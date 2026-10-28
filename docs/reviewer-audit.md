@@ -23,27 +23,32 @@ python3 mo10 scorecard --out /tmp/mo10-smoke --deterministic --limit 5
 
 ## Frozen benchmark
 
-`reviewer_audit/manifest.json` lists task id, review round, commit,
-cohort (`regression-bad`, `regression-clean`, `history`), adjudicated
-requirement IDs, and input hash. Regressions include LMW-10 rounds,
-SRW-61, SRW-86 (clean), SRW-73/77 clean passes, plus history to reach
-≥20 bundles.
+`reviewer_audit/manifest.json` (version 2) stores the full replay input:
+task description, `git show` diff at the bundle head, saved review proof
+(findings, checks, limitations), and agent closing note only when it
+references that commit (not a later “final commit” narrative). Cohort,
+adjudicated requirement IDs, and input hash cover the same material.
+Regenerate with `python3 mo10 freeze`.
 
 ## Shadow replay
 
-Each repeat rotates model family: MiniMax 3.1 Flash (`pi`), GPT 6.1 Sol
-(`codex exec`), Claude Opus (`claude -p`). Runs go through
-`heavy --review` one job at a time. The prompt is JSON-only pass/fail
-plus findings; requirement IDs are derived locally for recall.
+Each repeat rotates model family (GPT 6.1 Sol, Claude Opus). The prompt
+includes the frozen description, source diff, saved proof, and
+commit-scoped closing note; requirement IDs are derived locally for
+recall. Failed parses and subprocess errors set `error=true` on the
+verdict and are excluded from flip and false-block denominators.
 
 ## Metrics
 
 | Metric | Definition |
 | -------- | ------------ |
-| Flip rate | Repeat pairs that change pass/fail on identical input |
-| Defect recall | Adjudicated requirement IDs caught in any repeat’s findings |
-| False block | Clean bundle (`expected_pass`) failed in any repeat |
-| Recurring requirements | Stable IDs repeated across review rounds |
+| Pairwise flip rate | Share of **valid** repeat pairs with differing result |
+| Adjacent transitions | Consecutive valid repeats that change pass/fail |
+| Defect recall | Adjudicated requirement IDs caught in any valid repeat |
+| False block | Clean bundle (`expected_pass`) with a failing **valid** repeat |
+| Recurring requirements | Requirement ID in ≥2 rounds on the **same task** |
+| Cross-task prevalence | How often a requirement ID appears in saved reviews |
+| Retrospective flips | Saved reviews with identical full input hash |
 | Loop median / p90 | Review count per task (`tasks/*/task.json`) |
 
 ## Mixed-model judge

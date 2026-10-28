@@ -8,22 +8,41 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from .bundles import ReviewBundle
+from .bundles import ReviewBundle, _cap
 from .judge import run_model_prompt
 from .metrics import ShadowVerdict
 from .requirements import requirement_ids_for_subject
 
+PROMPT_DIFF_CAP = 48_000
+PROMPT_PROOF_CAP = 32_000
+PROMPT_DESC_CAP = 12_000
+PROMPT_NOTE_CAP = 8_000
+
 
 def _shadow_prompt(bundle: ReviewBundle) -> str:
-    note = bundle.closing_note_excerpt[:1200]
-    desc = bundle.description_excerpt[:800]
+    desc = _cap(bundle.description or bundle.description_excerpt, PROMPT_DESC_CAP)
+    diff = _cap(bundle.diff_text, PROMPT_DIFF_CAP)
+    proof = _cap(bundle.saved_proof, PROMPT_PROOF_CAP)
+    note = _cap(
+        bundle.agent_closing_note or bundle.closing_note_excerpt, PROMPT_NOTE_CAP
+    )
+    if not diff.strip():
+        diff = "(diff unavailable at freeze — verify repo checkout and head)"
+    if not proof.strip():
+        proof = "(saved review proof missing at freeze)"
     return (
-        "Board shadow review. Reply with JSON only, no markdown:\n"
+        "Board shadow review on a frozen historical bundle. "
+        "Use only the materials below.\n"
+        "Reply with JSON only, no markdown:\n"
         '{"pass":bool,"findings":[{"severity":"critical|major|minor","subject":"..."}]}\n'
-        "pass=false if critical or major acceptance gaps remain in the proof.\n"
-        f"task={bundle.task_id}\ncommit={bundle.head}\n"
-        f"title={bundle.title[:120]}\nstat={bundle.stat}\n"
-        f"brief={desc}\nproof={note}\n"
+        "pass=false if critical or major acceptance gaps remain in the proof.\n\n"
+        f"task={bundle.task_id}\nreview_round={bundle.review_round}\n"
+        f"commit={bundle.head}\ninput_hash={bundle.input_hash}\n"
+        f"title={bundle.title[:200]}\nstat={bundle.stat}\n\n"
+        f"task_description:\n{desc}\n\n"
+        f"source_diff:\n{diff}\n\n"
+        f"saved_review_proof:\n{proof}\n\n"
+        f"agent_closing_note_at_commit:\n{note or '(none for this commit)'}\n"
     )
 
 

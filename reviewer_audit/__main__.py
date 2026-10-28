@@ -62,6 +62,8 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
                 "repeat": v.repeat,
                 "subjects": v.finding_subjects,
                 "requirement_ids": v.requirement_ids,
+                "error": v.error,
+                "raw": v.raw,
             }
             for v in verdicts
         ]
@@ -69,6 +71,7 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
         rows,
         loop_median=loops.median_rounds,
         loop_p90=loops.p90_rounds,
+        task_ids=[b.task_id for b in bundles],
     )
     retro = summarize_retrospective_flips([b.task_id for b in bundles])
     judge_samples: dict[str, Any] = {}
@@ -96,11 +99,17 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
 
 
 def render_summary(metrics) -> str:
+    flip = (
+        f"{metrics.flip_rate_overall:.1%}"
+        if metrics.flip_rate_overall is not None
+        else "n/a"
+    )
     return (
         f"Scorecard: {metrics.bundle_count} bundles, "
-        f"flip {metrics.flip_rate_overall:.1%}, "
+        f"pairwise flip {flip}, "
+        f"incomplete {metrics.bundles_incomplete}, "
         f"recall {metrics.defect_recall_overall}, "
-        f"false blocks {metrics.false_block_count}/{metrics.clean_bundle_count}, "
+        f"false blocks {metrics.false_block_count}/{metrics.clean_eligible_count}, "
         f"loops median/p90 {metrics.loop_median:.1f}/{metrics.loop_p90:.1f}"
     )
 
