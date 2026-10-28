@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .board_io import read_reviewer_instructions
 from .bundles import default_seed_bundles, load_manifest, write_manifest
 from .history import compute_loop_stats
 from .metrics import aggregate_scorecard
@@ -28,6 +30,30 @@ def cmd_freeze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_baseline_metrics(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    metrics = data.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+    return {
+        "source": str(path),
+        "generated_at": data.get("generated_at"),
+        "review_policy": data.get("review_policy", "legacy"),
+        "flip_rate_overall": metrics.get("flip_rate_overall"),
+        "defect_recall_overall": metrics.get("defect_recall_overall"),
+        "false_block_rate": metrics.get("false_block_rate"),
+        "false_block_count": metrics.get("false_block_count"),
+        "clean_eligible_count": metrics.get("clean_eligible_count"),
+        "loop_median": metrics.get("loop_median"),
+        "loop_p90": metrics.get("loop_p90"),
+    }
+
+
 def cmd_scorecard(args: argparse.Namespace) -> int:
     manifest_path = Path(args.manifest)
     if not manifest_path.is_file():
@@ -36,6 +62,20 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
     if args.limit:
         bundles = bundles[: args.limit]
     loops = compute_loop_stats()
+    review_policy = args.review_policy
+    reviewer_instructions: str | None = None
+    if review_policy == "board":
+        reviewer_instructions = read_reviewer_instructions()
+    instr_hash = (
+        hashlib.sha256(reviewer_instructions.encode("utf-8")).hexdigest()[:16]
+        if reviewer_instructions
+        else None
+    )
+    baseline = (
+        _load_baseline_metrics(Path(args.baseline_scorecard))
+        if args.baseline_scorecard
+        else None
+    )
     raw_runs: dict[str, list] = {}
     rows = []
     for i, bundle in enumerate(bundles):
@@ -43,7 +83,13 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
         if args.deterministic:
             from .shadow import replay_bundle
 
-            verdicts = replay_bundle(bundle, repeats=args.repeats, use_models=False)
+            verdicts = replay_bundle(
+                bundle,
+                repeats=args.repeats,
+                use_models=False,
+                review_policy=review_policy,
+                reviewer_instructions=reviewer_instructions,
+            )
         else:
             from .shadow import replay_bundle
 
@@ -53,6 +99,8 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
                 use_models=True,
                 use_heavy=args.heavy,
                 bundle_index=i,
+                review_policy=review_policy,
+                reviewer_instructions=reviewer_instructions,
             )
         rows.append((bundle, verdicts))
         raw_runs[bundle.bundle_id] = [
@@ -93,8 +141,59 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
         raw_runs=raw_runs,
         retrospective=retro,
         judge_samples=judge_samples,
+        review_policy=review_policy,
+        reviewer_instructions_sha256=instr_hash,
+        baseline_metrics=baseline,
     )
     print(render_summary(metrics))
+    return 0
+
+
+def cmd_rescore(args: argparse.Namespace) -> int:
+    from .rescore import rescore_from_scorecard
+
+    manifest_path = Path(args.manifest)
+    if not manifest_path.is_file():
+        manifest_path = _pkg_manifest()
+    summary = rescore_from_scorecard(
+        Path(args.source),
+        manifest_path,
+        out_dir=Path(args.out),
+        baseline_path=Path(args.baseline_scorecard)
+        if args.baseline_scorecard
+        else None,
+    )
+    print(
+        "Rescore (ship-and-score pass on saved shadow findings): "
+        f"flip {summary['flip_rate_overall']:.1%}, "
+        f"recall {summary['defect_recall_overall']}, "
+        f"false blocks {summary['false_block_count']}/{summary['clean_eligible_count']} "
+        f"({summary['false_block_rate']:.1%})"
+    )
+    return 0
+
+
+def cmd_reaggregate(args: argparse.Namespace) -> int:
+    from .rescore import reaggregate_from_scorecard
+
+    manifest_path = Path(args.manifest)
+    if not manifest_path.is_file():
+        manifest_path = _pkg_manifest()
+    summary = reaggregate_from_scorecard(
+        Path(args.source),
+        manifest_path,
+        out_dir=Path(args.out),
+        baseline_path=Path(args.baseline_scorecard)
+        if args.baseline_scorecard
+        else None,
+    )
+    print(
+        "Reaggregate: "
+        f"flip {summary['flip_rate_overall']:.1%}, "
+        f"recall {summary['defect_recall_overall']}, "
+        f"false blocks {summary['false_block_count']}/{summary['clean_eligible_count']} "
+        f"({summary['false_block_rate']:.1%})"
+    )
     return 0
 
 
@@ -159,7 +258,45 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Route each LLM call through heavy --review",
     )
+    p_score.add_argument(
+        "--review-policy",
+        choices=("board", "legacy"),
+        default="board",
+        help="board=current reviewer.instructions (default); legacy=MO-10 major/critical gate",
+    )
+    p_score.add_argument(
+        "--baseline-scorecard",
+        default="",
+        help="Prior scorecard.json for before/after comparison in the report",
+    )
     p_score.set_defaults(func=cmd_scorecard)
+
+    p_rescore = sub.add_parser(
+        "rescore",
+        help="Recompute metrics from a prior scorecard.json under ship-and-score pass rules",
+    )
+    p_rescore.add_argument(
+        "source",
+        help="Prior scorecard.json (e.g. MO-10 baseline run)",
+    )
+    p_rescore.add_argument("--manifest", default=str(_pkg_manifest()))
+    p_rescore.add_argument("--out", required=True, help="Report directory")
+    p_rescore.add_argument(
+        "--baseline-scorecard",
+        default="",
+        help="Include before/after vs this baseline file",
+    )
+    p_rescore.set_defaults(func=cmd_rescore)
+
+    p_reagg = sub.add_parser(
+        "reaggregate",
+        help="Recompute scorecard metrics from saved raw_runs (same LLM receipt)",
+    )
+    p_reagg.add_argument("source", help="scorecard.json with raw_runs")
+    p_reagg.add_argument("--manifest", default=str(_pkg_manifest()))
+    p_reagg.add_argument("--out", required=True)
+    p_reagg.add_argument("--baseline-scorecard", default="")
+    p_reagg.set_defaults(func=cmd_reaggregate)
 
     p_loops = sub.add_parser("loops", help="Print board review-round percentiles")
     p_loops.set_defaults(func=cmd_loops)

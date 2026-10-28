@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""MO-18 entry: rerun reviewer scorecard under current board review rules."""
+
+from reviewer_audit.__main__ import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -8,8 +8,46 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_BOARD_TASKS = Path.home() / ".herdr-projects" / "data" / "tasks"
+HERDR_PROJECTS = Path.home() / ".local/bin/herdr-projects"
 
 MAX_DIFF_BYTES = 180_000
+
+# Fallback when herdr-projects is unavailable (matches mac-ops repo entry 2026-10-28).
+DEFAULT_REVIEWER_INSTRUCTIONS = (
+    "Finish every review in under 10 minutes. Review the diff, the task description "
+    "and the agent's saved proof (closing note, receipts, logs, screenshots). "
+    "Do not rerun release gates, full test suites, builds or replays that the agent "
+    "or the board check already ran with a receipt; judge from the receipt. "
+    "Ship-and-score policy: fail a review only for hard stops (does not build or start, "
+    "crashes, breaks health, or breaks money or data safety) or when the change does not "
+    "do what the task asked at all. List every other finding as a follow-up with its "
+    "severity; it does not send the work back. Blocking findings must name the exact "
+    "requirement from the task description they break and give a reproduction (a command, "
+    "a replay or a file and line) that fails now; a finding without both is a follow-up, "
+    "never a block."
+)
+
+
+def read_reviewer_instructions(*, repo: str = "mac-ops") -> str:
+    """Load reviewer.instructions from herdr-projects show --repo."""
+    if not HERDR_PROJECTS.is_file():
+        return DEFAULT_REVIEWER_INSTRUCTIONS
+    proc = subprocess.run(
+        [str(HERDR_PROJECTS), "show", "--repo", repo],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    text = proc.stdout or ""
+    marker = "Finish every review"
+    for line in text.splitlines():
+        if "reviewer.instructions" not in line:
+            continue
+        idx = line.find(marker)
+        if idx >= 0:
+            return line[idx:].strip()
+    return DEFAULT_REVIEWER_INSTRUCTIONS
 
 
 def read_task(task_id: str, tasks_root: Path | None = None) -> dict[str, Any]:
