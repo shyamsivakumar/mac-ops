@@ -124,17 +124,15 @@ and Multica services are not restored.
 
 ## Verification and lifecycle
 
-<<<<<<< HEAD
-The [eval scorecard](docs/evals.md) defines hard stops versus scorecard metrics for governor and controller changes (LMW-25, ship-and-score 2026-10-28).
+The [eval scorecard](docs/evals.md) defines hard stops versus scorecard
+metrics for governor and controller changes (LMW-25, ship-and-score
+2026-10-28).
 
-The controller is ported from llmwiki commit `45542a50a2938aaceda41b13806c25b404191e08`. Its memory and swap safety rules remain independent. See [governor states](docs/state-charts/governor.md) and [heavy states](docs/state-charts/heavy.md). Installation and migration states are documented in [installation states](docs/state-charts/installation.md).
-=======
 The controller is ported from llmwiki commit
 `45542a50a2938aaceda41b13806c25b404191e08`. Its memory and swap safety rules
 remain independent. See [governor states](docs/state-charts/governor.md) and
 [heavy states](docs/state-charts/heavy.md). Installation and migration states
-are documented in [installation states](docs/state-charts/installation.md).
->>>>>>> 3064ddf (Add pi and omp board-worker parity installer for GPT 6.1 Terra.)
+are in [installation states](docs/state-charts/installation.md).
 
 Pueue provides priority, runtime parallel counts and pause/resume, but adopting
 it requires installing its daemon and verifying synchronous caller, exit status,
@@ -161,3 +159,10 @@ The [Cursor input gate](docs/cursor-input-gate.md) queues the board's first
 brief until its composer is ready and its draft is visible. The guide covers the
 user-level install, exact undo, and verification. Its [state
 chart](docs/state-charts/cursor-input.md) records the delivery lifecycle.
+
+## Pi first-message delivery
+
+The [Pi input gate](docs/pi-input-gate.md) queues the board's first brief until
+Pi's editor is ready, skips the startup update banner race via
+`PI_SKIP_VERSION_CHECK`, and merges `quietStartup` in agent settings. Its
+[state chart](docs/state-charts/pi-input.md) records the delivery lifecycle.

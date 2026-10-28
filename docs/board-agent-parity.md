@@ -37,7 +37,7 @@ file exists beyond the board setting.
 ## What the installer sets
 
 - pi: `~/.pi/agent/AGENTS.md`, llmwiki skills paths, Executor MCP, Terra
-  enabled, board trust paths.
+  enabled, board trust paths, `quietStartup`, and the [pi input gate](pi-input-gate.md).
 - omp: wiki `runtime/omp` rules and agents, Executor MCP, Terra in
   `enabledModels`, shared skills directory.
 - Leaves board `worker.instructions`, `worker.fallback`, and coordinator

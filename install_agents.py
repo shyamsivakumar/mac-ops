@@ -100,6 +100,10 @@ def merge_pi_settings(
     merged = dict(current)
     merged["skills"] = skills
     merged["enabledModels"] = enabled
+    for key, value in overlay.items():
+        if key in ("skills", "enabledModels"):
+            continue
+        merged[key] = value
     atomic_write(settings_path, json.dumps(merged, indent=2) + "\n", 0o600)
 
 
@@ -325,6 +329,22 @@ def install(checkout: Path, refresh_models: bool, prove: bool, use_heavy: bool) 
         backups,
     )
     report["actions"].append("updated pi trust.json for board paths")
+
+    gate = subprocess.run(
+        [sys.executable, str(checkout / "scripts/install_pi_gate.py"), "install"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    report["pi_input_gate"] = {
+        "exit_code": gate.returncode,
+        "stdout": gate.stdout[-2000:],
+        "stderr": gate.stderr[-2000:],
+    }
+    if gate.returncode != 0:
+        raise RuntimeError("pi input gate install failed")
+
+    report["actions"].append("installed pi first-message input gate")
 
     if refresh_models:
         refresh_cmd = ["pi", "update", "--models"]
