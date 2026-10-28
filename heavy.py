@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+"""Supervise heavy workloads under macOS host telemetry admission limits."""
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -24,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-GIB = 1024 ** 3
+GIB = 1024**3
 MAX_CPU_PCT = 95.0
 MAX_MEMORY_PCT = 95.0
 MIN_HEADROOM_BYTES = 6 * GIB
@@ -41,7 +43,7 @@ CAPACITY_MAX_AGE_SECONDS = 30.0
 NORMAL_PRESSURE_LEVEL = 1
 WARNING_PRESSURE_LEVEL = 2
 WARNING_FREE_PERCENT = 30.0
-MAX_SWAP_GROWTH_BYTES_PER_SECOND = 1024 ** 2
+MAX_SWAP_GROWTH_BYTES_PER_SECOND = 1024**2
 _SWAP_BASELINE = None
 _SWAP_SAMPLE_LOCK = threading.Lock()
 CRITICAL_PRESSURE_LEVEL = 4
@@ -57,24 +59,29 @@ JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
 
+
 def monotonic_ns() -> int:
+    """Return the monotonic clock reading in nanoseconds."""
     return time.clock_gettime_ns(time.CLOCK_MONOTONIC)
 
 
 def monotonic() -> float:
+    """Return the monotonic clock reading in seconds."""
     return monotonic_ns() / 1_000_000_000.0
 
 
 class HeavyError(Exception):
-    pass
+    """Base error for supervisor failures reported to the user."""
 
 
 class TelemetryError(HeavyError):
-    pass
+    """Raised when host telemetry is missing, stale, or invalid."""
 
 
 @dataclass(frozen=True)
 class ProcessInfo:
+    """Identity of one process as reported by the process table."""
+
     pid: int
     ppid: int
     pgid: int
@@ -86,6 +93,8 @@ class ProcessInfo:
 
 @dataclass(frozen=True)
 class Sample:
+    """One host telemetry reading used for admission decisions."""
+
     pressure_level: int
     cpu_busy_pct: float
     memory_used_pct: float
@@ -108,6 +117,7 @@ def _finite_nonnegative(value: Any) -> bool:
 
 
 def parse_pressure_level(output: str) -> int:
+    """Return the kernel memory pressure level from sysctl output."""
     value = output.strip()
     if value not in ("1", "2", "4"):
         raise TelemetryError("invalid kernel pressure level")
@@ -115,13 +125,16 @@ def parse_pressure_level(output: str) -> int:
 
 
 def parse_vm_stat(output: str) -> Tuple[int, int]:
+    """Return the page size and free, inactive, and speculative bytes from vm_stat."""
     page_match = re.search(r"page size of\s+(\d+)\s+bytes", output)
     if not page_match:
         raise TelemetryError("vm_stat omitted page size")
     page_size = int(page_match.group(1))
     pages: Dict[str, int] = {}
     for name in ("free", "inactive", "speculative"):
-        match = re.search(r"^Pages " + re.escape(name) + r":\s*([0-9,]+)\.?\s*$", output, re.M)
+        match = re.search(
+            r"^Pages " + re.escape(name) + r":\s*([0-9,]+)\.?\s*$", output, re.M
+        )
         if not match:
             raise TelemetryError("vm_stat omitted required page count")
         pages[name] = int(match.group(1).replace(",", ""))
@@ -131,6 +144,7 @@ def parse_vm_stat(output: str) -> Tuple[int, int]:
 
 
 def parse_load(output: str, physical_cores: int) -> float:
+    """Return the load average per physical core from uptime output."""
     if physical_cores <= 0:
         raise TelemetryError("invalid physical core count")
     match = re.search(r"load averages?:\s*([0-9]+(?:\.[0-9]+)?)(?:,|\s)", output, re.I)
@@ -143,6 +157,7 @@ def parse_load(output: str, physical_cores: int) -> float:
 
 
 def parse_cpu_busy(output: str) -> float:
+    """Return the user plus system CPU percentage from iostat output."""
     lines = output.splitlines()
     header_index = None
     for index, line in enumerate(lines):
@@ -158,7 +173,9 @@ def parse_cpu_busy(output: str) -> float:
     if row is None:
         raise TelemetryError("iostat omitted CPU sample")
     user, system, idle = (float(value) for value in row[:3])
-    if not all(math.isfinite(value) and 0 <= value <= 100 for value in (user, system, idle)):
+    if not all(
+        math.isfinite(value) and 0 <= value <= 100 for value in (user, system, idle)
+    ):
         raise TelemetryError("invalid iostat CPU sample")
     if abs((user + system + idle) - 100.0) > 5.0:
         raise TelemetryError("inconsistent iostat CPU sample")
@@ -187,6 +204,7 @@ def sample_host(
     command_runner: Callable[[Sequence[str], float], str] = _run_native,
     clock: Callable[[], float] = monotonic,
 ) -> Sample:
+    """Sample pressure, memory, swap, load, and CPU from native macOS commands."""
     commands = {
         "pressure": ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
         "memory": ["/usr/sbin/sysctl", "-n", "hw.memsize"],
@@ -221,7 +239,9 @@ def sample_host(
         if physical <= 0 or cores <= 0:
             raise TelemetryError("invalid physical resource count")
         page_size, headroom = parse_vm_stat(outputs["vm"])
-        free_match = re.search(r"System-wide memory free percentage:\s*(\d{1,3})%", outputs["free"])
+        free_match = re.search(
+            r"System-wide memory free percentage:\s*(\d{1,3})%", outputs["free"]
+        )
         swap_match = re.search(r"used = ([\d.]+)([KMGT])", outputs["swap"])
         swapout_match = re.search(r"^Swapouts:\s*([0-9,]+)\.?\s*$", outputs["vm"], re.M)
         if not free_match or not swap_match or not swapout_match:
@@ -274,6 +294,7 @@ def admission_block_reason(
     task_already_active: bool,
     slot_limit: Optional[int] = None,
 ) -> Optional[str]:
+    """Return the reason a sample blocks admission, or None if it admits."""
     values = (
         sample.cpu_busy_pct,
         sample.memory_used_pct,
@@ -287,7 +308,11 @@ def admission_block_reason(
     age = now - sample.captured_monotonic
     if age < 0 or age > SAMPLE_MAX_AGE:
         return "stale-telemetry"
-    if sample.pressure_level not in (NORMAL_PRESSURE_LEVEL, WARNING_PRESSURE_LEVEL, CRITICAL_PRESSURE_LEVEL):
+    if sample.pressure_level not in (
+        NORMAL_PRESSURE_LEVEL,
+        WARNING_PRESSURE_LEVEL,
+        CRITICAL_PRESSURE_LEVEL,
+    ):
         return "invalid-pressure"
     if (
         sample.physical_cores is None
@@ -300,15 +325,21 @@ def admission_block_reason(
         return "task-slot-busy"
     if slot_limit is None:
         return "capacity-unavailable"
-    if isinstance(slot_limit, bool) or not isinstance(slot_limit, int) or slot_limit < 0:
+    if (
+        isinstance(slot_limit, bool)
+        or not isinstance(slot_limit, int)
+        or slot_limit < 0
+    ):
         return "invalid-capacity"
     if active_count >= slot_limit:
         return "global-slots-busy"
     reason = memory_load_block_reason(
-        pressure=sample.pressure_level, free_percent=sample.free_percent,
+        pressure=sample.pressure_level,
+        free_percent=sample.free_percent,
         swap_growth=sample.swap_growth_bytes_per_second,
         swapout_rate=sample.swapout_bytes_per_second,
-        load_per_core=sample.load_per_core, headroom=sample.headroom_bytes,
+        load_per_core=sample.load_per_core,
+        headroom=sample.headroom_bytes,
         physical=sample.physical_bytes,
     )
     if reason:
@@ -320,8 +351,17 @@ def admission_block_reason(
     return None
 
 
-def memory_load_block_reason(*, pressure, free_percent, swap_growth, swapout_rate,
-                             load_per_core, headroom, physical):
+def memory_load_block_reason(
+    *,
+    pressure,
+    free_percent,
+    swap_growth,
+    swapout_rate,
+    load_per_core,
+    headroom,
+    physical,
+):
+    """Return the reason memory or load blocks admission, or None."""
     if pressure == CRITICAL_PRESSURE_LEVEL:
         return "memory-pressure-critical"
     if pressure not in (NORMAL_PRESSURE_LEVEL, WARNING_PRESSURE_LEVEL):
@@ -329,7 +369,10 @@ def memory_load_block_reason(*, pressure, free_percent, swap_growth, swapout_rat
     if _finite_nonnegative(load_per_core) and load_per_core >= 1.0:
         return "load-per-core"
     rates = (swap_growth, swapout_rate)
-    if any(_finite_nonnegative(rate) and rate > MAX_SWAP_GROWTH_BYTES_PER_SECOND for rate in rates):
+    if any(
+        _finite_nonnegative(rate) and rate > MAX_SWAP_GROWTH_BYTES_PER_SECOND
+        for rate in rates
+    ):
         return "swap-growth"
     values = (free_percent, headroom, physical, load_per_core)
     if not all(_finite_nonnegative(value) for value in values):
@@ -383,7 +426,11 @@ class _ProcBsdInfo(ctypes.Structure):
 
 
 try:
-    _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True) if sys.platform == "darwin" else None
+    _LIBPROC = (
+        ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        if sys.platform == "darwin"
+        else None
+    )
 except OSError:
     _LIBPROC = None
 
@@ -392,7 +439,13 @@ def _native_process_info(pid: int) -> Optional[ProcessInfo]:
     if sys.platform != "darwin" or _LIBPROC is None:
         raise HeavyError("precise process identity requires macOS libproc")
     function = _LIBPROC.proc_pidinfo
-    function.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint64,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
     function.restype = ctypes.c_int
     info = _ProcBsdInfo()
     size = ctypes.sizeof(info)
@@ -418,17 +471,24 @@ def _parse_process_table(output: str) -> Dict[int, ProcessInfo]:
     for line in output.splitlines():
         if not line.strip():
             continue
-        match = re.match(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s+(.+?)\s*$", line)
+        match = re.match(
+            r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s+(.+?)\s*$", line
+        )
         if not match:
             raise HeavyError("process identity sample was malformed")
         pid, ppid, pgid, uid = (int(match.group(index)) for index in range(1, 5))
         state = match.group(5)
         token = match.group(6).strip()
-        result[pid] = ProcessInfo(pid, ppid, pgid, uid, token, _start_epoch(token), state)
+        result[pid] = ProcessInfo(
+            pid, ppid, pgid, uid, token, _start_epoch(token), state
+        )
     return result
 
 
-def process_table(*, command_runner: Callable[[Sequence[str], float], str] = _run_native) -> Dict[int, ProcessInfo]:
+def process_table(
+    *, command_runner: Callable[[Sequence[str], float], str] = _run_native
+) -> Dict[int, ProcessInfo]:
+    """Return the process table keyed by pid with precise start tokens for own processes."""
     output = command_runner(
         ["/bin/ps", "-axo", "pid=,ppid=,pgid=,uid=,stat=,lstart="],
         NATIVE_TIMEOUT,
@@ -452,7 +512,10 @@ def process_table(*, command_runner: Callable[[Sequence[str], float], str] = _ru
     return rows
 
 
-def kernel_boot_identity(*, command_runner: Callable[[Sequence[str], float], str] = _run_native) -> str:
+def kernel_boot_identity(
+    *, command_runner: Callable[[Sequence[str], float], str] = _run_native
+) -> str:
+    """Return the kernel boot time in seconds, used as the boot identity."""
     output = command_runner(["/usr/sbin/sysctl", "-n", "kern.boottime"], NATIVE_TIMEOUT)
     match = re.search(r"sec\s*=\s*(\d+)", output)
     if not match:
@@ -477,6 +540,7 @@ def _secure_directory(path: Path, uid: int, *, create: bool, mode: int) -> None:
 
 
 def state_directory(*, uid: Optional[int] = None) -> Path:
+    """Return the secured per-user registry directory, creating it if needed."""
     user_id = os.getuid() if uid is None else uid
     try:
         home = Path(pwd.getpwuid(user_id).pw_dir)
@@ -508,7 +572,11 @@ def _read_capacity_config(
         info = os.lstat(str(path))
     except OSError as exc:
         raise TelemetryError("capacity contract is unavailable") from exc
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != registry.uid or info.st_mode & 0o077:
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != registry.uid
+        or info.st_mode & 0o077
+    ):
         raise TelemetryError("capacity contract is unsafe")
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -516,7 +584,11 @@ def _read_capacity_config(
     try:
         fd = os.open(str(path), flags)
         opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != registry.uid or opened.st_mode & 0o077:
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != registry.uid
+            or opened.st_mode & 0o077
+        ):
             os.close(fd)
             raise TelemetryError("capacity contract is unsafe")
         with os.fdopen(fd, "rb") as handle:
@@ -536,13 +608,22 @@ def _read_capacity_config(
     reported_boot = value.get("boot_id")
     if isinstance(slots, bool) or not isinstance(slots, int) or slots < 0:
         raise TelemetryError("capacity slot count is invalid")
-    if isinstance(updated_at, bool) or not isinstance(updated_at, (int, float)) or not math.isfinite(float(updated_at)):
+    if (
+        isinstance(updated_at, bool)
+        or not isinstance(updated_at, (int, float))
+        or not math.isfinite(float(updated_at))
+    ):
         raise TelemetryError("capacity timestamp is invalid")
     if not isinstance(reported_boot, str) or not reported_boot:
         raise TelemetryError("capacity boot identity is invalid")
     current_time = time.time() if now is None else now
     age = current_time - float(updated_at)
-    if not math.isfinite(current_time) or not math.isfinite(age) or age < 0 or age > CAPACITY_MAX_AGE_SECONDS:
+    if (
+        not math.isfinite(current_time)
+        or not math.isfinite(age)
+        or age < 0
+        or age > CAPACITY_MAX_AGE_SECONDS
+    ):
         raise TelemetryError("capacity contract is stale")
     if boot_id is not None and reported_boot != boot_id:
         raise TelemetryError("capacity contract belongs to another boot")
@@ -561,7 +642,11 @@ def _effective_slot_limit(
     physical_bytes = sample.physical_bytes
     if isinstance(cores, bool) or not isinstance(cores, int) or cores <= 0:
         raise TelemetryError("physical core count is unavailable")
-    if isinstance(physical_bytes, bool) or not isinstance(physical_bytes, int) or physical_bytes <= 0:
+    if (
+        isinstance(physical_bytes, bool)
+        or not isinstance(physical_bytes, int)
+        or physical_bytes <= 0
+    ):
         raise TelemetryError("physical memory size is unavailable")
     memory_limit = physical_bytes // (6 * GIB)
     return min(int(value["heavy_slots"]), cores, memory_limit)
@@ -575,7 +660,11 @@ def _legacy_draining(registry: "Registry") -> bool:
         return False
     except OSError:
         return True
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != registry.uid or info.st_mode & 0o077:
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != registry.uid
+        or info.st_mode & 0o077
+    ):
         return True
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -583,7 +672,11 @@ def _legacy_draining(registry: "Registry") -> bool:
     try:
         fd = os.open(str(marker), flags)
         opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != registry.uid or opened.st_mode & 0o077:
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != registry.uid
+            or opened.st_mode & 0o077
+        ):
             os.close(fd)
             return True
         with os.fdopen(fd, "rb") as handle:
@@ -610,12 +703,16 @@ def _legacy_draining(registry: "Registry") -> bool:
 
 
 class Registry:
+    """Persist job, queue, and heartbeat records in one secured directory."""
+
     def __init__(self, directory: Path, *, uid: Optional[int] = None):
+        """Bind the registry to a directory and the expected owner uid."""
         self.directory = Path(directory)
         self.uid = os.getuid() if uid is None else uid
 
     @contextmanager
     def lock(self, *, exclusive: bool = True, timeout: float = 5.0) -> Iterable[None]:
+        """Hold a flock on the registry lock file for the duration of the block."""
         _secure_directory(self.directory, self.uid, create=False, mode=0o700)
         lock_path = self.directory / ".lock"
         flags = os.O_CREAT | os.O_RDWR
@@ -624,7 +721,11 @@ class Registry:
         fd = os.open(str(lock_path), flags, 0o600)
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid or info.st_mode & 0o077:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != self.uid
+                or info.st_mode & 0o077
+            ):
                 raise HeavyError("registry lock file is unsafe")
             operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
             deadline = monotonic() + timeout
@@ -650,7 +751,11 @@ class Registry:
     def _read_record(self, job_id: str) -> Dict[str, Any]:
         path = self._job_dir(job_id) / "record.json"
         info = os.lstat(str(path))
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid or info.st_mode & 0o077:
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != self.uid
+            or info.st_mode & 0o077
+        ):
             raise HeavyError("registry record is unsafe")
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
@@ -662,14 +767,22 @@ class Registry:
             raise HeavyError("registry record is too large")
         value = json.loads(raw)
         if job_id == PROTOCOL_RECORD_ID:
-            if (not isinstance(value, dict) or value.get("schema") != 2
-                    or value.get("kind") != "registry-protocol"
-                    or value.get("clock") != "CLOCK_MONOTONIC"
-                    or value.get("job_id") != job_id or value.get("uid") != self.uid):
+            if (
+                not isinstance(value, dict)
+                or value.get("schema") != 2
+                or value.get("kind") != "registry-protocol"
+                or value.get("clock") != "CLOCK_MONOTONIC"
+                or value.get("job_id") != job_id
+                or value.get("uid") != self.uid
+            ):
                 raise HeavyError("registry protocol fence is invalid")
             return value
-        if (not isinstance(value, dict) or value.get("schema") != 1
-                or value.get("clock") != "CLOCK_MONOTONIC" or value.get("job_id") != job_id):
+        if (
+            not isinstance(value, dict)
+            or value.get("schema") != 1
+            or value.get("clock") != "CLOCK_MONOTONIC"
+            or value.get("job_id") != job_id
+        ):
             raise HeavyError("registry record identity is invalid")
         if value.get("uid") != self.uid:
             raise HeavyError("registry record owner is invalid")
@@ -681,7 +794,11 @@ class Registry:
         target = directory / "record.json"
         try:
             info = os.lstat(str(target))
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid or info.st_mode & 0o077:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != self.uid
+                or info.st_mode & 0o077
+            ):
                 raise HeavyError("registry record is unsafe")
         except FileNotFoundError:
             pass
@@ -691,7 +808,9 @@ class Registry:
             flags |= os.O_NOFOLLOW
         fd = os.open(str(temp), flags, 0o600)
         try:
-            data = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            data = json.dumps(record, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
             view = memoryview(data)
             while view:
                 written = os.write(fd, view)
@@ -716,21 +835,35 @@ class Registry:
             os.close(dir_fd)
 
     def _job_ids(self) -> List[str]:
-        return sorted(item for item in os.listdir(str(self.directory)) if JOB_ID_PATTERN.fullmatch(item))
+        return sorted(
+            item
+            for item in os.listdir(str(self.directory))
+            if JOB_ID_PATTERN.fullmatch(item)
+        )
 
     def records(self) -> List[Dict[str, Any]]:
+        """Return all job records except the protocol record."""
         rows = [self._read_record(job_id) for job_id in self._job_ids()]
         return [row for row in rows if row["job_id"] != PROTOCOL_RECORD_ID]
 
     def ensure_protocol(self) -> None:
+        """Create the protocol record if it does not exist."""
         with self.lock():
             if os.path.lexists(str(self.directory / PROTOCOL_RECORD_ID)):
                 self._read_record(PROTOCOL_RECORD_ID)
             else:
-                self.create({"schema": 2, "kind": "registry-protocol", "job_id": PROTOCOL_RECORD_ID,
-                             "uid": self.uid, "clock": "CLOCK_MONOTONIC"})
+                self.create(
+                    {
+                        "schema": 2,
+                        "kind": "registry-protocol",
+                        "job_id": PROTOCOL_RECORD_ID,
+                        "uid": self.uid,
+                        "clock": "CLOCK_MONOTONIC",
+                    }
+                )
 
     def create(self, record: Dict[str, Any]) -> None:
+        """Create a job directory and write its initial record."""
         job_id = record["job_id"]
         if not JOB_ID_PATTERN.fullmatch(job_id):
             raise HeavyError("invalid job identity")
@@ -745,7 +878,10 @@ class Registry:
                 pass
             raise
 
-    def update(self, job_id: str, mutator: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    def update(
+        self, job_id: str, mutator: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]
+    ) -> Optional[Dict[str, Any]]:
+        """Apply mutator to a job record and persist the result if it returns one."""
         record = self._read_record(job_id)
         updated = mutator(dict(record))
         if updated is None:
@@ -754,6 +890,7 @@ class Registry:
         return updated
 
     def remove(self, job_id: str) -> None:
+        """Delete a job's record and heartbeat files and its directory."""
         directory = self._job_dir(job_id)
         for name in ("record.json", "heartbeat"):
             path = directory / name
@@ -761,7 +898,11 @@ class Registry:
                 info = os.lstat(str(path))
             except FileNotFoundError:
                 continue
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid or info.st_mode & 0o077:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != self.uid
+                or info.st_mode & 0o077
+            ):
                 raise HeavyError("refusing to remove unsafe registry file")
             os.unlink(str(path))
         if os.listdir(str(directory)):
@@ -769,6 +910,7 @@ class Registry:
         os.rmdir(str(directory))
 
     def write_heartbeat(self, job_id: str, monotonic_ns: int) -> None:
+        """Atomically write a monotonic heartbeat timestamp for a job."""
         directory = self._job_dir(job_id)
         path = directory / "heartbeat"
         temp = directory / (".heartbeat-" + uuid.uuid4().hex + ".tmp")
@@ -778,7 +920,11 @@ class Registry:
         fd = os.open(str(temp), flags, 0o600)
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid or info.st_mode & 0o077:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != self.uid
+                or info.st_mode & 0o077
+            ):
                 raise HeavyError("heartbeat file is unsafe")
             os.write(fd, str(monotonic_ns).encode("ascii"))
             os.fsync(fd)
@@ -799,12 +945,17 @@ class Registry:
             os.close(dir_fd)
 
     def read_heartbeat(self, job_id: str) -> Optional[int]:
+        """Return the job's heartbeat timestamp, or None if it is missing or unsafe."""
         path = self._job_dir(job_id) / "heartbeat"
         try:
             info = os.lstat(str(path))
         except FileNotFoundError:
             return None
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid or info.st_mode & 0o077:
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != self.uid
+            or info.st_mode & 0o077
+        ):
             return None
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
@@ -824,6 +975,7 @@ class Registry:
         return self.directory / ("queue-" + queue_id + ".json")
 
     def queue_records(self) -> List[Dict[str, Any]]:
+        """Return validated queue records from the registry directory."""
         rows = []
         for name in os.listdir(str(self.directory)):
             match = QUEUE_FILE_PATTERN.fullmatch(name)
@@ -832,7 +984,11 @@ class Registry:
             queue_id = match.group(1)
             path = self._queue_path(queue_id)
             info = os.lstat(str(path))
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid or info.st_mode & 0o077:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != self.uid
+                or info.st_mode & 0o077
+            ):
                 raise HeavyError("queue record is unsafe")
             flags = os.O_RDONLY
             if hasattr(os, "O_NOFOLLOW"):
@@ -876,6 +1032,7 @@ class Registry:
         return rows
 
     def create_queue(self, record: Dict[str, Any]) -> None:
+        """Atomically write a queue record to the registry directory."""
         queue_id = record.get("queue_id")
         path = self._queue_path(queue_id)
         temp = self.directory / (".queue-" + queue_id + ".tmp")
@@ -884,7 +1041,9 @@ class Registry:
             flags |= os.O_NOFOLLOW
         fd = os.open(str(temp), flags, 0o600)
         try:
-            data = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            data = json.dumps(record, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
             view = memoryview(data)
             while view:
                 written = os.write(fd, view)
@@ -909,19 +1068,63 @@ class Registry:
             os.close(dir_fd)
 
     def remove_queue(self, queue_id: str) -> None:
+        """Delete a queue record if it exists and is safe to remove."""
         path = self._queue_path(queue_id)
         try:
             info = os.lstat(str(path))
         except FileNotFoundError:
             return
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != self.uid or info.st_mode & 0o077:
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != self.uid
+            or info.st_mode & 0o077
+        ):
             raise HeavyError("refusing to remove unsafe queue record")
         os.unlink(str(path))
 
+    def update_queue(
+        self,
+        queue_id: str,
+        mutator: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        """Apply mutator to a queue record and persist the result if it returns one."""
+        path = self._queue_path(queue_id)
+        try:
+            info = os.lstat(str(path))
+        except FileNotFoundError:
+            return None
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != self.uid
+            or info.st_mode & 0o077
+        ):
+            raise HeavyError("refusing to update unsafe queue record")
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(str(path), flags)
+        try:
+            raw = os.read(fd, 65537)
+        finally:
+            os.close(fd)
+        if len(raw) > 65536:
+            raise HeavyError("queue record is too large")
+        record = json.loads(raw.decode("utf-8"))
+        updated = mutator(dict(record))
+        if updated is None:
+            return None
+        self.create_queue(updated)
+        return updated
 
-def legacy_slot_count(table: Dict[int, ProcessInfo], *, root: Path = LEGACY_SLOTS) -> int:
+
+def legacy_slot_count(
+    table: Dict[int, ProcessInfo], *, root: Path = LEGACY_SLOTS
+) -> int:
+    """Count legacy slots that hold a live or unverifiable pid."""
     try:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags = (
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        )
         root_fd = os.open(str(root), flags)
     except FileNotFoundError:
         return 0
@@ -966,7 +1169,11 @@ def legacy_slot_count(table: Dict[int, ProcessInfo], *, root: Path = LEGACY_SLOT
 def _identity_matches(info: Optional[ProcessInfo], identity: Dict[str, Any]) -> bool:
     if info is None:
         return False
-    if info.pid != identity.get("pid") or info.uid != identity.get("uid") or info.start_token != identity.get("start"):
+    if (
+        info.pid != identity.get("pid")
+        or info.uid != identity.get("uid")
+        or info.start_token != identity.get("start")
+    ):
         return False
     return True
 
@@ -984,7 +1191,9 @@ def _verified_group_members(
     start_token = str(identity["start"])
     start_epoch = _start_epoch(start_token)
     root = table.get(pid)
-    if root is not None and (root.uid != uid or root.start_token != start_token or root.pgid != pgid):
+    if root is not None and (
+        root.uid != uid or root.start_token != start_token or root.pgid != pgid
+    ):
         return None
     root_live = root is not None and not root.state.startswith(("Z", "X"))
     members = [row for row in table.values() if row.pgid == pgid]
@@ -1010,9 +1219,13 @@ def _workload_identity(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return value if isinstance(value, dict) else None
 
 
-def _record_live(record: Dict[str, Any], table: Dict[int, ProcessInfo]) -> Tuple[bool, bool]:
+def _record_live(
+    record: Dict[str, Any], table: Dict[int, ProcessInfo]
+) -> Tuple[bool, bool]:
     supervisor = record.get("supervisor")
-    supervisor_alive = bool(supervisor and _identity_matches(table.get(supervisor.get("pid")), supervisor))
+    supervisor_alive = bool(
+        supervisor and _identity_matches(table.get(supervisor.get("pid")), supervisor)
+    )
     workload = _workload_identity(record)
     if workload is None:
         return supervisor_alive, supervisor_alive
@@ -1022,9 +1235,13 @@ def _record_live(record: Dict[str, Any], table: Dict[int, ProcessInfo]) -> Tuple
     return bool(members) or supervisor_alive, supervisor_alive
 
 
-def _log_event(directory: Path, event: str, record: Dict[str, Any], *, detail: Optional[str] = None) -> None:
+def _log_event(
+    directory: Path, event: str, record: Dict[str, Any], *, detail: Optional[str] = None
+) -> None:
     entry = {
-        "time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "time": datetime.datetime.now(datetime.timezone.utc).isoformat(
+            timespec="seconds"
+        ),
         "event": event,
         "job_id": record.get("job_id"),
         "task_id": record.get("task_id"),
@@ -1043,14 +1260,28 @@ def _log_event(directory: Path, event: str, record: Dict[str, Any], *, detail: O
     fd = os.open(str(path), flags, 0o600)
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+        ):
             raise HeavyError("event log is unsafe")
-        os.write(fd, (json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"))
+        os.write(
+            fd,
+            (json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            ),
+        )
     finally:
         os.close(fd)
 
 
-def _task_identity(*, environ: Optional[Dict[str, str]] = None, cwd: Optional[str] = None, uid: Optional[int] = None) -> Tuple[str, str]:
+def _task_identity(
+    *,
+    environ: Optional[Dict[str, str]] = None,
+    cwd: Optional[str] = None,
+    uid: Optional[int] = None,
+) -> Tuple[str, str]:
     env = os.environ if environ is None else environ
     user_id = os.getuid() if uid is None else uid
     project_id = env.get("HERDR_PROJECTS_ID", "").strip()
@@ -1059,11 +1290,15 @@ def _task_identity(*, environ: Optional[Dict[str, str]] = None, cwd: Optional[st
             raise HeavyError("HERDR_PROJECTS_ID has an invalid task identity")
         return "board:" + project_id, project_id
     canonical = os.path.realpath(cwd if cwd is not None else os.getcwd())
-    digest = hashlib.sha256((str(user_id) + "\0" + canonical).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(
+        (str(user_id) + "\0" + canonical).encode("utf-8")
+    ).hexdigest()
     return "manual:" + digest, "manual:" + digest[:16]
 
 
-def _supervisor_identity(task_key: str, boot_id: str, table: Dict[int, ProcessInfo], uid: int) -> Dict[str, Any]:
+def _supervisor_identity(
+    task_key: str, boot_id: str, table: Dict[int, ProcessInfo], uid: int
+) -> Dict[str, Any]:
     info = table.get(os.getpid())
     if info is None or info.uid != uid:
         raise HeavyError("supervisor process identity unavailable")
@@ -1113,13 +1348,18 @@ def _claim_termination(
     takeover: bool = False,
 ) -> Optional[Dict[str, Any]]:
     with registry.lock():
+
         def change(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             workload = _workload_identity(record)
             if record.get("state") in ("complete", "removed"):
                 return None
             if expected_workload is not None and workload != expected_workload:
                 return None
-            if workload is None or record.get("task_key") != workload.get("task_key") or record.get("uid") != workload.get("uid"):
+            if (
+                workload is None
+                or record.get("task_key") != workload.get("task_key")
+                or record.get("uid") != workload.get("uid")
+            ):
                 return None
             if workload.get("boot_id") != record.get("supervisor", {}).get("boot_id"):
                 return None
@@ -1142,9 +1382,15 @@ def _claim_termination(
         return registry.update(job_id, change)
 
 
-def _set_curtail_request_locked(registry: Registry, job_id: str, reason: str, source: str) -> Optional[Dict[str, Any]]:
+def _set_curtail_request_locked(
+    registry: Registry, job_id: str, reason: str, source: str
+) -> Optional[Dict[str, Any]]:
     def change(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if record.get("state") in ("complete", "removed") or record.get("curtail_request") or record.get("termination"):
+        if (
+            record.get("state") in ("complete", "removed")
+            or record.get("curtail_request")
+            or record.get("termination")
+        ):
             return None
         record["curtail_request"] = {
             "reason": reason,
@@ -1159,6 +1405,7 @@ def _set_curtail_request_locked(registry: Registry, job_id: str, reason: str, so
 
 def _clear_curtail_request(registry: Registry, job_id: str) -> None:
     with registry.lock():
+
         def change(record: Dict[str, Any]) -> Dict[str, Any]:
             request = record.get("curtail_request") or {}
             if request.get("source") == "host-alarm":
@@ -1175,8 +1422,11 @@ def _record(registry: Registry, job_id: str) -> Dict[str, Any]:
         return registry._read_record(job_id)
 
 
-def _mark_complete(registry: Registry, job_id: str, *, state: str = "complete") -> Optional[Dict[str, Any]]:
+def _mark_complete(
+    registry: Registry, job_id: str, *, state: str = "complete"
+) -> Optional[Dict[str, Any]]:
     with registry.lock():
+
         def change(record: Dict[str, Any]) -> Dict[str, Any]:
             record["state"] = state
             return record
@@ -1213,6 +1463,7 @@ def terminate_owned_group(
     boot_reader: Callable[[], str] = kernel_boot_identity,
     grace_seconds: float = TERM_GRACE_SECONDS,
 ) -> bool:
+    """Send SIGTERM then SIGKILL to an owned process group and return True once it is gone."""
     if (
         identity.get("uid") != os.getuid()
         or not identity.get("task_key")
@@ -1275,13 +1526,22 @@ def terminate_owned_group(
 def _write_request_for_newest(registry: Registry) -> Dict[str, Any]:
     with registry.lock():
         records = registry.records()
-        active = [record for record in records if record.get("state") not in ("complete", "removed")]
+        active = [
+            record
+            for record in records
+            if record.get("state") not in ("complete", "removed")
+        ]
         if not active:
             return {"requested": False, "reason": "no-active-jobs"}
-        if any(record.get("curtail_request") or record.get("termination") for record in active):
+        if any(
+            record.get("curtail_request") or record.get("termination")
+            for record in active
+        ):
             return {"requested": False, "reason": "curtail-already-pending"}
         newest = max(active, key=lambda record: int(record.get("created_ns", 0)))
-        changed = _set_curtail_request_locked(registry, newest["job_id"], "external-request", "external-request")
+        changed = _set_curtail_request_locked(
+            registry, newest["job_id"], "external-request", "external-request"
+        )
         if changed is None:
             return {"requested": False, "reason": "curtail-already-pending"}
         return {
@@ -1298,6 +1558,7 @@ def status_payload(
     sample_reader: Callable[[], Sample] = sample_host,
     boot_reader: Callable[[], str] = kernel_boot_identity,
 ) -> Dict[str, Any]:
+    """Return the registry status payload with limits, pauses, and queue state."""
     with registry.lock(exclusive=False):
         records = registry.records()
         queues = registry.queue_records()
@@ -1309,7 +1570,9 @@ def status_payload(
     queues.sort(key=_queue_sort_key)
     try:
         sample = sample_reader()
-        global_limit = _effective_slot_limit(registry, sample, now=time.time(), boot_id=boot_reader())
+        global_limit = _effective_slot_limit(
+            registry, sample, now=time.time(), boot_id=boot_reader()
+        )
     except Exception:
         global_limit = None
     return {
@@ -1322,7 +1585,9 @@ def status_payload(
             "selection": protocol.get("last_pause_selection"),
         },
         "legacy_draining": _legacy_draining(registry),
-        "activation_pending": os.path.lexists(str(registry.directory / ".activation-pending")),
+        "activation_pending": os.path.lexists(
+            str(registry.directory / ".activation-pending")
+        ),
         "queue": [
             {
                 "queue_id": row.get("queue_id"),
@@ -1365,7 +1630,9 @@ def _prune_finished_locked(
         if not isinstance(supervisor, dict):
             raise HeavyError("registry supervisor identity is invalid")
         recorded_boot = supervisor.get("boot_id")
-        if not isinstance(recorded_boot, str) or not re.fullmatch(r"[1-9][0-9]*", recorded_boot):
+        if not isinstance(recorded_boot, str) or not re.fullmatch(
+            r"[1-9][0-9]*", recorded_boot
+        ):
             raise HeavyError("registry boot identity is invalid")
         if recorded_boot != boot_id:
             registry.remove(record["job_id"])
@@ -1379,6 +1646,8 @@ def _prune_finished_locked(
 
 @dataclass
 class SupervisorDeps:
+    """Injectable collaborators for the supervisor, defaulting to live system calls."""
+
     sample: Callable[[], Sample] = lambda: sample_with_emergency()
     clock: Callable[[], float] = monotonic
     monotonic_ns: Callable[[], int] = monotonic_ns
@@ -1386,7 +1655,9 @@ class SupervisorDeps:
     process_table_reader: Callable[[], Dict[int, ProcessInfo]] = process_table
     boot_reader: Callable[[], str] = kernel_boot_identity
     legacy_slots: Callable[[Dict[int, ProcessInfo]], int] = legacy_slot_count
-    launch_gated_workload: Optional[Callable[[Sequence[str]], Tuple[Any, Callable[[], None], Callable[[], None]]]] = None
+    launch_gated_workload: Optional[
+        Callable[[Sequence[str]], Tuple[Any, Callable[[], None], Callable[[], None]]]
+    ] = None
     launch_watchdog: Optional[Callable[[str], Any]] = None
     terminate: Callable[..., bool] = terminate_owned_group
     signal_group: Callable[[int, int], None] = os.killpg
@@ -1396,7 +1667,11 @@ class SupervisorDeps:
 
 
 def _queue_sort_key(record: Dict[str, Any]) -> Tuple[int, int, str]:
-    return (0 if record.get("role") == "review" else 1, int(record.get("created_ns", 0)), str(record.get("queue_id", "")))
+    return (
+        0 if record.get("role") == "review" else 1,
+        int(record.get("created_ns", 0)),
+        str(record.get("queue_id", "")),
+    )
 
 
 def _prune_queue_records_locked(
@@ -1406,7 +1681,9 @@ def _prune_queue_records_locked(
 ) -> List[Dict[str, Any]]:
     for queued in registry.queue_records():
         identity = queued["process"]
-        if queued.get("boot_id") != boot_id or not _identity_matches(table.get(identity.get("pid")), identity):
+        if queued.get("boot_id") != boot_id or not _identity_matches(
+            table.get(identity.get("pid")), identity
+        ):
             registry.remove_queue(queued["queue_id"])
     return registry.queue_records()
 
@@ -1442,17 +1719,32 @@ def _enqueue_job(
         registry.create_queue(queued)
         rows.append(queued)
         rows.sort(key=_queue_sort_key)
-        position = next(index + 1 for index, row in enumerate(rows) if row["queue_id"] == queue_id)
-    _log_event(registry.directory, "queued", queued, detail="priority position {}".format(position))
+        position = next(
+            index + 1 for index, row in enumerate(rows) if row["queue_id"] == queue_id
+        )
+    _log_event(
+        registry.directory,
+        "queued",
+        queued,
+        detail="priority position {}".format(position),
+    )
     print("heavy: queued role={} position={}".format(role, position), file=sys.stderr)
     return queue_id
 
 
-
 def critical_pressure(sample: Sample) -> bool:
-    return (sample.pressure_level == CRITICAL_PRESSURE_LEVEL
-            or (_finite_nonnegative(sample.memory_used_pct) and sample.memory_used_pct >= MAX_MEMORY_PCT)
-            or (_finite_nonnegative(sample.load_per_core) and sample.load_per_core >= CRITICAL_LOAD_PER_CORE))
+    """Return True when a sample meets any critical pressure threshold."""
+    return (
+        sample.pressure_level == CRITICAL_PRESSURE_LEVEL
+        or (
+            _finite_nonnegative(sample.memory_used_pct)
+            and sample.memory_used_pct >= MAX_MEMORY_PCT
+        )
+        or (
+            _finite_nonnegative(sample.load_per_core)
+            and sample.load_per_core >= CRITICAL_LOAD_PER_CORE
+        )
+    )
 
 
 def _host_reason(sample: Sample, load_high_count: int = 0) -> Optional[str]:
@@ -1520,20 +1812,28 @@ def _reserve_job(
             }
             registry.create_queue(queued)
             queues.append(queued)
-        current_queue = next((row for row in queues if row.get("queue_id") == queue_id), None)
+        current_queue = next(
+            (row for row in queues if row.get("queue_id") == queue_id), None
+        )
         if (
             current_queue is None
             or current_queue.get("task_key") != task_key
             or current_queue.get("role") != role
-            or not _identity_matches(table.get(supervisor["pid"]), current_queue.get("process", {}))
+            or not _identity_matches(
+                table.get(supervisor["pid"]), current_queue.get("process", {})
+            )
         ):
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
             return None, "queue-identity-unavailable"
         queues.sort(key=_queue_sort_key)
-        active = [row for row in records if row.get("state") not in ("complete", "removed")]
+        active = [
+            row for row in records if row.get("state") not in ("complete", "removed")
+        ]
         busy_tasks = {row.get("task_key") for row in active}
-        eligible_queues = [row for row in queues if row.get("task_key") not in busy_tasks]
+        eligible_queues = [
+            row for row in queues if row.get("task_key") not in busy_tasks
+        ]
         if task_key in busy_tasks:
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
@@ -1541,14 +1841,20 @@ def _reserve_job(
         if not eligible_queues or eligible_queues[0].get("queue_id") != queue_id:
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
-            return None, "reviewer-priority" if eligible_queues and eligible_queues[0].get("role") == "review" else "queue-order"
+            return None, "reviewer-priority" if eligible_queues and eligible_queues[
+                0
+            ].get("role") == "review" else "queue-order"
         try:
-            slot_limit = _effective_slot_limit(registry, sample, now=deps.wall_clock(), boot_id=boot_id)
+            slot_limit = _effective_slot_limit(
+                registry, sample, now=deps.wall_clock(), boot_id=boot_id
+            )
         except TelemetryError:
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
             return None, "capacity-unavailable"
-        active = [row for row in records if row.get("state") not in ("complete", "removed")]
+        active = [
+            row for row in records if row.get("state") not in ("complete", "removed")
+        ]
         same_task = any(row.get("task_key") == task_key for row in active)
         reason = admission_block_reason(
             sample,
@@ -1580,12 +1886,29 @@ def _reserve_job(
         }
         registry.create(record)
         registry.write_heartbeat(job_id, deps.monotonic_ns())
+        if current_queue is not None:
+            resume_queue_agent_pause(current_queue, deps)
+            try:
+
+                def clear_agent_pause(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                    if not row.get("agent_pause"):
+                        return None
+                    updated = dict(row)
+                    updated.pop("agent_pause", None)
+                    return updated
+
+                registry.update_queue(queue_id, clear_agent_pause)
+            except Exception:
+                pass
         registry.remove_queue(queue_id)
         return job_id, None
 
 
-def _update_workload(registry: Registry, job_id: str, workload: Dict[str, Any]) -> Dict[str, Any]:
+def _update_workload(
+    registry: Registry, job_id: str, workload: Dict[str, Any]
+) -> Dict[str, Any]:
     with registry.lock():
+
         def change(record: Dict[str, Any]) -> Dict[str, Any]:
             record["workload"] = workload
             record["state"] = "running"
@@ -1597,11 +1920,20 @@ def _update_workload(registry: Registry, job_id: str, workload: Dict[str, Any]) 
         return updated
 
 
-def _default_launch_gated_workload(argv: Sequence[str]) -> Tuple[subprocess.Popen, Callable[[], None], Callable[[], None]]:
+def _default_launch_gated_workload(
+    argv: Sequence[str],
+) -> Tuple[subprocess.Popen, Callable[[], None], Callable[[], None]]:
     read_fd, write_fd = os.pipe()
     try:
         process = subprocess.Popen(
-            ["/usr/bin/python3", "-I", os.path.realpath(__file__), "--workload-bootstrap", str(read_fd)] + list(argv),
+            [
+                "/usr/bin/python3",
+                "-I",
+                os.path.realpath(__file__),
+                "--workload-bootstrap",
+                str(read_fd),
+            ]
+            + list(argv),
             start_new_session=True,
             close_fds=True,
             pass_fds=(read_fd,),
@@ -1725,7 +2057,12 @@ def _curtail_current(
             workload_process.wait(timeout=1.0)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    _log_event(registry.directory, "curtailed" if success else "curtail-identity-failed", claimed, detail=reason)
+    _log_event(
+        registry.directory,
+        "curtailed" if success else "curtail-identity-failed",
+        claimed,
+        detail=reason,
+    )
     return success
 
 
@@ -1748,7 +2085,11 @@ def _sample_invalid_reason(sample: Sample, now: float) -> Optional[str]:
     age = now - sample.captured_monotonic
     if age < 0 or age > SAMPLE_MAX_AGE:
         return "telemetry-stale"
-    if sample.pressure_level not in (NORMAL_PRESSURE_LEVEL, WARNING_PRESSURE_LEVEL, CRITICAL_PRESSURE_LEVEL):
+    if sample.pressure_level not in (
+        NORMAL_PRESSURE_LEVEL,
+        WARNING_PRESSURE_LEVEL,
+        CRITICAL_PRESSURE_LEVEL,
+    ):
         return "telemetry-invalid"
     if (
         sample.physical_cores is None
@@ -1768,7 +2109,9 @@ def _sample_invalid_reason(sample: Sample, now: float) -> Optional[str]:
     return None
 
 
-def _signal_owned_group(identity: Dict[str, Any], signum: int, deps: SupervisorDeps) -> bool:
+def _signal_owned_group(
+    identity: Dict[str, Any], signum: int, deps: SupervisorDeps
+) -> bool:
     if (
         identity.get("uid") != os.getuid()
         or not identity.get("task_key")
@@ -1792,28 +2135,135 @@ def _signal_owned_group(identity: Dict[str, Any], signum: int, deps: SupervisorD
     return True
 
 
-def _request_global_pause(registry: Registry, reason: str, deps: SupervisorDeps, *, urgent: bool = False) -> Optional[str]:
+def _process_pause_identity(
+    pid: int,
+    task_key: str,
+    boot_id: str,
+    table: Dict[int, ProcessInfo],
+    uid: int,
+) -> Optional[Dict[str, Any]]:
+    info = table.get(pid)
+    if info is None or info.uid != uid:
+        return None
+    return {
+        "pid": info.pid,
+        "start": info.start_token,
+        "uid": info.uid,
+        "boot_id": boot_id,
+        "task_key": task_key,
+    }
+
+
+def signal_verified_processes(
+    identities: Sequence[Dict[str, Any]],
+    signum: int,
+    deps: SupervisorDeps,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Send a signal to each process whose identity still matches the live process table.
+
+    Args:
+        identities: Recorded process identities (pid, uid, start token, task key, boot id).
+        signum: Signal number to send.
+        deps: Supervisor dependencies providing the process table reader.
+
+    Returns:
+        A tuple of identities that were signalled and identities that were not.
+
+    """
+    try:
+        table = deps.process_table_reader()
+    except Exception:
+        return [], [item for item in identities if isinstance(item, dict)]
+    succeeded: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for identity in identities:
+        if not isinstance(identity, dict):
+            continue
+        if (
+            identity.get("uid") != os.getuid()
+            or not identity.get("task_key")
+            or not identity.get("boot_id")
+            or type(identity.get("pid")) is not int
+        ):
+            failed.append(identity)
+            continue
+        if not _identity_matches(table.get(identity["pid"]), identity):
+            failed.append(identity)
+            continue
+        try:
+            os.kill(int(identity["pid"]), signum)
+        except OSError:
+            failed.append(identity)
+            continue
+        succeeded.append(identity)
+    return succeeded, failed
+
+
+def resume_queue_agent_pause(
+    record: Dict[str, Any], deps: SupervisorDeps
+) -> Tuple[bool, List[Dict[str, Any]]]:
+    """Send SIGCONT to the agent processes paused for a queued job.
+
+    Args:
+        record: Registry record that may hold an ``agent_pause`` entry.
+        deps: Supervisor dependencies providing the process table reader.
+
+    Returns:
+        A tuple of whether every process resumed and the identities that failed to resume.
+
+    """
+    pause = record.get("agent_pause") or {}
+    if pause.get("status") not in ("paused", "pause-pending", "requested"):
+        return True, []
+    processes = pause.get("processes")
+    if not isinstance(processes, list) or not processes:
+        return True, []
+    _ok, failed = signal_verified_processes(processes, signal.SIGCONT, deps)
+    return not failed, failed
+
+
+def _request_global_pause(
+    registry: Registry, reason: str, deps: SupervisorDeps, *, urgent: bool = False
+) -> Optional[str]:
     if urgent:
         requested = []
         with registry.lock():
             for current in registry.records():
-                if (current.get("state") != "running" or not isinstance(_workload_identity(current), dict)
-                        or current.get("termination") or current.get("curtail_request") or current.get("pause")):
+                if (
+                    current.get("state") != "running"
+                    or not isinstance(_workload_identity(current), dict)
+                    or current.get("termination")
+                    or current.get("curtail_request")
+                    or current.get("pause")
+                ):
                     continue
                 job_id = current["job_id"]
+
                 def mark(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-                    if record.get("state") != "running" or _workload_identity(record) != _workload_identity(current):
+                    if record.get("state") != "running" or _workload_identity(
+                        record
+                    ) != _workload_identity(current):
                         return None
-                    record["pause"] = {"status": "requested", "reason": reason,
-                                       "source": "global-pressure", "requested_ns": deps.monotonic_ns(),
-                                       "selection": "critical-all"}
+                    record["pause"] = {
+                        "status": "requested",
+                        "reason": reason,
+                        "source": "global-pressure",
+                        "requested_ns": deps.monotonic_ns(),
+                        "selection": "critical-all",
+                    }
                     record["state"] = "pause-requested"
                     return record
+
                 changed = registry.update(job_id, mark)
                 if changed is not None:
                     requested.append(changed)
         for record in requested:
-            _log_event(registry.directory, "pause-requested", record, detail=reason + "; critical-all")
+            _log_event(
+                registry.directory,
+                "pause-requested",
+                record,
+                detail=reason + "; critical-all",
+            )
         return requested[0]["job_id"] if requested else None
     changed = None
     with registry.lock():
@@ -1851,8 +2301,12 @@ def _request_global_pause(registry: Registry, reason: str, deps: SupervisorDeps,
             and not record.get("termination")
             and not record.get("curtail_request")
         ]
-        ordinary = [record for record in running if record.get("role", "ordinary") != "review"]
-        candidates = ordinary or [record for record in running if record.get("role") == "review"]
+        ordinary = [
+            record for record in running if record.get("role", "ordinary") != "review"
+        ]
+        candidates = ordinary or [
+            record for record in running if record.get("role") == "review"
+        ]
         if not candidates:
             return None
         target = max(candidates, key=lambda row: int(row.get("created_ns", 0)))
@@ -1890,28 +2344,37 @@ def _request_global_pause(registry: Registry, reason: str, deps: SupervisorDeps,
         changed = registry.update(job_id, request)
     if changed is None:
         return None
-    _log_event(registry.directory, "pause-requested", changed, detail=reason + "; " + selection)
+    _log_event(
+        registry.directory, "pause-requested", changed, detail=reason + "; " + selection
+    )
     print(
         "heavy: pause requested task={} role={} reason={}".format(
-            changed.get("task_id"), changed.get("role", "ordinary"), reason + "; " + selection
+            changed.get("task_id"),
+            changed.get("role", "ordinary"),
+            reason + "; " + selection,
         ),
         file=sys.stderr,
     )
     return changed["job_id"]
 
 
-
 def request_critical_pauses() -> List[str]:
+    """Request pauses for workloads under critical pressure and return their job ids."""
     registry = Registry(state_directory())
     registry.ensure_protocol()
     _request_global_pause(registry, "critical-pressure", SupervisorDeps(), urgent=True)
     with registry.lock(exclusive=False):
-        return [record["job_id"] for record in registry.records()
-                if (record.get("pause") or {}).get("reason") == "critical-pressure"
-                and (record.get("pause") or {}).get("status") in ("requested", "paused")]
+        return [
+            record["job_id"]
+            for record in registry.records()
+            if (record.get("pause") or {}).get("reason") == "critical-pressure"
+            and (record.get("pause") or {}).get("status") in ("requested", "paused")
+        ]
 
 
-def _apply_pause_request(registry: Registry, job_id: str, workload: Dict[str, Any], deps: SupervisorDeps) -> bool:
+def _apply_pause_request(
+    registry: Registry, job_id: str, workload: Dict[str, Any], deps: SupervisorDeps
+) -> bool:
     changed = None
     with registry.lock():
         current = registry._read_record(job_id)
@@ -1946,7 +2409,12 @@ def _apply_pause_request(registry: Registry, job_id: str, workload: Dict[str, An
     if changed is None:
         return False
     try:
-        _log_event(registry.directory, "paused", changed, detail=(changed.get("pause") or {}).get("reason"))
+        _log_event(
+            registry.directory,
+            "paused",
+            changed,
+            detail=(changed.get("pause") or {}).get("reason"),
+        )
     except Exception:
         pass
     return True
@@ -1990,7 +2458,10 @@ def _resume_current(
                 if row.get("state") in ("paused", "complete", "removed"):
                     continue
                 supervisor = row.get("supervisor")
-                if not isinstance(supervisor, dict) or supervisor.get("boot_id") != boot_id:
+                if (
+                    not isinstance(supervisor, dict)
+                    or supervisor.get("boot_id") != boot_id
+                ):
                     continue
                 active, supervisor_active = _record_live(row, table)
                 if active or supervisor_active:
@@ -1998,7 +2469,9 @@ def _resume_current(
             active_count += deps.legacy_slots(table)
         except Exception:
             return False
-        if active_count >= slot_limit or not _signal_owned_group(workload, signal.SIGCONT, deps):
+        if active_count >= slot_limit or not _signal_owned_group(
+            workload, signal.SIGCONT, deps
+        ):
             return False
 
         def mark_running(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -2017,7 +2490,12 @@ def _resume_current(
     if changed is None:
         return False
     try:
-        _log_event(registry.directory, "resumed", changed, detail="healthy telemetry and positive capacity")
+        _log_event(
+            registry.directory,
+            "resumed",
+            changed,
+            detail="healthy telemetry and positive capacity",
+        )
     except Exception:
         pass
     return True
@@ -2043,10 +2521,14 @@ def _supervise_running(
     root_exit_code: Optional[int] = None
     while True:
         if watchdog is not None and watchdog.poll() is not None:
-            _curtail_current(registry, job_id, workload, "watchdog-failure", deps, workload_process)
+            _curtail_current(
+                registry, job_id, workload, "watchdog-failure", deps, workload_process
+            )
             return 125
         if stop_event():
-            _curtail_current(registry, job_id, workload, "interrupted", deps, workload_process)
+            _curtail_current(
+                registry, job_id, workload, "interrupted", deps, workload_process
+            )
             return 130
         deadline = deps.clock() + SAMPLE_INTERVAL
         registry.write_heartbeat(job_id, deps.monotonic_ns())
@@ -2056,8 +2538,17 @@ def _supervise_running(
             return int(root_exit_code)
         current = _record(registry, job_id)
         request = current.get("curtail_request") or {}
-        if request.get("source") == "external-request" or (request and request.get("source") != "host-alarm"):
-            _curtail_current(registry, job_id, workload, request.get("reason", "requested"), deps, workload_process)
+        if request.get("source") == "external-request" or (
+            request and request.get("source") != "host-alarm"
+        ):
+            _curtail_current(
+                registry,
+                job_id,
+                workload,
+                request.get("reason", "requested"),
+                deps,
+                workload_process,
+            )
             return 125
         if request.get("source") == "host-alarm":
             _clear_curtail_request(registry, job_id)
@@ -2069,7 +2560,11 @@ def _supervise_running(
             sample = getattr(exc, "partial_sample", None)
             sample_error = True
         now = deps.clock()
-        invalid_reason = "telemetry-missing" if sample_error or sample is None else _sample_invalid_reason(sample, now)
+        invalid_reason = (
+            "telemetry-missing"
+            if sample_error or sample is None
+            else _sample_invalid_reason(sample, now)
+        )
         slot_limit = None
         pressure_reason = None
         if invalid_reason is None and sample is not None:
@@ -2084,14 +2579,18 @@ def _supervise_running(
             except Exception:
                 invalid_reason = "capacity-unavailable"
         critical = sample is not None and critical_pressure(sample)
-        unhealthy_reason = "critical-pressure" if critical else (invalid_reason or pressure_reason)
+        unhealthy_reason = (
+            "critical-pressure" if critical else (invalid_reason or pressure_reason)
+        )
         if unhealthy_reason:
             healthy_since = None
             if pressure_since is None:
                 pressure_since = now
             if critical or now - pressure_since >= PRESSURE_HOLD_SECONDS:
                 try:
-                    _request_global_pause(registry, unhealthy_reason, deps, urgent=critical)
+                    _request_global_pause(
+                        registry, unhealthy_reason, deps, urgent=critical
+                    )
                 except Exception:
                     pass
         else:
@@ -2107,7 +2606,9 @@ def _supervise_running(
                     healthy_since = now
                 elif now - healthy_since >= RECOVERY_HOLD_SECONDS:
                     try:
-                        resumed = _resume_current(registry, job_id, workload, sample, deps)
+                        resumed = _resume_current(
+                            registry, job_id, workload, sample, deps
+                        )
                     except Exception:
                         resumed = False
                     if resumed:
@@ -2115,7 +2616,12 @@ def _supervise_running(
                         last_resume_retry = None
                     elif last_resume_retry is None or now - last_resume_retry >= 30.0:
                         try:
-                            _log_event(registry.directory, "resume-retry", current, detail="capacity, active slots, identity, or signal not confirmed")
+                            _log_event(
+                                registry.directory,
+                                "resume-retry",
+                                current,
+                                detail="capacity, active slots, identity, or signal not confirmed",
+                            )
                         except Exception:
                             pass
                         last_resume_retry = now
@@ -2131,7 +2637,12 @@ def _supervise_running(
                 last_pause_retry = None
             elif last_pause_retry is None or now - last_pause_retry >= 30.0:
                 try:
-                    _log_event(registry.directory, "pause-retry", current, detail="identity or signal not confirmed")
+                    _log_event(
+                        registry.directory,
+                        "pause-retry",
+                        current,
+                        detail="identity or signal not confirmed",
+                    )
                 except Exception:
                     pass
                 last_pause_retry = now
@@ -2171,7 +2682,9 @@ def _launch_job(
                 sample = deps.sample()
             except Exception as exc:
                 if deps.clock() - started >= MAX_WAIT_SECONDS:
-                    raise HeavyError("admission timed out: telemetry unavailable") from exc
+                    raise HeavyError(
+                        "admission timed out: telemetry unavailable"
+                    ) from exc
                 if deps.clock() - last_message >= 60:
                     print("heavy: waiting (telemetry unavailable)", file=sys.stderr)
                     last_message = deps.clock()
@@ -2240,19 +2753,36 @@ def _launch_job(
         open_gate()
         gate_opened = True
         _log_event(registry.directory, "started", record)
-        exit_code = _supervise_running(registry, job_id, record, workload_process, watchdog, deps, stop_event=stop_event)
+        exit_code = _supervise_running(
+            registry,
+            job_id,
+            record,
+            workload_process,
+            watchdog,
+            deps,
+            stop_event=stop_event,
+        )
         cleanup_record = _normal_completion(workload, deps)
         _mark_complete(
             registry,
             job_id,
-            state=("complete" if exit_code == 0 else "curtailed") if cleanup_record else "supervision-failed",
+            state=("complete" if exit_code == 0 else "curtailed")
+            if cleanup_record
+            else "supervision-failed",
         )
         return exit_code
     except Exception:
         if close_gate is not None and not gate_opened:
             close_gate()
         if workload_process is not None and record.get("workload"):
-            _curtail_current(registry, job_id, record["workload"], "supervisor-failure", deps, workload_process)
+            _curtail_current(
+                registry,
+                job_id,
+                record["workload"],
+                "supervisor-failure",
+                deps,
+                workload_process,
+            )
             cleanup_record = _normal_completion(record["workload"], deps)
         elif workload_process is not None:
             try:
@@ -2292,7 +2822,9 @@ def _launch_job(
                         registry.remove(job_id)
                 except Exception:
                     pass
-            elif record.get("workload") and (watchdog is None or watchdog.poll() is not None):
+            elif record.get("workload") and (
+                watchdog is None or watchdog.poll() is not None
+            ):
                 try:
                     watchdog_launch = deps.launch_watchdog or _default_launch_watchdog
                     watchdog_launch(job_id)
@@ -2316,6 +2848,7 @@ def watchdog_loop(
     boot_reader: Callable[[], str] = kernel_boot_identity,
     terminate: Callable[..., bool] = terminate_owned_group,
 ) -> int:
+    """Watch a job's registry record and heartbeat, terminating its workload when they fail."""
     cached = None
     while True:
         try:
@@ -2325,7 +2858,12 @@ def watchdog_loop(
             if cached is None:
                 return 1
             try:
-                if terminate(cached["workload"], reason="watchdog-registry-failure", table_reader=table_reader, boot_reader=boot_reader):
+                if terminate(
+                    cached["workload"],
+                    reason="watchdog-registry-failure",
+                    table_reader=table_reader,
+                    boot_reader=boot_reader,
+                ):
                     return 1
             except Exception:
                 pass
@@ -2369,13 +2907,19 @@ def watchdog_loop(
             continue
         if record.get("state") == "complete":
             try:
-                members = _safe_group_members(cached["workload"], table_reader=table_reader, boot_reader=boot_reader)
+                members = _safe_group_members(
+                    cached["workload"],
+                    table_reader=table_reader,
+                    boot_reader=boot_reader,
+                )
             except Exception:
                 members = None
             if members == []:
                 return 0
         heartbeat_age = clock_ns() - (heartbeat or 0)
-        stale = heartbeat is None or heartbeat_age > int(WATCHDOG_STALE_SECONDS * 1_000_000_000)
+        stale = heartbeat is None or heartbeat_age > int(
+            WATCHDOG_STALE_SECONDS * 1_000_000_000
+        )
         termination = record.get("termination") or {}
         if termination and not stale:
             sleep(WATCHDOG_INTERVAL)
@@ -2394,7 +2938,9 @@ def watchdog_loop(
                 claimed = None
             if claimed is None:
                 try:
-                    claimed = _takeover_termination(registry, job_id, cached["workload"], os.getpid())
+                    claimed = _takeover_termination(
+                        registry, job_id, cached["workload"], os.getpid()
+                    )
                 except Exception:
                     claimed = None
             if claimed is None:
@@ -2412,7 +2958,12 @@ def watchdog_loop(
                 sleep(WATCHDOG_INTERVAL)
                 continue
             try:
-                success = terminate(cached["workload"], reason="stale-supervision-heartbeat", table_reader=table_reader, boot_reader=boot_reader)
+                success = terminate(
+                    cached["workload"],
+                    reason="stale-supervision-heartbeat",
+                    table_reader=table_reader,
+                    boot_reader=boot_reader,
+                )
             except Exception:
                 success = False
             if success:
@@ -2424,7 +2975,9 @@ def watchdog_loop(
         sleep(WATCHDOG_INTERVAL)
 
 
-def _watchdog_takeover_record(record: Dict[str, Any], workload: Dict[str, Any], claimant_pid: int) -> Optional[Dict[str, Any]]:
+def _watchdog_takeover_record(
+    record: Dict[str, Any], workload: Dict[str, Any], claimant_pid: int
+) -> Optional[Dict[str, Any]]:
     if _workload_identity(record) != workload or not record.get("termination"):
         return None
     termination = record["termination"]
@@ -2435,7 +2988,9 @@ def _watchdog_takeover_record(record: Dict[str, Any], workload: Dict[str, Any], 
     return record
 
 
-def _takeover_termination(registry: Registry, job_id: str, workload: Dict[str, Any], claimant_pid: int) -> Optional[Dict[str, Any]]:
+def _takeover_termination(
+    registry: Registry, job_id: str, workload: Dict[str, Any], claimant_pid: int
+) -> Optional[Dict[str, Any]]:
     with registry.lock():
         return registry.update(
             job_id,
@@ -2447,7 +3002,9 @@ def _watchdog_main(job_id: str) -> int:
     return watchdog_loop(job_id, Registry(state_directory()))
 
 
-def _project_build_args(argv: Sequence[str], cwd: str) -> Tuple[List[str], Optional[str]]:
+def _project_build_args(
+    argv: Sequence[str], cwd: str
+) -> Tuple[List[str], Optional[str]]:
     if not argv or os.path.basename(argv[0]) != "xcodebuild":
         return list(argv), None
     project_path = None
@@ -2470,7 +3027,14 @@ def _project_build_args(argv: Sequence[str], cwd: str) -> Tuple[List[str], Optio
         rewritten.append(arg)
         index += 1
     home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    derived_data = home / "Library" / "Developer" / "Xcode" / "DerivedData" / ("shared-" + project_key)
+    derived_data = (
+        home
+        / "Library"
+        / "Developer"
+        / "Xcode"
+        / "DerivedData"
+        / ("shared-" + project_key)
+    )
     rewritten.extend(["-derivedDataPath", str(derived_data)])
     return rewritten, project_key
 
@@ -2493,7 +3057,11 @@ def _acquire_project_lock(
         flags |= os.O_NOFOLLOW
     fd = os.open(str(path), flags, 0o600)
     info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != registry.uid or info.st_mode & 0o077:
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != registry.uid
+        or info.st_mode & 0o077
+    ):
         os.close(fd)
         raise HeavyError("project lock file is unsafe")
     started = clock()
@@ -2525,6 +3093,7 @@ def run_supervisor(
     role: str = "ordinary",
     stop_event: Callable[[], bool] = lambda: False,
 ) -> int:
+    """Queue or launch argv as a supervised workload and return its exit code."""
     if not argv or not str(argv[0]).strip():
         raise HeavyError("usage: heavy <command> [args...]")
     dependencies = deps or SupervisorDeps()
@@ -2561,10 +3130,13 @@ def _safe_registry_for_cli() -> Registry:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Run the heavy command line and return the process exit code."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     if argv is None and not sys.flags.isolated:
         interpreter = "/usr/bin/python3"
-        os.execv(interpreter, [interpreter, "-I", os.path.realpath(__file__)] + arguments)
+        os.execv(
+            interpreter, [interpreter, "-I", os.path.realpath(__file__)] + arguments
+        )
     if arguments[:1] == ["--workload-bootstrap"]:
         if len(arguments) < 3 or not arguments[1].isdigit():
             return 125
@@ -2596,15 +3168,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if arguments[:1] == ["status"]:
             if len(arguments) != 1:
                 raise HeavyError("usage: heavy status")
-            print(json.dumps(status_payload(registry), sort_keys=True, separators=(",", ":")))
+            print(
+                json.dumps(
+                    status_payload(registry), sort_keys=True, separators=(",", ":")
+                )
+            )
             return 0
         if arguments[:1] == ["request-curtail"]:
             if len(arguments) != 1:
                 raise HeavyError("usage: heavy request-curtail")
-            print(json.dumps(_write_request_for_newest(registry), sort_keys=True, separators=(",", ":")))
+            print(
+                json.dumps(
+                    _write_request_for_newest(registry),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
             return 0
         if not arguments:
-            raise HeavyError("usage: heavy [--review] <command...> | status | request-curtail")
+            raise HeavyError(
+                "usage: heavy [--review] <command...> | status | request-curtail"
+            )
         interrupted = {"signal": None}
 
         def on_signal(signum: int, _frame: Any) -> None:
@@ -2613,7 +3197,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         previous_int = signal.signal(signal.SIGINT, on_signal)
         previous_term = signal.signal(signal.SIGTERM, on_signal)
         try:
-            return run_supervisor(arguments, registry=registry, role=role, stop_event=lambda: interrupted["signal"] is not None)
+            return run_supervisor(
+                arguments,
+                registry=registry,
+                role=role,
+                stop_event=lambda: interrupted["signal"] is not None,
+            )
         finally:
             signal.signal(signal.SIGINT, previous_int)
             signal.signal(signal.SIGTERM, previous_term)
@@ -2625,23 +3214,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 74
 
 
-
 def sample_with_emergency(
-    *, command_runner: Callable[[Sequence[str], float], str] = _run_native,
+    *,
+    command_runner: Callable[[Sequence[str], float], str] = _run_native,
     clock: Callable[[], float] = monotonic,
 ) -> Sample:
+    """Sample host telemetry, attaching a partial sample to the error when a full one fails."""
     captured: Dict[str, str] = {}
+
     def capture(argv: Sequence[str], timeout: float) -> str:
         output = command_runner(argv, timeout)
         key = argv[-1] if argv[0] == "/usr/sbin/sysctl" else argv[0]
         captured[key] = output
         return output
+
     try:
         return sample_host(command_runner=capture, clock=clock)
     except TelemetryError as exc:
         pressure = physical = cores = headroom = memory_used = load = None
         try:
-            pressure = parse_pressure_level(captured.get("kern.memorystatus_vm_pressure_level", ""))
+            pressure = parse_pressure_level(
+                captured.get("kern.memorystatus_vm_pressure_level", "")
+            )
         except TelemetryError:
             pass
         try:
@@ -2667,10 +3261,16 @@ def sample_with_emergency(
                 memory_used = (1 - headroom / physical) * 100
             except TelemetryError:
                 pass
-        partial = Sample(pressure_level=pressure, cpu_busy_pct=None,
-                         memory_used_pct=memory_used, headroom_bytes=headroom,
-                         physical_bytes=physical, load_per_core=load,
-                         captured_monotonic=clock(), physical_cores=cores)
+        partial = Sample(
+            pressure_level=pressure,
+            cpu_busy_pct=None,
+            memory_used_pct=memory_used,
+            headroom_bytes=headroom,
+            physical_bytes=physical,
+            load_per_core=load,
+            captured_monotonic=clock(),
+            physical_cores=cores,
+        )
         if critical_pressure(partial):
             exc.partial_sample = partial
         raise

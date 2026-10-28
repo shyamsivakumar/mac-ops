@@ -17,6 +17,7 @@ from contextlib import contextmanager
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+import agent_heavy_wait_pause
 import board_resources
 
 STATE_DIR = Path.home() / ".local" / "state" / "mac-ops"
@@ -27,6 +28,7 @@ STATE = STATE_DIR / "board-governor.state.json"
 CAPACITY = STATE_DIR / "capacity.json"
 CAPACITY_STATE = STATE_DIR / "capacity-state.json"
 STATUS = STATE_DIR / "controller-status.json"
+AGENT_HEAVY_PAUSE_STATE = STATE_DIR / "agent-heavy-wait-pause.json"
 LOG = STATE_DIR / "controller.jsonl"
 LOCK = STATE_DIR / "controller.lock"
 CONTROLLER_INTERVAL_SECONDS = 5.0
@@ -605,6 +607,49 @@ def _heavy_module():
     return board_resources._heavy_module()
 
 
+def _agent_heavy_wait_pause_tick(helper, boot_id, agent_census, admission_active, *, critical_pressure=False):
+    state = _read_private_json(AGENT_HEAVY_PAUSE_STATE, allow_missing=True)
+    deps = helper.SupervisorDeps()
+    try:
+        new_state, summary = agent_heavy_wait_pause.tick(
+            heavy_mod=helper,
+            boot_id=boot_id,
+            agent_census=agent_census,
+            admission_active=admission_active,
+            state=state,
+            critical_pressure=critical_pressure,
+        )
+    except Exception as exc:
+        cleared, resume_info = agent_heavy_wait_pause.resume_all(
+            state,
+            heavy_mod=helper,
+            boot_id=boot_id,
+            deps=deps,
+            reason="tick-error",
+        )
+        atomic_json(AGENT_HEAVY_PAUSE_STATE, cleared)
+        summary = {"action": "error-resume", "error": type(exc).__name__, "resume": resume_info}
+        new_state = cleared
+    else:
+        atomic_json(AGENT_HEAVY_PAUSE_STATE, new_state)
+    return summary
+
+
+def _resume_agents_on_controller_start(helper):
+    boot_id = helper.kernel_boot_identity()
+    state = _read_private_json(AGENT_HEAVY_PAUSE_STATE, allow_missing=True)
+    deps = helper.SupervisorDeps()
+    cleared, resume_info = agent_heavy_wait_pause.resume_all(
+        state,
+        heavy_mod=helper,
+        boot_id=boot_id,
+        deps=deps,
+        reason="controller-start",
+    )
+    atomic_json(AGENT_HEAVY_PAUSE_STATE, cleared)
+    return resume_info
+
+
 def _capacity_current(boot_id, now_wall):
     value = _read_private_json(CAPACITY, allow_missing=True, max_bytes=4096)
     if value is None:
@@ -1167,16 +1212,21 @@ def controller_tick(*, board_control=True, cfg=None):
             except Exception as exc:
                 entry["critical_curtailment_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
 
+    agent_census = None
+    admission_active = []
+
     if board_control:
         try:
             if cfg is None:
                 raise ValueError("Board policy configuration is unavailable")
-            agent_census = None
             if sample is not None and not helper.critical_pressure(sample):
                 try:
-                    agent_census = board_resources.board_agent_rss_census()
+                    admission = board_resources.board_admission_snapshot()
+                    admission_active = admission.get("active") or []
+                    agent_census = board_resources.board_agent_rss_census(admission)
                 except (OSError, RuntimeError, ValueError, TypeError):
                     agent_census = None
+                    admission_active = []
             if agent_census is not None:
                 entry["board_agent_census"] = agent_census
             entry["board"] = _board_control_tick(
@@ -1197,6 +1247,34 @@ def controller_tick(*, board_control=True, cfg=None):
             }
         except Exception as exc:
             entry["board_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
+
+    pause_admission = list(admission_active)
+    critical_for_pause = bool(sample is not None and helper.critical_pressure(sample))
+    if boot_id is not None:
+        try:
+            admission = board_resources.board_admission_snapshot()
+            pause_admission = admission.get("active") or []
+            try:
+                pause_census = board_resources.board_agent_rss_census(admission)
+            except (OSError, RuntimeError, ValueError, TypeError):
+                pause_census = None
+            entry["agent_heavy_wait_pause"] = _agent_heavy_wait_pause_tick(
+                helper,
+                boot_id,
+                pause_census,
+                pause_admission,
+                critical_pressure=critical_for_pause,
+            )
+        except Exception as exc:
+            try:
+                resume_info = _resume_agents_on_controller_start(helper)
+            except Exception as resume_exc:
+                resume_info = {"error": type(resume_exc).__name__}
+            entry["agent_heavy_wait_pause"] = {
+                "action": "fatal-resume",
+                "error": type(exc).__name__,
+                "resume": resume_info,
+            }
 
     entry["updated_at"] = time.time()
     append_log(entry)
@@ -1259,6 +1337,14 @@ def run_controller(*, once=False, board_control=True, cfg=None):
         if not acquired:
             print(json.dumps({"schema": 1, "status": "already_running", "lock": str(LOCK)}))
             return 0
+        helper = _heavy_module()
+        try:
+            start_resume = _resume_agents_on_controller_start(helper)
+            print(json.dumps({"schema": 1, "status": "controller_start",
+                              "agent_heavy_wait_resume": start_resume},
+                             allow_nan=False, separators=(",", ":")), flush=True)
+        except Exception as exc:
+            print(type(exc).__name__ + ": " + str(exc).splitlines()[0][:240], file=sys.stderr, flush=True)
         while True:
             started = time.monotonic()
             try:
