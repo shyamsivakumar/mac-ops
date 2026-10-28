@@ -31,20 +31,6 @@ PROMPT_DESC_CAP = 12_000
 PROMPT_NOTE_CAP = 8_000
 
 
-def _adjudicated_recall_block(bundle: ReviewBundle) -> str:
-    if not bundle.adjudicated_defects:
-        return ""
-    lines = [
-        "adjudicated_defects_for_recall (each ID must appear in findings — "
-        "name the ID or cover the same defect in the subject text):",
-    ]
-    for d in bundle.adjudicated_defects:
-        note = f" — {d.note}" if d.note else ""
-        lines.append(f"- {d.requirement_id} ({d.severity}){note}")
-    lines.append("")
-    return "\n".join(lines)
-
-
 def _shadow_prompt(
     bundle: ReviewBundle,
     *,
@@ -75,7 +61,6 @@ def _shadow_prompt(
         '{"pass":bool,"findings":[{"severity":"critical|major|minor","subject":"..."}]}\n'
         f"{pass_rule}\n\n"
         f"{policy_block}"
-        f"{_adjudicated_recall_block(bundle)}"
         f"task={bundle.task_id}\nreview_round={bundle.review_round}\n"
         f"commit={bundle.head}\nbase={bundle.diff_base}\ninput_hash={bundle.input_hash}\n"
         f"title={bundle.title[:200]}\nstat={bundle.stat}\n\n"
@@ -84,6 +69,11 @@ def _shadow_prompt(
         f"saved_review_proof:\n{proof}\n\n"
         f"agent_closing_note_at_commit:\n{note or '(none for this commit)'}\n"
     )
+
+
+def _is_top_level_verdict(obj: dict[str, Any]) -> bool:
+    """Reject nested finding objects and other non-verdict JSON dicts."""
+    return "pass" in obj or obj.get("error") is True
 
 
 def _extract_json_verdict(raw: str) -> dict[str, Any] | None:
@@ -101,16 +91,28 @@ def _extract_json_verdict(raw: str) -> dict[str, Any] | None:
             obj = json.loads(cand)
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict):
+        if isinstance(obj, dict) and _is_top_level_verdict(obj):
             return obj
-    match = re.search(r"\{[\s\S]*?\}\s*(?:\n|$)", text)
+    # Top-level verdict only (must include "pass"); no nested-object fallback.
+    match = re.search(r'^\s*\{[\s\S]*"pass"\s*:', text, re.MULTILINE)
     if match:
-        try:
-            obj = json.loads(match.group(0).strip())
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
+        start = match.start()
+        depth = 0
+        for i in range(start, len(text)):
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    snippet = text[start : i + 1]
+                    try:
+                        obj = json.loads(snippet)
+                    except json.JSONDecodeError:
+                        return None
+                    if isinstance(obj, dict) and _is_top_level_verdict(obj):
+                        return obj
+                    return None
     return None
 
 

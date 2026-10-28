@@ -45,14 +45,15 @@ class TestShadowPrompt(unittest.TestCase):
         self.assertIn(LEGACY_PASS_RULE, prompt)
         self.assertNotIn("reviewer.instructions (board mac-ops)", prompt)
 
-    def test_adjudicated_defects_listed_for_recall(self):
+    def test_prompt_never_leaks_adjudicated_requirement_ids(self):
         bundle = _minimal_bundle()
         bundle.adjudicated_defects = [
             AdjudicatedDefect("REQ-SPX-LEVEL-TRACK", "critical"),
         ]
-        prompt = _shadow_prompt(bundle, review_policy="board")
-        self.assertIn("adjudicated_defects_for_recall", prompt)
-        self.assertIn("REQ-SPX-LEVEL-TRACK", prompt)
+        for policy in ("board", "legacy"):
+            prompt = _shadow_prompt(bundle, review_policy=policy)
+            self.assertNotIn("adjudicated_defects_for_recall", prompt)
+            self.assertNotIn("REQ-SPX-LEVEL-TRACK", prompt)
 
 
 if __name__ == "__main__":

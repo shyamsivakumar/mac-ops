@@ -37,34 +37,50 @@ def verdict_from_raw_entry(
         )
     raw = entry.get("raw") or ""
     parsed = _extract_json_verdict(raw)
-    if parsed is None:
-        line = raw.split("\n", 1)[0].strip()
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            v = _parse_verdict(raw, model, repeat)
-            if not v.error:
-                return v
-            subjects = [str(s) for s in (entry.get("subjects") or []) if s]
-            req_ids: list[str] = []
-            for s in subjects:
-                for rid in requirement_ids_for_subject(s):
-                    if rid not in req_ids:
-                        req_ids.append(rid)
-            for rid in entry.get("requirement_ids") or []:
-                rid_s = str(rid)
-                if rid_s not in req_ids:
-                    req_ids.append(rid_s)
+    if parsed is None or "findings" not in parsed:
+        v = _parse_verdict(raw, model, repeat)
+        if not v.error:
             return ShadowVerdict(
-                pass_verdict=False,
-                finding_subjects=subjects,
-                requirement_ids=req_ids,
+                pass_verdict=v.pass_verdict,
+                finding_subjects=v.finding_subjects,
+                requirement_ids=v.requirement_ids,
                 model=model,
                 repeat=repeat,
-                raw=raw[:800],
+                raw=v.raw,
                 error=True,
             )
+        subjects = [str(s) for s in (entry.get("subjects") or []) if s]
+        req_ids: list[str] = []
+        for s in subjects:
+            for rid in requirement_ids_for_subject(s):
+                if rid not in req_ids:
+                    req_ids.append(rid)
+        for rid in entry.get("requirement_ids") or []:
+            rid_s = str(rid)
+            if rid_s not in req_ids:
+                req_ids.append(rid_s)
+        return ShadowVerdict(
+            pass_verdict=False,
+            finding_subjects=subjects,
+            requirement_ids=req_ids,
+            model=model,
+            repeat=repeat,
+            raw=raw[:800],
+            error=True,
+        )
+    if parsed.get("error"):
+        return ShadowVerdict(
+            pass_verdict=False,
+            finding_subjects=[],
+            requirement_ids=[],
+            model=model,
+            repeat=repeat,
+            raw=raw[:800],
+            error=True,
+        )
     findings = parsed.get("findings") or []
+    if not isinstance(findings, list):
+        return _parse_verdict(raw, model, repeat)
     subjects = [str(f.get("subject") or "") for f in findings if f.get("subject")]
     req_ids: list[str] = []
     for s in subjects:
