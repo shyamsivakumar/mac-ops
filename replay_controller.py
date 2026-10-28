@@ -119,10 +119,16 @@ def main():
             store[Path(path).name] = dict(value)
             context["calls"].append(Path(path).name)
 
+        def board_agent_rss_census(_admission=None):
+            return context.get("board_agent_census") or {
+                "schema": 1, "agents": [], "rss_bytes": [], "complete": False, "errors": [],
+            }
+
         resources = SimpleNamespace(
             compressor_snapshot=lambda: context["compressor"],
             active_heavy_census=lambda: context["census"],
             board_admission_snapshot=admission_snapshot,
+            board_agent_rss_census=board_agent_rss_census,
         )
         namespace.update(
             _heavy_module=lambda: helper,

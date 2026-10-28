@@ -142,6 +142,27 @@ def board_admission_snapshot():
     return _admission()
 
 
+def board_agent_rss_census(admission=None):
+    if admission is not None and not isinstance(admission, dict):
+        raise ValueError("board admission snapshot is invalid")
+    admission = admission if admission is not None else board_admission_snapshot()
+    active = admission.get("active")
+    if not isinstance(active, list):
+        raise ValueError("board admission active list is missing")
+    if not active:
+        return {"schema": 1, "agents": [], "rss_bytes": [], "complete": True, "errors": []}
+    errors = []
+    tasks = _read_slot_tasks(active)
+    agents = _collect_agents(tasks, errors)
+    rss_bytes = []
+    for row in agents:
+        value = row.get("rss_bytes")
+        if type(value) is int and value > 0:
+            rss_bytes.append(value)
+    complete = len(rss_bytes) == len(active) and not errors
+    return {"schema": 1, "agents": agents, "rss_bytes": rss_bytes, "complete": complete, "errors": errors}
+
+
 def compressor_snapshot():
     output, error = _command(["/usr/bin/vm_stat"], "vm_stat compressor counter")
     if error:
