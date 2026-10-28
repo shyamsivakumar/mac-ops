@@ -607,8 +607,9 @@ def _heavy_module():
     return board_resources._heavy_module()
 
 
-def _agent_heavy_wait_pause_tick(helper, boot_id, agent_census, admission_active):
+def _agent_heavy_wait_pause_tick(helper, boot_id, agent_census, admission_active, *, critical_pressure=False):
     state = _read_private_json(AGENT_HEAVY_PAUSE_STATE, allow_missing=True)
+    deps = helper.SupervisorDeps()
     try:
         new_state, summary = agent_heavy_wait_pause.tick(
             heavy_mod=helper,
@@ -616,14 +617,14 @@ def _agent_heavy_wait_pause_tick(helper, boot_id, agent_census, admission_active
             agent_census=agent_census,
             admission_active=admission_active,
             state=state,
+            critical_pressure=critical_pressure,
         )
     except Exception as exc:
-        table = helper.process_table()
         cleared, resume_info = agent_heavy_wait_pause.resume_all(
             state,
-            table=table,
             heavy_mod=helper,
             boot_id=boot_id,
+            deps=deps,
             reason="tick-error",
         )
         atomic_json(AGENT_HEAVY_PAUSE_STATE, cleared)
@@ -637,12 +638,12 @@ def _agent_heavy_wait_pause_tick(helper, boot_id, agent_census, admission_active
 def _resume_agents_on_controller_start(helper):
     boot_id = helper.kernel_boot_identity()
     state = _read_private_json(AGENT_HEAVY_PAUSE_STATE, allow_missing=True)
-    table = helper.process_table()
+    deps = helper.SupervisorDeps()
     cleared, resume_info = agent_heavy_wait_pause.resume_all(
         state,
-        table=table,
         heavy_mod=helper,
         boot_id=boot_id,
+        deps=deps,
         reason="controller-start",
     )
     atomic_json(AGENT_HEAVY_PAUSE_STATE, cleared)
@@ -1247,16 +1248,22 @@ def controller_tick(*, board_control=True, cfg=None):
         except Exception as exc:
             entry["board_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
 
+    pause_admission = list(admission_active)
+    critical_for_pause = bool(sample is not None and helper.critical_pressure(sample))
     if boot_id is not None:
         try:
-            if not admission_active:
-                admission = board_resources.board_admission_snapshot()
-                admission_active = admission.get("active") or []
+            admission = board_resources.board_admission_snapshot()
+            pause_admission = admission.get("active") or []
+            try:
+                pause_census = board_resources.board_agent_rss_census(admission)
+            except (OSError, RuntimeError, ValueError, TypeError):
+                pause_census = None
             entry["agent_heavy_wait_pause"] = _agent_heavy_wait_pause_tick(
                 helper,
                 boot_id,
-                agent_census if agent_census is not None else entry.get("board_agent_census"),
-                admission_active,
+                pause_census,
+                pause_admission,
+                critical_pressure=critical_for_pause,
             )
         except Exception as exc:
             try:
@@ -1330,6 +1337,14 @@ def run_controller(*, once=False, board_control=True, cfg=None):
         if not acquired:
             print(json.dumps({"schema": 1, "status": "already_running", "lock": str(LOCK)}))
             return 0
+        helper = _heavy_module()
+        try:
+            start_resume = _resume_agents_on_controller_start(helper)
+            print(json.dumps({"schema": 1, "status": "controller_start",
+                              "agent_heavy_wait_resume": start_resume},
+                             allow_nan=False, separators=(",", ":")), flush=True)
+        except Exception as exc:
+            print(type(exc).__name__ + ": " + str(exc).splitlines()[0][:240], file=sys.stderr, flush=True)
         while True:
             started = time.monotonic()
             try:

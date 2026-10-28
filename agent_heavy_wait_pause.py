@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
-import os
+import logging
 import signal
-from collections.abc import Callable, Sequence
 from typing import Any
 
-STATE_SCHEMA = 1
+logger = logging.getLogger(__name__)
+
+STATE_SCHEMA = 2
 PAUSE_REASON = "heavy-queue-wait"
 
 
@@ -28,29 +29,24 @@ def _descendant_pids(root: int, processes: dict[int, Any]) -> set[int]:
     return seen
 
 
-def _cmdline_allows_heavy_wait(cmdline: str) -> bool:
+def _idle_foreground_cmdline(cmdline: str) -> bool:
     if not cmdline:
-        return True
+        return False
     lowered = cmdline.lower()
-    allowed_fragments = (
+    idle_markers = (
         "cursor-agent",
         "cursor_agent_gate",
         "pi_agent_gate",
         "omp_agent_gate",
         "heavy.py",
         "heavy.sh",
-        "/heavy",
-        " python3 -i ",
+        "/.local/bin/heavy",
     )
-    if any(fragment in lowered for fragment in allowed_fragments):
-        return True
-    first = lowered.split()[0]
-    base = os.path.basename(first)
-    return base in ("zsh", "bash", "sh", "-zsh", "-bash", "python", "python3")
+    return any(marker in lowered for marker in idle_markers)
 
 
 def _agent_busy(
-    process_info: dict[str, Any] | None, supervisor_pids: Sequence[int]
+    process_info: dict[str, Any] | None, supervisor_pids: list[int]
 ) -> str | None:
     if not isinstance(process_info, dict):
         return "process-info-missing"
@@ -58,17 +54,22 @@ def _agent_busy(
     for pid in supervisor_pids:
         exclude.add(pid)
     foreground = process_info.get("foreground_processes")
-    if not isinstance(foreground, list):
+    if not isinstance(foreground, list) or not foreground:
         return "foreground-processes-missing"
+    saw_idle = False
     for item in foreground:
         if not isinstance(item, dict):
             return "foreground-process-invalid"
         pid = item.get("pid")
         if pid in exclude:
             continue
-        cmdline = item.get("cmdline") or item.get("argv0") or ""
-        if not _cmdline_allows_heavy_wait(str(cmdline)):
-            return "foreground-command"
+        cmdline = str(item.get("cmdline") or item.get("argv0") or "")
+        if _idle_foreground_cmdline(cmdline):
+            saw_idle = True
+            continue
+        return "foreground-command"
+    if not saw_idle:
+        return "foreground-not-idle"
     return None
 
 
@@ -77,7 +78,7 @@ def _task_key(task_id: str) -> str:
 
 
 def _queue_supervisor_pids(
-    queues: Sequence[dict[str, Any]],
+    queues: list[dict[str, Any]],
     table: dict[int, Any],
     heavy_mod: Any,
     boot_id: str,
@@ -98,7 +99,7 @@ def _queue_supervisor_pids(
 
 
 def _active_heavy_task_keys(
-    records: Sequence[dict[str, Any]], table: dict[int, Any], heavy_mod: Any
+    records: list[dict[str, Any]], table: dict[int, Any], heavy_mod: Any
 ) -> set[str]:
     active = set()
     for record in records:
@@ -116,12 +117,38 @@ def _active_heavy_task_keys(
     return active
 
 
+def _pause_identities_for_agent(
+    *,
+    agent_pids: list[int],
+    supervisor_pids: list[int],
+    task_key: str,
+    boot_id: str,
+    table: dict[int, Any],
+    heavy_mod: Any,
+) -> list[dict[str, Any]]:
+    excluded = set()
+    for supervisor_pid in supervisor_pids:
+        excluded.add(supervisor_pid)
+        excluded.update(_descendant_pids(supervisor_pid, table))
+    identities = []
+    import os
+
+    uid = os.getuid()
+    for pid in agent_pids:
+        if pid in excluded:
+            continue
+        identity = heavy_mod._process_pause_identity(pid, task_key, boot_id, table, uid)
+        if identity is not None:
+            identities.append(identity)
+    return identities
+
+
 def _pause_targets(
     *,
     agent_census: dict[str, Any],
-    admission_active: Sequence[dict[str, Any]],
-    queues: Sequence[dict[str, Any]],
-    records: Sequence[dict[str, Any]],
+    admission_active: list[dict[str, Any]],
+    queues: list[dict[str, Any]],
+    records: list[dict[str, Any]],
     table: dict[int, Any],
     boot_id: str,
     heavy_mod: Any,
@@ -151,32 +178,35 @@ def _pause_targets(
         ):
             eligible = False
             busy = "agent-pids-missing"
-            pause_pids: list[int] = []
+            identities: list[dict[str, Any]] = []
         elif key in running_keys:
             eligible = False
             busy = "heavy-job-active"
-            pause_pids = []
+            identities = []
         elif not task_queues:
             eligible = False
             busy = "not-queued"
-            pause_pids = []
+            identities = []
         elif not supervisor_pids:
             eligible = False
             busy = "queue-supervisor-unverified"
-            pause_pids = []
+            identities = []
         else:
-            excluded = set()
-            for supervisor_pid in supervisor_pids:
-                excluded.add(supervisor_pid)
-                excluded.update(_descendant_pids(supervisor_pid, table))
-            pause_pids = sorted({pid for pid in agent_pids if pid not in excluded})
+            identities = _pause_identities_for_agent(
+                agent_pids=agent_pids,
+                supervisor_pids=supervisor_pids,
+                task_key=key,
+                boot_id=boot_id,
+                table=table,
+                heavy_mod=heavy_mod,
+            )
             busy = _agent_busy(agent.get("process_info"), supervisor_pids)
-            eligible = busy is None and bool(pause_pids)
+            eligible = busy is None and bool(identities)
         targets[task_id] = {
             "task_key": key,
             "eligible": eligible,
             "busy_reason": busy,
-            "pause_pids": pause_pids,
+            "processes": identities,
             "supervisor_pids": supervisor_pids,
             "queue_ids": [
                 row.get("queue_id")
@@ -187,67 +217,114 @@ def _pause_targets(
     return targets
 
 
-def _signal_pids(
-    pids: Sequence[int],
-    signum: int,
-    *,
-    allowed: set[int],
-    boot_id: str,
-    table: dict[int, Any],
-    heavy_mod: Any,
-    signal_pid: Callable[[int, int], None],
-) -> tuple[list[int], list[int]]:
-    ok: list[int] = []
-    failed: list[int] = []
-    for pid in pids:
-        if pid not in allowed:
-            failed.append(pid)
-            continue
-        info = table.get(pid)
-        if info is None or info.uid != os.getuid() or info.state.startswith(("Z", "X")):
-            failed.append(pid)
-            continue
-        try:
-            signal_pid(pid, signum)
-        except OSError:
-            failed.append(pid)
-            continue
-        ok.append(pid)
-    return ok, failed
-
-
 def _empty_state(boot_id: str) -> dict[str, Any]:
-    return {"schema": STATE_SCHEMA, "boot_id": boot_id, "paused": {}}
+    return {
+        "schema": STATE_SCHEMA,
+        "boot_id": boot_id,
+        "paused": {},
+        "resume_pending": [],
+    }
+
+
+def _identity_key(identity: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        identity.get("pid"),
+        identity.get("start"),
+        identity.get("boot_id"),
+        identity.get("task_key"),
+    )
+
+
+def _merge_resume_pending(
+    existing: list[Any], failed: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    pending = [item for item in existing if isinstance(item, dict)]
+    seen = {_identity_key(item) for item in pending}
+    for identity in failed:
+        key = _identity_key(identity)
+        if key not in seen:
+            pending.append(identity)
+            seen.add(key)
+    return pending
+
+
+def _drop_resumed(
+    existing: list[Any], succeeded: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    done = {_identity_key(item) for item in succeeded}
+    return [
+        item
+        for item in existing
+        if isinstance(item, dict) and _identity_key(item) not in done
+    ]
 
 
 def resume_all(
     state: dict[str, Any] | None,
     *,
-    table: dict[int, Any],
     heavy_mod: Any,
     boot_id: str,
-    signal_pid: Callable[[int, int], None] = os.kill,
+    deps: Any,
     reason: str = "resume-all",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(state, dict) or state.get("schema") != STATE_SCHEMA:
         state = _empty_state(boot_id)
-    allowed = set()
+    identities: list[dict[str, Any]] = []
     for entry in (state.get("paused") or {}).values():
         if isinstance(entry, dict):
-            for pid in entry.get("pids") or []:
-                if type(pid) is int and pid > 0:
-                    allowed.add(pid)
-    resumed, failed = _signal_pids(
-        sorted(allowed),
-        signal.SIGCONT,
-        allowed=allowed,
-        boot_id=boot_id,
-        table=table,
-        heavy_mod=heavy_mod,
-        signal_pid=signal_pid,
-    )
+            for item in entry.get("processes") or []:
+                if isinstance(item, dict):
+                    identities.append(item)
+    for item in state.get("resume_pending") or []:
+        if isinstance(item, dict):
+            identities.append(item)
+    deduped = []
+    seen = set()
+    for identity in identities:
+        key = _identity_key(identity)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(identity)
+    resumed, failed = heavy_mod.signal_verified_processes(deduped, signal.SIGCONT, deps)
     cleared = _empty_state(boot_id)
+    if failed:
+        cleared["resume_pending"] = _merge_resume_pending([], failed)
     return cleared, {"reason": reason, "resumed": resumed, "failed": failed}
+
+
+def _sync_queue_agent_pause(
+    registry: Any,
+    queue_id: str,
+    *,
+    processes: list[dict[str, Any]],
+    status: str,
+    requested_ns: int,
+) -> None:
+    def mutate(row: dict[str, Any]) -> dict[str, Any] | None:
+        if row.get("queue_id") != queue_id:
+            return None
+        updated = dict(row)
+        updated["agent_pause"] = {
+            "status": status,
+            "reason": PAUSE_REASON,
+            "requested_ns": requested_ns,
+            "processes": processes,
+        }
+        return updated
+
+    registry.update_queue(queue_id, mutate)
+
+
+def _clear_queue_agent_pause(registry: Any, queue_id: str) -> None:
+    def mutate(row: dict[str, Any]) -> dict[str, Any] | None:
+        if row.get("queue_id") != queue_id or not row.get("agent_pause"):
+            return None
+        updated = dict(row)
+        updated.pop("agent_pause", None)
+        return updated
+
+    registry.update_queue(queue_id, mutate)
 
 
 def tick(
@@ -255,48 +332,72 @@ def tick(
     heavy_mod: Any,
     boot_id: str,
     agent_census: dict[str, Any] | None,
-    admission_active: Sequence[dict[str, Any]],
+    admission_active: list[dict[str, Any]],
     state: dict[str, Any] | None,
-    signal_pid: Callable[[int, int], None] = os.kill,
+    critical_pressure: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    table = heavy_mod.process_table()
+    deps = heavy_mod.SupervisorDeps()
     if not isinstance(state, dict) or state.get("schema") != STATE_SCHEMA:
         state = _empty_state(boot_id)
+    resume_pending = [
+        item for item in (state.get("resume_pending") or []) if isinstance(item, dict)
+    ]
     if state.get("boot_id") != boot_id:
         state, boot_resume = resume_all(
             state,
-            table=table,
             heavy_mod=heavy_mod,
             boot_id=str(state.get("boot_id") or boot_id),
-            signal_pid=signal_pid,
+            deps=deps,
             reason="boot-change",
         )
         state = _empty_state(boot_id)
+        resume_pending = list(state.get("resume_pending") or [])
     else:
         boot_resume = None
 
+    if resume_pending:
+        resumed, failed = heavy_mod.signal_verified_processes(
+            resume_pending, signal.SIGCONT, deps
+        )
+        resume_pending = _drop_resumed(resume_pending, resumed)
+        resume_pending = _merge_resume_pending(resume_pending, failed)
+
     if agent_census is None or not agent_census.get("complete"):
+        if critical_pressure:
+            held = dict(state.get("paused") or {})
+            state = {
+                "schema": STATE_SCHEMA,
+                "boot_id": boot_id,
+                "paused": held,
+                "resume_pending": resume_pending,
+            }
+            return state, {
+                "action": "hold",
+                "reason": "census-incomplete-critical",
+                "boot_resume": boot_resume,
+                "paused_count": len(held),
+            }
         state, resume_info = resume_all(
             state,
-            table=table,
             heavy_mod=heavy_mod,
             boot_id=boot_id,
-            signal_pid=signal_pid,
+            deps=deps,
             reason="census-incomplete",
         )
-        summary = {
+        state["resume_pending"] = resume_pending
+        return state, {
             "action": "resume",
             "resume": resume_info,
             "boot_resume": boot_resume,
             "paused_count": 0,
         }
-        return state, summary
 
     registry = heavy_mod.Registry(heavy_mod.state_directory())
     with registry.lock(exclusive=False):
         queues = registry.queue_records()
         records = registry.records()
 
+    table = heavy_mod.process_table()
     targets = _pause_targets(
         agent_census=agent_census,
         admission_active=admission_active,
@@ -311,70 +412,89 @@ def tick(
     for task_id, entry in list(paused.items()):
         target = targets.get(task_id)
         if target is None or not target.get("eligible"):
-            pids = entry.get("pids") if isinstance(entry, dict) else []
-            allowed = {pid for pid in pids if type(pid) is int}
-            _signal_pids(
-                sorted(allowed),
-                signal.SIGCONT,
-                allowed=allowed,
-                boot_id=boot_id,
-                table=table,
-                heavy_mod=heavy_mod,
-                signal_pid=signal_pid,
-            )
+            processes = entry.get("processes") if isinstance(entry, dict) else []
+            if isinstance(processes, list):
+                resumed, failed = heavy_mod.signal_verified_processes(
+                    processes, signal.SIGCONT, deps
+                )
+                resume_pending = _merge_resume_pending(
+                    _drop_resumed(resume_pending, resumed), failed
+                )
+            for queue_id in (entry or {}).get("queue_ids") or []:
+                if isinstance(queue_id, str):
+                    try:
+                        _clear_queue_agent_pause(registry, queue_id)
+                    except (heavy_mod.HeavyError, OSError) as exc:
+                        logger.warning(
+                            "could not clear agent pause on queue %s: %s",
+                            queue_id,
+                            exc,
+                        )
             paused.pop(task_id, None)
             resumed_tasks.append(task_id)
 
     paused_tasks: list[str] = []
     pending_tasks: list[str] = []
+    now_ns = deps.monotonic_ns()
     for task_id, target in targets.items():
         if not target.get("eligible"):
             continue
-        pause_pids = target["pause_pids"]
+        processes = target["processes"]
         existing = paused.get(task_id)
         if (
             isinstance(existing, dict)
-            and existing.get("pids") == pause_pids
+            and existing.get("processes") == processes
             and existing.get("status") == "paused"
         ):
             continue
-        allowed = set(pause_pids)
-        stopped, failed = _signal_pids(
-            pause_pids,
-            signal.SIGSTOP,
-            allowed=allowed,
-            boot_id=boot_id,
-            table=table,
-            heavy_mod=heavy_mod,
-            signal_pid=signal_pid,
+        stopped, failed = heavy_mod.signal_verified_processes(
+            processes, signal.SIGSTOP, deps
         )
+        status = "paused" if stopped and not failed else "pause-pending"
         if failed and not stopped:
             pending_tasks.append(task_id)
-            paused[task_id] = {
-                "status": "pause-pending",
-                "reason": PAUSE_REASON,
-                "pids": pause_pids,
-                "queue_ids": target.get("queue_ids"),
-            }
-            continue
+        else:
+            paused_tasks.append(task_id)
+        for queue_id in target.get("queue_ids") or []:
+            if isinstance(queue_id, str):
+                try:
+                    _sync_queue_agent_pause(
+                        registry,
+                        queue_id,
+                        processes=processes,
+                        status=status,
+                        requested_ns=now_ns,
+                    )
+                except (heavy_mod.HeavyError, OSError) as exc:
+                    logger.warning(
+                        "could not sync agent pause on queue %s: %s",
+                        queue_id,
+                        exc,
+                    )
         paused[task_id] = {
-            "status": "paused" if not failed else "pause-pending",
+            "status": status,
             "reason": PAUSE_REASON,
-            "pids": pause_pids,
+            "processes": processes,
             "queue_ids": target.get("queue_ids"),
             "stopped": stopped,
             "failed": failed,
         }
-        paused_tasks.append(task_id)
 
-    state = {"schema": STATE_SCHEMA, "boot_id": boot_id, "paused": paused}
+    state = {
+        "schema": STATE_SCHEMA,
+        "boot_id": boot_id,
+        "paused": paused,
+        "resume_pending": resume_pending,
+    }
     summary = {
         "action": "tick",
         "boot_resume": boot_resume,
         "resumed_tasks": resumed_tasks,
         "paused_tasks": paused_tasks,
         "pending_tasks": pending_tasks,
-        "paused_count": sum(1 for entry in paused.values() if isinstance(entry, dict)),
+        "paused_count": len(paused),
+        "resume_pending_count": len(resume_pending),
+        "critical_pressure": critical_pressure,
         "targets": {
             task_id: {
                 "eligible": info["eligible"],
