@@ -191,7 +191,22 @@ def finalize(p):
     return True
 
 
-def install(p, checkout, migrate=False, no_start=False):
+def require_main_checkout(checkout):
+    if not (checkout / ".git").is_dir():
+        raise RuntimeError("Install from the main repository checkout, not a worktree or runtime copy")
+    branch = run(["git", "-C", checkout, "branch", "--show-current"]).strip()
+    if branch != "main":
+        raise RuntimeError("Install only from mac-ops main")
+    if run(["git", "-C", checkout, "status", "--porcelain", "--untracked-files=no"]).strip():
+        raise RuntimeError("Install requires a clean main checkout")
+    head = run(["git", "-C", checkout, "rev-parse", "HEAD"]).strip()
+    remote = run(["git", "-C", checkout, "rev-parse", "origin/main"]).strip()
+    if head != remote:
+        raise RuntimeError("Update main to origin/main before installing")
+    return head
+
+
+def install(p, checkout, migrate=False, no_start=False, source_commit=None):
     if p["legacy"].exists() and not migrate:
         raise RuntimeError("Legacy load tools exist; use install --migrate to preserve their live jobs")
     local = p["state"].parent.parent
@@ -231,7 +246,7 @@ def install(p, checkout, migrate=False, no_start=False):
         plist = p["agents"] / (label + ".plist")
         archive(plist, p["agents"] / "_archive")
         atomic(plist, plistlib.dumps(spec), 0o644)
-    atomic(p["state"] / "installation.json", json.dumps({"checkout": str(checkout), "release": str(p["release"]), "installed_at": time.time()}).encode())
+    atomic(p["state"] / "installation.json", json.dumps({"checkout": str(checkout), "release": str(p["release"]), "installed_at": time.time(), "source_commit": source_commit}).encode())
     if migrate:
         finalize(p)
     if not no_start:
@@ -289,7 +304,8 @@ def main():
     if sys.platform != "darwin":
         raise RuntimeError("Mac load tools require macOS")
     if args.action == "install":
-        install(p, checkout, args.migrate, args.no_start)
+        source_commit = require_main_checkout(checkout)
+        install(p, checkout, args.migrate, args.no_start, source_commit)
     elif args.action == "uninstall":
         uninstall(p)
     elif args.action == "archive-legacy":

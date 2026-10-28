@@ -762,13 +762,17 @@ def _capacity_decision(helper, sample, census, compressor, previous, current, bo
     state, detail = _adaptive_capacity_decision(
         helper, sample, census, compressor, previous, current, boot_id, now_mono)
     floor = min(2, detail["ceiling"])
-    critical = (sample.pressure_level == 4 or sample.cpu_busy_pct >= 95
-                or sample.memory_used_pct >= 95 or sample.load_per_core >= 1.5)
+    critical = helper.critical_pressure(sample)
+    valid = helper._sample_invalid_reason(sample, now_mono) is None
     proposed = detail["target"]
-    target = 0 if critical else max(floor, proposed)
+    target = (0 if critical else max(floor, proposed) if valid
+              else min(current, floor, detail["ceiling"]))
     detail.update(floor=floor, critical=critical, adaptive_target=proposed, target=target)
     if critical:
         detail["reason"] = "critical_pressure"
+        state["healthy_since_monotonic"] = None
+    elif not valid:
+        detail["reason"] = "hold_missing_or_stale_reading"
         state["healthy_since_monotonic"] = None
     elif proposed < floor:
         detail["adaptive_reason"] = detail["reason"]
@@ -846,16 +850,21 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
     memory_reserve = None
     cpu_headroom = None
     memory_headroom = None
+    ceiling = None
     candidate_fits = False
-    if sample is not None and host_veto is None:
+    if sample is not None:
         cores = sample.physical_cores
-        if type(cores) is int and cores > 0:
-            memory_reserve = max(cfg["memory_reserve_bytes"], sample.physical_bytes * cfg["memory_reserve_fraction"])
-            memory_headroom = max(0, sample.headroom_bytes - memory_reserve)
-            cpu_headroom = max(0.0, cores * (1 - cfg["cpu_reserve_fraction"])
-                               - sample.load_per_core * cores)
-            candidate_fits = (memory_headroom >= BOARD_AGENT_MEMORY_BYTES
-                              and cpu_headroom >= BOARD_AGENT_CPU_CORES)
+        physical = sample.physical_bytes
+        if type(cores) is int and cores > 0 and type(physical) is int and physical > 0:
+            memory_reserve = max(cfg["memory_reserve_bytes"], physical * cfg["memory_reserve_fraction"])
+            ceiling = max(0, min(math.floor(max(0, physical - memory_reserve) / BOARD_AGENT_MEMORY_BYTES),
+                                 math.floor(cores * (1 - cfg["cpu_reserve_fraction"]) / BOARD_AGENT_CPU_CORES)))
+            if host_veto is None:
+                memory_headroom = max(0, sample.headroom_bytes - memory_reserve)
+                cpu_headroom = max(0.0, cores * (1 - cfg["cpu_reserve_fraction"])
+                                   - sample.load_per_core * cores)
+                candidate_fits = (memory_headroom >= BOARD_AGENT_MEMORY_BYTES
+                                  and cpu_headroom >= BOARD_AGENT_CPU_CORES)
 
     previous_error = None
     try:
@@ -881,15 +890,11 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
     prior_warning_episode = (previous.get("warning_episode") is True
                              and previous.get("schema") == 2
                              and previous.get("boot_id") == boot_id)
-    critical_pressure = bool(sample_is_fresh and sample is not None and (
-        sample.pressure_level == 4
-        or sample.load_per_core >= getattr(helper, "CRITICAL_LOAD_PER_CORE", 1.5)
-    ))
-    warning_pressure = bool(sample_is_fresh and sample is not None and (
+    critical_pressure = bool(sample_is_fresh and sample is not None and helper.critical_pressure(sample))
+    warning_pressure = bool(sample_is_fresh and sample is not None and not critical_pressure and (
         sample.pressure_level == 2
-        or sample.cpu_busy_pct >= getattr(helper, "MAX_CPU_PCT", 95.0)
-        or sample.memory_used_pct >= getattr(helper, "MAX_MEMORY_PCT", 95.0)
-        or (sample.load_per_core >= 1.0 and not critical_pressure)
+        or (helper._finite_nonnegative(sample.cpu_busy_pct) and sample.cpu_busy_pct >= 95)
+        or (helper._finite_nonnegative(sample.load_per_core) and sample.load_per_core >= 1.0)
         or (compressor_rate is not None and compressor_rate > HEAVY_COMPRESSOR_MAX_GROWTH_BYTES_PER_SECOND)
         or host_veto in ("swap-growth", "memory-headroom", "memory-pressure-warning-low-free")
     ))
@@ -905,6 +910,12 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
         else:
             healthy_since = now_mono
 
+    valid_noncritical = bool(sample_is_fresh and sample is not None
+                             and helper._sample_invalid_reason(sample, now_mono) is None
+                             and not critical_pressure and ceiling is not None)
+    floor = min(ceiling, max(6, active + 1)) if ceiling is not None else None
+    floor_ready = (valid_noncritical
+                   and admission_elapsed < cfg["board_response_seconds_threshold"])
     target = current
     reason = "hold_capacity"
     warning_episode = prior_warning_episode
@@ -913,41 +924,32 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
         reason = "critical_pressure_or_load"
         healthy_since = None
         warning_episode = True
+    elif floor_ready and current < floor:
+        target = floor
+        reason = "board_baseline_floor"
+        healthy_since = None
+        warning_episode = warning_pressure
     elif warning_pressure:
-        if not prior_warning_episode:
-            target = min(current // 2, active)
-            reason = "warning_pressure_cut"
-        else:
-            target = min(current, active)
-            reason = "warning_pressure_hold"
+        target = max(floor if floor_ready else 0,
+                     min(current if prior_warning_episode else current // 2, active))
+        reason = "warning_pressure_hold" if prior_warning_episode else "warning_pressure_cut"
         healthy_since = None
         warning_episode = True
-    elif task_finished:
-        target = min(current, active)
-        reason = "task_finished_close_spare" if current > active else "task_finished_reset_window"
+    elif task_finished or not safe:
+        target = min(current, max(active, floor if floor_ready else 0))
+        reason = ("task_finished_reset_window" if task_finished else
+                  host_veto or "one_agent_capacity_unavailable")
         healthy_since = None
-        warning_episode = False
-    elif not safe:
-        target = min(current, active)
-        reason = host_veto or ("board_sample_slow" if admission_elapsed >= cfg["board_response_seconds_threshold"]
-                               else "one_agent_capacity_unavailable")
-        healthy_since = None
-        warning_episode = prior_warning_episode
-    elif current > active + 1:
-        target = active + 1
-        reason = "single_spare_clamp"
-        healthy_since = None
-        warning_episode = False
-    elif current > active:
-        target = current
-        reason = "single_spare_open"
-        healthy_since = None
-        warning_episode = False
     else:
         warning_episode = False
         candidate = current + 1
-        if candidate > active + 1:
-            reason = "single_spare_cap"
+        pending = max(1, candidate - active)
+        growth_fits = (ceiling is not None and candidate <= ceiling
+                       and memory_headroom is not None and cpu_headroom is not None
+                       and memory_headroom >= pending * BOARD_AGENT_MEMORY_BYTES
+                       and cpu_headroom >= pending * BOARD_AGENT_CPU_CORES)
+        if not growth_fits:
+            reason = "await_capacity_headroom"
             healthy_since = None
         elif healthy_since is not None and now_mono - healthy_since >= BOARD_GROWTH_HOLD_SECONDS:
             target = candidate
@@ -956,8 +958,12 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
         else:
             reason = "await_healthy_window"
 
-    target = min(target, active + 1)
-    if target > current and (target != current + 1 or target > active + 1):
+    if ceiling is not None and target > ceiling:
+        target = ceiling
+        reason = "hardware_ceiling_cut"
+        healthy_since = None
+    floor_raise = bool(floor_ready and current < floor and target == floor)
+    if target > current and not floor_raise and target != current + 1:
         target = current
         reason = "growth_step_rejected"
         healthy_since = None
@@ -966,6 +972,8 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
         "active": active,
         "target": target,
         "reason": reason,
+        "floor": floor,
+        "floor_ready": floor_ready,
         "host_veto": host_veto,
         "sample_age_seconds": sample_age,
         "board_response_seconds": admission_elapsed,
@@ -973,13 +981,14 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
         "memory_reserve_bytes": memory_reserve,
         "agent_memory_budget_bytes": BOARD_AGENT_MEMORY_BYTES,
         "memory_headroom_bytes": memory_headroom,
+        "ceiling": ceiling,
         "agent_cpu_budget_cores": BOARD_AGENT_CPU_CORES,
         "cpu_headroom_cores": cpu_headroom,
         "active_ids": active_ids,
         "removed_ids": sorted(removed_ids),
         "growth_hold_seconds": BOARD_GROWTH_HOLD_SECONDS,
         "warning_episode": warning_episode,
-        "start_allowed": bool(safe and not task_finished and target > current),
+        "start_allowed": bool((floor_raise or safe) and target > current),
     }
     state = {
         "schema": 2,
@@ -1001,16 +1010,16 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
             state["healthy_since_monotonic"] = None
         elif target > current:
             latest_age = helper.monotonic() - sample.captured_monotonic if sample is not None else math.inf
-            if (latest_ids != active_ids or not safe
+            if (latest_ids != active_ids or not (floor_ready if floor_raise else safe)
                     or latest_age < 0 or latest_age > getattr(helper, "SAMPLE_MAX_AGE", 4.5)
                     or admission_elapsed + recheck_elapsed >= cfg["board_response_seconds_threshold"]):
                 result.update(target=current, reason="growth_sample_expired", start_allowed=False)
                 state["healthy_since_monotonic"] = None
-            elif target != current + 1:
+            elif not floor_raise and target != current + 1:
                 result.update(target=current, reason="growth_step_rejected", start_allowed=False)
                 state["healthy_since_monotonic"] = None
         else:
-            target = min(target, len(latest_ids), current)
+            target = min(target, current)
             result["target"] = target
         if result["target"] != current:
             command([str(BOARD), "set", "board.agents", str(result["target"])])
@@ -1038,7 +1047,8 @@ def controller_status():
 def controller_tick(*, board_control=True, cfg=None):
     _ensure_state_dir(create=True)
     helper = _heavy_module()
-    entry = {"schema": 1, "mode": "controller", "board_control": bool(board_control)}
+    entry = {"schema": 1, "mode": "controller", "board_control": bool(board_control),
+             "runtime": str(SCRIPT_DIR)}
     boot_id = None
     sample = None
     census = None
@@ -1049,7 +1059,7 @@ def controller_tick(*, board_control=True, cfg=None):
         boot_id = helper.kernel_boot_identity()
         if not isinstance(boot_id, str) or not re.fullmatch(r"[1-9][0-9]*", boot_id):
             raise ValueError("Kernel boot identity is invalid")
-        sample = helper.sample_host()
+        sample = helper.sample_with_emergency()
         compressor = board_resources.compressor_snapshot()
         census = board_resources.active_heavy_census()
         entry["active_count"] = census["active"]
@@ -1068,6 +1078,10 @@ def controller_tick(*, board_control=True, cfg=None):
                      compressor=compressor, census=census, active_count=census["active"])
     except Exception as exc:
         entry["heavy_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
+        partial = getattr(exc, "partial_sample", None)
+        if sample is None and isinstance(partial, helper.Sample):
+            sample = partial
+            entry["host"] = _sample_payload(sample)
         try:
             if boot_id is None:
                 boot_id = helper.kernel_boot_identity()
@@ -1075,10 +1089,9 @@ def controller_tick(*, board_control=True, cfg=None):
                 raise ValueError("Kernel boot identity is invalid")
             now_wall = time.time()
             now_mono = helper.monotonic()
-            critical = (sample is not None and (sample.pressure_level == 4
-                        or sample.cpu_busy_pct >= 95 or sample.memory_used_pct >= 95
-                        or sample.load_per_core >= 1.5))
-            fallback_slots = 0 if critical else 2
+            critical = sample is not None and helper.critical_pressure(sample)
+            prior_capacity = _capacity_current(boot_id, now_wall)
+            fallback_slots = 0 if critical else min(prior_capacity, 2)
             capacity_state = {"schema": 1, "boot_id": boot_id, "heavy_slots": fallback_slots,
                               "healthy_since_monotonic": None, "last_sample_monotonic": now_mono}
             payload = {"heavy_slots": fallback_slots, "updated_at": now_wall, "boot_id": boot_id}
@@ -1090,6 +1103,11 @@ def controller_tick(*, board_control=True, cfg=None):
     if payload is not None:
         atomic_json(CAPACITY, payload)
         atomic_json(CAPACITY_STATE, capacity_state)
+        if sample is not None and helper.critical_pressure(sample):
+            try:
+                entry["critical_curtailment"] = {"requested": helper.request_critical_pauses()}
+            except Exception as exc:
+                entry["critical_curtailment_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
 
     if board_control:
         try:

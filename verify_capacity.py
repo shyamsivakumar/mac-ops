@@ -72,7 +72,7 @@ def explore(decision, cfg):
 
 def explore_heavy(decide):
     checked = 0
-    census = {"active": 2, "registry_active": 2, "legacy_active": 0}
+    census = {"active": 2, "registry_active": 2, "legacy_active": 0, "job_rss_bytes": [GIB, GIB]}
     for current, cores, memory, load, pressure, cpu in itertools.product(
             range(9), (2, 14, 32), (12, 48, 128), (0, 0.5, 1, 9, 26), (1, 2, 4), (20, 95)):
         sample = heavy.Sample(pressure_level=pressure, cpu_busy_pct=cpu, memory_used_pct=30,
@@ -85,10 +85,12 @@ def explore_heavy(decide):
                     "last_sample_monotonic": 995, "healthy_since_monotonic": 900}
         compressor = {"compressor_bytes": GIB, "sampled_monotonic": 1000}
         _, result = decide(heavy, sample, census, compressor, previous, current, "100", 1000)
-        assert 0 <= result["target"] <= current + 1
+        assert 0 <= result["target"] <= max(min(2, cores, memory // 6), current + 1)
         assert result["target"] <= min(cores, memory // 6)
-        if pressure == 4 or load >= 1 or cpu >= 95:
-            assert result["target"] <= current, (sample, result)
+        if pressure == 4 or load >= 1.5:
+            assert result["target"] == 0, (sample, result)
+        elif load >= 1 or cpu >= 95:
+            assert result["target"] <= max(current, 2), (sample, result)
         checked += 1
     healthy = dataclasses.replace(sample, physical_cores=14, physical_bytes=48*GIB,
                                    headroom_bytes=40*GIB, pressure_level=1,
@@ -110,7 +112,7 @@ def explore_heavy(decide):
         sample = dataclasses.replace(healthy, captured_monotonic=now)
         compressor = {"compressor_bytes": GIB, "sampled_monotonic": now}
         previous, result = decide(heavy, sample, census, compressor, previous, current, "100", now)
-        assert result["target"] <= current + 1
+        assert result["target"] <= max(2, current + 1)
         grew += result["target"] > current
         current = result["target"]
         checked += 1
@@ -132,7 +134,7 @@ def explore_local_board(module, cfg):
         assert args[1:3] == ["set", "board.agents"], args
         value = int(args[3])
         if value > board["limit"]:
-            assert value == board["limit"] + 1
+            assert value == board["limit"] + 1 or value == min(14, max(6, len(board["active"]) + 1))
         changes.append([board["limit"], value])
         board["limit"] = value
         return ""
@@ -140,7 +142,7 @@ def explore_local_board(module, cfg):
     namespace["command"] = command
     namespace["_read_private_json"] = lambda *args, **kwargs: dict(state) if state else None
     namespace["atomic_json"] = lambda path, value: (state.clear(), state.update(value))
-    helper = SimpleNamespace(monotonic=lambda: now, admission_block_reason=heavy.admission_block_reason, SAMPLE_MAX_AGE=4.5)
+    helper = SimpleNamespace(monotonic=lambda: now, admission_block_reason=heavy.admission_block_reason, critical_pressure=heavy.critical_pressure, _sample_invalid_reason=heavy._sample_invalid_reason, _finite_nonnegative=heavy._finite_nonnegative, SAMPLE_MAX_AGE=4.5)
     sample = heavy.Sample(pressure_level=1, cpu_busy_pct=20, memory_used_pct=30,
                           headroom_bytes=32*GIB, physical_bytes=48*GIB,
                           load_per_core=0.2, captured_monotonic=now, free_percent=66,
@@ -148,26 +150,38 @@ def explore_local_board(module, cfg):
                           physical_cores=14)
     compressor = {"compressor_growth_bytes_per_second": 0, "compressor_veto": None}
     try:
-        for now in range(1000, 1061, 5):
+        cases = 0
+        for active, current, pressure, cpu in itertools.product((0, 1, 6, 14, 30), (0, 1, 7, 30), (1, 2, 4), (50, 97)):
+            state.clear()
+            board.update(limit=current, active=[{"id": "fixture/" + str(n), "stage": "working"} for n in range(active)])
+            now += 5
+            reading = dataclasses.replace(sample, captured_monotonic=now, pressure_level=pressure, cpu_busy_pct=cpu)
+            result = tick(helper, reading, compressor, cfg, "100")["decision"]
+            ceiling = result["ceiling"]
+            assert 0 <= board["limit"] <= ceiling, result
+            if pressure == 4:
+                assert board["limit"] == 0, result
+            else:
+                assert board["limit"] >= min(ceiling, max(6, active + 1)), result
+            cases += 1
+        board.update(limit=0, active=[{"id": "fixture/" + str(n), "stage": "working"} for n in range(6)])
+        now += 5
+        reading = dataclasses.replace(sample, captured_monotonic=now)
+        result = tick(helper, reading, compressor, cfg, "100")
+        assert board["limit"] == 7, result
+        for reading in (None, dataclasses.replace(reading, captured_monotonic=now - 30),
+                        dataclasses.replace(reading, free_percent=None)):
+            board["limit"] = 0
+            result = tick(helper, reading, compressor, cfg, "100")
+            assert board["limit"] == 0, result
+            cases += 1
+        board.update(limit=7, active=[{"id": "fixture/" + str(n), "stage": "working"} for n in range(6)])
+        state.clear()
+        for now in range(2000, 2061, 5):
             result = tick(helper, dataclasses.replace(sample, captured_monotonic=now), compressor, cfg, "100")
-            if now < 1060:
-                assert board["limit"] == 1, result
-        assert board["limit"] == 2
-        now = 1065
-        tick(helper, dataclasses.replace(sample, captured_monotonic=now, pressure_level=4), compressor, cfg, "100")
-        assert board["limit"] == 0
-        now = 1070
-        tick(helper, None, compressor, cfg, "100")
-        assert board["limit"] == 0
-        for now in range(1075, 1201, 5):
-            tick(helper, dataclasses.replace(sample, captured_monotonic=now), compressor, cfg, "100")
-            assert board["limit"] <= len(board["active"]) + 1
-        assert board["limit"] == 2
-        board["active"] = []
-        now = 1205
-        tick(helper, dataclasses.replace(sample, captured_monotonic=now), compressor, cfg, "100")
-        assert board["limit"] == 0
-        return {"local_board_changes": changes, "local_board_cases": 42}
+            assert board["limit"] == (7 if now < 2060 else 8), result
+            cases += 1
+        return {"local_board_changes": changes, "local_board_cases": cases + 1}
     finally:
         namespace.update(saved)
 
@@ -199,7 +213,7 @@ def main():
             raise AssertionError("Verifier missed pressure-growth mutation")
     if args.mutation_check:
         source = (ROOT / "board_governor.py").read_text()
-        changed = source.replace('detail.update(target=0, reason=host_reason)', 'detail.update(target=current + 1, reason=host_reason)', 1)
+        changed = source.replace('critical = helper.critical_pressure(sample)', 'critical = False', 1)
         if source == changed:
             raise AssertionError("Active host-veto branch changed; update source mutation")
         function = next(node for node in ast.parse(changed).body if isinstance(node, ast.FunctionDef) and node.name == "_capacity_decision")
