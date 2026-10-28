@@ -111,10 +111,12 @@ failed native start, or permanent availability of the board service.
 
 ## Source synchronization
 
-Installed production governor (MO-26) matches `board_governor.py` and
-`heavy.py` at commit `70bb996bc105` (heavy-wait pause off by default, board
-limit catch-up to the active count in one step, CPU veto from smoothed
-`cpu_busy_pct` instead of loadavg). The BoardFloor TLC receipts under
+The MO-26 installation of `70bb996bc105` was rolled back after the original
+overload replay encountered missing `cpu_busy_pct` and the board decision
+raised `TypeError` before cutting the board limit. Production uses `89f73fe`
+with the local heavy-wait pause-off hotfix. Check installation status before
+using this record; local hotfix files need not match the source commit.
+The BoardFloor TLC receipts under
 `/Users/shyamsivakumar/.herdr-projects/reports/mac-ops/2/formal-proof/board-floor/`
 still describe the prior `e778e78a5b86` snapshot until
 `/maintain-formal-verification-skill` reruns them against the measured-budget
@@ -124,9 +126,8 @@ functions and hashes, rerun the affected model, and move this sync commit only
 after the verification again describes the code.
 
 The installed release records `source_commit` in
-`~/.local/state/mac-ops/installation.json`. Read it to confirm which commit the
-running controller and supervisor came from; the file hashes under
-`~/.local/lib/mac-ops/<release>/` match the checkout that commit came from.
+`~/.local/state/mac-ops/installation.json`. Read it and check for local hotfix
+metadata before identifying the running controller and supervisor.
 
 `replay_controller.py --boardfloor` selects a controller row near Unix time
 `1793150983.444375`. Controller logs rotate, so that row can be gone from every
