@@ -20,6 +20,7 @@ MARKERS = (
     b"gpt-6.1-terra",
 )
 (LIMIT, TIMEOUT, SETTLE) = (1 << 20, 45.0, 0.3)
+(ACTIVE_SELECT, PASSIVE_SELECT) = (0.1, 0.5)
 CSI = re.compile(b"\\x1b\\[[\\x30-\\x3f]*[\\x20-\\x2f]*[\\x40-\\x7e]")
 OSC = re.compile(b"\\x1b\\].*?(?:\\x07|\\x1b\\\\)", re.DOTALL)
 
@@ -404,6 +405,7 @@ def main():
                 failure = 128 + sig
                 break
             pending = bool(candidate or startup or inp.buf or sent_paste or after_paste)
+            idle_passthrough = session_started and not pending
             if (not session_started and not ready and now - started > TIMEOUT) or (
                 input_at is not None and pending and (now - input_at > TIMEOUT)
             ):
@@ -419,38 +421,43 @@ def main():
             ):
                 failure = 125
                 break
-            visible_norm = b"".join(visible.tail.split()).lower()
-            if not ready and any(
-                b"".join(m.split()).lower() in visible_norm for m in MARKERS
-            ):
-                try:
-                    canonical_off = not termios.tcgetattr(master)[3] & termios.ICANON
-                except (OSError, termios.error):
-                    canonical_off = False
-                if canonical_off:
-                    if ready_at is None:
-                        ready_at = now
-                    elif now - ready_at >= 0.25:
-                        ready = True
-                        if session_started:
-                            if candidate:
-                                route(bytes(candidate), now)
-                                candidate.clear()
-                        else:
-                            route(bytes(startup), now)
-                            startup.clear()
-                            session_started = True
-                else:
-                    ready_at = None
-            if (
-                written_at is not None
-                and echo_at is not None
-                and (now - max(echo_at, written_at) >= SETTLE)
-            ):
-                finish_delivery()
+            if not idle_passthrough:
+                visible_norm = b"".join(visible.tail.split()).lower()
+                if not ready and any(
+                    b"".join(m.split()).lower() in visible_norm for m in MARKERS
+                ):
+                    try:
+                        canonical_off = (
+                            not termios.tcgetattr(master)[3] & termios.ICANON
+                        )
+                    except (OSError, termios.error):
+                        canonical_off = False
+                    if canonical_off:
+                        if ready_at is None:
+                            ready_at = now
+                        elif now - ready_at >= 0.25:
+                            ready = True
+                            if session_started:
+                                if candidate:
+                                    route(bytes(candidate), now)
+                                    candidate.clear()
+                            else:
+                                route(bytes(startup), now)
+                                startup.clear()
+                                session_started = True
+                    else:
+                        ready_at = None
+                if (
+                    written_at is not None
+                    and echo_at is not None
+                    and (now - max(echo_at, written_at) >= SETTLE)
+                ):
+                    finish_delivery()
             reads = [0] + ([] if master_eof else [master])
             writes = [master] if to_child else []
-            (r, w, _) = select.select(reads, writes, [], 0.1)
+            (r, w, _) = select.select(
+                reads, writes, [], PASSIVE_SELECT if idle_passthrough else ACTIVE_SELECT
+            )
             if master in r:
                 try:
                     raw = os.read(master, 65536)
@@ -465,21 +472,24 @@ def main():
                 if raw == b"":
                     break
                 if raw:
-                    queries.observe(raw)
-                    stdout(raw)
-                    stdout(b"\x1b[?2004h")
-                    shown = visible.feed(raw)
-                    if written_at is not None and echo_at is None:
-                        echo.extend(shown)
-                        echo[:] = echo[-8192:]
-                        if draft_seen(echo, suffix, paste_lines):
+                    if idle_passthrough:
+                        stdout(raw)
+                    else:
+                        queries.observe(raw)
+                        stdout(raw)
+                        stdout(b"\x1b[?2004h")
+                        shown = visible.feed(raw)
+                        if written_at is not None and echo_at is None:
+                            echo.extend(shown)
+                            echo[:] = echo[-8192:]
+                            if draft_seen(echo, suffix, paste_lines):
+                                echo_at = now
+                        if (
+                            written_at is not None
+                            and echo_at is None
+                            and now - written_at >= SETTLE
+                        ):
                             echo_at = now
-                    if (
-                        written_at is not None
-                        and echo_at is None
-                        and now - written_at >= SETTLE
-                    ):
-                        echo_at = now
             if 0 in r:
                 try:
                     raw = os.read(0, 65536)

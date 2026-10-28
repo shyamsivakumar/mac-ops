@@ -54,8 +54,10 @@ mv "$HOME/.local/bin/pi.before-mac-ops-12" "$HOME/.local/bin/pi"
   `thinking max`, `show full startup help`, and similar) plus raw terminal
   mode on the PTY for 250 ms.
 - The startup/delivery deadline is 45 seconds and buffered input is limited
-  to 1 MiB. A failed delivery exits visibly rather than forwarding a partial
-  brief.
+  to 1 MiB. Between deliveries, while the agent is working and no paste is
+  buffered, the wrapper relays PTY output with stdout only and skips the
+  per-frame bracketed-paste refresh and visibility scan. A failed
+  delivery exits visibly rather than forwarding a partial brief.
 
 Pi upgrades can change footer text or terminal behavior; use the status
 command and repeat the board smoke check after an upgrade.
