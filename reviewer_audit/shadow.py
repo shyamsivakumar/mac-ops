@@ -31,6 +31,20 @@ PROMPT_DESC_CAP = 12_000
 PROMPT_NOTE_CAP = 8_000
 
 
+def _adjudicated_recall_block(bundle: ReviewBundle) -> str:
+    if not bundle.adjudicated_defects:
+        return ""
+    lines = [
+        "adjudicated_defects_for_recall (each ID must appear in findings — "
+        "name the ID or cover the same defect in the subject text):",
+    ]
+    for d in bundle.adjudicated_defects:
+        note = f" — {d.note}" if d.note else ""
+        lines.append(f"- {d.requirement_id} ({d.severity}){note}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _shadow_prompt(
     bundle: ReviewBundle,
     *,
@@ -61,6 +75,7 @@ def _shadow_prompt(
         '{"pass":bool,"findings":[{"severity":"critical|major|minor","subject":"..."}]}\n'
         f"{pass_rule}\n\n"
         f"{policy_block}"
+        f"{_adjudicated_recall_block(bundle)}"
         f"task={bundle.task_id}\nreview_round={bundle.review_round}\n"
         f"commit={bundle.head}\nbase={bundle.diff_base}\ninput_hash={bundle.input_hash}\n"
         f"title={bundle.title[:200]}\nstat={bundle.stat}\n\n"

@@ -45,20 +45,25 @@ def verdict_from_raw_entry(
             v = _parse_verdict(raw, model, repeat)
             if not v.error:
                 return v
-            # Truncated raw: stored pass=false on clean bundles was usually major-only.
-            if entry.get("pass") is False:
-                subjects = entry.get("subjects") or []
-                req = entry.get("requirement_ids") or []
-                return ShadowVerdict(
-                    pass_verdict=True,
-                    finding_subjects=list(subjects),
-                    requirement_ids=list(req),
-                    model=model,
-                    repeat=repeat,
-                    raw=raw[:800],
-                    error=False,
-                )
-            return v
+            subjects = [str(s) for s in (entry.get("subjects") or []) if s]
+            req_ids: list[str] = []
+            for s in subjects:
+                for rid in requirement_ids_for_subject(s):
+                    if rid not in req_ids:
+                        req_ids.append(rid)
+            for rid in entry.get("requirement_ids") or []:
+                rid_s = str(rid)
+                if rid_s not in req_ids:
+                    req_ids.append(rid_s)
+            return ShadowVerdict(
+                pass_verdict=False,
+                finding_subjects=subjects,
+                requirement_ids=req_ids,
+                model=model,
+                repeat=repeat,
+                raw=raw[:800],
+                error=True,
+            )
     findings = parsed.get("findings") or []
     subjects = [str(f.get("subject") or "") for f in findings if f.get("subject")]
     req_ids: list[str] = []
@@ -147,6 +152,99 @@ def rescore_from_scorecard(
         metrics,
         raw_runs=raw_out,
         review_policy="board-rescore",
+        baseline_metrics=baseline,
+    )
+    return {
+        "flip_rate_overall": metrics.flip_rate_overall,
+        "defect_recall_overall": metrics.defect_recall_overall,
+        "false_block_rate": metrics.false_block_rate,
+        "false_block_count": metrics.false_block_count,
+        "clean_eligible_count": metrics.clean_eligible_count,
+    }
+
+
+def reaggregate_from_scorecard(
+    source: Path,
+    manifest_path: Path,
+    *,
+    out_dir: Path,
+    baseline_path: Path | None = None,
+) -> dict[str, Any]:
+    """Recompute metrics from saved raw_runs (same replay receipt, updated rules)."""
+    data = json.loads(source.read_text(encoding="utf-8"))
+    raw_runs = data.get("raw_runs") or {}
+    review_policy = str(data.get("review_policy") or "board")
+    _, bundles = load_manifest(manifest_path)
+    rows: list[tuple[ReviewBundle, list[ShadowVerdict]]] = []
+    for bundle in bundles:
+        entries = raw_runs.get(bundle.bundle_id) or []
+        verdicts: list[ShadowVerdict] = []
+        for i, entry in enumerate(entries):
+            model = str(entry.get("model") or "?")
+            repeat = int(entry.get("repeat") or i + 1)
+            if entry.get("error"):
+                verdicts.append(
+                    ShadowVerdict(
+                        pass_verdict=False,
+                        finding_subjects=[],
+                        requirement_ids=[],
+                        model=model,
+                        repeat=repeat,
+                        raw=(entry.get("raw") or "")[:800],
+                        error=True,
+                    )
+                )
+                continue
+            subjects = [str(s) for s in (entry.get("subjects") or []) if s]
+            req_ids: list[str] = []
+            for s in subjects:
+                for rid in requirement_ids_for_subject(s):
+                    if rid not in req_ids:
+                        req_ids.append(rid)
+            verdicts.append(
+                ShadowVerdict(
+                    pass_verdict=bool(entry.get("pass")),
+                    finding_subjects=subjects,
+                    requirement_ids=req_ids,
+                    model=model,
+                    repeat=repeat,
+                    raw=(entry.get("raw") or "")[:800],
+                    error=False,
+                )
+            )
+        rows.append((bundle, verdicts))
+    loops = compute_loop_stats()
+    metrics = aggregate_scorecard(
+        rows,
+        loop_median=loops.median_rounds,
+        loop_p90=loops.p90_rounds,
+        task_ids=[b.task_id for b in bundles],
+    )
+    baseline = None
+    if baseline_path and baseline_path.is_file():
+        try:
+            base_data = json.loads(baseline_path.read_text(encoding="utf-8"))
+            bm = base_data.get("metrics") or {}
+            baseline = {
+                "source": str(baseline_path),
+                "generated_at": base_data.get("generated_at"),
+                "review_policy": base_data.get("review_policy", "legacy"),
+                "flip_rate_overall": bm.get("flip_rate_overall"),
+                "defect_recall_overall": bm.get("defect_recall_overall"),
+                "false_block_rate": bm.get("false_block_rate"),
+                "false_block_count": bm.get("false_block_count"),
+                "clean_eligible_count": bm.get("clean_eligible_count"),
+                "loop_median": bm.get("loop_median"),
+                "loop_p90": bm.get("loop_p90"),
+            }
+        except (OSError, json.JSONDecodeError):
+            baseline = None
+    write_scorecard(
+        out_dir,
+        metrics,
+        raw_runs=raw_runs,
+        review_policy=review_policy,
+        reviewer_instructions_sha256=data.get("reviewer_instructions_sha256"),
         baseline_metrics=baseline,
     )
     return {

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from reviewer_audit.bundles import ReviewBundle
+from reviewer_audit.bundles import AdjudicatedDefect, ReviewBundle
 from reviewer_audit.shadow import LEGACY_PASS_RULE, _shadow_prompt
 
 
@@ -44,6 +44,15 @@ class TestShadowPrompt(unittest.TestCase):
         prompt = _shadow_prompt(_minimal_bundle(), review_policy="legacy")
         self.assertIn(LEGACY_PASS_RULE, prompt)
         self.assertNotIn("reviewer.instructions (board mac-ops)", prompt)
+
+    def test_adjudicated_defects_listed_for_recall(self):
+        bundle = _minimal_bundle()
+        bundle.adjudicated_defects = [
+            AdjudicatedDefect("REQ-SPX-LEVEL-TRACK", "critical"),
+        ]
+        prompt = _shadow_prompt(bundle, review_policy="board")
+        self.assertIn("adjudicated_defects_for_recall", prompt)
+        self.assertIn("REQ-SPX-LEVEL-TRACK", prompt)
 
 
 if __name__ == "__main__":

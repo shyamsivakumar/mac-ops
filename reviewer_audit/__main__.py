@@ -62,6 +62,20 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
     if args.limit:
         bundles = bundles[: args.limit]
     loops = compute_loop_stats()
+    review_policy = args.review_policy
+    reviewer_instructions: str | None = None
+    if review_policy == "board":
+        reviewer_instructions = read_reviewer_instructions()
+    instr_hash = (
+        hashlib.sha256(reviewer_instructions.encode("utf-8")).hexdigest()[:16]
+        if reviewer_instructions
+        else None
+    )
+    baseline = (
+        _load_baseline_metrics(Path(args.baseline_scorecard))
+        if args.baseline_scorecard
+        else None
+    )
     raw_runs: dict[str, list] = {}
     rows = []
     for i, bundle in enumerate(bundles):
@@ -69,7 +83,13 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
         if args.deterministic:
             from .shadow import replay_bundle
 
-            verdicts = replay_bundle(bundle, repeats=args.repeats, use_models=False)
+            verdicts = replay_bundle(
+                bundle,
+                repeats=args.repeats,
+                use_models=False,
+                review_policy=review_policy,
+                reviewer_instructions=reviewer_instructions,
+            )
         else:
             from .shadow import replay_bundle
 
@@ -79,6 +99,8 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
                 use_models=True,
                 use_heavy=args.heavy,
                 bundle_index=i,
+                review_policy=review_policy,
+                reviewer_instructions=reviewer_instructions,
             )
         rows.append((bundle, verdicts))
         raw_runs[bundle.bundle_id] = [
@@ -112,18 +134,6 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
                     b.closing_note_excerpt, "claude-opus"
                 ),
             }
-    review_policy = args.review_policy
-    instructions = read_reviewer_instructions() if review_policy == "board" else None
-    instr_hash = (
-        hashlib.sha256(instructions.encode("utf-8")).hexdigest()
-        if instructions is not None
-        else None
-    )
-    baseline = (
-        _load_baseline_metrics(Path(args.baseline_scorecard))
-        if args.baseline_scorecard
-        else None
-    )
     out_dir = Path(args.out)
     write_scorecard(
         out_dir,
@@ -155,6 +165,30 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     )
     print(
         "Rescore (ship-and-score pass on saved shadow findings): "
+        f"flip {summary['flip_rate_overall']:.1%}, "
+        f"recall {summary['defect_recall_overall']}, "
+        f"false blocks {summary['false_block_count']}/{summary['clean_eligible_count']} "
+        f"({summary['false_block_rate']:.1%})"
+    )
+    return 0
+
+
+def cmd_reaggregate(args: argparse.Namespace) -> int:
+    from .rescore import reaggregate_from_scorecard
+
+    manifest_path = Path(args.manifest)
+    if not manifest_path.is_file():
+        manifest_path = _pkg_manifest()
+    summary = reaggregate_from_scorecard(
+        Path(args.source),
+        manifest_path,
+        out_dir=Path(args.out),
+        baseline_path=Path(args.baseline_scorecard)
+        if args.baseline_scorecard
+        else None,
+    )
+    print(
+        "Reaggregate: "
         f"flip {summary['flip_rate_overall']:.1%}, "
         f"recall {summary['defect_recall_overall']}, "
         f"false blocks {summary['false_block_count']}/{summary['clean_eligible_count']} "
@@ -253,6 +287,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Include before/after vs this baseline file",
     )
     p_rescore.set_defaults(func=cmd_rescore)
+
+    p_reagg = sub.add_parser(
+        "reaggregate",
+        help="Recompute scorecard metrics from saved raw_runs (same LLM receipt)",
+    )
+    p_reagg.add_argument("source", help="scorecard.json with raw_runs")
+    p_reagg.add_argument("--manifest", default=str(_pkg_manifest()))
+    p_reagg.add_argument("--out", required=True)
+    p_reagg.add_argument("--baseline-scorecard", default="")
+    p_reagg.set_defaults(func=cmd_reaggregate)
 
     p_loops = sub.add_parser("loops", help="Print board review-round percentiles")
     p_loops.set_defaults(func=cmd_loops)
