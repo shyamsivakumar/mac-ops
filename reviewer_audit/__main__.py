@@ -139,6 +139,30 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_rescore(args: argparse.Namespace) -> int:
+    from .rescore import rescore_from_scorecard
+
+    manifest_path = Path(args.manifest)
+    if not manifest_path.is_file():
+        manifest_path = _pkg_manifest()
+    summary = rescore_from_scorecard(
+        Path(args.source),
+        manifest_path,
+        out_dir=Path(args.out),
+        baseline_path=Path(args.baseline_scorecard)
+        if args.baseline_scorecard
+        else None,
+    )
+    print(
+        "Rescore (ship-and-score pass on saved shadow findings): "
+        f"flip {summary['flip_rate_overall']:.1%}, "
+        f"recall {summary['defect_recall_overall']}, "
+        f"false blocks {summary['false_block_count']}/{summary['clean_eligible_count']} "
+        f"({summary['false_block_rate']:.1%})"
+    )
+    return 0
+
+
 def render_summary(metrics) -> str:
     flip = (
         f"{metrics.flip_rate_overall:.1%}"
@@ -212,6 +236,23 @@ def main(argv: list[str] | None = None) -> int:
         help="Prior scorecard.json for before/after comparison in the report",
     )
     p_score.set_defaults(func=cmd_scorecard)
+
+    p_rescore = sub.add_parser(
+        "rescore",
+        help="Recompute metrics from a prior scorecard.json under ship-and-score pass rules",
+    )
+    p_rescore.add_argument(
+        "source",
+        help="Prior scorecard.json (e.g. MO-10 baseline run)",
+    )
+    p_rescore.add_argument("--manifest", default=str(_pkg_manifest()))
+    p_rescore.add_argument("--out", required=True, help="Report directory")
+    p_rescore.add_argument(
+        "--baseline-scorecard",
+        default="",
+        help="Include before/after vs this baseline file",
+    )
+    p_rescore.set_defaults(func=cmd_rescore)
 
     p_loops = sub.add_parser("loops", help="Print board review-round percentiles")
     p_loops.set_defaults(func=cmd_loops)
