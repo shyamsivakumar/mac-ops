@@ -74,7 +74,7 @@ def explore_heavy(decide):
     checked = 0
     census = {"active": 2, "registry_active": 2, "legacy_active": 0, "job_rss_bytes": [GIB, GIB]}
     for current, cores, memory, load, pressure, cpu in itertools.product(
-            range(9), (2, 14, 32), (12, 48, 128), (0, 0.5, 1, 9, 26), (1, 2, 4), (20, 95)):
+            range(9), (2, 14, 32), (12, 48, 128), (0, 0.5, 1, 9, 26), (1, 2, 4), (20, 80, 95)):
         sample = heavy.Sample(pressure_level=pressure, cpu_busy_pct=cpu, memory_used_pct=30,
                               headroom_bytes=int(memory * GIB * 0.7), physical_bytes=memory * GIB,
                               load_per_core=load, captured_monotonic=1000, free_percent=70,
@@ -87,9 +87,9 @@ def explore_heavy(decide):
         _, result = decide(heavy, sample, census, compressor, previous, current, "100", 1000)
         assert 0 <= result["target"] <= max(min(2, cores, memory // 6), current + 1)
         assert result["target"] <= min(cores, memory // 6)
-        if pressure == 4 or load >= 1.5:
+        if pressure == 4 or cpu >= 95:
             assert result["target"] == 0, (sample, result)
-        elif load >= 1 or cpu >= 95:
+        elif cpu >= 80:
             assert result["target"] <= max(current, 2), (sample, result)
         checked += 1
     healthy = dataclasses.replace(sample, physical_cores=14, physical_bytes=48*GIB,
@@ -154,7 +154,7 @@ def explore_local_board(module, cfg):
     namespace["command"] = command
     namespace["_read_private_json"] = lambda *args, **kwargs: dict(state) if state else None
     namespace["atomic_json"] = lambda path, value: (state.clear(), state.update(value))
-    helper = SimpleNamespace(monotonic=lambda: now, admission_block_reason=heavy.admission_block_reason, critical_pressure=heavy.critical_pressure, _sample_invalid_reason=heavy._sample_invalid_reason, _finite_nonnegative=heavy._finite_nonnegative, SAMPLE_MAX_AGE=4.5)
+    helper = SimpleNamespace(monotonic=lambda: now, admission_block_reason=heavy.admission_block_reason, critical_pressure=heavy.critical_pressure, _sample_invalid_reason=heavy._sample_invalid_reason, _finite_nonnegative=heavy._finite_nonnegative, SAMPLE_MAX_AGE=4.5, WARNING_CPU_PCT=heavy.WARNING_CPU_PCT, MAX_CPU_PCT=heavy.MAX_CPU_PCT)
     sample = heavy.Sample(pressure_level=1, cpu_busy_pct=20, memory_used_pct=30,
                           headroom_bytes=32*GIB, physical_bytes=48*GIB,
                           load_per_core=0.2, captured_monotonic=now, free_percent=66,
@@ -163,7 +163,7 @@ def explore_local_board(module, cfg):
     compressor = {"compressor_growth_bytes_per_second": 0, "compressor_veto": None}
     try:
         cases = 0
-        for active, current, pressure, cpu in itertools.product((0, 1, 6, 14, 30), (0, 1, 7, 30), (1, 2, 4), (50, 97)):
+        for active, current, pressure, cpu in itertools.product((0, 1, 6, 14, 30), (0, 1, 7, 30), (1, 2, 4), (40, 97)):
             state.clear()
             board.update(limit=current, active=[{"id": "fixture/" + str(n), "stage": "working"} for n in range(active)])
             now += 5
@@ -171,7 +171,7 @@ def explore_local_board(module, cfg):
             result = tick(helper, reading, compressor, cfg, "100")["decision"]
             ceiling = result["ceiling"]
             assert 0 <= board["limit"] <= ceiling, result
-            if pressure == 4:
+            if pressure == 4 or cpu >= 95:
                 assert board["limit"] == 0, result
             else:
                 assert board["limit"] >= min(ceiling, max(6, active + 1)), result
@@ -224,6 +224,8 @@ def explore_measured_board_veto(module, cfg):
         _sample_invalid_reason=lambda sample, now: None,
         _finite_nonnegative=heavy._finite_nonnegative,
         SAMPLE_MAX_AGE=4.5,
+        WARNING_CPU_PCT=heavy.WARNING_CPU_PCT,
+        MAX_CPU_PCT=heavy.MAX_CPU_PCT,
     )
     sample = heavy.Sample(
         pressure_level=1, cpu_busy_pct=20, memory_used_pct=30,
@@ -274,6 +276,8 @@ def explore_active_catchup(module, cfg):
         _sample_invalid_reason=lambda sample, now: None,
         _finite_nonnegative=heavy._finite_nonnegative,
         SAMPLE_MAX_AGE=4.5,
+        WARNING_CPU_PCT=heavy.WARNING_CPU_PCT,
+        MAX_CPU_PCT=heavy.MAX_CPU_PCT,
     )
     sample = heavy.Sample(
         pressure_level=2, cpu_busy_pct=54.0, memory_used_pct=75.0,
@@ -321,7 +325,7 @@ def main():
             raise AssertionError("Verifier missed pressure-growth mutation")
     if args.mutation_check:
         source = (ROOT / "board_governor.py").read_text()
-        changed = source.replace('critical = helper.critical_pressure(sample)', 'critical = False', 1)
+        changed = source.replace('critical = _critical_pressure(helper, sample)', 'critical = False', 1)
         if source == changed:
             raise AssertionError("Active host-veto branch changed; update source mutation")
         function = next(node for node in ast.parse(changed).body if isinstance(node, ast.FunctionDef) and node.name == "_capacity_decision")

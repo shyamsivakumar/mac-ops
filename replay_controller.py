@@ -78,6 +78,7 @@ def main():
     if args.boardfloor is not None:
         modes.append(("boardfloor", args.boardfloor))
     for mode, path in modes:
+        namespace["_cpu_history"].clear()
         store = {}
         clock = {"wall": 0, "mono": 0}
         board = {"limit": 8}
@@ -205,7 +206,8 @@ def main():
                 store["capacity.json"] = {"heavy_slots": int(current), "updated_at": clock["wall"], "boot_id": boot}
                 entry = tick(board_control=True, cfg=cfg)
                 target = entry["capacity"]["heavy_slots"]
-                critical = heavy.critical_pressure(sample)
+                critical = namespace["_critical_pressure"](
+                    heavy, dataclasses.replace(sample, cpu_busy_pct=entry["host"]["cpu_busy_pct"]))
                 valid = heavy._sample_invalid_reason(sample, clock["mono"]) is None
                 if critical:
                     assert target == 0, (line_number, entry)

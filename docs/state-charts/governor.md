@@ -29,7 +29,7 @@ stateDiagram-v2
 
 The heavy floor is restored to `min(2, ceiling)` on a fresh, valid, noncritical reading, even before the growth window completes. For a bad, missing, or stale reading, the controller targets `min(current, floor, ceiling)`: it cannot raise capacity and it can reduce capacity above the floor to the floor. The machine ceiling is the lower of physical CPU cores and physical memory divided by 6 GiB per heavy slot. The model bounds the ceiling to 2, 3, or 4 so TLC can explore every value in a small state space. The production controller uses the machine's measured ceiling.
 
-The critical classifier is kernel pressure level 4, memory use at least 95 percent, or load per core at least 1.5. CPU use at least 95 percent is a warning. Once the capacity file write succeeds, a critical tick writes urgent pause requests for all running heavy jobs before it queries or changes the board limit. The controller does not claim that the operating system has paused a process yet. The strict publication-failure model shows why the one-tick request guarantee depends on that write succeeding.
+The critical classifier is kernel pressure level 4, memory use at least 95 percent, or smoothed CPU busy at least 95 percent. The controller smooths CPU busy as the mean of its last three samples. Smoothed CPU busy at least 80 percent is a board warning. Load average is logged. Load per core at least 2 is critical only when the CPU reading is missing. Heavy admission still waits on raw CPU busy at or above 95 percent. Once the capacity file write succeeds, a critical tick writes urgent pause requests for all running heavy jobs before it queries or changes the board limit. The controller does not claim that the operating system has paused a process yet. The strict publication-failure model shows why the one-tick request guarantee depends on that write succeeding.
 
 ## Queued heavy work and idle agents
 
@@ -71,7 +71,7 @@ The model assumes the controller's default `board_control=True`. `--no-board-con
 | --- | --- | --- |
 | Fresh, valid, noncritical sample below floor | `min(ceiling, max(6, active + 1))` | May raise by more than one; this floor takes precedence over the above-floor step rule. |
 | Limit below active tasks with ready floor and no host veto | `min(active, floor)` | Catch-up in one step. Raising the limit to the number of agents already running adds no load, so it needs no growth window or fit check. |
-| Critical kernel pressure, memory use, or load | 0 | Kernel pressure level 4, memory use at least 95 percent, or load per core at least 1.5 takes precedence over every floor. |
+| Critical kernel pressure, memory use, or CPU | 0 | Kernel pressure level 4, memory use at least 95 percent, or smoothed CPU busy at least 95 percent takes precedence over every floor. |
 | First warning in an episode | `max(floor, min(current // 2, active))` | A warning cannot cut below a ready floor. |
 | Repeated warning in the episode | `max(floor, min(current, active))` | Hold the warning cut while the episode persists, but preserve the ready floor. |
 | Healthy growth above floor | Current limit plus one | Fresh valid noncritical sample, 60 second healthy window, and memory/CPU fit for every pending board slot. |

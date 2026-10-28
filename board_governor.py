@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Publish safe heavy-work capacity and report board admission."""
 import argparse
+import dataclasses
 import fcntl
 import json
 import math
@@ -32,6 +33,7 @@ AGENT_HEAVY_PAUSE_STATE = STATE_DIR / "agent-heavy-wait-pause.json"
 LOG = STATE_DIR / "controller.jsonl"
 LOCK = STATE_DIR / "controller.lock"
 CONTROLLER_INTERVAL_SECONDS = 5.0
+CPU_SMOOTHING_SAMPLES = 3
 CAPACITY_MAX_AGE_SECONDS = 30.0
 HEAVY_GROWTH_HOLD_SECONDS = 60.0
 HEAVY_MAX_SAMPLE_GAP_SECONDS = CONTROLLER_INTERVAL_SECONDS * 2
@@ -787,8 +789,8 @@ def _adaptive_capacity_decision(helper, sample, census, compressor, previous, cu
         state["heavy_slots"] = target
         return state, detail
 
-    load_cores = sample.load_per_core * cores
-    cpu_available = max(0.0, cores * (1 - HEAVY_CPU_RESERVE_FRACTION) - load_cores)
+    busy_cores = sample.cpu_busy_pct / 100 * cores
+    cpu_available = max(0.0, cores * (1 - HEAVY_CPU_RESERVE_FRACTION) - busy_cores)
     memory_reserve = max(HEAVY_MEMORY_RESERVE_BYTES, physical * HEAVY_MEMORY_RESERVE_FRACTION)
     memory_available = max(0, sample.headroom_bytes - memory_reserve)
     fit = min(
@@ -848,7 +850,7 @@ def _capacity_decision(helper, sample, census, compressor, previous, current, bo
     state, detail = _adaptive_capacity_decision(
         helper, sample, census, compressor, previous, current, boot_id, now_mono)
     floor = min(2, detail["ceiling"])
-    critical = helper.critical_pressure(sample)
+    critical = _critical_pressure(helper, sample)
     valid = helper._sample_invalid_reason(sample, now_mono) is None
     proposed = detail["target"]
     target = (0 if critical else max(floor, proposed) if valid
@@ -933,7 +935,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
     elif compressor_veto is not None:
         host_veto = host_veto or str(compressor_veto)
 
-    critical_pressure = bool(sample_is_fresh and sample is not None and helper.critical_pressure(sample))
+    critical_pressure = bool(sample_is_fresh and sample is not None and _critical_pressure(helper, sample))
     if agent_census is None and sample_is_fresh and sample is not None and not critical_pressure:
         try:
             agent_census = board_resources.board_agent_rss_census(admission)
@@ -956,7 +958,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
                                  math.floor(cores * (1 - cfg["cpu_reserve_fraction"]) / BOARD_AGENT_CPU_CORES)))
             memory_headroom = max(0, sample.headroom_bytes - memory_reserve)
             cpu_headroom = max(0.0, cores * (1 - cfg["cpu_reserve_fraction"])
-                               - sample.load_per_core * cores)
+                               - sample.cpu_busy_pct / 100 * cores)
             if host_veto is None:
                 candidate_fits = (memory_headroom >= agent_memory_budget
                                   and cpu_headroom >= BOARD_AGENT_CPU_CORES)
@@ -987,8 +989,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
                              and previous.get("boot_id") == boot_id)
     warning_pressure = bool(sample_is_fresh and sample is not None and not critical_pressure and (
         sample.pressure_level == 2
-        or (helper._finite_nonnegative(sample.cpu_busy_pct) and sample.cpu_busy_pct >= 95)
-        or (helper._finite_nonnegative(sample.load_per_core) and sample.load_per_core >= 1.0)
+        or (helper._finite_nonnegative(sample.cpu_busy_pct) and sample.cpu_busy_pct >= helper.WARNING_CPU_PCT)
         or (compressor_rate is not None and compressor_rate > HEAVY_COMPRESSOR_MAX_GROWTH_BYTES_PER_SECOND)
         or host_veto in ("swap-growth", "memory-headroom", "memory-pressure-warning-low-free")
     ))
@@ -1159,6 +1160,22 @@ def controller_status():
         return {"schema": 1, "status": "unavailable", "error": str(exc).splitlines()[0][:180]}
 
 
+_cpu_history = []
+
+
+def _smoothed_cpu_sample(helper, sample):
+    if not helper._finite_nonnegative(sample.cpu_busy_pct):
+        return sample
+    _cpu_history.append(sample.cpu_busy_pct)
+    del _cpu_history[:-CPU_SMOOTHING_SAMPLES]
+    return dataclasses.replace(sample, cpu_busy_pct=sum(_cpu_history) / len(_cpu_history))
+
+
+def _critical_pressure(helper, sample):
+    return helper.critical_pressure(sample) or (
+        helper._finite_nonnegative(sample.cpu_busy_pct) and sample.cpu_busy_pct >= helper.MAX_CPU_PCT)
+
+
 def controller_tick(*, board_control=True, cfg=None):
     _ensure_state_dir(create=True)
     helper = _heavy_module()
@@ -1174,7 +1191,7 @@ def controller_tick(*, board_control=True, cfg=None):
         boot_id = helper.kernel_boot_identity()
         if not isinstance(boot_id, str) or not re.fullmatch(r"[1-9][0-9]*", boot_id):
             raise ValueError("Kernel boot identity is invalid")
-        sample = helper.sample_with_emergency()
+        sample = _smoothed_cpu_sample(helper, helper.sample_with_emergency())
         compressor = board_resources.compressor_snapshot()
         census = board_resources.active_heavy_census()
         entry["active_count"] = census["active"]
@@ -1196,6 +1213,7 @@ def controller_tick(*, board_control=True, cfg=None):
         partial = getattr(exc, "partial_sample", None)
         if sample is None and isinstance(partial, helper.Sample):
             sample = partial
+        if sample is not None:
             entry["host"] = _sample_payload(sample)
         try:
             if boot_id is None:
@@ -1204,7 +1222,7 @@ def controller_tick(*, board_control=True, cfg=None):
                 raise ValueError("Kernel boot identity is invalid")
             now_wall = time.time()
             now_mono = helper.monotonic()
-            critical = sample is not None and helper.critical_pressure(sample)
+            critical = sample is not None and _critical_pressure(helper, sample)
             prior_capacity = _capacity_current(boot_id, now_wall)
             fallback_slots = 0 if critical else min(prior_capacity, 2)
             capacity_state = {"schema": 1, "boot_id": boot_id, "heavy_slots": fallback_slots,
@@ -1218,7 +1236,7 @@ def controller_tick(*, board_control=True, cfg=None):
     if payload is not None:
         atomic_json(CAPACITY, payload)
         atomic_json(CAPACITY_STATE, capacity_state)
-        if sample is not None and helper.critical_pressure(sample):
+        if sample is not None and _critical_pressure(helper, sample):
             try:
                 entry["critical_curtailment"] = {"requested": helper.request_critical_pauses()}
             except Exception as exc:
@@ -1231,7 +1249,7 @@ def controller_tick(*, board_control=True, cfg=None):
         try:
             if cfg is None:
                 raise ValueError("Board policy configuration is unavailable")
-            if sample is not None and not helper.critical_pressure(sample):
+            if sample is not None and not _critical_pressure(helper, sample):
                 try:
                     admission = board_resources.board_admission_snapshot()
                     admission_active = admission.get("active") or []
@@ -1261,7 +1279,7 @@ def controller_tick(*, board_control=True, cfg=None):
             entry["board_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
 
     pause_admission = list(admission_active)
-    critical_for_pause = bool(sample is not None and helper.critical_pressure(sample))
+    critical_for_pause = bool(sample is not None and _critical_pressure(helper, sample))
     if boot_id is not None and not (cfg is not None and cfg["agent_heavy_wait_pause"]):
         entry["agent_heavy_wait_pause"] = {"action": "disabled"}
     elif boot_id is not None:

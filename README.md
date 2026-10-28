@@ -6,8 +6,11 @@ after a healthy window, and cuts capacity on pressure. Fresh noncritical
 readings restore a baseline of two heavy slots immediately; growth above two
 waits for the healthy window. Review jobs precede queued build and test jobs.
 Running heavy workloads pause after sustained warning pressure and resume after
-recovery. Critical kernel pressure, memory use of at least 95%, or load per core
-of at least 1.5 requests a pause immediately.
+recovery. Critical kernel pressure, memory use of at least 95%, or the controller's smoothed CPU busy of at
+least 95% requests a pause immediately. A supervisor pauses after raw CPU busy
+stays at or above 95% for 15 seconds. Heavy admission waits while raw CPU busy
+is at or above 95%. Load average is logged, and load per core of at least 2
+counts as critical only when the CPU reading is missing.
 
 The tools run locally without Multica, network services, API keys, or Homebrew
 dependencies. Apple Command Line Tools supply Python 3; macOS supplies launchd
@@ -57,8 +60,9 @@ Heavy capacity works without a board installation. Board integration uses
 gate sets `board.agents` through the board command. A fresh valid noncritical
 sample restores the floor `min(board ceiling, max(6, active tasks + 1))`, even
 when this requires a multi-slot raise. Warning cuts cannot cross that floor;
-critical kernel pressure, memory use of at least 95%, or load per core of at
-least 1.5 sets the limit to zero. Above the floor, the controller raises by one
+critical kernel pressure, memory use of at least 95%, or CPU busy of at
+least 95% (mean of the last three controller samples) sets the limit to zero.
+Smoothed CPU busy of at least 80% is a board warning. Above the floor, the controller raises by one
 after 60 healthy seconds only when memory and CPU fit every pending slot.
 Missing or stale readings never raise the limit. A completed task closes the
 freed spare capacity back to the active count or ready floor and resets the
