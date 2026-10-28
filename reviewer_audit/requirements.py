@@ -38,7 +38,12 @@ RULES: tuple[RequirementRule, ...] = (
     ),
     RequirementRule(
         "REQ-SPX-LEVEL-TRACK",
-        re.compile(r"SPX (index )?level|underlying-based|SPX feed", re.IGNORECASE),
+        re.compile(
+            r"SPX (index )?level|underlying-based|SPX feed|"
+            r"track underlying levels on SPX|live SPX index|SPX index tracking|"
+            r"SPX reading|levelTrigger",
+            re.IGNORECASE,
+        ),
     ),
     RequirementRule(
         "REQ-EXIT-SIZING",
@@ -50,7 +55,8 @@ RULES: tuple[RequirementRule, ...] = (
     RequirementRule(
         "REQ-API-EVIDENCE",
         re.compile(
-            r"API evidence|quote and order|cannot be verified|receipt.*prove",
+            r"API evidence|exact API|quote and order|cannot be verified|"
+            r"receipt.*prove|API responses are missing|order eligibility",
             re.IGNORECASE,
         ),
     ),

@@ -17,11 +17,21 @@ def _fmt_pct(value: float | None) -> str:
     return f"{value:.1%}"
 
 
+def _fmt_compare(before: float | None, after: float | None, *, pct: bool = True) -> str:
+    if before is None or after is None:
+        return "n/a"
+    if pct:
+        return f"{before:.1%} → {after:.1%}"
+    return f"{before} → {after}"
+
+
 def render_markdown(
     metrics: ScorecardMetrics,
     *,
     generated_at: str | None = None,
     retrospective: dict[str, Any] | None = None,
+    baseline_metrics: dict[str, Any] | None = None,
+    review_policy: str | None = None,
 ) -> str:
     ts = generated_at or datetime.now(timezone.utc).isoformat()
     lines = [
@@ -29,13 +39,40 @@ def render_markdown(
         "",
         f"Generated: {ts}",
         "",
-        "## Summary",
-        "",
-        f"- Bundles scored: **{metrics.bundle_count}** ({metrics.repeat_count} shadow repeats each)",
-        f"- Pairwise flip rate (mean across bundles with ≥2 valid repeats): **{_fmt_pct(metrics.flip_rate_overall)}**",
-        f"- Bundles with any pass/fail disagreement: **{metrics.bundles_with_any_flip}**",
-        f"- Bundles with incomplete repeats (errors or <2 valid): **{metrics.bundles_incomplete}**",
     ]
+    if review_policy:
+        lines.append(f"- Shadow review policy: **{review_policy}**")
+        lines.append("")
+    if baseline_metrics:
+        lines.extend(
+            [
+                "## Before / after (review policy change)",
+                "",
+                f"- Baseline scorecard: `{baseline_metrics.get('source', '')}` "
+                f"({baseline_metrics.get('generated_at', 'unknown time')}, "
+                f"policy **{baseline_metrics.get('review_policy', 'legacy')}**)",
+                f"- False-block rate (clean bundles): "
+                f"**{_fmt_compare(baseline_metrics.get('false_block_rate'), metrics.false_block_rate)}** "
+                f"({baseline_metrics.get('false_block_count')}/{baseline_metrics.get('clean_eligible_count')} "
+                f"→ {metrics.false_block_count}/{metrics.clean_eligible_count}; target **<15%**)",
+                f"- Defect recall: "
+                f"**{_fmt_compare(baseline_metrics.get('defect_recall_overall'), metrics.defect_recall_overall)}** "
+                f"(must stay **100%**)",
+                f"- Flip rate (mean pairwise): "
+                f"**{_fmt_compare(baseline_metrics.get('flip_rate_overall'), metrics.flip_rate_overall)}**",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- Bundles scored: **{metrics.bundle_count}** ({metrics.repeat_count} shadow repeats each)",
+            f"- Pairwise flip rate (mean across bundles with ≥2 valid repeats): **{_fmt_pct(metrics.flip_rate_overall)}**",
+            f"- Bundles with any pass/fail disagreement: **{metrics.bundles_with_any_flip}**",
+            f"- Bundles with incomplete repeats (errors or <2 valid): **{metrics.bundles_incomplete}**",
+        ]
+    )
     if metrics.defect_recall_overall is not None:
         lines.append(
             f"- Defect recall (adjudicated requirements, mean): **{metrics.defect_recall_overall:.1%}** "
@@ -111,7 +148,13 @@ def render_markdown(
     return "\n".join(lines)
 
 
-def render_html(metrics: ScorecardMetrics, *, generated_at: str | None = None) -> str:
+def render_html(
+    metrics: ScorecardMetrics,
+    *,
+    generated_at: str | None = None,
+    baseline_metrics: dict[str, Any] | None = None,
+    review_policy: str | None = None,
+) -> str:
     ts = html.escape(generated_at or datetime.now(timezone.utc).isoformat())
     rows = "".join(
         f"<tr><td>{html.escape(b.bundle_id)}</td>"
@@ -138,6 +181,30 @@ def render_html(metrics: ScorecardMetrics, *, generated_at: str | None = None) -
         if metrics.false_block_rate is not None
         else "n/a"
     )
+    policy_line = (
+        f'<p class="note">Shadow review policy: <strong>{html.escape(review_policy)}</strong></p>'
+        if review_policy
+        else ""
+    )
+    before_block = ""
+    if baseline_metrics:
+        before_block = (
+            "<h2>Before / after (review policy change)</h2>"
+            "<ul>"
+            f"<li>Baseline scorecard: <code>{html.escape(str(baseline_metrics.get('source', '')))}</code> "
+            f"({html.escape(str(baseline_metrics.get('generated_at', 'unknown time')))}, "
+            f"policy <strong>{html.escape(str(baseline_metrics.get('review_policy', 'legacy')))}</strong>)</li>"
+            f"<li>False-block rate (clean bundles): "
+            f"<strong>{_fmt_compare(baseline_metrics.get('false_block_rate'), metrics.false_block_rate)}</strong> "
+            f"({baseline_metrics.get('false_block_count')}/{baseline_metrics.get('clean_eligible_count')} "
+            f"&rarr; {metrics.false_block_count}/{metrics.clean_eligible_count}; target <strong>&lt;15%</strong>)</li>"
+            f"<li>Defect recall: "
+            f"<strong>{_fmt_compare(baseline_metrics.get('defect_recall_overall'), metrics.defect_recall_overall)}</strong> "
+            f"(must stay <strong>100%</strong>)</li>"
+            f"<li>Flip rate (mean pairwise): "
+            f"<strong>{_fmt_compare(baseline_metrics.get('flip_rate_overall'), metrics.flip_rate_overall)}</strong></li>"
+            "</ul>"
+        )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -154,6 +221,8 @@ th {{ background: #f4f4f4; }}
 <body>
 <h1>Reviewer agreement and loop scorecard</h1>
 <p class="note">Generated {ts}. Advisory only — never blocks merge.</p>
+{policy_line}
+{before_block}
 <h2>Summary</h2>
 <ul>
 <li>Bundles: {metrics.bundle_count} × {metrics.repeat_count} shadow repeats (mixed models)</li>
@@ -182,18 +251,35 @@ def write_scorecard(
     raw_runs: dict[str, Any] | None = None,
     retrospective: dict[str, Any] | None = None,
     judge_samples: dict[str, Any] | None = None,
+    review_policy: str | None = None,
+    reviewer_instructions_sha256: str | None = None,
+    baseline_metrics: dict[str, Any] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).isoformat()
     (out_dir / "report.md").write_text(
-        render_markdown(metrics, generated_at=ts, retrospective=retrospective),
+        render_markdown(
+            metrics,
+            generated_at=ts,
+            retrospective=retrospective,
+            baseline_metrics=baseline_metrics,
+            review_policy=review_policy,
+        ),
         encoding="utf-8",
     )
     (out_dir / "index.html").write_text(
-        render_html(metrics, generated_at=ts), encoding="utf-8"
+        render_html(
+            metrics,
+            generated_at=ts,
+            baseline_metrics=baseline_metrics,
+            review_policy=review_policy,
+        ),
+        encoding="utf-8",
     )
     payload: dict[str, Any] = {
         "generated_at": ts,
+        "review_policy": review_policy or "board",
+        "reviewer_instructions_sha256": reviewer_instructions_sha256,
         "metrics": {
             "bundle_count": metrics.bundle_count,
             "repeat_count": metrics.repeat_count,
@@ -224,6 +310,8 @@ def write_scorecard(
             for b in metrics.per_bundle
         ],
     }
+    if baseline_metrics:
+        payload["baseline_metrics"] = baseline_metrics
     if raw_runs:
         payload["raw_runs"] = raw_runs
         complete = sum(
