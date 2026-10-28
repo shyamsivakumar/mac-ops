@@ -5,6 +5,7 @@ REAL = os.path.realpath(str(Path(__file__).with_name('cursor-agent.before-mac-op
 (START, END) = (b'\x1b[200~', b'\x1b[201~')
 MARKERS = (b'Plan, search, build anything', b'Add a follow-up')
 (LIMIT, TIMEOUT, SETTLE) = (1 << 20, 45.0, 0.3)
+(ACTIVE_SELECT, PASSIVE_SELECT) = (0.1, 0.5)
 CSI = re.compile(b'\\x1b\\[[\\x30-\\x3f]*[\\x20-\\x2f]*[\\x40-\\x7e]')
 OSC = re.compile(b'\\x1b\\].*?(?:\\x07|\\x1b\\\\)', re.S)
 
@@ -291,35 +292,36 @@ def main():
                     pass
                 failure = 128 + sig
                 break
-            if not ready and now - started > TIMEOUT or (input_at is not None and (not transparent) and (now - input_at > TIMEOUT)):
-                failure = 124
-                break
             if len(startup) + len(candidate) + len(after_paste) + len(to_child) + len(inp.buf) > LIMIT:
                 failure = 125
                 break
-            if not ready and any((b''.join(m.split()) in b''.join(visible.tail.split()) for m in MARKERS)):
-                try:
-                    canonical_off = not termios.tcgetattr(master)[3] & termios.ICANON
-                except (OSError, termios.error):
-                    canonical_off = False
-                if canonical_off:
-                    if ready_at is None:
-                        ready_at = now
-                    elif now - ready_at >= 0.25:
-                        ready = True
-                        route(bytes(startup), now)
-                        startup.clear()
-                else:
-                    ready_at = None
-            if written_at is not None and echo_at is not None and (not transparent) and (now - max(echo_at, written_at) >= SETTLE):
-                queue(after_paste)
-                after_paste.clear()
-                queue(inp.buf)
-                inp.buf = b''
-                transparent = True
+            if not transparent:
+                if not ready and now - started > TIMEOUT or (input_at is not None and (now - input_at > TIMEOUT)):
+                    failure = 124
+                    break
+                if not ready and any((b''.join(m.split()) in b''.join(visible.tail.split()) for m in MARKERS)):
+                    try:
+                        canonical_off = not termios.tcgetattr(master)[3] & termios.ICANON
+                    except (OSError, termios.error):
+                        canonical_off = False
+                    if canonical_off:
+                        if ready_at is None:
+                            ready_at = now
+                        elif now - ready_at >= 0.25:
+                            ready = True
+                            route(bytes(startup), now)
+                            startup.clear()
+                    else:
+                        ready_at = None
+                if written_at is not None and echo_at is not None and (now - max(echo_at, written_at) >= SETTLE):
+                    queue(after_paste)
+                    after_paste.clear()
+                    queue(inp.buf)
+                    inp.buf = b''
+                    transparent = True
             reads = [0] + ([] if master_eof else [master])
             writes = [master] if to_child else []
-            (r, w, _) = select.select(reads, writes, [], 0.1)
+            (r, w, _) = select.select(reads, writes, [], PASSIVE_SELECT if transparent else ACTIVE_SELECT)
             if master in r:
                 try:
                     raw = os.read(master, 65536)
@@ -334,16 +336,16 @@ def main():
                 if raw == b'':
                     break
                 if raw:
-                    queries.observe(raw)
                     stdout(raw)
                     if not transparent:
+                        queries.observe(raw)
                         stdout(b'\x1b[?2004h')
-                    shown = visible.feed(raw)
-                    if written_at is not None and echo_at is None:
-                        echo.extend(shown)
-                        echo[:] = echo[-8192:]
-                        if draft_seen(echo, suffix, paste_lines):
-                            echo_at = now
+                        shown = visible.feed(raw)
+                        if written_at is not None and echo_at is None:
+                            echo.extend(shown)
+                            echo[:] = echo[-8192:]
+                            if draft_seen(echo, suffix, paste_lines):
+                                echo_at = now
             if 0 in r:
                 try:
                     raw = os.read(0, 65536)
