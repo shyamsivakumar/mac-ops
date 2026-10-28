@@ -12,7 +12,7 @@ From any checkout of this repository (including a task worktree):
 ./install.sh agents
 ```
 
-The first pass links rules, merges settings, installs the pi input gate, and
+First pass links rules, merges settings, installs pi and omp input gates, and
 merges the Executor MCP entry without replacing unrelated servers. Re-running
 `./install.sh agents` is idempotent (including the gate).
 
@@ -46,7 +46,8 @@ file exists beyond the board setting.
 - pi: `~/.pi/agent/AGENTS.md`, llmwiki skills paths, Executor MCP, Terra
   enabled, board trust paths, `quietStartup`, and the [pi input gate](pi-input-gate.md).
 - omp: wiki `runtime/omp` rules and agents, Executor MCP, Terra in
-  `enabledModels`, shared skills directory.
+  `enabledModels`, shared skills directory, `startup.quiet`, and the
+  [omp input gate](omp-input-gate.md).
 - Leaves board `worker.instructions`, `worker.fallback`, and coordinator
   settings unchanged.
 
