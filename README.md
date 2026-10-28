@@ -166,3 +166,10 @@ The [Pi input gate](docs/pi-input-gate.md) queues the board's first brief until
 Pi's editor is ready, skips the startup update banner race via
 `PI_SKIP_VERSION_CHECK`, and merges `quietStartup` in agent settings. Its
 [state chart](docs/state-charts/pi-input.md) records the delivery lifecycle.
+
+## Omp first-message delivery
+
+The [Omp input gate](docs/omp-input-gate.md) queues the board's first brief until
+Omp's editor is ready, skips first-run setup races via `OMP_SKIP_SETUP`, and
+merges `startup.quiet` in agent settings. Its [state
+chart](docs/state-charts/omp-input.md) records the delivery lifecycle.
