@@ -329,7 +329,7 @@ def main():
     )
     ready_at = echo_at = input_at = written_at = None
     paste_left = 0
-    ready = sent_paste = transparent = False
+    ready = sent_paste = session_started = False
     suffix = b""
     paste_lines = 0
     (failure, status, master_eof) = (0, None, False)
@@ -338,6 +338,23 @@ def main():
     def queue(data):
         to_child.extend(data)
 
+    def finish_delivery():
+        nonlocal sent_paste, written_at, echo_at, paste_left, input_at, ready_at, ready
+        nonlocal suffix, paste_lines
+        queue(after_paste)
+        after_paste.clear()
+        queue(inp.buf)
+        inp.buf = b""
+        sent_paste = False
+        written_at = echo_at = None
+        paste_left = 0
+        echo.clear()
+        input_at = None
+        ready_at = None
+        ready = False
+        suffix = b""
+        paste_lines = 0
+
     def route(data, now):
         nonlocal sent_paste, suffix, input_at, failure, paste_left, paste_lines
         if not data:
@@ -345,13 +362,10 @@ def main():
         if input_at is None:
             input_at = now
         if not ready:
-            startup.extend(data)
+            (candidate if session_started else startup).extend(data)
             return
         if sent_paste:
-            if transparent:
-                queue(data)
-            else:
-                after_paste.extend(data)
+            after_paste.extend(data)
             return
         candidate.extend(data)
         start = candidate.find(START)
@@ -389,14 +403,9 @@ def main():
                     pass
                 failure = 128 + sig
                 break
-            if (
-                not ready
-                and now - started > TIMEOUT
-                or (
-                    input_at is not None
-                    and (not transparent)
-                    and (now - input_at > TIMEOUT)
-                )
+            pending = bool(candidate or startup or inp.buf or sent_paste or after_paste)
+            if (not session_started and not ready and now - started > TIMEOUT) or (
+                input_at is not None and pending and (now - input_at > TIMEOUT)
             ):
                 failure = 124
                 break
@@ -423,21 +432,22 @@ def main():
                         ready_at = now
                     elif now - ready_at >= 0.25:
                         ready = True
-                        route(bytes(startup), now)
-                        startup.clear()
+                        if session_started:
+                            if candidate:
+                                route(bytes(candidate), now)
+                                candidate.clear()
+                        else:
+                            route(bytes(startup), now)
+                            startup.clear()
+                            session_started = True
                 else:
                     ready_at = None
             if (
                 written_at is not None
                 and echo_at is not None
-                and (not transparent)
                 and (now - max(echo_at, written_at) >= SETTLE)
             ):
-                queue(after_paste)
-                after_paste.clear()
-                queue(inp.buf)
-                inp.buf = b""
-                transparent = True
+                finish_delivery()
             reads = [0] + ([] if master_eof else [master])
             writes = [master] if to_child else []
             (r, w, _) = select.select(reads, writes, [], 0.1)
@@ -457,8 +467,7 @@ def main():
                 if raw:
                     queries.observe(raw)
                     stdout(raw)
-                    if not transparent:
-                        stdout(b"\x1b[?2004h")
+                    stdout(b"\x1b[?2004h")
                     shown = visible.feed(raw)
                     if written_at is not None and echo_at is None:
                         echo.extend(shown)
@@ -480,15 +489,12 @@ def main():
                     failure = 129
                     break
                 if raw:
-                    if transparent:
-                        queue(raw)
-                    else:
-                        (keys, replies, cancel) = inp.feed(raw, queries)
-                        if cancel:
-                            failure = 130
-                            break
-                        queue(replies)
-                        route(keys, now)
+                    (keys, replies, cancel) = inp.feed(raw, queries)
+                    if cancel:
+                        failure = 130
+                        break
+                    queue(replies)
+                    route(keys, now)
             if master in w and to_child:
                 try:
                     n = os.write(master, to_child[:65536])
@@ -532,11 +538,12 @@ def main():
             pass
     if failure:
         reap_after_close(pid)
-        phase = (
-            "before first submit; Enter withheld"
-            if not transparent
-            else "after first submit"
-        )
+        if not session_started or (not ready and not sent_paste):
+            phase = "before first submit; Enter withheld"
+        elif sent_paste or not ready:
+            phase = "before follow-up submit; Enter withheld"
+        else:
+            phase = "mid-session"
         try:
             os.write(2, f"Omp input gate stopped ({failure}) {phase}.\n".encode())
         except OSError:

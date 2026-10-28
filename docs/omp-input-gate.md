@@ -4,8 +4,10 @@ The local launcher queues the board's first brief until Omp has finished
 startup and the editor accepts input. It waits for the complete paste to be
 written, then releases Enter after a short settle. Omp's TUI often does not
 echo the draft back to the PTY, so the gate uses a timed acknowledgement
-instead of Cursor's draft-receipt match. Follow-up input then passes through
-as raw bytes.
+instead of Cursor's draft-receipt match. Each board brief and each
+`herdr-projects tell` follow-up goes through the same delivery cycle:
+composer readiness, complete paste write, settle, then Enter. The session
+does not passthrough raw stdin after the first message.
 
 Board launches also set `OMP_SKIP_SETUP=1` so first-run setup does not race
 the first brief. User settings merge `startup.quiet: true` to hide startup
