@@ -4,8 +4,10 @@ The local launcher queues the board's first brief until Pi has finished
 startup and the editor accepts input. It waits for the complete paste to be
 written, then releases Enter after a short settle. Pi's TUI often does not
 echo the draft back to the PTY, so the gate uses a timed acknowledgement
-instead of Cursor's draft-receipt match. Follow-up input then passes through
-as raw bytes.
+instead of Cursor's draft-receipt match. Each board brief and each
+`herdr-projects tell` follow-up goes through the same delivery cycle:
+composer readiness, complete paste write, settle, then Enter. The session
+does not passthrough raw stdin after the first message.
 
 Board launches also set `PI_SKIP_VERSION_CHECK=1` so the async "Update
 Available" banner does not race the first brief. User settings merge
@@ -48,9 +50,9 @@ mv "$HOME/.local/bin/pi.before-mac-ops-12" "$HOME/.local/bin/pi"
 - The gate requires a Herdr board task identity, its report path, a task
   temp folder beneath `hp-<uid>`, and interactive input/output. Ordinary CLI
   use, `pi -p`, and non-board launches execute the original program directly.
-- Readiness looks for Pi footer or onboarding text (`thinking max`,
-  `show full startup help`, and similar) plus raw terminal mode on the PTY
-  for 250 ms.
+- Readiness looks for Pi footer or onboarding text (`gpt-6.1-terra`,
+  `thinking max`, `show full startup help`, and similar) plus raw terminal
+  mode on the PTY for 250 ms.
 - The startup/delivery deadline is 45 seconds and buffered input is limited
   to 1 MiB. A failed delivery exits visibly rather than forwarding a partial
   brief.
