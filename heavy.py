@@ -1379,7 +1379,7 @@ def _prune_finished_locked(
 
 @dataclass
 class SupervisorDeps:
-    sample: Callable[[], Sample] = sample_host
+    sample: Callable[[], Sample] = lambda: sample_with_emergency()
     clock: Callable[[], float] = monotonic
     monotonic_ns: Callable[[], int] = monotonic_ns
     sleep: Callable[[float], None] = time.sleep
@@ -1446,6 +1446,13 @@ def _enqueue_job(
     _log_event(registry.directory, "queued", queued, detail="priority position {}".format(position))
     print("heavy: queued role={} position={}".format(role, position), file=sys.stderr)
     return queue_id
+
+
+
+def critical_pressure(sample: Sample) -> bool:
+    return (sample.pressure_level == CRITICAL_PRESSURE_LEVEL
+            or (_finite_nonnegative(sample.memory_used_pct) and sample.memory_used_pct >= MAX_MEMORY_PCT)
+            or (_finite_nonnegative(sample.load_per_core) and sample.load_per_core >= CRITICAL_LOAD_PER_CORE))
 
 
 def _host_reason(sample: Sample, load_high_count: int = 0) -> Optional[str]:
@@ -1524,10 +1531,17 @@ def _reserve_job(
                 registry.remove_queue(queue_id)
             return None, "queue-identity-unavailable"
         queues.sort(key=_queue_sort_key)
-        if not queues or queues[0].get("queue_id") != queue_id:
+        active = [row for row in records if row.get("state") not in ("complete", "removed")]
+        busy_tasks = {row.get("task_key") for row in active}
+        eligible_queues = [row for row in queues if row.get("task_key") not in busy_tasks]
+        if task_key in busy_tasks:
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
-            return None, "reviewer-priority" if queues and queues[0].get("role") == "review" else "queue-order"
+            return None, "task-slot-busy"
+        if not eligible_queues or eligible_queues[0].get("queue_id") != queue_id:
+            if ephemeral_queue:
+                registry.remove_queue(queue_id)
+            return None, "reviewer-priority" if eligible_queues and eligible_queues[0].get("role") == "review" else "queue-order"
         try:
             slot_limit = _effective_slot_limit(registry, sample, now=deps.wall_clock(), boot_id=boot_id)
         except TelemetryError:
@@ -1778,7 +1792,29 @@ def _signal_owned_group(identity: Dict[str, Any], signum: int, deps: SupervisorD
     return True
 
 
-def _request_global_pause(registry: Registry, reason: str, deps: SupervisorDeps) -> Optional[str]:
+def _request_global_pause(registry: Registry, reason: str, deps: SupervisorDeps, *, urgent: bool = False) -> Optional[str]:
+    if urgent:
+        requested = []
+        with registry.lock():
+            for current in registry.records():
+                if (current.get("state") != "running" or not isinstance(_workload_identity(current), dict)
+                        or current.get("termination") or current.get("curtail_request") or current.get("pause")):
+                    continue
+                job_id = current["job_id"]
+                def mark(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                    if record.get("state") != "running" or _workload_identity(record) != _workload_identity(current):
+                        return None
+                    record["pause"] = {"status": "requested", "reason": reason,
+                                       "source": "global-pressure", "requested_ns": deps.monotonic_ns(),
+                                       "selection": "critical-all"}
+                    record["state"] = "pause-requested"
+                    return record
+                changed = registry.update(job_id, mark)
+                if changed is not None:
+                    requested.append(changed)
+        for record in requested:
+            _log_event(registry.directory, "pause-requested", record, detail=reason + "; critical-all")
+        return requested[0]["job_id"] if requested else None
     changed = None
     with registry.lock():
         records = registry.records()
@@ -1862,6 +1898,17 @@ def _request_global_pause(registry: Registry, reason: str, deps: SupervisorDeps)
         file=sys.stderr,
     )
     return changed["job_id"]
+
+
+
+def request_critical_pauses() -> List[str]:
+    registry = Registry(state_directory())
+    registry.ensure_protocol()
+    _request_global_pause(registry, "critical-pressure", SupervisorDeps(), urgent=True)
+    with registry.lock(exclusive=False):
+        return [record["job_id"] for record in registry.records()
+                if (record.get("pause") or {}).get("reason") == "critical-pressure"
+                and (record.get("pause") or {}).get("status") in ("requested", "paused")]
 
 
 def _apply_pause_request(registry: Registry, job_id: str, workload: Dict[str, Any], deps: SupervisorDeps) -> bool:
@@ -2018,7 +2065,8 @@ def _supervise_running(
         sample_error = False
         try:
             sample = deps.sample()
-        except Exception:
+        except Exception as exc:
+            sample = getattr(exc, "partial_sample", None)
             sample_error = True
         now = deps.clock()
         invalid_reason = "telemetry-missing" if sample_error or sample is None else _sample_invalid_reason(sample, now)
@@ -2035,14 +2083,15 @@ def _supervise_running(
                 pressure_reason = _host_reason(sample)
             except Exception:
                 invalid_reason = "capacity-unavailable"
-        unhealthy_reason = invalid_reason or pressure_reason
+        critical = sample is not None and critical_pressure(sample)
+        unhealthy_reason = "critical-pressure" if critical else (invalid_reason or pressure_reason)
         if unhealthy_reason:
             healthy_since = None
             if pressure_since is None:
                 pressure_since = now
-            if now - pressure_since >= PRESSURE_HOLD_SECONDS:
+            if critical or now - pressure_since >= PRESSURE_HOLD_SECONDS:
                 try:
-                    _request_global_pause(registry, unhealthy_reason, deps)
+                    _request_global_pause(registry, unhealthy_reason, deps, urgent=critical)
                 except Exception:
                     pass
         else:
@@ -2574,6 +2623,57 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (OSError, ValueError, json.JSONDecodeError):
         print("heavy: local state or command failed safely", file=sys.stderr)
         return 74
+
+
+
+def sample_with_emergency(
+    *, command_runner: Callable[[Sequence[str], float], str] = _run_native,
+    clock: Callable[[], float] = monotonic,
+) -> Sample:
+    captured: Dict[str, str] = {}
+    def capture(argv: Sequence[str], timeout: float) -> str:
+        output = command_runner(argv, timeout)
+        key = argv[-1] if argv[0] == "/usr/sbin/sysctl" else argv[0]
+        captured[key] = output
+        return output
+    try:
+        return sample_host(command_runner=capture, clock=clock)
+    except TelemetryError as exc:
+        pressure = physical = cores = headroom = memory_used = load = None
+        try:
+            pressure = parse_pressure_level(captured.get("kern.memorystatus_vm_pressure_level", ""))
+        except TelemetryError:
+            pass
+        try:
+            physical = int(captured.get("hw.memsize", ""))
+            if physical <= 0:
+                physical = None
+        except ValueError:
+            pass
+        try:
+            cores = int(captured.get("hw.physicalcpu", ""))
+            if cores <= 0:
+                cores = None
+        except ValueError:
+            pass
+        if cores is not None:
+            try:
+                load = parse_load(captured.get("/usr/bin/uptime", ""), cores)
+            except TelemetryError:
+                pass
+        if physical is not None:
+            try:
+                _, headroom = parse_vm_stat(captured.get("/usr/bin/vm_stat", ""))
+                memory_used = (1 - headroom / physical) * 100
+            except TelemetryError:
+                pass
+        partial = Sample(pressure_level=pressure, cpu_busy_pct=None,
+                         memory_used_pct=memory_used, headroom_bytes=headroom,
+                         physical_bytes=physical, load_per_core=load,
+                         captured_monotonic=clock(), physical_cores=cores)
+        if critical_pressure(partial):
+            exc.partial_sample = partial
+        raise
 
 
 if __name__ == "__main__":

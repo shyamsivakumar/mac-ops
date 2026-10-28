@@ -11,7 +11,7 @@ Run from the mac-ops checkout:
 heavy python3 verify_capacity.py --mutation-check
 ```
 
-The check explores the actual `board_governor.decision` and `_capacity_decision` implementations across slot counts 0 to 16, 2/14/32 cores, 12/48/128 GiB, six load fractions, and three pressure levels. It also replaces required input fields with malformed or missing readings and runs healthy sequences. Growth on bad readings must never occur. Healthy growth is at most one slot, and the decision must obey its computed ceiling. Compressor, swap-use and swapout growth must each veto growth independently.
+The check explores the actual `board_governor.decision` and `_capacity_decision` implementations across slot counts 0 to 16, 2/14/32 cores, 12/48/128 GiB, six load fractions, and three pressure levels. It also replaces required input fields with malformed or missing readings and runs healthy sequences. Above-floor growth on bad readings must never occur. A fresh noncritical sample restores the baseline of two, bounded by the hardware ceiling. Healthy growth above that baseline is at most one slot, and the decision must obey its computed ceiling. Compressor, swap-use and swapout growth must each veto growth independently.
 
 The mutation checks alter the actual decision source at the critical-pressure branch and the active heavy controller host-veto branch to add one slot. The verifier must reject both mutations. No repository source is changed. A passing unmutated result and detected mutation are required together.
 

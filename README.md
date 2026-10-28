@@ -1,6 +1,6 @@
 # Mac load tools
 
-`heavy` queues expensive commands and keeps one command active per task. A single controller adjusts heavy capacity from host readings, grows one slot after a healthy window, and cuts capacity on pressure. Review jobs precede queued build and test jobs. Running heavy workloads pause after sustained pressure and resume after recovery.
+`heavy` queues expensive commands and keeps one command active per task. A single controller adjusts heavy capacity from host readings, grows one slot after a healthy window, and cuts capacity on pressure. Fresh noncritical readings restore a baseline of two heavy slots immediately; growth above two waits for the healthy window. Review jobs precede queued build and test jobs. Running heavy workloads pause after sustained warning pressure and resume after recovery. Critical kernel pressure, memory use of at least 95%, or load per core of at least 1.5 requests a pause immediately.
 
 The tools run locally without Multica, network services, API keys, or Homebrew dependencies. Apple Command Line Tools supply Python 3; macOS supplies launchd and taskpolicy. The repository is the source; installed runtime files are private copies with a content digest.
 
@@ -21,11 +21,11 @@ Add the wrapper directory to your shell profile if it is absent:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Run `./install.sh status` and `heavy status`. The installer derives paths from the current user and copies the checkout into `~/.local/lib/mac-ops/<content-digest>`. State and logs live in `~/.local/state/mac-ops`, outside Git. Reinstall after a reviewed checkout update. Existing runtime versions stay available for active supervisors and their watchdogs.
+Install from a clean `main` checkout matching `origin/main`; worktrees are rejected. Run `./install.sh status` and `heavy status`. The installer derives paths from the current user and copies the checkout into `~/.local/lib/mac-ops/<content-digest>`. State and logs live in `~/.local/state/mac-ops`, outside Git. The installation receipt records the main commit and runtime digest. Reinstall after a reviewed checkout update. Existing runtime versions stay available for active supervisors and their watchdogs.
 
 The installer writes `com.shyam.load-backstop` and `com.shyam.board-governor` launchd plists. The backstop service runs the single controller for heavy capacity and board agent limits. The governor plist points to the same controller, stays unloaded to avoid a second service, and shares its lock to prevent duplicate controllers. No Homebrew tool is adopted, so the installer does not invoke brew.
 
-Heavy capacity works without a board installation. Board integration uses `~/.herdr-projects/data/bin/herdr-projects` when available. The local admission gate sets `board.agents` through the board command. It grows by one only after a healthy window with free memory for one more agent, cuts immediately on pressure, and holds on missing readings. It limits spare admission to one slot and closes slots freed by finished tasks before another healthy-window raise. The gate is sampled by the controller; it does not modify the board plugin or depend on an upstream change. The installer does not change worker instructions.
+Heavy capacity works without a board installation. Board integration uses `~/.herdr-projects/data/bin/herdr-projects` when available. The local admission gate sets `board.agents` through the board command. A fresh valid noncritical sample restores the floor `min(board ceiling, max(6, active tasks + 1))`, even when this requires a multi-slot raise. Warning cuts cannot cross that floor; critical kernel pressure, memory use of at least 95%, or load per core of at least 1.5 sets the limit to zero. Above the floor, the controller raises by one after 60 healthy seconds only when memory and CPU fit every pending slot. Missing or stale readings never raise the limit. A completed task closes the freed spare capacity back to the active count or ready floor and resets the healthy window. The gate is sampled by the controller; it does not modify the board plugin or depend on an upstream change. The installer does not change worker instructions.
 
 ## Use heavy
 
@@ -62,6 +62,8 @@ Uninstall stops the installed launchd controller, moves its plists into `~/Libra
 
 ## Verification and lifecycle
 
-The controller is ported from llmwiki commit `45542a50a2938aaceda41b13806c25b404191e08`. Its memory and swap safety rules remain independent. See [controller states](docs/state-charts/controller.md) and [heavy states](docs/state-charts/heavy.md). Installation and migration states are documented in [installation states](docs/state-charts/installation.md).
+The controller is ported from llmwiki commit `45542a50a2938aaceda41b13806c25b404191e08`. Its memory and swap safety rules remain independent. See [governor states](docs/state-charts/governor.md) and [heavy states](docs/state-charts/heavy.md). Installation and migration states are documented in [installation states](docs/state-charts/installation.md).
 
 Pueue provides priority, runtime parallel counts and pause/resume, but adopting it requires installing its daemon and verifying synchronous caller, exit status, stdin and process identity behavior. GNU parallel sem provides load and memory admission but does not replace board admission or the reviewer queue. `taskpolicy -b` lowers scheduling priority and does not enforce capacity. The existing heavy registry preserves the active supervision contract while adding only the queue ordering and capacity reader that the migration needs.
+
+The [TLA+ verification skill](.agents/skills/verify-governor/SKILL.md) documents the bounded safety and liveness checks. It requires the checksum-pinned TLC jar from the local llmwiki checkout and an existing OpenJDK 17 installation; neither is a runtime dependency. Run `heavy --review bash formal/governor/check.sh` for a safety review, and `heavy python3 verify_capacity.py --mutation-check` for the actual-code checks.
