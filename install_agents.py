@@ -251,14 +251,26 @@ def trust_board_paths(trust_path: Path, paths: list[Path], backups: Path) -> Non
     atomic_write(trust_path, json.dumps(current, indent=2) + "\n", 0o600)
 
 
-def copy_json_template(template: Path, target: Path, backups: Path) -> None:
+EXECUTOR_MCP_KEY = "executor"
+
+
+def merge_executor_mcp(template: Path, target: Path, backups: Path) -> None:
+    desired = json.loads(template.read_text())
+    executor = desired.get("mcpServers", {}).get(EXECUTOR_MCP_KEY)
+    if not isinstance(executor, dict):
+        raise TypeError("Template missing executor mcpServers entry: " + str(template))
+    current: dict = {}
     if target.exists():
-        existing = json.loads(target.read_text())
-        desired = json.loads(template.read_text())
-        if existing == desired:
-            return
+        current = json.loads(target.read_text())
+    servers = dict(current.get("mcpServers") or {})
+    if servers.get(EXECUTOR_MCP_KEY) == executor:
+        return
+    if target.exists():
         backup(target, backups)
-    atomic_write(target, template.read_text(), 0o600)
+    servers[EXECUTOR_MCP_KEY] = executor
+    merged = dict(current)
+    merged["mcpServers"] = servers
+    atomic_write(target, json.dumps(merged, indent=2) + "\n", 0o600)
 
 
 def prove_model(command: list[str], token: str) -> dict:
@@ -311,11 +323,11 @@ def install(checkout: Path, refresh_models: bool, prove: bool, use_heavy: bool) 
     install_skill_links(pi_agent / "skills", codex_skills, backups)
     report["actions"].append("linked pi skill shortcuts")
 
-    copy_json_template(checkout / "runtime/pi/mcp.json", pi_agent / "mcp.json", backups)
-    copy_json_template(
+    merge_executor_mcp(checkout / "runtime/pi/mcp.json", pi_agent / "mcp.json", backups)
+    merge_executor_mcp(
         checkout / "runtime/omp/mcp.json", omp_agent / "mcp.json", backups
     )
-    report["actions"].append("installed executor MCP templates")
+    report["actions"].append("merged executor MCP entry into mcp.json")
 
     merge_omp_config(omp_agent, checkout / "runtime/omp/board.overlay.json", backups)
     report["actions"].append("merged omp config.yml board overlay")
@@ -359,7 +371,9 @@ def install(checkout: Path, refresh_models: bool, prove: bool, use_heavy: bool) 
             "stderr": proc.stderr[-2000:],
         }
         if proc.returncode != 0:
-            raise RuntimeError("pi update --models failed")
+            report["actions"].append(
+                "pi model refresh failed (non-fatal; use --model-refresh after re-auth)"
+            )
 
     if prove:
         token_pi = "TERRA_PI_OK"
@@ -427,7 +441,11 @@ def main() -> None:
     parser.add_argument(
         "action", choices=("install", "status"), nargs="?", default="install"
     )
-    parser.add_argument("--no-model-refresh", action="store_true")
+    parser.add_argument(
+        "--model-refresh",
+        action="store_true",
+        help="Run pi update --models (optional; failures are recorded, not fatal)",
+    )
     parser.add_argument("--no-prove", action="store_true")
     parser.add_argument("--no-heavy", action="store_true")
     args = parser.parse_args()
@@ -437,7 +455,7 @@ def main() -> None:
         return
     receipt = install(
         checkout,
-        refresh_models=not args.no_model_refresh,
+        refresh_models=args.model_refresh,
         prove=not args.no_prove,
         use_heavy=not args.no_heavy,
     )

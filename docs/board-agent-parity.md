@@ -12,8 +12,15 @@ From any checkout of this repository (including a task worktree):
 ./install.sh agents
 ```
 
-The second command refreshes pi model catalogs and runs GPT 6.1 Terra proofs
-through `heavy`. Receipt: `~/.local/state/mac-ops/agents-installation.json`.
+The first pass links rules, merges settings, installs the pi input gate, and
+merges the Executor MCP entry without replacing unrelated servers. Re-running
+`./install.sh agents` is idempotent (including the gate).
+
+The second command runs GPT 6.1 Terra one-line proofs through `heavy`. Optional
+catalog refresh: `./install.sh agents --model-refresh` (failures are recorded,
+not fatal; ChatGPT Terra does not require openai-codex refresh).
+
+Receipt: `~/.local/state/mac-ops/agents-installation.json`.
 
 Status:
 

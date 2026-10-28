@@ -27,7 +27,9 @@ It records the original link and installed file hash in
 `pi.mac-ops-12.json`. The vendor Node bundle stays untouched. The installed
 copy does not depend on this checkout.
 
-`./install.sh agents` runs this installer after merging Pi settings.
+`./install.sh agents` runs this installer after merging Pi settings. Re-running
+`./install.sh agents` is safe: an unchanged gate is a no-op, and an updated gate
+script replaces the installed wrapper only.
 
 Undo with the checked installer while this checkout is available:
 

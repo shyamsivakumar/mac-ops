@@ -77,7 +77,55 @@ def main():
             + str(receipt)
         )
         return
-    if not entry.is_symlink() or os.path.lexists(backup):
+    source = args.source.resolve(strict=True)
+    source_sha = digest(source)
+
+    def write_receipt(payload: dict) -> None:
+        receipt.write_text(json.dumps(payload, indent=2) + "\n")
+        receipt.chmod(0o600)
+
+    def replace_entry_from_source() -> None:
+        staged = folder / ("pi.mac-ops-12-stage-" + str(os.getpid()))
+        with staged.open("xb") as stream:
+            stream.write(source.read_bytes())
+        staged.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        os.replace(staged, entry)
+
+    if (
+        saved
+        and entry.is_file()
+        and not entry.is_symlink()
+        and backup.is_symlink()
+        and digest(entry) == source_sha
+    ):
+        print(
+            json.dumps(
+                {
+                    "already_installed": True,
+                    "entry": str(entry),
+                    "sha256": source_sha,
+                }
+            )
+        )
+        return
+
+    if saved and entry.is_file() and not entry.is_symlink() and backup.is_symlink():
+        replace_entry_from_source()
+        saved = dict(saved)
+        saved["sha256"] = source_sha
+        write_receipt(saved)
+        print(
+            json.dumps(
+                {
+                    "updated": str(entry),
+                    "sha256": source_sha,
+                    "undo": shlex.join(["mv", str(backup), str(entry)]),
+                }
+            )
+        )
+        return
+
+    if not entry.is_symlink() or backup.exists():
         raise RuntimeError("Expected an original Pi symlink and no existing backup.")
     original = os.readlink(entry)
     if saved and saved["original_link"] != original:
@@ -85,11 +133,10 @@ def main():
     real = entry.resolve(strict=True)
     if not real.is_file() or not os.access(real, os.X_OK):
         raise RuntimeError("Original Pi target is not executable.")
-    if folder.stat().st_uid != os.getuid() or real == args.source.resolve():
+    if folder.stat().st_uid != os.getuid() or real == source.resolve():
         raise RuntimeError(
             "Launcher folder must belong to this user and the original must be distinct."
         )
-    source = args.source.resolve(strict=True)
     staged = folder / ("pi.mac-ops-12-stage-" + str(os.getpid()))
     with staged.open("xb") as stream:
         stream.write(source.read_bytes())
@@ -100,8 +147,7 @@ def main():
         "real": str(real),
         "sha256": digest(staged),
     }
-    receipt.write_text(json.dumps(saved, indent=2) + "\n")
-    receipt.chmod(0o600)
+    write_receipt(saved)
     os.rename(entry, backup)
     try:
         os.replace(staged, entry)
