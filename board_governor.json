@@ -1,0 +1,16 @@
+{
+  "memory_reserve_fraction": 0.2,
+  "memory_reserve_bytes": 6442450944,
+  "cpu_reserve_fraction": 0.2,
+  "cost_margin": 1.5,
+  "warning_load_fraction": 0.8,
+  "critical_load_multiplier": 2.0,
+  "growth_hold_seconds": 60,
+  "max_sample_gap_seconds": 150,
+  "max_sample_age_seconds": 120,
+  "swapout_bytes_per_second": 1048576,
+  "swap_growth_bytes_per_second": 1048576,
+  "compressor_growth_bytes_per_second": 1048576,
+  "disk_wait_ratio_threshold": 0.25,
+  "board_response_seconds_threshold": 5.0
+}
