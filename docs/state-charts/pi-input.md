@@ -12,9 +12,16 @@ stateDiagram-v2
     Writing --> Writing: Drain partial PTY writes
     Writing --> Acknowledgement: Last paste byte written
     Acknowledgement --> Separation: Draft suffix, paste receipt, or settle timeout
-    Separation --> Transparent: 300 ms after ack; release held input
-    Transparent --> Transparent: Forward raw bytes without parsing in the same session
-    Transparent --> Closed: Vendor exits or terminal closes
+    Separation --> Waiting: 300 ms after ack; release held input
+    Waiting --> Starting: Re-arm composer readiness for next paste
+    Starting --> Ready: Footer marker and raw input stable 250 ms
+    Ready --> Ready: Wait for one complete bracketed paste
+    Ready --> Writing: Queue preserved paste
+    Writing --> Writing: Drain partial PTY writes
+    Writing --> Acknowledgement: Last paste byte written
+    Acknowledgement --> Separation: Draft suffix, paste receipt, or settle timeout
+    Separation --> Waiting: 300 ms after ack; release held input
+    Waiting --> Closed: Vendor exits or terminal closes
     Starting --> Closed: Deadline, cancellation, signal or I/O failure
     Ready --> Closed: Partial input deadline or invalid framing
     Writing --> Closed: Deadline, buffer limit, cancellation or I/O failure

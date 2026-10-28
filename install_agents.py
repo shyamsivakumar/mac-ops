@@ -200,6 +200,42 @@ def _rewrite_omp_config(text: str, enabled: list[str], directories: list[str]) -
     return "\n".join(out).rstrip() + "\n"
 
 
+def _patch_omp_startup_quiet(text: str, quiet: bool | None) -> str:
+    if quiet is None:
+        return text
+    lines = text.splitlines()
+    out: list[str] = []
+    index = 0
+    replaced = False
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() == "startup:":
+            out.append("startup:")
+            index += 1
+            while (
+                index < len(lines)
+                and lines[index].startswith("  ")
+                and not lines[index].startswith("  quiet:")
+            ):
+                out.append(lines[index])
+                index += 1
+            out.append("  quiet: " + ("true" if quiet else "false"))
+            replaced = True
+            while index < len(lines) and lines[index].startswith("  "):
+                if lines[index].strip().startswith("quiet:"):
+                    index += 1
+                    continue
+                out.append(lines[index])
+                index += 1
+            continue
+        out.append(line)
+        index += 1
+    if not replaced:
+        out.append("startup:")
+        out.append("  quiet: " + ("true" if quiet else "false"))
+    return "\n".join(out).rstrip() + "\n"
+
+
 def merge_omp_config(agent_dir: Path, overlay_path: Path, backups: Path) -> None:
     config_path = agent_dir / "config.yml"
     overlay = json.loads(overlay_path.read_text())
@@ -227,6 +263,9 @@ def merge_omp_config(agent_dir: Path, overlay_path: Path, backups: Path) -> None
         deduped.append(item if str(item).startswith("~") else key)
     directories = deduped
     updated = _rewrite_omp_config(text, enabled, directories)
+    startup = overlay.get("startup") or {}
+    if isinstance(startup, dict) and "quiet" in startup:
+        updated = _patch_omp_startup_quiet(updated, bool(startup["quiet"]))
     atomic_write(config_path, updated, 0o600)
 
 
@@ -357,6 +396,22 @@ def install(checkout: Path, refresh_models: bool, prove: bool, use_heavy: bool) 
         raise RuntimeError("pi input gate install failed")
 
     report["actions"].append("installed pi first-message input gate")
+
+    omp_gate = subprocess.run(
+        [sys.executable, str(checkout / "scripts/install_omp_gate.py"), "install"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    report["omp_input_gate"] = {
+        "exit_code": omp_gate.returncode,
+        "stdout": omp_gate.stdout[-2000:],
+        "stderr": omp_gate.stderr[-2000:],
+    }
+    if omp_gate.returncode != 0:
+        raise RuntimeError("omp input gate install failed")
+
+    report["actions"].append("installed omp first-message input gate")
 
     if refresh_models:
         refresh_cmd = ["pi", "update", "--models"]
