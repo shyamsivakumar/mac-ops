@@ -12,7 +12,17 @@ python3 mo10 freeze
 python3 mo10 loops
 
 # Weekly scorecard (20+ bundles, 5 shadow repeats, mixed models via heavy --review)
-python3 mo10 scorecard --out ~/.herdr-projects/reports/mac-ops/10
+python3 mo10 scorecard --heavy \
+  --out ~/.herdr-projects/reports/mac-ops/reviewer-weekly/$(date +%F)
+
+# Automation wrapper (loads board reviewer.instructions, vs MO-10 baseline):
+./scripts/weekly-reviewer-scorecard.sh
+# Or under load: ~/.local/bin/heavy --review ./scripts/weekly-reviewer-scorecard.sh
+
+# MO-18 rerun with explicit baseline (ship-and-score vs legacy major/critical gate):
+python3 mo10 scorecard --heavy --review-policy board \
+  --baseline-scorecard ~/.herdr-projects/reports/mac-ops/10/scorecard.json \
+  --out ~/.herdr-projects/reports/mac-ops/18
 ```
 
 Smoke test without LLM cost:
@@ -32,10 +42,13 @@ and agent closing note only when it references that commit. Regenerate with
 ## Shadow replay
 
 Each repeat rotates model family (GPT 6.1 Sol, Claude Opus). The prompt
-includes the frozen description, source diff, saved proof, and
-commit-scoped closing note; requirement IDs are derived locally for
-recall. Failed parses and subprocess errors set `error=true` on the
-verdict and are excluded from flip and false-block denominators.
+includes the frozen description, source diff, saved proof, commit-scoped
+closing note, and **current `reviewer.instructions`** from
+`herdr-projects show --repo mac-ops` (ship-and-score pass rule). Use
+`--review-policy legacy` to reproduce the MO-10 major/critical gate.
+Requirement IDs are derived locally for recall. Failed parses and subprocess
+errors set `error=true` on the verdict and are excluded from flip and
+false-block denominators.
 
 ## Metrics
 
@@ -58,4 +71,13 @@ same three families; see `reviewer_audit/judge.py`.
 ## Related
 
 - LMW-25 drop-in: `~/.herdr-projects/reports/llmwiki/25/report.md`
+- MO-10 baseline scorecard (legacy policy): `~/.herdr-projects/reports/mac-ops/10/scorecard.json`
 - Board task bundles: `~/.herdr-projects/data/tasks/<repo>/<n>/`
+
+### Weekly automation (optional)
+
+```sh
+herdr-projects automations add "mac-ops reviewer scorecard" \
+  --schedule "mon 09:00" --repo mac-ops \
+  --prompt 'Run scripts/weekly-reviewer-scorecard.sh; report vs MO-10 baseline'
+```
