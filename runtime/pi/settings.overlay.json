@@ -1,0 +1,13 @@
+{
+  "quietStartup": true,
+  "enabledModels": [
+    "openai/gpt-6.1-terra",
+    "openai-codex/gpt-6.1-terra",
+    "openai-codex/gpt-6.1-sol",
+    "openai/gpt-6.1-sol"
+  ],
+  "skills": [
+    "~/Code/llmwiki/runtime/codex/skills",
+    "~/Code/.agents/skills"
+  ]
+}

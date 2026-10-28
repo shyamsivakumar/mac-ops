@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "executor": {
+      "url": "http://127.0.0.1:4789/mcp",
+      "description": "Executor MCP gateway (xerj, exa, context7, Notion, and other integrations)",
+      "headers": {
+        "Authorization": "!/usr/bin/jq -r '\"Bearer \" + .token' ~/.executor/server-control/auth.json"
+      }
+    }
+  }
+}

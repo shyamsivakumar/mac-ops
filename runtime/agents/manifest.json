@@ -1,0 +1,13 @@
+{
+  "owner": "mac-ops/agents-parity.v1",
+  "llmwiki_root": "~/Code/llmwiki",
+  "codex_skills": "~/Code/llmwiki/runtime/codex/skills",
+  "project_skills": "~/Code/.agents/skills",
+  "omp_runtime": "~/Code/llmwiki/runtime/omp",
+  "board_worker_model": "openai-codex/gpt-6.1-terra",
+  "board_worker_model_pi": "openai/gpt-6.1-terra",
+  "board_worker_agent_pi": "pi/openai/gpt-6.1-terra",
+  "board_worker_agent_omp": "omp/openai-codex/gpt-6.1-terra",
+  "pi_openai_codex_note": "pi openai-codex sign-in refresh token is expired on this Mac; board workers should use pi/openai/gpt-6.1-terra (ChatGPT sign-in). Re-run pi auth for openai-codex to use pi/openai-codex/gpt-6.1-terra.",
+  "effort_note": "Set worker.effort max on the board; pi and omp map it to --thinking max. No separate per-harness effort file."
+}
