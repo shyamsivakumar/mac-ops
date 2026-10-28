@@ -37,7 +37,7 @@ def _shadow_prompt(bundle: ReviewBundle) -> str:
         '{"pass":bool,"findings":[{"severity":"critical|major|minor","subject":"..."}]}\n'
         "pass=false if critical or major acceptance gaps remain in the proof.\n\n"
         f"task={bundle.task_id}\nreview_round={bundle.review_round}\n"
-        f"commit={bundle.head}\ninput_hash={bundle.input_hash}\n"
+        f"commit={bundle.head}\nbase={bundle.diff_base}\ninput_hash={bundle.input_hash}\n"
         f"title={bundle.title[:200]}\nstat={bundle.stat}\n\n"
         f"task_description:\n{desc}\n\n"
         f"source_diff:\n{diff}\n\n"
@@ -46,18 +46,47 @@ def _shadow_prompt(bundle: ReviewBundle) -> str:
     )
 
 
+def _extract_json_verdict(raw: str) -> dict[str, Any] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    candidates: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            candidates.append(line)
+    candidates.append(text)
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    match = re.search(r"\{[\s\S]*?\}\s*(?:\n|$)", text)
+    if match:
+        try:
+            obj = json.loads(match.group(0).strip())
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
 def _parse_verdict(raw: str, model: str, repeat: int) -> ShadowVerdict:
-    parsed: dict[str, Any] | None = None
-    try:
-        parsed = json.loads(raw.strip())
-    except json.JSONDecodeError:
-        match = re.search(r"\{[\s\S]*\}", raw)
-        if match:
-            try:
-                parsed = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                parsed = None
-    if not parsed or parsed.get("error"):
+    parsed = _extract_json_verdict(raw)
+    if not parsed:
+        return ShadowVerdict(
+            pass_verdict=False,
+            finding_subjects=[],
+            requirement_ids=[],
+            model=model,
+            repeat=repeat,
+            raw=raw[:800],
+            error=True,
+        )
+    if parsed.get("error"):
         return ShadowVerdict(
             pass_verdict=False,
             finding_subjects=[],

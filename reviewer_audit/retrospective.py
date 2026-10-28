@@ -5,11 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .board_io import read_closing_note, read_task
+from .board_io import (
+    git_diff_base_to_head,
+    read_closing_note,
+    read_task,
+    task_repo_root,
+)
 from .bundles import (
-    _closing_note_for_head,
     input_hash_for_material,
-    saved_proof_from_review,
+    resolve_review_base,
+    submitted_review_input_material,
 )
 
 
@@ -26,17 +31,17 @@ def review_input_hash(
     task: dict[str, Any], review: dict[str, Any], closing: str
 ) -> str:
     head = str(review.get("head") or "")
-    agent_note = _closing_note_for_head(closing, head)
-    material = "\n---\n".join(
-        [
-            str(task.get("id", "")),
-            str(review.get("round", "")),
-            head,
-            str(task.get("description") or ""),
-            saved_proof_from_review(review),
-            agent_note,
-            str(review.get("by") or ""),
-        ]
+    diff_base = resolve_review_base(task, review)
+    repo_root = task_repo_root(task)
+    stat = ""
+    if repo_root and diff_base and head:
+        stat, _patch = git_diff_base_to_head(repo_root, diff_base, head)
+    material = submitted_review_input_material(
+        task,
+        review,
+        closing,
+        diff_base=diff_base,
+        stat=stat,
     )
     return input_hash_for_material(material)
 
@@ -81,12 +86,15 @@ def summarize_retrospective_flips(task_ids: list[str]) -> dict[str, Any]:
         total_transitions += len(row.passes) - 1
         total_flips += row.flip_count
     return {
-        "scope": "same full input identity (description, round proof, agent note when commit matches, reviewer)",
-        "note": "Not same-commit-only; commit-only grouping is intentionally excluded.",
+        "scope": (
+            "submitted review input (task brief, diff base+head, diff stat, "
+            "commit-scoped agent note, reviewer model) — excludes round number "
+            "and saved verdict text"
+        ),
         "groups_with_flips": len(rows),
         "transition_count": total_transitions,
         "flip_count": total_flips,
-        "flip_rate": total_flips / total_transitions if total_transitions else 0.0,
+        "flip_rate": total_flips / total_transitions if total_transitions else None,
         "examples": [
             {
                 "task_id": r.task_id,

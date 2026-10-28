@@ -23,12 +23,11 @@ python3 mo10 scorecard --out /tmp/mo10-smoke --deterministic --limit 5
 
 ## Frozen benchmark
 
-`reviewer_audit/manifest.json` (version 2) stores the full replay input:
-task description, `git show` diff at the bundle head, saved review proof
-(findings, checks, limitations), and agent closing note only when it
-references that commit (not a later “final commit” narrative). Cohort,
-adjudicated requirement IDs, and input hash cover the same material.
-Regenerate with `python3 mo10 freeze`.
+`reviewer_audit/manifest.json` (version 3) stores the full replay input:
+task description, **base-to-head** `git diff` for the reviewed change (with
+`diff_base` identity), saved review proof (findings, checks, limitations),
+and agent closing note only when it references that commit. Regenerate with
+`python3 mo10 freeze`.
 
 ## Shadow replay
 

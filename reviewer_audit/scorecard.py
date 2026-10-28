@@ -53,13 +53,15 @@ def render_markdown(
         ]
     )
     if retrospective:
+        flip_rate = retrospective.get("flip_rate")
+        flip_s = f"{flip_rate:.1%}" if isinstance(flip_rate, (int, float)) else "n/a"
         lines.extend(
             [
                 "## Retrospective same-input flips (saved reviews)",
                 "",
                 f"- Scope: {retrospective.get('scope', '')}",
                 f"- Groups with pass/fail changes: **{retrospective.get('groups_with_flips', 0)}**",
-                f"- Adjacent transition flip rate: **{retrospective.get('flip_rate', 0):.1%}** "
+                f"- Adjacent transition flip rate: **{flip_s}** "
                 f"({retrospective.get('flip_count', 0)}/{retrospective.get('transition_count', 0)} transitions)",
                 "",
             ]
@@ -224,6 +226,18 @@ def write_scorecard(
     }
     if raw_runs:
         payload["raw_runs"] = raw_runs
+        complete = sum(
+            1
+            for runs in raw_runs.values()
+            if sum(1 for r in runs if not r.get("error")) >= metrics.repeat_count
+        )
+        payload["shadow_execution"] = {
+            "bundles_with_five_valid_repeats": complete,
+            "bundles_scored": metrics.bundle_count,
+            "bundles_required": 20,
+            "repeat_target": metrics.repeat_count,
+            "meets_minimum": metrics.bundle_count >= 20 and complete >= 20,
+        }
     if retrospective:
         payload["retrospective_same_input_flips"] = retrospective
     if judge_samples:

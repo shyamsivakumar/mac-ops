@@ -39,10 +39,55 @@ def task_repo_root(task: dict[str, Any]) -> Path | None:
     return path if path.is_dir() else None
 
 
+def _cap_patch(patch: str, *, max_bytes: int) -> str:
+    if len(patch.encode("utf-8", errors="replace")) > max_bytes:
+        return patch[: max_bytes - 40] + "\n\n... [diff truncated at freeze cap] ...\n"
+    return patch
+
+
+def git_diff_base_to_head(
+    repo_root: Path,
+    base: str,
+    head: str,
+    *,
+    max_bytes: int = MAX_DIFF_BYTES,
+) -> tuple[str, str]:
+    """Return (stat line, patch) for the reviewed change base..head."""
+    if not head or not base or not repo_root.is_dir():
+        return "", ""
+    env = {"GIT_TERMINAL_PROMPT": "0"}
+    stat_proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "diff",
+            "--stat",
+            f"{base}..{head}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=env,
+    )
+    stat = (stat_proc.stdout or "").strip()
+    diff_proc = subprocess.run(
+        ["git", "-C", str(repo_root), "diff", f"{base}..{head}"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+        env=env,
+    )
+    patch = (diff_proc.stdout or "") + (diff_proc.stderr or "")
+    return stat, _cap_patch(patch, max_bytes=max_bytes)
+
+
 def git_diff_at_head(
     repo_root: Path, head: str, *, max_bytes: int = MAX_DIFF_BYTES
 ) -> tuple[str, str]:
-    """Return (stat line, patch text) for commit `head` in repo_root."""
+    """Return (stat line, patch text) for a single commit (legacy helper)."""
     if not head or not repo_root.is_dir():
         return "", ""
     env = {"GIT_TERMINAL_PROMPT": "0"}
@@ -64,9 +109,7 @@ def git_diff_at_head(
         env=env,
     )
     patch = (diff_proc.stdout or "") + (diff_proc.stderr or "")
-    if len(patch.encode("utf-8", errors="replace")) > max_bytes:
-        patch = patch[: max_bytes - 40] + "\n\n... [diff truncated at freeze cap] ...\n"
-    return stat, patch
+    return stat, _cap_patch(patch, max_bytes=max_bytes)
 
 
 def iter_tasks_with_reviews(tasks_root: Path | None = None) -> list[dict[str, Any]]:

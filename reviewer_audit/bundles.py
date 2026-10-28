@@ -10,10 +10,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .board_io import git_diff_at_head, read_closing_note, read_task, task_repo_root
+from .board_io import (
+    git_diff_base_to_head,
+    read_closing_note,
+    read_task,
+    task_repo_root,
+)
 from .requirements import requirement_ids_for_finding
 
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
+_BASE_IN_CHECKS = re.compile(
+    r"against base ([0-9a-f]{7,40})"
+    r"|\bbase(?:\s+(?:commit|sha))?[\s:=`]+([0-9a-f]{7,40})\b"
+    r"|\bbase\s+remains\s+(?:current\s+)?\w+\s+([0-9a-f]{7,40})\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -28,6 +39,7 @@ class ReviewBundle:
     bundle_id: str
     task_id: str
     review_round: int
+    diff_base: str
     head: str
     cohort: str  # regression-bad | regression-clean | history
     expected_pass: bool | None
@@ -76,6 +88,47 @@ def _closing_note_for_head(closing: str, head: str) -> str:
     return closing.strip()
 
 
+def resolve_review_base(task: dict[str, Any], review: dict[str, Any]) -> str:
+    for key in ("baseSha", "base", "mergeBase"):
+        raw = review.get(key)
+        if raw and re.fullmatch(r"[0-9a-f]{7,40}", str(raw).lower()):
+            return str(raw).lower()
+    for check in review.get("checks") or []:
+        match = _BASE_IN_CHECKS.search(str(check))
+        if match:
+            token = match.group(1) or match.group(2) or match.group(3)
+            if token:
+                return token.lower()
+    task_base = task.get("baseSha") or task.get("base")
+    if task_base and re.fullmatch(r"[0-9a-f]{7,40}", str(task_base).lower()):
+        return str(task_base).lower()
+    return ""
+
+
+def submitted_review_input_material(
+    task: dict[str, Any],
+    review: dict[str, Any],
+    closing: str,
+    *,
+    diff_base: str,
+    stat: str,
+) -> str:
+    """Hash material for retrospective same-input grouping (excludes round and verdict)."""
+    head = str(review.get("head") or "")
+    agent_note = _closing_note_for_head(closing, head)
+    return "\n---\n".join(
+        [
+            str(task.get("id", "")),
+            diff_base,
+            head,
+            str(task.get("description") or ""),
+            stat,
+            agent_note,
+            str(review.get("by") or ""),
+        ]
+    )
+
+
 def saved_proof_from_review(review: dict[str, Any]) -> str:
     chunks: list[str] = []
     text = str(review.get("text") or "").strip()
@@ -103,7 +156,9 @@ def _bundle_input_material(
     task: dict[str, Any],
     review: dict[str, Any],
     *,
+    diff_base: str,
     description: str,
+    stat: str,
     diff_text: str,
     saved_proof: str,
     agent_closing_note: str,
@@ -111,15 +166,14 @@ def _bundle_input_material(
     parts = [
         task.get("id", ""),
         str(review.get("round", "")),
+        diff_base,
         str(review.get("head") or task.get("reviewedHead") or ""),
         task.get("title", ""),
         description,
-        task.get("stat") or "",
+        stat,
         diff_text,
         saved_proof,
         agent_closing_note,
-        json.dumps(review.get("checks") or [], sort_keys=True),
-        json.dumps(review.get("limitations") or [], sort_keys=True),
     ]
     return "\n---\n".join(parts)
 
@@ -143,9 +197,14 @@ def bundle_from_task_round(
     if review is None:
         raise ValueError(f"{task_id} has no review round {review_round}")
     head = str(review.get("head") or "")
+    diff_base = resolve_review_base(task, review)
     description = str(task.get("description") or "")
     repo_root = task_repo_root(task)
-    git_stat, diff_text = git_diff_at_head(repo_root, head) if repo_root else ("", "")
+    git_stat, diff_text = (
+        git_diff_base_to_head(repo_root, diff_base, head)
+        if repo_root and diff_base and head
+        else ("", "")
+    )
     stat = git_stat or str(task.get("stat") or "")
     saved_proof = saved_proof_from_review(review)
     closing_raw = read_closing_note(task_id, tasks_root)
@@ -153,7 +212,9 @@ def bundle_from_task_round(
     material = _bundle_input_material(
         task,
         review,
+        diff_base=diff_base,
         description=description,
+        stat=stat,
         diff_text=diff_text,
         saved_proof=saved_proof,
         agent_closing_note=agent_note,
@@ -173,6 +234,7 @@ def bundle_from_task_round(
         bundle_id=bundle_id,
         task_id=task_id,
         review_round=review_round,
+        diff_base=diff_base,
         head=head,
         cohort=cohort,
         expected_pass=expected_pass,
@@ -340,6 +402,7 @@ def load_manifest(path: Path) -> tuple[dict[str, Any], list[ReviewBundle]]:
         raw = dict(raw)
         raw["adjudicated_defects"] = adj
         raw.setdefault("description", raw.get("description_excerpt", ""))
+        raw.setdefault("diff_base", "")
         raw.setdefault("diff_text", "")
         raw.setdefault("saved_proof", "")
         raw.setdefault("agent_closing_note", raw.get("closing_note_excerpt", ""))
