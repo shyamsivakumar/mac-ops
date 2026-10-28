@@ -602,7 +602,7 @@ def _capacity_state(boot_id):
     return value
 
 
-def _capacity_decision(helper, sample, census, compressor, previous, current, boot_id, now_mono):
+def _adaptive_capacity_decision(helper, sample, census, compressor, previous, current, boot_id, now_mono):
     cores = sample.physical_cores
     physical = sample.physical_bytes
     if type(cores) is not int or cores <= 0 or type(physical) is not int or physical <= 0:
@@ -754,6 +754,26 @@ def _capacity_decision(helper, sample, census, compressor, previous, current, bo
         detail["reason"] = "at_ceiling"
     state.update(heavy_slots=target, healthy_since_monotonic=healthy_since)
     detail["target"] = target
+    return state, detail
+
+
+
+def _capacity_decision(helper, sample, census, compressor, previous, current, boot_id, now_mono):
+    state, detail = _adaptive_capacity_decision(
+        helper, sample, census, compressor, previous, current, boot_id, now_mono)
+    floor = min(2, detail["ceiling"])
+    critical = (sample.pressure_level == 4 or sample.cpu_busy_pct >= 95
+                or sample.memory_used_pct >= 95 or sample.load_per_core >= 1.5)
+    proposed = detail["target"]
+    target = 0 if critical else max(floor, proposed)
+    detail.update(floor=floor, critical=critical, adaptive_target=proposed, target=target)
+    if critical:
+        detail["reason"] = "critical_pressure"
+        state["healthy_since_monotonic"] = None
+    elif proposed < floor:
+        detail["adaptive_reason"] = detail["reason"]
+        detail["reason"] = "baseline_floor" if current < floor else "baseline_floor_hold"
+    state["heavy_slots"] = target
     return state, detail
 
 
@@ -1055,9 +1075,13 @@ def controller_tick(*, board_control=True, cfg=None):
                 raise ValueError("Kernel boot identity is invalid")
             now_wall = time.time()
             now_mono = helper.monotonic()
-            capacity_state = {"schema": 1, "boot_id": boot_id, "heavy_slots": 0,
+            critical = (sample is not None and (sample.pressure_level == 4
+                        or sample.cpu_busy_pct >= 95 or sample.memory_used_pct >= 95
+                        or sample.load_per_core >= 1.5))
+            fallback_slots = 0 if critical else 2
+            capacity_state = {"schema": 1, "boot_id": boot_id, "heavy_slots": fallback_slots,
                               "healthy_since_monotonic": None, "last_sample_monotonic": now_mono}
-            payload = {"heavy_slots": 0, "updated_at": now_wall, "boot_id": boot_id}
+            payload = {"heavy_slots": fallback_slots, "updated_at": now_wall, "boot_id": boot_id}
             entry["capacity"] = payload
             entry["active_count"] = census["active"] if census is not None else None
         except Exception as boot_error:
