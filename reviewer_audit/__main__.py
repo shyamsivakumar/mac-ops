@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .board_io import read_reviewer_instructions
 from .bundles import default_seed_bundles, load_manifest, write_manifest
 from .history import compute_loop_stats
 from .metrics import aggregate_scorecard
@@ -26,6 +28,30 @@ def cmd_freeze(args: argparse.Namespace) -> int:
     write_manifest(out, bundles)
     print(f"Wrote {len(bundles)} bundles to {out}")
     return 0
+
+
+def _load_baseline_metrics(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    metrics = data.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+    return {
+        "source": str(path),
+        "generated_at": data.get("generated_at"),
+        "review_policy": data.get("review_policy", "legacy"),
+        "flip_rate_overall": metrics.get("flip_rate_overall"),
+        "defect_recall_overall": metrics.get("defect_recall_overall"),
+        "false_block_rate": metrics.get("false_block_rate"),
+        "false_block_count": metrics.get("false_block_count"),
+        "clean_eligible_count": metrics.get("clean_eligible_count"),
+        "loop_median": metrics.get("loop_median"),
+        "loop_p90": metrics.get("loop_p90"),
+    }
 
 
 def cmd_scorecard(args: argparse.Namespace) -> int:
@@ -86,6 +112,18 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
                     b.closing_note_excerpt, "claude-opus"
                 ),
             }
+    review_policy = args.review_policy
+    instructions = read_reviewer_instructions() if review_policy == "board" else None
+    instr_hash = (
+        hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+        if instructions is not None
+        else None
+    )
+    baseline = (
+        _load_baseline_metrics(Path(args.baseline_scorecard))
+        if args.baseline_scorecard
+        else None
+    )
     out_dir = Path(args.out)
     write_scorecard(
         out_dir,
@@ -93,6 +131,9 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
         raw_runs=raw_runs,
         retrospective=retro,
         judge_samples=judge_samples,
+        review_policy=review_policy,
+        reviewer_instructions_sha256=instr_hash,
+        baseline_metrics=baseline,
     )
     print(render_summary(metrics))
     return 0
@@ -158,6 +199,17 @@ def main(argv: list[str] | None = None) -> int:
         "--heavy",
         action="store_true",
         help="Route each LLM call through heavy --review",
+    )
+    p_score.add_argument(
+        "--review-policy",
+        choices=("board", "legacy"),
+        default="board",
+        help="board=current reviewer.instructions (default); legacy=MO-10 major/critical gate",
+    )
+    p_score.add_argument(
+        "--baseline-scorecard",
+        default="",
+        help="Prior scorecard.json for before/after comparison in the report",
     )
     p_score.set_defaults(func=cmd_scorecard)
 

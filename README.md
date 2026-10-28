@@ -177,6 +177,8 @@ chart](docs/state-charts/omp-input.md) records the delivery lifecycle.
 ## Reviewer agreement audit (MO-10)
 
 Advisory weekly scorecard for board reviewer flip rate, defect recall, false
-blocks, and loop percentiles. See
-[docs/reviewer-audit.md](docs/reviewer-audit.md); run `python3 mo10 scorecard
---out <report-dir>`.
+blocks, and loop percentiles. Shadow replay uses live `reviewer.instructions`
+(ship-and-score). See
+[docs/reviewer-audit.md](docs/reviewer-audit.md); weekly command:
+`./scripts/weekly-reviewer-scorecard.sh` (or `python3 mo10 scorecard --heavy
+--review-policy board --out <report-dir>`).
