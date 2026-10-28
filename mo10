@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Entry point: python3 mo10 freeze|scorecard|loops (mac-ops/10)."""
+
+from reviewer_audit.__main__ import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
