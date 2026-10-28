@@ -31,6 +31,18 @@ The heavy floor is restored to `min(2, ceiling)` on a fresh, valid, noncritical 
 
 The critical classifier is kernel pressure level 4, memory use at least 95 percent, or load per core at least 1.5. CPU use at least 95 percent is a warning. Once the capacity file write succeeds, a critical tick writes urgent pause requests for all running heavy jobs before it queries or changes the board limit. The controller does not claim that the operating system has paused a process yet. The strict publication-failure model shows why the one-tick request guarantee depends on that write succeeding.
 
+## Queued heavy work and idle agents
+
+When a board agent's heavy client is in the admission queue, the agent process tree is idle, and no heavy job is running for that task, the controller pauses agent-side processes with `SIGSTOP` while leaving the verified heavy supervisor subtree running. Pauses resume with `SIGCONT` when the task leaves the queue, starts running heavy work, becomes busy with another foreground command, or when the controller restarts or hits an error. Pause state lives in `agent-heavy-wait-pause.json` and retries like workload pause requests.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active
+    Active --> Paused: queued heavy client, idle agent, supervisor verified
+    Paused --> Active: admission, cancel, busy foreground, census loss, or error
+    Paused --> Active: controller restart or boot change
+```
+
 ## Queued heavy work
 
 ```mermaid
