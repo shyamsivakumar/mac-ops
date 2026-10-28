@@ -62,6 +62,8 @@ Uninstall stops the installed launchd controller, moves its plists into `~/Libra
 
 ## Verification and lifecycle
 
+The [eval scorecard](docs/evals.md) defines hard stops versus scorecard metrics for governor and controller changes (LMW-25, ship-and-score 2026-10-28).
+
 The controller is ported from llmwiki commit `45542a50a2938aaceda41b13806c25b404191e08`. Its memory and swap safety rules remain independent. See [governor states](docs/state-charts/governor.md) and [heavy states](docs/state-charts/heavy.md). Installation and migration states are documented in [installation states](docs/state-charts/installation.md).
 
 Pueue provides priority, runtime parallel counts and pause/resume, but adopting it requires installing its daemon and verifying synchronous caller, exit status, stdin and process identity behavior. GNU parallel sem provides load and memory admission but does not replace board admission or the reviewer queue. `taskpolicy -b` lowers scheduling priority and does not enforce capacity. The existing heavy registry preserves the active supervision contract while adding only the queue ordering and capacity reader that the migration needs.
