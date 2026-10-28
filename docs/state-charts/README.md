@@ -1,5 +1,6 @@
 # Load tool lifecycle
 
+- [Eval scorecard (hard stops and scorecards)](../evals.md).
 - [Heavy admission, queue and pressure handling](heavy.md).
 - [Governor sampling, floor, growth and local board admission](governor.md).
 - [Install, migration and uninstall](installation.md).
