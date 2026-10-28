@@ -99,10 +99,15 @@ def number(value, name, low=0, high=None):
 def config(path):
     values = json.loads(path.read_text())
     defaults = json.loads(DEFAULTS.read_text())
+    if isinstance(values, dict):
+        values.setdefault("agent_heavy_wait_pause", False)
     if not isinstance(values, dict) or set(values) != set(defaults):
         raise ValueError("Config must contain exactly the documented reserve, signal, and sample-age fields")
     for key, value in values.items():
-        number(value, key)
+        if key != "agent_heavy_wait_pause":
+            number(value, key)
+    if type(values["agent_heavy_wait_pause"]) is not bool:
+        raise ValueError("agent_heavy_wait_pause must be true or false")
     for key in ("memory_reserve_fraction", "cpu_reserve_fraction"):
         number(values[key], key, 0, 1)
     number(values["cost_margin"], "cost_margin", 1)
@@ -1250,7 +1255,15 @@ def controller_tick(*, board_control=True, cfg=None):
 
     pause_admission = list(admission_active)
     critical_for_pause = bool(sample is not None and helper.critical_pressure(sample))
-    if boot_id is not None:
+    if boot_id is not None and not (cfg is not None and cfg["agent_heavy_wait_pause"]):
+        try:
+            entry["agent_heavy_wait_pause"] = {
+                "action": "disabled",
+                "resume": _resume_agents_on_controller_start(helper),
+            }
+        except Exception as exc:
+            entry["agent_heavy_wait_pause"] = {"action": "disabled", "error": type(exc).__name__}
+    elif boot_id is not None:
         try:
             admission = board_resources.board_admission_snapshot()
             pause_admission = admission.get("active") or []
