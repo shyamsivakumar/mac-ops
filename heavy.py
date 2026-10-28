@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 GIB = 1024**3
 MAX_CPU_PCT = 95.0
+WARNING_CPU_PCT = 80.0
 MAX_MEMORY_PCT = 95.0
 MIN_HEADROOM_BYTES = 6 * GIB
 HEADROOM_FRACTION = 0.20
@@ -35,7 +36,7 @@ SAMPLE_INTERVAL = 2.0
 SAMPLE_MAX_AGE = 4.5
 NATIVE_TIMEOUT = 2.5
 MAX_WAIT_SECONDS = 45 * 60
-CRITICAL_LOAD_PER_CORE = 1.5
+CRITICAL_LOAD_PER_CORE = 2.0
 PRESSURE_HOLD_SECONDS = 15.0
 RECOVERY_HOLD_SECONDS = 10.0
 PAUSE_REQUEST_SPACING_NS = 5_000_000_000
@@ -338,7 +339,6 @@ def admission_block_reason(
         free_percent=sample.free_percent,
         swap_growth=sample.swap_growth_bytes_per_second,
         swapout_rate=sample.swapout_bytes_per_second,
-        load_per_core=sample.load_per_core,
         headroom=sample.headroom_bytes,
         physical=sample.physical_bytes,
     )
@@ -357,24 +357,21 @@ def memory_load_block_reason(
     free_percent,
     swap_growth,
     swapout_rate,
-    load_per_core,
     headroom,
     physical,
 ):
-    """Return the reason memory or load blocks admission, or None."""
+    """Return the reason memory blocks admission, or None."""
     if pressure == CRITICAL_PRESSURE_LEVEL:
         return "memory-pressure-critical"
     if pressure not in (NORMAL_PRESSURE_LEVEL, WARNING_PRESSURE_LEVEL):
         return "invalid-pressure"
-    if _finite_nonnegative(load_per_core) and load_per_core >= 1.0:
-        return "load-per-core"
     rates = (swap_growth, swapout_rate)
     if any(
         _finite_nonnegative(rate) and rate > MAX_SWAP_GROWTH_BYTES_PER_SECOND
         for rate in rates
     ):
         return "swap-growth"
-    values = (free_percent, headroom, physical, load_per_core)
+    values = (free_percent, headroom, physical)
     if not all(_finite_nonnegative(value) for value in values):
         return "invalid-telemetry"
     if physical <= 0 or headroom > physical or free_percent > 100:
@@ -1741,7 +1738,8 @@ def critical_pressure(sample: Sample) -> bool:
             and sample.memory_used_pct >= MAX_MEMORY_PCT
         )
         or (
-            _finite_nonnegative(sample.load_per_core)
+            not _finite_nonnegative(sample.cpu_busy_pct)
+            and _finite_nonnegative(sample.load_per_core)
             and sample.load_per_core >= CRITICAL_LOAD_PER_CORE
         )
     )
@@ -1750,8 +1748,6 @@ def critical_pressure(sample: Sample) -> bool:
 def _host_reason(sample: Sample, load_high_count: int = 0) -> Optional[str]:
     if sample.pressure_level == CRITICAL_PRESSURE_LEVEL:
         return "critical-pressure"
-    if sample.load_per_core >= CRITICAL_LOAD_PER_CORE:
-        return "load-per-core-critical"
     if sample.cpu_busy_pct >= MAX_CPU_PCT:
         return "cpu-threshold"
     if sample.memory_used_pct >= MAX_MEMORY_PCT:
@@ -1761,7 +1757,6 @@ def _host_reason(sample: Sample, load_high_count: int = 0) -> Optional[str]:
         free_percent=sample.free_percent,
         swap_growth=sample.swap_growth_bytes_per_second,
         swapout_rate=sample.swapout_bytes_per_second,
-        load_per_core=sample.load_per_core,
         headroom=sample.headroom_bytes,
         physical=sample.physical_bytes,
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
