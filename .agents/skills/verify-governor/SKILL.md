@@ -111,9 +111,10 @@ failed native start, or permanent availability of the board service.
 
 ## Source synchronization
 
-Installed production governor (MO-21) matches `board_governor.py` at commit
-`63e9a5585617` (per-agent memory budget from measured RSS). The BoardFloor TLC
-receipts under
+Installed production governor (MO-26) matches `board_governor.py` and
+`heavy.py` at commit `70bb996bc105` (heavy-wait pause off by default, board
+limit catch-up to the active count in one step, CPU veto from smoothed
+`cpu_busy_pct` instead of loadavg). The BoardFloor TLC receipts under
 `/Users/shyamsivakumar/.herdr-projects/reports/mac-ops/2/formal-proof/board-floor/`
 still describe the prior `e778e78a5b86` snapshot until
 `/maintain-formal-verification-skill` reruns them against the measured-budget
@@ -121,3 +122,15 @@ paths. `Governor.tla`'s board snapshot is historical; `BoardFloor.tla` owns
 current board-floor claims. After later source changes, compare the named
 functions and hashes, rerun the affected model, and move this sync commit only
 after the verification again describes the code.
+
+The installed release records `source_commit` in
+`~/.local/state/mac-ops/installation.json`. Read it to confirm which commit the
+running controller and supervisor came from; the file hashes under
+`~/.local/lib/mac-ops/<release>/` match the checkout that commit came from.
+
+`replay_controller.py --boardfloor` selects a controller row near Unix time
+`1793150983.444375`. Controller logs rotate, so that row can be gone from every
+live log; the replay then fails with "No valid board-floor source row matched".
+Use the recorded deadlock row instead when it is still present: replay it
+through `_board_control_tick` with the board command mocked and compare the
+target and the board write between the previous release and the current one.
