@@ -904,10 +904,10 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
             memory_reserve = max(cfg["memory_reserve_bytes"], physical * cfg["memory_reserve_fraction"])
             ceiling = max(0, min(math.floor(max(0, physical - memory_reserve) / agent_memory_budget),
                                  math.floor(cores * (1 - cfg["cpu_reserve_fraction"]) / BOARD_AGENT_CPU_CORES)))
+            memory_headroom = max(0, sample.headroom_bytes - memory_reserve)
+            cpu_headroom = max(0.0, cores * (1 - cfg["cpu_reserve_fraction"])
+                               - sample.load_per_core * cores)
             if host_veto is None:
-                memory_headroom = max(0, sample.headroom_bytes - memory_reserve)
-                cpu_headroom = max(0.0, cores * (1 - cfg["cpu_reserve_fraction"])
-                                   - sample.load_per_core * cores)
                 candidate_fits = (memory_headroom >= agent_memory_budget
                                   and cpu_headroom >= BOARD_AGENT_CPU_CORES)
 
@@ -960,6 +960,16 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
     floor = min(ceiling, max(6, active + 1)) if ceiling is not None else None
     floor_ready = (valid_noncritical
                    and admission_elapsed < cfg["board_response_seconds_threshold"])
+    floor_raise_fits = False
+    growth_host_vetoes = (
+        "compressor_growth", "swap-growth", "memory-headroom", "memory-pressure-warning-low-free",
+    )
+    if (floor_ready and floor is not None
+            and memory_headroom is not None and cpu_headroom is not None
+            and host_veto not in growth_host_vetoes):
+        pending_floor = max(1, floor - active)
+        floor_raise_fits = (memory_headroom >= pending_floor * agent_memory_budget
+                            and cpu_headroom >= pending_floor * BOARD_AGENT_CPU_CORES)
     target = current
     reason = "hold_capacity"
     warning_episode = prior_warning_episode
@@ -968,19 +978,20 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
         reason = "critical_pressure_or_load"
         healthy_since = None
         warning_episode = True
-    elif floor_ready and current < floor:
+    elif floor_ready and current < floor and floor_raise_fits:
         target = floor
         reason = "board_baseline_floor"
         healthy_since = None
         warning_episode = warning_pressure
     elif warning_pressure:
-        target = max(floor if floor_ready else 0,
-                     min(current if prior_warning_episode else current // 2, active))
+        warning_cut = min(current if prior_warning_episode else current // 2, active)
+        warning_floor = floor if (floor_ready and floor_raise_fits) else active
+        target = max(warning_floor if floor_ready else 0, warning_cut)
         reason = "warning_pressure_hold" if prior_warning_episode else "warning_pressure_cut"
         healthy_since = None
         warning_episode = True
     elif task_finished or not safe:
-        target = min(current, max(active, floor if floor_ready else 0))
+        target = min(current, max(active, floor if (floor_ready and floor_raise_fits) else 0))
         reason = ("task_finished_reset_window" if task_finished else
                   host_veto or "one_agent_capacity_unavailable")
         healthy_since = None
@@ -1018,6 +1029,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
         "reason": reason,
         "floor": floor,
         "floor_ready": floor_ready,
+        "floor_raise_fits": floor_raise_fits,
         "host_veto": host_veto,
         "sample_age_seconds": sample_age,
         "board_response_seconds": admission_elapsed,
@@ -1056,7 +1068,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
             state["healthy_since_monotonic"] = None
         elif target > current:
             latest_age = helper.monotonic() - sample.captured_monotonic if sample is not None else math.inf
-            if (latest_ids != active_ids or not (floor_ready if floor_raise else safe)
+            if (latest_ids != active_ids or not (floor_raise_fits if floor_raise else safe)
                     or latest_age < 0 or latest_age > getattr(helper, "SAMPLE_MAX_AGE", 4.5)
                     or admission_elapsed + recheck_elapsed >= cfg["board_response_seconds_threshold"]):
                 result.update(target=current, reason="growth_sample_expired", start_allowed=False)
@@ -1159,7 +1171,17 @@ def controller_tick(*, board_control=True, cfg=None):
         try:
             if cfg is None:
                 raise ValueError("Board policy configuration is unavailable")
-            entry["board"] = _board_control_tick(helper, sample, heavy_decision, cfg, boot_id)
+            agent_census = None
+            if sample is not None and not helper.critical_pressure(sample):
+                try:
+                    agent_census = board_resources.board_agent_rss_census()
+                except (OSError, RuntimeError, ValueError, TypeError):
+                    agent_census = None
+            if agent_census is not None:
+                entry["board_agent_census"] = agent_census
+            entry["board"] = _board_control_tick(
+                helper, sample, heavy_decision, cfg, boot_id, agent_census=agent_census,
+            )
         except Exception as exc:
             entry["board_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
     else:

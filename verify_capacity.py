@@ -138,11 +138,17 @@ def explore_local_board(module, cfg):
         changes.append([board["limit"], value])
         board["limit"] = value
         return ""
+    def agent_census(admission=None):
+        snap = admission if admission is not None else admission()
+        active_n = len(snap.get("active") or [])
+        rss = 800 * 1024**2
+        return {
+            "schema": 1, "agents": [], "rss_bytes": [rss] * active_n,
+            "complete": active_n > 0, "errors": [],
+        }
     namespace["board_resources"] = SimpleNamespace(
         board_admission_snapshot=admission,
-        board_agent_rss_census=lambda admission=None: {
-            "schema": 1, "agents": [], "rss_bytes": [], "complete": False, "errors": [],
-        },
+        board_agent_rss_census=agent_census,
     )
     namespace["command"] = command
     namespace["_read_private_json"] = lambda *args, **kwargs: dict(state) if state else None
@@ -191,6 +197,52 @@ def explore_local_board(module, cfg):
         namespace.update(saved)
 
 
+
+def explore_measured_board_veto(module, cfg):
+    tick = module["_board_control_tick"]
+    gib = 1024 ** 3
+    mib = 1024 ** 2
+    rss = 800 * mib
+    census = {"schema": 1, "rss_bytes": [rss] * 4, "complete": True, "errors": []}
+    board = {"schema": 1, "limit": 5, "active": [{"id": "fixture/%s" % i, "stage": "working"} for i in range(4)], "waiting": []}
+
+    def set_board_agents(argv):
+        if len(argv) >= 4 and argv[1:3] == ["set", "board.agents"]:
+            board["limit"] = int(argv[3])
+
+    namespace = tick.__globals__
+    saved = {name: namespace[name] for name in ("board_resources", "command", "_read_private_json", "atomic_json")}
+    namespace["board_resources"] = SimpleNamespace(board_admission_snapshot=lambda: dict(board))
+    namespace["command"] = set_board_agents
+    namespace["_read_private_json"] = lambda *args, **kwargs: None
+    namespace["atomic_json"] = lambda *args: None
+    helper = SimpleNamespace(
+        monotonic=lambda: 1000.0,
+        admission_block_reason=heavy.admission_block_reason,
+        critical_pressure=lambda sample: False,
+        _sample_invalid_reason=lambda sample, now: None,
+        _finite_nonnegative=heavy._finite_nonnegative,
+        SAMPLE_MAX_AGE=4.5,
+    )
+    sample = heavy.Sample(
+        pressure_level=1, cpu_busy_pct=20, memory_used_pct=30,
+        headroom_bytes=int(6.5 * gib), physical_bytes=16 * gib,
+        load_per_core=0.2, captured_monotonic=1000.0, free_percent=50,
+        swap_growth_bytes_per_second=0, swapout_bytes_per_second=0,
+        physical_cores=16,
+    )
+    heavy_decision = {"compressor_growth_bytes_per_second": 2 * mib, "compressor_veto": "compressor_growth"}
+    try:
+        decision = tick(helper, sample, heavy_decision, cfg, "100", agent_census=census)["decision"]
+        assert decision["agent_memory_budget_source"] == "measured_p90"
+        assert decision["agent_memory_budget_bytes"] < 2 * gib
+        assert decision["target"] <= 5
+        assert not decision.get("floor_raise_fits")
+        assert decision.get("reason") != "board_baseline_floor"
+        return {"measured_veto_reproduction_passed": True, "target": decision["target"], "reason": decision["reason"]}
+    finally:
+        namespace.update(saved)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mutation-check", action="store_true")
@@ -200,6 +252,7 @@ def main():
     result = explore(module["decision"], cfg)
     result.update(explore_heavy(module["_capacity_decision"]))
     result.update(explore_local_board(module, cfg))
+    result.update(explore_measured_board_veto(module, cfg))
     if args.mutation_check:
         source = (ROOT / "board_governor.py").read_text()
         broken_source = source.replace('return result(0, "critical",', 'return result(current_value + 1, "critical", start_allowed=True,', 1)
