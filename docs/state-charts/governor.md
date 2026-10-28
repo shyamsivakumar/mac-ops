@@ -33,7 +33,7 @@ The critical classifier is kernel pressure level 4, memory use at least 95 perce
 
 ## Queued heavy work and idle agents
 
-When a board agent's heavy client is in the admission queue, the agent process tree is idle, and no heavy job is running for that task, the controller pauses agent-side processes with `SIGSTOP` while leaving the verified heavy supervisor subtree running. Pauses resume with `SIGCONT` when the task leaves the queue, starts running heavy work, becomes busy with another foreground command, or when the controller restarts or hits an error. Pause state lives in `agent-heavy-wait-pause.json` and retries like workload pause requests.
+When a board agent's heavy client is in the admission queue, the agent process tree is idle, and no heavy job is running for that task, the controller pauses agent-side processes with `SIGSTOP` while leaving the verified heavy supervisor subtree running. Pauses resume with `SIGCONT` when the task leaves the queue, starts running heavy work, becomes busy with another foreground command, or when the controller restarts or hits an error. The pause is off by default (config `agent_heavy_wait_pause`); a disabled controller only records the disabled state and sends no signal, and controller startup still resumes anything an older version left paused. Pause state lives in `agent-heavy-wait-pause.json` and retries like workload pause requests.
 
 ```mermaid
 stateDiagram-v2
@@ -70,6 +70,7 @@ The model assumes the controller's default `board_control=True`. `--no-board-con
 | Reading or event | Board limit target | Guard |
 | --- | --- | --- |
 | Fresh, valid, noncritical sample below floor | `min(ceiling, max(6, active + 1))` | May raise by more than one; this floor takes precedence over the above-floor step rule. |
+| Limit below active tasks with ready floor and no host veto | `min(active, floor)` | Catch-up in one step. Raising the limit to the number of agents already running adds no load, so it needs no growth window or fit check. |
 | Critical kernel pressure, memory use, or load | 0 | Kernel pressure level 4, memory use at least 95 percent, or load per core at least 1.5 takes precedence over every floor. |
 | First warning in an episode | `max(floor, min(current // 2, active))` | A warning cannot cut below a ready floor. |
 | Repeated warning in the episode | `max(floor, min(current, active))` | Hold the warning cut while the episode persists, but preserve the ready floor. |
@@ -77,9 +78,9 @@ The model assumes the controller's default `board_control=True`. `--no-board-con
 | Missing, stale, unsafe, or slow sample | At most the current active task count | Never raise on incomplete evidence. |
 | Task finishes | At most `max(active, floor)` when floor is ready | Close freed spare capacity and reset the healthy window. |
 
-The board ceiling is the smaller of memory capacity after reserve divided by the per-agent budget (90th percentile of measured agent RSS times the configured cost margin, capped at 2 GiB), and CPU capacity after reserve divided by the 0.8 core agent budget. The floor may create several spare slots when it first restores from a low limit. Above the floor, each raise is exactly one and the fit check covers all slots pending between the current active count and the proposed limit. There is no one-spare cap that can override the floor.
+The board ceiling is the smaller of memory capacity after reserve divided by the per-agent budget (90th percentile of measured agent RSS times the configured cost margin, capped at 2 GiB), and CPU capacity after reserve divided by the 0.8 core agent budget. The floor may create several spare slots when it first restores from a low limit. Above the active count, each raise is exactly one and the fit check covers all slots pending between the current active count and the proposed limit. There is no one-spare cap that can override the floor.
 
-Before writing a larger board limit, the controller rereads the limit and active task identities and checks that the sample remains fresh and the board response stays inside its time budget. A floor restoration may jump directly to the floor. Above the floor, the increase must be exactly one. The controller reads the setting back after each write.
+Before writing a larger board limit, the controller rereads the limit and active task identities and checks that the sample remains fresh and the board response stays inside its time budget. A floor restoration may jump directly to the floor, and a catch-up may jump directly to the active count. Growth above the active count must be exactly one. The controller reads the setting back after each write.
 
 `replay_controller.py --boardfloor` selects the captured controller row near Unix time `1793150983.444375` with board limit 0, six active tasks, and `await_healthy_window`. It replays the exact logged host, compressor, census, and board fields through `controller_tick()` with board commands mocked. The expected production result is a board floor of 7 in that tick. The output record preserves the source row under `source_fields`.
 
@@ -100,8 +101,8 @@ heavy /usr/bin/python3 -I replay_controller.py \
 | Grow above two | `_adaptive_capacity_decision()` requires a continuous healthy sample window, a valid compressor delta, measured active-job RSS when jobs are active, and candidate fit under CPU, memory reserve, and machine ceiling. |
 | Cut or enter critical | A candidate that exceeds fit is reduced. The critical classifier sets the heavy target to zero regardless of the adaptive result. |
 | Request critical pauses | After a successful capacity write, `controller_tick()` calls `request_critical_pauses()`. The urgent registry update requests pauses for all running records with verified workload identities before the board control call. |
-| Restore the board floor | `_board_control_tick()` requires a fresh valid noncritical reading and targets `min(ceiling, max(6, active + 1))`. This may exceed the current limit by more than one. |
-| Update board limit above floor | `_board_control_tick()` checks warning episode, task identities, host and resource fit for all pending slots, 60 second growth window, sample age, board response time, and readback. Growth is exactly one. |
+| Restore the board floor | `_board_control_tick()` requires a fresh valid noncritical reading and targets `min(ceiling, max(6, active + 1))`. This may exceed the current limit by more than one. With a ready floor and no host veto it also raises a limit below the active count to `min(active, floor)` in one step. |
+| Update board limit above floor | `_board_control_tick()` checks warning episode, task identities, host and resource fit for all pending slots, 60 second growth window, sample age, board response time, and readback. Growth above the active count is exactly one. Catch-up to the active count is one step. |
 | Admit a queued job | `_reserve_job()` requires the first eligible queue after review priority and same-task-active filtering, matching supervisor identity, positive boot-matched capacity, a fresh safe sample, and a free heavy slot. |
 | Open the workload gate | `_launch_job()` starts the process behind a closed gate, verifies the workload identity, starts its watchdog, then opens the gate. Spawn or identity errors remain a separate failed outcome. |
 | Apply a pause request | The supervisor checks the stored workload identity and process group before sending `SIGSTOP`. It retries if the signal cannot be confirmed. |

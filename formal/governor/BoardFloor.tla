@@ -46,6 +46,8 @@ DesiredTarget ==
          THEN Max(FloorAtSample,
                   Min(IF warningEpisode THEN preLimit ELSE preLimit \div 2,
                       activeAtSample))
+         ELSE IF preLimit < Min(activeAtSample, FloorAtSample)
+              THEN Min(activeAtSample, FloorAtSample)
          ELSE Min(preLimit,
                   IF warningEpisode THEN activeAtSample ELSE preLimit \div 2)
     ELSE IF sample = "healthy" /\ preLimit < FloorAtSample
@@ -277,10 +279,17 @@ WarningKeepsFloor ==
       => pendingTarget >= FloorAtSample
 
 GrowthAboveFloorOneStep ==
-    (stage = "decided" /\ preLimit >= FloorAtSample
-       /\ pendingTarget > preLimit)
-      => (pendingTarget = preLimit + 1 /\ sample = "healthy"
-          /\ windowReadyAtDecision /\ growthFits)
+    (stage = "decided" /\ pendingTarget > preLimit)
+      => \/ /\ preLimit < Min(activeAtSample, FloorAtSample)
+           /\ FreshNoncritical
+           /\ pendingTarget = Min(activeAtSample, FloorAtSample)
+         \/ /\ preLimit >= FloorAtSample
+           /\ pendingTarget = preLimit + 1
+           /\ sample = "healthy"
+           /\ windowReadyAtDecision
+           /\ growthFits
+         \/ /\ FreshNoncritical /\ preLimit < FloorAtSample
+           /\ pendingTarget = FloorAtSample
 
 SafeQueueStart == jobState = "started" => startWasEligible
 

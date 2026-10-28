@@ -1063,15 +1063,22 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
         else:
             reason = "await_healthy_window"
 
+    catchup_limit = min(active, floor) if floor_ready and host_veto is None else None
+    if catchup_limit is not None and target < catchup_limit:
+        target = catchup_limit
+        reason = "active_catchup"
+        healthy_since = None
     if ceiling is not None and target > ceiling:
         target = ceiling
         reason = "hardware_ceiling_cut"
         healthy_since = None
     floor_raise = bool(floor_ready and current < floor and target == floor)
-    if target > current and not floor_raise and target != current + 1:
-        target = current
+    if (target > current and not floor_raise and target != current + 1
+            and not (catchup_limit is not None and target <= catchup_limit)):
+        target = max(current, catchup_limit) if catchup_limit is not None else current
         reason = "growth_step_rejected"
         healthy_since = None
+    catchup_raise = bool(catchup_limit is not None and current < target <= catchup_limit)
     result = {
         "current": current,
         "active": active,
@@ -1096,7 +1103,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
         "removed_ids": sorted(removed_ids),
         "growth_hold_seconds": BOARD_GROWTH_HOLD_SECONDS,
         "warning_episode": warning_episode,
-        "start_allowed": bool((floor_raise or safe) and target > current),
+        "start_allowed": bool((floor_raise or safe or catchup_raise) and target > current),
     }
     state = {
         "schema": 2,
@@ -1118,12 +1125,12 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
             state["healthy_since_monotonic"] = None
         elif target > current:
             latest_age = helper.monotonic() - sample.captured_monotonic if sample is not None else math.inf
-            if (latest_ids != active_ids or not (floor_raise_fits if floor_raise else safe)
+            if (latest_ids != active_ids or not (floor_raise_fits if floor_raise else catchup_raise or safe)
                     or latest_age < 0 or latest_age > getattr(helper, "SAMPLE_MAX_AGE", 4.5)
                     or admission_elapsed + recheck_elapsed >= cfg["board_response_seconds_threshold"]):
                 result.update(target=current, reason="growth_sample_expired", start_allowed=False)
                 state["healthy_since_monotonic"] = None
-            elif not floor_raise and target != current + 1:
+            elif not floor_raise and not catchup_raise and target != current + 1:
                 result.update(target=current, reason="growth_step_rejected", start_allowed=False)
                 state["healthy_since_monotonic"] = None
         else:
@@ -1256,13 +1263,7 @@ def controller_tick(*, board_control=True, cfg=None):
     pause_admission = list(admission_active)
     critical_for_pause = bool(sample is not None and helper.critical_pressure(sample))
     if boot_id is not None and not (cfg is not None and cfg["agent_heavy_wait_pause"]):
-        try:
-            entry["agent_heavy_wait_pause"] = {
-                "action": "disabled",
-                "resume": _resume_agents_on_controller_start(helper),
-            }
-        except Exception as exc:
-            entry["agent_heavy_wait_pause"] = {"action": "disabled", "error": type(exc).__name__}
+        entry["agent_heavy_wait_pause"] = {"action": "disabled"}
     elif boot_id is not None:
         try:
             admission = board_resources.board_admission_snapshot()
