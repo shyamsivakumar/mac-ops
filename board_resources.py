@@ -524,6 +524,7 @@ def _collect_agents(tasks, errors):
         row["pgids"] = sorted({processes[pid]["pgid"] for pid in selected})
         row["rss_bytes"] = sum(processes[pid]["rss"] for pid in selected) * 1024
         row["cpu_cores"] = round(sum(processes[pid]["cpu"] for pid in selected) / 100.0, 4)
+        row["process_info"] = info
         rows.append(row)
     return rows
 
