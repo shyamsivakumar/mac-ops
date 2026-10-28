@@ -138,7 +138,12 @@ def explore_local_board(module, cfg):
         changes.append([board["limit"], value])
         board["limit"] = value
         return ""
-    namespace["board_resources"] = SimpleNamespace(board_admission_snapshot=admission)
+    namespace["board_resources"] = SimpleNamespace(
+        board_admission_snapshot=admission,
+        board_agent_rss_census=lambda admission=None: {
+            "schema": 1, "agents": [], "rss_bytes": [], "complete": False, "errors": [],
+        },
+    )
     namespace["command"] = command
     namespace["_read_private_json"] = lambda *args, **kwargs: dict(state) if state else None
     namespace["atomic_json"] = lambda path, value: (state.clear(), state.update(value))

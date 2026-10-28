@@ -65,7 +65,7 @@ The model assumes the controller's default `board_control=True`. `--no-board-con
 | Missing, stale, unsafe, or slow sample | At most the current active task count | Never raise on incomplete evidence. |
 | Task finishes | At most `max(active, floor)` when floor is ready | Close freed spare capacity and reset the healthy window. |
 
-The board ceiling is the smaller of memory capacity after reserve divided by the 2 GiB agent budget, and CPU capacity after reserve divided by the 0.8 core agent budget. The floor may create several spare slots when it first restores from a low limit. Above the floor, each raise is exactly one and the fit check covers all slots pending between the current active count and the proposed limit. There is no one-spare cap that can override the floor.
+The board ceiling is the smaller of memory capacity after reserve divided by the per-agent budget (90th percentile of measured agent RSS times the configured cost margin, capped at 2 GiB), and CPU capacity after reserve divided by the 0.8 core agent budget. The floor may create several spare slots when it first restores from a low limit. Above the floor, each raise is exactly one and the fit check covers all slots pending between the current active count and the proposed limit. There is no one-spare cap that can override the floor.
 
 Before writing a larger board limit, the controller rereads the limit and active task identities and checks that the sample remains fresh and the board response stays inside its time budget. A floor restoration may jump directly to the floor. Above the floor, the increase must be exactly one. The controller reads the setting back after each write.
 

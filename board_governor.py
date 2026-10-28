@@ -42,8 +42,44 @@ HEAVY_CPU_RESERVE_FRACTION = 0.2
 HEAVY_COMPRESSOR_MAX_GROWTH_BYTES_PER_SECOND = 1024 ** 2
 HEAVY_RSS_COST_MARGIN = 1.5
 BOARD_GROWTH_HOLD_SECONDS = 60.0
-BOARD_AGENT_MEMORY_BYTES = 2 * 1024 ** 3
+BOARD_AGENT_MEMORY_CAP_BYTES = 2 * 1024 ** 3
+BOARD_AGENT_MEMORY_BYTES = BOARD_AGENT_MEMORY_CAP_BYTES
 BOARD_AGENT_CPU_CORES = 0.8
+
+
+def _rss_percentile(values, percentile):
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (len(ordered) - 1) * percentile / 100.0
+    low = int(__import__('math').floor(rank))
+    high = int(__import__('math').ceil(rank))
+    if low == high:
+        return ordered[low]
+    weight = rank - low
+    return int(ordered[low] * (1.0 - weight) + ordered[high] * weight)
+
+
+def _board_agent_memory_budget_bytes(agent_census, cfg, *, active):
+    cap = BOARD_AGENT_MEMORY_CAP_BYTES
+    if type(active) is not int or active < 0:
+        raise ValueError("Board active count is invalid")
+    if active == 0:
+        return cap, None, "planning_cap"
+    if (not isinstance(agent_census, dict) or agent_census.get("schema") != 1
+            or not agent_census.get("complete")):
+        return cap, None, "planning_cap"
+    rss_bytes = agent_census.get("rss_bytes")
+    if (not isinstance(rss_bytes, list) or len(rss_bytes) < active
+            or any(type(value) is not int or value <= 0 for value in rss_bytes)):
+        return cap, None, "planning_cap"
+    p90 = _rss_percentile(rss_bytes, 90)
+    if p90 is None or p90 <= 0:
+        return cap, None, "planning_cap"
+    budget = int(math.ceil(p90 * cfg["cost_margin"]))
+    return min(cap, max(budget, p90)), p90, "measured_p90"
 
 
 def command(args, *, timeout=4):
@@ -811,7 +847,7 @@ def _board_active_ids(admission):
     return sorted(ids)
 
 
-def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
+def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_census=None):
     admission_started = time.monotonic()
     admission = board_resources.board_admission_snapshot()
     admission_elapsed = time.monotonic() - admission_started
@@ -847,6 +883,15 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
     elif compressor_veto is not None:
         host_veto = host_veto or str(compressor_veto)
 
+    critical_pressure = bool(sample_is_fresh and sample is not None and helper.critical_pressure(sample))
+    if agent_census is None and sample_is_fresh and sample is not None and not critical_pressure:
+        try:
+            agent_census = board_resources.board_agent_rss_census(admission)
+        except (OSError, RuntimeError, ValueError, TypeError):
+            agent_census = None
+    agent_memory_budget, agent_rss_p90, agent_memory_source = _board_agent_memory_budget_bytes(
+        agent_census, cfg, active=active)
+
     memory_reserve = None
     cpu_headroom = None
     memory_headroom = None
@@ -857,13 +902,13 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
         physical = sample.physical_bytes
         if type(cores) is int and cores > 0 and type(physical) is int and physical > 0:
             memory_reserve = max(cfg["memory_reserve_bytes"], physical * cfg["memory_reserve_fraction"])
-            ceiling = max(0, min(math.floor(max(0, physical - memory_reserve) / BOARD_AGENT_MEMORY_BYTES),
+            ceiling = max(0, min(math.floor(max(0, physical - memory_reserve) / agent_memory_budget),
                                  math.floor(cores * (1 - cfg["cpu_reserve_fraction"]) / BOARD_AGENT_CPU_CORES)))
             if host_veto is None:
                 memory_headroom = max(0, sample.headroom_bytes - memory_reserve)
                 cpu_headroom = max(0.0, cores * (1 - cfg["cpu_reserve_fraction"])
                                    - sample.load_per_core * cores)
-                candidate_fits = (memory_headroom >= BOARD_AGENT_MEMORY_BYTES
+                candidate_fits = (memory_headroom >= agent_memory_budget
                                   and cpu_headroom >= BOARD_AGENT_CPU_CORES)
 
     previous_error = None
@@ -890,7 +935,6 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
     prior_warning_episode = (previous.get("warning_episode") is True
                              and previous.get("schema") == 2
                              and previous.get("boot_id") == boot_id)
-    critical_pressure = bool(sample_is_fresh and sample is not None and helper.critical_pressure(sample))
     warning_pressure = bool(sample_is_fresh and sample is not None and not critical_pressure and (
         sample.pressure_level == 2
         or (helper._finite_nonnegative(sample.cpu_busy_pct) and sample.cpu_busy_pct >= 95)
@@ -946,7 +990,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
         pending = max(1, candidate - active)
         growth_fits = (ceiling is not None and candidate <= ceiling
                        and memory_headroom is not None and cpu_headroom is not None
-                       and memory_headroom >= pending * BOARD_AGENT_MEMORY_BYTES
+                       and memory_headroom >= pending * agent_memory_budget
                        and cpu_headroom >= pending * BOARD_AGENT_CPU_CORES)
         if not growth_fits:
             reason = "await_capacity_headroom"
@@ -979,7 +1023,9 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id):
         "board_response_seconds": admission_elapsed,
         "healthy_since_monotonic": healthy_since,
         "memory_reserve_bytes": memory_reserve,
-        "agent_memory_budget_bytes": BOARD_AGENT_MEMORY_BYTES,
+        "agent_memory_budget_bytes": agent_memory_budget,
+        "agent_memory_budget_source": agent_memory_source,
+        "agent_rss_p90_bytes": agent_rss_p90,
         "memory_headroom_bytes": memory_headroom,
         "ceiling": ceiling,
         "agent_cpu_budget_cores": BOARD_AGENT_CPU_CORES,
