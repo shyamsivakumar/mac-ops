@@ -1,0 +1,10 @@
+{
+  "enabledModels": [
+    "openai-codex/gpt-6.1-terra"
+  ],
+  "skills": {
+    "customDirectories": [
+      "~/Code/llmwiki/runtime/codex/skills"
+    ]
+  }
+}
