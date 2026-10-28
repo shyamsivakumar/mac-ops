@@ -3,6 +3,7 @@
 - [Eval scorecard (hard stops and scorecards)](../evals.md).
 - [Heavy admission, queue and pressure handling](heavy.md).
 - [Governor sampling, floor, growth and local board admission](governor.md).
+- [Restart of a board task whose agent died](restart.md).
 - [Install, migration and uninstall](installation.md).
 - [Cursor startup and first-message delivery](cursor-input.md).
 - [Pi startup and first-message delivery](pi-input.md).
