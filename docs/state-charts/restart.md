@@ -37,7 +37,7 @@ A task that is archived, research only, blocked on a question, in review, finish
 | An agent that has been gone for less than | 90 seconds |
 | Restarts of one task in an hour | 3 |
 | Restarts on the whole board in an hour | 6 |
-| The tell waits for the new agent to be up | 20 seconds |
+| The tell waits for a live agent in the task's pane | 20 seconds |
 | The tell is given up after | 15 minutes |
 
 ```mermaid
@@ -47,10 +47,10 @@ stateDiagram-v2
     Remembered --> Watching: the row is gone, changed, or excluded
     Remembered --> Remembered: the same row is seen again before the interval
     Remembered --> Restarting: the interval passed, the limits allow, the agent has been gone long enough
-    Restarting --> Told: the board's commands worked, the tell waits for the new agent
+    Restarting --> Told: the board's commands worked, the tell waits for a live pane
     Restarting --> Watching: a command failed, the task is left for the coordinator
-    Told --> Watching: the agent is up, the tell is sent
-    Told --> Watching: the agent never came up, the tell is given up
+    Told --> Watching: the pane has a live agent and the row is still eligible, the tell is sent
+    Told --> Watching: the row is now excluded, or the agent is gone, the tell is dropped
 ```
 
 The watcher keeps its own state in `board-restart.state.json`: the signature and the time each dead row was first seen, the restarts of each task in the last hour, the cursor of the cycle and the tell that is waiting for its agent.

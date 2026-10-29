@@ -169,8 +169,10 @@ board's own commands: `stop`, `delegate --worker.agent`, `set worker.agent`,
 
 A task that is archived, research only, blocked on a question, in review or
 finishing is never touched, and neither is a `Could not start` whose cause is
-the machine rather than the agent. One task is restarted at most three times an
-hour, and the whole board six times an hour. The config switch
+the machine rather than the agent. The note to the new agent waits until that
+agent is live in the task's pane, and it is dropped if the row has since become
+one of those, or if the agent has already gone. One task is restarted at most
+three times an hour, and the whole board six times an hour. The config switch
 `agent_restart` (on by default) turns the watcher off. See the
 [restart state chart](docs/state-charts/restart.md).
 

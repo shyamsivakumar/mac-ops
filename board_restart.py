@@ -33,6 +33,7 @@ MACHINE_WIDE_CAUSES = (
 DEAD_AGENT_SECONDS = 90.0
 TELL_TEXT = ("Restarted on {agent} after {reason}; your branch and work are kept; "
              "continue from your last step.")
+LIVE_AGENT_STATUSES = ("working", "idle", "done", "blocked")
 
 
 def board_rows():
@@ -210,22 +211,22 @@ def board_restarts_in_window(records, now):
 
 
 def agent_is_up(meta, panes, pending):
+    link = meta.get("link") if isinstance(meta.get("link"), dict) else {}
+    pane_id = link.get("pane") if isinstance(link.get("pane"), str) and link.get("pane") else pending.get("pane")
+    current = panes.get(pane_id) if isinstance(pane_id, str) else None
+    if not isinstance(current, dict):
+        return False
+    agent = current.get("agent")
+    if not isinstance(agent, str) or not agent or current.get("status") not in LIVE_AGENT_STATUSES:
+        return False
     since = pending.get("at", 0)
     started = meta.get("startedAgentAt")
     if isinstance(started, (int, float)) and not isinstance(started, bool) and started / 1000 > since:
         return True
-    last = meta.get("last")
-    if isinstance(last, dict):
-        at = last.get("at")
-        if isinstance(at, (int, float)) and not isinstance(at, bool) and at / 1000 > since:
-            return True
-    pane = pending.get("pane")
-    session = pending.get("session")
-    if pane and session:
-        current = (panes.get(pane) or {}).get("session")
-        if current and current != session:
-            return True
-    return False
+    saved = pending.get("session")
+    seen = current.get("session")
+    return (isinstance(saved, str) and bool(saved) and isinstance(seen, str) and bool(seen)
+            and seen != saved)
 
 
 def run_command(command, dry_run):
@@ -283,13 +284,10 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         if not isinstance(record, dict):
             record = {}
             records[task_id] = record
+        skip = exclusion(row, meta)
         pending = record.get("pending_tell")
         if isinstance(pending, dict):
-            finished = ((row.get("msg") or "").strip() == "Finishing"
-                        or row.get("stage") in ("done", "nosummary"))
-            if finished:
-                record.pop("pending_tell", None)
-            elif now - pending.get("at", 0) > PENDING_TELL_SECONDS:
+            if skip or now - pending.get("at", 0) > PENDING_TELL_SECONDS:
                 record.pop("pending_tell", None)
             elif now - pending.get("at", 0) >= TELL_AFTER_SECONDS and agent_is_up(meta, panes, pending):
                 told = run_command([BOARD_CMD, "tell", task_id, pending["text"]], dry_run)
@@ -306,7 +304,6 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         if reason != record.get("reason"):
             record["reason"] = reason
             record.pop("skip", None)
-        skip = exclusion(row, meta)
         if skip:
             record["skip"] = skip
             continue
