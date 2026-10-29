@@ -157,6 +157,28 @@ verify_capacity.py --mutation-check` for the actual-code checks. The older
 combined model retains a historical board submodel; the separate board model
 owns current board claims.
 
+## Board restart of a dead agent
+
+The controller watches the board once a minute. A row whose agent is gone is
+remembered; the same row seen again a minute later is handed to the next model
+in the board's own order (`worker.agent`, then `worker.fallback`, freshly read
+from `herdr-projects show` for each restart), skipping the model that failed. The new agent is told
+what happened. The branch and the worktree stay. The watcher uses only the
+board's own commands: `stop`, `archive`, `restore`, `delegate --worker.agent`,
+`after` and `tell`. Stop on its own leaves the old omp process and model, so
+the task is archived and restored before the new delegate. A wait the task
+had is put back with `after`.
+
+A task that is archived, research only, blocked on a question, in review or
+finishing is never touched, and neither is a `Could not start` whose cause is
+the machine rather than the agent. The note to the new agent waits until that
+agent is live in the task's pane, and it is dropped if the row has since become
+one of those, or if the agent has already gone. One task is restarted at most
+three times an hour, and the whole board six times an hour. A restart whose
+command fails counts toward those limits. The config switch
+`agent_restart` (on by default) turns the watcher off. See the
+[restart state chart](docs/state-charts/restart.md).
+
 ## Cursor first-message delivery
 
 The [Cursor input gate](docs/cursor-input-gate.md) queues the board's first

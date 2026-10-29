@@ -13,5 +13,6 @@
   "compressor_growth_bytes_per_second": 1048576,
   "disk_wait_ratio_threshold": 0.25,
   "board_response_seconds_threshold": 5.0,
-  "agent_heavy_wait_pause": false
+  "agent_heavy_wait_pause": false,
+  "agent_restart": true
 }
