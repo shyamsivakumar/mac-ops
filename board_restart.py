@@ -349,7 +349,7 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         if skip:
             record["skip"] = skip
             continue
-        if record.get("skip") in ("restart_cap", "board_restart_cap"):
+        if record.get("skip") in ("restart_cap", "board_restart_cap", "no_agent_order", "no_other_agent"):
             record.pop("skip", None)
         if record.get("skip"):
             continue
