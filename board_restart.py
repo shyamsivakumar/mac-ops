@@ -299,14 +299,7 @@ def restart(task_id, agent, reason, dry_run, waits_before):
 def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_path=STATE, cycle=None):
     now = time.time() if now is None else now
     order_error = None
-    if cycle is None:
-        try:
-            cycle = board_cycle()
-        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError,
-                subprocess.SubprocessError) as exc:
-            detail = str(exc).splitlines()
-            order_error = type(exc).__name__ + (": " + detail[0][:160] if detail else "")
-            cycle = ()
+    current_cycle = cycle or ()
     state = read_state(state_path)
     records = state["tasks"]
     rows = board_rows() if rows is None else rows
@@ -375,11 +368,20 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         if board_restarts_in_window(records, now) >= MAX_RESTARTS_PER_HOUR_BOARD:
             record["skip"] = "board_restart_cap"
             continue
-        if not cycle:
+        if cycle is None:
+            try:
+                current_cycle = board_cycle()
+                order_error = None
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError,
+                    subprocess.SubprocessError) as exc:
+                detail = str(exc).splitlines()
+                order_error = type(exc).__name__ + (": " + detail[0][:160] if detail else "")
+                current_cycle = ()
+        if not current_cycle:
             record["skip"] = "no_agent_order"
             continue
         try:
-            agent, cursor = next_agent(failed_agent(meta, row, cycle), state["cursor"], cycle)
+            agent, cursor = next_agent(failed_agent(meta, row, current_cycle), state["cursor"], current_cycle)
         except ValueError:
             record["skip"] = "no_other_agent"
             continue
@@ -422,7 +424,7 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
             records.pop(task_id)
     write_state(state, state_path)
     result = {"schema": 1, "at": now, "dry_run": bool(dry_run), "actions": actions,
-              "cursor": state["cursor"], "cycle": list(cycle)}
+              "cursor": state["cursor"], "cycle": list(current_cycle)}
     if order_error:
         result["cycle_error"] = order_error
     return result

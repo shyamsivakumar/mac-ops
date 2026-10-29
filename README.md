@@ -161,8 +161,8 @@ owns current board claims.
 
 The controller watches the board once a minute. A row whose agent is gone is
 remembered; the same row seen again a minute later is handed to the next model
-in the board's own order (`worker.agent`, then `worker.fallback`, from
-`herdr-projects show`), skipping the model that failed. The new agent is told
+in the board's own order (`worker.agent`, then `worker.fallback`, freshly read
+from `herdr-projects show` for each restart), skipping the model that failed. The new agent is told
 what happened. The branch and the worktree stay. The watcher uses only the
 board's own commands: `stop`, `archive`, `restore`, `delegate --worker.agent`,
 `after` and `tell`. Stop on its own leaves the old omp process and model, so

@@ -24,7 +24,7 @@ The controller watches the board once a minute. A row whose agent is gone is rem
 
 ## The order
 
-Read each pass from `herdr-projects show --json`: `worker.agent`, then `worker.fallback`, in that order. Nothing in the watcher hardcodes the list. The model that failed is skipped. When the failed model is not in the order, the watcher's cursor names the model to use, and the cursor moves on with every restart.
+Read for each restart from `herdr-projects show --json`: `worker.agent`, then `worker.fallback`, in that order. Nothing in the watcher hardcodes the list. The model that failed is skipped. When the failed model is not in the order, the watcher's cursor names the model to use, and the cursor moves on with every restart.
 
 ## What is never touched
 
