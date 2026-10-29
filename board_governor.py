@@ -889,6 +889,22 @@ def _sample_payload(sample):
     }
 
 
+_last_cpu_busy = None
+
+
+def _cpu_busy_for_board_veto(helper, sample, cfg, now_mono):
+    global _last_cpu_busy
+    if helper._finite_nonnegative(sample.cpu_busy_pct):
+        _last_cpu_busy = (float(sample.cpu_busy_pct), float(sample.captured_monotonic))
+        return float(sample.cpu_busy_pct), None
+    if _last_cpu_busy is not None:
+        pct, captured = _last_cpu_busy
+        age = now_mono - captured
+        if helper._finite_nonnegative(pct) and 0 <= age <= cfg["max_sample_age_seconds"]:
+            return float(pct), None
+    return None, "cpu_busy_pct missing"
+
+
 def _board_active_ids(admission):
     active = admission.get("active")
     if not isinstance(active, list):
@@ -916,11 +932,18 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
     sample_age = None
     sample_is_fresh = False
     host_veto = "host_sample_unavailable"
+    cpu_busy_note = None
+    cpu_for_veto = None
     if sample is not None:
         sample_age = now_mono - sample.captured_monotonic
         sample_is_fresh = (0 <= sample_age <= getattr(helper, "SAMPLE_MAX_AGE", 4.5))
+        cpu_for_veto, cpu_busy_note = _cpu_busy_for_board_veto(helper, sample, cfg, now_mono)
+        if cpu_for_veto is None:
+            cpu_for_veto = 0.0
+        veto_sample = sample if cpu_for_veto == sample.cpu_busy_pct else dataclasses.replace(
+            sample, cpu_busy_pct=cpu_for_veto)
         host_veto = helper.admission_block_reason(
-            sample,
+            veto_sample,
             now=now_mono,
             active_count=0,
             task_already_active=False,
@@ -962,7 +985,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
                                  math.floor(cores * (1 - cfg["cpu_reserve_fraction"]) / BOARD_AGENT_CPU_CORES)))
             memory_headroom = max(0, sample.headroom_bytes - memory_reserve)
             cpu_headroom = max(0.0, cores * (1 - cfg["cpu_reserve_fraction"])
-                               - sample.cpu_busy_pct / 100 * cores)
+                               - cpu_for_veto / 100 * cores)
             if host_veto is None:
                 candidate_fits = (memory_headroom >= agent_memory_budget
                                   and cpu_headroom >= BOARD_AGENT_CPU_CORES)
@@ -1104,6 +1127,7 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
         "ceiling": ceiling,
         "agent_cpu_budget_cores": BOARD_AGENT_CPU_CORES,
         "cpu_headroom_cores": cpu_headroom,
+        "cpu_busy_note": cpu_busy_note,
         "active_ids": active_ids,
         "removed_ids": sorted(removed_ids),
         "growth_hold_seconds": BOARD_GROWTH_HOLD_SECONDS,
