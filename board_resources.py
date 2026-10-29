@@ -292,6 +292,10 @@ def _validate_identity(identity, label, heavy):
     return boot_id
 
 
+class _HeavyCensusRace(RuntimeError):
+    pass
+
+
 def _active_group_rss(heavy, processes, pgids):
     if not pgids:
         return []
@@ -308,7 +312,7 @@ def _active_group_rss(heavy, processes, pgids):
         info = processes.get(pid)
         if info is None:
             if pgid in pgids:
-                raise RuntimeError("heavy RSS process identity is unavailable")
+                raise _HeavyCensusRace("heavy RSS process identity is unavailable")
             continue
         try:
             ps_epoch = heavy._start_epoch(match.group(4).strip())
@@ -316,20 +320,20 @@ def _active_group_rss(heavy, processes, pgids):
             raise RuntimeError("heavy RSS process start identity is invalid") from exc
         if info.pgid != pgid or int(info.start_epoch) != int(ps_epoch):
             if pgid in pgids or info.pgid in pgids:
-                raise RuntimeError("heavy RSS process identity changed during sampling")
+                raise _HeavyCensusRace("heavy RSS process identity changed during sampling")
             continue
         if pgid in pgids:
             totals[pgid] += rss_kib * 1024
             matched.add(pid)
     for pid, info in processes.items():
         if info.uid == os.getuid() and info.pgid in pgids and pid not in matched:
-            raise RuntimeError("heavy RSS process census is incomplete")
+            raise _HeavyCensusRace("heavy RSS process census is incomplete")
     if any(total <= 0 for total in totals.values()):
-        raise RuntimeError("heavy workload RSS is unavailable")
+        raise _HeavyCensusRace("heavy workload RSS is unavailable")
     return sorted(totals.values())
 
 
-def active_heavy_census():
+def _active_heavy_census():
     heavy = _heavy_module()
     state_root = Path.home() / ".local" / "state" / "mac-ops"
     registry_path = state_root / heavy.REGISTRY_NAME
@@ -387,6 +391,15 @@ def active_heavy_census():
         "active": active + legacy,
         "job_rss_bytes": job_rss_bytes,
     }
+
+
+def active_heavy_census():
+    for attempt in range(3):
+        try:
+            return _active_heavy_census()
+        except _HeavyCensusRace:
+            if attempt == 2:
+                raise
 
 
 def _pane(task):
