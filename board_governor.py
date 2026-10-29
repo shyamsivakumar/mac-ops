@@ -889,7 +889,6 @@ _last_cpu_busy = None
 
 
 def _cpu_busy_for_board_veto(helper, sample, cfg, now_mono):
-    # 0% is only the no-veto stand-in. It must not be stored as a real reading.
     global _last_cpu_busy
     if helper._finite_nonnegative(sample.cpu_busy_pct):
         _last_cpu_busy = (float(sample.cpu_busy_pct), float(sample.captured_monotonic))
@@ -899,7 +898,7 @@ def _cpu_busy_for_board_veto(helper, sample, cfg, now_mono):
         age = now_mono - captured
         if helper._finite_nonnegative(pct) and 0 <= age <= cfg["max_sample_age_seconds"]:
             return float(pct), None
-    return 0.0, "cpu_busy_pct missing"
+    return None, "cpu_busy_pct missing"
 
 
 def _board_active_ids(admission):
@@ -935,6 +934,8 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
         sample_age = now_mono - sample.captured_monotonic
         sample_is_fresh = (0 <= sample_age <= getattr(helper, "SAMPLE_MAX_AGE", 4.5))
         cpu_for_veto, cpu_busy_note = _cpu_busy_for_board_veto(helper, sample, cfg, now_mono)
+        if cpu_for_veto is None:
+            cpu_for_veto = 0.0
         veto_sample = sample if cpu_for_veto == sample.cpu_busy_pct else dataclasses.replace(
             sample, cpu_busy_pct=cpu_for_veto)
         host_veto = helper.admission_block_reason(
