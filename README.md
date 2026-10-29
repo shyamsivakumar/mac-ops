@@ -78,6 +78,17 @@ healthy window. The gate is sampled by the controller; it does not modify the
 board plugin or depend on an upstream change. The installer does not change
 worker instructions.
 
+## Check a task
+
+Run `~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py` from the task
+worktree. Set the board's `check.command` to that exact command. The check
+compares the worktree with the merge base of `origin/main`, checks syntax for
+changed Python and shell files, runs existing Python tests that statically import
+the changed Python modules, and starts `heavy.py --help`. Use `--plan` to see
+the selected files and tests without running them. Dynamic imports and code
+without an associated test need separate review. This repository does not
+currently configure a Python linter or type checker.
+
 ## Use heavy
 
 ```sh

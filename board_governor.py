@@ -762,7 +762,24 @@ def _adaptive_capacity_decision(helper, sample, census, compressor, previous, cu
         return state, detail
     if (compressor_growth is not None
             and compressor_growth > HEAVY_COMPRESSOR_MAX_GROWTH_BYTES_PER_SECOND):
-        detail.update(target=0, reason="compressor_growth", compressor_veto="compressor_growth")
+        last_sample = previous.get("last_sample_monotonic")
+        healthy_since = previous.get("healthy_since_monotonic")
+        if (previous.get("boot_id") == boot_id and previous_machine == [cores, physical]
+                and not previous.get("compressor_noise")
+                and isinstance(last_sample, (int, float)) and not isinstance(last_sample, bool)
+                and math.isfinite(float(last_sample))
+                and 0 < now_mono - float(last_sample) <= HEAVY_MAX_SAMPLE_GAP_SECONDS
+                and isinstance(healthy_since, (int, float)) and not isinstance(healthy_since, bool)
+                and math.isfinite(float(healthy_since)) and healthy_since <= now_mono):
+            state["healthy_since_monotonic"] = healthy_since
+            previous_cost = previous.get("heavy_memory_cost_bytes")
+            if (isinstance(previous_cost, (int, float)) and not isinstance(previous_cost, bool)
+                    and math.isfinite(float(previous_cost)) and previous_cost > 0):
+                state["heavy_memory_cost_bytes"] = previous_cost
+        state["compressor_noise"] = True
+        target = min(current, active, ceiling)
+        state["heavy_slots"] = target
+        detail.update(target=target, reason="compressor_growth", compressor_veto="compressor_growth")
         return state, detail
     if compressor_growth is None:
         target = min(current, active, ceiling)
@@ -845,6 +862,8 @@ def _adaptive_capacity_decision(helper, sample, census, compressor, previous, cu
         healthy_since = None
         detail["reason"] = "at_ceiling"
     state.update(heavy_slots=target, healthy_since_monotonic=healthy_since)
+    if healthy_since is not None and healthy_since == previous.get("healthy_since_monotonic"):
+        state["compressor_noise"] = bool(previous.get("compressor_noise"))
     detail["target"] = target
     return state, detail
 
