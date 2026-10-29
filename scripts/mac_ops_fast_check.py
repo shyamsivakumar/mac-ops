@@ -4,8 +4,10 @@ import ast
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -69,6 +71,16 @@ def main():
     for name in changed_shell:
         subprocess.run(["/bin/sh", "-n", name], cwd=ROOT, check=True)
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ["TMPDIR"]))
+    model_dir = ROOT / "formal" / "heavy-queue"
+    for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
+        shutil.copyfile(model_dir / name, scratch / name)
+    java = os.environ.get("MAC_OPS_JAVA_BIN", "/opt/homebrew/opt/openjdk@17/bin/java")
+    jar = os.environ.get("MAC_OPS_TLA_JAR", str(Path.home() / "Code/llmwiki/runtime/tla/tla2tools.jar"))
+    subprocess.run([java, "-Xmx128m", f"-Djava.io.tmpdir={scratch}", "-cp", jar,
+                    "tlc2.TLC", "-workers", "1", "-noGenerateSpecTE",
+                    "-metadir", str(scratch / "states"), "-config", "HeavyQueue.cfg",
+                    "HeavyQueue.tla"], cwd=scratch, env=env, check=True, timeout=55)
     subprocess.run([sys.executable, "heavy.py", "--help"], cwd=ROOT, env=env, check=True)
     for name in tests:
         subprocess.run([sys.executable, "-m", "unittest", name[:-3].replace("/", ".")], cwd=ROOT, env=env, check=True)
