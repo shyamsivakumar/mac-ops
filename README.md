@@ -48,6 +48,11 @@ Board-worker parity for pi and omp (shared skills, Executor MCP, GPT 6.1 Terra
 model ids) is installed from any checkout with `./install.sh agents`; see [board
 agent parity](docs/board-agent-parity.md).
 
+Fresh npm worktrees can share one cached install with private copy-on-write
+dependencies. See [shared worktree setup](docs/shared-worktree-setup.md) for the
+command, supported inputs, and per-repository setup commands. The script does
+not change board settings or install host services.
+
 The installer writes `com.shyam.load-backstop` and `com.shyam.board-governor`
 launchd plists. The backstop service runs the single controller for heavy
 capacity and board agent limits. The governor plist points to the same
