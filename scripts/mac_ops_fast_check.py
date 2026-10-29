@@ -71,11 +71,11 @@ def main():
     for name in changed_shell:
         subprocess.run(["/bin/sh", "-n", name], cwd=ROOT, check=True)
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-    scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ["TMPDIR"]))
+    scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
     model_dir = ROOT / "formal" / "heavy-queue"
     for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
         shutil.copyfile(model_dir / name, scratch / name)
-    java = os.environ.get("MAC_OPS_JAVA_BIN", "/opt/homebrew/opt/openjdk@17/bin/java")
+    java = os.environ.get("MAC_OPS_JAVA_BIN", "/opt/homebrew/opt/openjdk@17/bin/java" if Path("/opt/homebrew/opt/openjdk@17/bin/java").is_file() else "java")
     jar = os.environ.get("MAC_OPS_TLA_JAR", str(Path.home() / "Code/llmwiki/runtime/tla/tla2tools.jar"))
     subprocess.run([java, "-Xmx128m", f"-Djava.io.tmpdir={scratch}", "-cp", jar,
                     "tlc2.TLC", "-workers", "1", "-noGenerateSpecTE",

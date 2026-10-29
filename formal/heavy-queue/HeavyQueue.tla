@@ -8,7 +8,7 @@ vars == <<state, slots, staleLock, lastAdmissionSafe, lastPrioritySafe, lastDepl
 
 Active == {j \in Jobs : state[j] \in {"admitted", "running"}}
 Queued == {j \in Jobs : state[j] = "queued"}
-Priority(j) == IF j = "review" THEN 0 ELSE IF j = "deploy" THEN 1 ELSE 2
+Priority(j) == IF j = "deploy" THEN 0 ELSE IF j = "review" THEN 1 ELSE 2
 Head(j) == /\ j \in Queued
            /\ \A k \in Queued : Priority(j) <= Priority(k)
 
@@ -24,7 +24,7 @@ Admit(j) == /\ Head(j)
             /\ Cardinality(Active) < slots
             /\ state' = [state EXCEPT ![j] = "admitted"]
             /\ lastAdmissionSafe' = (Cardinality(Active) < slots)
-            /\ lastPrioritySafe' = (j = "review" \/ "review" \notin Queued)
+            /\ lastPrioritySafe' = (j # "ordinary" \/ "review" \notin Queued)
             /\ lastDeploySafe' = (j = "deploy" \/ "deploy" \notin Queued)
             /\ UNCHANGED <<slots, staleLock, dropSafe>>
 
