@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-CYCLE = ("omp/openai-codex/gpt-6.1-terra", "codex/gpt-6.1-terra", "claude")
+CYCLE = ("cursor", "omp/openai-codex/gpt-6.1-terra", "codex/gpt-6.1-terra", "claude")
 STATE = Path.home() / ".local" / "state" / "mac-ops" / "board-restart.state.json"
 BOARD_HOME = Path(os.environ.get("HERDR_PROJECTS_HOME") or (Path.home() / ".herdr-projects"))
 BOARD_CMD = BOARD_HOME / "data" / "bin" / "herdr-projects"
@@ -236,12 +236,14 @@ def run_command(command, dry_run):
     try:
         done = subprocess.run(shown, capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
     except (OSError, subprocess.SubprocessError) as exc:
+        detail = str(exc).splitlines()
         return {"command": shown, "ok": False,
-                "error": type(exc).__name__ + ": " + str(exc).splitlines()[0][:160]}
+                "error": type(exc).__name__ + (": " + detail[0][:160] if detail else "")}
     said = (done.stdout or "").strip().splitlines()
+    errors = (done.stderr or "").strip().splitlines()
     return {"command": shown, "ok": done.returncode == 0, "returncode": done.returncode,
             "output": (said[-1][:200] if said else ""),
-            "error": (done.stderr or "").strip().splitlines()[:1][0][:200] if done.returncode else ""}
+            "error": errors[0][:200] if errors and done.returncode else ""}
 
 
 def restart(task_id, agent, reason, signature, dry_run, waits_before):
@@ -341,9 +343,9 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         result = restart(task_id, agent, reason, signature, dry_run, waits_before)
         stamps = record.get("restarts")
         stamps = stamps if isinstance(stamps, list) else []
+        stamps.append(now)
         record["restarts"] = stamps
         if result["ok"]:
-            stamps.append(now)
             record["first_seen"] = now
             record.pop("skip", None)
             record["pending_tell"] = {"at": now, "text": result["tell"], "agent": agent,

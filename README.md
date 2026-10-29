@@ -161,9 +161,10 @@ owns current board claims.
 
 The controller watches the board once a minute. A row whose agent is gone is
 remembered; the same row seen again a minute later is handed to the next agent
-of the cycle (`omp/openai-codex/gpt-6.1-terra`, `codex/gpt-6.1-terra`,
-`claude`), and the new agent is told what happened. The board keeps the
-branch, the worktree and the wait the task had, and the watcher uses only the
+of the cycle (`cursor`, `omp/openai-codex/gpt-6.1-terra`,
+`codex/gpt-6.1-terra`, `claude`), and the new agent is told what happened.
+The board keeps the branch, the worktree and the wait the task had, and the
+watcher uses only the
 board's own commands: `stop`, `delegate --worker.agent`, `set worker.agent`,
 `retry` and `tell`.
 
@@ -172,7 +173,8 @@ finishing is never touched, and neither is a `Could not start` whose cause is
 the machine rather than the agent. The note to the new agent waits until that
 agent is live in the task's pane, and it is dropped if the row has since become
 one of those, or if the agent has already gone. One task is restarted at most
-three times an hour, and the whole board six times an hour. The config switch
+three times an hour, and the whole board six times an hour. A restart whose
+command fails counts toward those limits. The config switch
 `agent_restart` (on by default) turns the watcher off. See the
 [restart state chart](docs/state-charts/restart.md).
 

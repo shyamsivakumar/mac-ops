@@ -23,7 +23,7 @@ The unsent row is the board's own restart: the program that never took the text 
 
 ## The cycle
 
-`omp/openai-codex/gpt-6.1-terra`, `codex/gpt-6.1-terra`, `claude`. The agent that failed is skipped. When the failed agent is not in the cycle, the watcher's cursor names the agent to use, and the cursor moves on with every restart.
+`cursor`, `omp/openai-codex/gpt-6.1-terra`, `codex/gpt-6.1-terra`, `claude`. The agent that failed is skipped, so a failed `claude` is followed by `cursor`. When the failed agent is not in the cycle, the watcher's cursor names the agent to use, and the cursor moves on with every restart.
 
 ## What is never touched
 
@@ -35,8 +35,8 @@ A task that is archived, research only, blocked on a question, in review, finish
 | --- | --- |
 | The same row seen again before it is restarted | 60 seconds |
 | An agent that has been gone for less than | 90 seconds |
-| Restarts of one task in an hour | 3 |
-| Restarts on the whole board in an hour | 6 |
+| Restarts of one task in an hour | 3, and a restart whose command failed counts |
+| Restarts on the whole board in an hour | 6, and a restart whose command failed counts |
 | The tell waits for a live agent in the task's pane | 20 seconds |
 | The tell is given up after | 15 minutes |
 
@@ -48,7 +48,7 @@ stateDiagram-v2
     Remembered --> Remembered: the same row is seen again before the interval
     Remembered --> Restarting: the interval passed, the limits allow, the agent has been gone long enough
     Restarting --> Told: the board's commands worked, the tell waits for a live pane
-    Restarting --> Watching: a command failed, the task is left for the coordinator
+    Restarting --> Watching: a command failed, the attempt counts, and the task is tried again until the hourly cap
     Told --> Watching: the pane has a live agent and the row is still eligible, the tell is sent
     Told --> Watching: the row is now excluded, or the agent is gone, the tell is dropped
 ```
