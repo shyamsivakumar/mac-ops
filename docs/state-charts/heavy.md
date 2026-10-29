@@ -7,16 +7,18 @@ stateDiagram-v2
     [*] --> Queued
     Queued --> Waiting: telemetry or capacity unavailable
     Waiting --> Queued: fresh sample
-    Queued --> Starting: fresh capacity, queue head, free slot, locked reservation
+    Queued --> Starting: fresh capacity, eligible queue head, free task and global slots, deploy limit, locked reservation
     Queued --> Waiting: legacy marker or slot limit reached
     Waiting --> Cancelled: interrupt or wait timeout
     Starting --> Running: launch verified process group and watchdog
     Starting --> Failed: launch or identity check fails
 ```
 
-Review jobs sort ahead of ordinary queued jobs. Each queue entry stores the waiting process identity and is removed when that process exits or changes identity. Reservation and queue removal use the same registry lock. A new job cannot start while `legacy-registry.json` exists.
+Deploy jobs sort ahead of reviews, and reviews sort ahead of ordinary jobs. After ten minutes in the queue, any job moves ahead of newer unaged jobs; aged jobs are ordered by arrival time. At most one deploy job may be active, including a paused or starting deploy. Another deploy waits without blocking eligible non-deploy work. Existing workloads are not preempted.
 
-The first queued reviewer gets the next available admission. Existing workloads are not preempted to serve a reviewer.
+Each queue entry stores the waiting process identity and is removed when that process exits or changes identity. Reservation and queue removal use the same registry lock. A new job cannot start while `legacy-registry.json` exists.
+
+Queue records encode a deploy as a review role with a deploy marker, so supervisors from the previous release can read the queue during installation. Those older supervisors do not apply deploy priority or aging until they exit.
 
 The slot limit is the minimum of fresh controller `heavy_slots`, physical CPU cores, and whole 6 GiB units of physical memory. The controller contract must have an integer `heavy_slots`, a current Unix `updated_at`, and the current kernel `boot_id`. Missing, malformed, stale, or cross-boot capacity holds admission. The project lock is acquired after the global reservation, and the supervisor refreshes the registry heartbeat while waiting for it.
 
