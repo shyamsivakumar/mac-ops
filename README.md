@@ -62,6 +62,9 @@ sample restores the floor `min(board ceiling, max(6, active tasks + 1))`, even
 when this requires a multi-slot raise. Warning cuts cannot cross that floor;
 critical kernel pressure, memory use of at least 95%, or CPU busy of at
 least 95% (mean of the last three controller samples) sets the limit to zero.
+When the current CPU reading is missing, the board critical check also uses
+the last finite CPU reading for up to `max_sample_age_seconds`. The existing
+critical load fallback remains active while the current CPU reading is missing.
 Smoothed CPU busy of at least 80% is a board warning. Above the floor, the controller raises by one
 after 60 healthy seconds only when memory and CPU fit every pending slot.
 Missing or stale readings never raise the limit. A completed task closes the
