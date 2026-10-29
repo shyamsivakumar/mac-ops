@@ -16,8 +16,8 @@ INSTALLERS = {
 }
 
 
-def run(*args, cwd=None, capture=False):
-    return subprocess.run(args, cwd=cwd, check=True, text=True,
+def run(*args, cwd=None, capture=False, env=None):
+    return subprocess.run(args, cwd=cwd, check=True, text=True, env=env,
                           stdout=subprocess.PIPE if capture else None).stdout
 
 
@@ -76,12 +76,96 @@ def unchanged(root, captured):
     validate(root, captured)
 
 
-def main():
+def detect(root):
+    javascript = [manager for manager, files in (
+        ('npm', ('package-lock.json', 'npm-shrinkwrap.json')),
+        ('pnpm', ('pnpm-lock.yaml',)),
+        ('bun', ('bun.lock', 'bun.lockb')),
+    ) if any((root / filename).is_file() for filename in files)]
+    if len(javascript) > 1:
+        raise ValueError('multiple JavaScript lockfiles; choose one package manager')
+    python = 'uv' if (root / 'uv.lock').is_file() else 'pip' if (root / 'requirements.txt').is_file() else None
+    native = [name for name, filename in (('cocoapods', 'Podfile.lock'), ('swift', 'Package.resolved'))
+              if (root / filename).is_file()]
+    if javascript and python:
+        raise ValueError('JavaScript and Python lockfiles need separate setup directories')
+    if (javascript or python) and native:
+        raise ValueError('native setup needs its own directory')
+    if len(native) > 1:
+        raise ValueError('multiple native lockfiles; choose one')
+    if javascript:
+        return javascript[0]
+    if python:
+        return python
+    if native:
+        return native[0]
+    raise ValueError('no supported dependency lockfile found')
+
+
+def git_common(root):
+    return Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir', cwd=root, capture=True).strip())
+
+
+def install_other(root, manager):
     started = time.monotonic()
+    if sys.platform != 'darwin':
+        raise ValueError('shared setup requires macOS')
+    destination = root / ('.venv' if manager in ('uv', 'pip') else 'Pods' if manager == 'cocoapods' else 'node_modules')
+    common = git_common(root)
+    base = common / 'mac-ops-manager-cache'
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with locked(base / (hashlib.sha256(str(root).encode()).hexdigest() + '.worktree.lock')):
+        if manager != 'swift' and os.path.lexists(destination):
+            raise ValueError(f'{destination.name} already exists; refusing to replace it')
+        heavy = str(Path.home() / '.local/bin/heavy')
+        if manager == 'swift':
+            run(heavy, 'swift', 'package', 'resolve', cwd=root)
+            cache = 'swift-package-cache'
+        elif manager == 'cocoapods':
+            run(heavy, 'pod', 'install', '--deployment', cwd=root)
+            cache = 'cocoapods-cache'
+        else:
+            filename = {'pnpm': 'pnpm-lock.yaml', 'uv': 'uv.lock', 'pip': 'requirements.txt',
+                        'bun': 'bun.lock' if (root / 'bun.lock').is_file() else 'bun.lockb'}[manager]
+            tool = 'python3' if manager == 'pip' else manager
+            version = run(tool, '--version', cwd=root, capture=True).encode()
+            digest = hashlib.sha256()
+            for data in (manager.encode(), version, os.uname().sysname.encode(), os.uname().release.encode(),
+                         os.uname().machine.encode(), (root / filename).read_bytes()):
+                digest.update(len(data).to_bytes(8, 'big'))
+                digest.update(data)
+            cache = base / manager / digest.hexdigest()
+            cache.mkdir(parents=True, exist_ok=True)
+            env = os.environ.copy()
+            if manager == 'pnpm':
+                command = ('pnpm', 'install', '--frozen-lockfile', '--package-import-method', 'clone', '--store-dir', str(cache))
+            elif manager == 'bun':
+                command = ('bun', 'install', '--frozen-lockfile', '--cache-dir', str(cache), '--backend', 'clonefile')
+            elif manager == 'uv':
+                env['UV_PROJECT_ENVIRONMENT'] = str(destination)
+                env.pop('UV_PROJECT', None)
+                command = ('uv', '--project', str(root), 'sync', '--locked', '--no-python-downloads', '--link-mode', 'clone', '--cache-dir', str(cache))
+            else:
+                run(heavy, 'python3', '-m', 'venv', '.venv', cwd=root)
+                command = (str(destination / 'bin/python'), '-m', 'pip', '--isolated', 'install', '--require-hashes', '--cache-dir', str(cache), '-r', 'requirements.txt')
+            run(heavy, *command, cwd=root, env=env)
+    print(json.dumps({'manager': manager, 'mode': 'installed', 'seconds': round(time.monotonic() - started, 3), 'cache': str(cache)}))
+
+
+def main():
     root = Path(sys.argv[1] if len(sys.argv) > 1 else '.').resolve()
+    manager = detect(root)
+    if manager != 'npm':
+        install_other(root, manager)
+        return
+    install_npm(root)
+
+
+def install_npm(root):
+    started = time.monotonic()
     if sys.platform != 'darwin':
         raise ValueError('copy-on-write clone requires macOS')
-    common = Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir', cwd=root, capture=True).strip())
+    common = git_common(root)
     base = common / 'mac-ops-npm-cache'
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     destination_key = hashlib.sha256(str(root).encode()).hexdigest()
@@ -117,12 +201,12 @@ def main():
                     clone = Path(stage) / 'node_modules'
                     run('/bin/cp', '-cR', str(root / 'node_modules'), str(clone))
                     clone.rename(cache)
-    print(json.dumps({'mode': mode, 'seconds': round(time.monotonic() - started, 3), 'key': key}))
+    print(json.dumps({'manager': 'npm', 'mode': mode, 'seconds': round(time.monotonic() - started, 3), 'key': key}))
 
 
 if __name__ == '__main__':
     try:
         main()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        print(f'shared npm setup: {error}', file=sys.stderr)
+        print(f'shared worktree setup: {error}', file=sys.stderr)
         sys.exit(1)

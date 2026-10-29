@@ -10,7 +10,11 @@ The first caller runs `~/.local/bin/heavy npm ci --no-audit --no-fund` in the re
 
 A destination lock serializes setup of the same worktree, and a cache-key lock serializes publication. A failed installation never publishes a cache entry. Existing node_modules, including dangling symlinks, are rejected without replacement. Install failures can leave npm's partial node_modules in the calling worktree; the script will not delete it or claim it is ready.
 
-The first slice supports npm lockfile versions 2 and 3 with public npm registry dependencies. It rejects workspaces, local and Git dependencies, shrinkwrap files, root install lifecycle scripts, binding.gyp, ESBUILD_BINARY_PATH, and dependency install scripts other than canonical registry esbuild 0.27.0 and fsevents 2.3.3. Those exceptions require their recorded SHA-512 integrity as well as package identity and registry URL. Absolute or escaping dependency symlinks are rejected before caching. These limits avoid silently skipping generated outputs or copying paths tied to another worktree. Other package managers and native dependency setup remain on their existing commands.
+The script selects the package manager from the requested directory before reading an npm manifest. `package-lock.json` or `npm-shrinkwrap.json` selects npm, `pnpm-lock.yaml` selects pnpm, `bun.lock` or `bun.lockb` selects Bun, `uv.lock` selects uv, and `requirements.txt` selects pip only when no uv lock is present. `Package.resolved` selects `swift package resolve`, and `Podfile.lock` selects `pod install --deployment`. Those native commands do not compile an app. More than one family of lockfile is rejected so the script does not guess.
+
+npm lockfile versions 2 and 3 can reuse a copy-on-write `node_modules` cache. That path accepts public npm registry dependencies and rejects workspaces, local and Git dependencies, shrinkwrap files, root install lifecycle scripts, binding.gyp, ESBUILD_BINARY_PATH, and dependency install scripts other than canonical registry esbuild 0.27.0 and fsevents 2.3.3. Those exceptions require their recorded SHA-512 integrity as well as package identity and registry URL. Absolute or escaping dependency symlinks are rejected before caching.
+
+pnpm, Bun, uv, and pip run through heavy in each worktree. Their package caches live under the repository's common Git directory and are keyed by the lockfile, manager version, and operating system. pnpm imports packages with clones, Bun uses clonefile, and uv uses clone mode with the environment path pinned to the requested directory. pip creates a local `.venv` and requires hashes. These managers do not copy an installed environment, because those environments can contain absolute paths. Swift and CocoaPods use their existing shared download caches.
 
 ## Workspace setup commands
 
@@ -23,11 +27,11 @@ Set these only after the script is present in the canonical mac-ops checkout. Do
 | recoup | `python3 "$HOME/Code/mac-ops/scripts/shared_npm_install.py" convex` | Backend npm only |
 | catalogue | `python3 "$HOME/Code/mac-ops/scripts/shared_npm_install.py" .` | Backend npm only |
 | mac-ops | `true` | No dependency install is required |
-| omni | `(cd tools/omni-mcp && "$HOME/.local/bin/heavy" uv sync --locked)` | Existing uv flow, not shared environment cloning |
+| omni | `python3 "$HOME/Code/mac-ops/scripts/shared_npm_install.py" tools/omni-mcp` | uv lock, shared uv cache, worktree-local environment |
 | dbt | `"$HOME/.local/bin/heavy" dbt deps` | Requires an already provisioned dbt CLI; does not install the unpinned adapter |
 | llmwiki | `(cd claude/hooks && "$HOME/.local/bin/heavy" npm ci --no-audit --no-fund --ignore-scripts)` | Existing CI preparation only; native hook runtime is not proven by this command |
 
-The dbt ingestion uv project and llmwiki's optional Bun tools are separate dependency roots. Python virtual environments contain absolute entrypoint paths, and CocoaPods/SPM depend on native project paths and shared Xcode caches. They must not be treated as relocatable node_modules directories.
+dbt's ingestion project and llmwiki's Bun tools are separate dependency roots. Point the script at the directory that contains the lockfile. dbt package installation remains `dbt deps` because it is not a Python or JavaScript lockfile. Python environments and CocoaPods or Swift checkouts stay in the worktree that created them.
 
 ## Deferred gateway consolidation
 
