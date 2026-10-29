@@ -962,7 +962,9 @@ def _board_control_tick(helper, sample, heavy_decision, cfg, boot_id, agent_cens
     elif compressor_veto is not None:
         host_veto = host_veto or str(compressor_veto)
 
-    critical_pressure = bool(sample_is_fresh and sample is not None and _critical_pressure(helper, sample))
+    critical_pressure = bool(sample_is_fresh and sample is not None and (
+        _critical_pressure(helper, sample)
+        or (cpu_busy_note is None and _critical_pressure(helper, veto_sample))))
     if agent_census is None and sample_is_fresh and sample is not None and not critical_pressure:
         try:
             agent_census = board_resources.board_agent_rss_census(admission)
