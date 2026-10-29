@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import errno
 import fcntl
+import json
 import os
 import pty
 import re
@@ -25,10 +26,12 @@ CSI = re.compile(b"\\x1b\\[[\\x30-\\x3f]*[\\x20-\\x2f]*[\\x40-\\x7e]")
 OSC = re.compile(b"\\x1b\\].*?(?:\\x07|\\x1b\\\\)", re.DOTALL)
 
 
-def passthrough(args):
+def passthrough(args, profiles=False):
     if "-p" in args or "--print" in args:
         return True
     value_flags = {"--model", "--thinking", "--resume", "--session"}
+    if profiles:
+        value_flags.add("--profile")
     flag_only = {
         "--continue",
         "--trust",
@@ -45,7 +48,7 @@ def passthrough(args):
             and (not args[index + 1].startswith("-"))
         ):
             index += 2
-        elif token in flag_only:
+        elif token in flag_only or (profiles and token.startswith("--profile=")):
             index += 1
         else:
             return True
@@ -280,7 +283,23 @@ def reap_after_close(pid):
 
 
 def main():
+    global REAL
     args = sys.argv[1:]
+    retry_enabled = False
+    receipt = Path(__file__).with_name("omp.mac-ops-14.json")
+    if receipt.exists():
+        try:
+            installed = json.loads(receipt.read_text())
+            if not isinstance(installed, dict):
+                raise ValueError("Install receipt is not an object")
+            if installed.get("cursor_retry"):
+                REAL = installed["cursor_retry"]
+                if not isinstance(REAL, str):
+                    raise ValueError("Invalid retry launcher")
+                retry_enabled = True
+        except (OSError, ValueError, TypeError) as error:
+            os.write(2, f"Omp input gate: invalid install receipt: {error}\n".encode())
+            return 126
     if (
         not os.path.isfile(REAL)
         or not os.access(REAL, os.X_OK)
@@ -292,21 +311,28 @@ def main():
         )
         return 126
     if (
-        passthrough(args)
+        passthrough(args, retry_enabled)
         or not task_context()
         or (not os.isatty(0))
         or (not os.isatty(1))
     ):
         os.execv(REAL, [REAL, *args])
+    ready_read, ready_write = os.pipe() if retry_enabled else (-1, -1)
     (pid, master) = pty.fork()
     if pid == 0:
+        if retry_enabled:
+            os.close(ready_read)
+            os.set_inheritable(ready_write, True)
+            os.environ["MAC_OPS_OMP_READY_FD"] = str(ready_write)
         os.environ["OMP_SKIP_SETUP"] = "1"
         try:
             os.execv(REAL, [REAL, *args])
         except OSError as exc:
             os.write(2, f"omp exec failed: {exc}\n".encode())
             os._exit(127)
-    stdout(b"\x1b[?2004h")
+    if retry_enabled:
+        os.close(ready_write)
+    runtime_started = not retry_enabled
     old_tty = termios.tcgetattr(0)
     (old_handlers, pending_signal) = ({}, [])
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
@@ -391,6 +417,7 @@ def main():
     try:
         fcntl.ioctl(master, termios.TIOCSWINSZ, size(1))
         tty.setraw(0, termios.TCSANOW)
+        stdout(b"\x1b[?2004h")
         os.set_blocking(master, False)
         while True:
             now = time.monotonic()
@@ -406,8 +433,9 @@ def main():
                 break
             pending = bool(candidate or startup or inp.buf or sent_paste or after_paste)
             idle_passthrough = session_started and not pending
-            if (not session_started and not ready and now - started > TIMEOUT) or (
-                input_at is not None and pending and (now - input_at > TIMEOUT)
+            if runtime_started and (
+                (not session_started and not ready and now - started > TIMEOUT)
+                or (input_at is not None and pending and now - input_at > TIMEOUT)
             ):
                 failure = 124
                 break
@@ -421,7 +449,7 @@ def main():
             ):
                 failure = 125
                 break
-            if not idle_passthrough:
+            if runtime_started and not idle_passthrough:
                 visible_norm = b"".join(visible.tail.split()).lower()
                 if not ready and any(
                     b"".join(m.split()).lower() in visible_norm for m in MARKERS
@@ -454,10 +482,23 @@ def main():
                 ):
                     finish_delivery()
             reads = [0] + ([] if master_eof else [master])
+            if ready_read >= 0:
+                reads.append(ready_read)
             writes = [master] if to_child else []
             (r, w, _) = select.select(
                 reads, writes, [], PASSIVE_SELECT if idle_passthrough else ACTIVE_SELECT
             )
+            if ready_read in r:
+                prepared = os.read(ready_read, 1)
+                os.close(ready_read)
+                ready_read = -1
+                if prepared != b"1":
+                    failure = 125
+                    continue
+                runtime_started = True
+                started = time.monotonic()
+                if input_at is not None:
+                    input_at = started
             if master in r:
                 try:
                     raw = os.read(master, 65536)
@@ -532,6 +573,8 @@ def main():
     except (OSError, termios.error):
         failure = 125
     finally:
+        if ready_read >= 0:
+            os.close(ready_read)
         try:
             os.close(master)
         except OSError:

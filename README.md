@@ -4,7 +4,7 @@
 single controller adjusts heavy capacity from host readings, grows one slot
 after a healthy window, and cuts capacity on pressure. Fresh noncritical
 readings restore a baseline of two heavy slots immediately; growth above two
-waits for the healthy window. Review jobs precede queued build and test jobs.
+waits for the healthy window. Deploy jobs precede reviews, and reviews precede ordinary jobs. Jobs waiting more than ten minutes move ahead of newer jobs. Only one deploy job can be active at a time.
 Running heavy workloads pause after sustained warning pressure and resume after
 recovery. Critical kernel pressure, memory use of at least 95%, or the controller's smoothed CPU busy of at
 least 95% requests a pause immediately. A supervisor pauses after raw CPU busy
@@ -95,6 +95,7 @@ management.
 ```sh
 heavy xcodebuild -scheme MyApp build
 heavy --review python3 check_changes.py
+heavy --deploy python3 merge_window_gate.py
 HEAVY_ROLE=review heavy ./review.sh
 heavy status
 ```
@@ -220,6 +221,18 @@ The [Omp input gate](docs/omp-input-gate.md) queues the board's first brief unti
 Omp's editor is ready, skips first-run setup races via `OMP_SKIP_SETUP`, and
 merges `startup.quiet` in agent settings. Its [state
 chart](docs/state-charts/omp-input.md) records the delivery lifecycle.
+
+## Omp Cursor retry
+
+[Omp Cursor retry](docs/omp-cursor-retry.md) provides task-local proof copies
+and an explicitly opted-in durable runner behind the existing input gate.
+The durable runner reapplies the patch after compatible upstream reinstalls
+and refuses incompatible versions; production activation requires explicit
+approval. On the fault matrix the patch recovered 6 of 6 safe network failures
+(stock: 4 of 6) and did not replay a turn after a write, shell or MCP call in
+the exercised stalled-stream watchdog cases.
+Its [state chart](docs/state-charts/cursor-retry.md) records retry, veto and
+durable-launcher publication paths.
 
 ## Reviewer agreement audit (MO-10)
 

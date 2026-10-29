@@ -24,6 +24,9 @@ def main():
     parser.add_argument(
         "--source", type=Path, default=Path(__file__).with_name("omp_agent_gate.py")
     )
+    parser.add_argument("--cursor-retry", action="store_true", help="Opt in to the pinned Cursor retry source runner")
+    parser.add_argument("--retry-source", type=Path, default=Path.home() / ".bun/install/global/node_modules")
+    parser.add_argument("--retry-omp", type=Path, default=Path.home() / ".bun/bin/omp")
     args = parser.parse_args()
     folder = args.bin_dir.expanduser().resolve()
     entry = folder / "omp"
@@ -79,10 +82,30 @@ def main():
         return
     source = args.source.resolve(strict=True)
     source_sha = digest(source)
+    retry_launch = saved.get("cursor_retry") if saved else None
+    if args.cursor_retry:
+        if args.action != "install":
+            raise RuntimeError("--cursor-retry is only valid with install")
+        if saved and not entry.is_symlink():
+            if not entry.is_file() or digest(entry) != saved["sha256"] or not backup.is_symlink():
+                raise RuntimeError("Installed input gate changed; refusing retry activation.")
+        elif not entry.is_symlink() or backup.exists():
+            raise RuntimeError("Expected an original Omp symlink and no existing backup.")
+        from omp_cursor_retry import install_bundle, PATCH
+        helper = Path(__file__).with_name("omp_cursor_retry.py")
+        source_path = args.retry_source.expanduser().absolute()
+        runtime_path = args.retry_omp.expanduser().absolute()
+        bundle_key = hashlib.sha256(
+            (digest(helper) + digest(PATCH) + str(source_path) + str(runtime_path)).encode()
+        ).hexdigest()[:20]
+        retry_launch = str(install_bundle(folder / ("omp.cursor-retry-" + bundle_key), source_path, runtime_path))
 
     def write_receipt(payload: dict) -> None:
-        receipt.write_text(json.dumps(payload, indent=2) + "\n")
-        receipt.chmod(0o600)
+        staged_receipt = folder / ("omp.mac-ops-14-receipt-" + str(os.getpid()))
+        with staged_receipt.open("x") as stream:
+            stream.write(json.dumps(payload, indent=2) + "\n")
+        staged_receipt.chmod(0o600)
+        os.replace(staged_receipt, receipt)
 
     def replace_entry_from_source() -> None:
         staged = folder / ("omp.mac-ops-14-stage-" + str(os.getpid()))
@@ -94,6 +117,7 @@ def main():
     if (
         saved
         and entry.is_file()
+        and retry_launch == saved.get("cursor_retry")
         and not entry.is_symlink()
         and backup.is_symlink()
         and digest(entry) == source_sha
@@ -110,9 +134,13 @@ def main():
         return
 
     if saved and entry.is_file() and not entry.is_symlink() and backup.is_symlink():
+        if digest(entry) != saved["sha256"]:
+            raise RuntimeError("Installed launcher changed; refusing to overwrite anything.")
         replace_entry_from_source()
         saved = dict(saved)
         saved["sha256"] = source_sha
+        if retry_launch:
+            saved["cursor_retry"] = retry_launch
         write_receipt(saved)
         print(
             json.dumps(
@@ -147,6 +175,8 @@ def main():
         "real": str(real),
         "sha256": digest(staged),
     }
+    if retry_launch:
+        saved["cursor_retry"] = retry_launch
     write_receipt(saved)
     os.rename(entry, backup)
     try:
