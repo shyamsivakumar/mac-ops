@@ -16,6 +16,8 @@ npm lockfile versions 2 and 3 can reuse a copy-on-write `node_modules` cache. Th
 
 pnpm, Bun, uv, and pip run through heavy in each worktree. Their package caches live under the repository's common Git directory and are keyed by the lockfile, manager version, and operating system. pnpm imports packages with clones, Bun uses clonefile, and uv uses clone mode with the environment path pinned to the requested directory. pip creates a local `.venv` and requires hashes. These managers do not copy an installed environment, because those environments can contain absolute paths. Swift and CocoaPods use their existing shared download caches.
 
+The pnpm path rejects ancestor workspaces and configured `workspace-dir` overrides, and pins its lockfile and output directories inside the requested root. Native setup requires a local `Package.swift` or CocoaPods manifest and passes the requested project directory to the tool.
+
 ## Workspace setup commands
 
 Set these only after the script is present in the canonical mac-ops checkout. Do not activate host installers during worktree setup.

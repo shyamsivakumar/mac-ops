@@ -117,12 +117,17 @@ def install_other(root, manager):
     with locked(base / (hashlib.sha256(str(root).encode()).hexdigest() + '.worktree.lock')):
         if manager != 'swift' and os.path.lexists(destination):
             raise ValueError(f'{destination.name} already exists; refusing to replace it')
+        if manager == 'swift' and not (root / 'Package.swift').is_file():
+            raise ValueError('Package.swift is required in the requested directory')
+        if manager == 'cocoapods' and not any((root / name).is_file() for name in
+                                               ('CocoaPods.podfile.yaml', 'CocoaPods.podfile', 'Podfile', 'Podfile.rb')):
+            raise ValueError('a CocoaPods manifest is required in the requested directory')
         heavy = str(Path.home() / '.local/bin/heavy')
         if manager == 'swift':
-            run(heavy, 'swift', 'package', 'resolve', cwd=root)
+            run(heavy, 'swift', 'package', '--package-path', str(root), 'resolve', cwd=root)
             cache = 'swift-package-cache'
         elif manager == 'cocoapods':
-            run(heavy, 'pod', 'install', '--deployment', cwd=root)
+            run(heavy, 'pod', 'install', '--deployment', f'--project-directory={root}', cwd=root)
             cache = 'cocoapods-cache'
         else:
             filename = {'pnpm': 'pnpm-lock.yaml', 'uv': 'uv.lock', 'pip': 'requirements.txt',
@@ -138,7 +143,15 @@ def install_other(root, manager):
             cache.mkdir(parents=True, exist_ok=True)
             env = os.environ.copy()
             if manager == 'pnpm':
-                command = ('pnpm', 'install', '--frozen-lockfile', '--package-import-method', 'clone', '--store-dir', str(cache))
+                if any((parent / 'pnpm-workspace.yaml').exists() for parent in root.parents):
+                    raise ValueError('ancestor pnpm workspaces are not supported')
+                env = {key: value for key, value in env.items() if key.lower() != 'npm_config_workspace_dir'}
+                workspace = run('pnpm', 'config', 'get', 'workspace-dir', cwd=root, capture=True, env=env).strip()
+                if workspace not in ('', 'undefined'):
+                    raise ValueError('configured pnpm workspace-dir is not supported')
+                command = ('pnpm', 'install', '--frozen-lockfile', '--package-import-method', 'clone',
+                           '--modules-dir', 'node_modules', '--virtual-store-dir', 'node_modules/.pnpm',
+                           '--lockfile-dir', str(root), '--store-dir', str(cache))
             elif manager == 'bun':
                 command = ('bun', 'install', '--frozen-lockfile', '--cache-dir', str(cache), '--backend', 'clonefile')
             elif manager == 'uv':
