@@ -14,9 +14,9 @@ ASSUME AllowSignalFailure \in BOOLEAN
 MaxSlots == {2, 3, 4}
 Window == 2
 BoardSnapshotActive == 2
-Signals == {"healthy", "warning", "critical", "stale", "missing", "bad"}
+Signals == {"healthy", "noise", "warning", "critical", "stale", "missing", "bad"}
 BadSignals == {"stale", "missing", "bad"}
-GoodSignals == {"healthy", "warning"}
+GoodSignals == {"healthy", "noise", "warning"}
 Stages == {"start", "sampled", "decided", "published", "done"}
 Jobs == {"waiting", "reserved", "running", "failed"}
 PauseStates == {"none", "requested", "paused", "signal_failed"}
@@ -55,6 +55,7 @@ EligibleSample == sample = "healthy"
 AdaptiveTarget ==
     \* board_governor.py:665-755
     IF sample = "critical" \/ sample = "warning" THEN 0
+    ELSE IF sample = "noise" THEN Min(CurrentSlots, ActiveHeavy)
     ELSE IF sample \in BadSignals THEN Min(CurrentSlots, Floor(maxSlots))
     ELSE IF resourceFit < CurrentSlots THEN Min(CurrentSlots \div 2, resourceFit)
     ELSE IF EligibleSample /\ resourceFit >= CurrentSlots + 1
@@ -70,6 +71,8 @@ HeavyTarget ==
     ELSE AdaptiveTarget
 
 NextHealthyTicks ==
+    IF sample = "noise" THEN healthyTicks
+    ELSE
     IF EligibleSample /\ resourceFit >= CurrentSlots + 1 /\ CurrentSlots < maxSlots
     THEN IF AdaptiveTarget > CurrentSlots THEN 0 ELSE Min(Window, healthyTicks + 1)
     ELSE 0
@@ -150,6 +153,7 @@ CaptureReading ==
                      ELSE IF Environment = "warning-alternates"
                           THEN IF warningEpisode THEN {"healthy"} ELSE {"warning"}
                           ELSE Signals)
+    /\ (sample' = "noise" => sample # "noise")
     /\ resourceFit' \in (IF Environment \in {"steady", "warning-alternates"}
                           THEN {maxSlots}
                           ELSE {0, CurrentSlots,
@@ -333,7 +337,7 @@ PublishBoardLimit ==
 AdmitJob ==
     \* heavy.py:1523-1563; heavy.py:534-567
     /\ jobState = "waiting"
-    /\ EligibleSample
+    /\ sample \in {"healthy", "noise"}
     /\ capacityFresh
     /\ capacityBoot = boot
     /\ resourceFit > ActiveHeavy
