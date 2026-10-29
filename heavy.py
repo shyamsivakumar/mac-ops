@@ -1002,7 +1002,7 @@ class Registry:
                 or value.get("kind") != "queue"
                 or value.get("queue_id") != queue_id
                 or value.get("uid") != self.uid
-                or value.get("role") not in ("ordinary", "review")
+                or value.get("role") not in ("ordinary", "review", "deploy")
                 or isinstance(value.get("created_ns"), bool)
                 or not isinstance(value.get("created_ns"), int)
                 or value.get("created_ns") < 0
@@ -1243,7 +1243,7 @@ def _log_event(
         "job_id": record.get("job_id"),
         "task_id": record.get("task_id"),
         "command": record.get("command_basename"),
-        "role": "deploy" if record.get("deploy") is True else record.get("role", "ordinary"),
+        "role": record.get("role", "ordinary"),
         "queue_id": record.get("queue_id"),
         "supervisor": record.get("supervisor", record.get("process")),
         "workload": record.get("workload"),
@@ -1590,7 +1590,7 @@ def status_payload(
                 "queue_id": row.get("queue_id"),
                 "task_id": row.get("task_id"),
                 "command": row.get("command_basename"),
-                "role": "deploy" if row.get("deploy") is True else row.get("role"),
+                "role": row.get("role"),
                 "position": index + 1,
                 "created_ns": row.get("created_ns"),
             }
@@ -1666,7 +1666,7 @@ class SupervisorDeps:
 def _queue_sort_key(record: Dict[str, Any], now_ns: Optional[int] = None) -> Tuple[int, int, str]:
     created = int(record.get("created_ns", 0))
     now = monotonic_ns() if now_ns is None else now_ns
-    role = "deploy" if record.get("deploy") is True else record.get("role")
+    role = record.get("role")
     priority = 0 if now - created > 600_000_000_000 else (
         1 if role == "deploy" else 2 if role == "review" else 3
     )
@@ -1708,8 +1708,7 @@ def _enqueue_job(
         "task_key": task_key,
         "task_id": task_id,
         "command_basename": command_basename,
-        "role": "review" if role == "deploy" else role,
-        "deploy": role == "deploy",
+        "role": role,
         "created_ns": deps.monotonic_ns(),
         "boot_id": boot_id,
         "process": process,
@@ -1803,8 +1802,7 @@ def _reserve_job(
                 "task_key": task_key,
                 "task_id": task_id,
                 "command_basename": command_basename,
-                "role": "review" if role == "deploy" else role,
-                "deploy": role == "deploy",
+                "role": role,
                 "created_ns": deps.monotonic_ns(),
                 "boot_id": boot_id,
                 "process": supervisor,
@@ -1817,7 +1815,7 @@ def _reserve_job(
         if (
             current_queue is None
             or current_queue.get("task_key") != task_key
-            or ("deploy" if current_queue.get("deploy") is True else current_queue.get("role")) != role
+            or current_queue.get("role") != role
             or not _identity_matches(
                 table.get(supervisor["pid"]), current_queue.get("process", {})
             )
@@ -1834,7 +1832,7 @@ def _reserve_job(
         eligible_queues = [
             row for row in queues
             if row.get("task_key") not in busy_tasks
-            and not (deploy_active and row.get("deploy") is True)
+            and not (deploy_active and row.get("role") == "deploy")
         ]
         if task_key in busy_tasks:
             if ephemeral_queue:
@@ -1843,10 +1841,9 @@ def _reserve_job(
         if not eligible_queues or eligible_queues[0].get("queue_id") != queue_id:
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
-            return None, "reviewer-priority" if eligible_queues and (
-                eligible_queues[0].get("role") == "review"
-                and eligible_queues[0].get("deploy") is not True
-            ) else "queue-order"
+            return None, "reviewer-priority" if eligible_queues and eligible_queues[
+                0
+            ].get("role") == "review" else "queue-order"
         try:
             slot_limit = _effective_slot_limit(
                 registry, sample, now=deps.wall_clock(), boot_id=boot_id

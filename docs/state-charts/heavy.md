@@ -18,7 +18,7 @@ Deploy jobs sort ahead of reviews, and reviews sort ahead of ordinary jobs. Afte
 
 Each queue entry stores the waiting process identity and is removed when that process exits or changes identity. Reservation and queue removal use the same registry lock. A new job cannot start while `legacy-registry.json` exists.
 
-Queue records encode a deploy as a review role with a deploy marker, so supervisors from the previous release can read the queue during installation. Those older supervisors do not apply deploy priority or aging until they exit.
+Before submitting deploy gates after installation, drain all queued supervisors from the previous release. Older supervisors reject deploy queue records and can fail their own waiting commands if a deploy is queued.
 
 The slot limit is the minimum of fresh controller `heavy_slots`, physical CPU cores, and whole 6 GiB units of physical memory. The controller contract must have an integer `heavy_slots`, a current Unix `updated_at`, and the current kernel `boot_id`. Missing, malformed, stale, or cross-boot capacity holds admission. The project lock is acquired after the global reservation, and the supervisor refreshes the registry heartbeat while waiting for it.
 
