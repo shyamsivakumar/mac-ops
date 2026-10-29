@@ -9,6 +9,7 @@
 - [Cursor startup and first-message delivery](cursor-input.md).
 - [Pi startup and first-message delivery](pi-input.md).
 - [Omp startup and first-message delivery](omp-input.md).
+- [Shared npm worktree setup](shared-npm-setup.md).
 - [Omp Cursor turn retry](cursor-retry.md).
 
 The [governor](../../.agents/skills/verify-governor/SKILL.md) and
