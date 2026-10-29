@@ -227,16 +227,16 @@
  
  			let compactionResult = COMPACTION_CHECK_NONE;
  			let checkedCompaction = false;
---- a/pi-coding-agent/src/exec/non-interactive-env.ts
-+++ b/pi-coding-agent/src/exec/non-interactive-env.ts
-@@ -50,6 +50,7 @@
- 	GH_PROMPT_DISABLED: "1",
- 	COMPOSER_NO_INTERACTION: "1",
- 	CLOUDSDK_CORE_DISABLE_PROMPTS: "1",
-+	BUN_BE_BUN: "",
- };
- 
- const WINDOWS_UTF8_ENV_DEFAULT_GROUPS: ReadonlyArray<ReadonlyArray<readonly [key: string, value: string]>> = [
+--- a/pi-coding-agent/src/exec/bash-executor.ts
++++ b/pi-coding-agent/src/exec/bash-executor.ts
+@@ -598,6 +598,6 @@
+ 		}),
+ 	]);
+-	const commandEnv = buildNonInteractiveEnv(preflight.env);
++	const commandEnv = { ...buildNonInteractiveEnv(preflight.env), BUN_BE_BUN: "" };
+ 	const runCdInPersistentShell = options?.useUserShell === true && !prefix && isPersistentShellCdCommand(command);
+ 	// Never wrap in cmd.exe: it is only the Windows no-bash fallback for spawn
+ 	// paths, and the embedded brush shell runs the POSIX line better directly.
 --- a/pi-ai/src/types.ts
 +++ b/pi-ai/src/types.ts
 @@ -1323,6 +1323,8 @@
@@ -277,3 +277,21 @@
  			target.push({ type: "error", reason: stopReason, error: message });
  			target.end(message);
  		}
+--- a/pi-coding-agent/src/cli/profile-alias.ts
++++ b/pi-coding-agent/src/cli/profile-alias.ts
+@@ -199,6 +199,15 @@
+ 	cwd = process.cwd(),
+ 	compiled = process.env.PI_COMPILED === "true",
+ }: ProfileAliasProcessOptions = {}): ProfileAliasCommand {
++	const managedLauncher = process.env.MAC_OPS_OMP_LAUNCHER;
++	if (managedLauncher) {
++		return {
++			display: managedLauncher,
++			posix: quotePosixArgument(managedLauncher),
++			fish: quotePosixArgument(managedLauncher),
++			powerShell: quoteForPowerShell(managedLauncher),
++		};
++	}
+ 	if (compiled) return DEFAULT_ALIAS_COMMAND;
+ 
+ 	const runtime = argv[0];

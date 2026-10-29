@@ -221,14 +221,17 @@ Omp's editor is ready, skips first-run setup races via `OMP_SKIP_SETUP`, and
 merges `startup.quiet` in agent settings. Its [state
 chart](docs/state-charts/omp-input.md) records the delivery lifecycle.
 
-## Omp Cursor retry proof
+## Omp Cursor retry
 
-[Omp Cursor retry proof](docs/omp-cursor-retry.md) prepares a task-local
-candidate without changing installed omp. On the fault matrix it recovered
-6 of 6 safe network failures (stock: 4 of 6) and never replayed a turn after a
-write, shell or MCP call, including a stalled-stream watchdog error. It is not
-installed. Its [state chart](docs/state-charts/cursor-retry.md) records the
-retry and veto paths.
+[Omp Cursor retry](docs/omp-cursor-retry.md) provides task-local proof copies
+and an explicitly opted-in durable runner behind the existing input gate.
+The durable runner reapplies the patch after compatible upstream reinstalls
+and refuses incompatible versions; production activation still needs separate
+approval. On the fault matrix the patch recovered 6 of 6 safe network failures
+(stock: 4 of 6) and never replayed a turn after a write, shell or MCP call,
+including a stalled-stream watchdog error. It is not installed.
+Its [state chart](docs/state-charts/cursor-retry.md) records retry, veto and
+durable-launcher publication paths.
 
 ## Reviewer agreement audit (MO-10)
 
