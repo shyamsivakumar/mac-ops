@@ -99,6 +99,8 @@ heavy /usr/bin/python3 -I replay_controller.py \
 | Transition | Guard in the source |
 | --- | --- |
 | Capture the host reading | `sample_host()` requires all native readings to complete, parses the required fields, and rejects a sample that took more than three seconds to collect. The heavy admission path rejects samples older than 4.5 seconds. |
+| Capture heavy census | A process identity change between the process table and RSS snapshots retries the entire census at most twice. Every attempt revalidates the registry and process identities. A persistent mismatch still fails closed, and a sample that ages out during retries cannot authorize growth. |
+| Model boundary | The bounded governor model treats census validity as an input. It does not model process churn, RSS snapshots, or the bounded census retry. |
 | Restore the heavy floor | `_capacity_decision()` requires a fresh valid sample before it applies `max(floor, adaptive_target)`. A bad or stale sample holds at most the current capacity and floor. The tick exception path republishes only the prior boot-matched capacity, capped at two. |
 | Grow above two | `_adaptive_capacity_decision()` requires a 60 second healthy sample window, a valid compressor delta, measured active-job RSS when jobs are active, and candidate fit under CPU, memory reserve, and machine ceiling. One contiguous compressor growth sample per window preserves the window but closes spare capacity above the floor; a second resets it. |
 | Cut or enter critical | A candidate that exceeds fit is reduced. The critical classifier sets the heavy target to zero regardless of the adaptive result. |
