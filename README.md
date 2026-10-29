@@ -4,7 +4,7 @@
 single controller adjusts heavy capacity from host readings, grows one slot
 after a healthy window, and cuts capacity on pressure. Fresh noncritical
 readings restore a baseline of two heavy slots immediately; growth above two
-waits for the healthy window. Review jobs precede queued build and test jobs.
+waits for the healthy window. Deploy jobs precede reviews, and reviews precede ordinary jobs. Jobs waiting more than ten minutes move ahead of newer jobs. Only one deploy job can be active at a time.
 Running heavy workloads pause after sustained warning pressure and resume after
 recovery. Critical kernel pressure, memory use of at least 95%, or the controller's smoothed CPU busy of at
 least 95% requests a pause immediately. A supervisor pauses after raw CPU busy
@@ -95,6 +95,7 @@ management.
 ```sh
 heavy xcodebuild -scheme MyApp build
 heavy --review python3 check_changes.py
+heavy --deploy python3 merge_window_gate.py
 HEAVY_ROLE=review heavy ./review.sh
 heavy status
 ```
