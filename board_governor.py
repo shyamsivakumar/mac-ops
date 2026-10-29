@@ -20,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 import agent_heavy_wait_pause
 import board_resources
+import board_restart
 
 STATE_DIR = Path.home() / ".local" / "state" / "mac-ops"
 BOARD = Path.home() / ".herdr-projects" / "data" / "bin" / "herdr-projects"
@@ -103,13 +104,16 @@ def config(path):
     defaults = json.loads(DEFAULTS.read_text())
     if isinstance(values, dict):
         values.setdefault("agent_heavy_wait_pause", False)
+        values.setdefault("agent_restart", True)
     if not isinstance(values, dict) or set(values) != set(defaults):
         raise ValueError("Config must contain exactly the documented reserve, signal, and sample-age fields")
     for key, value in values.items():
-        if key != "agent_heavy_wait_pause":
+        if key not in ("agent_heavy_wait_pause", "agent_restart"):
             number(value, key)
     if type(values["agent_heavy_wait_pause"]) is not bool:
         raise ValueError("agent_heavy_wait_pause must be true or false")
+    if type(values["agent_restart"]) is not bool:
+        raise ValueError("agent_restart must be true or false")
     for key in ("memory_reserve_fraction", "cpu_reserve_fraction"):
         number(values[key], key, 0, 1)
     number(values["cost_margin"], "cost_margin", 1)
@@ -1200,6 +1204,18 @@ def _critical_pressure(helper, sample):
         helper._finite_nonnegative(sample.cpu_busy_pct) and sample.cpu_busy_pct >= helper.MAX_CPU_PCT)
 
 
+_last_restart_tick = 0.0
+
+
+def _board_restart_tick():
+    global _last_restart_tick
+    now = time.monotonic()
+    if now - _last_restart_tick < board_restart.MIN_INTERVAL_SECONDS:
+        return {"action": "not_due"}
+    _last_restart_tick = now
+    return board_restart.tick()
+
+
 def controller_tick(*, board_control=True, cfg=None):
     _ensure_state_dir(create=True)
     helper = _heavy_module()
@@ -1304,6 +1320,11 @@ def controller_tick(*, board_control=True, cfg=None):
 
     pause_admission = list(admission_active)
     critical_for_pause = bool(sample is not None and _critical_pressure(helper, sample))
+    if board_control and cfg is not None and cfg["agent_restart"]:
+        try:
+            entry["board_restart"] = _board_restart_tick()
+        except Exception as exc:
+            entry["board_restart_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
     if boot_id is not None and not (cfg is not None and cfg["agent_heavy_wait_pause"]):
         entry["agent_heavy_wait_pause"] = {"action": "disabled"}
     elif boot_id is not None:
