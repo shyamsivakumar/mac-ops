@@ -160,13 +160,14 @@ owns current board claims.
 ## Board restart of a dead agent
 
 The controller watches the board once a minute. A row whose agent is gone is
-remembered; the same row seen again a minute later is handed to the next agent
-of the cycle (`cursor`, `omp/openai-codex/gpt-6.1-terra`,
-`codex/gpt-6.1-terra`, `claude`), and the new agent is told what happened.
-The board keeps the branch, the worktree and the wait the task had, and the
-watcher uses only the
-board's own commands: `stop`, `delegate --worker.agent`, `set worker.agent`,
-`retry` and `tell`.
+remembered; the same row seen again a minute later is handed to the next model
+in the board's own order (`worker.agent`, then `worker.fallback`, from
+`herdr-projects show`), skipping the model that failed. The new agent is told
+what happened. The branch and the worktree stay. The watcher uses only the
+board's own commands: `stop`, `archive`, `restore`, `delegate --worker.agent`,
+`after` and `tell`. Stop on its own leaves the old omp process and model, so
+the task is archived and restored before the new delegate. A wait the task
+had is put back with `after`.
 
 A task that is archived, research only, blocked on a question, in review or
 finishing is never touched, and neither is a `Could not start` whose cause is

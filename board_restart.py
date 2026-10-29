@@ -9,7 +9,6 @@ import sys
 import time
 from pathlib import Path
 
-CYCLE = ("cursor", "omp/openai-codex/gpt-6.1-terra", "codex/gpt-6.1-terra", "claude")
 STATE = Path.home() / ".local" / "state" / "mac-ops" / "board-restart.state.json"
 BOARD_HOME = Path(os.environ.get("HERDR_PROJECTS_HOME") or (Path.home() / ".herdr-projects"))
 BOARD_CMD = BOARD_HOME / "data" / "bin" / "herdr-projects"
@@ -132,7 +131,37 @@ def exclusion(row, meta):
     return None
 
 
-def next_agent(failed, cursor, cycle=CYCLE):
+def board_cycle():
+    output = subprocess.run([str(BOARD_CMD), "show", "--json"], check=True, capture_output=True,
+                            text=True, timeout=COMMAND_TIMEOUT).stdout
+    data = json.loads(output)
+    settings = data.get("settings") if isinstance(data, dict) else None
+    if not isinstance(settings, list):
+        raise ValueError("the board's settings are not a list")
+    found = {}
+    for item in settings:
+        if isinstance(item, dict) and isinstance(item.get("name"), str):
+            found[item["name"]] = item.get("value")
+    names = []
+    primary = found.get("worker.agent")
+    if isinstance(primary, str) and primary.strip():
+        names.append(primary.strip())
+    fallback = found.get("worker.fallback")
+    extras = fallback.split(",") if isinstance(fallback, str) else fallback
+    if isinstance(extras, list):
+        for item in extras:
+            if isinstance(item, str) and item.strip():
+                names.append(item.strip())
+    cycle = []
+    for name in names:
+        if name not in cycle:
+            cycle.append(name)
+    if not cycle:
+        raise ValueError("the board has no agent order")
+    return tuple(cycle)
+
+
+def next_agent(failed, cursor, cycle):
     if not cycle:
         raise ValueError("the cycle is empty")
     if not 0 <= cursor < len(cycle):
@@ -145,7 +174,7 @@ def next_agent(failed, cursor, cycle=CYCLE):
     raise ValueError("the cycle has no other agent")
 
 
-def failed_agent(meta, row, cycle=CYCLE):
+def failed_agent(meta, row, cycle):
     settings = meta.get("settings")
     if isinstance(settings, dict):
         agent = settings.get("worker.agent")
@@ -246,27 +275,38 @@ def run_command(command, dry_run):
             "error": errors[0][:200] if errors and done.returncode else ""}
 
 
-def restart(task_id, agent, reason, signature, dry_run, waits_before):
+def restart(task_id, agent, reason, dry_run, waits_before):
     steps = []
-    if signature == "not_started":
-        set_agent = run_command([BOARD_CMD, "set", "worker.agent", agent, "--task", task_id], dry_run)
-        steps.append(set_agent)
-        if not set_agent["ok"]:
-            return {"task": task_id, "agent": agent, "steps": steps, "ok": False}
-        steps.append(run_command([BOARD_CMD, "retry", task_id], dry_run))
-    else:
-        steps.append(run_command([BOARD_CMD, "stop", task_id], dry_run))
-        if not steps[-1]["ok"]:
-            return {"task": task_id, "agent": agent, "steps": steps, "ok": False}
-        steps.append(run_command([BOARD_CMD, "delegate", task_id, "--worker.agent", agent], dry_run))
-    ok = all(step["ok"] for step in steps)
-    return {"task": task_id, "agent": agent, "steps": steps, "ok": ok,
+    commands = [
+        [BOARD_CMD, "stop", task_id],
+        [BOARD_CMD, "archive", task_id],
+        [BOARD_CMD, "restore", task_id],
+        [BOARD_CMD, "delegate", task_id, "--worker.agent", agent],
+    ]
+    if waits_before:
+        commands.append([BOARD_CMD, "after", task_id, ",".join(waits_before)])
+    for command in commands:
+        step = run_command(command, dry_run)
+        steps.append(step)
+        if not step["ok"]:
+            break
+    return {"task": task_id, "agent": agent, "steps": steps,
+            "ok": all(step["ok"] for step in steps),
             "tell": TELL_TEXT.format(agent=agent, reason=reason),
             "wait_before": waits_before}
 
 
-def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_path=STATE, cycle=CYCLE):
+def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_path=STATE, cycle=None):
     now = time.time() if now is None else now
+    order_error = None
+    if cycle is None:
+        try:
+            cycle = board_cycle()
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError,
+                subprocess.SubprocessError) as exc:
+            detail = str(exc).splitlines()
+            order_error = type(exc).__name__ + (": " + detail[0][:160] if detail else "")
+            cycle = ()
     state = read_state(state_path)
     records = state["tasks"]
     rows = board_rows() if rows is None else rows
@@ -335,12 +375,19 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         if board_restarts_in_window(records, now) >= MAX_RESTARTS_PER_HOUR_BOARD:
             record["skip"] = "board_restart_cap"
             continue
-        agent, cursor = next_agent(failed_agent(meta, row, cycle), state["cursor"], cycle)
+        if not cycle:
+            record["skip"] = "no_agent_order"
+            continue
+        try:
+            agent, cursor = next_agent(failed_agent(meta, row, cycle), state["cursor"], cycle)
+        except ValueError:
+            record["skip"] = "no_other_agent"
+            continue
         state["cursor"] = cursor
         waits_before = after_ids(meta)
         pane = (meta.get("link") or {}).get("pane")
         session = (panes.get(pane) or {}).get("session") if isinstance(pane, str) else None
-        result = restart(task_id, agent, reason, signature, dry_run, waits_before)
+        result = restart(task_id, agent, reason, dry_run, waits_before)
         stamps = record.get("restarts")
         stamps = stamps if isinstance(stamps, list) else []
         stamps.append(now)
@@ -374,8 +421,11 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         if not record:
             records.pop(task_id)
     write_state(state, state_path)
-    return {"schema": 1, "at": now, "dry_run": bool(dry_run), "actions": actions,
-            "cursor": state["cursor"], "cycle": list(cycle)}
+    result = {"schema": 1, "at": now, "dry_run": bool(dry_run), "actions": actions,
+              "cursor": state["cursor"], "cycle": list(cycle)}
+    if order_error:
+        result["cycle_error"] = order_error
+    return result
 
 
 def main(argv=None):
