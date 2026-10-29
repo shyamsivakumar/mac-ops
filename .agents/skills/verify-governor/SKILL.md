@@ -33,7 +33,8 @@ invalid readings, critical pressure, queue admission, native start success or
 failure, critical pause request ordering, pause signal success or failure,
 restart, reboot, and expiry. Resource fit uses guard-equivalent values; raw
 sensor parsing is not proved. The model preselects one eligible queue entry and
-does not explore competing queues or reviewer ordering.
+does not explore competing queues, ten-minute aging, deploy priority, or the
+one-active-deploy limit.
 
 Its board submodel uses a fixed two-active-task snapshot and is historical; it
 does not represent the current `board.agents` floor. The model uses two abstract

@@ -32,6 +32,14 @@ copy does not depend on this checkout.
 `./install.sh agents` is safe: an unchanged gate is a no-op, and an updated gate
 script replaces the installed wrapper only.
 
+Cursor network retry remains a separate opt-in:
+`install --cursor-retry` preserves this outer gate and selects a private
+patched source runner as its child. Its durable bundle and automatic
+reapplication after compatible vendor updates are described in
+[Omp Cursor retry](omp-cursor-retry.md#durable-opt-in-and-update-survival).
+Routine `install` refreshes preserve an existing opt-in but never add one.
+Uninstall restores the original symlink even when retry was enabled.
+
 Undo with the checked installer while this checkout is available:
 
 ```sh

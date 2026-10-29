@@ -1002,7 +1002,7 @@ class Registry:
                 or value.get("kind") != "queue"
                 or value.get("queue_id") != queue_id
                 or value.get("uid") != self.uid
-                or value.get("role") not in ("ordinary", "review")
+                or value.get("role") not in ("ordinary", "review", "deploy")
                 or isinstance(value.get("created_ns"), bool)
                 or not isinstance(value.get("created_ns"), int)
                 or value.get("created_ns") < 0
@@ -1663,12 +1663,14 @@ class SupervisorDeps:
     wall_clock: Callable[[], float] = time.time
 
 
-def _queue_sort_key(record: Dict[str, Any]) -> Tuple[int, int, str]:
-    return (
-        0 if record.get("role") == "review" else 1,
-        int(record.get("created_ns", 0)),
-        str(record.get("queue_id", "")),
+def _queue_sort_key(record: Dict[str, Any], now_ns: Optional[int] = None) -> Tuple[int, int, str]:
+    created = int(record.get("created_ns", 0))
+    now = monotonic_ns() if now_ns is None else now_ns
+    role = record.get("role")
+    priority = 0 if now - created > 600_000_000_000 else (
+        1 if role == "deploy" else 2 if role == "review" else 3
     )
+    return (priority, created, str(record.get("queue_id", "")))
 
 
 def _prune_queue_records_locked(
@@ -1715,7 +1717,7 @@ def _enqueue_job(
         rows = _prune_queue_records_locked(registry, table, boot_id)
         registry.create_queue(queued)
         rows.append(queued)
-        rows.sort(key=_queue_sort_key)
+        rows.sort(key=lambda row: _queue_sort_key(row, deps.monotonic_ns()))
         position = next(
             index + 1 for index, row in enumerate(rows) if row["queue_id"] == queue_id
         )
@@ -1821,13 +1823,16 @@ def _reserve_job(
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
             return None, "queue-identity-unavailable"
-        queues.sort(key=_queue_sort_key)
+        queues.sort(key=lambda row: _queue_sort_key(row, snapshot_started_ns))
         active = [
             row for row in records if row.get("state") not in ("complete", "removed")
         ]
         busy_tasks = {row.get("task_key") for row in active}
+        deploy_active = any(row.get("role") == "deploy" for row in active)
         eligible_queues = [
-            row for row in queues if row.get("task_key") not in busy_tasks
+            row for row in queues
+            if row.get("task_key") not in busy_tasks
+            and not (deploy_active and row.get("role") == "deploy")
         ]
         if task_key in busy_tasks:
             if ephemeral_queue:
@@ -3140,13 +3145,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if len(arguments) != 2 or not JOB_ID_PATTERN.fullmatch(arguments[1]):
             return 64
         return _watchdog_main(arguments[1])
-    review_flag = arguments[:1] == ["--review"]
-    if review_flag:
+    role_flag = arguments[0] if arguments[:1] in (["--review"], ["--deploy"]) else None
+    if role_flag:
         arguments = arguments[1:]
     if arguments in (["--help"], ["-h"]):
         print(
-            "Usage: heavy [--review] <command...> | status | request-curtail\n"
-            "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Review jobs enter ahead of ordinary queued work.\n"
+            "Usage: heavy [--review|--deploy] <command...> | status | request-curtail\n"
+            "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
             "Admission requires stable swap, CPU and memory below 95%, and at least max(6 GiB, 20% RAM) headroom; level 2 is allowed above 30% free memory, level 4 is blocked.\n"
             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
             "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
@@ -3156,9 +3161,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         environment_role = os.environ.get("HEAVY_ROLE", "").strip().lower()
         if environment_role not in ("", "ordinary", "build", "test", "review"):
             raise HeavyError("HEAVY_ROLE must be review or ordinary")
-        role = "review" if review_flag or environment_role == "review" else "ordinary"
-        if review_flag and arguments[:1] in (["status"], ["request-curtail"]):
-            raise HeavyError("review role requires a workload command")
+        role = "deploy" if role_flag == "--deploy" else "review" if role_flag == "--review" or environment_role == "review" else "ordinary"
+        if role_flag and arguments[:1] in (["status"], ["request-curtail"]):
+            raise HeavyError("priority role requires a workload command")
         registry = _safe_registry_for_cli()
         if arguments[:1] == ["status"]:
             if len(arguments) != 1:
@@ -3182,7 +3187,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         if not arguments:
             raise HeavyError(
-                "usage: heavy [--review] <command...> | status | request-curtail"
+                "usage: heavy [--review|--deploy] <command...> | status | request-curtail"
             )
         interrupted = {"signal": None}
 
