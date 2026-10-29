@@ -93,7 +93,9 @@ Also run the report folder's `watchdog-policy.ts` and
 from a local HTTP/2 peer and then stalls until the outer watchdog fires. The
 second drives a real `AgentSession.prompt()`. Patched runs must show one
 request, one handler run, `cursorReplayUnsafe:true`, the blocked prefix and
-no `auto_retry_start`. Stock shows two requests and two handler runs.
+no `auto_retry_start`. In the session probe stock shows two requests and two
+handler runs; in the policy probe stock shows one of each with
+`retryable:true`.
 
 Run the report's `blast-radius-classifier-probe.ts` against stock and the
 copy. The only allowed differences are bare `ECONNRESET` becoming retryable

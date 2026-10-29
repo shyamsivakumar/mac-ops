@@ -43,7 +43,8 @@ execution]` and `cursorReplayUnsafe` into `agent-session.ts`. When the outer
 watchdog in `register-builtins.ts` replaces a stalled stream's error, it
 copies both from the last partial message. The agent-end handler stops a
 flagged error or abort before credential handling, compaction or automatic
-recovery, and `TurnRecovery` refuses flagged messages. Safe completed-read
+recovery, and the main `TurnRecovery` retry and continuation methods refuse
+flagged messages. Safe completed-read
 failures can continue through `turn-recovery.ts`.
 
 ## Task-local proof copy

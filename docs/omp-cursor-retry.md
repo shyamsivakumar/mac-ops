@@ -31,8 +31,10 @@ expected reply with no empty endings.
   remains unsafe after a later read.
 - The session agent-end handler stops a flagged error or abort right after
   logging it, before credential handling, compaction or automatic recovery.
-  `TurnRecovery` refuses flagged messages in every retry and continuation
-  entry point.
+  `TurnRecovery` also refuses flagged messages in `isRetryableError`,
+  `handleRetryableError`, `classifyResolvedInterruptedToolTurn` and
+  `handleCommittedTextStreamStall`. Other helpers such as
+  `isRetryableReasonlessAbort` are not guarded and rely on the earlier veto.
 - A resolved local-read turn can continue after `ECONNRESET` or `ENOTFOUND`.
   Paths containing `://` are excluded because internal URL readers can run
   other handlers. Other read-only tools are conservatively excluded.
