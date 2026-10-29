@@ -140,6 +140,7 @@ The controller is ported from llmwiki commit
 remain independent. See [governor states](docs/state-charts/governor.md) and
 [heavy states](docs/state-charts/heavy.md). Installation and migration states
 are in [installation states](docs/state-charts/installation.md).
+The [state chart index](docs/state-charts/README.md) lists the lifecycle charts.
 
 Pueue provides priority, runtime parallel counts and pause/resume, but adopting
 it requires installing its daemon and verifying synchronous caller, exit status,
