@@ -1184,7 +1184,6 @@ _last_restart_tick = 0.0
 
 
 def _board_restart_tick():
-    """Look for board rows whose agent died, once a minute at most."""
     global _last_restart_tick
     now = time.monotonic()
     if now - _last_restart_tick < board_restart.MIN_INTERVAL_SECONDS:

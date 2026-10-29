@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Restart board tasks whose agent died, with the board's own commands.
-
-The controller calls this once a minute. A row whose agent is gone is
-remembered; the same row seen again a minute later is handed to the next agent
-of the cycle, and told what happened. The board keeps the branch, the worktree
-and the wait the task had.
-"""
+"""Restart board tasks whose agent died, with the board's own commands."""
 import argparse
 import json
 import os
@@ -69,7 +63,6 @@ def task_meta(task_id):
 
 
 def pane_agents():
-    """What each pane of the session runs, by pane id."""
     try:
         output = subprocess.run([HERDR_CMD, "pane", "list"], check=True, capture_output=True,
                                 text=True, timeout=COMMAND_TIMEOUT).stdout
@@ -94,7 +87,6 @@ def pane_agents():
 
 
 def classify(row, meta):
-    """The dead-agent signature of a row, or None when the row is not dead."""
     stage = row.get("stage")
     state = row.get("state")
     message = (row.get("msg") or "").strip()
@@ -114,7 +106,6 @@ def classify(row, meta):
 
 
 def exclusion(row, meta):
-    """Why a row is never touched, or None when it may be restarted."""
     if row.get("archivedAt") or meta.get("archivedAt"):
         return "archived"
     if row.get("research") or meta.get("researchRun"):
@@ -141,7 +132,6 @@ def exclusion(row, meta):
 
 
 def next_agent(failed, cursor, cycle=CYCLE):
-    """The next agent of the cycle, skipping the one that failed."""
     if not cycle:
         raise ValueError("the cycle is empty")
     if not 0 <= cursor < len(cycle):
@@ -155,7 +145,6 @@ def next_agent(failed, cursor, cycle=CYCLE):
 
 
 def failed_agent(meta, row, cycle=CYCLE):
-    """The agent that ran and failed, as the cycle names it."""
     settings = meta.get("settings")
     if isinstance(settings, dict):
         agent = settings.get("worker.agent")
@@ -221,7 +210,6 @@ def board_restarts_in_window(records, now):
 
 
 def agent_is_up(meta, panes, pending):
-    """Whether the agent that was started after the restart is running now."""
     since = pending.get("at", 0)
     started = meta.get("startedAgentAt")
     if isinstance(started, (int, float)) and not isinstance(started, bool) and started / 1000 > since:
@@ -256,11 +244,8 @@ def run_command(command, dry_run):
 
 
 def restart(task_id, agent, reason, signature, dry_run, waits_before):
-    """The board's own commands: the agent is stopped, the next one starts."""
     steps = []
     if signature == "not_started":
-        # The board's own restart: the program that never took the text is ended and
-        # started again with the same text, on the agent the cycle names.
         set_agent = run_command([BOARD_CMD, "set", "worker.agent", agent, "--task", task_id], dry_run)
         steps.append(set_agent)
         if not set_agent["ok"]:
@@ -325,7 +310,6 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         if skip:
             record["skip"] = skip
             continue
-        # A cap is a count of the last hour, so it is decided again each pass.
         if record.get("skip") in ("restart_cap", "board_restart_cap"):
             record.pop("skip", None)
         if record.get("skip"):
@@ -338,8 +322,6 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
             record["skip"] = "machine_wide_failure"
             continue
         if signature == "agent_exited":
-            # The board writes the time it saw the agent go; an agent that ended its turn
-            # normally leaves that time fresh, and its work is done.
             gone_at = meta.get("exitedAt")
             if not isinstance(gone_at, (int, float)) or isinstance(gone_at, bool):
                 record["skip"] = "no_exit_time"
