@@ -17,7 +17,10 @@ steps:
   - name: fast-check
     image: python:3.13.12-slim-bookworm@sha256:a58daefb915e1e03ad48f3ca4df8832065412c5c35cacb9d39f4229184de12b6
     commands:
-      - apt-get update -qq && apt-get install -y -qq --no-install-recommends git python3
+      - apt-get update -qq && apt-get install -y -qq --no-install-recommends git python3 openjdk-17-jre-headless curl ca-certificates
+      - curl -fsSL https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar -o /tmp/tla2tools.jar
+      - echo "fc6878c603f0fdc18b9fe3e5bf51860cb90ab5b1154e3c371660c036d6bdd63e  /tmp/tla2tools.jar" | sha256sum -c -
+      - export MAC_OPS_TLA_JAR=/tmp/tla2tools.jar
       - git update-ref refs/remotes/origin/main HEAD
       - git reset --hard "$CI_COMMIT_SHA"
       - python3 scripts/mac_ops_fast_check.py
