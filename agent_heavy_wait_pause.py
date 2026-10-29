@@ -377,6 +377,7 @@ def tick(
                 "boot_resume": boot_resume,
                 "paused_count": len(held),
             }
+        state = dict(state, resume_pending=resume_pending)
         state, resume_info = resume_all(
             state,
             heavy_mod=heavy_mod,
@@ -384,7 +385,6 @@ def tick(
             deps=deps,
             reason="census-incomplete",
         )
-        state["resume_pending"] = resume_pending
         return state, {
             "action": "resume",
             "resume": resume_info,
