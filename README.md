@@ -226,10 +226,10 @@ chart](docs/state-charts/omp-input.md) records the delivery lifecycle.
 [Omp Cursor retry](docs/omp-cursor-retry.md) provides task-local proof copies
 and an explicitly opted-in durable runner behind the existing input gate.
 The durable runner reapplies the patch after compatible upstream reinstalls
-and refuses incompatible versions; production activation still needs separate
+and refuses incompatible versions; production activation requires explicit
 approval. On the fault matrix the patch recovered 6 of 6 safe network failures
-(stock: 4 of 6) and never replayed a turn after a write, shell or MCP call,
-including a stalled-stream watchdog error. It is not installed.
+(stock: 4 of 6) and did not replay a turn after a write, shell or MCP call in
+the exercised stalled-stream watchdog cases.
 Its [state chart](docs/state-charts/cursor-retry.md) records retry, veto and
 durable-launcher publication paths.
 

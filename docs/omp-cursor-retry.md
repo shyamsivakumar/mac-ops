@@ -4,8 +4,7 @@
 its private Bun 1.4.4 runner. Task-local proof copies remain available.
 `scripts/install_omp_gate.py install --cursor-retry` additionally provides
 an explicitly opted-in durable runner behind the existing input gate.
-Neither command has been activated in the user's installation by MO-35;
-production installation still requires separate approval.
+Production installation requires explicit approval.
 
 On the requested fault matrix the patched copy recovered all 6 safe cases,
 against 4 of 6 for stock omp. In all 8 unsafe cases (write, shell, and either
@@ -166,10 +165,8 @@ hashes. The durable alias target and shell-only Bun environment fix change
 the full patch identity without changing the retry/veto hunks; do not label
 those old reports as executions of the newer complete installed artifact.
 
-The current hardened durable artifact has not yet completed an end-to-end
-install and reinstall proof. An earlier version passed that isolated flow,
-but its patch and launcher hashes differ. The final alias and shell environment
-changes also need runtime verification before activation.
+The current hardened durable artifact has been installed with explicit approval.
+Its full reinstall flow and the alias and shell environment changes still need
+end-to-end verification.
 
-See the [state chart](state-charts/cursor-retry.md). Worker settings remain
-unchanged until a separately approved installation is verified.
+See the [state chart](state-charts/cursor-retry.md).
