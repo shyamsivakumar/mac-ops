@@ -8,4 +8,4 @@ The liveness check assumes the finite initial queue receives no new jobs, slots 
 
 Run `heavy python3 scripts/mac_ops_fast_check.py`. The check requires Java 17 and the existing `~/Code/llmwiki/runtime/tla/tla2tools.jar`; `MAC_OPS_JAVA_BIN` and `MAC_OPS_TLA_JAR` override those paths. TLC scratch files stay under `TMPDIR`.
 
-`DeployPriority.cfg` is separate and is not part of the fast check. It currently exposes the missing deploy priority: heavy accepts only ordinary and review roles. When MO-39 merges, update the model and this config to reflect the implemented policy, then enable the property in the fast check. Review the reviewer-priority invariant for the new ordering at that time.
+`DeployPriority.cfg` is separate and is not part of the fast check. It currently exposes the missing deploy priority: heavy accepts only ordinary and review roles. It omits today's reviewer-priority invariant because that invariant would conflict with deploy priority. When MO-39 merges, update the model and add a reviewer-before-ordinary invariant, then enable the future policy in the fast check.
