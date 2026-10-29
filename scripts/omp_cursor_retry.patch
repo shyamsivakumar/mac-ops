@@ -1,0 +1,297 @@
+--- a/pi-utils/src/fetch-retry.ts
++++ b/pi-utils/src/fetch-retry.ts
+@@ -541,5 +541,6 @@
+ 	}
+ 
+ 	if (VALIDATION_MESSAGE_PATTERN.test(message)) return false;
++	if (/\bECONNRESET\b/i.test(message)) return true;
+ 	return isUnexpectedSocketCloseMessage(message) || TRANSIENT_MESSAGE_PATTERN.test(message);
+ }
+--- a/pi-ai/src/error/flags.ts
++++ b/pi-ai/src/error/flags.ts
+@@ -697,7 +697,9 @@
+ 		// "unexpected EOF") is caught here too.
+ 		if (!isTerminalClientErrorStatus(statusClean)) {
+ 			if (isTimeoutText(errorMessage)) kinds |= Flag.Transient | Flag.Timeout;
+-			else if (isTransientErrorText(errorMessage)) kinds |= Flag.Transient;
++			else if (isTransientErrorText(errorMessage) || (api === "cursor-agent" && errorMessage === "ECONNRESET")) {
++				kinds |= Flag.Transient;
++			}
+ 			// A stream truncation, transport-level stream drop, or forwarded Codex
+ 			// HTTP body-read failure may not match TRANSIENT_TRANSPORT_PATTERN. Flag
+ 			// it explicitly so AIError.retriable and the turn-recovery layer treat it
+--- a/pi-ai/src/providers/cursor.ts
++++ b/pi-ai/src/providers/cursor.ts
+@@ -441,6 +441,7 @@
+ 	timestamp: number;
+ 	retry?: CursorRetryContext;
+ 	transport?: "http2" | "http1";
++	safety?: { unsafe: boolean; progress: boolean };
+ }
+ 
+ interface CursorRequestState {
+@@ -1052,6 +1053,21 @@
+ 
+ 	(async () => {
+ 		const retryContext = timing?.retry;
++		const safety = timing?.safety ?? { unsafe: false, progress: false };
++		for (let i = context.messages.length - 1; i >= 0; i--) {
++			const prior = context.messages[i];
++			if (prior.role === "user" && !prior.synthetic) break;
++			if (prior.role !== "assistant") continue;
++			if (prior.cursorReplayUnsafe) safety.unsafe = true;
++			for (const block of prior.content) {
++				if (
++					block.type === "toolCall" &&
++					(block.name !== "read" ||
++						typeof block.arguments.path !== "string" ||
++						block.arguments.path.includes("://"))
++				) safety.unsafe = true;
++			}
++		}
+ 		const transportMode = timing?.transport ?? (options?.transport === "http1" ? "http1" : "http2");
+ 		const startTime = timing?.startTime ?? performance.now();
+ 		let firstTokenTime = retryContext?.firstTokenTime;
+@@ -1075,6 +1091,7 @@
+ 				stopReason: "stop",
+ 				timestamp: timing?.timestamp ?? Date.now(),
+ 			} satisfies AssistantMessage);
++		if (safety.unsafe) output.cursorReplayUnsafe = true;
+ 
+ 		// Declared outside the `try` because BOTH exits must drain it: an exec
+ 		// handler decoded from the last chunk can still be running when the
+@@ -1434,11 +1451,24 @@
+ 						const interaction =
+ 							serverMessage.message.case === "interactionUpdate" ? serverMessage.message.value : undefined;
+ 						const interactionCase = interaction?.message?.case;
++						if (serverMessage.message.case === "execServerMessage") {
++							const exec = serverMessage.message.value.message;
++							if (exec.case !== "requestContextArgs") {
++								const isLocalRead =
++									(exec.case === "readArgs" || exec.case === "piReadArgs") &&
++									!exec.value.path.includes("://");
++								if (!isLocalRead) {
++									safety.unsafe = true;
++									output.cursorReplayUnsafe = true;
++								}
++							}
++						}
+ 						// A heartbeat is a pure keepalive `processInteractionUpdate` ignores;
+ 						// every other frame is progress or a side effect that must block the
+ 						// discovered-id retry.
+ 						if (interactionCase !== "heartbeat") {
+ 							sawProgressOrSideEffect = true;
++							safety.progress = true;
+ 							progressVersion++;
+ 						}
+ 						if (interactionCase === "stepCompleted") {
+@@ -1626,6 +1656,7 @@
+ 				h2Unavailable &&
+ 				options?.transport !== "http2" &&
+ 				!sawProgressOrSideEffect &&
++				!safety.unsafe &&
+ 				!options?.signal?.aborted &&
+ 				openBlockState !== undefined &&
+ 				usageState !== undefined &&
+@@ -1644,6 +1675,7 @@
+ 					startTime,
+ 					timestamp: output.timestamp,
+ 					transport: "http1",
++					safety,
+ 					retry: {
+ 						attempt: retryContext?.attempt ?? 0,
+ 						originalRequestId,
+@@ -1678,6 +1710,8 @@
+ 			const fallbackWireModelId =
+ 				wireMode === "normalized" &&
+ 				!sawProgressOrSideEffect &&
++				!safety.progress &&
++				!safety.unsafe &&
+ 				!options?.signal?.aborted &&
+ 				isCursorModelNotFound(error)
+ 					? serializedFallbackWireModelId
+@@ -1694,6 +1728,7 @@
+ 					startTime,
+ 					timestamp: output.timestamp,
+ 					transport: transportMode,
++					safety,
+ 				});
+ 				// The lazy watchdog observes THIS outer stream; the fallback's exec
+ 				// bridge marks the inner stream busy via `trackLocalWork`. Forward
+@@ -1724,7 +1759,7 @@
+ 				latestCheckpoint !== undefined &&
+ 				latestCheckpointProgressVersion === progressVersion &&
+ 				!latestCheckpointTerminal;
+-			const replaySafe = hasFreshCheckpoint || !sawProgressOrSideEffect;
++			const replaySafe = !safety.unsafe && (hasFreshCheckpoint || !sawProgressOrSideEffect);
+ 			const retryCheckpoint = hasFreshCheckpoint ? latestCheckpoint : retryContext?.checkpoint;
+ 			const checkpointHash =
+ 				retryCheckpoint === undefined
+@@ -1781,6 +1816,7 @@
+ 						startTime,
+ 						timestamp: output.timestamp,
+ 						transport: transportMode,
++						safety,
+ 						retry: {
+ 							attempt: retryAttempt + 1,
+ 							originalRequestId: retryOriginalRequestId,
+@@ -1865,6 +1901,9 @@
+ 				output.errorMessage = error.diagnosticMessage;
+ 			} else {
+ 				output.errorMessage = result.message;
++			}
++			if (safety.unsafe) {
++				output.errorMessage = "[Cursor retry blocked after non-read execution] " + output.errorMessage;
+ 			}
+ 			output.duration = performance.now() - startTime;
+ 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+--- a/pi-coding-agent/src/session/turn-recovery.ts
++++ b/pi-coding-agent/src/session/turn-recovery.ts
+@@ -687,6 +687,7 @@
+ 	 * own `response.steer`, and the rejected steer drains as ordinary input next.
+ 	 */
+ 	handleCommittedTextStreamStall(message: AssistantMessage): boolean {
++		if (message.cursorReplayUnsafe) return false;
+ 		const id = this.#classifyRetryMessage(message);
+ 		const socketClosed =
+ 			message.stopReason === "error" &&
+@@ -1519,6 +1520,7 @@
+ 	 * Context overflow is NOT retryable (handled by compaction instead).
+ 	 */
+ 	isRetryableError(message: AssistantMessage): boolean {
++		if (message.cursorReplayUnsafe) return false;
+ 		if (message.stopReason !== "error") return false;
+ 		if (this.#isUsagePreflightBlocked(message)) return false;
+ 		if (AIError.isResponsesRequestBodyReadTimeout(message)) return false;
+@@ -1616,6 +1618,7 @@
+ 	 * unexecuted call must be reissued.
+ 	 */
+ 	classifyResolvedInterruptedToolTurn(message: AssistantMessage): "reasonless-abort" | "stream-stall" | undefined {
++		if (message.cursorReplayUnsafe) return undefined;
+ 		const id = this.#classifyRetryMessage(message);
+ 		const genericAbort =
+ 			message.errorMessage !== undefined && Object.hasOwn(GENERIC_ABORT_MESSAGES, message.errorMessage);
+@@ -1637,6 +1640,12 @@
+ 		const resolvedToolCallIds: string[] = [];
+ 		for (const block of message.content) {
+ 			if (block.type !== "toolCall") continue;
++			if (
++				message.api === "cursor-agent" &&
++				(block.name !== "read" ||
++					typeof block.arguments.path !== "string" ||
++					block.arguments.path.includes("://"))
++			) return undefined;
+ 			resolvedToolCallIds.push(block.id);
+ 		}
+ 		if (resolvedToolCallIds.length === 0) return undefined;
+@@ -1679,6 +1688,7 @@
+ 			return false;
+ 		}
+ 		return (
++			(message.api === "cursor-agent" && /\b(?:ECONNRESET|ENOTFOUND)\b/i.test(errorMessage)) ||
+ 			AIError.isStreamEnvelopeTruncationText(errorMessage) ||
+ 			HTTP2_STREAM_RESET_ERROR_RE.test(errorMessage) ||
+ 			AIError.PYTHON_HTTP2_STREAM_RESET_PATTERN.test(errorMessage) ||
+@@ -2574,6 +2584,7 @@
+ 	 * @returns true if retry was initiated, false if max retries exceeded or disabled
+ 	 */
+ 	async #handleRetryableError(message: AssistantMessage, options?: RetryPolicyOptions): Promise<boolean> {
++		if (message.cursorReplayUnsafe) return false;
+ 		try {
+ 			return await this.#applyRetryPolicy(message, options);
+ 		} catch (error) {
+--- a/pi-coding-agent/src/session/agent-session.ts
++++ b/pi-coding-agent/src/session/agent-session.ts
+@@ -4873,6 +4873,16 @@
+ 			// repeatedly on provider errors otherwise leaves no actionable trace
+ 			// outside the session transcript (issue #6177).
+ 			logProviderTurnError(msg);
++			if (
++				msg.api === "cursor-agent" &&
++				msg.cursorReplayUnsafe &&
++				(msg.stopReason === "error" || msg.stopReason === "aborted")
++			) {
++				this.#recovery.resolveRetry();
++				this.#resetSessionStopContinuationState();
++				await emitAgentEndNotification();
++				return;
++			}
+ 
+ 			// Invalidate GitHub Copilot credentials on a hard auth failure (401, or an
+ 			// expired/revoked token) so stale tokens aren't reused on the next request.
+@@ -4982,6 +4992,7 @@
+ 			// replayed. Visible/side-effecting output then remains terminal while its
+ 			// credential is still blocked or rotated exactly once.
+ 			await this.#recovery.recordUsageLimitOutcome(msg);
++
+ 
+ 			let compactionResult = COMPACTION_CHECK_NONE;
+ 			let checkedCompaction = false;
+--- a/pi-coding-agent/src/exec/bash-executor.ts
++++ b/pi-coding-agent/src/exec/bash-executor.ts
+@@ -598,6 +598,6 @@
+ 		}),
+ 	]);
+-	const commandEnv = buildNonInteractiveEnv(preflight.env);
++	const commandEnv = { ...buildNonInteractiveEnv(preflight.env), BUN_BE_BUN: "" };
+ 	const runCdInPersistentShell = options?.useUserShell === true && !prefix && isPersistentShellCdCommand(command);
+ 	// Never wrap in cmd.exe: it is only the Windows no-bash fallback for spawn
+ 	// paths, and the embedded brush shell runs the POSIX line better directly.
+--- a/pi-ai/src/types.ts
++++ b/pi-ai/src/types.ts
+@@ -1323,6 +1323,8 @@
+ 	errorClassificationMessage?: string;
+ 	/** True only when an exact request-body-read timeout failed on a full Responses replay, not a previous-response delta. */
+ 	requestBodyReadTimeoutFullReplay?: boolean;
++	/** Non-read Cursor execution occurred; transport wrappers must preserve this replay veto. */
++	cursorReplayUnsafe?: true;
+ 	/** Per-tool abort messages used when an aborted assistant turn needs different placeholder results per tool call. */
+ 	toolCallAbortMessages?: Record<string, string>;
+ 	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
+--- a/pi-ai/src/providers/register-builtins.ts
++++ b/pi-ai/src/providers/register-builtins.ts
+@@ -113,6 +113,7 @@
+ 	limits?: StreamLimits,
+ ): void {
+ 	(async () => {
++		let partial: AssistantMessage | undefined;
+ 		try {
+ 			const providerHandlesStreamTimeouts = limits?.providerHandlesStreamTimeouts === true;
+ 			const providerHandlesFirstEventTimeouts = limits?.providerHandlesFirstEventTimeouts === true;
+@@ -163,6 +164,7 @@
+ 			});
+ 
+ 			for await (const event of watchedSource) {
++				if ("partial" in event) partial = event.partial;
+ 				target.push(event);
+ 			}
+ 			if (hasFinalResult(source)) {
+@@ -173,6 +175,10 @@
+ 		} catch (error) {
+ 			const stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
+ 			const message = createProviderStreamError(model, error, stopReason);
++			if (model.api === "cursor-agent" && partial?.cursorReplayUnsafe) {
++				message.cursorReplayUnsafe = true;
++				message.errorMessage = "[Cursor retry blocked after non-read execution] " + message.errorMessage;
++			}
+ 			target.push({ type: "error", reason: stopReason, error: message });
+ 			target.end(message);
+ 		}
+--- a/pi-coding-agent/src/cli/profile-alias.ts
++++ b/pi-coding-agent/src/cli/profile-alias.ts
+@@ -199,6 +199,15 @@
+ 	cwd = process.cwd(),
+ 	compiled = process.env.PI_COMPILED === "true",
+ }: ProfileAliasProcessOptions = {}): ProfileAliasCommand {
++	const managedLauncher = process.env.MAC_OPS_OMP_LAUNCHER;
++	if (managedLauncher) {
++		return {
++			display: managedLauncher,
++			posix: quotePosixArgument(managedLauncher),
++			fish: quotePosixArgument(managedLauncher),
++			powerShell: quoteForPowerShell(managedLauncher),
++		};
++	}
+ 	if (compiled) return DEFAULT_ALIAS_COMMAND;
+ 
+ 	const runtime = argv[0];

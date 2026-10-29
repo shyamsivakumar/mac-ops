@@ -4,7 +4,11 @@
 stateDiagram-v2
     [*] --> Original: Not a supported interactive board launch
     Original --> [*]: Vendor exit
-    [*] --> Starting: Board launch in task temp with HERDR_ENV
+    [*] --> Preparing: Opted-in board launch, raw input enabled
+    Preparing --> Preparing: Buffer input while child validates private generation
+    Preparing --> Starting: Dedicated helper pipe signals completion; start deadlines
+    Preparing --> Closed: Cancellation, signal, buffer limit or helper failure
+    [*] --> Starting: Non-opted-in board launch in task temp with HERDR_ENV
     Starting --> Starting: Queue keyboard input and relay terminal replies
     Starting --> Ready: Omp footer model marker and raw input stable 250 ms
     Ready --> Ready: Wait for one complete bracketed paste
@@ -29,6 +33,11 @@ stateDiagram-v2
     Separation --> Closed: Cancellation or I/O failure
     Closed --> [*]: Restore terminal and close PTY before bounded child cleanup
 ```
+
+The gate advertises bracketed-paste support only after entering raw mode.
+Opted-in preparation reuses the same startup/parser buffers; a completion
+pipe starts the existing deadlines but is not composer readiness. See the
+[durable retry chart](cursor-retry.md#durable-launcher-and-upstream-replacement).
 
 Readiness markers are assumptions about Omp's TUI output. Run the live
 board smoke flow in [omp-input-gate.md](../omp-input-gate.md) when
