@@ -8,11 +8,24 @@ stateDiagram-v2
     Draining --> Draining: legacy identity still live
     Draining --> Installed: finalize-migration after last legacy helper exits
     Installed --> Installed: install updated checkout into new content digest
+    Installed --> Compared: install_if_behind reads source_commit and origin/main
+    Compared --> Installed: source_commit equals origin/main
+    Compared --> Deferred: heavy queue above 3 or a host veto
+    Deferred --> Compared: a later firing retries
+    Compared --> Installed: source_commit is behind and the gate is clear
+    Installed --> RolledBack: controller error or slots hit 0 without a veto
+    RolledBack --> Installed: previous release reactivated
     Installed --> AgentParity: install.sh agents
     AgentParity --> Installed: receipt at ~/.local/state/mac-ops/agents-installation.json
     Installed --> Uninstalled: uninstall archives wrapper and plists
     Uninstalled --> Installed: install
 ```
+
+`scripts/install_if_behind.py` is the install automation's decision. It treats
+the receipt `source_commit` as behind only when that full commit is an ancestor
+of `origin/main`. A matching checkout HEAD does not count. A heavy queue above
+3 or a host veto defers. After install it watches the controller and reactivates
+the previous release if an error occurs or controller verification fails.
 
 Installation copies an explicit source allowlist into a private runtime
 directory and writes each file atomically. It does not replace files used
