@@ -391,22 +391,31 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         waits_before = after_ids(meta)
         pane = (meta.get("link") or {}).get("pane")
         session = (panes.get(pane) or {}).get("session") if isinstance(pane, str) else None
-        result = restart(task_id, agent, reason, dry_run, waits_before)
+        previous_exit = record.get("restarted_exit")
+        if signature == "agent_exited":
+            record["restarted_exit"] = meta.get("exitedAt")
         stamps = record.get("restarts")
         stamps = stamps if isinstance(stamps, list) else []
         stamps.append(now)
         record["restarts"] = stamps
+        if signature == "agent_exited":
+            write_state(state, state_path)
+        result = restart(task_id, agent, reason, dry_run, waits_before)
         if result["ok"]:
             record["first_seen"] = now
             record.pop("skip", None)
-            if signature == "agent_exited":
-                record["restarted_exit"] = meta.get("exitedAt")
             record["pending_tell"] = {"at": now, "text": result["tell"], "agent": agent,
                                       "pane": pane if isinstance(pane, str) else None,
                                       "session": session}
             waits_after = after_ids(meta if tasks is not None else task_meta(task_id))
             result["wait_after"] = waits_after
             result["wait_kept"] = waits_after == waits_before
+        elif signature == "agent_exited":
+            if previous_exit is None:
+                record.pop("restarted_exit", None)
+            else:
+                record["restarted_exit"] = previous_exit
+            write_state(state, state_path)
         actions.append({"task": task_id, "action": "restart", "signature": signature,
                         "reason": reason, "result": result})
     for task_id in list(records):

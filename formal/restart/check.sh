@@ -72,7 +72,7 @@ run RestartLatch pass yes ""
 run RestartLive pass no ""
 run RestartReach fail no NotYetRestarted
 run RestartNoLatch fail no NoDoubleSuccess
-run RestartCrash gap no NoDoubleSuccess
+run RestartCrash pass no ""
 run RestartWipe fail no SavedLatch
 run RestartBadInput fail no NoActionOnBadInput
 
