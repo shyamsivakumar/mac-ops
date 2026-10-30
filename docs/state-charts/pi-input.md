@@ -21,6 +21,10 @@ stateDiagram-v2
     Writing --> Acknowledgement: Last paste byte written
     Acknowledgement --> Separation: Draft suffix, paste receipt, or settle timeout
     Separation --> Waiting: 300 ms after ack; release held input
+    Waiting --> Idle: Session started and no paste or keyboard bytes are pending
+    Idle --> Idle: Passive 500 ms select, stdout only, no marker scan
+    Idle --> Starting: Keyboard or paste bytes arrive
+    Idle --> Closed: Vendor exits or terminal closes
     Waiting --> Closed: Vendor exits or terminal closes
     Starting --> Closed: Deadline, cancellation, signal or I/O failure
     Ready --> Closed: Partial input deadline or invalid framing
@@ -30,6 +34,13 @@ stateDiagram-v2
     Closed --> [*]: Restore terminal and close PTY before bounded child cleanup
 ```
 
+| State | Event | Guard | Side effect |
+| --- | --- | --- | --- |
+| Idle | output | `idle_passthrough` | pass through, wait 500 ms |
+| Starting | queued bytes | buffer non-empty | leave idle, reparse in 100 ms |
+
 Readiness markers are assumptions about Pi's TUI output. Run the live
 board smoke flow in [pi-input-gate.md](../pi-input-gate.md) when
-changing markers or launch arguments.
+changing markers or launch arguments. The idle path was added so a live
+session does not keep parsing its own output. It matches the cursor gate's
+transparent relay.
