@@ -48,7 +48,7 @@ fallback models, or a crash between the board commands and `os.replace`.
   `read_state`, `write_state`
 - `board_governor.py`: `_board_restart_tick`, and the `agent_restart`
   branch of `controller_tick` that catches a watcher error
-- Sync commit: SYNC_COMMIT
+- Sync commit: 2371483d89697adea29ede655c195e4a77bcda92
 - Move the sync commit only after the model still matches those lines
   and the check script has run at the new commit.
 
