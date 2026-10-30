@@ -51,7 +51,7 @@ keeps the exit that was replaced first.
   `read_state`, `write_state`
 - `board_governor.py`: `_board_restart_tick`, and the `agent_restart`
   branch of `controller_tick` that catches a watcher error
-- Sync commit: 2371483d89697adea29ede655c195e4a77bcda92
+- Sync commit: 9d644d47bb023d4b656a502d921fab0ff268cb1a
 - Move the sync commit only after the model still matches those lines
   and the check script has run at the new commit.
 
