@@ -242,7 +242,8 @@ def install(p, checkout, migrate=False, no_start=False, source_commit=None):
         brew_wrapper.symlink_to(p["bin"])
     p["agents"].mkdir(parents=True, exist_ok=True)
     for label, spec in service_specs(p).items():
-        bootout(label)
+        if not no_start:
+            bootout(label)
         plist = p["agents"] / (label + ".plist")
         archive(plist, p["agents"] / "_archive")
         atomic(plist, plistlib.dumps(spec), 0o644)
@@ -271,6 +272,46 @@ def archive_legacy(p):
     print("Moved legacy folder to " + str(target))
 
 
+
+def validate_release(p, release_dir):
+    release_dir = Path(release_dir).resolve()
+    expected_root = Path(p["release"]).resolve().parent
+    if release_dir.parent != expected_root or not release_dir.is_dir() or release_dir.is_symlink():
+        raise RuntimeError("Rollback release directory is invalid: " + str(release_dir))
+    digest = hashlib.sha256()
+    for name in FILES:
+        candidate = release_dir / name
+        if not candidate.is_file() or candidate.is_symlink():
+            raise RuntimeError("Rollback release is missing file: " + name)
+        digest.update(name.encode() + candidate.read_bytes())
+    if digest.hexdigest()[:20] != release_dir.name:
+        raise RuntimeError("Rollback release digest does not match directory name: " + release_dir.name)
+    return release_dir
+
+
+def activate_release(p, checkout, release_dir, source_commit, no_start=False):
+    release_dir = validate_release(p, release_dir)
+    rolled = dict(p, release=release_dir)
+    rolled["bin"].parent.mkdir(parents=True, exist_ok=True)
+    if rolled["bin"].exists() or rolled["bin"].is_symlink():
+        archive(rolled["bin"], rolled["state"] / "install-backups")
+    atomic(rolled["bin"], ('#!/bin/sh\nexec /usr/bin/python3 -I ' + shell_quote(str(release_dir / "heavy.py")) + ' "$@"\n').encode(), 0o755)
+    if rolled["legacy"].exists():
+        legacy_helpers(rolled)
+    rolled["agents"].mkdir(parents=True, exist_ok=True)
+    for label, spec in service_specs(rolled).items():
+        if not no_start:
+            bootout(label)
+        plist = rolled["agents"] / (label + ".plist")
+        archive(plist, rolled["agents"] / "_archive")
+        atomic(plist, plistlib.dumps(spec), 0o644)
+    atomic(rolled["state"] / "installation.json", json.dumps({"checkout": str(checkout), "release": str(release_dir), "installed_at": time.time(), "source_commit": source_commit}).encode())
+    if not no_start:
+        run(["/bin/launchctl", "enable", f"gui/{os.getuid()}/{LABELS[0]}"])
+        run(["/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", rolled["agents"] / (LABELS[0] + ".plist")])
+    print("Rolled back heavy to " + str(release_dir) + " (" + str(source_commit) + ")")
+
+
 def uninstall(p):
     for label in LABELS:
         bootout(label)
@@ -284,15 +325,17 @@ def uninstall(p):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("install", "uninstall", "status", "finalize-migration", "archive-legacy"), nargs="?", default="install")
+    parser.add_argument("action", choices=("install", "uninstall", "status", "finalize-migration", "archive-legacy", "rollback"), nargs="?", default="install")
     parser.add_argument("--migrate", action="store_true")
     parser.add_argument("--no-start", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--release", type=Path)
+    parser.add_argument("--source-commit")
     args = parser.parse_args()
     checkout = Path(__file__).resolve().parent
     p = paths(Path.home(), checkout)
     receipt = p["state"] / "installation.json"
-    if args.action != "install" and receipt.is_file():
+    if args.action not in ("install", "rollback") and receipt.is_file():
         installed = json.loads(receipt.read_text())
         release = Path(installed["release"])
         if not release.is_absolute() or release.parent != Path.home() / ".local/lib/mac-ops":
@@ -306,6 +349,10 @@ def main():
     if args.action == "install":
         source_commit = require_main_checkout(checkout)
         install(p, checkout, args.migrate, args.no_start, source_commit)
+    elif args.action == "rollback":
+        if args.release is None or not args.source_commit:
+            raise RuntimeError("rollback requires --release and --source-commit")
+        activate_release(p, checkout, args.release, args.source_commit, args.no_start)
     elif args.action == "uninstall":
         uninstall(p)
     elif args.action == "archive-legacy":
