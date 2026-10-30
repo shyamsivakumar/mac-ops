@@ -1,14 +1,16 @@
 ---------------------------- MODULE RestartLatch ----------------------------
 \* One board task whose agent has exited. Each action is one watcher tick,
 \* or a crash that discards the tick's memory because tick() reads the state
-\* file again next time (board_restart.py:303, 429).
+\* file again next time (board_restart.py:303, 438).
 EXTENDS Integers
 
-\* Persist FALSE: restart() ran, then write_state raised before os.replace
-\* (board_restart.py:394-429, 212-222). The controller catches that and the
-\* next minute calls tick() on the old file (board_governor.py:1334-1338).
+\* Persist FALSE: restarted_exit was replaced before the commands
+\* (board_restart.py:395-402), then write_state at the end of tick raised
+\* before os.replace (board_restart.py:212-222, called at 438). The
+\* controller catches that and the next minute calls tick() on the file
+\* that already holds the exit (board_governor.py:1334-1338).
 \* Latch FALSE: the restarted_exit guard at board_restart.py:363-364 and the
-\* write at 402-403 are absent.
+\* write at 395-396 are absent.
 \* Wipe TRUE: a reload erases a latch the code's read_state keeps.
 \* BadGuard TRUE: restart even when the state file was rejected or exitedAt
 \* is missing. The code refuses both (board_restart.py:204-205, 358-360).
@@ -80,19 +82,22 @@ Age ==
   /\ phase' = "ready"
   /\ UNCHANGED <<exit, badFile, disk, pending, up, ok1, ok2, fails, badRestarts, told, lastOk, remembered>>
 
-\* Commands succeeded. first_seen moves, so the interval starts again. 399-406
+\* Commands succeeded. The exit is already on disk. Persist TRUE also resets
+\* the 60s clock and stores the tell (board_restart.py:404-412, 438).
+\* Persist FALSE keeps the exit and drops that later replace.
 RestartOk ==
   /\ canRestart
   /\ countSuccess
   /\ fails' = fails
-  /\ disk' = IF Persist /\ inputOk /\ exit \in {1, 2} THEN exit ELSE disk
+  /\ disk' = IF Latch /\ inputOk /\ exit \in {1, 2} THEN exit ELSE disk
   /\ lastOk' = IF inputOk /\ exit \in {1, 2} THEN exit ELSE lastOk
-  /\ pending' = TRUE
-  /\ phase' = "seen"
+  /\ pending' = IF Persist THEN TRUE ELSE pending
+  /\ phase' = IF Persist THEN "seen" ELSE phase
   /\ UNCHANGED <<exit, badFile, up, told, remembered>>
 
-\* A command failed. The exit is not saved, and first_seen stays, so the next
-\* tick may retry at once. board_restart.py:395-398, and 399 only on success.
+\* A command failed. The intent is cleared and replaced, and first_seen stays,
+\* so the next tick may retry at once. board_restart.py:413-418. Disk returns
+\* to the exit saved before this attempt.
 RestartFail ==
   /\ canRestart
   /\ IF ~inputOk
@@ -183,15 +188,16 @@ TypeOK ==
   /\ disk \in 0..2 /\ lastOk \in 0..2
   /\ ok1 \in 0..3 /\ ok2 \in 0..3 /\ fails \in 0..3 /\ badRestarts \in 0..3
 
-\* A successful restart of one death happens once when the tick writes the file.
+\* A successful restart of one death happens once. The exit is replaced
+\* before the commands, so a crash of the later replace still counts once.
 NoDoubleSuccess == ok1 <= 1 /\ ok2 <= 1
 
 \* A missing exit or a rejected state file does not call restart().
 NoActionOnBadInput == badRestarts = 0
 
-\* A completed write is still there after the actions that keep the file.
-\* A crash (Persist FALSE) is excused here and caught by NoDoubleSuccess.
-SavedLatch == lastOk = 0 \/ ~Persist \/ disk = lastOk
+\* The exit written before the commands is still there after the actions
+\* that keep the file. Persist FALSE keeps that exit when Latch is on.
+SavedLatch == lastOk = 0 \/ disk = lastOk \/ (~Latch /\ ~Persist)
 
 EventuallyRestarted == <>(ok1 = 1)
 EventuallyTold == <>told

@@ -2,6 +2,7 @@
 """Drive board_restart.tick with a fixture. No live board, no new test file."""
 
 import importlib.util
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -106,21 +107,30 @@ def scenario_crash(module, state):
         calls["n"] += 1
         return real_restart(*args, **kwargs)
 
-    def boom(_state_body, path=module.STATE):
+    def crash_after_intent(body, path=module.STATE):
+        tasks = body.get("tasks") if isinstance(body, dict) else None
+        record = tasks.get("mac-ops/1") if isinstance(tasks, dict) else None
+        record = record if isinstance(record, dict) else {}
+        if record.get("restarted_exit") == GONE and "pending_tell" not in record:
+            return real_write(body, path)
         raise OSError("replace failed")
 
     tick(module, BASE, state)
     module.restart = counting
-    module.write_state = boom
+    module.write_state = crash_after_intent
     raised = False
     try:
         tick(module, BASE + 61, state)
     except OSError:
         raised = True
+    held = False
+    if state.exists():
+        saved = json.loads(state.read_text(encoding="utf-8"))
+        held = saved.get("tasks", {}).get("mac-ops/1", {}).get("restarted_exit") == GONE
     module.write_state = real_write
-    tick(module, BASE + 62, state)
+    later = tick(module, BASE + 62, state)
     module.restart = real_restart
-    return raised, calls["n"]
+    return raised, calls["n"], len(restarts(later)), held
 
 
 def check(module):
@@ -147,16 +157,16 @@ def check(module):
             or not retried["actions"][0]["result"]["ok"]
         ):
             raise SystemExit("failed command did not retry on the next tick")
-        raised, count = scenario_crash(module, root / "crash.json")
-        if not raised or count != 2:
+        raised, count, later, held = scenario_crash(module, root / "crash.json")
+        if not raised or count != 1 or later != 0 or not held:
             raise SystemExit(
-                f"crash gap changed: raised {raised} restart calls {count}"
+                f"crash: raised {raised} restart calls {count} later {later} held {held}"
             )
     print(
         "replay: one restart per exit, retry after failure, tell without a second restart"
     )
     print(
-        "KNOWN GAP crash: write_state raised after restart(); the next tick restarted again"
+        "crash: one restart, intent replaced before the commands, next tick did not restart"
     )
     return 0
 
@@ -179,7 +189,7 @@ def mutant(module):
 def write_mutant(dest):
     text = SOURCE.read_text(encoding="utf-8")
     guard = '            if record.get("restarted_exit") == gone_at:\n                continue\n'
-    setter = '            if signature == "agent_exited":\n                record["restarted_exit"] = meta.get("exitedAt")\n'
+    setter = '        if signature == "agent_exited":\n            record["restarted_exit"] = meta.get("exitedAt")\n'
     if guard not in text or setter not in text:
         raise SystemExit("latch lines not found in board_restart.py")
     dest.write_text(text.replace(guard, "", 1).replace(setter, "", 1), encoding="utf-8")

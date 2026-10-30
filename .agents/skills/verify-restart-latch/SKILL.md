@@ -12,11 +12,13 @@ Run this after changing `board_restart.py` (`tick`, `restart`,
 ## Property
 
 One death of an agent, identified by `exitedAt`, is handed to the next
-model once, after the watcher has replaced its state file with that exit
-saved. A missing exit time or a rejected state file restarts nothing. If
-the new agent comes up, the tell is sent. This is serialized ticks whose
-writes complete. It is not a promise across a crash between the board
-commands and `os.replace`.
+model once. The watcher replaces its state file with that exit saved
+before `stop`, `archive`, `restore`, and `delegate`. A crash after those
+commands and before the later replace does not restart that exit again.
+A failed command clears the saved exit and replaces the file, so the next
+tick can retry. A missing exit time or a rejected state file restarts
+nothing. If the new agent comes up and the later replace finished, the
+tell is sent.
 
 A second restart repeats `stop` / `archive` / `restore` / `delegate` on
 work already handed on. It also uses up the three restarts allowed for
@@ -38,8 +40,9 @@ A pass covers that model only. `exitedAt` does not move backward: a
 missing time remembers the exit that was just showing, and the next
 number is that exit or a newer one. It does not cover two tasks at once,
 the board-wide cap of six, the 90 second freshness wait (the model starts
-after the exit is old enough), machine-wide start failures, the order of
-fallback models, or a crash between the board commands and `os.replace`.
+after the exit is old enough), machine-wide start failures, or the order of
+fallback models. A crash after the commands is covered: `Persist = FALSE`
+keeps the exit that was replaced first.
 
 ## Covered code and sync
 
@@ -55,18 +58,17 @@ fallback models, or a crash between the board commands and `os.replace`.
 | Action | Code |
 | --- | --- |
 | `See`, `Age` | `tick` signature, `first_seen`, interval check |
-| `RestartOk` | `restart()` ok, then `restarted_exit`, `write_state` |
-| `RestartFail` | a failed step, no `restarted_exit`, attempt counted |
+| `RestartOk` | `board_restart.py:395-402`; `Persist FALSE` skips 438 |
+| `RestartFail` | step failure clears latch, replaces file (`413-418`) |
 | `Tell` | `pending_tell` and `agent_is_up` |
 | `Missing`, `Corrupt` | non-numeric `exitedAt`; `read_state` raises |
 | `NewDeath` | same signature, new `exitedAt`, `first_seen` kept |
 | `GoHealthy` | row leaves dead signatures; `restarted_exit` stays |
 | `Recover` | the exit that left the row returns; `exitedAt` never moves back |
 
-`Persist = FALSE` is the crash after `restart()` and before
-`os.replace`. The next tick reads the old file. That is a real path.
-`RestartCrash.cfg` violates `NoDoubleSuccess`. Do not treat that
-configuration as a pass.
+`Persist = FALSE` is the crash after `restart()` and before the trailing
+`os.replace`. The intent replace has already saved the exit.
+`RestartCrash.cfg` passes `NoDoubleSuccess`.
 
 ## Command
 
@@ -87,7 +89,7 @@ The jar is
 | `RestartLive.cfg` | pass, including both liveness properties |
 | `RestartReach.cfg` | must violate `NotYetRestarted` (success reachable) |
 | `RestartNoLatch.cfg` | must violate `NoDoubleSuccess` |
-| `RestartCrash.cfg` | known gap: must violate `NoDoubleSuccess` |
+| `RestartCrash.cfg` | pass `NoDoubleSuccess` (the exit is already replaced) |
 | `RestartWipe.cfg` | must violate `SavedLatch` |
 | `RestartBadInput.cfg` | must violate `NoActionOnBadInput` |
 
@@ -95,8 +97,8 @@ The script also runs `formal/restart/replay_latch.py` on `tick`. The same
 exit restarts once, a newer exit restarts once, a failed command retries,
 and the tell is sent without a second restart. A copy of
 `board_restart.py` with the `restarted_exit` lines removed must restart
-the same exit twice. A `write_state` error after the commands must still
-restart again; the script prints that as `KNOWN GAP`. The lifetime cap of
+the same exit twice. A `write_state` error after the intent replace and
+after the commands must not restart again. The lifetime cap of
 three in the model is stricter than the code's rolling hour, and the
 repeated restart happens on the second attempt, so the cap does not hide it.
 
@@ -117,9 +119,8 @@ meta yourself. Do not call the live board.
 4. The first `restart()` step fails: the exit is not saved, and the next
    tick retries.
 5. `exitedAt` missing: no restart.
-6. `write_state` raises after a successful dry-run restart: the next
-   tick restarts again. That is the crash finding. The latch cannot fix
-   it, because the latch is written in the file the crash skips.
+6. `write_state` raises after a successful dry-run restart, and the
+   intent replace already finished: the next tick does not restart.
 
 If a TLC step cannot be done by `tick`, the model is wrong. If every
 step can, it is a bug in the watcher.
