@@ -48,7 +48,8 @@ closing note, and **current `reviewer.instructions`** from
 `--review-policy legacy` to reproduce the MO-10 major/critical gate.
 Requirement IDs are derived locally for recall. Failed parses and subprocess
 errors set `error=true` on the verdict and are excluded from flip and
-false-block denominators.
+false-block denominators. The states are in the
+[shadow verdict chart](state-charts/shadow-verdict.md).
 
 ## Metrics
 
