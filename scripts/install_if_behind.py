@@ -21,7 +21,6 @@ if str(ROOT) not in sys.path:
 import install as installer
 
 
-
 def default_checkout(home=None):
     home = Path(home or Path.home())
     for key in ("MAC_OPS_CHECKOUT", "HERDR_PROJECTS_REPO"):
@@ -390,6 +389,15 @@ def check_gate(heavy_bin, state_dir, *, max_queued=3, max_status_age=30.0, now=N
     }
 
 
+CENSUS_PROCESS_EXIT = "foreground process exited during collection"
+
+
+def census_error_is_process_exit(err):
+    if not isinstance(err, str):
+        return False
+    _prefix, separator, detail = err.rpartition(": ")
+    text = detail if separator else err
+    return text == CENSUS_PROCESS_EXIT
 
 
 def evaluate_controller_ticks(
@@ -421,6 +429,7 @@ def evaluate_controller_ticks(
     board_decisions = 0
     heavy_decisions = 0
     fatal_errors = []
+    census_churn = []
     unexplained_zero_board_slots = []
     board_targets = []
     board_currents = []
@@ -477,14 +486,20 @@ def evaluate_controller_ticks(
         if isinstance(agent_census, dict):
             census_errors = agent_census.get("errors") or []
             for err in census_errors:
-                fatal_errors.append(f"board_agent_census: {err}")
+                message = f"board_agent_census: {err}"
+                if census_error_is_process_exit(err):
+                    census_churn.append(message)
+                else:
+                    fatal_errors.append(message)
         pause_status = row.get("agent_heavy_wait_pause")
         if isinstance(pause_status, dict):
             if pause_status.get("error"):
                 fatal_errors.append(f"agent_heavy_wait_pause: {pause_status['error']}")
             for key in ("resume", "boot_resume"):
                 resume = pause_status.get(key)
-                if isinstance(resume, dict) and (resume.get("error") or resume.get("failed")):
+                if isinstance(resume, dict) and (
+                    resume.get("error") or resume.get("failed")
+                ):
                     fatal_errors.append(f"agent_heavy_wait_pause {key}: {resume}")
             if pause_status.get("resume_pending_count"):
                 fatal_errors.append("agent_heavy_wait_pause has pending resumes")
@@ -516,6 +531,7 @@ def evaluate_controller_ticks(
         "board_decisions": board_decisions,
         "heavy_decisions": heavy_decisions,
         "fatal_errors": fatal_errors,
+        "census_churn": census_churn,
         "unexplained_zero_board_slots": unexplained_zero_board_slots,
         "last_tick_at": max((row["updated_at"] for row in matching), default=None),
         "min_board_target": min(board_targets) if board_targets else None,
@@ -555,7 +571,8 @@ def observe_controller(
 ):
     observe_seconds = max(0.0, float(observe_seconds))
     min_ticks = 0 if observe_seconds == 0 else max(1, int(observe_seconds // 15) or 1)
-    deadline = install_started_at + observe_seconds
+    started = time.time()
+    deadline = started + observe_seconds
     while True:
         rows = read_controller_rows(state_dir, since=install_started_at)
         summary = evaluate_controller_ticks(
@@ -564,14 +581,21 @@ def observe_controller(
             install_started_at=install_started_at,
             min_ticks=min_ticks,
         )
-        if summary["fatal_errors"] or summary["unexplained_zero_board_slots"]:
-            return summary
         now = time.time()
+        last_tick_at = summary["last_tick_at"]
+        fresh = last_tick_at is not None and now - float(last_tick_at) <= 15
+        if summary["fatal_errors"] or summary["unexplained_zero_board_slots"]:
+            summary["reasons"] = [
+                reason
+                for reason in summary["reasons"]
+                if not str(reason).startswith("insufficient_controller_ticks")
+            ]
+            summary["passed"] = len(summary["reasons"]) == 0
+            return summary
+        if summary["tick_count"] >= min_ticks and fresh and summary["passed"]:
+            return summary
         if now >= deadline:
-            if observe_seconds and (
-                summary["last_tick_at"] is None
-                or now - summary["last_tick_at"] > 15
-            ):
+            if observe_seconds and not fresh:
                 summary["passed"] = False
                 summary["reasons"].append("controller_status_stale_at_end")
             return summary
@@ -795,7 +819,9 @@ def run_install_if_behind(
         ).strip()
 
         if status_before["receipt"] and not status_before["installed"]:
-            raise RuntimeError("Installation receipt is missing source_commit or release")
+            raise RuntimeError(
+                "Installation receipt is missing source_commit or release"
+            )
         ancestry = classify_commits(
             checkout,
             status_before["source_commit"],
@@ -910,13 +936,17 @@ def run_install_if_behind(
             home != Path.home().resolve()
             or state_dir != (Path.home() / ".local/state/mac-ops").resolve()
         ):
-            raise RuntimeError("Live installation requires the real home and state directory")
+            raise RuntimeError(
+                "Live installation requires the real home and state directory"
+            )
         if no_start and (
             home == Path.home().resolve()
             or state_dir != (home / ".local/state/mac-ops").resolve()
             or p_install["legacy"].exists()
         ):
-            raise RuntimeError("No-start installation requires an isolated home without legacy state")
+            raise RuntimeError(
+                "No-start installation requires an isolated home without legacy state"
+            )
         if status_before["receipt"]:
             installer.validate_release(p_install, status_before["release"])
         if installer.require_main_checkout(checkout) != target_commit:
@@ -925,7 +955,10 @@ def run_install_if_behind(
         try:
             if no_start:
                 installer.install(
-                    p_install, checkout, migrate=False, no_start=True,
+                    p_install,
+                    checkout,
+                    migrate=False,
+                    no_start=True,
                     source_commit=target_commit,
                 )
             else:
@@ -945,11 +978,23 @@ def run_install_if_behind(
                 observe_seconds=observe_seconds,
                 poll_interval=poll_interval,
             )
-        except (RuntimeError, OSError, ValueError, TypeError, subprocess.SubprocessError) as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            subprocess.SubprocessError,
+        ) as exc:
             observation = {"passed": False, "reasons": [str(exc)]}
             try:
                 status_after = read_installation_status(checkout, state_dir)
-            except (RuntimeError, OSError, ValueError, TypeError, subprocess.SubprocessError):
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                subprocess.SubprocessError,
+            ):
                 pass
 
         if not observation["passed"]:
