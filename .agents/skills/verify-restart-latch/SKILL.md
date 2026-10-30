@@ -78,8 +78,10 @@ From the mac-ops repo root, one heavy run:
 heavy /bin/bash formal/restart/check.sh
 ```
 
-The script copies the model into `$TMPDIR` and runs TLC with one worker
-and a 512 MiB heap. Java is `/opt/homebrew/opt/openjdk@17/bin/java`.
+The script is POSIX shell. The fast check runs `sh -n` on it, and that
+shell is dash on CI, so do not put bash arrays back. It copies the model
+into `$TMPDIR` and runs TLC with one worker and a 512 MiB heap. Java is
+`/opt/homebrew/opt/openjdk@17/bin/java`.
 The jar is
 `/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar`.
 
