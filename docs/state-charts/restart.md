@@ -67,8 +67,8 @@ stateDiagram-v2
     Remembered --> Watching: the row is gone, changed, or excluded
     Remembered --> Remembered: same row seen before the interval
     Remembered --> Restarting: interval passed, limits allow, exit is new
-    Restarting --> Latched: commands worked, exit time saved, tell waits
-    Restarting --> Remembered: a command failed, exit not saved, attempt counts
+    Restarting --> Latched: exit saved to the state file, then commands run
+    Latched --> Remembered: a command failed, this exit is cleared, attempt counts
     Latched --> Told: the pane has a live agent, the tell is sent
     Latched --> Latched: the same exit is still on the row
     Latched --> Restarting: a newer exit time is old enough
@@ -79,25 +79,27 @@ stateDiagram-v2
 | State | Event | Guard | Side effect |
 | --- | --- | --- | --- |
 | Remembered | minute tick | same signature, under 60 seconds | none |
-| Restarting | minute tick | see below | the restart commands |
-| Latched | commands succeeded | signature is `agent_exited` | save exit |
-| Remembered | a command failed | any step not ok | count attempt |
+| Restarting | tick | below; `agent_exited` | replace `restarted_exit`, run |
+| Latched | commands ok | file holds this exit | reset 60s clock, hold tell |
+| Remembered | step failed | any | clear `restarted_exit`, replace file, count |
 | Told | pane is live | see below | `herdr-projects tell` |
 | Latched | same exit again | `restarted_exit` is this `exitedAt` | none |
 
 Restarting guard: 60 seconds have passed, the exit is at least 90 seconds
 old, both hourly caps allow it, and `restarted_exit` is not this
-`exitedAt`. The side effect is `stop`, `archive`, `restore`, `delegate`,
-then `after` if the task had a wait.
+`exitedAt`. Before `stop`, `archive`, `restore`, and `delegate`, the
+watcher replaces the state file with this `exitedAt` saved. `after` still
+runs when the task had a wait.
 
-Latched side effect: save `exitedAt` as `restarted_exit`, reset the 60
-second clock, hold the tell. Failed command side effect: do not save the
-exit, retry on a later tick until the cap.
+Latched side effect after the commands work: reset the 60 second clock
+and hold the tell. The exit is already in the file. Failed command side
+effect: clear `restarted_exit`, replace the file again, and retry on a
+later tick until the cap.
 
 Told guard: 20 seconds since the restart, and the session changed or
 `startedAgentAt` is newer.
 
-A failed restart does not save the exit, so the next minute can try
+A failed restart clears the exit, so the next minute can try
 again. A newer `exitedAt` is a new death and can be restarted, up to
 three attempts an hour for that task. The tell can still be sent for an
 exit that will not be restarted again.
@@ -105,10 +107,12 @@ exit that will not be restarted again.
 The watcher keeps its own state in `board-restart.state.json`: the
 signature and the time each dead row was first seen, the exit time
 already restarted, the restarts of each task in the last hour, the cursor
-of the cycle and the tell that is waiting for its agent. The file is
-replaced in one step. A crash after the board commands and before that
-replace leaves the old file, so the next minute can restart the same
-death again. The saved exit time does not close that window.
+of the cycle and the tell that is waiting for its agent. For an exit, the
+watcher replaces that file with `restarted_exit` set before it runs the
+board commands, and replaces it again to clear `restarted_exit` when a
+command fails. A crash after the commands and before the later replace
+still has the exit saved, so the next minute does not restart that death.
+The tell and the reset clock are in the later replace.
 
 The config switch `agent_restart` (on by default) turns the watcher off.
 With it off, the controller records the disabled state and touches no
