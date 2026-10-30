@@ -360,6 +360,8 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
                 continue
             if now - gone_at / 1000 < DEAD_AGENT_SECONDS:
                 continue
+            if record.get("restarted_exit") == gone_at:
+                continue
         if now - record.get("first_seen", now) < MIN_INTERVAL_SECONDS:
             continue
         if restarts_in_window(record, now) >= MAX_RESTARTS_PER_HOUR:
@@ -397,6 +399,8 @@ def tick(*, now=None, dry_run=False, rows=None, panes=None, tasks=None, state_pa
         if result["ok"]:
             record["first_seen"] = now
             record.pop("skip", None)
+            if signature == "agent_exited":
+                record["restarted_exit"] = meta.get("exitedAt")
             record["pending_tell"] = {"at": now, "text": result["tell"], "agent": agent,
                                       "pane": pane if isinstance(pane, str) else None,
                                       "session": session}
