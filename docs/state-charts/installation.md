@@ -12,8 +12,11 @@ stateDiagram-v2
     Compared --> Installed: source_commit equals origin/main
     Compared --> Deferred: heavy queue above 3 or a host veto
     Deferred --> Compared: a later firing retries
-    Compared --> Installed: source_commit is behind and the gate is clear
-    Installed --> RolledBack: controller error or slots hit 0 without a veto
+    Compared --> Observing: source_commit is behind and the gate is clear
+    Observing --> Observing: agent process exits during census
+    Observing --> Installed: required controller ticks arrive within the bound
+    Observing --> RolledBack: controller error or slots hit 0 without a veto
+    Observing --> RolledBack: bound ends before the required ticks
     RolledBack --> Installed: previous release reactivated
     Installed --> AgentParity: install.sh agents
     AgentParity --> Installed: receipt at ~/.local/state/mac-ops/agents-installation.json
@@ -24,8 +27,14 @@ stateDiagram-v2
 `scripts/install_if_behind.py` is the install automation's decision. It treats
 the receipt `source_commit` as behind only when that full commit is an ancestor
 of `origin/main`. A matching checkout HEAD does not count. A heavy queue above
-3 or a host veto defers. After install it watches the controller and reactivates
-the previous release if an error occurs or controller verification fails.
+3 or a host veto defers. After install it watches the controller until the
+required ticks arrive or the bound ends. The bound is three minutes from the
+start of observation (twelve ticks at one per fifteen seconds). An agent whose
+foreground process exits during the census is normal churn and stays in
+observation. A controller error, a heavy error, any other census error, or
+board slots at 0 without a veto reactivates the previous release. The same
+rollback happens when the bound ends without enough ticks or the controller
+status is stale.
 
 Installation copies an explicit source allowlist into a private runtime
 directory and writes each file atomically. It does not replace files used
