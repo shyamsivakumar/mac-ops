@@ -1275,7 +1275,8 @@ def controller_tick(*, board_control=True, cfg=None):
             now_mono = helper.monotonic()
             critical = sample is not None and _critical_pressure(helper, sample)
             prior_capacity = _capacity_current(boot_id, now_wall)
-            fallback_slots = 0 if critical else min(prior_capacity, 2)
+            sample_usable = sample is not None and helper._sample_invalid_reason(sample, now_mono) is None
+            fallback_slots = 0 if critical else 2 if sample_usable else min(prior_capacity, 2)
             capacity_state = {"schema": 1, "boot_id": boot_id, "heavy_slots": fallback_slots,
                               "healthy_since_monotonic": None, "last_sample_monotonic": now_mono}
             payload = {"heavy_slots": fallback_slots, "updated_at": now_wall, "boot_id": boot_id}

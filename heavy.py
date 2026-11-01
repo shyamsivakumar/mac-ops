@@ -1731,8 +1731,11 @@ def _enqueue_job(
     return queue_id
 
 
-def critical_pressure(sample: Sample) -> bool:
-    """Return True when a sample meets any critical pressure threshold."""
+def critical_pressure(sample: Sample, *, load_proxy: bool = True) -> bool:
+    """Return True when a sample meets any critical pressure threshold.
+
+    load_proxy=False ignores the load-average stand-in for a missing CPU reading.
+    """
     return (
         sample.pressure_level == CRITICAL_PRESSURE_LEVEL
         or (
@@ -1740,7 +1743,8 @@ def critical_pressure(sample: Sample) -> bool:
             and sample.memory_used_pct >= MAX_MEMORY_PCT
         )
         or (
-            not _finite_nonnegative(sample.cpu_busy_pct)
+            load_proxy
+            and not _finite_nonnegative(sample.cpu_busy_pct)
             and _finite_nonnegative(sample.load_per_core)
             and sample.load_per_core >= CRITICAL_LOAD_PER_CORE
         )
@@ -3271,7 +3275,7 @@ def sample_with_emergency(
             captured_monotonic=clock(),
             physical_cores=cores,
         )
-        if critical_pressure(partial):
+        if critical_pressure(partial, load_proxy=False):
             exc.partial_sample = partial
         raise
 
