@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -135,7 +136,42 @@ def _admission():
             if group == "waiting" and row.get("state") not in ("yielded", "queued"):
                 raise RuntimeError("board admission waiting state is invalid")
             seen.add(task_id)
+    absent_sockets = {}
+    data["active"] = [row for row in data["active"] if not _agent_is_gone(row["id"], absent_sockets)]
     return data
+
+
+def _socket_absent(path, cache):
+    if path not in cache:
+        with socket.socket(socket.AF_UNIX) as probe:
+            probe.settimeout(1)
+            try:
+                probe.connect(path)
+                cache[path] = False
+            except (FileNotFoundError, ConnectionRefusedError):
+                cache[path] = True
+            except OSError:
+                cache[path] = False
+    return cache[path]
+
+
+def _agent_is_gone(task_id, absent_sockets):
+    try:
+        task_file = BOARD_TASKS / task_id / "task.json"
+        if task_file.stat().st_size > MAX_JSON_BYTES:
+            return False
+        task = json.loads(task_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(task, dict):
+        return False
+    if task.get("archivedAt"):
+        return True
+    try:
+        _, socket_path = _pane(task)
+    except (KeyError, TypeError):
+        return False
+    return isinstance(socket_path, str) and bool(socket_path) and _socket_absent(socket_path, absent_sockets)
 
 
 def board_admission_snapshot():
