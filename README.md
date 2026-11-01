@@ -10,7 +10,7 @@ recovery. Critical kernel pressure, memory use of at least 95%, or the controlle
 least 95% requests a pause immediately. A supervisor pauses after raw CPU busy
 stays at or above 95% for 15 seconds. Heavy admission waits while raw CPU busy
 is at or above 95%. Load average is logged, and load per core of at least 2
-counts as critical only when the CPU reading is missing.
+counts as critical only when a complete sample lacks a CPU reading; a partial sample from a failed collection is critical only at kernel pressure level 4 or memory use of at least 95%, and otherwise holds capacity. Board tasks that are archived or whose herdr socket is gone are not counted as active agents.
 
 The tools run locally without Multica, network services, API keys, or Homebrew
 dependencies. Apple Command Line Tools supply Python 3; macOS supplies launchd
