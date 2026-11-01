@@ -18,6 +18,10 @@ The [restart latch](../../.agents/skills/verify-restart-latch/SKILL.md) skill
 checks that one agent exit is restarted once when the watcher finishes its
 tick.
 
+The [install_if_behind model](../../formal/install-if-behind/README.md)
+checks that a killed install never leaves an unobserved release reported
+as up to date. Its bounded run finds the current gap.
+
 The [governor](../../.agents/skills/verify-governor/SKILL.md) and
 [capacity](../../.agents/skills/verify-capacity/SKILL.md) skills name the
 bounded checks and their limits. Native process checks and live controller
