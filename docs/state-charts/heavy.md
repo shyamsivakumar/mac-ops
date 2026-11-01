@@ -43,4 +43,6 @@ While pressure continues, the registry permits one new pause request every 5 sec
 
 Ordinary direct `xcodebuild` commands keep the shared DerivedData rewrite and run through `/usr/sbin/taskpolicy -b`. Review commands keep the same project protections but do not receive background scheduling.
 
+Memory headroom is the larger of the vm_stat sum of free, inactive, and speculative pages and the kernel's own system-wide free percentage applied to physical memory. macOS keeps free pages near zero and compresses idle memory, so vm_stat alone understated available memory and held admission and resume below the 20% (at least 6 GiB) floor while the kernel reported 33 to 46 percent free. Critical kernel pressure, actual swap growth above 1 MiB/s, and headroom under the floor on both measures still block.
+
 Critical kernel pressure, memory use at least 95%, or load per core at least 2 with a missing CPU reading requests pauses for all registered running workloads immediately. The controller writes those requests before board queries, and each supervisor retries its own verified group signal. Raw CPU busy at or above 95% is a noncritical warning for a supervisor: it must persist for the 15-second sustained window before a pause request. The controller's smoothed CPU busy at or above 95% is critical.
