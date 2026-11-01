@@ -2578,6 +2578,7 @@ def _supervise_running(
         )
         slot_limit = None
         pressure_reason = None
+        resume_blocked = False
         if invalid_reason is None and sample is not None:
             try:
                 slot_limit = _effective_slot_limit(
@@ -2586,10 +2587,10 @@ def _supervise_running(
                     now=deps.wall_clock(),
                     boot_id=deps.boot_reader(),
                 )
-                pressure_reason = _host_reason(
-                    sample,
-                    paused=(_record(registry, job_id).get("pause") or {}).get("status")
-                    == "paused",
+                pressure_reason = _host_reason(sample)
+                resume_blocked = (
+                    pressure_reason is None
+                    and _host_reason(sample, paused=True) is not None
                 )
             except Exception:
                 invalid_reason = "capacity-unavailable"
@@ -2616,6 +2617,7 @@ def _supervise_running(
                 and sample is not None
                 and slot_limit is not None
                 and slot_limit > 0
+                and not resume_blocked
             ):
                 if healthy_since is None:
                     healthy_since = now
