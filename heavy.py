@@ -31,7 +31,8 @@ MAX_CPU_PCT = 95.0
 WARNING_CPU_PCT = 80.0
 MAX_MEMORY_PCT = 95.0
 MIN_HEADROOM_BYTES = 6 * GIB
-HEADROOM_FRACTION = 0.20
+HEADROOM_FRACTION = 0.15
+PAUSE_HEADROOM_FRACTION = 0.125
 SAMPLE_INTERVAL = 2.0
 SAMPLE_MAX_AGE = 4.5
 NATIVE_TIMEOUT = 2.5
@@ -359,6 +360,7 @@ def memory_load_block_reason(
     swapout_rate,
     headroom,
     physical,
+    headroom_fraction=HEADROOM_FRACTION,
 ):
     """Return the reason memory blocks admission, or None."""
     if pressure == CRITICAL_PRESSURE_LEVEL:
@@ -380,7 +382,7 @@ def memory_load_block_reason(
         return "memory-pressure-warning-low-free"
     if not all(_finite_nonnegative(rate) for rate in rates):
         return "swap-baseline-unavailable"
-    if headroom < max(MIN_HEADROOM_BYTES, int(physical * HEADROOM_FRACTION)):
+    if headroom < max(MIN_HEADROOM_BYTES, int(physical * headroom_fraction)):
         return "memory-headroom"
     return None
 
@@ -1751,7 +1753,9 @@ def critical_pressure(sample: Sample, *, load_proxy: bool = True) -> bool:
     )
 
 
-def _host_reason(sample: Sample, load_high_count: int = 0) -> Optional[str]:
+def _host_reason(
+    sample: Sample, load_high_count: int = 0, paused: bool = False
+) -> Optional[str]:
     if sample.pressure_level == CRITICAL_PRESSURE_LEVEL:
         return "critical-pressure"
     if sample.cpu_busy_pct >= MAX_CPU_PCT:
@@ -1765,6 +1769,9 @@ def _host_reason(sample: Sample, load_high_count: int = 0) -> Optional[str]:
         swapout_rate=sample.swapout_bytes_per_second,
         headroom=sample.headroom_bytes,
         physical=sample.physical_bytes,
+        headroom_fraction=(
+            HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
+        ),
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
     return None
@@ -2579,7 +2586,11 @@ def _supervise_running(
                     now=deps.wall_clock(),
                     boot_id=deps.boot_reader(),
                 )
-                pressure_reason = _host_reason(sample)
+                pressure_reason = _host_reason(
+                    sample,
+                    paused=(_record(registry, job_id).get("pause") or {}).get("status")
+                    == "paused",
+                )
             except Exception:
                 invalid_reason = "capacity-unavailable"
         critical = sample is not None and critical_pressure(sample)
@@ -3156,7 +3167,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "Usage: heavy [--review|--deploy] <command...> | status | request-curtail\n"
             "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
-            "Admission requires stable swap, CPU and memory below 95%, and at least max(6 GiB, 20% RAM) headroom; level 2 is allowed above 30% free memory, level 4 is blocked.\n"
+            "Admission requires stable swap, CPU and memory below 95%, and at least max(6 GiB, 15% RAM) headroom to start or resume (a running job pauses only below max(6 GiB, 12.5% RAM)); level 2 is allowed above 30% free memory, level 4 is blocked.\n"
             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
             "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
         )

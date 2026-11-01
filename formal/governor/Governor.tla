@@ -227,6 +227,31 @@ PublishCapacity ==
                     jobState, eligibleSeen, reservationValid, startedSafely,
                     activeAtTick, criticalAtTick, pauseRequested, pauseStatus>>
 
+CensusFailure ==
+    \* board_governor.py:1265-1292
+    /\ Environment = "adversarial"
+    /\ stage = "sampled"
+    /\ publishedSlots' = IF sample = "critical" THEN 0
+                         ELSE IF FreshSample THEN Floor(maxSlots)
+                         ELSE Min(CurrentSlots, Floor(maxSlots))
+    /\ capacityFresh' = TRUE
+    /\ capacityBoot' = boot
+    /\ healthyTicks' = 0
+    /\ pendingBoardTarget' = NextBoardTarget
+    /\ pendingBoardHealthyTicks' = NextBoardHealthyTicks
+    /\ pendingWarningEpisode' = NextWarningEpisode
+    /\ lastPublishedSample' = sample
+    /\ lastPublishBefore' = preSlots
+    /\ publicationSucceeded' = TRUE
+    /\ stage' = "published"
+    /\ UNCHANGED <<maxSlots, boot, boardLimit, boardHealthyTicks, warningEpisode,
+                    sample, resourceFit, boardFit, identityOK, taskSlotFree,
+                    preSlots, preBoardLimit, preWarningEpisode, pendingTarget,
+                    pendingHealthyTicks, lastBoardSample, lastBoardBefore,
+                    lastBoardWasWarningEpisode, lastBoardFit, lastBoardGrew,
+                    jobState, eligibleSeen, reservationValid, startedSafely,
+                    activeAtTick, criticalAtTick, pauseRequested, pauseStatus>>
+
 PublishFailure ==
     \* board_governor.py:1090-1096
     /\ AllowPublicationFailure
@@ -457,7 +482,8 @@ ExpireCapacity ==
                     eligibleSeen, reservationValid, startedSafely, activeAtTick,
                     criticalAtTick, pauseRequested, pauseStatus>>
 
-Next == CaptureReading \/ DecideTargets \/ PublishCapacity \/ PublishFailure
+Next == CaptureReading \/ DecideTargets \/ CensusFailure \/ PublishCapacity
+        \/ PublishFailure
         \/ RequestCriticalPause \/ SignalAccepted \/ SignalDenied \/ RetrySignal
         \/ PublishBoardLimit \/ AdmitJob \/ ExternalStartSuccess
         \/ ExternalStartFailure \/ ControllerRestart \/ HostReboot \/ ExpireCapacity
