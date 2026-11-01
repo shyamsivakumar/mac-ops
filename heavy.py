@@ -256,6 +256,7 @@ def sample_host(
         swapouts = int(swapout_match[1].replace(",", ""))
         load_per_core = parse_load(outputs["uptime"], cores)
         cpu_busy = parse_cpu_busy(outputs["cpu"])
+        headroom = min(physical, max(headroom, int(physical * free_percent / 100.0)))
         memory_used = (1.0 - (headroom / physical)) * 100.0
         if not math.isfinite(memory_used) or memory_used < 0 or memory_used > 100:
             raise TelemetryError("invalid memory headroom estimate")
