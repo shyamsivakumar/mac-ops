@@ -144,6 +144,11 @@ def parse_vm_stat(output: str) -> Tuple[int, int]:
     return page_size, sum(pages.values()) * page_size
 
 
+def kernel_adjusted_headroom(vm_headroom: int, physical: int, free_percent: float) -> int:
+    """Return vm_stat headroom, raised to the kernel's free percentage of physical memory."""
+    return max(vm_headroom, int(physical * free_percent / 100.0))
+
+
 def parse_load(output: str, physical_cores: int) -> float:
     """Return the load average per physical core from uptime output."""
     if physical_cores <= 0:
@@ -256,7 +261,9 @@ def sample_host(
         swapouts = int(swapout_match[1].replace(",", ""))
         load_per_core = parse_load(outputs["uptime"], cores)
         cpu_busy = parse_cpu_busy(outputs["cpu"])
-        headroom = min(physical, max(headroom, int(physical * free_percent / 100.0)))
+        if headroom > physical:
+            raise TelemetryError("invalid memory headroom estimate")
+        headroom = kernel_adjusted_headroom(headroom, physical, free_percent)
         memory_used = (1.0 - (headroom / physical)) * 100.0
         if not math.isfinite(memory_used) or memory_used < 0 or memory_used > 100:
             raise TelemetryError("invalid memory headroom estimate")
@@ -3259,6 +3266,14 @@ def sample_with_emergency(
         if physical is not None:
             try:
                 _, headroom = parse_vm_stat(captured.get("/usr/bin/vm_stat", ""))
+                free_match = re.search(
+                    r"System-wide memory free percentage:\s*(\d{1,3})%",
+                    captured.get("/usr/bin/memory_pressure", ""),
+                )
+                if free_match and float(free_match[1]) <= 100:
+                    headroom = kernel_adjusted_headroom(
+                        headroom, physical, float(free_match[1])
+                    )
                 memory_used = (1 - headroom / physical) * 100
             except TelemetryError:
                 pass
