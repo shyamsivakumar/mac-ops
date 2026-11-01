@@ -1,0 +1,9 @@
+# install_if_behind model
+
+InstallIfBehind.tla models one serialized run of `run_install_if_behind` in `scripts/install_if_behind.py`, plus pushes to origin/main and process kills. Run `~/.local/bin/heavy sh formal/install-if-behind/check.sh`. It exits 0 only when every cfg behaves as expected.
+
+Actions map to code as follows. Start is `install_lock` and `status_before` (759, 813). Decide is the fetch, `classify_commits`, `check_gate` and `evaluate_decision` (813-850, 627-651), where "up to date", "deferred" and "install" are the three outcomes. Install is `install.sh`, which writes the receipt and activates the release (965-968). ObservePass and ObserveFail are `observe_controller` (974-980, 564-603). Rollback is `rollback_to_release` (1003-1039, 605-625), or a reported error with the new release left active when no previous receipt exists. Crash is SIGTERM or SIGKILL: the except tuple at 981-987 does not catch KeyboardInterrupt or SystemExit, so no rollback runs and the lock is released.
+
+InstallSafety (ModelFix FALSE, one crash) must violate StableMeansVerified. The trace is: install, crash while observing, next run sees receipt equal to origin, answers up_to_date without observing, and an unverified release stays active. InstallFixed adds a persisted pending-observation marker that the next run reads first, and must pass. InstallNoPrev starts with no receipt and must pass. InstallLive checks `[]<>(pc = "idle")` under weak fairness of the run steps.
+
+The bounded run covers three commits, one crash and a single run at a time, so it proves these properties only inside that bound. It does not model git, the gate's real inputs, timeouts, partial writes inside install.sh or activate_release (both are atomic here), or two machines. ModelFix is a design proposal, not code in the repo.

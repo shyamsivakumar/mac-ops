@@ -18,6 +18,8 @@ stateDiagram-v2
     Observing --> RolledBack: controller error or slots hit 0 without a veto
     Observing --> RolledBack: bound ends before the required ticks
     RolledBack --> Installed: previous release reactivated
+    Observing --> Unverified: process killed before observation ends
+    Unverified --> Compared: next firing sees source_commit equal to origin/main and reports up_to_date
     Installed --> AgentParity: install.sh agents
     AgentParity --> Installed: receipt at ~/.local/state/mac-ops/agents-installation.json
     Installed --> Uninstalled: uninstall archives wrapper and plists
@@ -35,6 +37,16 @@ observation. A controller error, a heavy error, any other census error, or
 board slots at 0 without a veto reactivates the previous release. The same
 rollback happens when the bound ends without enough ticks or the controller
 status is stale.
+
+A kill after `install.py` writes the new receipt (SIGTERM, SIGKILL, or an
+interrupt during observation) skips the rollback branch, because no
+pending-observation record exists. If `origin/main` has not moved, the next
+firing reads `source_commit` equal to `origin/main` and returns `up_to_date`,
+so the release is never observed and never rolled back. A failed rollback
+after a failed observation leaves the same state with decision `error`. The bounded model in
+[formal/install-if-behind](../../formal/install-if-behind/README.md) finds this
+trace, and a replay against the real code reproduces it. The fix is open as a
+follow-up.
 
 Installation copies an explicit source allowlist into a private runtime
 directory and writes each file atomically. It does not replace files used
