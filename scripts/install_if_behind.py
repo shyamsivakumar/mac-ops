@@ -1202,6 +1202,9 @@ def run_install_if_behind(
                 "reason": "; ".join(observation["reasons"]),
                 "installed": False,
                 "head_commit": head_commit,
+                "previous_source_commit": restored["source_commit"]
+                if restored
+                else base_result["previous_source_commit"],
                 "installed_source_commit": restored["source_commit"]
                 if restored
                 else status_after["source_commit"],
