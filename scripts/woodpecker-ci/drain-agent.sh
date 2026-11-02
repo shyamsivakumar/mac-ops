@@ -8,7 +8,8 @@
 # Ownership lives in woodpecker.sqlite table mo117_drain_owned, written in the
 # same BEGIN IMMEDIATE transaction as the no_schedule flip (RETURNING-equivalent
 # via a temp flipped set). Host drain-ops/<opid>/ids mirrors that for operators.
-# Stale mkdir locks and active markers (dead owner pid) are reclaimed safely.
+# Mutual exclusion uses fcntl.flock (kernel-owned; released on process death),
+# not mkdir reclaim.
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -16,13 +17,14 @@ set -eu
 
 STATE_DIR="$HOME/Library/Logs/woodpecker"
 OPS_DIR="$STATE_DIR/drain-ops"
-LOCK_DIR="$STATE_DIR/drain-owned.lock"
+LOCK_FILE="$STATE_DIR/drain-owned.flock"
 mkdir -p "$STATE_DIR" "$OPS_DIR"
 
 op_dir=
 drain_lock_held=0
 owns_active_cleanup=0
-# Incomplete lock/active publish older than this may be reclaimed.
+DRAIN_LOCK_PY=
+# Incomplete active publish older than this may be reclaimed.
 STALE_PUBLISH_SECS=10
 
 pid_alive() {
@@ -36,102 +38,82 @@ file_age_secs() {
   echo $((now - mtime))
 }
 
-# Reclaim a dead owner's lock via atomic mv (only one reclaimer wins).
-# Never rm -rf the live LOCK_DIR based on a stale pid observation.
-try_reclaim_stale_lock() {
-  [ -d "$LOCK_DIR" ] || return 1
-  if [ -f "$LOCK_DIR/pid" ]; then
-    oldpid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
-    case "$oldpid" in
-      '' | *[!0-9]*)
-        age=$(file_age_secs "$LOCK_DIR/pid")
-        if [ "$age" -lt "$STALE_PUBLISH_SECS" ]; then
-          return 1
-        fi
-        ;;
-      *)
-        if pid_alive "$oldpid"; then
-          return 1
-        fi
-        # Re-read: a new owner may have published since our first check.
-        oldpid2=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
-        if [ "$oldpid2" != "$oldpid" ]; then
-          return 1
-        fi
-        if pid_alive "$oldpid2"; then
-          return 1
-        fi
-        ;;
-    esac
-  else
-    age=$(file_age_secs "$LOCK_DIR")
-    if [ "$age" -lt "$STALE_PUBLISH_SECS" ]; then
-      return 1
-    fi
-    oldpid=
-  fi
-  stale="$LOCK_DIR.stale.$$"
-  if ! mv "$LOCK_DIR" "$stale" 2>/dev/null; then
-    return 1
-  fi
-  # Confirm the moved lock is still the dead/corrupt one we observed.
-  if [ -f "$stale/pid" ]; then
-    movedpid=$(cat "$stale/pid" 2>/dev/null || true)
-    if [ -n "$oldpid" ] && [ "$movedpid" != "$oldpid" ]; then
-      # Race: put it back if LOCK_DIR is free; otherwise drop (new owner exists).
-      mv "$stale" "$LOCK_DIR" 2>/dev/null || rm -rf "$stale"
-      return 1
-    fi
-    case "$movedpid" in
-      '' | *[!0-9]*) ;;
-      *)
-        if pid_alive "$movedpid"; then
-          mv "$stale" "$LOCK_DIR" 2>/dev/null || rm -rf "$stale"
-          return 1
-        fi
-        ;;
-    esac
-  fi
-  echo "Reclaimed stale drain lock (was pid ${oldpid:-none})." >&2
-  rm -rf "$stale"
-  return 0
-}
-
+# Hold an exclusive flock in a child until release_drain_lock. The kernel drops
+# the lock if the holder dies (including SIGKILL), so no stale-dir reclaim.
 acquire_drain_lock() {
+  if [ "$drain_lock_held" -eq 1 ]; then
+    return 0
+  fi
+  DRAIN_LOCK_READY="$STATE_DIR/drain-lock-ready.$$"
+  DRAIN_LOCK_RELEASE="$STATE_DIR/drain-lock-release.$$"
+  rm -f "$DRAIN_LOCK_READY" "$DRAIN_LOCK_RELEASE"
+  python3 -u - "$LOCK_FILE" "$DRAIN_LOCK_READY" "$DRAIN_LOCK_RELEASE" <<'PY' &
+import fcntl
+import os
+import sys
+import time
+
+lock_path, ready_path, release_path = sys.argv[1], sys.argv[2], sys.argv[3]
+parent = os.getppid()
+fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+deadline = time.time() + 60.0
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        break
+    except (BlockingIOError, OSError):
+        if time.time() >= deadline:
+            sys.stderr.write("Timed out waiting for drain flock\n")
+            sys.exit(1)
+        time.sleep(0.1)
+os.lseek(fd, 0, os.SEEK_SET)
+os.ftruncate(fd, 0)
+os.write(fd, b"%d\n" % os.getpid())
+with open(ready_path, "w", encoding="utf-8") as ready:
+    ready.write("held\n")
+while not os.path.exists(release_path):
+    if os.getppid() != parent:
+        break
+    time.sleep(0.1)
+sys.exit(0)
+PY
+  DRAIN_LOCK_PY=$!
   tries=0
-  while true; do
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-      # Publish pid atomically so reclaimers never see an empty owner file
-      # as grounds for immediate deletion of a live lock.
-      printf '%s\n' "$$" >"$LOCK_DIR/pid.tmp.$$"
-      mv -f "$LOCK_DIR/pid.tmp.$$" "$LOCK_DIR/pid"
-      # Confirm we still own the directory (another reclaim must not have moved it).
-      if [ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid")" = "$$" ]; then
-        drain_lock_held=1
-        return 0
-      fi
-      # Lost ownership during publish — do not delete whoever holds it now.
-      drain_lock_held=0
-    else
-      try_reclaim_stale_lock || true
+  while [ ! -f "$DRAIN_LOCK_READY" ]; do
+    if ! kill -0 "$DRAIN_LOCK_PY" 2>/dev/null; then
+      wait "$DRAIN_LOCK_PY" 2>/dev/null || true
+      rm -f "$DRAIN_LOCK_READY" "$DRAIN_LOCK_RELEASE"
+      echo "Failed to acquire drain flock." >&2
+      exit 1
     fi
     tries=$((tries + 1))
-    if [ "$tries" -ge 600 ]; then
-      echo "Timed out waiting for drain ownership lock ($LOCK_DIR)." >&2
+    if [ "$tries" -ge 650 ]; then
+      kill "$DRAIN_LOCK_PY" 2>/dev/null || true
+      wait "$DRAIN_LOCK_PY" 2>/dev/null || true
+      rm -f "$DRAIN_LOCK_READY" "$DRAIN_LOCK_RELEASE"
+      echo "Timed out waiting for drain flock holder." >&2
       exit 1
     fi
     sleep 0.1
   done
+  rm -f "$DRAIN_LOCK_READY"
+  drain_lock_held=1
 }
 
 release_drain_lock() {
   if [ "$drain_lock_held" -ne 1 ]; then
     return 0
   fi
-  # Remove only our own lock; never delete another process's directory.
-  if [ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then
-    rm -rf "$LOCK_DIR"
+  if [ -n "$DRAIN_LOCK_RELEASE" ]; then
+    : >"$DRAIN_LOCK_RELEASE"
   fi
+  if [ -n "$DRAIN_LOCK_PY" ]; then
+    wait "$DRAIN_LOCK_PY" 2>/dev/null || true
+  fi
+  rm -f "$DRAIN_LOCK_READY" "$DRAIN_LOCK_RELEASE"
+  DRAIN_LOCK_READY=
+  DRAIN_LOCK_RELEASE=
+  DRAIN_LOCK_PY=
   drain_lock_held=0
 }
 
