@@ -71,33 +71,80 @@ if docker volume inspect woodpecker-ci-agent-config >/dev/null 2>&1; then
     alpine:3.22 sh -c 'cp -a /from/. /to/ && ls -la /to'
 fi
 
-compose up -d --remove-orphans
+# Bring server up first, then agents, so we can pause as they register.
+compose up -d --remove-orphans server webhook-proxy
+agents_up_at=$(date +%s)
+compose up -d agent-linux agent-deploy
 
-# New agents (esp. ci-deploy) register outside the pre-resize drain op. Claim
-# them into DRAIN_OPID before any further guarded work so they cannot schedule.
+# Tight extend loop: claim agents into DRAIN_OPID as soon as they appear so
+# they cannot keep scheduling. Require fresh last_contact (not a stale row
+# from a prior rollout) and no_schedule=1 under this op.
+extend_loop_stop="$HOME/Library/Logs/woodpecker/mo117-extend-stop-$$"
+mkdir -p "$HOME/Library/Logs/woodpecker"
+rm -f "$extend_loop_stop"
+(
+  while [ ! -f "$extend_loop_stop" ]; do
+    "$ROOT/scripts/drain-agent.sh" --extend-op "$DRAIN_OPID" >/dev/null 2>&1 || true
+    sleep 0.5
+  done
+) &
+extend_pid=$!
+cleanup_extend() {
+  : >"$extend_loop_stop"
+  wait "$extend_pid" 2>/dev/null || true
+  rm -f "$extend_loop_stop"
+}
+trap cleanup_extend EXIT
+
 deadline=$(($(date +%s) + 120))
 until {
-  deploy_ids=$(docker_deploy_agent_ids)
-  check_ids=$(docker_check_agent_ids)
-  [ -n "$(printf '%s' "$deploy_ids" | tr -d '[:space:]')" ] \
-    && [ -n "$(printf '%s' "$check_ids" | tr -d '[:space:]')" ]
+  [ -n "$(compose ps --status running -q agent-linux 2>/dev/null)" ] \
+    && [ -n "$(compose ps --status running -q agent-deploy 2>/dev/null)" ] \
+    && [ "$(query_db "SELECT COUNT(*) FROM agents a
+        JOIN mo117_drain_owned o ON o.agent_id = a.id AND o.opid = '$DRAIN_OPID'
+        WHERE a.backend = 'docker'
+          AND a.name != 'ci-deploy'
+          AND IFNULL(a.custom_labels, '') NOT LIKE '%role\":\"deploy%'
+          AND a.no_schedule = 1
+          AND IFNULL(a.last_contact, 0) >= $agents_up_at;")" != "0" ] \
+    && [ "$(query_db "SELECT COUNT(*) FROM agents a
+        JOIN mo117_drain_owned o ON o.agent_id = a.id AND o.opid = '$DRAIN_OPID'
+        WHERE a.no_schedule = 1
+          AND IFNULL(a.last_contact, 0) >= $agents_up_at
+          AND (a.name = 'ci-deploy'
+               OR IFNULL(a.custom_labels, '') LIKE '%role\":\"deploy%');")" != "0" ]
 }; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "New Docker agents did not register within 120s." >&2
+    cleanup_extend
+    echo "Fresh paused Docker agents did not appear under op $DRAIN_OPID within 120s." >&2
     exit 1
   fi
-  sleep 2
+  sleep 1
 done
-"$ROOT/scripts/drain-agent.sh" --extend-op "$DRAIN_OPID"
-deploy_paused=$(query_db "SELECT COUNT(*) FROM agents a
-  JOIN mo117_drain_owned o ON o.agent_id = a.id
-  WHERE o.opid = '$DRAIN_OPID'
-    AND a.no_schedule = 1
-    AND (a.name = 'ci-deploy' OR IFNULL(a.custom_labels, '') LIKE '%role\":\"deploy%');")
-if [ "$deploy_paused" = "0" ]; then
-  echo "ci-deploy was not paused under drain op $DRAIN_OPID after extend." >&2
-  exit 1
-fi
+cleanup_extend
+trap - EXIT
+
+# After pause: wait until owned Docker agents are idle and no SRW deploy is live.
+idle_deadline=$(($(date +%s) + 1800))
+while true; do
+  if [ "$(srw_deploy_running)" != "0" ]; then
+    echo "SRW deploy running after agent bring-up; refusing to continue apply." >&2
+    exit 2
+  fi
+  running=$(query_db "SELECT COUNT(*) FROM workflows w
+    JOIN mo117_drain_owned o ON o.agent_id = w.agent_id AND o.opid = '$DRAIN_OPID'
+    WHERE w.state = 'running';")
+  if [ "$running" = "0" ]; then
+    printf 'Post-extend idle: owned Docker agents quiet under op %s.\n' "$DRAIN_OPID"
+    break
+  fi
+  if [ "$(date +%s)" -ge "$idle_deadline" ]; then
+    echo "Owned agents still running workflows after extend (op $DRAIN_OPID)." >&2
+    exit 1
+  fi
+  "$ROOT/scripts/drain-agent.sh" --extend-op "$DRAIN_OPID" >/dev/null 2>&1 || true
+  sleep 5
+done
 
 install -m 600 "$ROOT/com.shyamsivakumar.woodpecker-reaper.plist" \
   "$HOME/Library/LaunchAgents/"
