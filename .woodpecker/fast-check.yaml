@@ -1,27 +1,69 @@
+---
 labels:
   platform: linux/arm64
 
 clone:
   - name: git
-    image: woodpeckerci/plugin-git:2.9.2@sha256:ebde4a4d07e0e24b630082484d192890dd4f6d442d90bf5466f0763860f83652
+    image: "woodpeckerci/plugin-git:2.9.2@sha256:\
+      ebde4a4d07e0e24b630082484d192890dd4f6d442d90bf5466f0763860f83652"
     settings:
       partial: false
       depth: 0
   - name: main
-    image: woodpeckerci/plugin-git:2.9.2@sha256:ebde4a4d07e0e24b630082484d192890dd4f6d442d90bf5466f0763860f83652
+    image: "woodpeckerci/plugin-git:2.9.2@sha256:\
+      ebde4a4d07e0e24b630082484d192890dd4f6d442d90bf5466f0763860f83652"
     settings:
       partial: false
       depth: 0
       ref: refs/heads/main
 steps:
-  - name: fast-check
-    image: python:3.13.12-slim-bookworm@sha256:a58daefb915e1e03ad48f3ca4df8832065412c5c35cacb9d39f4229184de12b6
+  # MO-118: shared woodpecker-cli lint (see scripts/woodpecker-ci/snippets/).
+  - name: woodpecker-lint
+    image: "alpine:3.22@sha256:\
+      2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f"
     commands:
-      - apt-get update -qq && apt-get install -y -qq --no-install-recommends git python3 openjdk-17-jre-headless curl ca-certificates
-      - curl -fsSL https://open-vsx.org/api/tlaplus/vscode-ide/2026.10.301552/file/tlaplus.vscode-ide-2026.10.301552.vsix -o /tmp/tlaplus.vsix
-      - echo "89adb8d05d3136f74a4a33c97ae35b04730cdb3fb551b81d4299ba5b56c3c5a8  /tmp/tlaplus.vsix" | sha256sum -c -
-      - python3 -c "import zipfile; open('/tmp/tla2tools.jar', 'wb').write(zipfile.ZipFile('/tmp/tlaplus.vsix').read('extension/tools/tla2tools.jar'))"
-      - echo "011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd  /tmp/tla2tools.jar" | sha256sum -c -
+      - |
+        set -eu
+        VER=3.16.0
+        ARCH=$(uname -m)
+        case "$ARCH" in
+          aarch64|arm64)
+            WARCH=arm64
+            SUM=9c7e6cad9e9d65da8678f8446805076212dd04cad59765d24a0b2b74ac56ed23
+            ;;
+          x86_64)
+            WARCH=amd64
+            SUM=a87df7024f2cf4949a94fb27a49808b984350cf97d4aa511049d58f88dd21e7e
+            ;;
+          *) echo "unsupported arch: $ARCH" >&2; exit 1 ;;
+        esac
+        apk add --no-cache -q curl tar
+        curl -fsSL -o /tmp/wp-cli.tgz \
+          "https://github.com/woodpecker-ci/woodpecker/releases/download/v${VER}/woodpecker-cli_linux_${WARCH}.tar.gz"
+        echo "${SUM}  /tmp/wp-cli.tgz" | sha256sum -c -
+        tar -xzf /tmp/wp-cli.tgz -C /usr/local/bin woodpecker-cli
+        woodpecker-cli lint .woodpecker/
+    when:
+      - event: [pull_request, push]
+  - name: fast-check
+    image: "python:3.13.12-slim-bookworm@sha256:\
+      a58daefb915e1e03ad48f3ca4df8832065412c5c35cacb9d39f4229184de12b6"
+    commands:
+      - >-
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends
+        git python3 openjdk-17-jre-headless curl ca-certificates
+      - "curl -fsSL https://open-vsx.org/api/tlaplus/vscode-ide/2026.10.301552/\
+        file/tlaplus.vscode-ide-2026.10.301552.vsix -o /tmp/tlaplus.vsix"
+      - >-
+        echo "89adb8d05d3136f74a4a33c97ae35b04730cdb3fb551b81d4299ba5b56c3c5a8
+        */tmp/tlaplus.vsix" | sha256sum -c -
+      - >-
+        python3 -c "import zipfile;
+        open('/tmp/tla2tools.jar', 'wb').write(zipfile.ZipFile(
+        '/tmp/tlaplus.vsix').read('extension/tools/tla2tools.jar'))"
+      - >-
+        echo "011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd
+        */tmp/tla2tools.jar" | sha256sum -c -
       - export MAC_OPS_TLA_JAR=/tmp/tla2tools.jar
       - git update-ref refs/remotes/origin/main HEAD
       - git reset --hard "$CI_COMMIT_SHA"
