@@ -122,7 +122,7 @@ Jamf Protect and other MDM agents were left alone (device management).
 
 | Agent | Host / name | Backend | Capacity | Labels |
 | --- | --- | --- | --- | --- |
-| `ci-linux` | `agent-linux` (`17fcd710bf9a`) | docker | **3** | linux/arm64 |
+| `ci-linux` | `agent-linux` (`ci-linux`) | docker | **4** | linux/arm64 |
 | `ci-deploy` | `agent-deploy` | docker | **1** | `!role=deploy,role=deploy` |
 | macOS | `shyams-macbook-pro-ios` | local | **1** | darwin/arm64 |
 
@@ -131,6 +131,9 @@ Jamf Protect and other MDM agents were left alone (device management).
 SRW-349 must add `role: deploy` to `.woodpecker/deploy.yaml`.
 
 Colima: **10 GiB / 4 CPUs**. Native capacity stays 1.
+`ci-linux` was raised 3→4 on 2026-11-02 (drain + recreate; dual-load OK).
+Before/after queue wait and undos:
+`~/Code/coordinator/evidence/woodpecker-agent-config-2026-11-02.md`.
 
 ## Drain before restart
 
@@ -183,14 +186,14 @@ xcrun simctl shutdown CI-iPhone   # after each iOS job
 ## Proof checklist
 
 - [x] Swap/load before and after cleanup and lane split
-- [x] `agents`: linux cap 3, deploy cap 1 + role labels, darwin cap 1
+- [x] `agents`: linux cap 4 (raised 2026-11-02), deploy cap 1, darwin cap 1
 - [x] Reaper + nightly backup; backup on M4
 - [x] Two Linux checks concurrent on `ci-linux` (cairn 104 + SRW verify 2525)
 - [ ] SRW deploy on `ci-deploy` overlapping checks — needs SRW-349 `role: deploy`
 
 ## Do not
 
-- Grow Colima above 10 GiB or `ci-linux` above 3 without dual-load proof
+- Grow Colima above 10 GiB or `ci-linux` above 4 without dual-load proof
 - Restart Docker agents / Colima during an SRW deploy
 - Re-enable archived non-CI LaunchAgents without coordinator OK
 - Remove held paper-trader LaunchAgents without coordinator OK

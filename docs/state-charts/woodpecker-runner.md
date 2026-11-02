@@ -41,7 +41,7 @@ The native agent `shyams-macbook-pro-ios` runs from the LaunchAgent
 Workflow 4254 followed the Killed, Expired, StaleDropped path and stayed
 `running` until the MO-117 reaper cleared it. MO-116 returned the live plist
 to `WOODPECKER_MAX_WORKFLOWS=1`. MO-117 made the M1 a dedicated CI box: Colima
-at 10 GiB with `ci-linux` capacity 3 and `ci-deploy` capacity 1
+at 10 GiB with `ci-linux` capacity 4 and `ci-deploy` capacity 1
 (`role=deploy`), native still capacity 1 (see [M1 CI lanes](../m1-ci-lanes.md)).
 
 ## Agent install
