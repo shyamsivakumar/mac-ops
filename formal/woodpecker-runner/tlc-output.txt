@@ -1,0 +1,271 @@
+===== RunnerNoPartition.cfg
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Checking 4 branches of temporal properties for the complete state space with 872 total distinct states at (2026-11-01 16:56:59)
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 5.6E-15
+690 states generated, 218 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 8.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 7 and the 95th percentile is 4).
+===== RunnerDoubleRun.cfg
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Error: Invariant NoDoubleRun is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ pending = {t1, t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 0
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "pending" @@ t2 :> "pending")
+
+State 2: <Poll(w1,t1) line 37, col 5 to line 44, col 65 of module RunnerLifecycle>
+/\ pending = {t2}
+/\ exec = (w1 :> t1 @@ w2 :> "none")
+/\ faults = 0
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> w1 @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+State 3: <LeasePartition(t1) line 70, col 5 to line 75, col 27 of module RunnerLifecycle>
+/\ pending = {t1, t2}
+/\ exec = (w1 :> t1 @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+State 4: <Poll(w2,t1) line 37, col 5 to line 44, col 65 of module RunnerLifecycle>
+/\ pending = {t2}
+/\ exec = (w1 :> t1 @@ w2 :> t1)
+/\ faults = 1
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> w2 @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+61 states generated, 46 distinct states found, 34 states left on queue.
+The depth of the complete state graph search is 4.
+Trace exploration spec path: ./RunnerLifecycle_TTrace_1793581019.tla
+===== RunnerInstallGap.cfg
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Error: Invariant RunnerAlwaysUp is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ pending = {t1, t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 0
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "pending" @@ t2 :> "pending")
+
+State 2: <InstallStart line 99, col 5 to line 107, col 41 of module RunnerLifecycle>
+/\ pending = {t1, t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = FALSE
+/\ install = "installing"
+/\ agentUp = FALSE
+/\ release = "new"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "pending" @@ t2 :> "pending")
+
+7 states generated, 7 distinct states found, 5 states left on queue.
+The depth of the complete state graph search is 2.
+Trace exploration spec path: ./RunnerLifecycle_TTrace_1793581020.tla
+===== RunnerStaleDrop.cfg
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Checking 2 branches of temporal properties for the complete state space with 592 total distinct states at (2026-11-01 16:57:02)
+Error: Temporal property JobsReported was violated.
+
+Error: The following behavior constitutes a counter-example:
+
+State 1: <Initial predicate>
+/\ pending = {t1, t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 0
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "pending" @@ t2 :> "pending")
+
+State 2: <Poll(w2,t1) line 37, col 5 to line 44, col 65 of module RunnerLifecycle>
+/\ pending = {t2}
+/\ exec = (w1 :> "none" @@ w2 :> t1)
+/\ faults = 0
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> w2 @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+State 3: <InstallStart line 99, col 5 to line 107, col 41 of module RunnerLifecycle>
+/\ pending = {t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "installing"
+/\ agentUp = FALSE
+/\ release = "new"
+/\ running = (t1 :> w2 @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+State 4: <InstallUp line 110, col 5 to line 114, col 75 of module RunnerLifecycle>
+/\ pending = {t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "failed"
+/\ agentUp = FALSE
+/\ release = "new"
+/\ running = (t1 :> w2 @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+State 5: <LeaseExpire(t1) line 64, col 5 to line 67, col 23 of module RunnerLifecycle>
+/\ pending = {t1, t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "failed"
+/\ agentUp = FALSE
+/\ release = "new"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+State 6: <StaleDropAct(t1) line 84, col 5 to line 88, col 84 of module RunnerLifecycle>
+/\ pending = {t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "failed"
+/\ agentUp = FALSE
+/\ release = "new"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+State 7: <RollbackAct line 117, col 5 to line 122, col 66 of module RunnerLifecycle>
+/\ pending = {t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "rolledback"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "pending")
+
+State 8: <Poll(w1,t2) line 37, col 5 to line 44, col 65 of module RunnerLifecycle>
+/\ pending = {}
+/\ exec = (w1 :> t2 @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "rolledback"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> w1)
+/\ db = (t1 :> "running" @@ t2 :> "running")
+
+State 9: <Finish(w1) line 47, col 5 to line 56, col 65 of module RunnerLifecycle>
+/\ pending = {}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "rolledback"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "running" @@ t2 :> "success")
+
+State 10: Stuttering
+945 states generated, 296 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 10.
+Trace exploration spec path: ./RunnerLifecycle_TTrace_1793581021.tla
+===== RunnerNoRollback.cfg
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Checking 2 branches of temporal properties for the complete state space with 346 total distinct states at (2026-11-01 16:57:03)
+Error: Temporal properties RunnerComesBack and FailedInstallRollsBack were violated.
+
+Error: The following behavior constitutes a counter-example:
+
+State 1: <Initial predicate>
+/\ pending = {t1, t2}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 0
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "pending" @@ t2 :> "pending")
+
+State 2: <Poll(w2,t2) line 37, col 5 to line 44, col 65 of module RunnerLifecycle>
+/\ pending = {t1}
+/\ exec = (w1 :> "none" @@ w2 :> t2)
+/\ faults = 0
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> w2)
+/\ db = (t1 :> "pending" @@ t2 :> "running")
+
+State 3: <Finish(w2) line 47, col 5 to line 56, col 65 of module RunnerLifecycle>
+/\ pending = {t1}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 0
+/\ newBroken = FALSE
+/\ install = "idle"
+/\ agentUp = TRUE
+/\ release = "old"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "pending" @@ t2 :> "success")
+
+State 4: <InstallStart line 99, col 5 to line 107, col 41 of module RunnerLifecycle>
+/\ pending = {t1}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "installing"
+/\ agentUp = FALSE
+/\ release = "new"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "pending" @@ t2 :> "success")
+
+State 5: <InstallUp line 110, col 5 to line 114, col 75 of module RunnerLifecycle>
+/\ pending = {t1}
+/\ exec = (w1 :> "none" @@ w2 :> "none")
+/\ faults = 1
+/\ newBroken = TRUE
+/\ install = "failed"
+/\ agentUp = FALSE
+/\ release = "new"
+/\ running = (t1 :> "none" @@ t2 :> "none")
+/\ db = (t1 :> "pending" @@ t2 :> "success")
+
+State 6: Stuttering
+526 states generated, 173 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 7.
+Trace exploration spec path: ./RunnerLifecycle_TTrace_1793581023.tla
