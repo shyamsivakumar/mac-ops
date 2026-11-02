@@ -6,6 +6,7 @@
 - [Restart of a board task whose agent died](restart.md).
 - [Idle agents waiting for heavy admission](agent-heavy-wait-pause.md).
 - [Install, migration and uninstall](installation.md).
+- [Board agent parity install (pi and omp)](agents-installation.md).
 - [Cursor startup and first-message delivery](cursor-input.md).
 - [Pi startup and first-message delivery](pi-input.md).
 - [Omp startup and first-message delivery](omp-input.md).
