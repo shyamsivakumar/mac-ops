@@ -34,7 +34,7 @@ query_db() {
     sh -c "apk add -q sqlite >/dev/null && sqlite3 -readonly file:/d/woodpecker.sqlite?mode=ro \"$sql\""
 }
 
-# Writable SQL (brief helper container).
+# Writable SQL (brief helper container). Prints sqlite stdout (e.g. RETURNING).
 write_db() {
   sql=$1
   helper="woodpecker-dbwrite-$$"

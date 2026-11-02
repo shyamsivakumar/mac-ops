@@ -1,7 +1,8 @@
 #!/bin/sh
-# Recover a stopped Colima VM. Starts missing stack containers only.
-# Does not recreate healthy running services (compose --no-recreate and
-# only names the missing ones). Does not restart the native agent if loaded.
+# Keep Colima + missing stack containers up. Starts missing services only
+# (compose --no-recreate). Retains the SRW deploy guard for Docker agents.
+# Re-checks missing services even when Colima is already running so agents
+# left down under the deploy guard are brought up on a later pass.
 set -eu
 
 # shellcheck disable=SC1091
@@ -16,20 +17,27 @@ log() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$LOG"
 }
 
-"$COLIMA" status woodpecker >/dev/null 2>&1 && exit 0
+if ! "$COLIMA" status woodpecker >/dev/null 2>&1; then
+  log "Colima profile woodpecker is not running; restarting its LaunchAgent."
+  launchctl kickstart -k "$DOMAIN/com.shyamsivakumar.colima-woodpecker"
 
-log "Colima profile woodpecker is not running; restarting its LaunchAgent."
-launchctl kickstart -k "$DOMAIN/com.shyamsivakumar.colima-woodpecker"
+  deadline=$(($(date +%s) + 180))
+  until "$COLIMA" status woodpecker >/dev/null 2>&1 && docker ps -q >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      log "Colima did not become ready within 180 seconds."
+      exit 1
+    fi
+    sleep 3
+  done
+  log "Colima is running."
+fi
 
-deadline=$(($(date +%s) + 180))
-until "$COLIMA" status woodpecker >/dev/null 2>&1 && docker ps -q >/dev/null 2>&1; do
-  if [ "$(date +%s)" -ge "$deadline" ]; then
-    log "Colima did not become ready within 180 seconds."
-    exit 1
-  fi
-  sleep 3
-done
-log "Colima is running."
+# Always inspect missing services while Colima is up (including later passes
+# after an SRW-guarded recovery left agents down).
+if ! docker ps -q >/dev/null 2>&1; then
+  log "Docker context not ready yet; deferring service check."
+  exit 0
+fi
 
 missing=
 for service in server agent-linux agent-deploy webhook-proxy; do
@@ -41,7 +49,6 @@ missing=$(printf '%s' "$missing" | sed 's/^ *//')
 
 if [ -n "$missing" ]; then
   if [ "$(srw_deploy_running)" != "0" ]; then
-    # Never bring Docker agents up under a live SRW deploy row.
     start=
     case " $missing " in
       *" server "*) start="$start server" ;;
@@ -62,8 +69,6 @@ if [ -n "$missing" ]; then
     # shellcheck disable=SC2086
     compose up -d --no-recreate $missing
   fi
-else
-  log "All compose services already running; nothing to start."
 fi
 
 native_pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
@@ -75,8 +80,6 @@ case "$native_pid" in
       || launchctl kickstart "$DOMAIN/org.woodpecker.agent"
     ;;
   *)
-    log "Native agent pid=$native_pid left running."
+    : # leave a loaded native agent alone
     ;;
 esac
-
-log "Recovery finished (missing-only, --no-recreate)."

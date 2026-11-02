@@ -87,21 +87,25 @@ if [ "$plist_max" != "1" ]; then
   exit 1
 fi
 
-# Live process env (LaunchAgent may still be running the old value).
-live_max=
-native_pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
-case "$native_pid" in
-  '' | -) live_max=missing ;;
-  *)
-    live_max=$(ps eww -p "$native_pid" -o command= 2>/dev/null \
-      | tr ' ' '\n' | sed -n 's/^WOODPECKER_MAX_WORKFLOWS=//p' | head -1)
-    [ -n "$live_max" ] || live_max=unknown
-    ;;
-esac
+native_live_max() {
+  pid=$1
+  case "$pid" in
+    '' | -)
+      echo missing
+      return
+      ;;
+  esac
+  val=$(ps eww -p "$pid" -o command= 2>/dev/null \
+    | tr ' ' '\n' | sed -n 's/^WOODPECKER_MAX_WORKFLOWS=//p' | head -1)
+  if [ -n "$val" ]; then echo "$val"; else echo unknown; fi
+}
 
-# agents.capacity as reported to the server (source of truth for scheduling).
-db_cap=$(query_db "SELECT IFNULL(capacity, -1) FROM agents
-  WHERE backend = 'local' ORDER BY id LIMIT 1;" || echo missing)
+native_pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
+live_max=$(native_live_max "$native_pid")
+db_row=$(query_db "SELECT IFNULL(capacity, -1) || '|' || IFNULL(last_contact, 0)
+  FROM agents WHERE backend = 'local' ORDER BY id LIMIT 1;" || echo 'missing|0')
+db_cap=${db_row%%|*}
+old_contact=${db_row##*|}
 
 need_reload=0
 if [ "$live_max" != "1" ]; then
@@ -115,18 +119,49 @@ if [ "$db_cap" != "1" ]; then
 fi
 
 if [ "$need_reload" -eq 1 ]; then
-  # Drain already held native idle + owned no_schedule; safe to reload.
-  launchctl kickstart -k "$DOMAIN/org.woodpecker.agent"
-  deadline=$(($(date +%s) + 60))
-  until [ "$(query_db "SELECT IFNULL(capacity, -1) FROM agents
-      WHERE backend = 'local' ORDER BY id LIMIT 1;")" = "1" ]; do
+  # Drain already held native idle + owned no_schedule. Reload the service
+  # definition from the current plist (kickstart -k alone keeps a stale load).
+  old_pid=$native_pid
+  launchctl bootout "$DOMAIN/org.woodpecker.agent" 2>/dev/null || true
+  launchctl bootstrap "$DOMAIN" "$PLIST"
+  launchctl enable "$DOMAIN/org.woodpecker.agent" 2>/dev/null || true
+  launchctl kickstart "$DOMAIN/org.woodpecker.agent"
+
+  deadline=$(($(date +%s) + 90))
+  while true; do
+    new_pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
+    new_max=$(native_live_max "$new_pid")
+    new_row=$(query_db "SELECT IFNULL(capacity, -1) || '|' || IFNULL(last_contact, 0)
+      FROM agents WHERE backend = 'local' ORDER BY id LIMIT 1;" || echo 'missing|0')
+    new_cap=${new_row%%|*}
+    new_contact=${new_row##*|}
+    replaced=0
+    case "$old_pid" in
+      '' | -)
+        if [ -n "$new_pid" ] && [ "$new_pid" != "-" ]; then replaced=1; fi
+        ;;
+      *)
+        if [ -n "$new_pid" ] && [ "$new_pid" != "-" ] && [ "$new_pid" != "$old_pid" ]; then
+          replaced=1
+        fi
+        ;;
+    esac
+    contact_fresh=0
+    if [ "$new_contact" -gt "$old_contact" ] 2>/dev/null; then
+      contact_fresh=1
+    fi
+    if [ "$replaced" -eq 1 ] && [ "$new_max" = "1" ] \
+      && [ "$new_cap" = "1" ] && [ "$contact_fresh" -eq 1 ]; then
+      printf 'Native agent reloaded pid=%s env=1 capacity=1 last_contact=%s (was %s).\n' \
+        "$new_pid" "$new_contact" "$old_contact"
+      break
+    fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      echo "Native agent did not report capacity 1 after guarded reload." >&2
+      echo "Native agent did not prove fresh capacity 1 after plist reload (pid=$new_pid env=$new_max cap=$new_cap contact=$new_contact old_contact=$old_contact)." >&2
       exit 1
     fi
     sleep 2
   done
-  printf 'Native agent reloaded; agents.capacity=1.\n'
 else
   printf 'Native agent live+DB capacity=1 (no reload).\n'
 fi
