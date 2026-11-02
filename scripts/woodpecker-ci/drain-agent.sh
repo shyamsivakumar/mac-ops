@@ -5,8 +5,8 @@
 # Usage: drain-agent.sh <ci-linux|ci-deploy|native|all> [timeout_sec]
 #         drain-agent.sh --resume
 #
-# Sets no_schedule=1 only on agents that previously had 0, records those ids,
-# and --resume restores only that owned set (never clears unrelated maintenance).
+# Atomically sets no_schedule=1 only where it was 0 (UPDATE…RETURNING), records
+# only those flipped ids, and --resume restores only that owned set.
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -16,11 +16,19 @@ STATE_DIR="$HOME/Library/Logs/woodpecker"
 OWNED_FILE="$STATE_DIR/drain-owned-ids"
 mkdir -p "$STATE_DIR"
 
-record_owned() {
+# Persist owned ids durably (temp + rename). Prefer leaving agents paused with
+# a missing ownership file over clearing someone else's pause.
+commit_owned() {
   ids=$1
   [ -n "$(printf '%s' "$ids" | tr -d '[:space:]')" ] || return 0
-  printf '%s\n' "$ids" | tr -s '[:space:]' '\n' >>"$OWNED_FILE"
-  sort -u -o "$OWNED_FILE" "$OWNED_FILE"
+  tmp="$OWNED_FILE.tmp.$$"
+  {
+    if [ -f "$OWNED_FILE" ]; then
+      cat "$OWNED_FILE"
+    fi
+    printf '%s\n' "$ids" | tr -s '[:space:]' '\n'
+  } | awk 'NF' | sort -u >"$tmp"
+  mv -f "$tmp" "$OWNED_FILE"
 }
 
 if [ "${1:-}" = "--resume" ]; then
@@ -30,7 +38,7 @@ if [ "${1:-}" = "--resume" ]; then
   fi
   in_list=$(tr '\n' ',' <"$OWNED_FILE" | sed 's/,$//')
   write_db "UPDATE agents SET no_schedule = 0
-    WHERE id IN ($in_list) AND no_schedule != 0;"
+    WHERE id IN ($in_list) AND no_schedule != 0;" >/dev/null
   printf 'Scheduling resumed on drain-owned agent id(s): %s\n' \
     "$(tr '\n' ' ' <"$OWNED_FILE")"
   rm -f "$OWNED_FILE"
@@ -97,7 +105,6 @@ case "$agent_name" in
     ;;
 esac
 
-# Collect target ids, then flip only those currently schedulable (no_schedule=0).
 pause_ids=
 for t in $targets; do
   ids=$(agent_ids_for "$t" || true)
@@ -106,22 +113,24 @@ for t in $targets; do
 done
 pause_ids=$(printf '%s' "$pause_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
 
-owned=
 if [ -n "$(printf '%s' "$pause_ids" | tr -d '[:space:]')" ]; then
   in_list=$(printf '%s' "$pause_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
-  # Agents we may own: currently accepting work.
-  owned=$(query_db "SELECT id FROM agents
-    WHERE id IN ($in_list) AND IFNULL(no_schedule, 0) = 0;")
+  # Single transaction: only rows still at 0 flip; RETURNING is the owned set.
+  owned=$(write_db "
+BEGIN IMMEDIATE;
+UPDATE agents
+  SET no_schedule = 1
+  WHERE id IN ($in_list) AND IFNULL(no_schedule, 0) = 0
+  RETURNING id;
+COMMIT;
+")
   owned=$(printf '%s' "$owned" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
   if [ -n "$(printf '%s' "$owned" | tr -d '[:space:]')" ]; then
-    own_list=$(printf '%s' "$owned" | tr ' ' ',' | sed 's/,$//;s/^,//')
-    write_db "UPDATE agents SET no_schedule = 1 WHERE id IN ($own_list);"
-    record_owned "$owned"
+    commit_owned "$owned"
     printf 'Set no_schedule=1 on drain-owned agent id(s): %s\n' "$owned"
   else
     printf 'Targets already no_schedule=1; not claiming ownership.\n'
   fi
-  # Still wait for idle even if we did not flip (someone else holds the pause).
 fi
 
 printf 'Draining %s (timeout %ss)...\n' "$agent_name" "$timeout_sec"
