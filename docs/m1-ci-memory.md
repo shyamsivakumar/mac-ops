@@ -38,10 +38,15 @@ for Colima. Stale (not live CI, not the paper-trader LaunchAgent): the Booted
 left alone. No reboot, no Railway change, no paper-trader touch. Colima was
 resized only after live Docker workflows and any deploy workflow were idle.
 
-DB rows that stay `running` with no container (for example fantasy-football
-pipeline 891 from 2026-09-04 and native workflow 4254 from 2026-10-30) are
-stale queue artifacts; see [woodpecker-runner](state-charts/woodpecker-runner.md).
-They did not block the Docker agent from taking new work after this fix.
+A `running` SQLite workflow is not stale just because there is no `wp_*`
+container. Docker-agent jobs create those containers; native darwin jobs do
+not. Treat a row as stale only with agent and process evidence: for Docker,
+no matching `wp_*` container and the Docker agent idle on that workflow; for
+native, the `org.woodpecker.agent` process has no children for that workflow
+(and usually a lease/`task not found` history). Examples from this incident:
+fantasy-football pipeline 891 (Docker, 2026-09-04) and native workflow 4254
+(2026-10-30). See [woodpecker-runner](state-charts/woodpecker-runner.md).
+Those rows did not block the Docker agent from taking new work after this fix.
 
 ## Applied controls
 
