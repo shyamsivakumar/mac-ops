@@ -165,7 +165,7 @@ def _agent_is_gone(task_id, absent_sockets):
         return False
     if not isinstance(task, dict):
         return False
-    if task.get("archivedAt"):
+    if task.get("archivedAt") or task.get("stage") == "done":
         return True
     try:
         _, socket_path = _pane(task)

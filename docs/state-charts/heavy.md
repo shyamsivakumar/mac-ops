@@ -29,13 +29,15 @@ stateDiagram-v2
     Running --> PauseRequested: pressure or missing telemetry for 15 seconds
     PauseRequested --> Paused: own process group identity verified, SIGSTOP succeeds
     PauseRequested --> PauseRequested: verification or signal fails, retry
-    Paused --> Running: 10 healthy seconds, free active slot, positive fresh capacity, verified SIGCONT
+    Paused --> Running: 10 healthy seconds at the resume headroom, free active slot, positive fresh capacity, verified SIGCONT
     Paused --> Paused: capacity is zero or verification or signal fails, retry
     Running --> Terminating: user interrupt, explicit curtail, or watchdog failure
     PauseRequested --> Terminating: user interrupt, explicit curtail, or watchdog failure
     Paused --> Terminating: user interrupt, explicit curtail, or watchdog failure
     Terminating --> Complete: verified group exits and registry cleanup finishes
 ```
+
+Memory headroom (free, inactive and speculative pages) has a dead band so a job does not flip near one line. A running job counts headroom as low only below `max(6 GiB, 12.5% RAM)`. A paused job resumes only at `max(6 GiB, 15% RAM)` or more. On this 48 GB Mac that is 6.0 GiB to pause and 7.2 GiB to resume; the previous single line was 9.6 GiB, and measured headroom at normal load was 7.8 to 9.8 GiB, so jobs flipped. Critical kernel pressure, swap growth and a level 2 reading at or below 30% free still count as pressure at either state, and critical pressure still pauses at once.
 
 Only the registered workload's own isolated process group receives pause, resume, or termination signals. The supervisor stays outside that group and keeps the watchdog heartbeat current while the workload is paused. Host pressure and missing telemetry never trigger termination. Capacity zero blocks admission and resume, and capacity zero alone does not trigger a pause. Paused jobs remain in admission accounting. A resume also waits until the verified count of active nonpaused jobs is below the fresh slot limit.
 
