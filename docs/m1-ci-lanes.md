@@ -10,6 +10,21 @@ Stack lives in `~/Code/woodpecker-ci` on the M1. Canonical copies of the
 compose file, drain/reaper/backup scripts and LaunchAgent plists are versioned
 here under [`scripts/woodpecker-ci/`](../scripts/woodpecker-ci/).
 
+## Install / sync (canonical → M1)
+
+From a checkout of this repo (SSH `Host m1` → `shyams-m1`):
+
+```sh
+chmod +x scripts/woodpecker-ci/*.sh
+./scripts/woodpecker-ci/install-to-m1.sh
+```
+
+That copies `*.sh` → `~/Code/woodpecker-ci/scripts/` (mode `755`), and
+`compose.yaml` + reaper/backup plists → `~/Code/woodpecker-ci/` (mode `644`).
+`common.sh` must sit next to the other scripts; running a drained script
+without it fails immediately. After sync, reaper/backup LaunchAgents already
+point at those paths — `kickstart` them only if the plist contents changed.
+
 ## Keep (Woodpecker CI + reachability)
 
 - Woodpecker server, **webhook-proxy** (`127.0.0.1:8001`, GitHub hooks),
@@ -28,9 +43,9 @@ CI, but may serve other machines or the SRW paper path.
 
 | Item | Why it might matter | Status now | Undo if removed later |
 | --- | --- | --- | --- |
-| `com.alpha-trader` | Paper-trader host | **kept**, idle | bootstrap plist |
-| strategy-paper plist | Paper svc :8788 | **kept**, unloaded | bootstrap |
-| webhook-proxy | GitHub → CI | **kept**, running | `compose up -d` |
+| `com.alpha-trader` | Paper-trader host | **kept**, idle | already loaded |
+| `…strategy-paper` | Paper :8788 | **kept**, unloaded | `launchctl bootstrap` |
+| webhook-proxy | GitHub → CI | **kept**, running | `docker compose up -d` |
 | Heavy job queue on M1 | Not found listening | n/a | — |
 
 No M1 listener looked like a shared heavy-queue endpoint. SRW live paper runs
@@ -38,9 +53,22 @@ on Railway; the local paper LaunchAgents are held only as a break-glass.
 
 ## Quit ledger (with one-line undo)
 
-Archives: `~/Library/LaunchAgents/_disabled-mo117-*` on the M1.
+Archives on the M1:
+
+- Pass 1: `~/Library/LaunchAgents/_disabled-mo117-20261102T205559Z/`
+- Pass 2 (strict): `~/Library/LaunchAgents/_disabled-mo117-20261102T211321Z-strict/`
+
 Line logs: `~/Library/Logs/woodpecker/mo117-quit.log` and
-`mo117-quit-strict.log`.
+`mo117-quit-strict.log`. Login-item snapshot:
+`~/Library/Preferences/ByHost/*.before-mo117` (TAL).
+
+Domain: `gui/$(id -u)`. Restore helper for an archived plist `NAME.plist`:
+
+```sh
+A=~/Library/LaunchAgents/_disabled-mo117-20261102T205559Z
+mv "$A/NAME.plist" ~/Library/LaunchAgents/ && \
+  launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/NAME.plist
+```
 
 ### Pass 1 — free memory for two lanes (≈12:50 PT)
 
@@ -49,16 +77,16 @@ Line logs: `~/Library/Logs/woodpecker/mo117-quit.log` and
 | Arc | ~2.2 GiB | quit | `open -a Arc` |
 | ChatGPT / Codex UI | hundreds of MiB | quit | `open -a ChatGPT` |
 | Herdr, Activity Monitor, Safari, Messages | small | quit | `open -a <App>` |
-| FFT steel | 223 + 975 MiB | bootout, archive, kill | restore, bootstrap |
-| FFT collector agent | idle | bootout + archive | restore, bootstrap |
-| Fantasy cron agents (8) | idle | bootout + archive | restore, bootstrap |
-| `com.shyam.*` scrapers (6) | idle | bootout + archive | restore + bootstrap |
-| reports-server | 8.7 MiB | bootout + archive | restore + bootstrap |
-| PostgreSQL@17 agent | 3.4 MiB | bootout + archive | restore + bootstrap |
-| Google Keystone / updater | idle | bootout + archive | restore + bootstrap |
-| pm2 `cli-proxy` | 2.7 MiB | `pm2 delete` | `pm2 start` from prior config |
-| Codex app-server daemon | 44 MiB | kill | relaunch Codex |
-| TAL relaunch list | — | Finder-only | restore ByHost `*.before-mo117` |
+| FFT steel | 223 + 975 MiB | bootout, archive, kill | restore (helper) |
+| FFT collector | idle | bootout + archive | restore (helper) |
+| Fantasy cron agents (8) | idle | bootout + archive | restore (helper) |
+| `com.shyam.*` scrapers (6) | idle | bootout + archive | restore (helper) |
+| reports-server | 8.7 MiB | bootout + archive | restore (helper) |
+| PostgreSQL@17 agent | 3.4 MiB | bootout + archive | restore (helper) |
+| Google Keystone / updater | idle | bootout + archive | restore (helper) |
+| pm2 `cli-proxy` | 2.7 MiB | `pm2 delete` | `pm2 resurrect`, or re-add |
+| Codex app-server daemon | 44 MiB | kill | relaunch Codex.app |
+| TAL relaunch list | — | Finder-only | restore `*.before-mo117` |
 
 ### Pass 2 — Woodpecker-only strict (≈13:13 PT)
 
@@ -70,12 +98,12 @@ Line logs: `~/Library/Logs/woodpecker/mo117-quit.log` and
 | Rectangle | 21.8 MiB | quit | `open -a Rectangle` |
 | Fleetsmith UI | 48–282 MiB | quit (MDM may relaunch) | `open -a Fleetsmith` |
 | Notes/News/Stocks/Safari/Msgs/Term/Siri | 13–99 MiB | quit | `open -a <App>` |
-| LogiOptionsPlus | 116–165 MiB | kill; sudo for plist | reopen Logi app |
-| ARDAgent | 6 MiB | kill (respawns) | `sudo …/kickstart -activate` |
-| PM2 + modules | 63 MiB | `pm2 kill`, plist **held** | `launchctl kickstart` |
-| `com.ollama.ollama` | 5.2 MiB | bootout | `launchctl bootstrap` plist |
-| Stale FFT/fantasy plists | — | archived `*-strict` | `mv` back |
-| Spotlight: Code, .colima, logs | — | `.metadata_never_index` | `rm` it |
+| LogiOptionsPlus | 116–165 MiB | kill (sudo to disable) | reopen Logi app |
+| ARDAgent | 6 MiB | kill (respawns) | `kickstart -activate` (sudo) |
+| PM2 + modules | 63 MiB | `pm2 kill`; alpha-trader held | `kickstart` it |
+| `com.ollama.ollama` | 5.2 MiB | bootout (plist kept) | `launchctl bootstrap` |
+| Stale FFT/fantasy plists | — | archived `*-strict` | restore (helper) |
+| Spotlight: Code, .colima, logs | — | `.metadata_never_index` | `rm` markers |
 
 Jamf Protect and other MDM agents were left alone (device management).
 
@@ -105,17 +133,24 @@ Colima: **10 GiB / 4 CPUs**. Native capacity stays 1.
 ## Drain before restart
 
 ```sh
-~/Code/woodpecker-ci/scripts/drain-agent.sh all   # or ci-linux / ci-deploy
+~/Code/woodpecker-ci/scripts/drain-agent.sh all   # or ci-linux / ci-deploy / native
+# … restart window …
+~/Code/woodpecker-ci/scripts/drain-agent.sh --resume
 ```
 
-Refuses if an SRW `deploy` workflow is running. Never `colima stop` / resize /
-`compose restart agent-*` during an SRW deploy.
+Sets `agents.no_schedule=1` before waiting so nothing new (especially an SRW
+deploy) starts mid-drain. Refuses if an SRW `deploy` workflow is running.
+Never `colima stop` / resize / `compose restart agent-*` during an SRW deploy.
+`apply-two-lanes.sh` drains with no_schedule, does **not** restart the native
+agent, then `--resume`s after the new Docker agents are up.
 
 ## Reaper
 
 `com.shyamsivakumar.woodpecker-reaper` every 5 minutes: pipelines still
-`running` with no log for 10 minutes → `failure`; also clears orphan workflows
-under terminal pipelines. Log: `~/Library/Logs/woodpecker/reaper.log`.
+`running` with no log for 10 minutes **and** no executor evidence (no queue
+task, no `wp_*` containers / native children as applicable) → `failure` after
+a re-check; also clears orphan workflows under terminal pipelines. Silence
+alone is not enough. Log: `~/Library/Logs/woodpecker/reaper.log`.
 
 ## Nightly SQLite backup
 
