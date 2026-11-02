@@ -1,24 +1,24 @@
-# M1 Woodpecker memory budget (MO-116)
+# M1 Woodpecker memory budget (MO-116 → MO-117)
 
-The M1 (`ssh m1`, 16 GiB RAM) runs every personal-repo Woodpecker pipeline:
-the Colima `woodpecker` VM (Docker agent, `platform: linux/arm64`) plus the
-native macOS agent `shyams-macbook-pro-ios` (`platform: darwin/arm64`). Stack
-details live in the llmwiki Woodpecker reference and `~/Code/woodpecker-ci` on
-the M1.
+The M1 (`ssh m1`, 16 GiB RAM) is the dedicated CI box (MO-117): Colima
+`woodpecker` with two Docker agents (`ci-linux` capacity 3, `ci-deploy`
+capacity 1) plus the native macOS agent `shyams-macbook-pro-ios`
+(`platform: darwin/arm64`, capacity 1). Current topology and quit ledger:
+[m1-ci-lanes.md](m1-ci-lanes.md). Stack details live in the llmwiki
+Woodpecker reference and `~/Code/woodpecker-ci` on the M1.
 
-## Budget
+## Budget (MO-117)
 
 | Piece | Intended | Oversubscribe risk |
 | --- | --- | --- |
-| Colima VM | 6 GiB, 4 CPUs | 8 GiB leaves ~8 GiB for macOS, agent, sim |
-| Docker agent | `capacity = 1` | One Linux workflow inside the VM |
+| Colima VM | 10 GiB, 4 CPUs | Above 10 GiB starves macOS + Xcode |
+| `ci-linux` | `capacity = 3` | Raise only after dual-load proof |
+| `ci-deploy` | `capacity = 1`, `role=deploy` | Never share with checks |
 | Native agent | `MAX_WORKFLOWS=1` | `=2` (MO-72): two jobs fight VM |
 | `CI-iPhone` | Boot only for iOS jobs | Idle Booted sim: ~1–1.5 GiB |
 
-Native capacity 2 plus the Docker agent oversubscribes RAM on this host. The
-Docker agent's work sits inside the Colima reservation, so the dangerous
-overlap is Colima memory plus one or two native Xcode/simulator jobs plus
-ordinary desktop processes.
+Native capacity 2 plus Colima oversubscribes RAM on this host. Desktop apps
+and non-CI LaunchAgents were removed in MO-117 so the 10 GiB VM fits.
 
 ## MO-116 incident (2026-11-02)
 
