@@ -52,6 +52,8 @@ printf 'Install OK. Smoke: ssh %s %s/scripts/drain-agent.sh --resume\n' \
   "$HOST" "$DEST"
 printf 'Reaper/backup/ci-slo LaunchAgents point at %s/scripts/*.sh\n' "$DEST"
 printf 'MO-118: bootstrap daily SLO + timeouts with:\n'
-printf "  ssh %s \"DOMAIN=gui/\$(id -u); launchctl bootout \$DOMAIN/com.shyamsivakumar.woodpecker-ci-slo-daily 2>/dev/null; launchctl bootstrap \$DOMAIN %s/com.shyamsivakumar.woodpecker-ci-slo-daily.plist; launchctl enable \$DOMAIN/com.shyamsivakumar.woodpecker-ci-slo-daily\"\n" \
+# Single-quoted remote body so a copied command expands $(id -u)/$DOMAIN on the M1,
+# not in the caller's shell.
+printf "  ssh %s 'DOMAIN=gui/\$(id -u); launchctl bootout \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-ci-slo-daily 2>/dev/null; launchctl bootstrap \"\$DOMAIN\" %s/com.shyamsivakumar.woodpecker-ci-slo-daily.plist; launchctl enable \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-ci-slo-daily'\n" \
   "$HOST" "$DEST"
 printf '  ssh %s %s/scripts/set-repo-timeouts.sh\n' "$HOST" "$DEST"

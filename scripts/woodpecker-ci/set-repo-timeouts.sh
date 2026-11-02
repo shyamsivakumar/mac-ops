@@ -37,16 +37,37 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$SRW_TIMEOUT" -gt 60 ]; then
-  echo "SRW_TIMEOUT=$SRW_TIMEOUT exceeds WOODPECKER_MAX_PIPELINE_TIMEOUT=60" >&2
+# Timeouts must be positive integers within the server max (60).
+case "$DEFAULT_TIMEOUT" in *[!0-9]* | '' | 0)
+  echo "DEFAULT_TIMEOUT must be a positive integer (got $DEFAULT_TIMEOUT)" >&2
+  exit 1
+  ;;
+esac
+case "$SRW_TIMEOUT" in *[!0-9]* | '' | 0)
+  echo "SRW_TIMEOUT must be a positive integer (got $SRW_TIMEOUT)" >&2
+  exit 1
+  ;;
+esac
+if [ "$DEFAULT_TIMEOUT" -gt 60 ] || [ "$SRW_TIMEOUT" -gt 60 ]; then
+  echo "timeouts must be ≤ WOODPECKER_MAX_PIPELINE_TIMEOUT=60" >&2
   exit 1
 fi
+# LIKE pattern: keep operator input from breaking out of the SQL string.
+newline='
+'
+cr=$(printf '\r')
+case "$SRW_MATCH" in
+  *\'* | *\"* | *\`* | *\$* | *\\* | *"$newline"* | *"$cr"*)
+    echo "SRW_MATCH contains unsafe characters: $SRW_MATCH" >&2
+    exit 1
+    ;;
+esac
 
 printf 'MO-118 timeouts: default=%sm SRW=%sm\n' "$DEFAULT_TIMEOUT" "$SRW_TIMEOUT"
 
 apply_db() {
-  write_db "UPDATE repos SET timeout = $DEFAULT_TIMEOUT WHERE full_name NOT LIKE '$SRW_MATCH';"
-  write_db "UPDATE repos SET timeout = $SRW_TIMEOUT WHERE full_name LIKE '$SRW_MATCH';"
+  write_db "UPDATE repos SET timeout = ${DEFAULT_TIMEOUT} WHERE full_name NOT LIKE '${SRW_MATCH}';"
+  write_db "UPDATE repos SET timeout = ${SRW_TIMEOUT} WHERE full_name LIKE '${SRW_MATCH}';"
   printf 'Repo timeouts after update:\n'
   query_db "SELECT full_name, timeout FROM repos ORDER BY full_name;"
 }
@@ -96,12 +117,26 @@ recreate_server() {
     exit 1
   fi
   printf 'Draining agents before server recreate (MO-117 lane guard)...\n'
-  # drain-agent prints DRAIN_OPID=...
-  opid=$(
-    "$drain" all 900 | tee /dev/stderr | awk -F= '/^DRAIN_OPID=/{print $2; exit}'
-  )
+  # drain-agent prints DRAIN_OPID=... before the idle wait; a later failure
+  # still leaves an opid on stdout. Capture exit status separately and abort
+  # recreate unless drain succeeded.
+  drain_log=$(mktemp "${TMPDIR:-/tmp}/mo118-drain.XXXXXX")
+  set +e
+  "$drain" all 900 >"$drain_log" 2>&1
+  drain_rc=$?
+  set -e
+  cat "$drain_log" >&2
+  opid=$(awk -F= '/^DRAIN_OPID=/{print $2; exit}' "$drain_log")
+  rm -f "$drain_log"
+  if [ "$drain_rc" -ne 0 ]; then
+    echo "Drain failed (rc=$drain_rc); not recreating server." >&2
+    if [ -n "${opid:-}" ]; then
+      echo "Drain op $opid may still be held; resume with: $drain --resume $opid" >&2
+    fi
+    exit "$drain_rc"
+  fi
   if [ -z "${opid:-}" ]; then
-    echo "Drain did not print DRAIN_OPID" >&2
+    echo "Drain succeeded but did not print DRAIN_OPID" >&2
     exit 1
   fi
   printf 'Recreating server with new timeout env (opid=%s)...\n' "$opid"
