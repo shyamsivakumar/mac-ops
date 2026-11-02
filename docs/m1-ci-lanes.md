@@ -1,49 +1,83 @@
 # M1 dedicated CI box — two Linux lanes (MO-117)
 
 Shyam's call (2026-11-02): no VPS and no hosted CI. The M1 is a dedicated
-CI box. Linux CI stays on Colima as two Docker agents; the native macOS agent
-keeps Xcode. Coordinate deploy labeling with SRW-349 (`role: deploy`).
+CI box. Keep only Woodpecker CI (and access), until the coordinator confirms
+anything else. Linux CI stays on Colima as two Docker agents; the native
+macOS agent keeps Xcode while jobs run. Coordinate deploy labeling with
+SRW-349 (`role: deploy`).
 
 Stack lives in `~/Code/woodpecker-ci` on the M1. Canonical copies of the
 compose file, drain/reaper/backup scripts and LaunchAgent plists are versioned
 here under [`scripts/woodpecker-ci/`](../scripts/woodpecker-ci/).
 
-## Keep on the M1
+## Keep (Woodpecker CI + reachability)
 
-- Woodpecker server, webhook proxy, `agent-linux`, `agent-deploy`, Colima
-  profile `woodpecker` (LaunchAgents `com.shyamsivakumar.colima-woodpecker`
-  and `…-watchdog`)
+- Woodpecker server, **webhook-proxy** (`127.0.0.1:8001`, GitHub hooks),
+  `agent-linux`, `agent-deploy`, Colima profile `woodpecker`
+  (LaunchAgents `com.shyamsivakumar.colima-woodpecker`, `…-watchdog`)
 - Native agent `org.woodpecker.agent` (`shyams-macbook-pro-ios`, capacity 1)
-- Tailscale, sshd, macOS system services
-- Paper trader LaunchAgents: `com.alpha-trader`,
-  `com.shyamsivakumar.strategy-paper`
-- New: `com.shyamsivakumar.woodpecker-reaper`,
+- Xcode / `CI-iPhone` simulator **only while a darwin job runs**; shut down after
+- Tailscale, sshd, core macOS system services (Finder, WindowServer, mds, …)
+- Reaper + nightly backup: `com.shyamsivakumar.woodpecker-reaper`,
   `com.shyamsivakumar.woodpecker-backup-nightly`
 
-Everything else that is not CI was quit and its user LaunchAgent archived to
-`~/Library/LaunchAgents/_disabled-mo117-*` so it does not return after reboot.
-TAL relaunch list is Finder-only. LogiOptionsPlus and Zoom agents under
-`/Library/LaunchAgents` need sudo to disable permanently; they were killed
-but may respawn until that is done by hand.
+## Held for coordinator confirmation
 
-## Quit ledger (2026-11-02, RSS at quit)
+Do **not** delete these until the coordinator says so. They are not Woodpecker
+CI, but may serve other machines or the SRW paper path.
 
-| What | RSS (approx) | Action |
-| --- | --- | --- |
-| Arc (earlier pass) | ~2.2 GiB renderer + app | quit |
-| ChatGPT / Codex UI (earlier) | ~hundreds of MiB | quit |
-| Herdr / Activity Monitor / Safari / Messages | small | quit |
-| FFT Auction LaunchAgent | 223 MiB; Chrome ~975 MiB | bootout, archive, kill |
-| Fantasy-football cron LaunchAgents (8) | idle | bootout + archive |
-| `com.shyam.*` scrapers (6) | idle | bootout + archive |
-| reports-server | 8.7 MiB | bootout + archive |
-| PostgreSQL@17 | 3.4 MiB | bootout + archive |
-| Google Keystone / updater | idle | bootout + archive |
-| pm2 `cli-proxy` | 2.7 MiB | deleted from pm2 |
-| Codex app-server daemon | 44 MiB | killed |
-| LogiOptionsPlus | 50–145 MiB | killed (may respawn from `/Library`) |
+| Item | Why it might matter | Status now | Undo if removed later |
+| --- | --- | --- | --- |
+| `com.alpha-trader` | Paper-trader host | **kept**, idle | bootstrap plist |
+| strategy-paper plist | Paper svc :8788 | **kept**, unloaded | bootstrap |
+| webhook-proxy | GitHub → CI | **kept**, running | `compose up -d` |
+| Heavy job queue on M1 | Not found listening | n/a | — |
 
-Full line log: `~/Library/Logs/woodpecker/mo117-quit.log` on the M1.
+No M1 listener looked like a shared heavy-queue endpoint. SRW live paper runs
+on Railway; the local paper LaunchAgents are held only as a break-glass.
+
+## Quit ledger (with one-line undo)
+
+Archives: `~/Library/LaunchAgents/_disabled-mo117-*` on the M1.
+Line logs: `~/Library/Logs/woodpecker/mo117-quit.log` and
+`mo117-quit-strict.log`.
+
+### Pass 1 — free memory for two lanes (≈12:50 PT)
+
+| What | RSS (approx) | Action | Undo |
+| --- | --- | --- | --- |
+| Arc | ~2.2 GiB | quit | `open -a Arc` |
+| ChatGPT / Codex UI | hundreds of MiB | quit | `open -a ChatGPT` |
+| Herdr, Activity Monitor, Safari, Messages | small | quit | `open -a <App>` |
+| FFT steel | 223 + 975 MiB | bootout, archive, kill | restore, bootstrap |
+| FFT collector agent | idle | bootout + archive | restore, bootstrap |
+| Fantasy cron agents (8) | idle | bootout + archive | restore, bootstrap |
+| `com.shyam.*` scrapers (6) | idle | bootout + archive | restore + bootstrap |
+| reports-server | 8.7 MiB | bootout + archive | restore + bootstrap |
+| PostgreSQL@17 agent | 3.4 MiB | bootout + archive | restore + bootstrap |
+| Google Keystone / updater | idle | bootout + archive | restore + bootstrap |
+| pm2 `cli-proxy` | 2.7 MiB | `pm2 delete` | `pm2 start` from prior config |
+| Codex app-server daemon | 44 MiB | kill | relaunch Codex |
+| TAL relaunch list | — | Finder-only | restore ByHost `*.before-mo117` |
+
+### Pass 2 — Woodpecker-only strict (≈13:13 PT)
+
+| What | RSS (approx) | Action | Undo |
+| --- | --- | --- | --- |
+| Raycast | 29.3 MiB | quit | `open -a Raycast` |
+| Ice | 19.8 MiB | quit | `open -a Ice` |
+| Amphetamine | 23.8 MiB | quit | `open -a Amphetamine` |
+| Rectangle | 21.8 MiB | quit | `open -a Rectangle` |
+| Fleetsmith UI | 48–282 MiB | quit (MDM may relaunch) | `open -a Fleetsmith` |
+| Notes/News/Stocks/Safari/Msgs/Term/Siri | 13–99 MiB | quit | `open -a <App>` |
+| LogiOptionsPlus | 116–165 MiB | kill; sudo for plist | reopen Logi app |
+| ARDAgent | 6 MiB | kill (respawns) | `sudo …/kickstart -activate` |
+| PM2 + modules | 63 MiB | `pm2 kill`, plist **held** | `launchctl kickstart` |
+| `com.ollama.ollama` | 5.2 MiB | bootout | `launchctl bootstrap` plist |
+| Stale FFT/fantasy plists | — | archived `*-strict` | `mv` back |
+| Spotlight: Code, .colima, logs | — | `.metadata_never_index` | `rm` it |
+
+Jamf Protect and other MDM agents were left alone (device management).
 
 ## Memory before / after
 
@@ -52,81 +86,61 @@ Full line log: `~/Library/Logs/woodpecker/mo117-quit.log` on the M1.
 | Before cleanup (12:47 PT) | 9.5 / 10 GiB | ~7 / 11 / 18 | 6 GiB, 1 agent |
 | After quit (12:57 PT) | 1.4 / 3 GiB | ~32 / 60 / 44 (iOS drain) | 6 GiB |
 | After lanes (13:04 PT) | 1.3 / 3 GiB | ~4 / 19 / 29 | **10 GiB**, 2 agents |
+| After strict (13:13 PT) | 1.0 / 2 GiB | ~18 / 9 / 18 | 10 GiB; CI live |
 
 ## Agents
 
 | Agent | Host / name | Backend | Capacity | Labels |
 | --- | --- | --- | --- | --- |
-| `ci-linux` | `agent-linux` (DB 17fcd710bf9a) | docker | **3** | linux/arm64 |
+| `ci-linux` | `agent-linux` (`17fcd710bf9a`) | docker | **3** | linux/arm64 |
 | `ci-deploy` | `agent-deploy` | docker | **1** | `!role=deploy,role=deploy` |
-| macOS | `shyams-macbook-pro-ios` | local | **1** | platform darwin/arm64 |
+| macOS | `shyams-macbook-pro-ios` | local | **1** | darwin/arm64 |
 
 `!role=deploy` means the deploy agent only takes workflows that set
 `labels.role: deploy`. Unlabeled Linux checks go to `ci-linux` only.
-SRW-349 must add `role: deploy` to `.woodpecker/deploy.yaml` so SRW deploys
-use the exclusive lane.
+SRW-349 must add `role: deploy` to `.woodpecker/deploy.yaml`.
 
-Colima is sized at **10 GiB / 4 CPUs** so capacity 3 checks + 1 deploy fit on
-the dedicated box. Native capacity stays 1. Do not raise native capacity on
-this 16 GiB host without a dual-load proof.
+Colima: **10 GiB / 4 CPUs**. Native capacity stays 1.
 
 ## Drain before restart
-
-Woodpecker cancels running workflows on agent shutdown. Always:
 
 ```sh
 ~/Code/woodpecker-ci/scripts/drain-agent.sh all   # or ci-linux / ci-deploy
 ```
 
-The drain script refuses if an SRW `deploy` workflow is running. Never
-`colima stop` / resize / `compose restart agent-*` during an SRW deploy.
-
-Apply / resize helper: `scripts/apply-two-lanes.sh` (drains, sets Colima
-memory, `compose up -d --remove-orphans`, installs reaper + nightly backup).
+Refuses if an SRW `deploy` workflow is running. Never `colima stop` / resize /
+`compose restart agent-*` during an SRW deploy.
 
 ## Reaper
 
-LaunchAgent `com.shyamsivakumar.woodpecker-reaper` every 5 minutes runs
-`scripts/reaper.sh`: any pipeline still `running` with no `log_entries` for
-10 minutes is marked `failure` (covers upstream #7063 stale-drop zombies).
-Log: `~/Library/Logs/woodpecker/reaper.log`.
+`com.shyamsivakumar.woodpecker-reaper` every 5 minutes: pipelines still
+`running` with no log for 10 minutes → `failure`; also clears orphan workflows
+under terminal pipelines. Log: `~/Library/Logs/woodpecker/reaper.log`.
 
 ## Nightly SQLite backup
 
-LaunchAgent `com.shyamsivakumar.woodpecker-backup-nightly` at 03:15 local runs
-a hot `sqlite3 .backup` (agents stay up) and `scp`s to
-`shyams-m4:~/Backups/woodpecker-ci/nightly-*` (14-day retention). Colima has
-no host mounts, so the copy leaves the VM via `docker cp`.
-
-Proof run 2026-11-02: `nightly-20261102T210502Z`, 5564 pipelines, ~1.5 GiB.
-
-Cold restore still uses `scripts/backup.sh` / `restore.sh` (stops agents).
+`com.shyamsivakumar.woodpecker-backup-nightly` at 03:15 → hot
+`sqlite3 .backup`, then `scp` to
+`shyams-m4:~/Backups/woodpecker-ci/nightly-*` (14-day retention).
 
 ## Simulator
 
-After each darwin/iOS job, shut down `CI-iPhone` so it does not sit Booted
-(~1–1.5 GiB). Idle Booted sims are not CI.
-
 ```sh
-xcrun simctl shutdown CI-iPhone
+xcrun simctl shutdown CI-iPhone   # after each iOS job
 ```
 
-## Proof checklist (MO-117)
+## Proof checklist
 
-- [x] Swap/load before and after cleanup and lane split (tables above)
-- [x] `agents` table: linux capacity 3, deploy capacity 1 with role labels,
-      darwin capacity 1
-- [x] Reaper + nightly backup LaunchAgents installed; backup landed on M4
-- [x] Two Linux checks from different repos at once on `ci-linux` (2026-11-02
-      13:11 PT): cairn pipeline 104 `ci` and SRW pipeline 2525 `verify`, both
-      `running` on agent capacity 3 with two live `wp_*` containers
-- [ ] SRW deploy overlapping those checks on `ci-deploy` — needs SRW-349
-      `role: deploy` on deploy.yaml; until then unlabeled deploys share
-      `ci-linux`. Agent 3 is registered and exclusive (`!role=deploy`).
+- [x] Swap/load before and after cleanup and lane split
+- [x] `agents`: linux cap 3, deploy cap 1 + role labels, darwin cap 1
+- [x] Reaper + nightly backup; backup on M4
+- [x] Two Linux checks concurrent on `ci-linux` (cairn 104 + SRW verify 2525)
+- [ ] SRW deploy on `ci-deploy` overlapping checks — needs SRW-349 `role: deploy`
 
 ## Do not
 
-- Grow Colima above 10 GiB or `ci-linux` above 3 without a dual-load proof
-- Restart Docker agents or Colima during an SRW deploy
-- Re-enable archived non-CI LaunchAgents on the M1
-- Put CI work on the M4
+- Grow Colima above 10 GiB or `ci-linux` above 3 without dual-load proof
+- Restart Docker agents / Colima during an SRW deploy
+- Re-enable archived non-CI LaunchAgents without coordinator OK
+- Remove held paper-trader LaunchAgents without coordinator OK
+- Put CI on the M4
