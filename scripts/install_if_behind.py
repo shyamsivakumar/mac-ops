@@ -1040,14 +1040,18 @@ def run_install_if_behind(
             )
 
         status_after = status_before
-        previous_receipt = status_before["receipt"]
+        if marker_for_receipt:
+            # Keep the last verified recovery receipt when superseding unverified B
+            # with newer C (do not chain previous_receipt to unverified B).
+            previous_receipt = marker_previous_receipt(pending_marker)
+        else:
+            previous_receipt = status_before["receipt"]
         if resume_unverified:
             install_started_at = float(
                 pending_marker.get("started_at")
                 or status_before.get("installed_at")
                 or time.time()
             )
-            previous_receipt = marker_previous_receipt(pending_marker)
             target_release = status_before["release"]
             try:
                 observation = observe_controller(
