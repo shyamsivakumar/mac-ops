@@ -73,6 +73,32 @@ fi
 
 compose up -d --remove-orphans
 
+# New agents (esp. ci-deploy) register outside the pre-resize drain op. Claim
+# them into DRAIN_OPID before any further guarded work so they cannot schedule.
+deadline=$(($(date +%s) + 120))
+until {
+  deploy_ids=$(docker_deploy_agent_ids)
+  check_ids=$(docker_check_agent_ids)
+  [ -n "$(printf '%s' "$deploy_ids" | tr -d '[:space:]')" ] \
+    && [ -n "$(printf '%s' "$check_ids" | tr -d '[:space:]')" ]
+}; do
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "New Docker agents did not register within 120s." >&2
+    exit 1
+  fi
+  sleep 2
+done
+"$ROOT/scripts/drain-agent.sh" --extend-op "$DRAIN_OPID"
+deploy_paused=$(query_db "SELECT COUNT(*) FROM agents a
+  JOIN mo117_drain_owned o ON o.agent_id = a.id
+  WHERE o.opid = '$DRAIN_OPID'
+    AND a.no_schedule = 1
+    AND (a.name = 'ci-deploy' OR IFNULL(a.custom_labels, '') LIKE '%role\":\"deploy%');")
+if [ "$deploy_paused" = "0" ]; then
+  echo "ci-deploy was not paused under drain op $DRAIN_OPID after extend." >&2
+  exit 1
+fi
+
 install -m 600 "$ROOT/com.shyamsivakumar.woodpecker-reaper.plist" \
   "$HOME/Library/LaunchAgents/"
 install -m 600 "$ROOT/com.shyamsivakumar.woodpecker-backup-nightly.plist" \
