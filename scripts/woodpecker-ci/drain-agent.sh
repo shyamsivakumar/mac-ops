@@ -6,7 +6,8 @@
 #         drain-agent.sh --resume
 #
 # Atomically sets no_schedule=1 only where it was 0 (UPDATE…RETURNING), records
-# only those flipped ids, and --resume restores only that owned set.
+# only those flipped ids under a shared lock, and --resume restores only that
+# owned set (same lock).
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -14,10 +15,34 @@ set -eu
 
 STATE_DIR="$HOME/Library/Logs/woodpecker"
 OWNED_FILE="$STATE_DIR/drain-owned-ids"
+LOCK_DIR="$STATE_DIR/drain-owned.lock"
 mkdir -p "$STATE_DIR"
 
-# Persist owned ids durably (temp + rename). Prefer leaving agents paused with
-# a missing ownership file over clearing someone else's pause.
+drain_lock_held=0
+acquire_drain_lock() {
+  tries=0
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge 600 ]; then
+      echo "Timed out waiting for drain ownership lock ($LOCK_DIR)." >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  printf '%s\n' "$$" >"$LOCK_DIR/pid"
+  drain_lock_held=1
+}
+
+release_drain_lock() {
+  if [ "$drain_lock_held" -eq 1 ]; then
+    rm -rf "$LOCK_DIR"
+    drain_lock_held=0
+  fi
+}
+trap release_drain_lock EXIT INT TERM
+
+# Persist owned ids under the drain lock (caller must hold it). Prefer leaving
+# agents paused with a missing ownership file over clearing someone else's pause.
 commit_owned() {
   ids=$1
   [ -n "$(printf '%s' "$ids" | tr -d '[:space:]')" ] || return 0
@@ -32,8 +57,10 @@ commit_owned() {
 }
 
 if [ "${1:-}" = "--resume" ]; then
+  acquire_drain_lock
   if [ ! -s "$OWNED_FILE" ]; then
     printf 'No drain-owned no_schedule ids to resume.\n'
+    release_drain_lock
     exit 0
   fi
   in_list=$(tr '\n' ',' <"$OWNED_FILE" | sed 's/,$//')
@@ -42,6 +69,7 @@ if [ "${1:-}" = "--resume" ]; then
   printf 'Scheduling resumed on drain-owned agent id(s): %s\n' \
     "$(tr '\n' ' ' <"$OWNED_FILE")"
   rm -f "$OWNED_FILE"
+  release_drain_lock
   exit 0
 fi
 
@@ -115,7 +143,8 @@ pause_ids=$(printf '%s' "$pause_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n
 
 if [ -n "$(printf '%s' "$pause_ids" | tr -d '[:space:]')" ]; then
   in_list=$(printf '%s' "$pause_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
-  # Single transaction: only rows still at 0 flip; RETURNING is the owned set.
+  # Lock covers DB flip + ownership merge so concurrent drains cannot clobber.
+  acquire_drain_lock
   owned=$(write_db "
 BEGIN IMMEDIATE;
 UPDATE agents
@@ -131,6 +160,7 @@ COMMIT;
   else
     printf 'Targets already no_schedule=1; not claiming ownership.\n'
   fi
+  release_drain_lock
 fi
 
 printf 'Draining %s (timeout %ss)...\n' "$agent_name" "$timeout_sec"
