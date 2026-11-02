@@ -5,10 +5,10 @@
 # Usage: drain-agent.sh <ci-linux|ci-deploy|native|all> [timeout_sec]
 #         drain-agent.sh --resume <opid>
 #
-# Each drain creates an operation id. Ownership records only pauses this drain
-# system created (plus agents already claimed by other drain ops). Independent
-# operator pauses are never claimed or cleared. Only the drain waiter clears
-# its own active marker on EXIT; --resume never touches another op's active.
+# Ownership lives in woodpecker.sqlite table mo117_drain_owned, written in the
+# same BEGIN IMMEDIATE transaction as the no_schedule flip (RETURNING-equivalent
+# via a temp flipped set). Host drain-ops/<opid>/ids mirrors that for operators.
+# Stale mkdir locks and active markers (dead owner pid) are reclaimed safely.
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -21,12 +21,37 @@ mkdir -p "$STATE_DIR" "$OPS_DIR"
 
 op_dir=
 drain_lock_held=0
-# Only the process that created this drain's active marker may clear it.
 owns_active_cleanup=0
+
+pid_alive() {
+  kill -0 "$1" 2>/dev/null
+}
 
 acquire_drain_lock() {
   tries=0
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    if [ -f "$LOCK_DIR/pid" ]; then
+      oldpid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+      case "$oldpid" in
+        '' | *[!0-9]*)
+          echo "Removing corrupt drain lock dir." >&2
+          rm -rf "$LOCK_DIR"
+          continue
+          ;;
+      esac
+      if ! pid_alive "$oldpid"; then
+        echo "Removing stale drain lock (dead pid $oldpid)." >&2
+        rm -rf "$LOCK_DIR"
+        continue
+      fi
+    else
+      # Lock dir without pid — treat as stale after a short settle.
+      if [ "$tries" -ge 5 ]; then
+        echo "Removing drain lock dir with no pid file." >&2
+        rm -rf "$LOCK_DIR"
+        continue
+      fi
+    fi
     tries=$((tries + 1))
     if [ "$tries" -ge 600 ]; then
       echo "Timed out waiting for drain ownership lock ($LOCK_DIR)." >&2
@@ -45,6 +70,31 @@ release_drain_lock() {
   fi
 }
 
+# Clear active only if this process created it, or if the recorded waiter is dead.
+reclaim_stale_active() {
+  d=$1
+  [ -f "$d/active" ] || return 0
+  apid=$(cat "$d/active" 2>/dev/null || true)
+  case "$apid" in
+    '' | *[!0-9]*)
+      echo "Clearing corrupt active marker in $d." >&2
+      rm -f "$d/active"
+      return 0
+      ;;
+  esac
+  if ! pid_alive "$apid"; then
+    echo "Clearing stale active marker in $d (dead pid $apid)." >&2
+    rm -f "$d/active"
+  fi
+}
+
+sweep_stale_actives() {
+  for d in "$OPS_DIR"/*; do
+    [ -d "$d" ] || continue
+    reclaim_stale_active "$d"
+  done
+}
+
 on_exit() {
   if [ "$owns_active_cleanup" -eq 1 ] && [ -n "$op_dir" ] && [ -d "$op_dir" ]; then
     rm -f "$op_dir/active"
@@ -55,40 +105,7 @@ trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-agents_still_owned() {
-  skip=${1:-}
-  for d in "$OPS_DIR"/*; do
-    [ -d "$d" ] || continue
-    base=$(basename "$d")
-    if [ -n "$skip" ] && [ "$base" = "$skip" ]; then
-      continue
-    fi
-    if [ -f "$d/ids" ]; then
-      cat "$d/ids"
-    fi
-  done | awk 'NF' | sort -u
-}
-
-overlapping_active_ops() {
-  opid=$1
-  my_ids="$OPS_DIR/$opid/ids"
-  [ -f "$my_ids" ] || return 1
-  for d in "$OPS_DIR"/*; do
-    [ -d "$d" ] || continue
-    other=$(basename "$d")
-    [ "$other" != "$opid" ] || continue
-    [ -f "$d/active" ] || continue
-    [ -f "$d/ids" ] || continue
-    if awk 'NR==FNR{a[$1]=1; next} $1 in a{found=1; exit} END{exit !found}' \
-      "$my_ids" "$d/ids"; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-persist_owned_ids() {
-  # Write ownership file durably (temp + rename) under the drain lock.
+persist_ids_file() {
   dest=$1
   shift
   tmp="$dest.tmp.$$"
@@ -96,41 +113,113 @@ persist_owned_ids() {
   mv -f "$tmp" "$dest"
 }
 
+# DB-backed ownership helpers (same sqlite volume as Woodpecker).
+claim_pause_txn() {
+  opid=$1
+  in_list=$2
+  write_db "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS mo117_drain_owned (
+  opid TEXT NOT NULL,
+  agent_id INTEGER NOT NULL,
+  PRIMARY KEY (opid, agent_id)
+);
+CREATE TEMP TABLE flipped AS
+  SELECT id AS agent_id FROM agents
+  WHERE id IN ($in_list) AND IFNULL(no_schedule, 0) = 0;
+UPDATE agents
+  SET no_schedule = 1
+  WHERE id IN (SELECT agent_id FROM flipped);
+INSERT OR IGNORE INTO mo117_drain_owned (opid, agent_id)
+  SELECT '$opid', agent_id FROM flipped;
+INSERT OR IGNORE INTO mo117_drain_owned (opid, agent_id)
+  SELECT '$opid', d.agent_id FROM mo117_drain_owned d
+  WHERE d.agent_id IN ($in_list) AND d.opid != '$opid';
+SELECT agent_id FROM mo117_drain_owned WHERE opid = '$opid' ORDER BY agent_id;
+SELECT 'FLIPPED';
+SELECT agent_id FROM flipped ORDER BY agent_id;
+COMMIT;
+"
+}
+
+resume_op_txn() {
+  opid=$1
+  write_db "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS mo117_drain_owned (
+  opid TEXT NOT NULL,
+  agent_id INTEGER NOT NULL,
+  PRIMARY KEY (opid, agent_id)
+);
+CREATE TEMP TABLE clearing AS
+  SELECT agent_id FROM mo117_drain_owned WHERE opid = '$opid'
+  AND agent_id NOT IN (
+    SELECT agent_id FROM mo117_drain_owned WHERE opid != '$opid'
+  );
+UPDATE agents SET no_schedule = 0
+  WHERE id IN (SELECT agent_id FROM clearing) AND no_schedule != 0;
+DELETE FROM mo117_drain_owned WHERE opid = '$opid';
+SELECT agent_id FROM clearing ORDER BY agent_id;
+COMMIT;
+"
+}
+
+other_active_overlap() {
+  opid=$1
+  # Overlap if another op still has active and shares a DB-owned agent.
+  my_ids=$(query_db "SELECT agent_id FROM mo117_drain_owned WHERE opid = '$opid';" || true)
+  [ -n "$(printf '%s' "$my_ids" | tr -d '[:space:]')" ] || return 1
+  for d in "$OPS_DIR"/*; do
+    [ -d "$d" ] || continue
+    other=$(basename "$d")
+    [ "$other" != "$opid" ] || continue
+    reclaim_stale_active "$d"
+    [ -f "$d/active" ] || continue
+    other_ids=$(query_db "SELECT agent_id FROM mo117_drain_owned WHERE opid = '$other';" || true)
+    if [ -z "$(printf '%s' "$other_ids" | tr -d '[:space:]')" ]; then
+      continue
+    fi
+    if printf '%s\n%s\n' "$my_ids" "$other_ids" | awk 'NF{c[$1]++; if(c[$1]>1){found=1; exit}} END{exit !found}'; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 if [ "${1:-}" = "--resume" ]; then
   opid=${2:?usage: drain-agent.sh --resume <opid>}
-  # Do not set owns_active_cleanup — a refused resume must not clear the
-  # waiter process's active marker.
   op_dir="$OPS_DIR/$opid"
+  sweep_stale_actives
   acquire_drain_lock
-  if [ ! -d "$op_dir" ] || [ ! -f "$op_dir/ids" ]; then
-    echo "Unknown or already resumed drain op: $opid" >&2
-    exit 1
+  write_db "CREATE TABLE IF NOT EXISTS mo117_drain_owned (
+    opid TEXT NOT NULL,
+    agent_id INTEGER NOT NULL,
+    PRIMARY KEY (opid, agent_id)
+  );" >/dev/null
+  if [ ! -d "$op_dir" ]; then
+    # Allow resume from DB even if host dir was lost.
+    mkdir -p "$op_dir"
   fi
+  reclaim_stale_active "$op_dir"
   if [ -f "$op_dir/active" ]; then
     echo "Drain op $opid is still active (idle wait); refusing --resume." >&2
     exit 1
   fi
-  if overlapping_active_ops "$opid"; then
+  owned_n=$(query_db "SELECT COUNT(*) FROM mo117_drain_owned WHERE opid = '$opid';" 2>/dev/null || echo 0)
+  if [ "$owned_n" = "0" ] && [ ! -s "$op_dir/ids" ]; then
+    echo "Unknown or already resumed drain op: $opid" >&2
+    exit 1
+  fi
+  if other_active_overlap "$opid"; then
     echo "Another active drain overlaps op $opid agents; refusing --resume." >&2
     exit 1
   fi
-  still=$(agents_still_owned "$opid" | tr '\n' ' ')
-  clear_ids=
-  while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    case " $still " in
-      *" $id "*) ;;
-      *) clear_ids="$clear_ids $id" ;;
-    esac
-  done <"$op_dir/ids"
-  clear_ids=$(printf '%s' "$clear_ids" | sed 's/^ *//')
-  if [ -n "$(printf '%s' "$clear_ids" | tr -d '[:space:]')" ]; then
-    in_list=$(printf '%s' "$clear_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
-    write_db "UPDATE agents SET no_schedule = 0
-      WHERE id IN ($in_list) AND no_schedule != 0;" >/dev/null
-    printf 'Scheduling resumed on agent id(s): %s (op %s)\n' "$clear_ids" "$opid"
+  cleared=$(resume_op_txn "$opid")
+  cleared=$(printf '%s' "$cleared" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+  if [ -n "$(printf '%s' "$cleared" | tr -d '[:space:]')" ]; then
+    printf 'Scheduling resumed on agent id(s): %s (op %s)\n' "$cleared" "$opid"
   else
-    printf 'Op %s released; agents still held by other drain ops.\n' "$opid"
+    printf 'Op %s released; agents still held by other drain ops (or none flipped).\n' "$opid"
   fi
   rm -rf "$op_dir"
   op_dir=
@@ -185,6 +274,8 @@ native_agent_busy() {
   fi
 }
 
+sweep_stale_actives
+
 if [ "$(srw_deploy_running)" != "0" ]; then
   echo "SRW deploy workflow is running; refusing to drain/restart." >&2
   exit 2
@@ -217,51 +308,21 @@ done
 pause_ids=$(printf '%s' "$pause_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
 
 mkdir -p "$op_dir"
-: >"$op_dir/active"
+printf '%s\n' "$$" >"$op_dir/active"
 owns_active_cleanup=1
-: >"$op_dir/ids"
 
 in_list=$(printf '%s' "$pause_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
 acquire_drain_lock
 
-# Persist recoverable ownership BEFORE the pause commit: agents we will flip,
-# plus targets already claimed by other drain ops.
-will_flip=$(query_db "SELECT id FROM agents
-  WHERE id IN ($in_list) AND IFNULL(no_schedule, 0) = 0;")
-already=$(agents_still_owned | tr '\n' ' ')
-pre_ids=
-for id in $will_flip; do
-  pre_ids="$pre_ids $id"
-done
-for id in $pause_ids; do
-  case " $already " in
-    *" $id "*) pre_ids="$pre_ids $id" ;;
-  esac
-done
-persist_owned_ids "$op_dir/ids" "$pre_ids"
+txn_out=$(claim_pause_txn "$opid" "$in_list")
+# Parse ids before FLIPPED marker and flipped list after.
+owned=$(printf '%s\n' "$txn_out" | awk 'BEGIN{p=1} /^FLIPPED$/{p=0; next} p' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+flipped=$(printf '%s\n' "$txn_out" | awk 'BEGIN{p=0} /^FLIPPED$/{p=1; next} p' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
-owned=$(write_db "
-BEGIN IMMEDIATE;
-UPDATE agents
-  SET no_schedule = 1
-  WHERE id IN ($in_list) AND IFNULL(no_schedule, 0) = 0
-  RETURNING id;
-COMMIT;
-")
-owned=$(printf '%s' "$owned" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+persist_ids_file "$op_dir/ids" "$owned"
 
-# Refresh ownership from RETURNING + drain-owned refs (should match pre_ids).
-already=$(agents_still_owned "$opid" | tr '\n' ' ')
-post_ids=$owned
-for id in $pause_ids; do
-  case " $already " in
-    *" $id "*) post_ids="$post_ids $id" ;;
-  esac
-done
-persist_owned_ids "$op_dir/ids" "$post_ids"
-
-if [ -n "$(printf '%s' "$owned" | tr -d '[:space:]')" ]; then
-  printf 'Set no_schedule=1 on drain-created pause id(s): %s\n' "$owned"
+if [ -n "$(printf '%s' "$flipped" | tr -d '[:space:]')" ]; then
+  printf 'Set no_schedule=1 on drain-created pause id(s): %s\n' "$flipped"
 else
   printf 'No new pauses created (targets already paused); op claims only drain-owned refs.\n'
 fi
