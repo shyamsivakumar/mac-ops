@@ -37,19 +37,19 @@ for arg in "$@"; do
   esac
 done
 
-# Timeouts must be positive integers within the server max (60).
-case "$DEFAULT_TIMEOUT" in *[!0-9]* | '' | 0)
-  echo "DEFAULT_TIMEOUT must be a positive integer (got $DEFAULT_TIMEOUT)" >&2
+# Timeouts: exact decimal 1–60 (no leading zeros, no overflow strings).
+valid_timeout() {
+  case "$1" in
+    [1-9] | [1-5][0-9] | 60) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+if ! valid_timeout "$DEFAULT_TIMEOUT"; then
+  echo "DEFAULT_TIMEOUT must be an integer 1..60 (got $DEFAULT_TIMEOUT)" >&2
   exit 1
-  ;;
-esac
-case "$SRW_TIMEOUT" in *[!0-9]* | '' | 0)
-  echo "SRW_TIMEOUT must be a positive integer (got $SRW_TIMEOUT)" >&2
-  exit 1
-  ;;
-esac
-if [ "$DEFAULT_TIMEOUT" -gt 60 ] || [ "$SRW_TIMEOUT" -gt 60 ]; then
-  echo "timeouts must be ≤ WOODPECKER_MAX_PIPELINE_TIMEOUT=60" >&2
+fi
+if ! valid_timeout "$SRW_TIMEOUT"; then
+  echo "SRW_TIMEOUT must be an integer 1..60 (got $SRW_TIMEOUT)" >&2
   exit 1
 fi
 # LIKE pattern: keep operator input from breaking out of the SQL string.

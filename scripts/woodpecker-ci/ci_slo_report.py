@@ -193,8 +193,9 @@ def timing_for(row):
 
 
 def load_failure_logs(host, stack, since_epoch):
-    # One row per failed workflow: include w.error and any failed step type
-    # (clone / commands / plugin / service), not only commands.
+    # One row per failed workflow: include w.error and every failed step
+    # (clone / commands / plugin / service). Log tails are fetched for all
+    # failed step IDs so an infra signal in a non-commands step is not lost.
     sql = f"""
 SELECT w.id AS workflow_id,
        r.full_name AS repo,
@@ -213,33 +214,19 @@ SELECT w.id AS workflow_id,
            AND s.state IN ('failure', 'killed', 'error')
        ), '') AS step_errors,
        IFNULL((
-         SELECT s.id
+         SELECT group_concat(s.id, ',')
          FROM steps s
          WHERE s.pipeline_id = w.pipeline_id
            AND s.ppid = w.pid
            AND s.state IN ('failure', 'killed', 'error')
-         ORDER BY CASE s.type
-           WHEN 'commands' THEN 0
-           WHEN 'clone' THEN 1
-           WHEN 'plugin' THEN 2
-           ELSE 3
-         END, s.id
-         LIMIT 1
-       ), 0) AS step_id,
+       ), '') AS step_ids,
        IFNULL((
-         SELECT s.name
+         SELECT group_concat(IFNULL(s.name, ''), ',')
          FROM steps s
          WHERE s.pipeline_id = w.pipeline_id
            AND s.ppid = w.pid
            AND s.state IN ('failure', 'killed', 'error')
-         ORDER BY CASE s.type
-           WHEN 'commands' THEN 0
-           WHEN 'clone' THEN 1
-           WHEN 'plugin' THEN 2
-           ELSE 3
-         END, s.id
-         LIMIT 1
-       ), '') AS step_name
+       ), '') AS step_names
 FROM workflows w
 JOIN pipelines p ON p.id = w.pipeline_id
 JOIN repos r ON r.id = p.repo_id
@@ -251,7 +238,16 @@ ORDER BY w.id;
     step_ids = []
     meta = []
     for row in rows:
-        sid = int(row.get("step_id") or 0)
+        ids = []
+        for part in (row.get("step_ids") or "").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                ids.append(int(part))
+            except ValueError:
+                continue
+        names = [n for n in (row.get("step_names") or "").split(",") if n]
         meta.append(
             {
                 "workflow_id": int(row.get("workflow_id") or 0),
@@ -261,12 +257,11 @@ ORDER BY w.id;
                 "state": row.get("state") or "",
                 "workflow_error": row.get("workflow_error") or "",
                 "step_errors": row.get("step_errors") or "",
-                "step_name": row.get("step_name") or "",
-                "step_id": sid,
+                "step_names": names,
+                "step_ids": ids,
             }
         )
-        if sid:
-            step_ids.append(sid)
+        step_ids.extend(ids)
 
     logs_by_step = defaultdict(list)
     if step_ids:
@@ -299,7 +294,10 @@ ORDER BY step_id, rn;
     failures = []
     for m in meta:
         err_blob = "\n".join(x for x in (m["workflow_error"], m["step_errors"]) if x)
-        log_text = "\n".join(logs_by_step.get(m["step_id"], []))
+        log_parts = []
+        for sid in m["step_ids"]:
+            log_parts.extend(logs_by_step.get(sid, []))
+        log_text = "\n".join(log_parts)
         cause = classify_failure(err_blob, log_text)
         failures.append(
             {
@@ -308,7 +306,7 @@ ORDER BY step_id, rn;
                 "workflow": m["workflow"],
                 "number": m["number"],
                 "state": m["state"],
-                "step": m["step_name"],
+                "step": ",".join(m["step_names"]) if m["step_names"] else "",
                 "cause": cause,
                 "error": err_blob[:300],
             }
