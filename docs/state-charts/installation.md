@@ -18,7 +18,9 @@ stateDiagram-v2
     Observing --> RolledBack: controller error or slots hit 0 without a veto
     Observing --> RolledBack: bound ends before the required ticks
     Observing --> Unverified: firing killed after the receipt names the new commit
-    Unverified --> Installed: next firing reads source_commit equal to origin/main (follow-up)
+    Unverified --> Observing: next firing finds observation-pending marker
+    Unverified --> RolledBack: resumed observation fails
+    Unverified --> Installed: resumed observation passes
     RolledBack --> Installed: previous release reactivated
     Installed --> AgentParity: install.sh agents
     AgentParity --> Installed: receipt at ~/.local/state/mac-ops/agents-installation.json
@@ -38,20 +40,26 @@ board slots at 0 without a veto reactivates the previous release. The same
 rollback happens when the bound ends without enough ticks or the controller
 status is stale.
 
-Observation state lives only in the firing's memory. When a firing is killed
-after `install.sh` writes the new receipt and before observation ends, the
-`flock` is released and nothing records that the release was never checked.
-The next firing sees `source_commit` equal to `origin/main` and returns
-`up_to_date`, so the unverified release stays active. The
-[install model](../../formal/install-if-behind/README.md) finds this path.
+Before install, `install_if_behind` writes `observation-pending.json` with the
+target commit and previous receipt, then updates it with the new release after
+install. Observation clears the marker on pass or after rollback. When a firing
+is killed after the receipt names the new commit, the marker remains. The next
+firing that sees `source_commit` equal to `origin/main` with a matching marker
+refuses `up_to_date`, resumes observation, and either verifies the release or
+reactivates the previous receipt. The
+[install model](../../formal/install-if-behind/README.md) found the pre-marker
+path.
 
 | State | Entered by | Guard to leave | Side effect |
 | --- | --- | --- | --- |
-| Compared | firing takes the lock | not main, dirty or fetch failed: error; receipt equals origin/main: up_to_date; behind: gate check | none |
+| Compared | lock taken | dirty, not main, fetch failed: error | none |
+| Compared | lock taken | receipt is origin/main: up_to_date | none |
+| Compared | lock taken | marker matches: resume Observing | none |
+| Compared | lock taken | behind: gate check | none |
 | Deferred | gate blocked or lock held | later firing | closing note |
-| Observing | receipt names target commit | ticks, controller error, bound end | reads `controller.jsonl` |
-| RolledBack | observation failed | previous receipt exists | previous release reactivated |
-| Unverified | firing killed in Observing | none recorded | none (follow-up) |
+| Observing | receipt names target | tick, error, bound end | clears marker |
+| RolledBack | observation failed | previous receipt exists | reactivates it |
+| Unverified | killed in Observing | next firing reads marker | marker stays |
 
 Installation copies an explicit source allowlist into a private runtime
 directory and writes each file atomically. It does not replace files used

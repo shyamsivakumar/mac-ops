@@ -561,6 +561,103 @@ def read_controller_rows(state_dir, *, since=0.0):
     return rows
 
 
+OBSERVATION_MARKER_NAME = "observation-pending.json"
+
+
+def observation_marker_path(state_dir):
+    return Path(state_dir) / OBSERVATION_MARKER_NAME
+
+
+def read_observation_marker(state_dir):
+    path = observation_marker_path(state_dir)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    source_commit = data.get("source_commit")
+    if not isinstance(source_commit, str) or not source_commit:
+        return None
+    return data
+
+
+def write_observation_marker(
+    state_dir,
+    *,
+    source_commit,
+    started_at,
+    previous_receipt=None,
+    release=None,
+):
+    state_dir = Path(state_dir)
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = {
+        "source_commit": source_commit,
+        "started_at": float(started_at),
+    }
+    if release is not None:
+        payload["release"] = release
+    if previous_receipt is not None:
+        payload["previous_receipt"] = previous_receipt
+    installer.atomic(
+        observation_marker_path(state_dir),
+        json.dumps(payload, sort_keys=True).encode("utf-8"),
+        0o600,
+    )
+
+
+def clear_observation_marker(state_dir):
+    with contextlib.suppress(FileNotFoundError):
+        observation_marker_path(state_dir).unlink()
+
+
+def observation_marker_applies_to_receipt(marker, status):
+    if not marker or not status or not status.get("installed"):
+        return False
+    source_commit = status.get("source_commit")
+    if not source_commit or marker.get("source_commit") != source_commit:
+        return False
+    marker_release = marker.get("release")
+    return not (
+        marker_release
+        and status.get("release")
+        and marker_release != status.get("release")
+    )
+
+
+def marker_previous_receipt(marker):
+    if not marker:
+        return None
+    previous = marker.get("previous_receipt")
+    if not isinstance(previous, dict):
+        return None
+    if not previous.get("release") or not previous.get("source_commit"):
+        return None
+    return previous
+
+
+def rebind_observation_marker_to_receipt(state_dir, marker, status):
+    """Keep recovery previous_receipt when marker target != installed receipt."""
+    if not marker or not status or not status.get("installed"):
+        return None
+    source_commit = status.get("source_commit")
+    if not source_commit:
+        return None
+    write_observation_marker(
+        state_dir,
+        source_commit=source_commit,
+        started_at=float(
+            marker.get("started_at") or status.get("installed_at") or time.time()
+        ),
+        previous_receipt=marker_previous_receipt(marker),
+        release=status.get("release"),
+    )
+    return read_observation_marker(state_dir)
+
+
 def observe_controller(
     state_dir,
     *,
@@ -866,7 +963,28 @@ def run_install_if_behind(
             "fetch_error": fetch_error,
         }
 
-        if action == "up_to_date":
+        pending_marker = read_observation_marker(state_dir)
+        marker_for_receipt = observation_marker_applies_to_receipt(
+            pending_marker, status_before
+        )
+        if pending_marker and not marker_for_receipt:
+            # Interrupted supersede can leave marker.source_commit ahead of the
+            # still-installed receipt. Re-bind so previous_receipt is not lost.
+            rebound = rebind_observation_marker_to_receipt(
+                state_dir, pending_marker, status_before
+            )
+            if rebound and observation_marker_applies_to_receipt(
+                rebound, status_before
+            ):
+                pending_marker = rebound
+                marker_for_receipt = True
+            else:
+                clear_observation_marker(state_dir)
+                pending_marker = None
+                marker_for_receipt = False
+        resume_unverified = marker_for_receipt and action == "up_to_date"
+
+        if action == "up_to_date" and not resume_unverified:
             result = {
                 **base_result,
                 "decision": "up_to_date",
@@ -892,44 +1010,48 @@ def run_install_if_behind(
         if dry_run:
             result = {
                 **base_result,
-                "decision": "dry_run_would_install",
-                "reason": reason,
+                "decision": "dry_run_would_install"
+                if not resume_unverified
+                else "error",
+                "reason": reason
+                if not resume_unverified
+                else "unverified_receipt_observation_pending",
                 "installed": False,
             }
             write_closing_note(closing_note, result)
             return result
 
-        recheck = check_gate(
-            heavy_bin,
-            state_dir,
-            max_queued=max_queued,
-            max_status_age=max_status_age,
-        )
-        if not recheck["passed"]:
-            result = {
-                **base_result,
-                "gate": recheck,
-                "decision": "deferred",
-                "reason": ", ".join(recheck["reasons"]),
-                "installed": False,
-            }
-            write_closing_note(closing_note, result)
-            return result
-
-        if head_commit != target_commit:
-            run_cmd(
-                ["git", "-C", str(checkout), "merge", "--ff-only", target_commit],
-                timeout=30,
+        if not resume_unverified:
+            recheck = check_gate(
+                heavy_bin,
+                state_dir,
+                max_queued=max_queued,
+                max_status_age=max_status_age,
             )
-            head_commit = run_cmd(
-                ["git", "-C", str(checkout), "rev-parse", "HEAD"], timeout=15
-            ).strip()
-            if head_commit != target_commit:
-                raise RuntimeError(
-                    "Fast-forward merge did not reach target origin/main commit"
-                )
+            if not recheck["passed"]:
+                result = {
+                    **base_result,
+                    "gate": recheck,
+                    "decision": "deferred",
+                    "reason": ", ".join(recheck["reasons"]),
+                    "installed": False,
+                }
+                write_closing_note(closing_note, result)
+                return result
 
-        install_started_at = time.time()
+            if head_commit != target_commit:
+                run_cmd(
+                    ["git", "-C", str(checkout), "merge", "--ff-only", target_commit],
+                    timeout=30,
+                )
+                head_commit = run_cmd(
+                    ["git", "-C", str(checkout), "rev-parse", "HEAD"], timeout=15
+                ).strip()
+                if head_commit != target_commit:
+                    raise RuntimeError(
+                        "Fast-forward merge did not reach target origin/main commit"
+                    )
+
         p_install = installer.paths(home, checkout)
         p_install["state"] = state_dir
         if not no_start and (
@@ -947,65 +1069,120 @@ def run_install_if_behind(
             raise RuntimeError(
                 "No-start installation requires an isolated home without legacy state"
             )
-        if status_before["receipt"]:
-            installer.validate_release(p_install, status_before["release"])
-        if installer.require_main_checkout(checkout) != target_commit:
-            raise RuntimeError("Checkout changed before installation")
+
         status_after = status_before
-        try:
-            if no_start:
-                installer.install(
-                    p_install,
-                    checkout,
-                    migrate=False,
-                    no_start=True,
-                    source_commit=target_commit,
-                )
-            else:
-                command = [checkout / "install.sh"]
-                if p_install["legacy"].exists():
-                    command.append("--migrate")
-                run_cmd(command, cwd=checkout, timeout=120)
-            status_after = read_installation_status(checkout, state_dir)
-            if status_after["source_commit"] != target_commit:
-                raise RuntimeError(
-                    "Post-install receipt source_commit does not match target origin/main"
-                )
-            observation = observe_controller(
-                state_dir,
-                target_release=status_after["release"],
-                install_started_at=install_started_at,
-                observe_seconds=observe_seconds,
-                poll_interval=poll_interval,
+        if marker_for_receipt:
+            # Keep the last verified recovery receipt when superseding unverified B
+            # with newer C (do not chain previous_receipt to unverified B).
+            previous_receipt = marker_previous_receipt(pending_marker)
+        else:
+            previous_receipt = status_before["receipt"]
+        if resume_unverified:
+            install_started_at = float(
+                pending_marker.get("started_at")
+                or status_before.get("installed_at")
+                or time.time()
             )
-        except (
-            RuntimeError,
-            OSError,
-            ValueError,
-            TypeError,
-            subprocess.SubprocessError,
-        ) as exc:
-            observation = {"passed": False, "reasons": [str(exc)]}
+            target_release = status_before["release"]
             try:
-                status_after = read_installation_status(checkout, state_dir)
+                observation = observe_controller(
+                    state_dir,
+                    target_release=target_release,
+                    install_started_at=install_started_at,
+                    observe_seconds=observe_seconds,
+                    poll_interval=poll_interval,
+                )
             except (
                 RuntimeError,
                 OSError,
                 ValueError,
                 TypeError,
                 subprocess.SubprocessError,
-            ):
-                pass
+            ) as exc:
+                observation = {"passed": False, "reasons": [str(exc)]}
+        else:
+            if status_before["receipt"]:
+                installer.validate_release(p_install, status_before["release"])
+            if installer.require_main_checkout(checkout) != target_commit:
+                raise RuntimeError("Checkout changed before installation")
+            install_started_at = time.time()
+            if marker_for_receipt:
+                # Keep marker on unverified B until receipt names C.
+                write_observation_marker(
+                    state_dir,
+                    source_commit=status_before["source_commit"],
+                    started_at=install_started_at,
+                    previous_receipt=previous_receipt,
+                    release=status_before.get("release"),
+                )
+            else:
+                write_observation_marker(
+                    state_dir,
+                    source_commit=target_commit,
+                    started_at=install_started_at,
+                    previous_receipt=previous_receipt,
+                )
+            try:
+                if no_start:
+                    installer.install(
+                        p_install,
+                        checkout,
+                        migrate=False,
+                        no_start=True,
+                        source_commit=target_commit,
+                    )
+                else:
+                    command = [checkout / "install.sh"]
+                    if p_install["legacy"].exists():
+                        command.append("--migrate")
+                    run_cmd(command, cwd=checkout, timeout=120)
+                status_after = read_installation_status(checkout, state_dir)
+                if status_after["source_commit"] != target_commit:
+                    raise RuntimeError(
+                        "Post-install receipt source_commit does not match target origin/main"
+                    )
+                write_observation_marker(
+                    state_dir,
+                    source_commit=target_commit,
+                    started_at=install_started_at,
+                    previous_receipt=previous_receipt,
+                    release=status_after["release"],
+                )
+                observation = observe_controller(
+                    state_dir,
+                    target_release=status_after["release"],
+                    install_started_at=install_started_at,
+                    observe_seconds=observe_seconds,
+                    poll_interval=poll_interval,
+                )
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                subprocess.SubprocessError,
+            ) as exc:
+                observation = {"passed": False, "reasons": [str(exc)]}
+                try:
+                    status_after = read_installation_status(checkout, state_dir)
+                except (
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    subprocess.SubprocessError,
+                ):
+                    pass
 
         if not observation["passed"]:
             restored = None
             rollback_error = None
-            if status_before["receipt"]:
+            if previous_receipt:
                 try:
                     restored = rollback_to_release(
                         home,
                         checkout,
-                        status_before["receipt"],
+                        previous_receipt,
                         state_dir=state_dir,
                         no_start=no_start,
                     )
@@ -1017,12 +1194,17 @@ def run_install_if_behind(
                     subprocess.SubprocessError,
                 ) as exc:
                     rollback_error = str(exc)
+            if restored:
+                clear_observation_marker(state_dir)
             result = {
                 **base_result,
                 "decision": "rolled_back" if restored else "error",
                 "reason": "; ".join(observation["reasons"]),
                 "installed": False,
                 "head_commit": head_commit,
+                "previous_source_commit": restored["source_commit"]
+                if restored
+                else base_result["previous_source_commit"],
                 "installed_source_commit": restored["source_commit"]
                 if restored
                 else status_after["source_commit"],
@@ -1038,6 +1220,7 @@ def run_install_if_behind(
             write_closing_note(closing_note, result)
             return result
 
+        clear_observation_marker(state_dir)
         result = {
             **base_result,
             "decision": "installed",
