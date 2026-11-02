@@ -5,10 +5,10 @@
 # Usage: drain-agent.sh <ci-linux|ci-deploy|native|all> [timeout_sec]
 #         drain-agent.sh --resume <opid>
 #
-# Each drain creates an operation id. Ownership (flipped agent ids) is stored
-# per op under drain-ops/<opid>/. --resume clears only that op's contribution;
-# agents stay paused while any other op still lists them. Resume is refused
-# while the op is still active (idle wait) or while any other active op overlaps.
+# Each drain creates an operation id. Ownership records only pauses this drain
+# system created (RETURNING flips) plus agents already claimed by other drain
+# ops (refcount). Independent operator pauses are never claimed or cleared.
+# The active marker is cleared on any exit; ids remain until --resume <opid>.
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -19,7 +19,9 @@ OPS_DIR="$STATE_DIR/drain-ops"
 LOCK_DIR="$STATE_DIR/drain-owned.lock"
 mkdir -p "$STATE_DIR" "$OPS_DIR"
 
+op_dir=
 drain_lock_held=0
+
 acquire_drain_lock() {
   tries=0
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
@@ -40,8 +42,16 @@ release_drain_lock() {
     drain_lock_held=0
   fi
 }
-# Release only on EXIT. INT/TERM exit so the shell cannot continue unlocked.
-trap release_drain_lock EXIT
+
+# Drop active so a timed-out/signaled drain does not block --resume forever.
+# Keep ids until an explicit --resume clears ownership.
+on_exit() {
+  if [ -n "$op_dir" ] && [ -d "$op_dir" ]; then
+    rm -f "$op_dir/active"
+  fi
+  release_drain_lock
+}
+trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -60,7 +70,6 @@ agents_still_owned() {
   done | awk 'NF' | sort -u
 }
 
-# True if another op is still in its idle-wait (active) and shares an agent id.
 overlapping_active_ops() {
   opid=$1
   my_ids="$OPS_DIR/$opid/ids"
@@ -95,7 +104,6 @@ if [ "${1:-}" = "--resume" ]; then
     echo "Another active drain overlaps op $opid agents; refusing --resume." >&2
     exit 1
   fi
-  # Clear no_schedule only for ids this op owns that no other op still lists.
   still=$(agents_still_owned "$opid" | tr '\n' ' ')
   clear_ids=
   while IFS= read -r id; do
@@ -115,6 +123,7 @@ if [ "${1:-}" = "--resume" ]; then
     printf 'Op %s released; agents still held by other drain ops.\n' "$opid"
   fi
   rm -rf "$op_dir"
+  op_dir=
   exit 0
 fi
 
@@ -133,7 +142,10 @@ agent_ids_for() {
     ci-linux) docker_check_agent_ids ;;
     ci-deploy) docker_deploy_agent_ids ;;
     native) native_agent_ids ;;
-    *) return 1 ;;
+    *)
+      echo "unknown agent target: $1" >&2
+      return 1
+      ;;
   esac
 }
 
@@ -182,19 +194,25 @@ esac
 
 pause_ids=
 for t in $targets; do
-  ids=$(agent_ids_for "$t" || true)
-  [ -n "$ids" ] || continue
+  if ! ids=$(agent_ids_for "$t"); then
+    echo "Failed to look up agent ids for $t." >&2
+    exit 1
+  fi
+  if [ -z "$(printf '%s' "$ids" | tr -d '[:space:]')" ]; then
+    echo "No agents matched target $t; refusing to drain." >&2
+    exit 1
+  fi
   pause_ids="$pause_ids $ids"
 done
 pause_ids=$(printf '%s' "$pause_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
 
 mkdir -p "$op_dir"
 : >"$op_dir/active"
+: >"$op_dir/ids"
 
-if [ -n "$(printf '%s' "$pause_ids" | tr -d '[:space:]')" ]; then
-  in_list=$(printf '%s' "$pause_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
-  acquire_drain_lock
-  owned=$(write_db "
+in_list=$(printf '%s' "$pause_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
+acquire_drain_lock
+owned=$(write_db "
 BEGIN IMMEDIATE;
 UPDATE agents
   SET no_schedule = 1
@@ -202,50 +220,56 @@ UPDATE agents
   RETURNING id;
 COMMIT;
 ")
-  owned=$(printf '%s' "$owned" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-  # Also claim agents we need that were already paused (refcount via op ids file)
-  # so --resume of another op cannot clear them while we still need the pause.
-  {
-    printf '%s\n' "$pause_ids" | tr -s '[:space:]' '\n'
-  } | awk 'NF' | sort -u >"$op_dir/ids"
-  if [ -n "$(printf '%s' "$owned" | tr -d '[:space:]')" ]; then
-    printf 'Set no_schedule=1 on newly flipped agent id(s): %s\n' "$owned"
-  else
-    printf 'Targets already no_schedule=1; op still claims them until --resume.\n'
-  fi
-  release_drain_lock
+owned=$(printf '%s' "$owned" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+
+# Own only: (1) ids we just flipped, (2) target ids already claimed by other
+# drain ops. Never claim an independent operator pause.
+{
+  printf '%s\n' "$owned" | tr -s '[:space:]' '\n'
+  already=$(agents_still_owned | tr '\n' ' ')
+  for id in $pause_ids; do
+    case " $already " in
+      *" $id "*) printf '%s\n' "$id" ;;
+    esac
+  done
+} | awk 'NF' | sort -u >"$op_dir/ids"
+
+if [ -n "$(printf '%s' "$owned" | tr -d '[:space:]')" ]; then
+  printf 'Set no_schedule=1 on drain-created pause id(s): %s\n' "$owned"
 else
-  # No agents matched; still emit an op so callers have a resume handle.
-  : >"$op_dir/ids"
+  printf 'No new pauses created (targets already paused); op claims only drain-owned refs.\n'
 fi
+release_drain_lock
 
 printf 'DRAIN_OPID=%s\n' "$opid"
 printf 'Draining %s (timeout %ss, op %s)...\n' "$agent_name" "$timeout_sec" "$opid"
 
-finish_op_active() {
-  rm -f "$op_dir/active"
-}
-
 while true; do
   if [ "$(srw_deploy_running)" != "0" ]; then
-    echo "SRW deploy started during drain; aborting (op $opid left active)." >&2
+    echo "SRW deploy started during drain; aborting (ownership retained, active cleared on exit)." >&2
     exit 2
   fi
   busy=0
   for t in $targets; do
+    if ! ids=$(agent_ids_for "$t"); then
+      echo "Failed to look up agent ids for $t during wait." >&2
+      exit 1
+    fi
+    if [ -z "$(printf '%s' "$ids" | tr -d '[:space:]')" ]; then
+      echo "Agent lookup for $t returned empty during wait." >&2
+      exit 1
+    fi
     if [ "$t" = "native" ]; then
       if [ "$(native_agent_busy)" != "0" ]; then
         busy=1
         printf '  native agent still has child processes\n'
       fi
-      ids=$(agent_ids_for native || true)
-      if [ -n "$ids" ] && [ "$(running_on_ids "$ids")" != "0" ]; then
+      if [ "$(running_on_ids "$ids")" != "0" ]; then
         busy=1
         printf '  native agent still has DB running workflow(s)\n'
       fi
       continue
     fi
-    ids=$(agent_ids_for "$t" || true)
     c=$(running_on_ids "$ids")
     if [ "$c" != "0" ]; then
       busy=1
@@ -260,14 +284,14 @@ while true; do
     if [ "$need_wp" -eq 1 ] && [ "$(wp_containers)" != "0" ]; then
       printf '  waiting for %s wp_* container(s)\n' "$(wp_containers)"
     else
-      finish_op_active
+      rm -f "$op_dir/active"
       printf 'Drain complete for %s (op %s held until --resume %s).\n' \
         "$agent_name" "$opid" "$opid"
       exit 0
     fi
   fi
   if [ $(($(date +%s) - started)) -ge "$timeout_sec" ]; then
-    echo "Drain timed out after ${timeout_sec}s (op $opid left active)." >&2
+    echo "Drain timed out after ${timeout_sec}s (ownership retained for --resume $opid; active cleared on exit)." >&2
     exit 1
   fi
   sleep 5
