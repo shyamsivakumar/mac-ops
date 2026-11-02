@@ -57,14 +57,14 @@ Poll(w, t) ==
     /\ UNCHANGED <<agentUp, release, install, newBroken, faults>>
 
 \* RPC.Done always writes the workflow DB status, then acknowledges the queue.
-\* fifo.finished does not require the reporting worker to still hold the lease:
-\* if the task is running it is closed; otherwise it is removed from pending.
+\* fifo.finished closes any running entry for the task id (no owner check);
+\* if the task is not running it is removed from pending instead.
 Finish(w) ==
     /\ exec[w] # None
     /\ LET t == exec[w] IN
         /\ exec' = [exec EXCEPT ![w] = None]
         /\ db' = [db EXCEPT ![t] = "success"]
-        /\ IF running[t] = w
+        /\ IF running[t] # None
               THEN /\ running' = [running EXCEPT ![t] = None]
                    /\ pending' = pending
               ELSE /\ pending' = pending \ {t}
