@@ -115,8 +115,14 @@ volume_agent_paused() {
   [ "$n" -ge 1 ]
 }
 
-# Tight extend loop through guarded bring-up / idle wait so late registrants
-# are still claimed before --resume.
+must_extend_op() {
+  if ! "$ROOT/scripts/drain-agent.sh" --extend-op "$DRAIN_OPID"; then
+    echo "drain-agent.sh --extend-op $DRAIN_OPID failed." >&2
+    exit 1
+  fi
+}
+
+# Soft extend during registration only (agent.conf / rows may not exist yet).
 extend_loop_stop="$HOME/Library/Logs/woodpecker/mo117-extend-stop-$$"
 mkdir -p "$HOME/Library/Logs/woodpecker"
 rm -f "$extend_loop_stop"
@@ -148,12 +154,16 @@ until {
   fi
   sleep 1
 done
+cleanup_extend
+trap - EXIT
 printf 'Volume-bound agents paused under op %s (linux+deploy).\n' "$DRAIN_OPID"
 
-# After pause: wait until owned Docker agents are idle and no SRW deploy is live.
-# Keep the extend loop running so a late registration cannot slip through.
+# From here, extension failures are fatal. Re-claim, then wait for idle.
+must_extend_op
+
 idle_deadline=$(($(date +%s) + 1800))
 while true; do
+  must_extend_op
   if ! srw=$(db_count "$(
     cat <<SQL
 SELECT COUNT(*) FROM workflows w
@@ -177,7 +187,6 @@ SQL
     echo "Failed to query owned running workflows." >&2
     exit 1
   fi
-  # Re-assert the volume-bound agents are still the owned paused ones.
   if ! volume_agent_paused woodpecker-ci-agent-linux-config \
     || ! volume_agent_paused woodpecker-ci-agent-deploy-config; then
     if [ "$(date +%s)" -ge "$idle_deadline" ]; then
@@ -197,7 +206,6 @@ SQL
   fi
   sleep 5
 done
-# Keep claiming until just before --resume (after native capacity checks).
 
 install -m 600 "$ROOT/com.shyamsivakumar.woodpecker-reaper.plist" \
   "$HOME/Library/LaunchAgents/"
@@ -304,8 +312,23 @@ else
 fi
 
 # Resume only this apply drain op (refcount: other ops keep their pauses).
-cleanup_extend
-trap - EXIT
+# Final claim + idle/ownership proof before clearing the drain op.
+must_extend_op
+if ! volume_agent_paused woodpecker-ci-agent-linux-config \
+  || ! volume_agent_paused woodpecker-ci-agent-deploy-config; then
+  echo "Volume-bound agents not paused under op $DRAIN_OPID before resume." >&2
+  exit 1
+fi
+if ! running=$(db_count "SELECT COUNT(*) FROM workflows w
+  JOIN mo117_drain_owned o ON o.agent_id = w.agent_id AND o.opid = '$DRAIN_OPID'
+  WHERE w.state = 'running';"); then
+  echo "Failed final owned-workflow idle check." >&2
+  exit 1
+fi
+if [ "$running" != "0" ]; then
+  echo "Owned agents still running workflows before resume (op $DRAIN_OPID)." >&2
+  exit 1
+fi
 "$ROOT/scripts/drain-agent.sh" --resume "$DRAIN_OPID"
 
 "$ROOT/scripts/verify.sh"
