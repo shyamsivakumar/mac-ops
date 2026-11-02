@@ -14,6 +14,7 @@
 - [Omp Cursor turn retry](cursor-retry.md).
 - [Controller tick order (restart watcher and idle-agent pause)](controller.md).
 - [Shadow review verdict](shadow-verdict.md).
+- [Woodpecker runner job and install lifecycle](woodpecker-runner.md).
 
 The [restart latch](../../.agents/skills/verify-restart-latch/SKILL.md) skill
 checks that one agent exit is restarted once when the watcher finishes its

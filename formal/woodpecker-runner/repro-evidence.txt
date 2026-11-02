@@ -1,0 +1,113 @@
+=== A. Failed-install: isolated mirror of bootstrap critical path ===
+exit=1 release=new (expect new: recreate happened, no restore)
+
+=== B. Real bootstrap.sh has no rollback/restore ===
+2:set -eu
+58:compose up -d --force-recreate
+71:"$ROOT/scripts/verify.sh"
+--- lines 55-71 ---
+
+compose config --quiet
+compose build --pull server agent webhook-proxy
+compose up -d --force-recreate
+
+"$TAILSCALE" serve --bg --yes --https=8443 127.0.0.1:8000
+"$TAILSCALE" funnel --bg --yes --https=443 127.0.0.1:8001
+
+plist="$HOME/Library/LaunchAgents/com.shyamsivakumar.colima-woodpecker.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+install -m 600 "$ROOT/com.shyamsivakumar.colima-woodpecker.plist" "$plist"
+domain="gui/$(id -u)"
+if ! launchctl print "$domain/com.shyamsivakumar.colima-woodpecker" >/dev/null 2>&1; then
+  launchctl bootstrap "$domain" "$plist"
+fi
+
+"$ROOT/scripts/verify.sh"
+
+=== C. Workflow 4254 agent restart gap (production install/restart path) ===
+{"level":"error","repo":"shyamsivakumar/strategy-replay-workbench","pipeline":"1449","workflow_id":"4254","time":"2026-10-29T20:00:46-07:00","message":"received sigterm termination signal"}
+{"level":"info","time":"2026-10-29T20:00:46-07:00","message":"termination signal is received, shutting down agent"}
+{"level":"info","time":"2026-10-29T20:00:46-07:00","message":"shutdown healthcheck server ..."}
+{"level":"error","error":"http: Server closed","time":"2026-10-29T20:00:46-07:00","message":"cannot listen on address :3000"}
+{"level":"info","time":"2026-10-29T20:00:46-07:00","message":"healthcheck server stopped"}
+{"level":"info","time":"2026-10-29T20:00:57-07:00","message":"log level: info"}
+{"level":"info","version":"3.16.0","time":"2026-10-29T20:00:57-07:00","message":"Starting Woodpecker agent"}
+{"level":"info","time":"2026-10-29T20:00:57-07:00","message":"log-entry stream buffer size set to max 100Mb"}
+{"level":"info","version":"3.16.0","backend":"local","platform":"darwin/arm64","parallel workflows":2,"single workflow":false,"time":"2026-10-29T20:00:57-07:00","message":"starting Woodpecker agent"}
+
+=== D. persistent.go Poll drops when backup gone (source) ===
+	task, err := q.Queue.Poll(c, agentID, f)
+	if task != nil {
+		log.Debug().Msgf("pull queue item: %s: remove from backup", task.ID)
+		if deleteErr := q.store.TaskDelete(task.ID); deleteErr != nil {
+			if errors.Is(deleteErr, types.ErrRecordNotExist) {
+				// The task is no longer in the backup store, which means it was
+				// already finished/removed (e.g. its workflow was canceled) and
+				// only lingered in the in-memory queue. Handing it to the agent
+				// would loop forever, so drop it from the queue instead.
+				log.Error().Err(deleteErr).Msgf("pull queue item: %s: not found in backup, dropping stale task", task.ID)
+				if dropErr := q.Queue.Error(c, task.ID, deleteErr); dropErr != nil {
+					log.Error().Err(dropErr).Msgf("pull queue item: %s: failed to drop stale task", task.ID)
+				}
+				return nil, nil
+			}
+			log.Error().Err(deleteErr).Msgf("pull queue item: %s: failed to remove from backup", task.ID)
+		} else {
+			log.Debug().Msgf("pull queue item: %s: successfully removed from backup", task.ID)
+		}
+	}
+	return task, err
+}
+
+// Error signals the task is done with an error.
+
+=== E. fifo resubmitExpiredPipelines does not restore backup (source) ===
+421:func (q *fifo) resubmitExpiredPipelines() {
+422-	for taskID, taskState := range q.running {
+423-		if time.Now().After(taskState.deadline) {
+424-			log.Info().Msgf("queue: resubmitting expired task %s", taskID)
+425-			taskState.error = ErrTaskExpired
+426-			q.pending.PushFront(taskState.item)
+427-			delete(q.running, taskID)
+428-			close(taskState.done)
+429-		}
+430-	}
+431-}
+
+=== F. RPC.Done updates DB before queue ack (source) ===
+362:	if workflow, err = pipeline.UpdateWorkflowStatusToDone(s.store, *workflow, state); err != nil {
+363:		logger.Error().Err(err).Msgf("pipeline.UpdateWorkflowStatusToDone: cannot update workflow state: %s", err)
+364-	}
+365-
+366-	var queueErr error
+367-	if !state.Canceled {
+368-		if workflow.Failing() {
+369-			queueErr = s.scheduler.Error(c, strWorkflowID, fmt.Errorf("workflow finished with error %s", state.Error))
+370-		} else {
+371-			queueErr = s.scheduler.Done(c, strWorkflowID, workflow.State)
+372-		}
+373-	} else {
+374-		if workflow.Started > 0 {
+375-			queueErr = s.scheduler.Done(c, strWorkflowID, model.StatusKilled)
+376-		} else {
+377-			queueErr = s.scheduler.Done(c, strWorkflowID, model.StatusCanceled)
+378-		}
+379-	}
+380-	if queueErr != nil {
+381-		logger.Error().Err(queueErr).Msg("queue.Done: cannot ack workflow")
+382-	}
+383-
+384-	currentPipeline.Workflows, err = s.store.WorkflowGetTree(currentPipeline)
+385-	if err != nil {
+386-		return err
+387-	}
+388-
+
+=== G. Bare-FIFO double-run is not the production path ===
+Production uses persistentQueue. After first poll the backup row is gone;
+resubmit puts the task in memory only; the next poll drops it (StaleDrop).
+RunnerDoubleRun.cfg sets StaleDrop=FALSE to show the bare FIFO hazard only.
+Agent still sees lease loss via extend failures, e.g.:
+878187:{"level":"error","repo":"shyamsivakumar/strategy-replay-workbench","pipeline":"2172","workflow_id":"5499","error":"backoff: permanent error (last error: rpc error: code = Unknown desc = queue: task not found)","time":"2026-11-01T19:22:10-08:00","message":"failed to extend workflow lease"}
+878189:{"level":"error","repo":"shyamsivakumar/strategy-replay-workbench","pipeline":"2384","workflow_id":"5762","error":"backoff: permanent error (last error: rpc error: code = Unknown desc = queue: task not found)","time":"2026-11-02T06:07:03-08:00","message":"failed to extend workflow lease"}
+878191:{"level":"error","repo":"shyamsivakumar/CineJar","pipeline":"127","workflow_id":"5820","error":"backoff: permanent error (last error: rpc error: code = Unknown desc = queue: task not found)","time":"2026-11-02T10:19:21-08:00","message":"failed to extend workflow lease"}
