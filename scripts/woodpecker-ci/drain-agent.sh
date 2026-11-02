@@ -39,7 +39,11 @@ release_drain_lock() {
     drain_lock_held=0
   fi
 }
-trap release_drain_lock EXIT INT TERM
+# Release only on EXIT. INT/TERM must exit (not continue) so a signal mid
+# flip cannot drop the lock while commit_owned / resume still runs.
+trap release_drain_lock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Persist owned ids under the drain lock (caller must hold it). Prefer leaving
 # agents paused with a missing ownership file over clearing someone else's pause.
@@ -60,7 +64,6 @@ if [ "${1:-}" = "--resume" ]; then
   acquire_drain_lock
   if [ ! -s "$OWNED_FILE" ]; then
     printf 'No drain-owned no_schedule ids to resume.\n'
-    release_drain_lock
     exit 0
   fi
   in_list=$(tr '\n' ',' <"$OWNED_FILE" | sed 's/,$//')
@@ -69,7 +72,6 @@ if [ "${1:-}" = "--resume" ]; then
   printf 'Scheduling resumed on drain-owned agent id(s): %s\n' \
     "$(tr '\n' ' ' <"$OWNED_FILE")"
   rm -f "$OWNED_FILE"
-  release_drain_lock
   exit 0
 fi
 
@@ -160,6 +162,7 @@ COMMIT;
   else
     printf 'Targets already no_schedule=1; not claiming ownership.\n'
   fi
+  # Drop the lock before the idle wait so concurrent drains can proceed.
   release_drain_lock
 fi
 
