@@ -117,6 +117,7 @@ text = open(sys.argv[1], encoding="utf-8").read()
 actions = (
     "CaptureReading",
     "DecideTargets",
+    "CensusFailure",
     "PublishCapacity",
     "PublishFailure",
     "RequestCriticalPause",
