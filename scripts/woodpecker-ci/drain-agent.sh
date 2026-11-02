@@ -4,12 +4,14 @@
 #
 # Usage: drain-agent.sh <ci-linux|ci-deploy|native|all> [timeout_sec]
 #         drain-agent.sh --resume <opid>
+#         drain-agent.sh --extend-op <opid>
 #
 # Ownership lives in woodpecker.sqlite table mo117_drain_owned, written in the
-# same BEGIN IMMEDIATE transaction as the no_schedule flip (RETURNING-equivalent
-# via a temp flipped set). Host drain-ops/<opid>/ids mirrors that for operators.
-# Mutual exclusion uses fcntl.flock (kernel-owned; released on process death),
-# not mkdir reclaim.
+# same BEGIN IMMEDIATE transaction as the no_schedule flip. Host
+# drain-ops/<opid>/ids mirrors that for operators. Mutual exclusion uses
+# fcntl.flock (kernel-owned; released on process death). `all` treats
+# ci-deploy as optional when absent; --extend-op claims agents that register
+# after the initial drain (new deploy lane) into an open op.
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -256,16 +258,36 @@ other_active_overlap() {
   return 1
 }
 
-if [ "${1:-}" = "--resume" ]; then
-  opid=${2:?usage: drain-agent.sh --resume <opid>}
-  op_dir="$OPS_DIR/$opid"
-  sweep_stale_actives
-  acquire_drain_lock
+wp_containers() {
+  docker ps --filter name=wp_ -q | wc -l | tr -d ' '
+}
+
+agent_ids_for() {
+  case "$1" in
+    ci-linux) docker_check_agent_ids ;;
+    ci-deploy) docker_deploy_agent_ids ;;
+    native) native_agent_ids ;;
+    *)
+      echo "unknown agent target: $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+ensure_owned_table() {
   write_db "CREATE TABLE IF NOT EXISTS mo117_drain_owned (
     opid TEXT NOT NULL,
     agent_id INTEGER NOT NULL,
     PRIMARY KEY (opid, agent_id)
   );" >/dev/null
+}
+
+if [ "${1:-}" = "--resume" ]; then
+  opid=${2:?usage: drain-agent.sh --resume <opid>}
+  op_dir="$OPS_DIR/$opid"
+  sweep_stale_actives
+  acquire_drain_lock
+  ensure_owned_table
   if [ ! -d "$op_dir" ]; then
     # Allow resume from DB even if host dir was lost.
     mkdir -p "$op_dir"
@@ -296,27 +318,47 @@ if [ "${1:-}" = "--resume" ]; then
   exit 0
 fi
 
-agent_name=${1:?usage: drain-agent.sh <ci-linux|ci-deploy|native|all|--resume> [timeout_sec|opid]}
+# Claim agents that appeared after the initial drain (new ci-deploy lane, etc.)
+# into an existing open op so they stay paused until --resume.
+if [ "${1:-}" = "--extend-op" ]; then
+  opid=${2:?usage: drain-agent.sh --extend-op <opid>}
+  op_dir="$OPS_DIR/$opid"
+  acquire_drain_lock
+  ensure_owned_table
+  owned_n=$(query_db "SELECT COUNT(*) FROM mo117_drain_owned WHERE opid = '$opid';" 2>/dev/null || echo 0)
+  if [ "$owned_n" = "0" ] && [ ! -d "$op_dir" ]; then
+    echo "Unknown drain op for extend: $opid" >&2
+    exit 1
+  fi
+  mkdir -p "$op_dir"
+  extend_ids=
+  for t in ci-linux ci-deploy native; do
+    if ! ids=$(agent_ids_for "$t"); then
+      echo "Failed to look up agent ids for $t during extend." >&2
+      exit 1
+    fi
+    extend_ids="$extend_ids $ids"
+  done
+  extend_ids=$(printf '%s' "$extend_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
+  if [ -z "$(printf '%s' "$extend_ids" | tr -d '[:space:]')" ]; then
+    echo "No agents found to extend into op $opid." >&2
+    exit 1
+  fi
+  in_list=$(printf '%s' "$extend_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
+  txn_out=$(claim_pause_txn "$opid" "$in_list")
+  owned=$(printf '%s\n' "$txn_out" | awk 'BEGIN{p=1} /^FLIPPED$/{p=0; next} p' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+  flipped=$(printf '%s\n' "$txn_out" | awk 'BEGIN{p=0} /^FLIPPED$/{p=1; next} p' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+  persist_ids_file "$op_dir/ids" "$owned"
+  printf 'Extended op %s; newly flipped id(s): %s\n' "$opid" "${flipped:-none}"
+  op_dir=
+  exit 0
+fi
+
+agent_name=${1:?usage: drain-agent.sh <ci-linux|ci-deploy|native|all|--resume|--extend-op> [timeout_sec|opid]}
 timeout_sec=${2:-1800}
 started=$(date +%s)
 opid="$(date +%Y%m%dT%H%M%S)-$$"
 op_dir="$OPS_DIR/$opid"
-
-wp_containers() {
-  docker ps --filter name=wp_ -q | wc -l | tr -d ' '
-}
-
-agent_ids_for() {
-  case "$1" in
-    ci-linux) docker_check_agent_ids ;;
-    ci-deploy) docker_deploy_agent_ids ;;
-    native) native_agent_ids ;;
-    *)
-      echo "unknown agent target: $1" >&2
-      return 1
-      ;;
-  esac
-}
 
 running_on_ids() {
   ids=$1
@@ -352,11 +394,16 @@ if [ "$(srw_deploy_running)" != "0" ]; then
 fi
 
 targets=
+optional_targets=
 case "$agent_name" in
   ci-linux) targets="ci-linux" ;;
   ci-deploy) targets="ci-deploy" ;;
   native) targets="native" ;;
-  all) targets="ci-linux ci-deploy native" ;;
+  all)
+    targets="ci-linux ci-deploy native"
+    # First two-lane rollout: ci-deploy may not exist until apply brings it up.
+    optional_targets="ci-deploy"
+    ;;
   *)
     echo "unknown agent: $agent_name" >&2
     exit 1
@@ -364,18 +411,31 @@ case "$agent_name" in
 esac
 
 pause_ids=
+present_targets=
 for t in $targets; do
   if ! ids=$(agent_ids_for "$t"); then
     echo "Failed to look up agent ids for $t." >&2
     exit 1
   fi
   if [ -z "$(printf '%s' "$ids" | tr -d '[:space:]')" ]; then
+    case " $optional_targets " in
+      *" $t "*)
+        printf 'Target %s not present; skipping (optional for this drain).\n' "$t"
+        continue
+        ;;
+    esac
     echo "No agents matched target $t; refusing to drain." >&2
     exit 1
   fi
+  present_targets="$present_targets $t"
   pause_ids="$pause_ids $ids"
 done
+present_targets=$(printf '%s' "$present_targets" | sed 's/^ *//')
 pause_ids=$(printf '%s' "$pause_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
+if [ -z "$(printf '%s' "$pause_ids" | tr -d '[:space:]')" ]; then
+  echo "No agents to drain after optional skips." >&2
+  exit 1
+fi
 
 mkdir -p "$op_dir"
 publish_active_marker "$op_dir"
@@ -407,7 +467,7 @@ while true; do
     exit 2
   fi
   busy=0
-  for t in $targets; do
+  for t in $present_targets; do
     if ! ids=$(agent_ids_for "$t"); then
       echo "Failed to look up agent ids for $t during wait." >&2
       exit 1
