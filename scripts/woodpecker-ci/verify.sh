@@ -42,9 +42,9 @@ until {
 done
 
 deadline=$((SECONDS + 120))
-until compose logs --tail=100 agent-linux 2>&1 | grep -q '"parallel workflows":3'; do
+until compose logs --tail=100 agent-linux 2>&1 | grep -q '"parallel workflows":4'; do
   if [ "$SECONDS" -ge "$deadline" ]; then
-    echo "ci-linux agent did not report parallel workflows:3." >&2
+    echo "ci-linux agent did not report parallel workflows:4." >&2
     compose logs --tail=100 agent-linux >&2
     exit 1
   fi
@@ -147,7 +147,7 @@ for agent_svc in agent-linux agent-deploy; do
 done
 
 printf 'Local health: OK\n'
-printf 'Containers: server, ci-linux (cap 3), ci-deploy (cap 1, role=deploy), webhook filter\n'
+printf 'Containers: server, ci-linux (cap 4), ci-deploy (cap 1, role=deploy), webhook filter\n'
 printf 'Private host: %s\n' "$(sed -n 's/^WOODPECKER_HOST=//p' "$ROOT/.env")"
 printf 'Public ingress: POST /api/hook only\n'
 printf 'OAuth callback: %s/authorize\n' "$(sed -n 's/^WOODPECKER_HOST=//p' "$ROOT/.env")"

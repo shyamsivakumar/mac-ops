@@ -46,7 +46,7 @@ services:
       - "127.0.0.1:8001:8080"
 
   # Linux checks lane. Unlabeled linux/arm64 workflows land here.
-  # Capacity 3 with Colima 10 GiB after MO-117 dedicated-CI cleanup.
+  # Capacity 4 after 2026-11-02 dual-load headroom check (Colima 10 GiB).
   agent-linux:
     build:
       context: ./woodpecker-runtime
@@ -59,7 +59,7 @@ services:
       WOODPECKER_SERVER: "server:9000"
       WOODPECKER_AGENT_SECRET_FILE: "/run/secrets/agent-secret"
       WOODPECKER_HOSTNAME: "ci-linux"
-      WOODPECKER_MAX_WORKFLOWS: "3"
+      WOODPECKER_MAX_WORKFLOWS: "4"
       WOODPECKER_BACKEND: "docker"
       WOODPECKER_LOG_LEVEL: "info"
     volumes:
