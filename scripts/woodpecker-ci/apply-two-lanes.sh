@@ -76,9 +76,47 @@ compose up -d --remove-orphans server webhook-proxy
 agents_up_at=$(date +%s)
 compose up -d agent-linux agent-deploy
 
-# Tight extend loop: claim agents into DRAIN_OPID as soon as they appear so
-# they cannot keep scheduling. Require fresh last_contact (not a stale row
-# from a prior rollout) and no_schedule=1 under this op.
+# agent.conf on each volume binds the running container to agents.id.
+agent_id_from_volume() {
+  vol=$1
+  docker run --rm -v "$vol:/c:ro" alpine:3.22 \
+    sh -c 'test -s /c/agent.conf && cat /c/agent.conf' \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["agent_id"])'
+}
+
+# Fail closed: empty/non-integer DB results are not success.
+db_count() {
+  sql=$1
+  out=
+  if ! out=$(query_db "$sql"); then
+    return 1
+  fi
+  case "$out" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$out"
+}
+
+# True when the agent_id from this volume is fresh, owned, and paused.
+volume_agent_paused() {
+  vol=$1
+  aid=
+  if ! aid=$(agent_id_from_volume "$vol"); then
+    return 1
+  fi
+  case "$aid" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  n=$(db_count "SELECT COUNT(*) FROM agents a
+    JOIN mo117_drain_owned o ON o.agent_id = a.id AND o.opid = '$DRAIN_OPID'
+    WHERE a.id = $aid
+      AND a.no_schedule = 1
+      AND IFNULL(a.last_contact, 0) >= $agents_up_at;") || return 1
+  [ "$n" -ge 1 ]
+}
+
+# Tight extend loop through guarded bring-up / idle wait so late registrants
+# are still claimed before --resume.
 extend_loop_stop="$HOME/Library/Logs/woodpecker/mo117-extend-stop-$$"
 mkdir -p "$HOME/Library/Logs/woodpecker"
 rm -f "$extend_loop_stop"
@@ -100,40 +138,55 @@ deadline=$(($(date +%s) + 120))
 until {
   [ -n "$(compose ps --status running -q agent-linux 2>/dev/null)" ] \
     && [ -n "$(compose ps --status running -q agent-deploy 2>/dev/null)" ] \
-    && [ "$(query_db "SELECT COUNT(*) FROM agents a
-        JOIN mo117_drain_owned o ON o.agent_id = a.id AND o.opid = '$DRAIN_OPID'
-        WHERE a.backend = 'docker'
-          AND a.name != 'ci-deploy'
-          AND IFNULL(a.custom_labels, '') NOT LIKE '%role\":\"deploy%'
-          AND a.no_schedule = 1
-          AND IFNULL(a.last_contact, 0) >= $agents_up_at;")" != "0" ] \
-    && [ "$(query_db "SELECT COUNT(*) FROM agents a
-        JOIN mo117_drain_owned o ON o.agent_id = a.id AND o.opid = '$DRAIN_OPID'
-        WHERE a.no_schedule = 1
-          AND IFNULL(a.last_contact, 0) >= $agents_up_at
-          AND (a.name = 'ci-deploy'
-               OR IFNULL(a.custom_labels, '') LIKE '%role\":\"deploy%');")" != "0" ]
+    && volume_agent_paused woodpecker-ci-agent-linux-config \
+    && volume_agent_paused woodpecker-ci-agent-deploy-config
 }; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
     cleanup_extend
-    echo "Fresh paused Docker agents did not appear under op $DRAIN_OPID within 120s." >&2
+    echo "Fresh paused agents bound to linux/deploy volumes did not appear under op $DRAIN_OPID within 120s." >&2
     exit 1
   fi
   sleep 1
 done
-cleanup_extend
-trap - EXIT
+printf 'Volume-bound agents paused under op %s (linux+deploy).\n' "$DRAIN_OPID"
 
 # After pause: wait until owned Docker agents are idle and no SRW deploy is live.
+# Keep the extend loop running so a late registration cannot slip through.
 idle_deadline=$(($(date +%s) + 1800))
 while true; do
-  if [ "$(srw_deploy_running)" != "0" ]; then
+  if ! srw=$(db_count "$(
+    cat <<SQL
+SELECT COUNT(*) FROM workflows w
+JOIN pipelines p ON p.id = w.pipeline_id
+JOIN repos r ON r.id = p.repo_id
+WHERE w.state = 'running'
+  AND w.name = 'deploy'
+  AND r.full_name LIKE '%strategy-replay-workbench%';
+SQL
+  )"); then
+    echo "Failed to query SRW deploy status." >&2
+    exit 1
+  fi
+  if [ "$srw" != "0" ]; then
     echo "SRW deploy running after agent bring-up; refusing to continue apply." >&2
     exit 2
   fi
-  running=$(query_db "SELECT COUNT(*) FROM workflows w
+  if ! running=$(db_count "SELECT COUNT(*) FROM workflows w
     JOIN mo117_drain_owned o ON o.agent_id = w.agent_id AND o.opid = '$DRAIN_OPID'
-    WHERE w.state = 'running';")
+    WHERE w.state = 'running';"); then
+    echo "Failed to query owned running workflows." >&2
+    exit 1
+  fi
+  # Re-assert the volume-bound agents are still the owned paused ones.
+  if ! volume_agent_paused woodpecker-ci-agent-linux-config \
+    || ! volume_agent_paused woodpecker-ci-agent-deploy-config; then
+    if [ "$(date +%s)" -ge "$idle_deadline" ]; then
+      echo "Volume-bound agents lost pause ownership under op $DRAIN_OPID." >&2
+      exit 1
+    fi
+    sleep 2
+    continue
+  fi
   if [ "$running" = "0" ]; then
     printf 'Post-extend idle: owned Docker agents quiet under op %s.\n' "$DRAIN_OPID"
     break
@@ -142,9 +195,9 @@ while true; do
     echo "Owned agents still running workflows after extend (op $DRAIN_OPID)." >&2
     exit 1
   fi
-  "$ROOT/scripts/drain-agent.sh" --extend-op "$DRAIN_OPID" >/dev/null 2>&1 || true
   sleep 5
 done
+# Keep claiming until just before --resume (after native capacity checks).
 
 install -m 600 "$ROOT/com.shyamsivakumar.woodpecker-reaper.plist" \
   "$HOME/Library/LaunchAgents/"
@@ -251,6 +304,8 @@ else
 fi
 
 # Resume only this apply drain op (refcount: other ops keep their pauses).
+cleanup_extend
+trap - EXIT
 "$ROOT/scripts/drain-agent.sh" --resume "$DRAIN_OPID"
 
 "$ROOT/scripts/verify.sh"
