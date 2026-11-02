@@ -39,7 +39,10 @@ The native agent `shyams-macbook-pro-ios` runs from the LaunchAgent
 `org.woodpecker.agent`. MO-72 added a second slot by setting
 `WOODPECKER_MAX_WORKFLOWS=2`, so one SIGTERM kills both in-flight workflows.
 Workflow 4254 followed the Killed, Expired, StaleDropped path and is still
-`running` in the database.
+`running` in the database. MO-116 returned the live plist to
+`WOODPECKER_MAX_WORKFLOWS=1` and capped the Colima `woodpecker` VM at 6 GiB
+(see [M1 CI memory](../m1-ci-memory.md)); capacity 2 plus an 8 GiB VM
+oversubscribed the 16 GiB host.
 
 ## Agent install
 
