@@ -614,13 +614,11 @@ def clear_observation_marker(state_dir):
         observation_marker_path(state_dir).unlink()
 
 
-def observation_marker_matches_receipt(marker, status, target_commit):
+def observation_marker_applies_to_receipt(marker, status):
     if not marker or not status or not status.get("installed"):
         return False
     source_commit = status.get("source_commit")
-    if not source_commit or source_commit != target_commit:
-        return False
-    if marker.get("source_commit") != source_commit:
+    if not source_commit or marker.get("source_commit") != source_commit:
         return False
     marker_release = marker.get("release")
     return not (
@@ -628,6 +626,17 @@ def observation_marker_matches_receipt(marker, status, target_commit):
         and status.get("release")
         and marker_release != status.get("release")
     )
+
+
+def marker_previous_receipt(marker):
+    if not marker:
+        return None
+    previous = marker.get("previous_receipt")
+    if not isinstance(previous, dict):
+        return None
+    if not previous.get("release") or not previous.get("source_commit"):
+        return None
+    return previous
 
 
 def observe_controller(
@@ -936,15 +945,13 @@ def run_install_if_behind(
         }
 
         pending_marker = read_observation_marker(state_dir)
-        resume_unverified = (
-            action == "up_to_date"
-            and observation_marker_matches_receipt(
-                pending_marker, status_before, target_commit
-            )
+        marker_for_receipt = observation_marker_applies_to_receipt(
+            pending_marker, status_before
         )
-        if pending_marker and not resume_unverified:
+        if pending_marker and not marker_for_receipt:
             clear_observation_marker(state_dir)
             pending_marker = None
+        resume_unverified = marker_for_receipt and action == "up_to_date"
 
         if action == "up_to_date" and not resume_unverified:
             result = {
@@ -1040,9 +1047,7 @@ def run_install_if_behind(
                 or status_before.get("installed_at")
                 or time.time()
             )
-            previous_receipt = (
-                pending_marker.get("previous_receipt") or previous_receipt
-            )
+            previous_receipt = marker_previous_receipt(pending_marker)
             target_release = status_before["release"]
             try:
                 observation = observe_controller(
@@ -1144,7 +1149,8 @@ def run_install_if_behind(
                     subprocess.SubprocessError,
                 ) as exc:
                     rollback_error = str(exc)
-            clear_observation_marker(state_dir)
+            if restored:
+                clear_observation_marker(state_dir)
             result = {
                 **base_result,
                 "decision": "rolled_back" if restored else "error",
