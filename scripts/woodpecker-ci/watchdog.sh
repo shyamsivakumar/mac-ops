@@ -1,7 +1,7 @@
 #!/bin/sh
 # Recover a stopped Colima VM. Starts missing stack containers only.
-# Does not restart healthy Docker agents or the native agent (that would
-# cancel in-flight work, including SRW deploy).
+# Does not recreate healthy running services (compose --no-recreate and
+# only names the missing ones). Does not restart the native agent if loaded.
 set -eu
 
 # shellcheck disable=SC1091
@@ -31,26 +31,41 @@ until "$COLIMA" status woodpecker >/dev/null 2>&1 && docker ps -q >/dev/null 2>&
 done
 log "Colima is running."
 
-# Start only services that are not already running. Never compose restart.
-need_up=0
+missing=
 for service in server agent-linux agent-deploy webhook-proxy; do
   if [ -z "$(compose ps --status running -q "$service" 2>/dev/null)" ]; then
-    log "Service $service is not running; will compose up -d."
-    need_up=1
+    missing="$missing $service"
   fi
 done
-if [ "$need_up" -eq 1 ]; then
-  # Refuse to bring agents up while an SRW deploy DB row is somehow mid-flight
-  # on a surviving native path; Docker agents were down with Colima anyway.
+missing=$(printf '%s' "$missing" | sed 's/^ *//')
+
+if [ -n "$missing" ]; then
   if [ "$(srw_deploy_running)" != "0" ]; then
-    log "SRW deploy marked running; composing server/webhook only."
-    compose up -d server webhook-proxy
+    # Never bring Docker agents up under a live SRW deploy row.
+    start=
+    case " $missing " in
+      *" server "*) start="$start server" ;;
+    esac
+    case " $missing " in
+      *" webhook-proxy "*) start="$start webhook-proxy" ;;
+    esac
+    start=$(printf '%s' "$start" | sed 's/^ *//')
+    if [ -n "$start" ]; then
+      log "SRW deploy marked running; compose up --no-recreate: $start"
+      # shellcheck disable=SC2086
+      compose up -d --no-recreate $start
+    else
+      log "SRW deploy marked running; missing only agents — leaving them down."
+    fi
   else
-    compose up -d
+    log "compose up -d --no-recreate for missing: $missing"
+    # shellcheck disable=SC2086
+    compose up -d --no-recreate $missing
   fi
+else
+  log "All compose services already running; nothing to start."
 fi
 
-# Native agent: start only if LaunchAgent is not running.
 native_pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
 case "$native_pid" in
   '' | -)
@@ -64,4 +79,4 @@ case "$native_pid" in
     ;;
 esac
 
-log "Recovery finished (no blanket agent restart)."
+log "Recovery finished (missing-only, --no-recreate)."

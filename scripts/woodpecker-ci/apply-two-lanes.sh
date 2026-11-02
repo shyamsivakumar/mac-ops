@@ -1,11 +1,12 @@
 #!/bin/sh
 # MO-117: resize Colima, swap in two Docker agents, install reaper + nightly backup.
 # Refuses to run while an SRW deploy is active. Drains Docker (+native if
-# needed) with no_schedule set before stopping Colima. Does not restart the
-# native agent; only verifies WOODPECKER_MAX_WORKFLOWS=1 in its plist.
+# needed) with owned no_schedule before stopping Colima. Verifies the live
+# native capacity is 1 (plist + process env + agents.capacity); guarded reload
+# only after drain when the running agent drifted.
 set -eu
 
-# shellcheck source-path=SCRIPTDIR source=common.sh
+# shellcheck source-path=SCRIPTDIR source=common.sh disable=SC1091
 . "$(dirname -- "$0")/common.sh"
 
 DOMAIN="gui/$(id -u)"
@@ -74,20 +75,63 @@ for label in com.shyamsivakumar.woodpecker-reaper \
 done
 launchctl kickstart "$DOMAIN/com.shyamsivakumar.woodpecker-reaper"
 
-# Enforce native capacity 1 via plist (no kickstart — that would cancel a
-# live darwin job). Fix the file if drifted; operator reloads when idle.
-if [ -f "$PLIST" ]; then
-  max=$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:WOODPECKER_MAX_WORKFLOWS' \
-    "$PLIST" 2>/dev/null || echo missing)
-  if [ "$max" != "1" ]; then
-    echo "Native agent WOODPECKER_MAX_WORKFLOWS is '$max' (want 1)." >&2
-    echo "Fix $PLIST then: drain-agent.sh native && launchctl kickstart -k $DOMAIN/org.woodpecker.agent" >&2
-    exit 1
-  fi
-  printf 'Native agent plist WOODPECKER_MAX_WORKFLOWS=1 (not restarted).\n'
+# Fail closed if the native LaunchAgent plist is missing or wrong.
+if [ ! -f "$PLIST" ]; then
+  echo "Native agent plist missing: $PLIST" >&2
+  exit 1
+fi
+plist_max=$(/usr/libexec/PlistBuddy -c \
+  'Print :EnvironmentVariables:WOODPECKER_MAX_WORKFLOWS' "$PLIST" 2>/dev/null || echo missing)
+if [ "$plist_max" != "1" ]; then
+  echo "Native agent plist WOODPECKER_MAX_WORKFLOWS is '$plist_max' (want 1)." >&2
+  exit 1
 fi
 
-# Resume scheduling now that the new agents are up.
+# Live process env (LaunchAgent may still be running the old value).
+live_max=
+native_pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
+case "$native_pid" in
+  '' | -) live_max=missing ;;
+  *)
+    live_max=$(ps eww -p "$native_pid" -o command= 2>/dev/null \
+      | tr ' ' '\n' | sed -n 's/^WOODPECKER_MAX_WORKFLOWS=//p' | head -1)
+    [ -n "$live_max" ] || live_max=unknown
+    ;;
+esac
+
+# agents.capacity as reported to the server (source of truth for scheduling).
+db_cap=$(query_db "SELECT IFNULL(capacity, -1) FROM agents
+  WHERE backend = 'local' ORDER BY id LIMIT 1;" || echo missing)
+
+need_reload=0
+if [ "$live_max" != "1" ]; then
+  printf 'Native agent live WOODPECKER_MAX_WORKFLOWS=%s (want 1); guarded reload.\n' \
+    "$live_max"
+  need_reload=1
+fi
+if [ "$db_cap" != "1" ]; then
+  printf 'Native agents.capacity=%s (want 1); guarded reload.\n' "$db_cap"
+  need_reload=1
+fi
+
+if [ "$need_reload" -eq 1 ]; then
+  # Drain already held native idle + owned no_schedule; safe to reload.
+  launchctl kickstart -k "$DOMAIN/org.woodpecker.agent"
+  deadline=$(($(date +%s) + 60))
+  until [ "$(query_db "SELECT IFNULL(capacity, -1) FROM agents
+      WHERE backend = 'local' ORDER BY id LIMIT 1;")" = "1" ]; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "Native agent did not report capacity 1 after guarded reload." >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  printf 'Native agent reloaded; agents.capacity=1.\n'
+else
+  printf 'Native agent live+DB capacity=1 (no reload).\n'
+fi
+
+# Resume only agents this drain owned.
 "$ROOT/scripts/drain-agent.sh" --resume
 
 "$ROOT/scripts/verify.sh"
