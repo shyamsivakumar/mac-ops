@@ -84,6 +84,30 @@ pipeline_lost_executor() {
   return 0
 }
 
+# Same executor evidence, scoped to one workflow row (orphans under terminal
+# pipelines must not be failed while their own executor is still live).
+workflow_lost_executor() {
+  wid=$1
+  task_n=$(sql "SELECT COUNT(*) FROM tasks t
+    JOIN workflows w ON w.pipeline_id = t.pipeline_id
+    WHERE w.id = $wid;")
+  if [ "$task_n" != "0" ]; then
+    return 1
+  fi
+  backend=$(sql "SELECT IFNULL(a.backend, '') FROM workflows w
+    LEFT JOIN agents a ON a.id = w.agent_id
+    WHERE w.id = $wid;")
+  case "$backend" in
+    local)
+      if [ "$(native_busy)" != "0" ]; then return 1; fi
+      ;;
+    docker | '')
+      if [ "$(wp_count)" != "0" ]; then return 1; fi
+      ;;
+  esac
+  return 0
+}
+
 candidates=$(sql "
 SELECT p.id || '|' || p.repo_id || '|' || p.number || '|' || IFNULL(p.started,0)
 FROM pipelines p
@@ -103,7 +127,14 @@ FROM workflows w
 JOIN pipelines p ON p.id = w.pipeline_id
 WHERE w.state IN ('running', 'pending')
   AND p.status IN ('killed', 'failure', 'success', 'error', 'declined')
-  AND (w.started IS NULL OR w.started = 0 OR w.started < $cutoff);
+  AND (w.started IS NULL OR w.started = 0 OR w.started < $cutoff)
+  AND NOT EXISTS (
+    SELECT 1 FROM steps s
+    JOIN log_entries le ON le.step_id = s.id
+    WHERE s.pipeline_id = w.pipeline_id
+      AND (s.pid = w.pid OR s.ppid = w.pid)
+      AND le.created >= $cutoff
+  );
 ")
 
 echo "$candidates" | while IFS='|' read -r pid repo_id number started; do
@@ -159,6 +190,10 @@ done
 
 echo "$orphan_workflows" | while IFS='|' read -r wid pid started; do
   [ -n "$wid" ] || continue
+  if ! workflow_lost_executor "$wid"; then
+    log "reaper: skip orphan workflow id=$wid (executor present or task queued)"
+    continue
+  fi
   msg="reaped by MO-117 reaper: orphan workflow under terminal pipeline (started=$started)"
   reaped=$(sql "
 BEGIN IMMEDIATE;
@@ -170,15 +205,26 @@ JOIN pipelines p ON p.id = w.pipeline_id
 WHERE w.id = $wid
   AND w.state IN ('running', 'pending')
   AND p.status IN ('killed', 'failure', 'success', 'error', 'declined')
-  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.pipeline_id = w.pipeline_id);
+  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.pipeline_id = w.pipeline_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM steps s
+    JOIN log_entries le ON le.step_id = s.id
+    WHERE s.pipeline_id = w.pipeline_id
+      AND (s.pid = w.pid OR s.ppid = w.pid)
+      AND le.created >= $cutoff
+  );
 UPDATE workflows
   SET state = 'failure', finished = $now, error = '$msg'
   WHERE id IN (SELECT id FROM orphan_ok);
 UPDATE steps
   SET state = 'failure', finished = $now, error = '$msg', exit_code = 1
-  WHERE pipeline_id = $pid
-    AND state IN ('running', 'pending')
-    AND EXISTS (SELECT 1 FROM orphan_ok);
+  WHERE state IN ('running', 'pending')
+    AND pipeline_id = $pid
+    AND EXISTS (
+      SELECT 1 FROM workflows w
+      WHERE w.id IN (SELECT id FROM orphan_ok)
+        AND (steps.pid = w.pid OR steps.ppid = w.pid)
+    );
 SELECT COUNT(*) FROM orphan_ok;
 COMMIT;
 ")

@@ -17,7 +17,18 @@ PLIST="$HOME/Library/LaunchAgents/org.woodpecker.agent.plist"
 printf 'MO-117 apply: Colima memory=%sGiB ci-linux capacity=%s\n' "$COLIMA_MEM" "$LINUX_CAP"
 
 # Pause scheduling + wait for Docker (and native, if busy) to go idle.
-"$ROOT/scripts/drain-agent.sh" all 1800
+# Capture DRAIN_OPID so --resume cannot clear a different op's pause.
+drain_log=$(mktemp)
+drain_rc=0
+"$ROOT/scripts/drain-agent.sh" all 1800 >"$drain_log" || drain_rc=$?
+cat "$drain_log"
+DRAIN_OPID=$(sed -n 's/^DRAIN_OPID=//p' "$drain_log" | tail -1)
+rm -f "$drain_log"
+[ "$drain_rc" -eq 0 ] || exit "$drain_rc"
+[ -n "$DRAIN_OPID" ] || {
+  echo "drain-agent.sh did not print DRAIN_OPID." >&2
+  exit 1
+}
 
 # Snapshot Colima config before resize.
 if [ ! -f "$HOME/.colima/woodpecker/colima.yaml.before-mo117" ]; then
@@ -166,8 +177,8 @@ else
   printf 'Native agent live+DB capacity=1 (no reload).\n'
 fi
 
-# Resume only agents this drain owned.
-"$ROOT/scripts/drain-agent.sh" --resume
+# Resume only this apply drain op (refcount: other ops keep their pauses).
+"$ROOT/scripts/drain-agent.sh" --resume "$DRAIN_OPID"
 
 "$ROOT/scripts/verify.sh"
 
