@@ -22,35 +22,98 @@ mkdir -p "$STATE_DIR" "$OPS_DIR"
 op_dir=
 drain_lock_held=0
 owns_active_cleanup=0
+# Incomplete lock/active publish older than this may be reclaimed.
+STALE_PUBLISH_SECS=10
 
 pid_alive() {
   kill -0 "$1" 2>/dev/null
 }
 
+file_age_secs() {
+  f=$1
+  now=$(date +%s)
+  mtime=$(stat -f %m "$f" 2>/dev/null || echo "$now")
+  echo $((now - mtime))
+}
+
+# Reclaim a dead owner's lock via atomic mv (only one reclaimer wins).
+# Never rm -rf the live LOCK_DIR based on a stale pid observation.
+try_reclaim_stale_lock() {
+  [ -d "$LOCK_DIR" ] || return 1
+  if [ -f "$LOCK_DIR/pid" ]; then
+    oldpid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    case "$oldpid" in
+      '' | *[!0-9]*)
+        age=$(file_age_secs "$LOCK_DIR/pid")
+        if [ "$age" -lt "$STALE_PUBLISH_SECS" ]; then
+          return 1
+        fi
+        ;;
+      *)
+        if pid_alive "$oldpid"; then
+          return 1
+        fi
+        # Re-read: a new owner may have published since our first check.
+        oldpid2=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+        if [ "$oldpid2" != "$oldpid" ]; then
+          return 1
+        fi
+        if pid_alive "$oldpid2"; then
+          return 1
+        fi
+        ;;
+    esac
+  else
+    age=$(file_age_secs "$LOCK_DIR")
+    if [ "$age" -lt "$STALE_PUBLISH_SECS" ]; then
+      return 1
+    fi
+    oldpid=
+  fi
+  stale="$LOCK_DIR.stale.$$"
+  if ! mv "$LOCK_DIR" "$stale" 2>/dev/null; then
+    return 1
+  fi
+  # Confirm the moved lock is still the dead/corrupt one we observed.
+  if [ -f "$stale/pid" ]; then
+    movedpid=$(cat "$stale/pid" 2>/dev/null || true)
+    if [ -n "$oldpid" ] && [ "$movedpid" != "$oldpid" ]; then
+      # Race: put it back if LOCK_DIR is free; otherwise drop (new owner exists).
+      mv "$stale" "$LOCK_DIR" 2>/dev/null || rm -rf "$stale"
+      return 1
+    fi
+    case "$movedpid" in
+      '' | *[!0-9]*) ;;
+      *)
+        if pid_alive "$movedpid"; then
+          mv "$stale" "$LOCK_DIR" 2>/dev/null || rm -rf "$stale"
+          return 1
+        fi
+        ;;
+    esac
+  fi
+  echo "Reclaimed stale drain lock (was pid ${oldpid:-none})." >&2
+  rm -rf "$stale"
+  return 0
+}
+
 acquire_drain_lock() {
   tries=0
-  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-    if [ -f "$LOCK_DIR/pid" ]; then
-      oldpid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
-      case "$oldpid" in
-        '' | *[!0-9]*)
-          echo "Removing corrupt drain lock dir." >&2
-          rm -rf "$LOCK_DIR"
-          continue
-          ;;
-      esac
-      if ! pid_alive "$oldpid"; then
-        echo "Removing stale drain lock (dead pid $oldpid)." >&2
-        rm -rf "$LOCK_DIR"
-        continue
+  while true; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      # Publish pid atomically so reclaimers never see an empty owner file
+      # as grounds for immediate deletion of a live lock.
+      printf '%s\n' "$$" >"$LOCK_DIR/pid.tmp.$$"
+      mv -f "$LOCK_DIR/pid.tmp.$$" "$LOCK_DIR/pid"
+      # Confirm we still own the directory (another reclaim must not have moved it).
+      if [ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid")" = "$$" ]; then
+        drain_lock_held=1
+        return 0
       fi
+      # Lost ownership during publish — do not delete whoever holds it now.
+      drain_lock_held=0
     else
-      # Lock dir without pid — treat as stale after a short settle.
-      if [ "$tries" -ge 5 ]; then
-        echo "Removing drain lock dir with no pid file." >&2
-        rm -rf "$LOCK_DIR"
-        continue
-      fi
+      try_reclaim_stale_lock || true
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge 600 ]; then
@@ -59,33 +122,55 @@ acquire_drain_lock() {
     fi
     sleep 0.1
   done
-  printf '%s\n' "$$" >"$LOCK_DIR/pid"
-  drain_lock_held=1
 }
 
 release_drain_lock() {
-  if [ "$drain_lock_held" -eq 1 ]; then
-    rm -rf "$LOCK_DIR"
-    drain_lock_held=0
+  if [ "$drain_lock_held" -ne 1 ]; then
+    return 0
   fi
+  # Remove only our own lock; never delete another process's directory.
+  if [ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then
+    rm -rf "$LOCK_DIR"
+  fi
+  drain_lock_held=0
 }
 
-# Clear active only if this process created it, or if the recorded waiter is dead.
+# Publish waiter pid atomically (temp + rename). Never leave an empty marker.
+publish_active_marker() {
+  d=$1
+  tmp="$d/active.tmp.$$"
+  printf '%s\n' "$$" >"$tmp"
+  mv -f "$tmp" "$d/active"
+}
+
+# Reclaim only confirmed-dead waiters (re-read pid). Incomplete publishes are
+# reclaimed only after STALE_PUBLISH_SECS so a concurrent writer is safe.
 reclaim_stale_active() {
   d=$1
   [ -f "$d/active" ] || return 0
   apid=$(cat "$d/active" 2>/dev/null || true)
   case "$apid" in
     '' | *[!0-9]*)
-      echo "Clearing corrupt active marker in $d." >&2
-      rm -f "$d/active"
+      age=$(file_age_secs "$d/active")
+      if [ "$age" -ge "$STALE_PUBLISH_SECS" ]; then
+        echo "Clearing aged incomplete active marker in $d." >&2
+        rm -f "$d/active"
+      fi
       return 0
       ;;
   esac
-  if ! pid_alive "$apid"; then
-    echo "Clearing stale active marker in $d (dead pid $apid)." >&2
-    rm -f "$d/active"
+  if pid_alive "$apid"; then
+    return 0
   fi
+  apid2=$(cat "$d/active" 2>/dev/null || true)
+  if [ "$apid2" != "$apid" ]; then
+    return 0
+  fi
+  if pid_alive "$apid2"; then
+    return 0
+  fi
+  echo "Clearing stale active marker in $d (dead pid $apid)." >&2
+  rm -f "$d/active"
 }
 
 sweep_stale_actives() {
@@ -97,7 +182,10 @@ sweep_stale_actives() {
 
 on_exit() {
   if [ "$owns_active_cleanup" -eq 1 ] && [ -n "$op_dir" ] && [ -d "$op_dir" ]; then
-    rm -f "$op_dir/active"
+    # Only clear our marker if it still names this process.
+    if [ -f "$op_dir/active" ] && [ "$(cat "$op_dir/active" 2>/dev/null)" = "$$" ]; then
+      rm -f "$op_dir/active"
+    fi
   fi
   release_drain_lock
 }
@@ -308,7 +396,7 @@ done
 pause_ids=$(printf '%s' "$pause_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
 
 mkdir -p "$op_dir"
-printf '%s\n' "$$" >"$op_dir/active"
+publish_active_marker "$op_dir"
 owns_active_cleanup=1
 
 in_list=$(printf '%s' "$pause_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
@@ -371,7 +459,9 @@ while true; do
     if [ "$need_wp" -eq 1 ] && [ "$(wp_containers)" != "0" ]; then
       printf '  waiting for %s wp_* container(s)\n' "$(wp_containers)"
     else
-      rm -f "$op_dir/active"
+      if [ -f "$op_dir/active" ] && [ "$(cat "$op_dir/active" 2>/dev/null)" = "$$" ]; then
+        rm -f "$op_dir/active"
+      fi
       owns_active_cleanup=0
       printf 'Drain complete for %s (op %s held until --resume %s).\n' \
         "$agent_name" "$opid" "$opid"
