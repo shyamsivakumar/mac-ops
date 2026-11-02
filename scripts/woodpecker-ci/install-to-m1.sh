@@ -19,10 +19,15 @@ apply-two-lanes.sh
 watchdog.sh
 backup-nightly.sh
 verify.sh
+ci_slo_report.py
+ci_slo_report.sh
+ci_slo_daily.sh
+set-repo-timeouts.sh
 '
 plists='
 com.shyamsivakumar.woodpecker-reaper.plist
 com.shyamsivakumar.woodpecker-backup-nightly.plist
+com.shyamsivakumar.woodpecker-ci-slo-daily.plist
 '
 
 printf 'Installing mac-ops woodpecker-ci overlay -> %s:%s\n' "$HOST" "$DEST"
@@ -39,6 +44,14 @@ scp -o BatchMode=yes -q "$SRC/compose.yaml" "$HOST:$DEST/compose.yaml"
 
 ssh -o BatchMode=yes "$HOST" "chmod 755 $DEST/scripts/*.sh && chmod 644 $DEST/*.plist $DEST/compose.yaml && ls -la $DEST/scripts $DEST/com.shyamsivakumar.woodpecker-*.plist"
 
+# Snippet is docs-only on the M1 (repos pull it from mac-ops), but keep a copy.
+scp -o BatchMode=yes -q "$SRC/snippets/woodpecker-lint-step.yaml" \
+  "$HOST:$DEST/scripts/woodpecker-lint-step.yaml" 2>/dev/null || true
+
 printf 'Install OK. Smoke: ssh %s %s/scripts/drain-agent.sh --resume\n' \
   "$HOST" "$DEST"
-printf 'Reaper/backup LaunchAgents still point at %s/scripts/*.sh\n' "$DEST"
+printf 'Reaper/backup/ci-slo LaunchAgents point at %s/scripts/*.sh\n' "$DEST"
+printf 'MO-118: bootstrap daily SLO + timeouts with:\n'
+printf "  ssh %s \"DOMAIN=gui/\$(id -u); launchctl bootout \$DOMAIN/com.shyamsivakumar.woodpecker-ci-slo-daily 2>/dev/null; launchctl bootstrap \$DOMAIN %s/com.shyamsivakumar.woodpecker-ci-slo-daily.plist; launchctl enable \$DOMAIN/com.shyamsivakumar.woodpecker-ci-slo-daily\"\n" \
+  "$HOST" "$DEST"
+printf '  ssh %s %s/scripts/set-repo-timeouts.sh\n' "$HOST" "$DEST"

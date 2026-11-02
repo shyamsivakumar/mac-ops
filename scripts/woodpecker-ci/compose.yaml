@@ -27,6 +27,8 @@ services:
       WOODPECKER_AGENT_SECRET_FILE: "/run/secrets/agent-secret"
       WOODPECKER_DISABLE_USER_AGENT_REGISTRATION: "true"
       WOODPECKER_FORCE_IGNORE_SERVICE_FAILURE: "false"
+      # MO-118: 15m server default; max 60 so SRW can override to 30.
+      WOODPECKER_DEFAULT_PIPELINE_TIMEOUT: "15"
       WOODPECKER_MAX_PIPELINE_TIMEOUT: "60"
       WOODPECKER_LOG_LEVEL: "info"
     volumes:
