@@ -62,10 +62,12 @@ Line logs: `~/Library/Logs/woodpecker/mo117-quit.log` and
 `mo117-quit-strict.log`. Login-item snapshot:
 `~/Library/Preferences/ByHost/*.before-mo117` (TAL).
 
-Domain: `gui/$(id -u)`. Restore helper for an archived plist `NAME.plist`:
+Domain: `gui/$(id -u)`. Pick the archive that contains the plist (pass 1 or
+pass 2), then restore:
 
 ```sh
-A=~/Library/LaunchAgents/_disabled-mo117-20261102T205559Z
+# ls ~/Library/LaunchAgents/_disabled-mo117-*   # find which archive has NAME.plist
+A=~/Library/LaunchAgents/_disabled-mo117-20261102T205559Z   # or …211321Z-strict
 mv "$A/NAME.plist" ~/Library/LaunchAgents/ && \
   launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/NAME.plist
 ```

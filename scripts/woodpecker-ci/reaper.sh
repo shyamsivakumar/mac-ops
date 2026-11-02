@@ -2,6 +2,10 @@
 # Fail zombie pipelines that are still "running" with no log for 10 minutes
 # AND no executor evidence (MO-116 rule). Silence alone is not enough — a
 # healthy quiet build must keep running. Covers upstream #7063 stale-drop.
+#
+# Mutates only inside BEGIN IMMEDIATE, gated on a reap_ok set that requires
+# still-running + no recent logs + no tasks row. Workflow/step updates run
+# only for pipeline ids in that set.
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -72,26 +76,12 @@ pipeline_lost_executor() {
   if [ "$local_n" != "0" ] && [ "$(native_busy)" != "0" ]; then
     return 1
   fi
-  # No assigned agent yet but still "running" with no task and no containers:
-  # treat as lost only when there is also no native activity and no wp_*.
   if [ "$docker_n" = "0" ] && [ "$local_n" = "0" ]; then
     if [ "$(wp_count)" != "0" ] || [ "$(native_busy)" != "0" ]; then
       return 1
     fi
   fi
   return 0
-}
-
-still_quiet_running() {
-  pid=$1
-  n=$(sql "SELECT COUNT(*) FROM pipelines p
-    WHERE p.id = $pid AND p.status = 'running'
-      AND NOT EXISTS (
-        SELECT 1 FROM steps s
-        JOIN log_entries le ON le.step_id = s.id
-        WHERE s.pipeline_id = p.id AND le.created >= $cutoff
-      );")
-  [ "$n" = "1" ]
 }
 
 candidates=$(sql "
@@ -122,55 +112,84 @@ echo "$candidates" | while IFS='|' read -r pid repo_id number started; do
     log "reaper: skip pipeline id=$pid number=$number (executor present or task queued)"
     continue
   fi
-  if ! still_quiet_running "$pid"; then
-    log "reaper: skip pipeline id=$pid number=$number (changed before mutate)"
-    continue
-  fi
-  # Re-check executor immediately before UPDATE.
-  if ! pipeline_lost_executor "$pid"; then
-    log "reaper: skip pipeline id=$pid number=$number (executor returned)"
-    continue
-  fi
   msg="reaped by MO-117 reaper: no log for ${STALE_SECS}s and no executor (started=$started)"
-  sql "
-BEGIN;
+  # IMMEDIATE locks out writers (including a newly queued task) while we
+  # revalidate and mutate. Workflow/step updates only touch reap_ok ids.
+  reaped=$(sql "
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE IF NOT EXISTS reap_ok (id INTEGER PRIMARY KEY);
+DELETE FROM reap_ok;
+INSERT INTO reap_ok (id)
+SELECT p.id FROM pipelines p
+WHERE p.id = $pid
+  AND p.status = 'running'
+  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.pipeline_id = p.id)
+  AND NOT EXISTS (
+    SELECT 1 FROM steps s
+    JOIN log_entries le ON le.step_id = s.id
+    WHERE s.pipeline_id = p.id AND le.created >= $cutoff
+  );
 UPDATE pipelines
   SET status = 'failure', finished = $now, updated = $now,
       errors = CASE
         WHEN errors IS NULL OR errors = '' OR errors = 'null'
           THEN json_array(json_object('message', '$msg'))
         ELSE errors END
-  WHERE id = $pid AND status = 'running'
-    AND NOT EXISTS (
-      SELECT 1 FROM steps s
-      JOIN log_entries le ON le.step_id = s.id
-      WHERE s.pipeline_id = $pid AND le.created >= $cutoff
-    );
+  WHERE id IN (SELECT id FROM reap_ok);
 UPDATE workflows
   SET state = 'failure', finished = $now, error = '$msg'
-  WHERE pipeline_id = $pid AND state IN ('running', 'pending');
+  WHERE pipeline_id IN (SELECT id FROM reap_ok)
+    AND state IN ('running', 'pending');
 UPDATE steps
   SET state = 'failure', finished = $now, error = '$msg', exit_code = 1
-  WHERE pipeline_id = $pid AND state IN ('running', 'pending');
+  WHERE pipeline_id IN (SELECT id FROM reap_ok)
+    AND state IN ('running', 'pending');
+SELECT COUNT(*) FROM reap_ok;
 COMMIT;
-"
-  log "reaper: failed pipeline id=$pid repo_id=$repo_id number=$number"
+")
+  case "$reaped" in
+    '' | 0)
+      log "reaper: skip pipeline id=$pid number=$number (atomic revalidation failed)"
+      ;;
+    *)
+      log "reaper: failed pipeline id=$pid repo_id=$repo_id number=$number"
+      ;;
+  esac
 done
 
 echo "$orphan_workflows" | while IFS='|' read -r wid pid started; do
   [ -n "$wid" ] || continue
   msg="reaped by MO-117 reaper: orphan workflow under terminal pipeline (started=$started)"
-  sql "
-BEGIN;
+  reaped=$(sql "
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE IF NOT EXISTS orphan_ok (id INTEGER PRIMARY KEY);
+DELETE FROM orphan_ok;
+INSERT INTO orphan_ok (id)
+SELECT w.id FROM workflows w
+JOIN pipelines p ON p.id = w.pipeline_id
+WHERE w.id = $wid
+  AND w.state IN ('running', 'pending')
+  AND p.status IN ('killed', 'failure', 'success', 'error', 'declined')
+  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.pipeline_id = w.pipeline_id);
 UPDATE workflows
   SET state = 'failure', finished = $now, error = '$msg'
-  WHERE id = $wid AND state IN ('running', 'pending');
+  WHERE id IN (SELECT id FROM orphan_ok);
 UPDATE steps
   SET state = 'failure', finished = $now, error = '$msg', exit_code = 1
-  WHERE pipeline_id = $pid AND state IN ('running', 'pending');
+  WHERE pipeline_id = $pid
+    AND state IN ('running', 'pending')
+    AND EXISTS (SELECT 1 FROM orphan_ok);
+SELECT COUNT(*) FROM orphan_ok;
 COMMIT;
-"
-  log "reaper: failed orphan workflow id=$wid pipeline_id=$pid"
+")
+  case "$reaped" in
+    '' | 0)
+      log "reaper: skip orphan workflow id=$wid (atomic revalidation failed)"
+      ;;
+    *)
+      log "reaper: failed orphan workflow id=$wid pipeline_id=$pid"
+      ;;
+  esac
 done
 
 if [ -z "$candidates" ] && [ -z "$orphan_workflows" ]; then

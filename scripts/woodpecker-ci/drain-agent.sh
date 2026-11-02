@@ -3,16 +3,37 @@
 # deploy is running. Woodpecker cancels in-flight workflows on agent shutdown.
 #
 # Usage: drain-agent.sh <ci-linux|ci-deploy|native|all> [timeout_sec]
-# Leaves no_schedule=1 on drained Docker/native agents. Caller must clear it
-# (drain-agent.sh --resume) after the restart window, or apply-two-lanes does.
+#         drain-agent.sh --resume
+#
+# Sets no_schedule=1 only on agents that previously had 0, records those ids,
+# and --resume restores only that owned set (never clears unrelated maintenance).
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
 . "$(dirname -- "$0")/common.sh"
 
+STATE_DIR="$HOME/Library/Logs/woodpecker"
+OWNED_FILE="$STATE_DIR/drain-owned-ids"
+mkdir -p "$STATE_DIR"
+
+record_owned() {
+  ids=$1
+  [ -n "$(printf '%s' "$ids" | tr -d '[:space:]')" ] || return 0
+  printf '%s\n' "$ids" | tr -s '[:space:]' '\n' >>"$OWNED_FILE"
+  sort -u -o "$OWNED_FILE" "$OWNED_FILE"
+}
+
 if [ "${1:-}" = "--resume" ]; then
-  write_db "UPDATE agents SET no_schedule = 0 WHERE no_schedule != 0;"
-  printf 'Scheduling resumed on all agents.\n'
+  if [ ! -s "$OWNED_FILE" ]; then
+    printf 'No drain-owned no_schedule ids to resume.\n'
+    exit 0
+  fi
+  in_list=$(tr '\n' ',' <"$OWNED_FILE" | sed 's/,$//')
+  write_db "UPDATE agents SET no_schedule = 0
+    WHERE id IN ($in_list) AND no_schedule != 0;"
+  printf 'Scheduling resumed on drain-owned agent id(s): %s\n' \
+    "$(tr '\n' ' ' <"$OWNED_FILE")"
+  rm -f "$OWNED_FILE"
   exit 0
 fi
 
@@ -45,7 +66,6 @@ running_on_ids() {
 }
 
 native_agent_busy() {
-  # Local backend: any child of the LaunchAgent process means a job is live.
   pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
   case "$pid" in
     '' | -)
@@ -77,7 +97,7 @@ case "$agent_name" in
     ;;
 esac
 
-# Disable scheduling before waiting so nothing new (esp. SRW deploy) starts.
+# Collect target ids, then flip only those currently schedulable (no_schedule=0).
 pause_ids=
 for t in $targets; do
   ids=$(agent_ids_for "$t" || true)
@@ -85,17 +105,30 @@ for t in $targets; do
   pause_ids="$pause_ids $ids"
 done
 pause_ids=$(printf '%s' "$pause_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
+
+owned=
 if [ -n "$(printf '%s' "$pause_ids" | tr -d '[:space:]')" ]; then
   in_list=$(printf '%s' "$pause_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
-  write_db "UPDATE agents SET no_schedule = 1 WHERE id IN ($in_list);"
-  printf 'Set no_schedule=1 on agent id(s): %s\n' "$pause_ids"
+  # Agents we may own: currently accepting work.
+  owned=$(query_db "SELECT id FROM agents
+    WHERE id IN ($in_list) AND IFNULL(no_schedule, 0) = 0;")
+  owned=$(printf '%s' "$owned" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+  if [ -n "$(printf '%s' "$owned" | tr -d '[:space:]')" ]; then
+    own_list=$(printf '%s' "$owned" | tr ' ' ',' | sed 's/,$//;s/^,//')
+    write_db "UPDATE agents SET no_schedule = 1 WHERE id IN ($own_list);"
+    record_owned "$owned"
+    printf 'Set no_schedule=1 on drain-owned agent id(s): %s\n' "$owned"
+  else
+    printf 'Targets already no_schedule=1; not claiming ownership.\n'
+  fi
+  # Still wait for idle even if we did not flip (someone else holds the pause).
 fi
 
 printf 'Draining %s (timeout %ss)...\n' "$agent_name" "$timeout_sec"
 
 while true; do
   if [ "$(srw_deploy_running)" != "0" ]; then
-    echo "SRW deploy started during drain; aborting (no_schedule left set)." >&2
+    echo "SRW deploy started during drain; aborting (owned no_schedule left set)." >&2
     exit 2
   fi
   busy=0
@@ -127,13 +160,13 @@ while true; do
     if [ "$need_wp" -eq 1 ] && [ "$(wp_containers)" != "0" ]; then
       printf '  waiting for %s wp_* container(s)\n' "$(wp_containers)"
     else
-      printf 'Drain complete for %s (no_schedule still 1 until --resume).\n' \
+      printf 'Drain complete for %s (owned no_schedule until --resume).\n' \
         "$agent_name"
       exit 0
     fi
   fi
   if [ $(($(date +%s) - started)) -ge "$timeout_sec" ]; then
-    echo "Drain timed out after ${timeout_sec}s (no_schedule left set)." >&2
+    echo "Drain timed out after ${timeout_sec}s (owned no_schedule left set)." >&2
     exit 1
   fi
   sleep 5
