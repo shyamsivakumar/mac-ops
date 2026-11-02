@@ -639,6 +639,25 @@ def marker_previous_receipt(marker):
     return previous
 
 
+def rebind_observation_marker_to_receipt(state_dir, marker, status):
+    """Keep recovery previous_receipt when marker target != installed receipt."""
+    if not marker or not status or not status.get("installed"):
+        return None
+    source_commit = status.get("source_commit")
+    if not source_commit:
+        return None
+    write_observation_marker(
+        state_dir,
+        source_commit=source_commit,
+        started_at=float(
+            marker.get("started_at") or status.get("installed_at") or time.time()
+        ),
+        previous_receipt=marker_previous_receipt(marker),
+        release=status.get("release"),
+    )
+    return read_observation_marker(state_dir)
+
+
 def observe_controller(
     state_dir,
     *,
@@ -949,8 +968,20 @@ def run_install_if_behind(
             pending_marker, status_before
         )
         if pending_marker and not marker_for_receipt:
-            clear_observation_marker(state_dir)
-            pending_marker = None
+            # Interrupted supersede can leave marker.source_commit ahead of the
+            # still-installed receipt. Re-bind so previous_receipt is not lost.
+            rebound = rebind_observation_marker_to_receipt(
+                state_dir, pending_marker, status_before
+            )
+            if rebound and observation_marker_applies_to_receipt(
+                rebound, status_before
+            ):
+                pending_marker = rebound
+                marker_for_receipt = True
+            else:
+                clear_observation_marker(state_dir)
+                pending_marker = None
+                marker_for_receipt = False
         resume_unverified = marker_for_receipt and action == "up_to_date"
 
         if action == "up_to_date" and not resume_unverified:
@@ -1075,12 +1106,22 @@ def run_install_if_behind(
             if installer.require_main_checkout(checkout) != target_commit:
                 raise RuntimeError("Checkout changed before installation")
             install_started_at = time.time()
-            write_observation_marker(
-                state_dir,
-                source_commit=target_commit,
-                started_at=install_started_at,
-                previous_receipt=previous_receipt,
-            )
+            if marker_for_receipt:
+                # Keep marker on unverified B until receipt names C.
+                write_observation_marker(
+                    state_dir,
+                    source_commit=status_before["source_commit"],
+                    started_at=install_started_at,
+                    previous_receipt=previous_receipt,
+                    release=status_before.get("release"),
+                )
+            else:
+                write_observation_marker(
+                    state_dir,
+                    source_commit=target_commit,
+                    started_at=install_started_at,
+                    previous_receipt=previous_receipt,
+                )
             try:
                 if no_start:
                     installer.install(
