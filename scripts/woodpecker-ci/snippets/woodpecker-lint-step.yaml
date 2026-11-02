@@ -16,9 +16,10 @@
   commands:
     - |
       set -eu
+      # $$ keeps shell vars; Woodpecker would eat ${VER}/${WARCH}/${SUM}.
       VER=3.16.0
-      ARCH=$(uname -m)
-      case "$ARCH" in
+      ARCH=$$(uname -m)
+      case "$$ARCH" in
         aarch64|arm64)
           WARCH=arm64
           SUM=9c7e6cad9e9d65da8678f8446805076212dd04cad59765d24a0b2b74ac56ed23
@@ -27,12 +28,12 @@
           WARCH=amd64
           SUM=a87df7024f2cf4949a94fb27a49808b984350cf97d4aa511049d58f88dd21e7e
           ;;
-        *) echo "unsupported arch: $ARCH" >&2; exit 1 ;;
+        *) echo "unsupported arch: $$ARCH" >&2; exit 1 ;;
       esac
       apk add --no-cache -q curl tar
       curl -fsSL -o /tmp/wp-cli.tgz \
-        "https://github.com/woodpecker-ci/woodpecker/releases/download/v${VER}/woodpecker-cli_linux_${WARCH}.tar.gz"
-      echo "${SUM}  /tmp/wp-cli.tgz" | sha256sum -c -
+        "https://github.com/woodpecker-ci/woodpecker/releases/download/v$${VER}/woodpecker-cli_linux_$${WARCH}.tar.gz"
+      echo "$${SUM}  /tmp/wp-cli.tgz" | sha256sum -c -
       tar -xzf /tmp/wp-cli.tgz -C /usr/local/bin woodpecker-cli
       woodpecker-cli lint .woodpecker/
   when:
