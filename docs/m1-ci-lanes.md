@@ -135,16 +135,19 @@ Colima: **10 GiB / 4 CPUs**. Native capacity stays 1.
 ## Drain before restart
 
 ```sh
-~/Code/woodpecker-ci/scripts/drain-agent.sh all   # or ci-linux / ci-deploy / native
-# … restart window …
-~/Code/woodpecker-ci/scripts/drain-agent.sh --resume
+~/Code/woodpecker-ci/scripts/drain-agent.sh all   # prints DRAIN_OPID=…
+# … restart window (keep that opid) …
+~/Code/woodpecker-ci/scripts/drain-agent.sh --resume "$DRAIN_OPID"
 ```
 
 Sets `agents.no_schedule=1` before waiting so nothing new (especially an SRW
-deploy) starts mid-drain. Refuses if an SRW `deploy` workflow is running.
-Never `colima stop` / resize / `compose restart agent-*` during an SRW deploy.
-`apply-two-lanes.sh` drains with no_schedule, does **not** restart the native
-agent, then `--resume`s after the new Docker agents are up.
+deploy) starts mid-drain. Each drain is an op under
+`~/Library/Logs/woodpecker/drain-ops/<opid>/`; `--resume` clears only that
+op's agents and refuses while the op (or an overlapping op) is still active.
+Refuses if an SRW `deploy` workflow is running. Never `colima stop` / resize /
+`compose restart agent-*` during an SRW deploy. `apply-two-lanes.sh` captures
+`DRAIN_OPID`, does **not** blindly restart the native agent, then resumes that
+op after the new Docker agents are up.
 
 ## Reaper
 
