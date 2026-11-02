@@ -163,6 +163,17 @@ alone is not enough. Log: `~/Library/Logs/woodpecker/reaper.log`.
 `sqlite3 .backup`, then `scp` to
 `shyams-m4:~/Backups/woodpecker-ci/nightly-*` (14-day retention).
 
+## CI SLO report + timeouts (MO-118)
+
+Cross-repo wait/run/total p50/p95 and failure causes (code/infra/flaky):
+[`docs/ci-slo.md`](ci-slo.md). Daily at **17:00 PT** via
+`com.shyamsivakumar.woodpecker-ci-slo-daily` →
+`shyams-m4:~/Code/coordinator/evidence/ci-slo-<date>.{md,json}`.
+
+Server default pipeline timeout **15** minutes; SRW override **30**.
+`set-repo-timeouts.sh` drains with the MO-117 drain helper before recreating
+the server — never apply mid-deploy.
+
 ## Simulator
 
 ```sh
