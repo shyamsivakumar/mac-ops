@@ -1,7 +1,7 @@
 # M1 Woodpecker memory budget (MO-116 → MO-117)
 
 The M1 (`ssh m1`, 16 GiB RAM) is the dedicated CI box (MO-117): Colima
-`woodpecker` with two Docker agents (`ci-linux` capacity 3, `ci-deploy`
+`woodpecker` with two Docker agents (`ci-linux` capacity 4, `ci-deploy`
 capacity 1) plus the native macOS agent `shyams-macbook-pro-ios`
 (`platform: darwin/arm64`, capacity 1). Current topology and quit ledger:
 [m1-ci-lanes.md](m1-ci-lanes.md). Stack details live in the llmwiki
@@ -12,7 +12,7 @@ Woodpecker reference and `~/Code/woodpecker-ci` on the M1.
 | Piece | Intended | Oversubscribe risk |
 | --- | --- | --- |
 | Colima VM | 10 GiB, 4 CPUs | Above 10 GiB starves macOS + Xcode |
-| `ci-linux` | `capacity = 3` | Raise only after dual-load proof |
+| `ci-linux` | `capacity = 4` | Raise only after dual-load proof |
 | `ci-deploy` | `capacity = 1`, `role=deploy` | Never share with checks |
 | Native agent | `MAX_WORKFLOWS=1` | `=2` (MO-72): two jobs fight VM |
 | `CI-iPhone` | Boot only for iOS jobs | Idle Booted sim: ~1–1.5 GiB |
