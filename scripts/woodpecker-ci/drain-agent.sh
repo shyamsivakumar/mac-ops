@@ -6,9 +6,9 @@
 #         drain-agent.sh --resume <opid>
 #
 # Each drain creates an operation id. Ownership records only pauses this drain
-# system created (RETURNING flips) plus agents already claimed by other drain
-# ops (refcount). Independent operator pauses are never claimed or cleared.
-# The active marker is cleared on any exit; ids remain until --resume <opid>.
+# system created (plus agents already claimed by other drain ops). Independent
+# operator pauses are never claimed or cleared. Only the drain waiter clears
+# its own active marker on EXIT; --resume never touches another op's active.
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -21,6 +21,8 @@ mkdir -p "$STATE_DIR" "$OPS_DIR"
 
 op_dir=
 drain_lock_held=0
+# Only the process that created this drain's active marker may clear it.
+owns_active_cleanup=0
 
 acquire_drain_lock() {
   tries=0
@@ -43,10 +45,8 @@ release_drain_lock() {
   fi
 }
 
-# Drop active so a timed-out/signaled drain does not block --resume forever.
-# Keep ids until an explicit --resume clears ownership.
 on_exit() {
-  if [ -n "$op_dir" ] && [ -d "$op_dir" ]; then
+  if [ "$owns_active_cleanup" -eq 1 ] && [ -n "$op_dir" ] && [ -d "$op_dir" ]; then
     rm -f "$op_dir/active"
   fi
   release_drain_lock
@@ -55,7 +55,6 @@ trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Agents still claimed by any remaining op dirs (excluding optional skip opid).
 agents_still_owned() {
   skip=${1:-}
   for d in "$OPS_DIR"/*; do
@@ -88,8 +87,19 @@ overlapping_active_ops() {
   return 1
 }
 
+persist_owned_ids() {
+  # Write ownership file durably (temp + rename) under the drain lock.
+  dest=$1
+  shift
+  tmp="$dest.tmp.$$"
+  printf '%s\n' "$@" | tr -s '[:space:]' '\n' | awk 'NF' | sort -u >"$tmp"
+  mv -f "$tmp" "$dest"
+}
+
 if [ "${1:-}" = "--resume" ]; then
   opid=${2:?usage: drain-agent.sh --resume <opid>}
+  # Do not set owns_active_cleanup — a refused resume must not clear the
+  # waiter process's active marker.
   op_dir="$OPS_DIR/$opid"
   acquire_drain_lock
   if [ ! -d "$op_dir" ] || [ ! -f "$op_dir/ids" ]; then
@@ -208,10 +218,28 @@ pause_ids=$(printf '%s' "$pause_ids" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n
 
 mkdir -p "$op_dir"
 : >"$op_dir/active"
+owns_active_cleanup=1
 : >"$op_dir/ids"
 
 in_list=$(printf '%s' "$pause_ids" | tr ' ' ',' | sed 's/,$//;s/^,//')
 acquire_drain_lock
+
+# Persist recoverable ownership BEFORE the pause commit: agents we will flip,
+# plus targets already claimed by other drain ops.
+will_flip=$(query_db "SELECT id FROM agents
+  WHERE id IN ($in_list) AND IFNULL(no_schedule, 0) = 0;")
+already=$(agents_still_owned | tr '\n' ' ')
+pre_ids=
+for id in $will_flip; do
+  pre_ids="$pre_ids $id"
+done
+for id in $pause_ids; do
+  case " $already " in
+    *" $id "*) pre_ids="$pre_ids $id" ;;
+  esac
+done
+persist_owned_ids "$op_dir/ids" "$pre_ids"
+
 owned=$(write_db "
 BEGIN IMMEDIATE;
 UPDATE agents
@@ -222,17 +250,15 @@ COMMIT;
 ")
 owned=$(printf '%s' "$owned" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
-# Own only: (1) ids we just flipped, (2) target ids already claimed by other
-# drain ops. Never claim an independent operator pause.
-{
-  printf '%s\n' "$owned" | tr -s '[:space:]' '\n'
-  already=$(agents_still_owned | tr '\n' ' ')
-  for id in $pause_ids; do
-    case " $already " in
-      *" $id "*) printf '%s\n' "$id" ;;
-    esac
-  done
-} | awk 'NF' | sort -u >"$op_dir/ids"
+# Refresh ownership from RETURNING + drain-owned refs (should match pre_ids).
+already=$(agents_still_owned "$opid" | tr '\n' ' ')
+post_ids=$owned
+for id in $pause_ids; do
+  case " $already " in
+    *" $id "*) post_ids="$post_ids $id" ;;
+  esac
+done
+persist_owned_ids "$op_dir/ids" "$post_ids"
 
 if [ -n "$(printf '%s' "$owned" | tr -d '[:space:]')" ]; then
   printf 'Set no_schedule=1 on drain-created pause id(s): %s\n' "$owned"
@@ -285,6 +311,7 @@ while true; do
       printf '  waiting for %s wp_* container(s)\n' "$(wp_containers)"
     else
       rm -f "$op_dir/active"
+      owns_active_cleanup=0
       printf 'Drain complete for %s (op %s held until --resume %s).\n' \
         "$agent_name" "$opid" "$opid"
       exit 0
