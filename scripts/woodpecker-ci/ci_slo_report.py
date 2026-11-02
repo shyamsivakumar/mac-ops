@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import defaultdict
@@ -34,7 +35,9 @@ INFRA_RE = re.compile(
     r"backoff: maximum elapsed|rpc error|Unavailable desc|"
     r"error during connect|closing transport|agent.*(offline|gone)|"
     r"killed by timeout|pipeline timeout|signal: killed|"
-    r"^Canceled$|\bCanceled\b|\bcanceled by\b|cancel previous|superseded)",
+    r"^Canceled$|\bCanceled\b|\bcanceled by\b|cancel previous|superseded|"
+    r"clone:git:|fatal: could not read|Authentication failed|"
+    r"early EOF|RPC failed|The requested URL returned error)",
     re.IGNORECASE,
 )
 FLAKY_RE = re.compile(
@@ -46,7 +49,7 @@ FLAKY_RE = re.compile(
 CODE_RE = re.compile(
     r"(AssertionError|ERR_ASSERTION|assert\.|EXPECT\(|XCTAssert|"
     r"npm ERR!|error TS\d+|FAILED \(failures=|Test Suites:.*failed|"
-    r"FAIL\s+\S+|pytest\.|Error: fast check failed|exit code [1-9]|"
+    r"FAIL\s+\S+|pytest\.|Error: fast check failed|"
     r"swift(test|build).*error:|Compilation error|lint failed)",
     re.IGNORECASE,
 )
@@ -83,17 +86,22 @@ def now_pt():
     return datetime.now(timezone.utc)
 
 
-def run_sql(sql: str, *, host: str | None, stack: str) -> str:
-    """Run read-only SQL against woodpecker.sqlite. host=None means local M1."""
+def run_sql_json(sql: str, *, host: str | None, stack: str) -> list:
+    """Run read-only SQL; return parsed JSON rows (sqlite3 -json)."""
     b64 = base64.b64encode(sql.encode()).decode()
+    root_q = shlex.quote(stack)
+    b64_q = shlex.quote(b64)
     remote = f"""
 set -eu
 PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
-ROOT={stack!r}
+ROOT={root_q}
+# shellcheck disable=SC1091
 . "$ROOT/scripts/common.sh"
-sql=$(printf '%s' {b64!r} | base64 -D 2>/dev/null || printf '%s' {b64!r} | base64 -d)
-query_db "$sql"
+sql=$(printf '%s' {b64_q} | base64 -D 2>/dev/null || printf '%s' {b64_q} | base64 -d)
+# Feed SQL on stdin so pipes/newlines in the query never hit the shell parser.
+printf '%s\\n' "$sql" | docker run --rm -i -v woodpecker-ci-server-data:/d:ro alpine:3.22 \\
+  sh -c 'apk add -q sqlite >/dev/null && sqlite3 -readonly -json file:/d/woodpecker.sqlite?mode=ro'
 """
     if host:
         proc = subprocess.run(
@@ -115,11 +123,24 @@ query_db "$sql"
         raise RuntimeError(
             f"SQL failed (rc={proc.returncode}): {proc.stderr.strip() or proc.stdout}"
         )
-    return proc.stdout
+    out = (proc.stdout or "").strip()
+    if not out:
+        return []
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"SQL JSON parse failed: {exc}: {out[:200]}") from exc
+    if not isinstance(data, list):
+        raise TypeError(f"SQL JSON expected a list, got {type(data).__name__}")
+    return data
 
 
 def classify_failure(error: str, log_text: str) -> str:
-    blob = f"{error or ''}\n{log_text or ''}"
+    err = (error or "").strip()
+    # Step/workflow error alone is decisive for cancel / agent / docker kills.
+    if err and INFRA_RE.search(err):
+        return "infra"
+    blob = f"{err}\n{log_text or ''}"
     if INFRA_RE.search(blob):
         return "infra"
     if FLAKY_RE.search(blob) and not CODE_RE.search(blob):
@@ -128,51 +149,33 @@ def classify_failure(error: str, log_text: str) -> str:
         return "code"
     if FLAKY_RE.search(blob):
         return "flaky"
-    # Empty logs with a docker-ish step.error already caught; bare failures → code.
-    if (error or "").strip():
+    if err:
         return (
             "infra"
-            if "error" in error.lower() and "assert" not in error.lower()
+            if "error" in err.lower() and "assert" not in err.lower()
             else "code"
         )
     return "code"
 
 
-def parse_workflows(raw: str):
-    rows = []
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("|")
-        if len(parts) < 10:
-            continue
-        (
-            full_name,
-            workflow,
-            number,
-            p_status,
-            created,
-            p_started,
-            p_finished,
-            w_started,
-            w_finished,
-            w_state,
-        ) = parts[:10]
-        rows.append(
+def parse_workflows(rows: list):
+    parsed = []
+    for row in rows:
+        parsed.append(
             {
-                "repo": full_name,
-                "workflow": workflow,
-                "number": int(number),
-                "pipeline_status": p_status,
-                "created": int(created or 0),
-                "pipeline_started": int(p_started or 0),
-                "pipeline_finished": int(p_finished or 0),
-                "started": int(w_started or 0),
-                "finished": int(w_finished or 0),
-                "state": w_state,
+                "repo": row.get("full_name") or "",
+                "workflow": row.get("name") or "",
+                "number": int(row.get("number") or 0),
+                "pipeline_status": row.get("status") or "",
+                "created": int(row.get("created") or 0),
+                "pipeline_started": int(row.get("p_started") or 0),
+                "pipeline_finished": int(row.get("p_finished") or 0),
+                "started": int(row.get("w_started") or 0),
+                "finished": int(row.get("w_finished") or 0),
+                "state": row.get("state") or "",
             }
         )
-    return rows
+    return parsed
 
 
 def timing_for(row):
@@ -190,35 +193,77 @@ def timing_for(row):
 
 
 def load_failure_logs(host, stack, since_epoch):
-    # One query for failed command steps, one batched log tail (last 60 lines
-    # per step via window), so we do not SSH once per failure.
+    # One row per failed workflow: include w.error and any failed step type
+    # (clone / commands / plugin / service), not only commands.
     sql = f"""
-SELECT w.id, r.full_name, w.name, p.number, w.state,
-       IFNULL(s.error,''), IFNULL(s.name,''), IFNULL(s.id,0)
+SELECT w.id AS workflow_id,
+       r.full_name AS repo,
+       w.name AS workflow,
+       p.number AS number,
+       w.state AS state,
+       IFNULL(w.error, '') AS workflow_error,
+       IFNULL((
+         SELECT group_concat(
+                  IFNULL(s.type, '') || ':' || IFNULL(s.name, '') || ':' || IFNULL(s.error, ''),
+                  char(10)
+                )
+         FROM steps s
+         WHERE s.pipeline_id = w.pipeline_id
+           AND s.ppid = w.pid
+           AND s.state IN ('failure', 'killed', 'error')
+       ), '') AS step_errors,
+       IFNULL((
+         SELECT s.id
+         FROM steps s
+         WHERE s.pipeline_id = w.pipeline_id
+           AND s.ppid = w.pid
+           AND s.state IN ('failure', 'killed', 'error')
+         ORDER BY CASE s.type
+           WHEN 'commands' THEN 0
+           WHEN 'clone' THEN 1
+           WHEN 'plugin' THEN 2
+           ELSE 3
+         END, s.id
+         LIMIT 1
+       ), 0) AS step_id,
+       IFNULL((
+         SELECT s.name
+         FROM steps s
+         WHERE s.pipeline_id = w.pipeline_id
+           AND s.ppid = w.pid
+           AND s.state IN ('failure', 'killed', 'error')
+         ORDER BY CASE s.type
+           WHEN 'commands' THEN 0
+           WHEN 'clone' THEN 1
+           WHEN 'plugin' THEN 2
+           ELSE 3
+         END, s.id
+         LIMIT 1
+       ), '') AS step_name
 FROM workflows w
 JOIN pipelines p ON p.id = w.pipeline_id
 JOIN repos r ON r.id = p.repo_id
-LEFT JOIN steps s ON s.pipeline_id = w.pipeline_id
-  AND s.ppid = w.pid
-  AND s.type = 'commands'
-  AND s.state IN ('failure','killed','error')
-WHERE p.created > {since_epoch}
-  AND w.state IN ('failure','killed','error')
+WHERE p.created > {int(since_epoch)}
+  AND w.state IN ('failure', 'killed', 'error')
 ORDER BY w.id;
 """
-    raw = run_sql(sql, host=host, stack=stack)
+    rows = run_sql_json(sql, host=host, stack=stack)
     step_ids = []
     meta = []
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("|")
-        if len(parts) < 8:
-            continue
-        wid, repo, workflow, number, state, error, step_name, step_id = parts[:8]
-        sid = int(step_id or 0)
+    for row in rows:
+        sid = int(row.get("step_id") or 0)
         meta.append(
-            (int(wid), repo, workflow, int(number), state, error, step_name, sid)
+            {
+                "workflow_id": int(row.get("workflow_id") or 0),
+                "repo": row.get("repo") or "",
+                "workflow": row.get("workflow") or "",
+                "number": int(row.get("number") or 0),
+                "state": row.get("state") or "",
+                "workflow_error": row.get("workflow_error") or "",
+                "step_errors": row.get("step_errors") or "",
+                "step_name": row.get("step_name") or "",
+                "step_id": sid,
+            }
         )
         if sid:
             step_ids.append(sid)
@@ -227,7 +272,7 @@ ORDER BY w.id;
     if step_ids:
         id_list = ",".join(str(i) for i in sorted(set(step_ids)))
         log_sql = f"""
-SELECT step_id, CAST(data AS TEXT) FROM (
+SELECT step_id AS step_id, CAST(data AS TEXT) AS line_text FROM (
   SELECT step_id, data, line,
          ROW_NUMBER() OVER (PARTITION BY step_id ORDER BY line DESC) AS rn
   FROM log_entries
@@ -237,36 +282,35 @@ WHERE rn <= 60
 ORDER BY step_id, rn;
 """
         try:
-            log_raw = run_sql(log_sql, host=host, stack=stack)
-        except RuntimeError as exc:
-            # Older SQLite without window functions: fall back to error text only.
+            log_rows = run_sql_json(log_sql, host=host, stack=stack)
+        except (RuntimeError, TypeError) as exc:
             sys.stderr.write(
-                f"ci_slo_report: batched logs failed ({exc}); using step.error only\n"
+                f"ci_slo_report: batched logs failed ({exc}); using error text only\n"
             )
-            log_raw = ""
-        for line in log_raw.splitlines():
-            if "|" not in line:
-                continue
-            sid_s, text = line.split("|", 1)
+            log_rows = []
+        for lr in log_rows:
             try:
-                logs_by_step[int(sid_s)].append(text)
-            except ValueError:
+                sid = int(lr.get("step_id") or 0)
+            except (TypeError, ValueError):
                 continue
+            if sid:
+                logs_by_step[sid].append(lr.get("line_text") or "")
 
     failures = []
-    for wid, repo, workflow, number, state, error, step_name, sid in meta:
-        log_text = "\n".join(logs_by_step.get(sid, []))
-        cause = classify_failure(error, log_text)
+    for m in meta:
+        err_blob = "\n".join(x for x in (m["workflow_error"], m["step_errors"]) if x)
+        log_text = "\n".join(logs_by_step.get(m["step_id"], []))
+        cause = classify_failure(err_blob, log_text)
         failures.append(
             {
-                "workflow_id": wid,
-                "repo": repo,
-                "workflow": workflow,
-                "number": number,
-                "state": state,
-                "step": step_name,
+                "workflow_id": m["workflow_id"],
+                "repo": m["repo"],
+                "workflow": m["workflow"],
+                "number": m["number"],
+                "state": m["state"],
+                "step": m["step_name"],
                 "cause": cause,
-                "error": (error or "")[:300],
+                "error": err_blob[:300],
             }
         )
     return failures
@@ -274,23 +318,36 @@ ORDER BY step_id, rn;
 
 def aggregate(rows, failures):
     buckets = defaultdict(
-        lambda: {"wait": [], "run": [], "total": [], "n": 0, "states": defaultdict(int)}
+        lambda: {
+            "wait": [],
+            "run": [],
+            "total": [],
+            "n": 0,
+            "incomplete": 0,
+            "states": defaultdict(int),
+        }
     )
     for row in rows:
-        t = timing_for(row)
-        if t is None:
-            continue
-        wait, run, total = t
         key = (row["repo"], row["workflow"])
         b = buckets[key]
+        b["states"][row["state"] or "unknown"] += 1
+        t = timing_for(row)
+        if t is None:
+            b["incomplete"] += 1
+            continue
+        wait, run, total = t
         b["wait"].append(wait)
         b["run"].append(run)
         b["total"].append(total)
         b["n"] += 1
-        b["states"][row["state"]] += 1
 
+    # One failure record per workflow (already aggregated in load_failure_logs).
     fail_by_key = defaultdict(lambda: {"code": 0, "infra": 0, "flaky": 0, "items": []})
+    seen_wf = set()
     for f in failures:
+        if f["workflow_id"] in seen_wf:
+            continue
+        seen_wf.add(f["workflow_id"])
         key = (f["repo"], f["workflow"])
         fail_by_key[key][f["cause"]] += 1
         fail_by_key[key]["items"].append(f)
@@ -301,11 +358,16 @@ def aggregate(rows, failures):
         for name in ("wait", "run", "total"):
             b[name].sort()
         fr = fail_by_key.get(key, {"code": 0, "infra": 0, "flaky": 0, "items": []})
+        pending = int(b["states"].get("pending", 0)) + int(
+            b["states"].get("running", 0)
+        )
         report_rows.append(
             {
                 "repo": key[0],
                 "workflow": key[1],
                 "n": b["n"],
+                "incomplete": b["incomplete"],
+                "pending_or_running": pending,
                 "wait_p50": percentile(b["wait"], 50),
                 "wait_p95": percentile(b["wait"], 95),
                 "run_p50": percentile(b["run"], 50),
@@ -318,7 +380,9 @@ def aggregate(rows, failures):
                     "infra": fr["infra"],
                     "flaky": fr["flaky"],
                 },
-                "meets_15m_p95": (percentile(b["total"], 95) or 0) <= 900,
+                "meets_15m_p95": (percentile(b["total"], 95) or 0) <= 900
+                if b["n"]
+                else False,
                 "zero_infra": fr["infra"] == 0,
             }
         )
@@ -331,24 +395,26 @@ def render_markdown(report_rows, failures, generated_at, window_hours):
     lines.append("")
     lines.append(
         f"Source: Woodpecker SQLite on M1. Window: last {window_hours}h. "
-        "Times are queue wait / run / total (push→final). "
-        "Bar: p95 total ≤ 15m and zero infra failures."
+        "Times are queue wait / run / total (push→final) for finished workflows. "
+        "Bar: p95 total ≤ 15m and zero infra failures. "
+        "`inc` = unfinished / missing timestamps; failure counts are per workflow."
     )
     lines.append("")
     lines.append(
-        "| Repo | Workflow | n | wait p50 | wait p95 | run p50 | run p95 | total p50 | total p95 | ≤15m | infra | code | flaky |"
+        "| Repo | Workflow | n | inc | wait p50 | wait p95 | run p50 | run p95 | total p50 | total p95 | ≤15m | infra | code | flaky |"
     )
     lines.append(
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: |"
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: |"
     )
     for r in report_rows:
         short = r["repo"].split("/")[-1]
         ok = "yes" if r["meets_15m_p95"] else "NO"
         lines.append(
-            "| {repo} | {wf} | {n} | {w50} | {w95} | {r50} | {r95} | {t50} | {t95} | {ok} | {infra} | {code} | {flaky} |".format(
+            "| {repo} | {wf} | {n} | {inc} | {w50} | {w95} | {r50} | {r95} | {t50} | {t95} | {ok} | {infra} | {code} | {flaky} |".format(
                 repo=short,
                 wf=r["workflow"],
                 n=r["n"],
+                inc=r["incomplete"],
                 w50=fmt_secs(r["wait_p50"]),
                 w95=fmt_secs(r["wait_p95"]),
                 r50=fmt_secs(r["run_p50"]),
@@ -366,7 +432,7 @@ def render_markdown(report_rows, failures, generated_at, window_hours):
     code_n = sum(1 for f in failures if f["cause"] == "code")
     flaky_n = sum(1 for f in failures if f["cause"] == "flaky")
     lines.append(
-        f"Failures in window: {len(failures)} "
+        f"Failed workflows in window: {len(failures)} "
         f"(code={code_n}, infra={infra_n}, flaky={flaky_n})."
     )
     if failures:
@@ -417,17 +483,17 @@ def main(argv=None):
     since = int(datetime.now(timezone.utc).timestamp()) - args.hours * 3600
 
     wf_sql = f"""
-SELECT r.full_name, w.name, p.number, p.status,
-       p.created, IFNULL(p.started,0), IFNULL(p.finished,0),
-       IFNULL(w.started,0), IFNULL(w.finished,0), w.state
+SELECT r.full_name AS full_name, w.name AS name, p.number AS number, p.status AS status,
+       p.created AS created, IFNULL(p.started,0) AS p_started, IFNULL(p.finished,0) AS p_finished,
+       IFNULL(w.started,0) AS w_started, IFNULL(w.finished,0) AS w_finished, w.state AS state
 FROM workflows w
 JOIN pipelines p ON p.id = w.pipeline_id
 JOIN repos r ON r.id = p.repo_id
-WHERE p.created > {since}
+WHERE p.created > {int(since)}
 ORDER BY r.full_name, w.name, p.created;
 """
-    raw = run_sql(wf_sql, host=host, stack=args.stack)
-    rows = parse_workflows(raw)
+    raw_rows = run_sql_json(wf_sql, host=host, stack=args.stack)
+    rows = parse_workflows(raw_rows)
     failures = load_failure_logs(host, args.stack, since)
     report_rows = aggregate(rows, failures)
 
@@ -460,6 +526,6 @@ ORDER BY r.full_name, w.name, p.created;
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except RuntimeError as e:
+    except (RuntimeError, TypeError) as e:
         print(f"ci_slo_report: {e}", file=sys.stderr)
         raise SystemExit(1)
