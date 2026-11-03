@@ -135,12 +135,33 @@ Colima: **10 GiB / 4 CPUs**. Native capacity stays 1.
 Before/after queue wait and undos:
 `~/Code/coordinator/evidence/woodpecker-agent-config-2026-11-02.md`.
 
+### MO-121 — catalogue wait, docker.sock cancels, darwin cap
+
+1. **catalouge `linux` wait p95 ≈ 22m (run p95 ≈ 43s)** — not a label miss.
+   Jobs run on `ci-linux`. The tail is queue wait while Colima/agents were
+   down or drained during MO-116/117 (~12:09 and ~12:58 PT Colima stop/start)
+   and while unlabeled SRW `deploy` still landed on `ci-linux` (before
+   `role=deploy` routing). After lanes + labeling, remaining spikes are
+   capacity-4 saturation under SRW verify bursts — not a stuck catalogue
+   queue.
+2. **docker.sock `Canceled`** — Colima/agent recreate without a finished
+   drain kills in-flight `wp_*` waits. Fix: `safe-restart.sh` + watchdog
+   drain-before-`kickstart -k`. Never restart mid-SRW-deploy.
+3. **Darwin capacity 2** — measured 2026-11-02 ~18:33 PT with CI-only load:
+   swap **64%** used (1312 / 2048 MiB). Gate is stay under 50%, so native
+   `WOODPECKER_MAX_WORKFLOWS` stays **1**. iOS queue (CineJar) is capacity,
+   not a bug in labels; raising concurrency needs lower swap first.
+
 ## Drain before restart
 
 ```sh
 ~/Code/woodpecker-ci/scripts/drain-agent.sh all   # prints DRAIN_OPID=…
 # … restart window (keep that opid) …
 ~/Code/woodpecker-ci/scripts/drain-agent.sh --resume "$DRAIN_OPID"
+
+# Or one shot (MO-121):
+~/Code/woodpecker-ci/scripts/safe-restart.sh all -- \
+  docker-compose --context colima-woodpecker up -d --force-recreate --no-deps agent-linux
 ```
 
 Sets `agents.no_schedule=1` before waiting so nothing new (especially an SRW
@@ -151,6 +172,10 @@ Refuses if an SRW `deploy` workflow is running. Never `colima stop` / resize /
 `compose restart agent-*` during an SRW deploy. `apply-two-lanes.sh` captures
 `DRAIN_OPID`, does **not** blindly restart the native agent, then resumes that
 op after the new Docker agents are up.
+
+`watchdog.sh` (MO-121) drains before `kickstart -k` on Colima whenever Docker
+still answers, brings compose services back with `--no-recreate` while the
+drain is held, then resumes. It never force-recreates agents.
 
 ## Reaper
 
@@ -194,7 +219,10 @@ xcrun simctl shutdown CI-iPhone   # after each iOS job
 ## Do not
 
 - Grow Colima above 10 GiB or `ci-linux` above 4 without dual-load proof
+- Raise native capacity above 1 while swap used ≥ 50%
 - Restart Docker agents / Colima during an SRW deploy
+- `launchctl kickstart -k` Colima or `compose … --force-recreate` agents
+  without `drain-agent.sh` / `safe-restart.sh`
 - Re-enable archived non-CI LaunchAgents without coordinator OK
 - Remove held paper-trader LaunchAgents without coordinator OK
 - Put CI on the M4
