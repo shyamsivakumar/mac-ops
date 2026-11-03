@@ -174,8 +174,13 @@ Refuses if an SRW `deploy` workflow is running. Never `colima stop` / resize /
 op after the new Docker agents are up.
 
 `watchdog.sh` (MO-121) drains before `kickstart -k` on Colima whenever Docker
-still answers, brings compose services back with `--no-recreate` while the
-drain is held, then resumes. It never force-recreates agents.
+still answers, persists the opid under
+`~/Library/Logs/woodpecker/watchdog-drain-opid`, brings compose services back
+with `--no-recreate`, waits for agent process + fresh `last_contact`, then
+resumes. A failed pass leaves the hold file so the next watchdog run retries
+resume (and will not open a second overlapping drain). It never
+force-recreates agents. `safe-restart.sh` uses the same readiness gate before
+`--resume`.
 
 ## Reaper
 

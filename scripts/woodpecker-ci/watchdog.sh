@@ -7,6 +7,8 @@
 # MO-121: never kickstart -k Colima while Docker still answers without
 # draining first. Undrained Colima/agent kills show up as docker.sock
 # "Canceled" infra failures on in-flight SRW/mac-ops workflows.
+# Persist the drain opid across watchdog invocations so a failed recovery
+# pass can still release no_schedule on a later successful pass.
 set -eu
 
 # shellcheck disable=SC1091
@@ -14,6 +16,7 @@ set -eu
 
 LOG_DIR="$HOME/Library/Logs/woodpecker"
 LOG="$LOG_DIR/watchdog.log"
+DRAIN_HOLD_FILE="$LOG_DIR/watchdog-drain-opid"
 DOMAIN="gui/$(id -u)"
 mkdir -p "$LOG_DIR"
 
@@ -25,14 +28,76 @@ docker_reachable() {
   docker ps -q >/dev/null 2>&1
 }
 
+read_held_drain_opid() {
+  if [ -f "$DRAIN_HOLD_FILE" ]; then
+    tr -d '[:space:]' <"$DRAIN_HOLD_FILE"
+  fi
+}
+
+persist_held_drain_opid() {
+  opid=$1
+  if [ -z "$opid" ]; then
+    return 0
+  fi
+  printf '%s\n' "$opid" >"$DRAIN_HOLD_FILE"
+  log "Persisted drain op $opid in $DRAIN_HOLD_FILE"
+}
+
+clear_held_drain_opid() {
+  rm -f "$DRAIN_HOLD_FILE"
+}
+
+# Resume a held drain only after all agents are process-up and contacting.
+resume_held_drain_if_ready() {
+  drain="$ROOT/scripts/drain-agent.sh"
+  opid=$(read_held_drain_opid)
+  if [ -z "$opid" ]; then
+    return 0
+  fi
+  if [ ! -x "$drain" ]; then
+    log "Held drain $opid but drain-agent.sh missing; cannot resume."
+    return 1
+  fi
+  if ! docker_reachable; then
+    log "Held drain $opid; Docker not ready yet — will retry next pass."
+    return 0
+  fi
+
+  start_missing_services
+  ensure_native_agent
+
+  ready_log=$(mktemp "${TMPDIR:-/tmp}/mo121-watchdog-ready.XXXXXX")
+  ready_rc=0
+  wait_agents_ready all 180 >"$ready_log" 2>&1 || ready_rc=$?
+  while IFS= read -r line; do
+    log "ready: $line"
+  done <"$ready_log"
+  rm -f "$ready_log"
+  if [ "$ready_rc" -ne 0 ]; then
+    log "Held drain $opid; agents not ready yet — will retry next pass."
+    return 0
+  fi
+
+  if "$drain" --resume "$opid" >>"$LOG" 2>&1; then
+    log "Resumed held drain $opid after verified agent readiness."
+    clear_held_drain_opid
+    return 0
+  fi
+  log "Failed to resume held drain $opid; leaving hold file for next pass."
+  return 1
+}
+
 # Pause agents via drain when the engine is still up, then hard-restart Colima.
 # If Docker is already dead, only kickstart (prefer without -k) and bring the
 # compose services back — the sock drop already canceled in-flight jobs.
+# If a prior pass already held a drain, do not open a second overlapping op.
 restart_colima() {
   drain="$ROOT/scripts/drain-agent.sh"
-  opid=
+  opid=$(read_held_drain_opid)
 
-  if docker_reachable; then
+  if [ -n "$opid" ]; then
+    log "Reusing held drain $opid from a prior pass; not opening a new drain."
+  elif docker_reachable; then
     if [ "$(srw_deploy_running)" != "0" ]; then
       log "Colima unhealthy but SRW deploy running; refusing kickstart -k."
       exit 2
@@ -42,12 +107,16 @@ restart_colima() {
       drain_log=$(mktemp "${TMPDIR:-/tmp}/mo121-watchdog-drain.XXXXXX")
       drain_rc=0
       "$drain" all 900 >"$drain_log" 2>&1 || drain_rc=$?
-      # Keep operator visibility in the watchdog log without flooding.
       while IFS= read -r line; do
         log "drain: $line"
       done <"$drain_log"
       opid=$(awk -F= '/^DRAIN_OPID=/{print $2; exit}' "$drain_log")
       rm -f "$drain_log"
+      # Persist as soon as we own a drain so a later crash cannot strand it
+      # without a recorded opid.
+      if [ -n "$opid" ]; then
+        persist_held_drain_opid "$opid"
+      fi
       if [ "$drain_rc" -ne 0 ]; then
         log "Drain failed (rc=$drain_rc); not kickstarting Colima."
         exit "$drain_rc"
@@ -80,17 +149,14 @@ restart_colima() {
   until "$COLIMA" status woodpecker >/dev/null 2>&1 && docker_reachable; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
       log "Colima did not become ready within 180 seconds."
-      if [ -n "$opid" ] && [ -x "$drain" ]; then
-        log "Leaving drain $opid held after Colima timeout."
+      if [ -n "$opid" ]; then
+        log "Drain $opid remains held in $DRAIN_HOLD_FILE for a later pass."
       fi
       exit 1
     fi
     sleep 3
   done
   log "Colima is running."
-  # Caller brings compose services up while drain is still held, then resumes.
-  WATCHDOG_DRAIN_OPID=$opid
-  export WATCHDOG_DRAIN_OPID
 }
 
 start_missing_services() {
@@ -131,7 +197,25 @@ start_missing_services() {
   fi
 }
 
-WATCHDOG_DRAIN_OPID=
+ensure_native_agent() {
+  native_pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
+  case "$native_pid" in
+    '' | -)
+      if [ "$(srw_deploy_running)" != "0" ]; then
+        log "Native agent not loaded but SRW deploy running; not bootstrapping."
+        return 0
+      fi
+      log "Native agent not loaded; bootstrapping LaunchAgent (no -k)."
+      launchctl bootstrap "$DOMAIN" \
+        "$HOME/Library/LaunchAgents/org.woodpecker.agent.plist" 2>/dev/null \
+        || launchctl kickstart "$DOMAIN/org.woodpecker.agent"
+      ;;
+    *)
+      :
+      ;;
+  esac
+}
+
 if ! "$COLIMA" status woodpecker >/dev/null 2>&1; then
   log "Colima profile woodpecker is not running; recovering."
   restart_colima
@@ -141,37 +225,13 @@ fi
 # after an SRW-guarded recovery left agents down).
 if ! docker_reachable; then
   log "Docker context not ready yet; deferring service check."
+  # Keep any held drain for a later pass; do not clear the hold file.
   exit 0
 fi
 
 start_missing_services
+ensure_native_agent
 
-# Resume only after compose services are up so paused agents are online first.
-if [ -n "${WATCHDOG_DRAIN_OPID:-}" ]; then
-  drain="$ROOT/scripts/drain-agent.sh"
-  if [ -x "$drain" ]; then
-    if "$drain" --resume "$WATCHDOG_DRAIN_OPID" >>"$LOG" 2>&1; then
-      log "Resumed drain $WATCHDOG_DRAIN_OPID after Colima recovery."
-    else
-      log "Failed to resume drain $WATCHDOG_DRAIN_OPID; agents may stay paused."
-      exit 1
-    fi
-  fi
-fi
-
-native_pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
-case "$native_pid" in
-  '' | -)
-    if [ "$(srw_deploy_running)" != "0" ]; then
-      log "Native agent not loaded but SRW deploy running; not bootstrapping."
-    else
-      log "Native agent not loaded; bootstrapping LaunchAgent (no -k)."
-      launchctl bootstrap "$DOMAIN" \
-        "$HOME/Library/LaunchAgents/org.woodpecker.agent.plist" 2>/dev/null \
-        || launchctl kickstart "$DOMAIN/org.woodpecker.agent"
-    fi
-    ;;
-  *)
-    : # leave a loaded native agent alone
-    ;;
-esac
+# Release this pass's drain and any stranded hold from a prior failed pass,
+# but only after agents are verified ready.
+resume_held_drain_if_ready
