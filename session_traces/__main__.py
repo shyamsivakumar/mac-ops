@@ -1,0 +1,142 @@
+"""CLI: python3 -m session_traces collect|eval|run-daily."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from .collect import collect_and_store
+from .eval_day import write_day_report
+from .store import day_key, posthog_api_key
+
+
+def _parse_day(value: str | None) -> tuple[datetime, datetime]:
+    """Return [start, end) in local day as UTC datetimes covering that calendar day."""
+    if value:
+        day = datetime.strptime(value, "%Y-%m-%d").astimezone()
+    else:
+        now = datetime.now().astimezone()
+        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_local = day.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_local = start_local + timedelta(days=1)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="MO-124 session traces and daily evals"
+    )
+    parser.add_argument(
+        "--state-root",
+        type=Path,
+        default=None,
+        help="Override ~/.local/state/mac-ops",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Override ~/.t3/userdata/statev2.sqlite",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    collect_p = sub.add_parser("collect", help="Collect scrubbed traces for a day")
+    collect_p.add_argument(
+        "--day", help="Local calendar day YYYY-MM-DD (default: today)"
+    )
+    collect_p.add_argument(
+        "--no-export",
+        action="store_true",
+        help="Skip PostHog export even when a key is present",
+    )
+    collect_p.add_argument(
+        "--dry-run-export",
+        action="store_true",
+        help="Build the PostHog batch but do not POST",
+    )
+
+    eval_p = sub.add_parser("eval", help="Score stored traces for a day")
+    eval_p.add_argument("--day", help="Local calendar day YYYY-MM-DD (default: today)")
+    eval_p.add_argument(
+        "--baseline-day",
+        help="Prior day JSON to flag regressions against",
+    )
+
+    daily = sub.add_parser("run-daily", help="Collect then eval (LaunchAgent entry)")
+    daily.add_argument("--day", help="Local calendar day YYYY-MM-DD (default: today)")
+    daily.add_argument("--no-export", action="store_true")
+    daily.add_argument("--baseline-day", default=None)
+
+    sub.add_parser("status", help="Show store paths and PostHog key presence")
+
+    args = parser.parse_args(argv)
+
+    if args.cmd == "status":
+        info = {
+            "posthog_key_present": bool(posthog_api_key()),
+            "state_root": str(args.state_root)
+            if args.state_root
+            else str(Path.home() / ".local/state/mac-ops"),
+            "db": str(args.db)
+            if args.db
+            else str(Path.home() / ".t3/userdata/statev2.sqlite"),
+        }
+        print(json.dumps(info, indent=2))
+        return 0
+
+    if args.cmd == "collect":
+        start, end = _parse_day(args.day)
+        result = collect_and_store(
+            since=start,
+            until=end,
+            db_path=args.db,
+            state_root=args.state_root,
+            export=not args.no_export,
+            dry_run_export=args.dry_run_export,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.cmd == "eval":
+        day = args.day or day_key()
+        result = write_day_report(
+            day, root=args.state_root, baseline_day=args.baseline_day
+        )
+        print(json.dumps(result, indent=2))
+        md = Path(result["md"])
+        if md.is_file():
+            print(md.read_text(encoding="utf-8"))
+        return 0
+
+    if args.cmd == "run-daily":
+        start, end = _parse_day(args.day)
+        day = args.day or day_key(start)
+        collect_result = collect_and_store(
+            since=start,
+            until=end,
+            db_path=args.db,
+            state_root=args.state_root,
+            export=not args.no_export,
+        )
+        # Baseline: previous local day when not specified.
+        baseline = args.baseline_day
+        if baseline is None:
+            prev = (start - timedelta(days=1)).astimezone().strftime("%Y-%m-%d")
+            baseline = prev
+        eval_result = write_day_report(day, root=args.state_root, baseline_day=baseline)
+        out = {"collect": collect_result, "eval": eval_result}
+        print(json.dumps(out, indent=2))
+        md = Path(eval_result["md"])
+        if md.is_file():
+            sys.stdout.write(md.read_text(encoding="utf-8"))
+        return 0
+
+    parser.error(f"unknown command {args.cmd}")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
