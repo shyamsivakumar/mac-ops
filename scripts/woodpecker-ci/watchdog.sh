@@ -87,16 +87,48 @@ resume_held_drain_if_ready() {
   return 1
 }
 
+# Before kickstart -k, require SRW clear + agents idle when a drain is in play
+# (including reuse of a timed-out hold — ownership alone is not enough).
+ensure_idle_before_colima_kick() {
+  opid=$1
+  if ! docker_reachable; then
+    log "Docker unreachable; skipping idle recheck before Colima kickstart."
+    return 0
+  fi
+  if [ "$(srw_deploy_running)" != "0" ]; then
+    log "SRW deploy running; refusing Colima kickstart -k (drain $opid kept)."
+    exit 2
+  fi
+  idle_log=$(mktemp "${TMPDIR:-/tmp}/mo121-watchdog-idle.XXXXXX")
+  idle_rc=0
+  wait_agents_idle all 900 >"$idle_log" 2>&1 || idle_rc=$?
+  while IFS= read -r line; do
+    log "idle: $line"
+  done <"$idle_log"
+  rm -f "$idle_log"
+  if [ "$idle_rc" -eq 2 ]; then
+    log "SRW deploy appeared during idle wait; refusing kickstart -k."
+    exit 2
+  fi
+  if [ "$idle_rc" -ne 0 ]; then
+    log "Agents not idle under held drain $opid; not kickstarting Colima."
+    exit "$idle_rc"
+  fi
+}
+
 # Pause agents via drain when the engine is still up, then hard-restart Colima.
 # If Docker is already dead, only kickstart (prefer without -k) and bring the
 # compose services back — the sock drop already canceled in-flight jobs.
-# If a prior pass already held a drain, do not open a second overlapping op.
+# If a prior pass already held a drain, reuse that op but still recheck idle +
+# SRW deploy before kickstart -k.
 restart_colima() {
   drain="$ROOT/scripts/drain-agent.sh"
   opid=$(read_held_drain_opid)
+  drained=0
 
   if [ -n "$opid" ]; then
     log "Reusing held drain $opid from a prior pass; not opening a new drain."
+    drained=1
   elif docker_reachable; then
     if [ "$(srw_deploy_running)" != "0" ]; then
       log "Colima unhealthy but SRW deploy running; refusing kickstart -k."
@@ -104,18 +136,19 @@ restart_colima() {
     fi
     if [ -x "$drain" ]; then
       log "Docker still reachable; draining all agents before Colima kickstart -k."
+      # --hold-file writes the opid at pause claim, before the idle wait, so a
+      # killed drain still leaves a durable resume handle.
       drain_log=$(mktemp "${TMPDIR:-/tmp}/mo121-watchdog-drain.XXXXXX")
       drain_rc=0
-      "$drain" all 900 >"$drain_log" 2>&1 || drain_rc=$?
+      "$drain" --hold-file "$DRAIN_HOLD_FILE" all 900 >"$drain_log" 2>&1 || drain_rc=$?
       while IFS= read -r line; do
         log "drain: $line"
       done <"$drain_log"
       opid=$(awk -F= '/^DRAIN_OPID=/{print $2; exit}' "$drain_log")
       rm -f "$drain_log"
-      # Persist as soon as we own a drain so a later crash cannot strand it
-      # without a recorded opid.
       if [ -n "$opid" ]; then
-        persist_held_drain_opid "$opid"
+        # hold-file already written by drain-agent; keep in-memory opid too
+        log "Drain op $opid recorded in $DRAIN_HOLD_FILE"
       fi
       if [ "$drain_rc" -ne 0 ]; then
         log "Drain failed (rc=$drain_rc); not kickstarting Colima."
@@ -125,12 +158,17 @@ restart_colima() {
         log "Drain printed no DRAIN_OPID; not kickstarting Colima."
         exit 1
       fi
+      drained=1
     else
       log "drain-agent.sh missing; refusing Colima kickstart -k while Docker is up."
       exit 1
     fi
   else
     log "Docker already unreachable; Colima recovery without drain (sock already gone)."
+  fi
+
+  if [ "$drained" -eq 1 ]; then
+    ensure_idle_before_colima_kick "$opid"
   fi
 
   # Prefer a non-kill start when the LaunchAgent is not loaded; use -k only when

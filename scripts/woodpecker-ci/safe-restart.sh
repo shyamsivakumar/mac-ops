@@ -62,12 +62,16 @@ if [ ! -x "$drain" ]; then
   exit 1
 fi
 
+hold_file=$(mktemp "${TMPDIR:-/tmp}/mo121-safe-restart-hold.XXXXXX")
 drain_log=$(mktemp "${TMPDIR:-/tmp}/mo121-safe-restart-drain.XXXXXX")
 drain_rc=0
-"$drain" "$target" "$timeout_sec" >"$drain_log" 2>&1 || drain_rc=$?
+"$drain" --hold-file "$hold_file" "$target" "$timeout_sec" >"$drain_log" 2>&1 || drain_rc=$?
 cat "$drain_log"
 opid=$(awk -F= '/^DRAIN_OPID=/{print $2; exit}' "$drain_log")
-rm -f "$drain_log"
+if [ -z "$opid" ] && [ -s "$hold_file" ]; then
+  opid=$(tr -d '[:space:]' <"$hold_file")
+fi
+rm -f "$drain_log" "$hold_file"
 
 if [ "$drain_rc" -ne 0 ]; then
   echo "Drain failed (rc=$drain_rc); not running restart command." >&2
