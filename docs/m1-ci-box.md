@@ -151,24 +151,36 @@ no matching processes.
 Domain for user agents: `gui/$(id -u)`. Archive (if a plist was moved):
 `~/Library/LaunchAgents/_disabled-mo122-20261103T025356Z/`.
 
-All rows use domain `gui/$(id -u)` (`D` below). Undo for each label:
-`launchctl enable D/LABEL && launchctl kickstart D/LABEL`. If the plist was
-archived, restore it and run `bootstrap` instead of `kickstart`.
+Domain `D=gui/$(id -u)`. After any `bootout`, `enable` alone is not enough —
+the job definition is gone until `bootstrap` from a plist path.
 
-| Label | What we did | Undo |
+User-domain undo pattern (bootout + disable):
+
+```sh
+D=gui/$(id -u)
+A=~/Library/LaunchAgents/_disabled-mo122-20261103T025356Z   # if archived
+P=~/Library/LaunchAgents                                     # live dir
+# Prefer archived copy, else the stock system/user plist path:
+PLIST=$A/LABEL.plist; [ -f "$PLIST" ] || PLIST=/Library/LaunchAgents/LABEL.plist
+[ -f "$PLIST" ] || PLIST=$P/LABEL.plist
+mv "$PLIST" "$P/LABEL.plist" 2>/dev/null || true   # only if restoring from A
+launchctl enable "$D/LABEL"
+launchctl bootstrap "$D" "$P/LABEL.plist"          # required after bootout
+```
+
+| Label | What we did | Plist to bootstrap |
 | --- | --- | --- |
-| `com.logitech.LogiRightSight.Agent` | bootout + disable | enable + kickstart |
-| `com.logi.cp-dev-mgr` | bootout + disable | enable + kickstart |
-| `us.zoom.updater` | bootout + disable | enable + kickstart |
-| `us.zoom.updater.login.check` | bootout + disable | enable + kickstart |
-| `com.apple.intelligence*` (see below) | disable | enable + kickstart |
+| `com.logitech.LogiRightSight.Agent` | bootout+disable | archive/vendor plist |
+| `com.logi.cp-dev-mgr` | bootout+disable | archive/vendor plist |
+| `us.zoom.updater` | bootout+disable | archive/vendor plist |
+| `us.zoom.updater.login.check` | bootout+disable | archive/vendor plist |
+| `com.apple.intelligence*` | **disable only** | `enable` + `kickstart` |
 
-The Apple row covers `intelligenceplatformd`, `intelligencetasksd`,
-`callintelligenced`, `intelligenceflowd`, `intelligencecontextd` and
-`visualintelligenced` (many already exit -9).
+Apple labels (disable only): `intelligenceplatformd`, `intelligencetasksd`,
+`callintelligenced`, `intelligenceflowd`, `intelligencecontextd`,
+`visualintelligenced`. Undo: `launchctl enable D/LABEL && launchctl kickstart D/LABEL`.
 
-Reopening an app alone does **not** clear `launchctl disable`. Always
-`enable` (then `bootstrap` if the plist was archived, else `kickstart`).
+Reopening an app alone does **not** reverse `bootout` or `disable`.
 
 System LaunchAgents/Daemons (still need sudo; not fully disabled yet):
 
