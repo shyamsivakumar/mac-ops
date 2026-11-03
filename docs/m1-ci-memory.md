@@ -20,6 +20,11 @@ Woodpecker reference and `~/Code/woodpecker-ci` on the M1.
 Native capacity 2 plus Colima oversubscribes RAM on this host. Desktop apps
 and non-CI LaunchAgents were removed in MO-117 so the 10 GiB VM fits.
 
+MO-121 re-check (2026-11-02 ~18:33 PT, CI-only): swap used **64%**
+(1312 / 2048 MiB), Colima 10 GiB, native still capacity 1. Do **not** raise
+`WOODPECKER_MAX_WORKFLOWS` to 2 until a dual-load sample keeps swap under
+50%.
+
 ## MO-116 incident (2026-11-02)
 
 Measured over `ssh m1` around 12:05–12:10 PT while CI was pending across SRW,

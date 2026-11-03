@@ -62,8 +62,11 @@ stateDiagram-v2
 `compose up -d --force-recreate` and then `scripts/verify.sh` under `set -eu`.
 A failure exits with the new release in place and no automatic rollback. The
 native agent plist edit and `launchctl kickstart -k` are also manual, with a
-`.before-max2` copy as the only revert. `scripts/watchdog.sh` on the M1
-restarts the agent the same way, without changing the release.
+`.before-max2` copy as the only revert. Prefer
+`scripts/safe-restart.sh` (MO-121) for any agent force-recreate so drain runs
+first. `scripts/watchdog.sh` recovers a down Colima with drain-before
+`kickstart -k` when Docker still answers, then `compose up --no-recreate`
+only — it does not force-recreate agents or change the release.
 
 The TLA+ model in
 [formal/woodpecker-runner](../../formal/woodpecker-runner/README.md)
