@@ -158,14 +158,22 @@ User-domain undo pattern (bootout + disable):
 
 ```sh
 D=gui/$(id -u)
-A=~/Library/LaunchAgents/_disabled-mo122-20261103T025356Z   # if archived
-P=~/Library/LaunchAgents                                     # live dir
-# Prefer archived copy, else the stock system/user plist path:
-PLIST=$A/LABEL.plist; [ -f "$PLIST" ] || PLIST=/Library/LaunchAgents/LABEL.plist
-[ -f "$PLIST" ] || PLIST=$P/LABEL.plist
-mv "$PLIST" "$P/LABEL.plist" 2>/dev/null || true   # only if restoring from A
+A=~/Library/LaunchAgents/_disabled-mo122-20261103T025356Z
+P=~/Library/LaunchAgents
+# 1) Prefer an archived user copy — move it back (must succeed).
+if [ -f "$A/LABEL.plist" ]; then
+  mv "$A/LABEL.plist" "$P/LABEL.plist"
+  PLIST=$P/LABEL.plist
+# 2) Else bootstrap directly from the vendor/system plist (do not mv).
+elif [ -f /Library/LaunchAgents/LABEL.plist ]; then
+  PLIST=/Library/LaunchAgents/LABEL.plist
+elif [ -f "$P/LABEL.plist" ]; then
+  PLIST=$P/LABEL.plist
+else
+  echo "no plist for LABEL" >&2; exit 1
+fi
 launchctl enable "$D/LABEL"
-launchctl bootstrap "$D" "$P/LABEL.plist"          # required after bootout
+launchctl bootstrap "$D" "$PLIST"   # required after bootout; use $PLIST as-is
 ```
 
 | Label | What we did | Plist to bootstrap |
