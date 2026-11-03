@@ -58,6 +58,12 @@ SECRET_PATTERNS = [
     re.compile(r"\b(AKIA[0-9A-Z]{16})\b"),
     re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._\-+=/]{8,}"),
     re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*\S+"),
+    # curl -u user:pass and basic-auth style credentials in command text
+    re.compile(r"(?i)(-u|--user)\s+\S+:\S+"),
+    re.compile(r"(?i)://[^/\s:]+:[^/\s@]+@"),
+    # Phone / SSN (US-oriented; still scrub when present in titles)
+    re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b"),
+    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
     re.compile(r"/Users/[^/\s]+"),
     re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
 ]
@@ -68,10 +74,14 @@ HOME_RE = re.compile(r"^/Users/[^/]+")
 def scrub_string(value: str) -> str:
     out = value
     for pat in SECRET_PATTERNS:
-        if pat.pattern.startswith("(?i)(api") or "Bearer" in pat.pattern:
+        if "Bearer" in pat.pattern or (
+            pat.pattern.startswith("(?i)(api") and "password" in pat.pattern
+        ):
             out = pat.sub(
                 lambda m: (m.group(1) if m.lastindex else "") + "[REDACTED]", out
             )
+        elif pat.pattern.startswith("(?i)(-u"):
+            out = pat.sub(r"\1 [REDACTED]", out)
         elif pat is HOME_RE or pat.pattern.startswith("/Users"):
             out = pat.sub("/Users/[user]", out)
         else:

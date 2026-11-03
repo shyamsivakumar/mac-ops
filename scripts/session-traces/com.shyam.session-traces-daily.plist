@@ -9,7 +9,7 @@
 		<string>/bin/sh</string>
 		<string>/Users/shyamsivakumar/Code/mac-ops/scripts/session-traces/daily.sh</string>
 	</array>
-	<!-- 17:30 America/Los_Angeles, after the MO-118 CI SLO report. -->
+	<!-- 17:30 America/Los_Angeles: collects the previous local day + reconciles unfinished runs. -->
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>

@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from .scrub import scrub_path
-from .store import day_key, export_posthog, rebuild_day_index, write_trace
+from .store import (
+    day_key,
+    export_posthog,
+    load_day_traces,
+    rebuild_day_index,
+    write_trace,
+)
 
 DEFAULT_DB = Path.home() / ".t3" / "userdata" / "statev2.sqlite"
 TASK_KEY_RE = re.compile(r"\b([A-Z]{2,5}-\d+)\b")
@@ -30,6 +36,7 @@ PREVIEW_RE = re.compile(
     r"cursor.?model.?panel|Browser\.|mcp__.*preview)"
 )
 BLOCKER_RE = re.compile(r"(?i)\b(blocked|blocker|named blocker|waiting on shyam)\b")
+NONTERMINAL = frozenset({"queued", "preparing", "starting", "running", "waiting"})
 
 
 def open_db(path: Path | None = None) -> sqlite3.Connection:
@@ -59,6 +66,15 @@ def _ms_between(start: str | None, end: str | None) -> int | None:
     except ValueError:
         return None
     return max(0, int((b - a).total_seconds() * 1000))
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _task_key(title: str | None) -> str | None:
@@ -93,51 +109,94 @@ def _tokens_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tool_name(item_type: str, payload: dict[str, Any]) -> str:
+    """Stable tool names only — never persist command text or free-form titles."""
     if item_type == "dynamic_tool":
-        return str(payload.get("toolName") or payload.get("title") or "dynamic_tool")
+        name = payload.get("toolName")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        return "dynamic_tool"
     if item_type == "command_execution":
-        title = payload.get("title")
-        if title:
-            return str(title)
-        inp = payload.get("input")
-        if isinstance(inp, str) and inp.strip():
-            return "shell:" + inp.strip().split()[0][:80]
         return "command_execution"
     if item_type == "file_change":
         return "file_change"
     if item_type == "file_search":
-        return str(payload.get("title") or "file_search")
+        return "file_search"
     if item_type == "web_search":
         return "web_search"
     if item_type == "subagent":
-        return str(payload.get("title") or "subagent")
+        return "subagent"
     return item_type
 
 
-def _pr_outcomes(thread_payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _pr_outcomes_for_run(
+    thread_payload: dict[str, Any], *, completed_at: str | None, status: str
+) -> tuple[list[dict[str, Any]], str]:
+    """PR/CI evidence as of the run's end.
+
+    Thread snapshots are current; when merge/check timing cannot be tied to the
+    run ending, mark evidence unknown and do not credit a post-run merge.
+    """
     prs = thread_payload.get("pullRequests") or []
-    out = []
+    out: list[dict[str, Any]] = []
+    evidence = "known"
+    run_end = _parse_ts(completed_at)
+    terminal = status not in NONTERMINAL
+
     for pr in prs:
         if not isinstance(pr, dict):
             continue
         snap = pr.get("snapshot") if isinstance(pr.get("snapshot"), dict) else {}
+        merged_at_raw = snap.get("mergedAt")
+        merged_at = _parse_ts(merged_at_raw)
+        state = (snap.get("state") or pr.get("state") or "").lower()
+        run_merged = False
+        timing = "known"
+
+        if merged_at and run_end:
+            if merged_at <= run_end:
+                run_merged = True
+            else:
+                # Merged after this run ended — not attributable to the run.
+                run_merged = False
+                state = "open"
+                timing = "post_run_merge"
+        elif state == "merged":
+            if terminal and run_end is None:
+                timing = "unknown"
+                evidence = "unknown"
+            elif terminal and merged_at is None:
+                # State says merged but no timestamp — cannot prove it was merged by run end.
+                timing = "unknown"
+                evidence = "unknown"
+                run_merged = False
+                state = "merged_unknown_timing"
+            else:
+                run_merged = True
+
         out.append(
             {
                 "url": pr.get("url"),
                 "repository": pr.get("repository"),
                 "number": pr.get("number"),
-                "state": snap.get("state") or pr.get("state"),
-                "merged_at": snap.get("mergedAt"),
-                "merge_sha": snap.get("mergeCommitOid")
-                or snap.get("mergeCommit")
-                or snap.get("headSha"),
+                "state": "merged" if run_merged else state,
+                "merged_at": merged_at_raw if run_merged else None,
+                "merge_sha": (
+                    snap.get("mergeCommitOid")
+                    or snap.get("mergeCommit")
+                    or snap.get("headSha")
+                )
+                if run_merged
+                else None,
                 "checks_state": snap.get("checksState"),
                 "review_decision": snap.get("reviewDecision"),
                 "head_branch": snap.get("headBranch"),
                 "title": snap.get("title"),
+                "timing": timing,
             }
         )
-    return out
+    if not out and terminal:
+        evidence = "known"
+    return out, evidence
 
 
 def _named_blocker(
@@ -152,24 +211,16 @@ def _named_blocker(
     return None
 
 
+def _normalize_path(path: str) -> str:
+    return os.path.normpath(path)
+
+
 def _allowed_roots(worktree: str | None, workspace: str | None) -> list[str]:
-    """Bound worktree, project checkout, and known worktree mirrors for that project."""
+    """Only the assigned worktree and the project checkout — never sibling dirs."""
     roots: list[str] = []
     for p in (worktree, workspace):
         if p:
-            roots.append(str(p))
-    if workspace:
-        ws = Path(workspace)
-        name = ws.name
-        home = Path.home()
-        for c in (
-            home / ".t3" / "worktrees" / name,
-            home / ".shepherdr" / "worktrees" / name,
-            ws.parent / ".worktrees" / name,
-            home / "Code" / ".worktrees" / name,
-            home / "Code" / f"{name}-worktrees",
-        ):
-            roots.append(str(c))
+            roots.append(_normalize_path(str(p)))
     seen: set[str] = set()
     out: list[str] = []
     for r in roots:
@@ -180,10 +231,13 @@ def _allowed_roots(worktree: str | None, workspace: str | None) -> list[str]:
 
 
 def _path_under(path: str, root: str) -> bool:
+    p = Path(_normalize_path(path))
+    r = Path(_normalize_path(root))
     try:
-        return Path(path).is_relative_to(root)
-    except (ValueError, TypeError):
-        return path == root or path.startswith(str(root).rstrip("/") + "/")
+        return p.is_relative_to(r)
+    except (ValueError, TypeError, AttributeError):
+        ps, rs = str(p), str(r)
+        return ps == rs or ps.startswith(rs.rstrip("/") + "/")
 
 
 def collect_runs(
@@ -192,6 +246,7 @@ def collect_runs(
     until: datetime | None = None,
     db_path: Path | None = None,
     thread_id: str | None = None,
+    run_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build one scrubbed-ready trace dict per T3 run in the window."""
     since = since or (datetime.now(timezone.utc) - timedelta(days=1))
@@ -201,11 +256,19 @@ def collect_runs(
 
     conn = open_db(db_path)
     try:
-        params: list[Any] = [since_s, until_s]
-        thread_clause = ""
+        params: list[Any] = []
+        clauses = []
+        if run_ids:
+            placeholders = ",".join("?" for _ in run_ids)
+            clauses.append(f"r.run_id IN ({placeholders})")
+            params.extend(run_ids)
+        else:
+            clauses.append("r.requested_at >= ? AND r.requested_at <= ?")
+            params.extend([since_s, until_s])
         if thread_id:
-            thread_clause = " AND r.thread_id = ?"
+            clauses.append("r.thread_id = ?")
             params.append(thread_id)
+        where = " AND ".join(clauses)
         runs = conn.execute(
             f"""
             SELECT r.run_id, r.thread_id, r.ordinal, r.provider, r.provider_instance_id,
@@ -215,7 +278,7 @@ def collect_runs(
             FROM orchestration_v2_projection_runs r
             JOIN orchestration_v2_projection_threads t ON t.thread_id = r.thread_id
             LEFT JOIN projection_projects p ON p.project_id = t.project_id
-            WHERE r.requested_at >= ? AND r.requested_at <= ?{thread_clause}
+            WHERE {where}
             ORDER BY r.requested_at
             """,
             params,
@@ -277,7 +340,7 @@ def collect_runs(
                     fname = payload.get("fileName")
                     if fname:
                         touched_files.append(str(fname))
-                        entry["file"] = scrub_path(str(fname))
+                        entry["file"] = scrub_path(_normalize_path(str(fname)))
                 tool_calls.append(entry)
                 if PREVIEW_RE.search(name):
                     preview_hits.append(name)
@@ -290,11 +353,13 @@ def collect_runs(
                 if not ok_roots:
                     continue
                 if not any(_path_under(path, root) for root in ok_roots):
-                    outside.append(scrub_path(path))
+                    outside.append(scrub_path(_normalize_path(path)))
 
             started_at = run_payload.get("startedAt") or run["requested_at"]
             completed_at = run["completed_at"] or run_payload.get("completedAt")
-            prs = _pr_outcomes(thread_payload)
+            prs, outcome_evidence = _pr_outcomes_for_run(
+                thread_payload, completed_at=completed_at, status=run["status"]
+            )
             blocker = _named_blocker(run["title"], notifications)
 
             trace = {
@@ -323,6 +388,7 @@ def collect_runs(
                 or tokens.get("totalCostUsd")
                 or tokens.get("cost_usd"),
                 "pull_requests": prs,
+                "outcome_evidence": outcome_evidence,
                 "named_blocker": blocker,
                 "files_outside_worktree": outside,
                 "preview_or_playwright": preview_hits,
@@ -334,6 +400,19 @@ def collect_runs(
         conn.close()
 
 
+def _unfinished_run_ids(root: Path | None, lookback_days: int = 3) -> list[str]:
+    """Stored traces still non-terminal — refresh on the next daily pass."""
+    ids: list[str] = []
+    today = datetime.now().astimezone().date()
+    for i in range(lookback_days + 1):
+        day = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        for trace in load_day_traces(day, root=root):
+            status = (trace.get("status") or "").lower()
+            if status in NONTERMINAL and trace.get("run_id"):
+                ids.append(str(trace["run_id"]))
+    return ids
+
+
 def collect_and_store(
     *,
     since: datetime | None = None,
@@ -342,8 +421,19 @@ def collect_and_store(
     state_root: Path | None = None,
     export: bool = True,
     dry_run_export: bool = False,
+    reconcile_unfinished: bool = True,
 ) -> dict[str, Any]:
     traces = collect_runs(since=since, until=until, db_path=db_path)
+    refreshed = 0
+    if reconcile_unfinished:
+        unfinished = _unfinished_run_ids(state_root)
+        # Avoid double-collecting runs already in this window.
+        have = {t["run_id"] for t in traces}
+        missing = [rid for rid in unfinished if rid not in have]
+        if missing:
+            extra = collect_runs(db_path=db_path, run_ids=missing)
+            traces.extend(extra)
+            refreshed = len(extra)
     paths = []
     days: set[str] = set()
     for trace in traces:
@@ -356,6 +446,7 @@ def collect_and_store(
         export_result = export_posthog(traces, dry_run=dry_run_export)
     return {
         "collected": len(traces),
+        "reconciled_unfinished": refreshed,
         "days": sorted(days),
         "paths_sample": paths[:5],
         "posthog": export_result,
