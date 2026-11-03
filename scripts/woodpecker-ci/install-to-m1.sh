@@ -23,11 +23,15 @@ ci_slo_report.py
 ci_slo_report.sh
 ci_slo_daily.sh
 set-repo-timeouts.sh
+set-trusted-volumes.sh
+setup-cache-dirs.sh
+cache-cleanup.sh
 '
 plists='
 com.shyamsivakumar.woodpecker-reaper.plist
 com.shyamsivakumar.woodpecker-backup-nightly.plist
 com.shyamsivakumar.woodpecker-ci-slo-daily.plist
+com.shyamsivakumar.woodpecker-cache-cleanup.plist
 '
 
 printf 'Installing mac-ops woodpecker-ci overlay -> %s:%s\n' "$HOST" "$DEST"
@@ -57,3 +61,9 @@ printf 'MO-118: bootstrap daily SLO + timeouts with:\n'
 printf "  ssh %s 'DOMAIN=gui/\$(id -u); launchctl bootout \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-ci-slo-daily 2>/dev/null; launchctl bootstrap \"\$DOMAIN\" %s/com.shyamsivakumar.woodpecker-ci-slo-daily.plist; launchctl enable \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-ci-slo-daily'\n" \
   "$HOST" "$DEST"
 printf '  ssh %s %s/scripts/set-repo-timeouts.sh\n' "$HOST" "$DEST"
+printf 'MO-120: trusted volumes + cache dirs + daily cleanup:\n'
+printf '  ssh %s %s/scripts/set-trusted-volumes.sh\n' "$HOST" "$DEST"
+printf '  ssh %s %s/scripts/setup-cache-dirs.sh --colima\n' "$HOST" "$DEST"
+printf '  ssh %s sudo %s/scripts/setup-cache-dirs.sh --host\n' "$HOST" "$DEST"
+printf "  ssh %s 'DOMAIN=gui/\$(id -u); launchctl bootout \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-cache-cleanup 2>/dev/null; launchctl bootstrap \"\$DOMAIN\" %s/com.shyamsivakumar.woodpecker-cache-cleanup.plist; launchctl enable \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-cache-cleanup'\n" \
+  "$HOST" "$DEST"
