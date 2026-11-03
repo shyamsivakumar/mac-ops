@@ -36,20 +36,17 @@ point at those paths — `kickstart` them only if the plist contents changed.
 - Reaper + nightly backup: `com.shyamsivakumar.woodpecker-reaper`,
   `com.shyamsivakumar.woodpecker-backup-nightly`
 
-## Held for coordinator confirmation
+## Held / retired non-CI (see also [`m1-ci-box.md`](m1-ci-box.md))
 
-Do **not** delete these until the coordinator says so. They are not Woodpecker
-CI, but may serve other machines or the SRW paper path.
-
-| Item | Why it might matter | Status now | Undo if removed later |
+| Item | Why it might matter | Status now | Undo |
 | --- | --- | --- | --- |
-| `com.alpha-trader` | Paper-trader host | **kept**, idle | already loaded |
-| `…strategy-paper` | Paper :8788 | **kept**, unloaded | `launchctl bootstrap` |
+| `com.alpha-trader` | Paper trader | **disabled** MO-122 | see archive |
+| `…strategy-paper` | Paper :8788 | **disabled** MO-122 | same archive |
 | webhook-proxy | GitHub → CI | **kept**, running | `docker compose up -d` |
 | Heavy job queue on M1 | Not found listening | n/a | — |
 
-No M1 listener looked like a shared heavy-queue endpoint. SRW live paper runs
-on Railway; the local paper LaunchAgents are held only as a break-glass.
+SRW live paper runs on Railway. Local paper LaunchAgents and their plists are
+archived under `~/Library/LaunchAgents/_disabled-mo122-*` (not deleted).
 
 ## Quit ledger (with one-line undo)
 
