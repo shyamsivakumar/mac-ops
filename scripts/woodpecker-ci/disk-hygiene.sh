@@ -77,19 +77,35 @@ require_idle() {
   esac
 }
 
-# Absolute path of DD_ROOT; refuse MO-120 cache and its descendants.
+# Canonical absolute path (resolves /var → /private/var, .., symlinks).
+# Fails closed when resolution is impossible.
+canon_path() {
+  python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1" 2>/dev/null
+}
+
+PROTECTED_CANON=$(canon_path "$PROTECTED_CACHE") || PROTECTED_CANON=
+
+# True if path is the MO-120 cache or a descendant (canonical compare).
+under_protected_cache() {
+  target=$(canon_path "$1") || return 0
+  [ -n "$PROTECTED_CANON" ] || return 0
+  case "$target" in
+    "$PROTECTED_CANON" | "$PROTECTED_CANON"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Absolute canonical DD_ROOT; refuse MO-120 cache and its descendants.
 resolve_dd_root() {
   root=$1
-  case "$root" in
-    /*) abs=$root ;;
-    *) abs=$(CDPATH='' cd -- "$root" 2>/dev/null && pwd) || abs=$root ;;
-  esac
-  case "$abs" in
-    "$PROTECTED_CACHE" | "$PROTECTED_CACHE"/*)
-      log "refuse DD_ROOT under protected cache: $abs"
-      return 1
-      ;;
-  esac
+  abs=$(canon_path "$root") || {
+    log "refuse DD_ROOT: cannot canonicalize $root"
+    return 1
+  }
+  if under_protected_cache "$abs"; then
+    log "refuse DD_ROOT under protected cache: $abs"
+    return 1
+  fi
   printf '%s\n' "$abs"
 }
 
@@ -126,9 +142,7 @@ if [ -d "$DD_ROOT" ]; then
         -print 2>/dev/null >"$list" || true
       while IFS= read -r p; do
         [ -n "${p:-}" ] || continue
-        case "$p" in
-          "$PROTECTED_CACHE" | "$PROTECTED_CACHE"/*) continue ;;
-        esac
+        under_protected_cache "$p" && continue
         require_idle "DerivedData-age-item" || break
         log "DerivedData age-prune $p"
         rm -rf "$p"
@@ -142,9 +156,7 @@ if [ -d "$DD_ROOT" ]; then
         2>/dev/null | sort -n >"$list"
       while read -r _mtime path; do
         [ -n "${path:-}" ] || continue
-        case "$path" in
-          "$PROTECTED_CACHE" | "$PROTECTED_CACHE"/*) continue ;;
-        esac
+        under_protected_cache "$path" && continue
         used=$(bytes_of "$DD_ROOT")
         [ "$used" -gt "$DD_CAP_BYTES" ] || break
         require_idle "DerivedData-cap-item" || break
@@ -194,11 +206,19 @@ fi
 
 # --- Colima: dangling only; keep tagged images + woodpecker volumes. ---
 if docker info >/dev/null 2>&1; then
-  if require_idle docker; then
-    log "docker: prune stopped containers + dangling images + builder cache"
+  if require_idle "docker-container-prune"; then
+    log "docker: container prune"
     docker container prune -f >/dev/null 2>&1 || true
+  fi
+  if require_idle "docker-image-prune"; then
+    log "docker: image prune (dangling only)"
     docker image prune -f >/dev/null 2>&1 || true
+  fi
+  if require_idle "docker-builder-prune"; then
+    log "docker: builder prune"
     docker builder prune -f >/dev/null 2>&1 || true
+  fi
+  if require_idle "docker-volume-list"; then
     docker volume ls -qf dangling=true 2>/dev/null | while read -r vol; do
       case "$vol" in
         woodpecker-ci-*)
