@@ -140,17 +140,40 @@ def main(argv: list[str] | None = None) -> int:
             export=not args.no_export,
             reconcile_unfinished=True,
         )
-        baseline = args.baseline_day
-        if baseline is None:
-            prev = (
-                datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
-                - timedelta(days=1)
-            ).strftime("%Y-%m-%d")
-            baseline = prev
-        eval_result = write_day_report(day, root=args.state_root, baseline_day=baseline)
-        out = {"collect": collect_result, "eval": eval_result, "day": day}
+        # Regenerate every day whose traces changed (requested day + reconciled).
+        changed_days = list(collect_result.get("days") or [day])
+        if day not in changed_days:
+            changed_days.insert(0, day)
+        eval_results = []
+        for d in changed_days:
+            if args.baseline_day is not None and d == day:
+                baseline = args.baseline_day
+            else:
+                baseline = (
+                    datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+                    - timedelta(days=1)
+                ).strftime("%Y-%m-%d")
+            eval_results.append(
+                write_day_report(d, root=args.state_root, baseline_day=baseline)
+            )
+        primary = next((e for e in eval_results if e["day"] == day), eval_results[0])
+        out = {
+            "collect": collect_result,
+            "eval": primary,
+            "evals": eval_results,
+            "day": day,
+            "days_reported": [e["day"] for e in eval_results],
+        }
+        # Manifest for daily.sh to copy every regenerated report into evidence.
+        from .store import evals_dir as _evals_dir
+
+        manifest_dir = _evals_dir(args.state_root)
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        (manifest_dir / "_last_daily.json").write_text(
+            json.dumps(out, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         print(json.dumps(out, indent=2))
-        md = Path(eval_result["md"])
+        md = Path(primary["md"])
         if md.is_file():
             sys.stdout.write(md.read_text(encoding="utf-8"))
         return 0

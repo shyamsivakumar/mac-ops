@@ -20,50 +20,75 @@ def _pr_key(pr: dict[str, Any]) -> str | None:
     return str(url) if url else None
 
 
-def _has_merged_pr(trace: dict[str, Any]) -> bool:
+def _usable_prs(trace: dict[str, Any]) -> list[dict[str, Any]]:
+    """PRs with evidence known by this run's end (no post-run snapshot bleed)."""
     if (trace.get("outcome_evidence") or "known") == "unknown":
-        return False
+        return []
+    out = []
     for pr in trace.get("pull_requests") or []:
+        if not isinstance(pr, dict):
+            continue
         timing = pr.get("timing") or "known"
         if timing in {"unknown", "post_run_merge"}:
             continue
-        state = (pr.get("state") or "").lower()
-        if state == "merged" or pr.get("merged_at"):
+        if pr.get("evidence_by_end") is False:
+            continue
+        out.append(pr)
+    return out
+
+
+def _pr_merged(pr: dict[str, Any]) -> bool:
+    state = (pr.get("state") or "").lower()
+    return state == "merged" or bool(pr.get("merged_at"))
+
+
+def _pr_ci_green(pr: dict[str, Any]) -> bool:
+    state = (pr.get("checks_state") or "").lower()
+    return state in {"passing", "success"}
+
+
+def _pr_ci_red(pr: dict[str, Any]) -> bool:
+    state = (pr.get("checks_state") or "").lower()
+    return state in {"failing", "failure", "failed", "error"}
+
+
+def _pr_review_blocked(pr: dict[str, Any]) -> bool:
+    return (pr.get("review_decision") or "").upper() == "CHANGES_REQUESTED"
+
+
+def _has_merged_pr(trace: dict[str, Any]) -> bool:
+    return any(_pr_merged(pr) for pr in _usable_prs(trace))
+
+
+def _proven_same_pr(trace: dict[str, Any]) -> bool:
+    """Merge + green CI + acceptable review must hold on one PR."""
+    for pr in _usable_prs(trace):
+        if not _pr_merged(pr):
+            continue
+        if pr.get("checks_state") is None:
+            continue
+        if not _pr_ci_green(pr):
+            continue
+        if _pr_review_blocked(pr):
+            continue
+        return True
+    return False
+
+
+def _disproven_same_pr(trace: dict[str, Any]) -> bool:
+    for pr in _usable_prs(trace):
+        if pr.get("checks_state") is None and pr.get("review_decision") is None:
+            continue
+        if _pr_ci_red(pr) or _pr_review_blocked(pr):
             return True
     return False
 
 
-def _ci_green(trace: dict[str, Any]) -> bool:
-    prs = [p for p in (trace.get("pull_requests") or []) if isinstance(p, dict)]
-    if not prs:
-        return False
-    states = [(pr.get("checks_state") or "").lower() for pr in prs]
-    if any(s in {"failing", "failure", "failed", "error"} for s in states):
-        return False
-    return any(s in {"passing", "success"} for s in states)
-
-
-def _ci_red(trace: dict[str, Any]) -> bool:
-    for pr in trace.get("pull_requests") or []:
-        state = (pr.get("checks_state") or "").lower()
-        if state in {"failing", "failure", "failed", "error"}:
-            return True
-    return False
-
-
-def _review_blocked(trace: dict[str, Any]) -> bool:
-    for pr in trace.get("pull_requests") or []:
-        if (pr.get("review_decision") or "").upper() == "CHANGES_REQUESTED":
-            return True
-    return False
-
-
-def _review_clean(trace: dict[str, Any]) -> bool:
-    if not _has_merged_pr(trace) or not _ci_green(trace):
-        return False
-    return all(
-        (pr.get("review_decision") or "").upper() != "CHANGES_REQUESTED"
-        for pr in (trace.get("pull_requests") or [])
+def _ci_green_known(trace: dict[str, Any]) -> bool:
+    """True only when some usable PR has known passing checks."""
+    return any(
+        pr.get("checks_state") is not None and _pr_ci_green(pr)
+        for pr in _usable_prs(trace)
     )
 
 
@@ -76,11 +101,10 @@ def proof_status(trace: dict[str, Any]) -> str:
         return "proven"  # named blocker is an accepted terminal outcome
     if (trace.get("outcome_evidence") or "known") == "unknown":
         return "missing"
-    if _ci_red(trace) or _review_blocked(trace):
+    if _disproven_same_pr(trace):
         return "disproven"
-    if _has_merged_pr(trace) and _ci_green(trace) and _review_clean(trace):
+    if _proven_same_pr(trace):
         return "proven"
-    # Completed with no PR, open PR + pending/missing checks, or unproven merge.
     return "missing"
 
 
@@ -90,14 +114,16 @@ def score_trace(trace: dict[str, Any]) -> dict[str, Any]:
     ended_ok = merged or blocker
     status = (trace.get("status") or "").lower()
     pstatus = proof_status(trace)
-    proof = pstatus == "proven" and merged and _ci_green(trace) and _review_clean(trace)
+    proof = pstatus == "proven" and _proven_same_pr(trace)
     # Named blocker counts as ended_ok but not "claimed done with CI proof".
     if pstatus == "proven" and blocker and not merged:
         proof = False
     claimed_without_proof = pstatus == "disproven"
     missing_proof = pstatus == "missing"
     stopped_green = (
-        status in {"interrupted", "cancelled"} and _ci_green(trace) and not merged
+        status in {"interrupted", "cancelled"}
+        and _ci_green_known(trace)
+        and not merged
     )
     outside = list(trace.get("files_outside_worktree") or [])
     preview = list(trace.get("preview_or_playwright") or [])
@@ -140,24 +166,35 @@ def score_trace(trace: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merged_pr_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Group by canonical PR; duration/cost are sums of contributing runs."""
-    by_pr: dict[str, dict[str, Any]] = {}
+    """Group by canonical PR; include earlier contributing runs before the merge run."""
+    merged_keys: set[str] = set()
     for r in rows:
         if not r.get("merged_pr"):
             continue
         for pr in r.get("pull_requests") or []:
+            timing = pr.get("timing") or "known"
+            if timing in {"unknown", "post_run_merge"}:
+                continue
             state = (pr.get("state") or "").lower()
             if state != "merged" and not pr.get("merged_at"):
                 continue
-            if (pr.get("timing") or "known") in {"unknown", "post_run_merge"}:
-                continue
             key = _pr_key(pr)
-            if not key:
+            if key:
+                merged_keys.add(key)
+
+    by_pr: dict[str, dict[str, Any]] = {
+        key: {"duration_ms": 0, "cost_usd": 0.0, "cost_n": 0, "runs": 0}
+        for key in merged_keys
+    }
+    # Attribute every run that linked a eventually-merged PR (including pre-merge runs).
+    for r in rows:
+        seen_keys: set[str] = set()
+        for pr in r.get("pull_requests") or []:
+            key = _pr_key(pr)
+            if not key or key not in merged_keys or key in seen_keys:
                 continue
-            bucket = by_pr.setdefault(
-                key,
-                {"duration_ms": 0, "cost_usd": 0.0, "cost_n": 0, "runs": 0},
-            )
+            seen_keys.add(key)
+            bucket = by_pr[key]
             bucket["runs"] += 1
             if isinstance(r.get("duration_ms"), int):
                 bucket["duration_ms"] += r["duration_ms"]

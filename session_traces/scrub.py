@@ -57,6 +57,8 @@ SECRET_PATTERNS = [
     re.compile(r"\b(xox[baprs]-[A-Za-z0-9-]{10,})\b"),
     re.compile(r"\b(AKIA[0-9A-Z]{16})\b"),
     re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._\-+=/]{8,}"),
+    re.compile(r"(?i)\b(Authorization:\s*Basic\s+)[A-Za-z0-9+/=]+"),
+    re.compile(r"(?i)(?<![\w-])(Basic\s+)[A-Za-z0-9+/]{8,}={0,2}"),
     re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*\S+"),
     # curl -u user:pass and basic-auth style credentials in command text
     re.compile(r"(?i)(-u|--user)\s+\S+:\S+"),
@@ -74,8 +76,10 @@ HOME_RE = re.compile(r"^/Users/[^/]+")
 def scrub_string(value: str) -> str:
     out = value
     for pat in SECRET_PATTERNS:
-        if "Bearer" in pat.pattern or (
-            pat.pattern.startswith("(?i)(api") and "password" in pat.pattern
+        if (
+            "Bearer" in pat.pattern
+            or "Basic" in pat.pattern
+            or (pat.pattern.startswith("(?i)(api") and "password" in pat.pattern)
         ):
             out = pat.sub(
                 lambda m: (m.group(1) if m.lastindex else "") + "[REDACTED]", out

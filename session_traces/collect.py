@@ -173,6 +173,10 @@ def _pr_outcomes_for_run(
             else:
                 run_merged = True
 
+        # Current thread snapshots are not historical. Only attach CI/review when
+        # the merge itself is known to have happened by run end; otherwise leave
+        # them unknown so later snapshots cannot rewrite earlier run scores.
+        evidence_by_end = run_merged and timing == "known"
         out.append(
             {
                 "url": pr.get("url"),
@@ -187,11 +191,14 @@ def _pr_outcomes_for_run(
                 )
                 if run_merged
                 else None,
-                "checks_state": snap.get("checksState"),
-                "review_decision": snap.get("reviewDecision"),
+                "checks_state": snap.get("checksState") if evidence_by_end else None,
+                "review_decision": snap.get("reviewDecision")
+                if evidence_by_end
+                else None,
                 "head_branch": snap.get("headBranch"),
                 "title": snap.get("title"),
                 "timing": timing,
+                "evidence_by_end": evidence_by_end,
             }
         )
     if not out and terminal:
