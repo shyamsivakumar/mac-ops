@@ -20,8 +20,8 @@ def _pr_key(pr: dict[str, Any]) -> str | None:
     return str(url) if url else None
 
 
-def _usable_prs(trace: dict[str, Any]) -> list[dict[str, Any]]:
-    """PRs with evidence known by this run's end (no post-run snapshot bleed)."""
+def _timed_prs(trace: dict[str, Any]) -> list[dict[str, Any]]:
+    """PRs whose merge timing relative to this run is known (not post-run)."""
     if (trace.get("outcome_evidence") or "known") == "unknown":
         return []
     out = []
@@ -31,13 +31,13 @@ def _usable_prs(trace: dict[str, Any]) -> list[dict[str, Any]]:
         timing = pr.get("timing") or "known"
         if timing in {"unknown", "post_run_merge"}:
             continue
-        if pr.get("evidence_by_end") is False:
-            continue
         out.append(pr)
     return out
 
 
 def _pr_merged(pr: dict[str, Any]) -> bool:
+    if pr.get("merge_by_end") is True:
+        return True
     state = (pr.get("state") or "").lower()
     return state == "merged" or bool(pr.get("merged_at"))
 
@@ -57,12 +57,16 @@ def _pr_review_blocked(pr: dict[str, Any]) -> bool:
 
 
 def _has_merged_pr(trace: dict[str, Any]) -> bool:
-    return any(_pr_merged(pr) for pr in _usable_prs(trace))
+    return any(_pr_merged(pr) for pr in _timed_prs(trace))
 
 
 def _proven_same_pr(trace: dict[str, Any]) -> bool:
-    """Merge + green CI + acceptable review must hold on one PR."""
-    for pr in _usable_prs(trace):
+    """Merge + green CI + acceptable review must hold on one PR.
+
+    CI/review fields are only present when historical snapshot timing is known
+    at or before run end; otherwise proof stays missing (not disproven).
+    """
+    for pr in _timed_prs(trace):
         if not _pr_merged(pr):
             continue
         if pr.get("checks_state") is None:
@@ -76,7 +80,7 @@ def _proven_same_pr(trace: dict[str, Any]) -> bool:
 
 
 def _disproven_same_pr(trace: dict[str, Any]) -> bool:
-    for pr in _usable_prs(trace):
+    for pr in _timed_prs(trace):
         if pr.get("checks_state") is None and pr.get("review_decision") is None:
             continue
         if _pr_ci_red(pr) or _pr_review_blocked(pr):
@@ -85,10 +89,10 @@ def _disproven_same_pr(trace: dict[str, Any]) -> bool:
 
 
 def _ci_green_known(trace: dict[str, Any]) -> bool:
-    """True only when some usable PR has known passing checks."""
+    """True only when some timed PR has known-by-end passing checks."""
     return any(
         pr.get("checks_state") is not None and _pr_ci_green(pr)
-        for pr in _usable_prs(trace)
+        for pr in _timed_prs(trace)
     )
 
 
@@ -121,9 +125,7 @@ def score_trace(trace: dict[str, Any]) -> dict[str, Any]:
     claimed_without_proof = pstatus == "disproven"
     missing_proof = pstatus == "missing"
     stopped_green = (
-        status in {"interrupted", "cancelled"}
-        and _ci_green_known(trace)
-        and not merged
+        status in {"interrupted", "cancelled"} and _ci_green_known(trace) and not merged
     )
     outside = list(trace.get("files_outside_worktree") or [])
     preview = list(trace.get("preview_or_playwright") or [])
@@ -165,18 +167,21 @@ def score_trace(trace: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _merged_pr_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Group by canonical PR; include earlier contributing runs before the merge run."""
+def _merged_pr_metrics(
+    day_rows: list[dict[str, Any]],
+    *,
+    contribution_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Group by canonical PR; sum contributing runs across days for today's merges."""
     merged_keys: set[str] = set()
-    for r in rows:
+    for r in day_rows:
         if not r.get("merged_pr"):
             continue
         for pr in r.get("pull_requests") or []:
             timing = pr.get("timing") or "known"
             if timing in {"unknown", "post_run_merge"}:
                 continue
-            state = (pr.get("state") or "").lower()
-            if state != "merged" and not pr.get("merged_at"):
+            if not _pr_merged(pr):
                 continue
             key = _pr_key(pr)
             if key:
@@ -186,8 +191,10 @@ def _merged_pr_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         key: {"duration_ms": 0, "cost_usd": 0.0, "cost_n": 0, "runs": 0}
         for key in merged_keys
     }
-    # Attribute every run that linked a eventually-merged PR (including pre-merge runs).
-    for r in rows:
+    # Include earlier-day runs that linked the same PR (without changing their
+    # own day's merged_pr attribution).
+    pool = contribution_rows if contribution_rows is not None else day_rows
+    for r in pool:
         seen_keys: set[str] = set()
         for pr in r.get("pull_requests") or []:
             key = _pr_key(pr)
@@ -209,16 +216,34 @@ def _merged_pr_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "count": len(durations),
             "total": sum(durations) if durations else 0,
             "mean": (sum(durations) / len(durations)) if durations else None,
-            "note": "sum of contributing run durations per distinct PR",
+            "note": "sum of contributing run durations per distinct PR across stored days",
         },
         "cost_per_merged_pr_usd": {
             "count": len(costs),
             "total": sum(costs) if costs else 0,
             "mean": (sum(costs) / len(costs)) if costs else None,
-            "note": "sum of contributing run costs per distinct PR",
+            "note": "sum of contributing run costs per distinct PR across stored days",
         },
         "prs": sorted(by_pr.keys()),
     }
+
+
+def _all_scored_rows(root: Path | None) -> list[dict[str, Any]]:
+    from .store import traces_dir
+
+    base = traces_dir(root)
+    if not base.is_dir():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(base.iterdir()):
+        if not path.is_dir():
+            continue
+        name = path.name
+        if len(name) != 10 or name[4] != "-" or name[7] != "-":
+            continue
+        for trace in load_day_traces(name, root=root):
+            rows.append(score_trace(trace))
+    return rows
 
 
 def evaluate_day(day: str | None = None, *, root: Path | None = None) -> dict[str, Any]:
@@ -228,7 +253,7 @@ def evaluate_day(day: str | None = None, *, root: Path | None = None) -> dict[st
     by_provider: dict[str, int] = defaultdict(int)
     by_status: dict[str, int] = defaultdict(int)
     flag_counts: dict[str, int] = defaultdict(int)
-    pr_metrics = _merged_pr_metrics(rows)
+    pr_metrics = _merged_pr_metrics(rows, contribution_rows=_all_scored_rows(root))
 
     for r in rows:
         by_provider[str(r.get("provider") or "unknown")] += 1

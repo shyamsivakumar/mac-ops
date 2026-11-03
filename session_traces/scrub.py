@@ -58,7 +58,8 @@ SECRET_PATTERNS = [
     re.compile(r"\b(AKIA[0-9A-Z]{16})\b"),
     re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._\-+=/]{8,}"),
     re.compile(r"(?i)\b(Authorization:\s*Basic\s+)[A-Za-z0-9+/=]+"),
-    re.compile(r"(?i)(?<![\w-])(Basic\s+)[A-Za-z0-9+/]{8,}={0,2}"),
+    # No minimum length: short values like YTpi ("a:b") must redact too.
+    re.compile(r"(?i)(?<![\w-])(Basic\s+)[A-Za-z0-9+/=]+"),
     re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*\S+"),
     # curl -u user:pass and basic-auth style credentials in command text
     re.compile(r"(?i)(-u|--user)\s+\S+:\S+"),

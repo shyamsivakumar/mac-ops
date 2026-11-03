@@ -30,6 +30,7 @@ def _make_db(
     status: str = "completed",
     completed_at: str = "2026-11-03T16:20:00.000Z",
     checks: str = "passing",
+    synced_at: str | None = "2026-11-03T16:16:00Z",
     title_cmd: str | None = None,
     file_name: str = "/Users/shyamsivakumar/Code/other-repo/secret.env",
     extra_run: dict | None = None,
@@ -116,6 +117,7 @@ def _make_db(
                     "checksState": checks,
                     "reviewDecision": None,
                     "mergeCommitOid": "deadbeef",
+                    "syncedAt": synced_at,
                     "title": "MO-124: session traces",
                 },
             }
@@ -267,6 +269,7 @@ class ScrubTests(unittest.TestCase):
         self.assertNotIn("123-45-6789", s)
         self.assertNotIn("exam:passwordxxxxxxxxxx", s)
         self.assertNotIn("dXNlcjpwYXNz", s)
+        self.assertNotIn("YTpi", scrub_string("Basic YTpi"))
         self.assertIn("/Users/[user]", s)
 
     def test_drops_prompt_fields(self):
@@ -375,6 +378,7 @@ class CollectEvalTests(unittest.TestCase):
         write_trace(traces[0], root=self.root)
         scored = score_trace(traces[0])
         self.assertTrue(scored["merged_pr"])
+        # syncedAt before run end → CI known → proven
         self.assertTrue(scored["claimed_done_with_proof"])
         self.assertEqual(scored["proof_status"], "proven")
         self.assertIn("files_outside_worktree", scored["flags"])
@@ -382,6 +386,63 @@ class CollectEvalTests(unittest.TestCase):
         summary = evaluate_day("2026-11-03", root=self.root)
         self.assertEqual(summary["merged_pr_count"], 1)
         self.assertEqual(summary["claimed_done_with_proof"], 1)
+
+    def test_later_snapshot_ci_does_not_disprove(self):
+        db = self.root / "late.sqlite"
+        _make_db(
+            db,
+            merged_at="2026-11-03T16:10:00Z",
+            completed_at="2026-11-03T16:20:00.000Z",
+            checks="failing",
+            synced_at="2026-11-03T18:00:00Z",
+        )
+        traces = collect_runs(
+            since=datetime(2026, 11, 3, tzinfo=timezone.utc),
+            until=datetime(2026, 11, 4, tzinfo=timezone.utc),
+            db_path=db,
+        )
+        scored = score_trace(traces[0])
+        self.assertTrue(scored["merged_pr"])
+        self.assertIsNone(traces[0]["pull_requests"][0]["checks_state"])
+        self.assertEqual(scored["proof_status"], "missing")
+        self.assertNotIn("claimed_done_without_proof", scored["flags"])
+
+    def test_cross_day_pr_contributions(self):
+        prior = {
+            "merged_pr": False,
+            "duration_ms": 2000,
+            "cost_usd": 2.0,
+            "pull_requests": [
+                {
+                    "repository": "o/r",
+                    "number": 1,
+                    "state": "open",
+                    "timing": "post_run_merge",
+                }
+            ],
+        }
+        merge_day = {
+            "merged_pr": True,
+            "duration_ms": 1000,
+            "cost_usd": 1.0,
+            "pull_requests": [
+                {
+                    "repository": "o/r",
+                    "number": 1,
+                    "state": "merged",
+                    "merged_at": "t",
+                    "timing": "known",
+                    "merge_by_end": True,
+                }
+            ],
+        }
+        metrics = _merged_pr_metrics([merge_day], contribution_rows=[prior, merge_day])
+        self.assertEqual(metrics["distinct_merged_prs"], 1)
+        self.assertEqual(metrics["time_per_merged_pr_ms"]["total"], 3000)
+        self.assertEqual(metrics["cost_per_merged_pr_usd"]["total"], 3.0)
+        # Prior day alone still has zero merged PRs.
+        prior_only = _merged_pr_metrics([prior], contribution_rows=[prior, merge_day])
+        self.assertEqual(prior_only["distinct_merged_prs"], 0)
 
     def test_post_run_merge_and_interrupted_not_proven(self):
         db = self.root / "post.sqlite"
