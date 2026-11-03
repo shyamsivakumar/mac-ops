@@ -239,6 +239,15 @@ the exercised stalled-stream watchdog cases.
 Its [state chart](docs/state-charts/cursor-retry.md) records retry, veto and
 durable-launcher publication paths.
 
+## Agent session traces (MO-124)
+
+Read-only traces of every T3 build-session run on this Mac, scrubbed and stored
+under `~/.local/state/mac-ops/session-traces/`, with a daily eval table in
+`session-evals/`. Optional PostHog export uses the same free store as SRW-619
+when `POSTHOG_API_KEY` is set (ask the coordinator before creating a key). See
+[docs/session-traces.md](docs/session-traces.md); daily command:
+`./scripts/session-traces/daily.sh`.
+
 ## Reviewer agreement audit (MO-10)
 
 Advisory weekly scorecard for board reviewer flip rate, defect recall, false
