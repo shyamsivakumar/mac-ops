@@ -173,10 +173,15 @@ def _pr_outcomes_for_run(
             else:
                 run_merged = True
 
-        # Current thread snapshots are not historical. Only attach CI/review when
-        # the merge itself is known to have happened by run end; otherwise leave
-        # them unknown so later snapshots cannot rewrite earlier run scores.
-        evidence_by_end = run_merged and timing == "known"
+        # Merge timing can be known from mergedAt. Checks/review on the thread
+        # snapshot are current, not historical — only attach them when the
+        # snapshot itself is timestamped at or before run end. Otherwise leave
+        # them unknown so a later failing snapshot cannot rewrite earlier runs.
+        merge_by_end = run_merged and timing == "known"
+        snap_at = _parse_ts(
+            snap.get("syncedAt") or snap.get("updatedAt") or snap.get("closedAt")
+        )
+        ci_by_end = bool(merge_by_end and snap_at and run_end and snap_at <= run_end)
         out.append(
             {
                 "url": pr.get("url"),
@@ -191,14 +196,13 @@ def _pr_outcomes_for_run(
                 )
                 if run_merged
                 else None,
-                "checks_state": snap.get("checksState") if evidence_by_end else None,
-                "review_decision": snap.get("reviewDecision")
-                if evidence_by_end
-                else None,
+                "checks_state": snap.get("checksState") if ci_by_end else None,
+                "review_decision": snap.get("reviewDecision") if ci_by_end else None,
                 "head_branch": snap.get("headBranch"),
                 "title": snap.get("title"),
                 "timing": timing,
-                "evidence_by_end": evidence_by_end,
+                "evidence_by_end": ci_by_end,
+                "merge_by_end": merge_by_end,
             }
         )
     if not out and terminal:
