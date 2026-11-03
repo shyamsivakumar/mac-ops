@@ -24,8 +24,9 @@ with `./scripts/woodpecker-ci/install-to-m1.sh` (MO-117 layout).
   VM disk. Create with `./setup-cache-dirs.sh --colima`.
 - **macOS host** (native agent; later the iMac): same absolute path on the
   host. Create once with `sudo ./setup-cache-dirs.sh --host`.
-- Permissions: Colima `root:root` `0750`; macOS `root:admin` `0770`. Only CI
-  (and admins) write there.
+- Permissions: Colima `root:root` dirs `0750`; macOS `root:admin` dirs
+  `0770`. Setup only chmods directories so cached executables keep `+x`.
+  Only CI (and admins) write there.
 
 ## Mark Trusted (Volumes) only
 
@@ -35,13 +36,16 @@ ssh m1 ~/Code/woodpecker-ci/scripts/set-trusted-volumes.sh
 ssh m1 ~/Code/woodpecker-ci/scripts/set-trusted-volumes.sh --undo
 ```
 
-Sets `trusted.volumes=true` via the admin API. Leaves `network` and
-`security` (privileged) **false**. API-only — does not drain or restart
-agents (coordinate with MO-117; never restart during an SRW deploy).
+Sets `trusted.volumes=true` via the admin API for an explicit
+`owner/name` allowlist. Leaves `network` and `security` (privileged)
+**false**. Rejects missing or ambiguous `full_name` matches. API-only —
+does not drain or restart agents (coordinate with MO-117; never restart
+during an SRW deploy).
 
-Repos (personal only): `strategy-replay-workbench`, `mac-ops`,
-`sams-llm-wiki`, `cairn`, `catalouge`, `recoup`, `CineJar`, `scrapers`,
-`scripture-scroll`, `qabot`, `fantasy-football-toolkit`, `strata`.
+Repos (personal only): `shyamsivakumar/strategy-replay-workbench`,
+`…/mac-ops`, `…/sams-llm-wiki`, `…/cairn`, `…/catalouge`, `…/recoup`,
+`…/CineJar`, `…/scrapers`, `…/scripture-scroll`, `…/qabot`,
+`…/fantasy-football-toolkit`, `…/strata`.
 
 Per-repo undo (example):
 
@@ -67,53 +71,59 @@ steps:
         set -eu
         LOCK_HASH=$$(sha256sum package-lock.json | cut -d" " -f1)
         KEY=/cache/node_modules/$$LOCK_HASH
-        MAIN_KEY=/cache/node_modules/main
         if [ "$$CI_PIPELINE_EVENT" = "push" ] \
           && [ "$$CI_COMMIT_BRANCH" = "main" ]; then
           npm ci --cache /cache/npm
-          mkdir -p "$$KEY"
-          cp -a node_modules/. "$$KEY/"
-          ln -sfn "$$LOCK_HASH" "$$MAIN_KEY.Target"
-          # publish main pointer after a successful write only
-          mv -f "$$MAIN_KEY.Target" "$$MAIN_KEY"
+          stage=$$(mktemp -d "$$KEY.staging.XXXXXX")
+          cp -a node_modules/. "$$stage/"
+          rm -rf "$$KEY"
+          mv "$$stage" "$$KEY"
+          printf '%s\n' "$$LOCK_HASH" > /cache/node_modules/main
         else
-          # PRs / topic branches: read only — never overwrite main's tree
+          # PRs: restore only a matching lockfile key. Never copy main's
+          # node_modules when the lockfile differs — that installs the
+          # wrong tree. Fall back to npm ci using the warm package cache.
           if [ -d "$$KEY" ]; then
             cp -a "$$KEY/." node_modules/
-          elif [ -L "$$MAIN_KEY" ] || [ -f "$$MAIN_KEY" ]; then
-            TARGET=$$(cat "$$MAIN_KEY" 2>/dev/null || readlink "$$MAIN_KEY")
-            cp -a "/cache/node_modules/$$TARGET/." node_modules/ \
-              || npm ci --cache /cache/npm
           else
             npm ci --cache /cache/npm
           fi
         fi
 ```
 
+Warm **package-download** caches (`npm`, `pip`, …) are the right fallback
+when the lockfile key is cold. A `node_modules` (or equivalent installed
+tree) key is only safe to restore when it matches this revision's
+lockfile hash.
+
 `mac-ops` `.woodpecker/fast-check.yaml` mounts
 `/var/lib/woodpecker-cache/mac-ops/tools` for pinned CLI / TLA downloads as
-the proof path. Those keys are content-addressed (version + sha256): a
-missing key may be filled after checksum verify from any event; only
-`main` may replace an existing key. Dependency kinds (`npm`,
-`node_modules`, `pip`, …) stay strict main-write / PR-read.
+the proof path. Keys include the artifact digest; every restore re-checks
+that digest and discards stale entries. A missing key may be filled after
+checksum verify from any event (unique staging dir + lost-race = accept
+valid key); only `main` may replace an existing key. Dependency kinds
+(`npm`, `node_modules`, `pip`, …) stay strict main-write / PR-read.
 
 ## Rule: main writes, PRs only read
 
 Woodpecker has no per-branch cache scope. Branch pipelines in a Trusted
 repo can mount the same host paths, so discipline is in the workflow:
 
-1. **Key** by lockfile hash (or pinned tool digest). Prefer the matching
-   key; **fall back** to `main`'s published pointer when the PR key is cold.
-2. **Pushes to `main`** may populate / rotate the key and update the `main`
-   pointer after a successful install.
+1. **Key** installed trees by lockfile hash (or pinned tool digest). Prefer
+   the matching key. When it is cold, fall back to a **package-download**
+   cache and reinstall (`npm ci`, `pip download`, …) — do not restore
+   another revision's installed tree.
+2. **Pushes to `main`** may populate / rotate the key after a successful
+   install.
 3. **Pull requests and topic branches** restore only. They must not
-   `rm -rf` or overwrite `main`'s pointer or another key owned by main.
+   `rm -rf` or overwrite `main`'s keys.
 4. Caches hold **dependency / tool artifacts only — never secrets**, tokens,
    `.env`, deploy keys, or forge credentials.
 
 ## Size cap and cleanup
 
-Default cap: **20 GiB** across `/var/lib/woodpecker-cache` (host + Colima).
+Default cap: **20 GiB per tree** — host and Colima each. Combined usage
+can approach 40 GiB. Lower `CAP_BYTES` on either side if disk is tight.
 
 ```sh
 # Manual:
@@ -122,8 +132,10 @@ CACHE_ROOT=/var/lib/woodpecker-cache CAP_BYTES=21474836480 \
 ```
 
 LaunchAgent `com.shyamsivakumar.woodpecker-cache-cleanup` runs daily at
-**04:15** local and prunes oldest `<repo>/<kind>` trees until under the
-cap. Bootstrap after `install-to-m1.sh`:
+**04:15** local and prunes **oldest** (by mtime) `<repo>/<kind>` trees
+until under the per-tree cap. It **skips entirely** while any Woodpecker
+workflow is `running`, so it does not delete a mounted cache mid-job.
+Bootstrap after `install-to-m1.sh`:
 
 ```sh
 ssh m1 'DOMAIN=gui/$(id -u)
