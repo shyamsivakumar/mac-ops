@@ -35,20 +35,20 @@ for arg in "$@"; do
   esac
 done
 
-# Shyam-approved personal repos only (not slash-eureka / org GHA repos).
+# Explicit full_name allowlist (owner/name). Reject missing or ambiguous.
 REPOS='
-strategy-replay-workbench
-mac-ops
-sams-llm-wiki
-cairn
-catalouge
-recoup
-CineJar
-scrapers
-scripture-scroll
-qabot
-fantasy-football-toolkit
-strata
+shyamsivakumar/strategy-replay-workbench
+shyamsivakumar/mac-ops
+shyamsivakumar/sams-llm-wiki
+shyamsivakumar/cairn
+shyamsivakumar/catalouge
+shyamsivakumar/recoup
+shyamsivakumar/CineJar
+shyamsivakumar/scrapers
+shyamsivakumar/scripture-scroll
+shyamsivakumar/qabot
+shyamsivakumar/fantasy-football-toolkit
+shyamsivakumar/strata
 '
 
 API=http://127.0.0.1:8000
@@ -95,6 +95,11 @@ api() {
   fi
 }
 
+# Escape a single SQL string literal (full_name values are allowlisted).
+sql_quote() {
+  printf "%s" "$1" | sed "s/'/''/g"
+}
+
 volumes_wanted=true
 if [ "$UNDO" -eq 1 ]; then
   volumes_wanted=false
@@ -112,24 +117,32 @@ me=$(api GET /api/user)
 login=$(printf '%s' "$me" | /usr/bin/python3 -c 'import sys,json; print(json.load(sys.stdin)["login"])')
 printf 'Authenticated as %s\n' "$login"
 
-# Avoid pipeline subshell so failures abort the script.
 old_ifs=$IFS
 IFS='
 '
 # shellcheck disable=SC2086
 set -- $REPOS
 IFS=$old_ifs
-for name in "$@"; do
-  [ -n "$name" ] || continue
-  row=$(query_db "SELECT id || '|' || full_name || '|' || trusted FROM repos WHERE name = '$name' LIMIT 1;")
-  if [ -z "$row" ]; then
-    printf 'MISSING %s (not in Woodpecker DB)\n' "$name"
+missing=0
+for full in "$@"; do
+  [ -n "$full" ] || continue
+  q=$(sql_quote "$full")
+  count=$(query_db "SELECT COUNT(*) FROM repos WHERE full_name = '$q';")
+  if [ "$count" != "1" ]; then
+    printf 'REJECT %s (exact full_name matches=%s; need exactly 1)\n' "$full" "$count" >&2
+    missing=1
     continue
   fi
+  row=$(query_db "SELECT id || '|' || full_name || '|' || trusted FROM repos WHERE full_name = '$q';")
   id=${row%%|*}
   rest=${row#*|}
-  full=${rest%%|*}
+  got=${rest%%|*}
   trusted_json=${rest#*|}
+  if [ "$got" != "$full" ]; then
+    printf 'REJECT %s (DB returned %s)\n' "$full" "$got" >&2
+    missing=1
+    continue
+  fi
   current=$(printf '%s' "$trusted_json" | /usr/bin/python3 -c 'import sys,json; t=json.load(sys.stdin); print("volumes=%s network=%s security=%s" % (t.get("volumes"), t.get("network"), t.get("security")))')
   body=$(VOLUMES="$volumes_wanted" /usr/bin/python3 -c 'import json,os; print(json.dumps({"trusted":{"volumes": os.environ["VOLUMES"]=="true"}}))')
   printf 'REPO %s id=%s before[%s]\n' "$full" "$id" "$current"
@@ -167,9 +180,16 @@ for name in "$@"; do
   fi
 done
 
+if [ "$missing" -ne 0 ]; then
+  echo "One or more allowlisted full_names were missing or ambiguous." >&2
+  exit 1
+fi
+
 printf 'DB verification:\n'
-query_db "SELECT full_name, trusted FROM repos WHERE name IN (
-  'strategy-replay-workbench','mac-ops','sams-llm-wiki','cairn','catalouge',
-  'recoup','CineJar','scrapers','scripture-scroll','qabot',
-  'fantasy-football-toolkit','strata'
+query_db "SELECT full_name, trusted FROM repos WHERE full_name IN (
+  'shyamsivakumar/strategy-replay-workbench','shyamsivakumar/mac-ops',
+  'shyamsivakumar/sams-llm-wiki','shyamsivakumar/cairn','shyamsivakumar/catalouge',
+  'shyamsivakumar/recoup','shyamsivakumar/CineJar','shyamsivakumar/scrapers',
+  'shyamsivakumar/scripture-scroll','shyamsivakumar/qabot',
+  'shyamsivakumar/fantasy-football-toolkit','shyamsivakumar/strata'
 ) ORDER BY full_name;"

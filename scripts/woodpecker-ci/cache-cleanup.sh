@@ -1,48 +1,91 @@
 #!/bin/sh
 # MO-120: enforce a size cap on /var/lib/woodpecker-cache.
 # Deletes oldest repo/kind trees first until under CAP_BYTES.
-# Safe for LaunchAgent or cron. Never touches secrets (caches only).
+# Skips entirely while any Woodpecker workflow is running (avoids deleting
+# mounts mid-job). Safe for LaunchAgent or cron. Never touches secrets.
 #
 # Env:
 #   CACHE_ROOT   default /var/lib/woodpecker-cache
-#   CAP_BYTES    default 20GiB (21474836480)
+#   CAP_BYTES    default 20GiB (21474836480) — per tree (host and Colima each)
 #   LOG_FILE     default ~/Library/Logs/woodpecker/cache-cleanup.log
 set -eu
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin
 export PATH
 
+# shellcheck source=common.sh disable=SC1091
+. "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/common.sh"
+
 CACHE_ROOT=${CACHE_ROOT:-/var/lib/woodpecker-cache}
 CAP_BYTES=${CAP_BYTES:-21474836480}
 LOG_FILE=${LOG_FILE:-$HOME/Library/Logs/woodpecker/cache-cleanup.log}
-DOCKER=${DOCKER:-/opt/homebrew/bin/docker}
-CONTEXT=${CONTEXT:-colima-woodpecker}
 
 mkdir -p "$(dirname "$LOG_FILE")"
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 log() { printf '%s %s\n' "$ts" "$*" | tee -a "$LOG_FILE"; }
 
+running=$(any_workflow_running 2>/dev/null || echo unknown)
+case "$running" in
+  '' | unknown)
+    log "skip cleanup: could not read running workflow count"
+    exit 0
+    ;;
+  0) ;;
+  *)
+    log "skip cleanup: $running workflow(s) running (MO-120 mount safety)"
+    exit 0
+    ;;
+esac
+
+# Prune oldest leaf kind dirs (by mtime) until under cap.
+prune_oldest() {
+  root=$1
+  label=$2
+  dir_mode=${3:-0750}
+  used=$(du -sk "$root" | awk '{print $1 * 1024}')
+  log "$label $root used=$used cap=$CAP_BYTES"
+  if [ "$used" -le "$CAP_BYTES" ]; then
+    return 0
+  fi
+  list=$(mktemp "${TMPDIR:-/tmp}/wp-cache-prune.XXXXXX")
+  if stat -f '%m' "$root" >/dev/null 2>&1; then
+    find "$root" -mindepth 2 -maxdepth 2 -type d -exec stat -f '%m %N' {} \; \
+      >"$list" 2>/dev/null || true
+  else
+    find "$root" -mindepth 2 -maxdepth 2 -type d -exec stat -c '%Y %n' {} \; \
+      >"$list" 2>/dev/null || true
+  fi
+  sort -n "$list" | while read -r _mtime path; do
+    used=$(du -sk "$root" | awk '{print $1 * 1024}')
+    [ "$used" -gt "$CAP_BYTES" ] || break
+    still=$(any_workflow_running 2>/dev/null || echo 1)
+    if [ "$still" != "0" ]; then
+      log "$label abort prune: workflows running ($still)"
+      break
+    fi
+    log "$label prune $path (mtime=$_mtime)"
+    rm -rf "$path"
+    mkdir -p "$path"
+    chmod "$dir_mode" "$path"
+  done
+  rm -f "$list"
+}
+
 # Host tree (native agent).
 if [ -d "$CACHE_ROOT" ]; then
-  used=$(du -sk "$CACHE_ROOT" | awk '{print $1 * 1024}')
-  log "host $CACHE_ROOT used=$used cap=$CAP_BYTES"
-  if [ "$used" -gt "$CAP_BYTES" ]; then
-    # Oldest leaf kind dirs first.
-    du -sk "$CACHE_ROOT"/*/* 2>/dev/null | sort -n | while read -r _kb path; do
-      used=$(du -sk "$CACHE_ROOT" | awk '{print $1 * 1024}')
-      [ "$used" -gt "$CAP_BYTES" ] || break
-      log "host prune $path"
-      rm -rf "$path"
-      mkdir -p "$path"
-    done
-  fi
+  prune_oldest "$CACHE_ROOT" host 0770
 else
   log "host $CACHE_ROOT absent (ok if native cache not installed yet)"
 fi
 
-# Colima VM tree (Docker agents).
-if "$DOCKER" --context "$CONTEXT" info >/dev/null 2>&1; then
+# Colima VM tree (Docker agents). Cap is per-tree (see docs/ci-cache.md).
+still=$(any_workflow_running 2>/dev/null || echo 1)
+if [ "$still" != "0" ]; then
+  log "skip colima prune: $still workflow(s) running"
+  exit 0
+fi
+if docker info >/dev/null 2>&1; then
   # shellcheck disable=SC2016
-  "$DOCKER" --context "$CONTEXT" run --rm --privileged \
+  docker run --rm --privileged \
     -e CACHE_ROOT="$CACHE_ROOT" \
     -e CAP_BYTES="$CAP_BYTES" \
     -v /var/lib:/var/lib \
@@ -60,10 +103,11 @@ if "$DOCKER" --context "$CONTEXT" info >/dev/null 2>&1; then
       if [ "$used" -le "$CAP" ]; then
         exit 0
       fi
-      du -sk "$ROOT"/*/* 2>/dev/null | sort -n | while read -r _kb path; do
+      find "$ROOT" -mindepth 2 -maxdepth 2 -type d -exec stat -c "%Y %n" {} \; \
+        | sort -n | while read -r mtime path; do
         used=$(du -sk "$ROOT" | awk "{print \$1 * 1024}")
         [ "$used" -gt "$CAP" ] || break
-        echo "colima prune $path"
+        echo "colima prune $path (mtime=$mtime)"
         rm -rf "$path"
         mkdir -p "$path"
         chmod 0750 "$path"
@@ -72,5 +116,5 @@ if "$DOCKER" --context "$CONTEXT" info >/dev/null 2>&1; then
     log "$line"
   done
 else
-  log "colima context $CONTEXT unavailable; skipped VM cleanup"
+  log "colima context unavailable; skipped VM cleanup"
 fi

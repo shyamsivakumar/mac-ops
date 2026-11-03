@@ -8,6 +8,8 @@
 #
 # Owner/mode: root:root 0750 on Colima; root:admin 0770 on macOS so the
 # LaunchAgent user (admin group) and CI can write, others cannot read.
+# Directory modes only — never rewrite file modes (preserves execute bits on
+# cached package binaries and tools).
 # Never stores secrets — dependency caches only.
 #
 # Does not restart agents (MO-117: never restart during an SRW deploy).
@@ -51,6 +53,13 @@ make_tree() {
   done
 }
 
+# Directories only — do not chmod existing files (keeps +x on tools/bins).
+chmod_dirs() {
+  root=$1
+  mode=$2
+  find "$root" -type d -exec chmod "$mode" {} +
+}
+
 setup_colima() {
   printf 'MO-120: creating %s inside Colima profile woodpecker...\n' "$ROOT_CACHE"
   "$DOCKER" --context "$CONTEXT" run --rm --privileged \
@@ -68,7 +77,6 @@ setup_colima() {
       done
       chown -R root:root \"\$ROOT\"
       find \"\$ROOT\" -type d -exec chmod 0750 {} +
-      find \"\$ROOT\" -type f -exec chmod 0640 {} +
       ls -la \"\$ROOT\"
     "
   printf 'Colima cache root ready at %s (VM-local).\n' "$ROOT_CACHE"
@@ -79,8 +87,7 @@ setup_host() {
   if [ "$(id -u)" -eq 0 ]; then
     make_tree "$ROOT_CACHE"
     chown -R root:admin "$ROOT_CACHE"
-    find "$ROOT_CACHE" -type d -exec chmod 0770 {} +
-    find "$ROOT_CACHE" -type f -exec chmod 0660 {} +
+    chmod_dirs "$ROOT_CACHE" 0770
   elif sudo -n true 2>/dev/null; then
     sudo mkdir -p "$ROOT_CACHE"
     # shellcheck disable=SC2086
@@ -91,7 +98,6 @@ setup_host() {
     done
     sudo chown -R root:admin "$ROOT_CACHE"
     sudo find "$ROOT_CACHE" -type d -exec chmod 0770 {} +
-    sudo find "$ROOT_CACHE" -type f -exec chmod 0660 {} + 2>/dev/null || true
   else
     echo "Host path $ROOT_CACHE needs sudo once. Re-run:" >&2
     echo "  sudo $0 --host" >&2
