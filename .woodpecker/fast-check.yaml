@@ -55,11 +55,12 @@ steps:
           cp "$$src" "$${stage}/woodpecker-cli"
           chmod 0755 "$${stage}/woodpecker-cli"
           echo "$${BIN_SUM}  $${stage}/woodpecker-cli" | sha256sum -c -
-          if mv "$$stage" "$$KEY" 2>/dev/null; then
+          # -T: never nest into an existing KEY if we lost the race.
+          if mv -T "$$stage" "$$KEY" 2>/dev/null; then
+            echo "$${BIN_SUM}  $${KEY}/woodpecker-cli" | sha256sum -c -
             return 0
           fi
           rm -rf "$$stage"
-          # Lost the race: another publisher won; accept a valid key.
           echo "$${BIN_SUM}  $${KEY}/woodpecker-cli" | sha256sum -c -
         }
         t0=$$(date +%s)
@@ -121,7 +122,9 @@ steps:
           stage=$$(mktemp -d "$${KEY}.staging.XXXXXX")
           cp "$$src" "$${stage}/tla2tools.jar"
           echo "$${JAR_SUM}  $${stage}/tla2tools.jar" | sha256sum -c -
-          if mv "$$stage" "$$KEY" 2>/dev/null; then
+          # -T: never nest into an existing KEY if we lost the race.
+          if mv -T "$$stage" "$$KEY" 2>/dev/null; then
+            echo "$${JAR_SUM}  $${KEY}/tla2tools.jar" | sha256sum -c -
             return 0
           fi
           rm -rf "$$stage"
