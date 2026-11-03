@@ -14,6 +14,7 @@ DEST=${DEST:-/Users/shyamsivakumar/Code/woodpecker-ci}
 scripts='
 common.sh
 drain-agent.sh
+safe-restart.sh
 reaper.sh
 apply-two-lanes.sh
 watchdog.sh
