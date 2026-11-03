@@ -2,7 +2,7 @@
 # Pause scheduling, wait until the named agent(s) are idle, refuse if an SRW
 # deploy is running. Woodpecker cancels in-flight workflows on agent shutdown.
 #
-# Usage: drain-agent.sh <ci-linux|ci-deploy|native|all> [timeout_sec]
+# Usage: drain-agent.sh [--hold-file PATH] <ci-linux|ci-deploy|native|all> [timeout_sec]
 #         drain-agent.sh --resume <opid>
 #         drain-agent.sh --extend-op <opid>
 #
@@ -12,6 +12,8 @@
 # fcntl.flock (kernel-owned; released on process death). `all` treats
 # ci-deploy as optional when absent; --extend-op claims agents that register
 # after the initial drain (new deploy lane) into an open op.
+# --hold-file writes the opid as soon as the pause is claimed (before the idle
+# wait) so a killed drain still leaves a durable resume handle.
 set -eu
 
 # shellcheck source=common.sh disable=SC1091
@@ -26,8 +28,21 @@ op_dir=
 drain_lock_held=0
 owns_active_cleanup=0
 DRAIN_LOCK_PY=
+HOLD_FILE=
 # Incomplete active publish older than this may be reclaimed.
 STALE_PUBLISH_SECS=10
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --hold-file)
+      HOLD_FILE=${2:?--hold-file needs a path}
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 pid_alive() {
   kill -0 "$1" 2>/dev/null
@@ -164,6 +179,7 @@ sweep_stale_actives() {
   done
 }
 
+# shellcheck disable=SC2329
 on_exit() {
   if [ "$owns_active_cleanup" -eq 1 ] && [ -n "$op_dir" ] && [ -d "$op_dir" ]; then
     # Only clear our marker if it still names this process.
@@ -258,20 +274,8 @@ other_active_overlap() {
   return 1
 }
 
-wp_containers() {
-  docker ps --filter name=wp_ -q | wc -l | tr -d ' '
-}
-
 agent_ids_for() {
-  case "$1" in
-    ci-linux) docker_check_agent_ids ;;
-    ci-deploy) docker_deploy_agent_ids ;;
-    native) native_agent_ids ;;
-    *)
-      echo "unknown agent target: $1" >&2
-      return 1
-      ;;
-  esac
+  agent_ids_for_target "$1"
 }
 
 ensure_owned_table() {
@@ -354,37 +358,10 @@ if [ "${1:-}" = "--extend-op" ]; then
   exit 0
 fi
 
-agent_name=${1:?usage: drain-agent.sh <ci-linux|ci-deploy|native|all|--resume|--extend-op> [timeout_sec|opid]}
+agent_name=${1:?usage: drain-agent.sh [--hold-file PATH] <ci-linux|ci-deploy|native|all|--resume|--extend-op> [timeout_sec|opid]}
 timeout_sec=${2:-1800}
-started=$(date +%s)
 opid="$(date +%Y%m%dT%H%M%S)-$$"
 op_dir="$OPS_DIR/$opid"
-
-running_on_ids() {
-  ids=$1
-  [ -n "$ids" ] || {
-    echo 0
-    return
-  }
-  in_list=$(printf '%s' "$ids" | tr '\n' ',' | sed 's/,$//')
-  query_db "SELECT COUNT(*) FROM workflows
-    WHERE state = 'running' AND agent_id IN ($in_list);"
-}
-
-native_agent_busy() {
-  pid=$(launchctl list 2>/dev/null | awk '$3=="org.woodpecker.agent"{print $1; exit}')
-  case "$pid" in
-    '' | -)
-      echo 0
-      return
-      ;;
-  esac
-  if pgrep -P "$pid" >/dev/null 2>&1; then
-    echo 1
-  else
-    echo 0
-  fi
-}
 
 sweep_stale_actives
 
@@ -450,6 +427,11 @@ owned=$(printf '%s\n' "$txn_out" | awk 'BEGIN{p=1} /^FLIPPED$/{p=0; next} p' | t
 flipped=$(printf '%s\n' "$txn_out" | awk 'BEGIN{p=0} /^FLIPPED$/{p=1; next} p' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
 persist_ids_file "$op_dir/ids" "$owned"
+# Durable at claim time (before idle wait) so a killed drain still leaves a
+# resume handle for watchdog / operators.
+if [ -n "$HOLD_FILE" ]; then
+  printf '%s\n' "$opid" >"$HOLD_FILE"
+fi
 
 if [ -n "$(printf '%s' "$flipped" | tr -d '[:space:]')" ]; then
   printf 'Set no_schedule=1 on drain-created pause id(s): %s\n' "$flipped"
@@ -459,60 +441,30 @@ fi
 release_drain_lock
 
 printf 'DRAIN_OPID=%s\n' "$opid"
+if [ -n "$HOLD_FILE" ]; then
+  printf 'Wrote hold file %s at pause claim\n' "$HOLD_FILE"
+fi
 printf 'Draining %s (timeout %ss, op %s)...\n' "$agent_name" "$timeout_sec" "$opid"
 
-while true; do
-  if [ "$(srw_deploy_running)" != "0" ]; then
-    echo "SRW deploy started during drain; aborting (ownership retained, active cleared on exit)." >&2
-    exit 2
-  fi
-  busy=0
-  for t in $present_targets; do
-    if ! ids=$(agent_ids_for "$t"); then
-      echo "Failed to look up agent ids for $t during wait." >&2
-      exit 1
-    fi
-    if [ -z "$(printf '%s' "$ids" | tr -d '[:space:]')" ]; then
-      echo "Agent lookup for $t returned empty during wait." >&2
-      exit 1
-    fi
-    if [ "$t" = "native" ]; then
-      if [ "$(native_agent_busy)" != "0" ]; then
-        busy=1
-        printf '  native agent still has child processes\n'
-      fi
-      if [ "$(running_on_ids "$ids")" != "0" ]; then
-        busy=1
-        printf '  native agent still has DB running workflow(s)\n'
-      fi
-      continue
-    fi
-    c=$(running_on_ids "$ids")
-    if [ "$c" != "0" ]; then
-      busy=1
-      printf '  %s still has %s running workflow(s)\n' "$t" "$c"
-    fi
-  done
-  if [ "$busy" -eq 0 ]; then
-    need_wp=0
-    case "$agent_name" in
-      ci-linux | all) need_wp=1 ;;
-    esac
-    if [ "$need_wp" -eq 1 ] && [ "$(wp_containers)" != "0" ]; then
-      printf '  waiting for %s wp_* container(s)\n' "$(wp_containers)"
-    else
-      if [ -f "$op_dir/active" ] && [ "$(cat "$op_dir/active" 2>/dev/null)" = "$$" ]; then
-        rm -f "$op_dir/active"
-      fi
-      owns_active_cleanup=0
-      printf 'Drain complete for %s (op %s held until --resume %s).\n' \
-        "$agent_name" "$opid" "$opid"
-      exit 0
-    fi
-  fi
-  if [ $(($(date +%s) - started)) -ge "$timeout_sec" ]; then
-    echo "Drain timed out after ${timeout_sec}s (ownership retained for --resume $opid; active cleared on exit)." >&2
-    exit 1
-  fi
-  sleep 5
-done
+idle_log=$(mktemp "${TMPDIR:-/tmp}/mo117-drain-idle.XXXXXX")
+idle_rc=0
+wait_agents_idle "$agent_name" "$timeout_sec" >"$idle_log" 2>&1 || idle_rc=$?
+while IFS= read -r line; do
+  printf '  %s\n' "$line"
+done <"$idle_log"
+rm -f "$idle_log"
+if [ "$idle_rc" -eq 2 ]; then
+  echo "SRW deploy started during drain; aborting (ownership retained, active cleared on exit)." >&2
+  exit 2
+fi
+if [ "$idle_rc" -ne 0 ]; then
+  echo "Drain timed out after ${timeout_sec}s (ownership retained for --resume $opid; active cleared on exit)." >&2
+  exit 1
+fi
+if [ -f "$op_dir/active" ] && [ "$(cat "$op_dir/active" 2>/dev/null)" = "$$" ]; then
+  rm -f "$op_dir/active"
+fi
+owns_active_cleanup=0
+printf 'Drain complete for %s (op %s held until --resume %s).\n' \
+  "$agent_name" "$opid" "$opid"
+exit 0
