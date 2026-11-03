@@ -27,12 +27,14 @@ set-repo-timeouts.sh
 set-trusted-volumes.sh
 setup-cache-dirs.sh
 cache-cleanup.sh
+disk-hygiene.sh
 '
 plists='
 com.shyamsivakumar.woodpecker-reaper.plist
 com.shyamsivakumar.woodpecker-backup-nightly.plist
 com.shyamsivakumar.woodpecker-ci-slo-daily.plist
 com.shyamsivakumar.woodpecker-cache-cleanup.plist
+com.shyamsivakumar.woodpecker-disk-hygiene.plist
 '
 
 printf 'Installing mac-ops woodpecker-ci overlay -> %s:%s\n' "$HOST" "$DEST"
@@ -67,4 +69,7 @@ printf '  ssh %s %s/scripts/set-trusted-volumes.sh\n' "$HOST" "$DEST"
 printf '  ssh %s %s/scripts/setup-cache-dirs.sh --colima\n' "$HOST" "$DEST"
 printf '  ssh %s sudo %s/scripts/setup-cache-dirs.sh --host\n' "$HOST" "$DEST"
 printf "  ssh %s 'DOMAIN=gui/\$(id -u); launchctl bootout \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-cache-cleanup 2>/dev/null; launchctl bootstrap \"\$DOMAIN\" %s/com.shyamsivakumar.woodpecker-cache-cleanup.plist; launchctl enable \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-cache-cleanup'\n" \
+  "$HOST" "$DEST"
+printf 'MO-122: daily disk hygiene (DerivedData cap + sim prune + alert <15%%):\n'
+printf "  ssh %s 'DOMAIN=gui/\$(id -u); launchctl bootout \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-disk-hygiene 2>/dev/null; launchctl bootstrap \"\$DOMAIN\" %s/com.shyamsivakumar.woodpecker-disk-hygiene.plist; launchctl enable \"\$DOMAIN\"/com.shyamsivakumar.woodpecker-disk-hygiene'\n" \
   "$HOST" "$DEST"
