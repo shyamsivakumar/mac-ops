@@ -7,22 +7,31 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .collect import collect_and_store
 from .eval_day import write_day_report
 from .store import day_key, posthog_api_key
 
+LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
-def _parse_day(value: str | None) -> tuple[datetime, datetime]:
-    """Return [start, end) in local day as UTC datetimes covering that calendar day."""
+
+def _parse_day(value: str | None) -> tuple[datetime, datetime, str]:
+    """Return [start, end) UTC covering a local calendar day, plus the day key."""
     if value:
-        day = datetime.strptime(value, "%Y-%m-%d").astimezone()
+        start_local = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
     else:
-        now = datetime.now().astimezone()
-        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    start_local = day.replace(hour=0, minute=0, second=0, microsecond=0)
+        now = datetime.now(LOCAL_TZ)
+        start_local = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_local = start_local + timedelta(days=1)
-    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+    day = start_local.strftime("%Y-%m-%d")
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), day
+
+
+def _previous_local_day() -> str:
+    now = datetime.now(LOCAL_TZ)
+    prev = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return prev.strftime("%Y-%m-%d")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,8 +74,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Prior day JSON to flag regressions against",
     )
 
-    daily = sub.add_parser("run-daily", help="Collect then eval (LaunchAgent entry)")
-    daily.add_argument("--day", help="Local calendar day YYYY-MM-DD (default: today)")
+    daily = sub.add_parser(
+        "run-daily",
+        help="Collect previous local day (default), reconcile unfinished, eval",
+    )
+    daily.add_argument(
+        "--day",
+        help="Local calendar day YYYY-MM-DD (default: previous local day)",
+    )
     daily.add_argument("--no-export", action="store_true")
     daily.add_argument("--baseline-day", default=None)
 
@@ -83,12 +98,13 @@ def main(argv: list[str] | None = None) -> int:
             "db": str(args.db)
             if args.db
             else str(Path.home() / ".t3/userdata/statev2.sqlite"),
+            "local_tz": str(LOCAL_TZ),
         }
         print(json.dumps(info, indent=2))
         return 0
 
     if args.cmd == "collect":
-        start, end = _parse_day(args.day)
+        start, end, day = _parse_day(args.day)
         result = collect_and_store(
             since=start,
             until=end,
@@ -97,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
             export=not args.no_export,
             dry_run_export=args.dry_run_export,
         )
+        result["day"] = day
         print(json.dumps(result, indent=2))
         return 0
 
@@ -112,22 +129,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "run-daily":
-        start, end = _parse_day(args.day)
-        day = args.day or day_key(start)
+        # Default: previous local day so the 17:30 job covers a finished calendar day.
+        day_arg = args.day or _previous_local_day()
+        start, end, day = _parse_day(day_arg)
         collect_result = collect_and_store(
             since=start,
             until=end,
             db_path=args.db,
             state_root=args.state_root,
             export=not args.no_export,
+            reconcile_unfinished=True,
         )
-        # Baseline: previous local day when not specified.
         baseline = args.baseline_day
         if baseline is None:
-            prev = (start - timedelta(days=1)).astimezone().strftime("%Y-%m-%d")
+            prev = (
+                datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=LOCAL_TZ)
+                - timedelta(days=1)
+            ).strftime("%Y-%m-%d")
             baseline = prev
         eval_result = write_day_report(day, root=args.state_root, baseline_day=baseline)
-        out = {"collect": collect_result, "eval": eval_result}
+        out = {"collect": collect_result, "eval": eval_result, "day": day}
         print(json.dumps(out, indent=2))
         md = Path(eval_result["md"])
         if md.is_file():

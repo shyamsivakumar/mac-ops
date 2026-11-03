@@ -20,17 +20,23 @@ scrubbed or dropped.
 ## Commands
 
 ```sh
-# Collect today's runs into ~/.local/state/mac-ops/session-traces/
+# Collect a local calendar day into ~/.local/state/mac-ops/session-traces/
 python3 mo124 collect --day 2026-11-03 --no-export
 
 # Score stored traces → session-evals/<day>.{md,json}
 python3 mo124 eval --day 2026-11-03
 
-# Collect + eval (LaunchAgent entry)
-./scripts/session-traces/daily.sh 2026-11-03
+# LaunchAgent entry: previous local day by default, plus unfinished-run reconcile
+./scripts/session-traces/daily.sh            # yesterday (America/Los_Angeles)
+./scripts/session-traces/daily.sh 2026-11-03 # explicit day
 
 python3 mo124 status   # paths + whether POSTHOG_API_KEY is set
 ```
+
+Command tool calls are stored as the stable name `command_execution` (never the
+command text). PR/CI outcomes are attributed only when merge timing is at or
+before the run's end; otherwise evidence is `unknown` / `post_run_merge`.
+Merged-PR metrics count **distinct** PRs (run durations summed per PR).
 
 Optional export: set `POSTHOG_API_KEY` (or `POSTHOG_API_KEY_FILE`), and
 optionally `POSTHOG_HOST` (default `https://us.i.posthog.com`). Export is a
@@ -57,12 +63,14 @@ The daily script copies `session-eval-<date>.{md,json}` into
 
 | Check | Meaning |
 | --- | --- |
-| Ended with merge or blocker | PR `state=merged`, or named blocker in title |
-| Claimed done with proof | Done run, PR, CI green, no `CHANGES_REQUESTED` |
-| Stopped while green | Cancelled while checks passed and not merged |
-| Outside worktree | `file_change` paths not in worktree or project root |
+| Ended with merge or blocker | Merged by run end, or named blocker |
+| Claimed done with proof | Merged by run end, CI passing, no `CHANGES_REQUESTED` |
+| Claimed done without proof | Completed with CI red or `CHANGES_REQUESTED` |
+| Missing proof | Completed with no proven merge/blocker |
+| Stopped while green | Interrupted/cancelled while checks passed and not merged |
+| Outside worktree | `file_change` outside assigned worktree or project checkout |
 | Preview / Playwright | Tools matching preview/playwright/html_render/device |
-| Time / cost per merge | Mean duration (and cost) over merged-PR runs |
+| Time / cost per merge | Distinct PRs; summed contributing run duration/cost |
 
 The daily table lists every run; flagged rows are called out. Compared to the
 previous day's JSON, rises in the bad flags (or a drop in proof) are marked

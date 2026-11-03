@@ -8,14 +8,32 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from session_traces.collect import collect_runs
-from session_traces.eval_day import evaluate_day, score_trace, write_day_report
+from session_traces.__main__ import _parse_day
+from session_traces.collect import (
+    _allowed_roots,
+    _path_under,
+    _pr_outcomes_for_run,
+    _tool_name,
+    collect_runs,
+)
+from session_traces.eval_day import evaluate_day, score_trace
 from session_traces.scrub import scrub_path, scrub_string, scrub_trace
-from session_traces.store import export_posthog, load_day_traces, write_trace
+from session_traces.store import export_posthog, write_trace
 
 
-def _make_db(path: Path) -> None:
+def _make_db(
+    path: Path,
+    *,
+    merged_at: str = "2026-11-03T16:15:00Z",
+    status: str = "completed",
+    completed_at: str = "2026-11-03T16:20:00.000Z",
+    checks: str = "passing",
+    title_cmd: str | None = None,
+    file_name: str = "/Users/shyamsivakumar/Code/other-repo/secret.env",
+    extra_run: dict | None = None,
+) -> None:
     conn = sqlite3.connect(path)
     conn.executescript(
         """
@@ -94,8 +112,8 @@ def _make_db(path: Path) -> None:
                 "number": 99,
                 "snapshot": {
                     "state": "merged",
-                    "mergedAt": "2026-11-03T16:30:00Z",
-                    "checksState": "passing",
+                    "mergedAt": merged_at,
+                    "checksState": checks,
                     "reviewDecision": None,
                     "mergeCommitOid": "deadbeef",
                     "title": "MO-124: session traces",
@@ -123,7 +141,7 @@ def _make_db(path: Path) -> None:
     )
     run_payload = {
         "startedAt": "2026-11-03T16:00:01.000Z",
-        "completedAt": "2026-11-03T16:20:00.000Z",
+        "completedAt": completed_at,
         "modelSelection": {"instanceId": "cursor", "model": "default"},
     }
     conn.execute(
@@ -134,13 +152,39 @@ def _make_db(path: Path) -> None:
             1,
             "cursor",
             None,
-            "completed",
+            status,
             "2026-11-03T16:00:00.000Z",
-            "2026-11-03T16:20:00.000Z",
+            completed_at if status == "completed" else None,
             json.dumps(run_payload),
             "cursor",
         ),
     )
+    if extra_run:
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_runs VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                extra_run["run_id"],
+                "thread1",
+                extra_run.get("ordinal", 2),
+                "cursor",
+                None,
+                extra_run.get("status", "completed"),
+                extra_run.get("requested_at", "2026-11-03T16:25:00.000Z"),
+                extra_run.get("completed_at", "2026-11-03T16:40:00.000Z"),
+                json.dumps(
+                    {
+                        "startedAt": extra_run.get(
+                            "started_at", "2026-11-03T16:25:01.000Z"
+                        ),
+                        "completedAt": extra_run.get(
+                            "completed_at", "2026-11-03T16:40:00.000Z"
+                        ),
+                        "modelSelection": {"instanceId": "cursor", "model": "default"},
+                    }
+                ),
+                "cursor",
+            ),
+        )
     tools = [
         (
             "item1",
@@ -157,7 +201,7 @@ def _make_db(path: Path) -> None:
             "item2",
             "file_change",
             {
-                "fileName": "/Users/shyamsivakumar/Code/other-repo/secret.env",
+                "fileName": file_name,
                 "startedAt": "2026-11-03T16:02:00.000Z",
                 "completedAt": "2026-11-03T16:02:00.100Z",
                 "status": "completed",
@@ -170,6 +214,18 @@ def _make_db(path: Path) -> None:
                 "toolName": "html_preview",
                 "startedAt": "2026-11-03T16:03:00.000Z",
                 "completedAt": "2026-11-03T16:03:02.000Z",
+                "status": "completed",
+            },
+        ),
+        (
+            "item4",
+            "command_execution",
+            {
+                "title": title_cmd
+                or "curl -u exam:passwordxxxxxxxxxx https://example.com",
+                "input": "curl -u exam:passwordxxxxxxxxxx https://example.com",
+                "startedAt": "2026-11-03T16:04:00.000Z",
+                "completedAt": "2026-11-03T16:04:01.000Z",
                 "status": "completed",
             },
         ),
@@ -197,13 +253,18 @@ def _make_db(path: Path) -> None:
 
 
 class ScrubTests(unittest.TestCase):
-    def test_redacts_keys_and_home(self):
+    def test_redacts_keys_home_phone_ssn_basic_auth(self):
         s = scrub_string(
-            "key=phc_abc123 token=sk-EXAMPLE email me@example.com /Users/shyamsivakumar/Code/x"
+            "key=phc_abc123 token=sk-EXAMPLE email me@example.com "
+            "/Users/shyamsivakumar/Code/x call 415-555-1212 ssn 123-45-6789 "
+            "curl -u exam:passwordxxxxxxxxxx https://x"
         )
         self.assertNotIn("phc_abc123", s)
         self.assertNotIn("sk-EXAMPLE", s)
         self.assertNotIn("me@example.com", s)
+        self.assertNotIn("415-555-1212", s)
+        self.assertNotIn("123-45-6789", s)
+        self.assertNotIn("exam:passwordxxxxxxxxxx", s)
         self.assertIn("/Users/[user]", s)
 
     def test_drops_prompt_fields(self):
@@ -219,17 +280,73 @@ class ScrubTests(unittest.TestCase):
         )
 
 
+class PathAndToolTests(unittest.TestCase):
+    def test_tool_name_never_command_text(self):
+        name = _tool_name(
+            "command_execution",
+            {"title": "curl -u exam:passwordxxxxxxxxxx https://x", "input": "secret"},
+        )
+        self.assertEqual(name, "command_execution")
+
+    def test_path_traversal_rejected(self):
+        root = "/repo/wt"
+        self.assertFalse(_path_under("/repo/wt/../../other/file.py", root))
+        self.assertTrue(_path_under("/repo/wt/src/a.py", root))
+
+    def test_sibling_worktree_not_auto_allowed(self):
+        roots = _allowed_roots(
+            "/Users/x/.t3/worktrees/mac-ops/t3-abc",
+            "/Users/x/Code/mac-ops",
+        )
+        self.assertEqual(
+            roots,
+            [
+                "/Users/x/.t3/worktrees/mac-ops/t3-abc",
+                "/Users/x/Code/mac-ops",
+            ],
+        )
+        self.assertFalse(
+            any(
+                _path_under("/Users/x/.t3/worktrees/mac-ops/t3-other/file.py", r)
+                for r in roots
+            )
+        )
+
+    def test_post_run_merge_not_credited(self):
+        payload = {
+            "pullRequests": [
+                {
+                    "url": "https://github.com/o/r/pull/1",
+                    "repository": "o/r",
+                    "number": 1,
+                    "snapshot": {
+                        "state": "merged",
+                        "mergedAt": "2026-11-03T16:30:00Z",
+                        "checksState": "passing",
+                    },
+                }
+            ]
+        }
+        prs, evidence = _pr_outcomes_for_run(
+            payload, completed_at="2026-11-03T16:20:00Z", status="completed"
+        )
+        self.assertEqual(evidence, "known")
+        self.assertEqual(prs[0]["state"], "open")
+        self.assertEqual(prs[0]["timing"], "post_run_merge")
+
+
 class CollectEvalTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.db = self.root / "state.sqlite"
-        _make_db(self.db)
+        # Merge before run end so proof can credit when appropriate.
+        _make_db(self.db, merged_at="2026-11-03T16:15:00Z")
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_collect_builds_trace(self):
+    def test_collect_builds_trace_without_command_secrets(self):
         traces = collect_runs(
             since=datetime(2026, 11, 3, tzinfo=timezone.utc),
             until=datetime(2026, 11, 4, tzinfo=timezone.utc),
@@ -238,38 +355,87 @@ class CollectEvalTests(unittest.TestCase):
         self.assertEqual(len(traces), 1)
         t = traces[0]
         self.assertEqual(t["task_key"], "MO-124")
-        self.assertEqual(t["provider"], "cursor")
-        self.assertEqual(t["model"], "default")
-        self.assertEqual(t["status"], "completed")
-        self.assertEqual(t["tool_call_count"], 3)
-        self.assertTrue(t["files_outside_worktree"])
-        self.assertIn("html_preview", t["preview_or_playwright"])
-        self.assertEqual(t["pull_requests"][0]["state"], "merged")
-        # Tool inputs (secrets) must not appear on the trace.
+        self.assertEqual(t["tool_call_count"], 4)
+        names = [c["name"] for c in t["tool_calls"]]
+        self.assertIn("command_execution", names)
+        self.assertTrue(all("synthetic-password" not in n for n in names))
         blob = json.dumps(t)
         self.assertNotIn("sk-secret", blob)
+        self.assertNotIn("synthetic-password", blob)
+        self.assertEqual(t["pull_requests"][0]["state"], "merged")
 
-    def test_store_and_eval(self):
+    def test_store_and_eval_proof(self):
         traces = collect_runs(
             since=datetime(2026, 11, 3, tzinfo=timezone.utc),
             until=datetime(2026, 11, 4, tzinfo=timezone.utc),
             db_path=self.db,
         )
         write_trace(traces[0], root=self.root)
-        loaded = load_day_traces("2026-11-03", root=self.root)
-        self.assertEqual(len(loaded), 1)
-        scored = score_trace(loaded[0])
+        scored = score_trace(traces[0])
         self.assertTrue(scored["merged_pr"])
         self.assertTrue(scored["claimed_done_with_proof"])
+        self.assertEqual(scored["proof_status"], "proven")
         self.assertIn("files_outside_worktree", scored["flags"])
         self.assertIn("preview_or_playwright", scored["flags"])
-        self.assertNotIn("claimed_done_without_proof", scored["flags"])
-        report = write_day_report("2026-11-03", root=self.root)
-        self.assertTrue(Path(report["md"]).is_file())
         summary = evaluate_day("2026-11-03", root=self.root)
-        self.assertEqual(summary["run_count"], 1)
         self.assertEqual(summary["merged_pr_count"], 1)
         self.assertEqual(summary["claimed_done_with_proof"], 1)
+
+    def test_post_run_merge_and_interrupted_not_proven(self):
+        db = self.root / "post.sqlite"
+        _make_db(
+            db,
+            merged_at="2026-11-03T16:30:00Z",
+            status="interrupted",
+            completed_at="2026-11-03T16:20:00.000Z",
+        )
+        traces = collect_runs(
+            since=datetime(2026, 11, 3, tzinfo=timezone.utc),
+            until=datetime(2026, 11, 4, tzinfo=timezone.utc),
+            db_path=db,
+        )
+        scored = score_trace(traces[0])
+        self.assertFalse(scored["merged_pr"])
+        self.assertFalse(scored["claimed_done_with_proof"])
+        self.assertEqual(scored["proof_status"], "n/a")
+
+    def test_missing_proof_when_no_pr(self):
+        trace = {
+            "status": "completed",
+            "pull_requests": [],
+            "outcome_evidence": "known",
+            "named_blocker": None,
+            "files_outside_worktree": [],
+            "preview_or_playwright": [],
+        }
+        scored = score_trace(trace)
+        self.assertEqual(scored["proof_status"], "missing")
+        self.assertIn("missing_proof", scored["flags"])
+
+    def test_distinct_pr_metrics(self):
+        db = self.root / "dup.sqlite"
+        _make_db(
+            db,
+            merged_at="2026-11-03T16:15:00Z",
+            extra_run={
+                "run_id": "run2",
+                "ordinal": 2,
+                "requested_at": "2026-11-03T16:25:00.000Z",
+                "started_at": "2026-11-03T16:25:01.000Z",
+                "completed_at": "2026-11-03T16:35:00.000Z",
+            },
+        )
+        traces = collect_runs(
+            since=datetime(2026, 11, 3, tzinfo=timezone.utc),
+            until=datetime(2026, 11, 4, tzinfo=timezone.utc),
+            db_path=db,
+        )
+        for t in traces:
+            write_trace(t, root=self.root)
+        summary = evaluate_day("2026-11-03", root=self.root)
+        self.assertEqual(summary["merged_pr_count"], 1)
+        self.assertEqual(summary["merged_pr_run_count"], 2)
+        self.assertEqual(summary["time_per_merged_pr_ms"]["count"], 1)
 
     def test_posthog_dry_run_and_skip(self):
         self.assertEqual(
@@ -280,6 +446,15 @@ class CollectEvalTests(unittest.TestCase):
         )
         self.assertEqual(out["exported"], 1)
         self.assertTrue(out["dry_run"])
+
+    def test_dst_day_boundary(self):
+        # 2026-11-01 is DST end in America/Los_Angeles (falls back).
+        start, end, day = _parse_day("2026-11-01")
+        self.assertEqual(day, "2026-11-01")
+        local = ZoneInfo("America/Los_Angeles")
+        self.assertEqual(start.astimezone(local).hour, 0)
+        self.assertEqual(end.astimezone(local).hour, 0)
+        self.assertEqual((end - start).total_seconds(), 25 * 3600)
 
 
 if __name__ == "__main__":

@@ -11,8 +11,22 @@ from typing import Any
 from .store import day_key, evals_dir, load_day_traces, state_root
 
 
+def _pr_key(pr: dict[str, Any]) -> str | None:
+    repo = pr.get("repository")
+    number = pr.get("number")
+    if repo is not None and number is not None:
+        return f"{repo}#{number}"
+    url = pr.get("url")
+    return str(url) if url else None
+
+
 def _has_merged_pr(trace: dict[str, Any]) -> bool:
+    if (trace.get("outcome_evidence") or "known") == "unknown":
+        return False
     for pr in trace.get("pull_requests") or []:
+        timing = pr.get("timing") or "known"
+        if timing in {"unknown", "post_run_merge"}:
+            continue
         state = (pr.get("state") or "").lower()
         if state == "merged" or pr.get("merged_at"):
             return True
@@ -20,34 +34,13 @@ def _has_merged_pr(trace: dict[str, Any]) -> bool:
 
 
 def _ci_green(trace: dict[str, Any]) -> bool:
-    prs = trace.get("pull_requests") or []
+    prs = [p for p in (trace.get("pull_requests") or []) if isinstance(p, dict)]
     if not prs:
         return False
-    return all(
-        (pr.get("checks_state") or "").lower() in {"passing", "success", "neutral", ""}
-        for pr in prs
-    ) and any(
-        (pr.get("checks_state") or "").lower() in {"passing", "success"} for pr in prs
-    )
-
-
-def _review_clean(trace: dict[str, Any]) -> bool:
-    """Objective check: no CHANGES_REQUESTED; treat missing decision as unknown-pass for merge proof."""
-    prs = trace.get("pull_requests") or []
-    if not prs:
+    states = [(pr.get("checks_state") or "").lower() for pr in prs]
+    if any(s in {"failing", "failure", "failed", "error"} for s in states):
         return False
-    for pr in prs:
-        decision = (pr.get("review_decision") or "").upper()
-        if decision == "CHANGES_REQUESTED" and not _has_merged_pr(trace):
-            return False
-    # Snapshot does not carry critical/major counts; 0 critical/major is inferred
-    # when merged with passing checks and no CHANGES_REQUESTED.
-    if _has_merged_pr(trace) and _ci_green(trace):
-        return all(
-            (pr.get("review_decision") or "").upper() != "CHANGES_REQUESTED"
-            for pr in prs
-        )
-    return False
+    return any(s in {"passing", "success"} for s in states)
 
 
 def _ci_red(trace: dict[str, Any]) -> bool:
@@ -65,29 +58,54 @@ def _review_blocked(trace: dict[str, Any]) -> bool:
     return False
 
 
+def _review_clean(trace: dict[str, Any]) -> bool:
+    if not _has_merged_pr(trace) or not _ci_green(trace):
+        return False
+    return all(
+        (pr.get("review_decision") or "").upper() != "CHANGES_REQUESTED"
+        for pr in (trace.get("pull_requests") or [])
+    )
+
+
+def proof_status(trace: dict[str, Any]) -> str:
+    """proven | disproven | missing | n/a for objective done-with-proof scoring."""
+    status = (trace.get("status") or "").lower()
+    if status != "completed":
+        return "n/a"
+    if trace.get("named_blocker"):
+        return "proven"  # named blocker is an accepted terminal outcome
+    if (trace.get("outcome_evidence") or "known") == "unknown":
+        return "missing"
+    if _ci_red(trace) or _review_blocked(trace):
+        return "disproven"
+    if _has_merged_pr(trace) and _ci_green(trace) and _review_clean(trace):
+        return "proven"
+    # Completed with no PR, open PR + pending/missing checks, or unproven merge.
+    return "missing"
+
+
 def score_trace(trace: dict[str, Any]) -> dict[str, Any]:
     merged = _has_merged_pr(trace)
     blocker = bool(trace.get("named_blocker"))
     ended_ok = merged or blocker
-    # Proof = merged with green CI and no CHANGES_REQUESTED (critical/major proxy).
-    proof = merged and _ci_green(trace) and _review_clean(trace)
-    # "Claimed done without proof": completed run still open, CI red or review blocked.
     status = (trace.get("status") or "").lower()
-    claimed_without_proof = (
-        status == "completed"
-        and bool(trace.get("pull_requests"))
-        and not merged
-        and (_ci_red(trace) or _review_blocked(trace))
-    )
+    pstatus = proof_status(trace)
+    proof = pstatus == "proven" and merged and _ci_green(trace) and _review_clean(trace)
+    # Named blocker counts as ended_ok but not "claimed done with CI proof".
+    if pstatus == "proven" and blocker and not merged:
+        proof = False
+    claimed_without_proof = pstatus == "disproven"
+    missing_proof = pstatus == "missing"
     stopped_green = (
         status in {"interrupted", "cancelled"} and _ci_green(trace) and not merged
     )
     outside = list(trace.get("files_outside_worktree") or [])
     preview = list(trace.get("preview_or_playwright") or [])
-    # Flags are actionable misses only; merge/blocker rate stays a summary metric.
     flags = []
     if claimed_without_proof:
         flags.append("claimed_done_without_proof")
+    if missing_proof:
+        flags.append("missing_proof")
     if stopped_green:
         flags.append("stopped_while_green")
     if outside:
@@ -108,13 +126,61 @@ def score_trace(trace: dict[str, Any]) -> dict[str, Any]:
         "merged_pr": merged,
         "named_blocker": blocker,
         "ended_with_merge_or_blocker": ended_ok,
+        "proof_status": pstatus,
         "claimed_done_with_proof": proof,
         "claimed_done_without_proof": claimed_without_proof,
+        "missing_proof": missing_proof,
         "stopped_before_merge_while_green": stopped_green,
         "files_outside_worktree_count": len(outside),
         "preview_or_playwright_count": len(preview),
         "pull_requests": trace.get("pull_requests") or [],
+        "outcome_evidence": trace.get("outcome_evidence") or "known",
         "flags": flags,
+    }
+
+
+def _merged_pr_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Group by canonical PR; duration/cost are sums of contributing runs."""
+    by_pr: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if not r.get("merged_pr"):
+            continue
+        for pr in r.get("pull_requests") or []:
+            state = (pr.get("state") or "").lower()
+            if state != "merged" and not pr.get("merged_at"):
+                continue
+            if (pr.get("timing") or "known") in {"unknown", "post_run_merge"}:
+                continue
+            key = _pr_key(pr)
+            if not key:
+                continue
+            bucket = by_pr.setdefault(
+                key,
+                {"duration_ms": 0, "cost_usd": 0.0, "cost_n": 0, "runs": 0},
+            )
+            bucket["runs"] += 1
+            if isinstance(r.get("duration_ms"), int):
+                bucket["duration_ms"] += r["duration_ms"]
+            if isinstance(r.get("cost_usd"), (int, float)):
+                bucket["cost_usd"] += float(r["cost_usd"])
+                bucket["cost_n"] += 1
+    durations = [b["duration_ms"] for b in by_pr.values()]
+    costs = [b["cost_usd"] for b in by_pr.values() if b["cost_n"]]
+    return {
+        "distinct_merged_prs": len(by_pr),
+        "time_per_merged_pr_ms": {
+            "count": len(durations),
+            "total": sum(durations) if durations else 0,
+            "mean": (sum(durations) / len(durations)) if durations else None,
+            "note": "sum of contributing run durations per distinct PR",
+        },
+        "cost_per_merged_pr_usd": {
+            "count": len(costs),
+            "total": sum(costs) if costs else 0,
+            "mean": (sum(costs) / len(costs)) if costs else None,
+            "note": "sum of contributing run costs per distinct PR",
+        },
+        "prs": sorted(by_pr.keys()),
     }
 
 
@@ -125,15 +191,7 @@ def evaluate_day(day: str | None = None, *, root: Path | None = None) -> dict[st
     by_provider: dict[str, int] = defaultdict(int)
     by_status: dict[str, int] = defaultdict(int)
     flag_counts: dict[str, int] = defaultdict(int)
-    merged_rows = [r for r in rows if r["merged_pr"]]
-    durations = [
-        r["duration_ms"] for r in merged_rows if isinstance(r.get("duration_ms"), int)
-    ]
-    costs = [
-        r["cost_usd"]
-        for r in merged_rows
-        if isinstance(r.get("cost_usd"), (int, float))
-    ]
+    pr_metrics = _merged_pr_metrics(rows)
 
     for r in rows:
         by_provider[str(r.get("provider") or "unknown")] += 1
@@ -147,7 +205,8 @@ def evaluate_day(day: str | None = None, *, root: Path | None = None) -> dict[st
         "run_count": len(rows),
         "by_provider": dict(sorted(by_provider.items())),
         "by_status": dict(sorted(by_status.items())),
-        "merged_pr_count": len(merged_rows),
+        "merged_pr_count": pr_metrics["distinct_merged_prs"],
+        "merged_pr_run_count": sum(1 for r in rows if r["merged_pr"]),
         "named_blocker_count": sum(1 for r in rows if r["named_blocker"]),
         "ended_with_merge_or_blocker": sum(
             1 for r in rows if r["ended_with_merge_or_blocker"]
@@ -156,6 +215,7 @@ def evaluate_day(day: str | None = None, *, root: Path | None = None) -> dict[st
         "claimed_done_without_proof": sum(
             1 for r in rows if r.get("claimed_done_without_proof")
         ),
+        "missing_proof": sum(1 for r in rows if r.get("missing_proof")),
         "stopped_before_merge_while_green": sum(
             1 for r in rows if r["stopped_before_merge_while_green"]
         ),
@@ -166,16 +226,9 @@ def evaluate_day(day: str | None = None, *, root: Path | None = None) -> dict[st
             1 for r in rows if r["preview_or_playwright_count"]
         ),
         "flag_counts": dict(sorted(flag_counts.items())),
-        "time_per_merged_pr_ms": {
-            "count": len(durations),
-            "total": sum(durations) if durations else 0,
-            "mean": (sum(durations) / len(durations)) if durations else None,
-        },
-        "cost_per_merged_pr_usd": {
-            "count": len(costs),
-            "total": sum(costs) if costs else 0,
-            "mean": (sum(costs) / len(costs)) if costs else None,
-        },
+        "time_per_merged_pr_ms": pr_metrics["time_per_merged_pr_ms"],
+        "cost_per_merged_pr_usd": pr_metrics["cost_per_merged_pr_usd"],
+        "distinct_merged_prs": pr_metrics["prs"],
         "regressions": [r for r in rows if r["flags"]],
         "rows": rows,
     }
@@ -209,18 +262,24 @@ def render_markdown(
         f"- Runs: **{summary['run_count']}**",
         f"- Providers: {', '.join(f'{k}={v}' for k, v in summary['by_provider'].items()) or 'none'}",
         f"- Statuses: {', '.join(f'{k}={v}' for k, v in summary['by_status'].items()) or 'none'}",
-        f"- Merged PR runs: **{summary['merged_pr_count']}**",
+        f"- Distinct merged PRs: **{summary['merged_pr_count']}** "
+        f"(across {summary.get('merged_pr_run_count', 0)} runs)",
         f"- Named blocker runs: **{summary['named_blocker_count']}**",
         f"- Ended with merge or blocker: **{summary['ended_with_merge_or_blocker']}**",
-        f"- Claimed done with proof (merged + CI green, no CHANGES_REQUESTED): **{summary['claimed_done_with_proof']}**",
-        f"- Claimed done without proof (open PR, CI red or CHANGES_REQUESTED): **{summary.get('claimed_done_without_proof', 0)}**",
+        f"- Claimed done with proof: **{summary['claimed_done_with_proof']}**",
+        f"- Claimed done without proof (CI red / CHANGES_REQUESTED): "
+        f"**{summary.get('claimed_done_without_proof', 0)}**",
+        f"- Missing proof (completed, no proven merge/blocker): "
+        f"**{summary.get('missing_proof', 0)}**",
         f"- Stopped before merge while green: **{summary['stopped_before_merge_while_green']}**",
         f"- Touched files outside worktree: **{summary['files_outside_worktree']}**",
         f"- Preview / Playwright / panel tools: **{summary['preview_or_playwright']}**",
-        f"- Time per merged PR (mean): **{_fmt_ms((summary['time_per_merged_pr_ms'] or {}).get('mean'))}** "
+        f"- Time per distinct merged PR (mean of summed run durations): "
+        f"**{_fmt_ms((summary['time_per_merged_pr_ms'] or {}).get('mean'))}** "
         f"(n={summary['time_per_merged_pr_ms']['count']})",
-        f"- Cost per merged PR (mean USD): **{summary['cost_per_merged_pr_usd']['mean']}** "
-        f"(n={summary['cost_per_merged_pr_usd']['count']}; tokens/cost often absent in T3 projections)",
+        f"- Cost per distinct merged PR (mean USD): "
+        f"**{summary['cost_per_merged_pr_usd']['mean']}** "
+        f"(n={summary['cost_per_merged_pr_usd']['count']}; often absent in T3 projections)",
         "",
     ]
     if baseline:
@@ -229,11 +288,11 @@ def render_markdown(
             "stopped_before_merge_while_green",
             "files_outside_worktree",
             "preview_or_playwright",
+            "missing_proof",
             "claimed_done_with_proof",
         ):
             before = baseline.get(key, 0)
             after = summary.get(key, 0)
-            # Higher is worse for the first three; lower proof is worse.
             worse = (
                 after > before if key != "claimed_done_with_proof" else after < before
             )
@@ -245,20 +304,20 @@ def render_markdown(
         [
             "## Daily table",
             "",
-            "| Task | Provider | Model | Status | Dur | Merged | Flags |",
+            "| Task | Provider | Model | Status | Dur | Proof | Flags |",
             "| --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for r in summary["rows"]:
         flags = ",".join(r["flags"]) if r["flags"] else ""
         lines.append(
-            "| {task} | {prov} | {model} | {status} | {dur} | {merged} | {flags} |".format(
+            "| {task} | {prov} | {model} | {status} | {dur} | {proof} | {flags} |".format(
                 task=(r.get("task_key") or r.get("title") or "")[:40].replace("|", "/"),
                 prov=r.get("provider") or "",
                 model=(r.get("model") or "")[:24],
                 status=r.get("status") or "",
                 dur=_fmt_ms(r.get("duration_ms")),
-                merged="yes" if r.get("merged_pr") else "",
+                proof=r.get("proof_status") or "",
                 flags=flags.replace("|", "/"),
             )
         )
@@ -296,7 +355,6 @@ def write_day_report(
     out.mkdir(parents=True, exist_ok=True)
     json_path = out / f"{day}.json"
     md_path = out / f"{day}.md"
-    # Drop bulky rows duplicate in markdown-only consumers; keep in JSON.
     json_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

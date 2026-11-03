@@ -1,9 +1,11 @@
 #!/bin/sh
 # MO-124: daily collect + eval of T3 agent build sessions on this Mac.
 #
-# Writes scrubbed traces under ~/.local/state/mac-ops/session-traces/ and a
-# daily table under ~/.local/state/mac-ops/session-evals/. Copies the markdown
-# + JSON into coordinator/evidence when that path exists.
+# Default day is the *previous* local calendar day so the 17:30 LaunchAgent
+# covers a finished day. Unfinished runs from recent days are reconciled on
+# each pass. Writes scrubbed traces under ~/.local/state/mac-ops/session-traces/
+# and a daily table under session-evals/; copies into coordinator/evidence when
+# present.
 set -eu
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin
 export PATH
@@ -12,7 +14,12 @@ HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPO=$(CDPATH='' cd -- "$HERE/../.." && pwd)
 STATE=${MAC_OPS_STATE:-$HOME/.local/state/mac-ops}
 COORD_DIR=${COORD_DIR:-$HOME/Code/coordinator/evidence}
-DATE=${1:-$(TZ=America/Los_Angeles date +%Y-%m-%d)}
+# Previous local day unless an explicit YYYY-MM-DD is passed.
+if [ "${1-}" != "" ]; then
+  DATE=$1
+else
+  DATE=$(TZ=America/Los_Angeles date -v-1d +%Y-%m-%d)
+fi
 STAMP=$(TZ=America/Los_Angeles date +%Y-%m-%dT%H%M%S%z)
 LOG_DIR=$STATE/session-evals/logs
 mkdir -p "$LOG_DIR"
@@ -30,5 +37,4 @@ runlog=$LOG_DIR/daily-$STAMP.log
   fi
 } >"$runlog" 2>&1
 
-# Echo the markdown for LaunchAgent stdout / manual runs.
 cat "$STATE/session-evals/$DATE.md"

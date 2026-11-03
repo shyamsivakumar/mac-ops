@@ -10,11 +10,13 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .scrub import scrub_trace
 
 DEFAULT_STATE = Path.home() / ".local" / "state" / "mac-ops"
 DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com"
+LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def state_root(root: Path | None = None) -> Path:
@@ -32,15 +34,15 @@ def evals_dir(root: Path | None = None) -> Path:
 
 def day_key(ts: str | datetime | None = None) -> str:
     if isinstance(ts, datetime):
-        return ts.astimezone().strftime("%Y-%m-%d")
+        return ts.astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
     if isinstance(ts, str) and ts:
         # ISO timestamps from T3 are UTC with Z.
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            return dt.astimezone().strftime("%Y-%m-%d")
+            return dt.astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
         except ValueError:
             return ts[:10]
-    return datetime.now().astimezone().strftime("%Y-%m-%d")
+    return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
 
 
 def write_trace(trace: dict[str, Any], *, root: Path | None = None) -> Path:
