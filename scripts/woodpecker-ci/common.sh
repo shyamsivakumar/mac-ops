@@ -28,10 +28,31 @@ docker() {
 }
 
 # Read-only SQL against the live Woodpecker SQLite volume.
+# Retries briefly on SQLITE_BUSY (server writes during pipelines).
 query_db() {
   sql=$1
-  docker run --rm -v woodpecker-ci-server-data:/d:ro alpine:3.22 \
-    sh -c "apk add -q sqlite >/dev/null && sqlite3 -readonly file:/d/woodpecker.sqlite?mode=ro \"$sql\""
+  i=0
+  while :; do
+    if out=$(docker run --rm -v woodpecker-ci-server-data:/d:ro alpine:3.22 \
+      sh -c "apk add -q sqlite >/dev/null && sqlite3 -readonly \"file:/d/woodpecker.sqlite?mode=ro&immutable=0\" \"$sql\"" 2>&1); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    case "$out" in
+      *locked* | *BUSY*)
+        i=$((i + 1))
+        if [ "$i" -gt 30 ]; then
+          printf '%s\n' "$out" >&2
+          return 1
+        fi
+        sleep 1
+        ;;
+      *)
+        printf '%s\n' "$out" >&2
+        return 1
+        ;;
+    esac
+  done
 }
 
 # Writable SQL (brief helper container). Prints sqlite stdout (e.g. RETURNING).

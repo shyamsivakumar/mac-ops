@@ -18,9 +18,12 @@ clone:
       ref: refs/heads/main
 steps:
   # MO-118: shared woodpecker-cli lint (see scripts/woodpecker-ci/snippets/).
+  # MO-120: host tools cache under /var/lib/woodpecker-cache/mac-ops/tools.
   - name: woodpecker-lint
     image: "alpine:3.22@sha256:\
       2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f"
+    volumes:
+      - /var/lib/woodpecker-cache/mac-ops/tools:/cache/tools
     commands:
       - |
         set -eu
@@ -39,35 +42,85 @@ steps:
           *) echo "unsupported arch: $$ARCH" >&2; exit 1 ;;
         esac
         apk add --no-cache -q curl tar
-        curl -fsSL -o /tmp/wp-cli.tgz \
-          "https://github.com/woodpecker-ci/woodpecker/releases/download/v$${VER}/woodpecker-cli_linux_$${WARCH}.tar.gz"
-        echo "$${SUM}  /tmp/wp-cli.tgz" | sha256sum -c -
-        tar -xzf /tmp/wp-cli.tgz -C /usr/local/bin woodpecker-cli
+        KEY=/cache/tools/woodpecker-cli-$${VER}-linux-$${WARCH}
+        t0=$$(date +%s)
+        if [ -f "$${KEY}/woodpecker-cli" ]; then
+          echo "cache-hit woodpecker-cli key=$${VER}-$${WARCH}"
+          cp "$${KEY}/woodpecker-cli" /usr/local/bin/woodpecker-cli
+        else
+          echo "cache-miss woodpecker-cli key=$${VER}-$${WARCH}"
+          curl -fsSL -o /tmp/wp-cli.tgz \
+            "https://github.com/woodpecker-ci/woodpecker/releases/download/v$${VER}/woodpecker-cli_linux_$${WARCH}.tar.gz"
+          echo "$${SUM}  /tmp/wp-cli.tgz" | sha256sum -c -
+          tar -xzf /tmp/wp-cli.tgz -C /usr/local/bin woodpecker-cli
+          # Digest-keyed tools: first fill after checksum; main may refresh.
+          # Dependency caches stay main-write / PR-read (docs/ci-cache.md).
+          if [ "$${CI_PIPELINE_EVENT}" = "push" ] &&
+            [ "$${CI_COMMIT_BRANCH}" = "main" ]; then
+            mkdir -p "$${KEY}.tmp"
+            cp /usr/local/bin/woodpecker-cli "$${KEY}.tmp/woodpecker-cli"
+            rm -rf "$${KEY}"
+            mv "$${KEY}.tmp" "$${KEY}"
+          elif [ ! -e "$${KEY}" ]; then
+            mkdir -p "$${KEY}.tmp"
+            cp /usr/local/bin/woodpecker-cli "$${KEY}.tmp/woodpecker-cli"
+            mv "$${KEY}.tmp" "$${KEY}"
+          fi
+        fi
+        chmod +x /usr/local/bin/woodpecker-cli
+        t1=$$(date +%s)
+        echo "woodpecker-lint-cache-seconds=$$((t1 - t0))"
         woodpecker-cli lint .woodpecker/
     when:
       - event: [pull_request, push]
   - name: fast-check
     image: "python:3.13.12-slim-bookworm@sha256:\
       a58daefb915e1e03ad48f3ca4df8832065412c5c35cacb9d39f4229184de12b6"
+    volumes:
+      - /var/lib/woodpecker-cache/mac-ops/tools:/cache/tools
     commands:
       - >-
         apt-get update -qq && apt-get install -y -qq --no-install-recommends
         git python3 openjdk-17-jre-headless curl ca-certificates
-      - "curl -fsSL https://open-vsx.org/api/tlaplus/vscode-ide/2026.10.301552/\
-        file/tlaplus.vscode-ide-2026.10.301552.vsix -o /tmp/tlaplus.vsix"
-      - >-
-        echo "89adb8d05d3136f74a4a33c97ae35b04730cdb3fb551b81d4299ba5b56c3c5a8
-        */tmp/tlaplus.vsix" | sha256sum -c -
-      - >-
-        python3 -c "import zipfile;
-        open('/tmp/tla2tools.jar', 'wb').write(zipfile.ZipFile(
-        '/tmp/tlaplus.vsix').read('extension/tools/tla2tools.jar'))"
-      - >-
-        echo "011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd
-        */tmp/tla2tools.jar" | sha256sum -c -
-      - export MAC_OPS_TLA_JAR=/tmp/tla2tools.jar
-      - git update-ref refs/remotes/origin/main HEAD
-      - git reset --hard "$CI_COMMIT_SHA"
-      - python3 scripts/mac_ops_fast_check.py
+      - |
+        set -eu
+        VSIX_SUM=89adb8d05d3136f74a4a33c97ae35b04730cdb3fb551b81d4299ba5b56c3c5a8
+        JAR_SUM=011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd
+        KEY=/cache/tools/tla2tools-2026.10.301552
+        t0=$$(date +%s)
+        if [ -f "$${KEY}/tla2tools.jar" ]; then
+          echo "cache-hit tla2tools key=2026.10.301552"
+          cp "$${KEY}/tla2tools.jar" /tmp/tla2tools.jar
+        else
+          echo "cache-miss tla2tools key=2026.10.301552"
+          curl -fsSL \
+            "https://open-vsx.org/api/tlaplus/vscode-ide/2026.10.301552/file/"\
+            "tlaplus.vscode-ide-2026.10.301552.vsix" \
+            -o /tmp/tlaplus.vsix
+          echo "$${VSIX_SUM}  /tmp/tlaplus.vsix" | sha256sum -c -
+          python3 -c "import zipfile; \
+            open('/tmp/tla2tools.jar','wb').write( \
+            zipfile.ZipFile('/tmp/tlaplus.vsix') \
+            .read('extension/tools/tla2tools.jar'))"
+          echo "$${JAR_SUM}  /tmp/tla2tools.jar" | sha256sum -c -
+          if [ "$${CI_PIPELINE_EVENT}" = "push" ] &&
+            [ "$${CI_COMMIT_BRANCH}" = "main" ]; then
+            mkdir -p "$${KEY}.tmp"
+            cp /tmp/tla2tools.jar "$${KEY}.tmp/tla2tools.jar"
+            rm -rf "$${KEY}"
+            mv "$${KEY}.tmp" "$${KEY}"
+          elif [ ! -e "$${KEY}" ]; then
+            mkdir -p "$${KEY}.tmp"
+            cp /tmp/tla2tools.jar "$${KEY}.tmp/tla2tools.jar"
+            mv "$${KEY}.tmp" "$${KEY}"
+          fi
+        fi
+        echo "$${JAR_SUM}  /tmp/tla2tools.jar" | sha256sum -c -
+        t1=$$(date +%s)
+        echo "fast-check-tla-cache-seconds=$$((t1 - t0))"
+        export MAC_OPS_TLA_JAR=/tmp/tla2tools.jar
+        git update-ref refs/remotes/origin/main HEAD
+        git reset --hard "$${CI_COMMIT_SHA}"
+        python3 scripts/mac_ops_fast_check.py
     when:
       - event: [push, pull_request]
