@@ -18,7 +18,7 @@ from session_traces.collect import (
     _tool_name,
     collect_runs,
 )
-from session_traces.eval_day import evaluate_day, score_trace
+from session_traces.eval_day import _merged_pr_metrics, evaluate_day, score_trace
 from session_traces.scrub import scrub_path, scrub_string, scrub_trace
 from session_traces.store import export_posthog, write_trace
 
@@ -257,7 +257,8 @@ class ScrubTests(unittest.TestCase):
         s = scrub_string(
             "key=phc_abc123 token=sk-ant-xyz email me@example.com "
             "/Users/shyamsivakumar/Code/x call 415-555-1212 ssn 123-45-6789 "
-            "curl -u demo:synthetic-password https://x"
+            "curl -u demo:synthetic-password https://x "
+            "Authorization: Basic dXNlcjpwYXNz"
         )
         self.assertNotIn("phc_abc123", s)
         self.assertNotIn("sk-ant-xyz", s)
@@ -265,6 +266,7 @@ class ScrubTests(unittest.TestCase):
         self.assertNotIn("415-555-1212", s)
         self.assertNotIn("123-45-6789", s)
         self.assertNotIn("demo:synthetic-password", s)
+        self.assertNotIn("dXNlcjpwYXNz", s)
         self.assertIn("/Users/[user]", s)
 
     def test_drops_prompt_fields(self):
@@ -455,6 +457,110 @@ class CollectEvalTests(unittest.TestCase):
         self.assertEqual(start.astimezone(local).hour, 0)
         self.assertEqual(end.astimezone(local).hour, 0)
         self.assertEqual((end - start).total_seconds(), 25 * 3600)
+
+    def test_post_run_merge_strips_ci_for_scoring(self):
+        prs, _ = _pr_outcomes_for_run(
+            {
+                "pullRequests": [
+                    {
+                        "url": "https://github.com/o/r/pull/1",
+                        "repository": "o/r",
+                        "number": 1,
+                        "snapshot": {
+                            "state": "merged",
+                            "mergedAt": "2026-11-03T16:30:00Z",
+                            "checksState": "failing",
+                            "reviewDecision": "CHANGES_REQUESTED",
+                        },
+                    }
+                ]
+            },
+            completed_at="2026-11-03T16:20:00Z",
+            status="interrupted",
+        )
+        self.assertIsNone(prs[0]["checks_state"])
+        self.assertIsNone(prs[0]["review_decision"])
+        scored = score_trace(
+            {
+                "status": "interrupted",
+                "pull_requests": prs,
+                "outcome_evidence": "known",
+                "named_blocker": None,
+                "files_outside_worktree": [],
+                "preview_or_playwright": [],
+            }
+        )
+        self.assertNotIn("stopped_while_green", scored["flags"])
+        self.assertNotIn("claimed_done_without_proof", scored["flags"])
+
+    def test_same_pr_proof_required(self):
+        scored = score_trace(
+            {
+                "status": "completed",
+                "outcome_evidence": "known",
+                "named_blocker": None,
+                "files_outside_worktree": [],
+                "preview_or_playwright": [],
+                "pull_requests": [
+                    {
+                        "repository": "o/r",
+                        "number": 1,
+                        "state": "merged",
+                        "merged_at": "t",
+                        "timing": "known",
+                        "evidence_by_end": True,
+                        "checks_state": "pending",
+                        "review_decision": None,
+                    },
+                    {
+                        "repository": "o/r",
+                        "number": 2,
+                        "state": "open",
+                        "timing": "known",
+                        "evidence_by_end": True,
+                        "checks_state": "passing",
+                        "review_decision": None,
+                    },
+                ],
+            }
+        )
+        self.assertEqual(scored["proof_status"], "missing")
+        self.assertFalse(scored["claimed_done_with_proof"])
+
+    def test_pre_merge_runs_count_toward_pr_totals(self):
+        rows = [
+            {
+                "merged_pr": False,
+                "duration_ms": 1000,
+                "cost_usd": 1.0,
+                "pull_requests": [
+                    {
+                        "repository": "o/r",
+                        "number": 1,
+                        "state": "open",
+                        "timing": "post_run_merge",
+                    }
+                ],
+            },
+            {
+                "merged_pr": True,
+                "duration_ms": 1000,
+                "cost_usd": 1.0,
+                "pull_requests": [
+                    {
+                        "repository": "o/r",
+                        "number": 1,
+                        "state": "merged",
+                        "merged_at": "t",
+                        "timing": "known",
+                    }
+                ],
+            },
+        ]
+        metrics = _merged_pr_metrics(rows)
+        self.assertEqual(metrics["distinct_merged_prs"], 1)
+        self.assertEqual(metrics["time_per_merged_pr_ms"]["total"], 2000)
+        self.assertEqual(metrics["cost_per_merged_pr_usd"]["total"], 2.0)
 
 
 if __name__ == "__main__":
