@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Entry point: python3 mo124 collect|eval|run-daily|status (MO-124)."""
+
+from session_traces.__main__ import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
