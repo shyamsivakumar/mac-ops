@@ -33,13 +33,14 @@ def candidates():
 
 def save(path, text, backup):
     if text == path.read_text():
-        return
+        return False
     backup.mkdir(mode=0o700, parents=True, exist_ok=True)
     digest = hashlib.sha256(str(path).encode()).hexdigest()[:16]
     target = backup / (digest + "-" + path.name)
     if not target.exists():
         target.write_bytes(path.read_bytes())
     path.write_text(text)
+    return True
 
 
 def apply(backup):
@@ -58,8 +59,8 @@ def apply(backup):
                 f'    runpy.run_path(str(root / {name!r}), run_name="__main__")\n'
                 'else:\n'
                 f'    globals().update(runpy.run_path(str(root / {name!r})))\n')
-        save(path, code, backup)
-        changed.append(str(path))
+        if save(path, code, backup):
+            changed.append(str(path))
     replacements = {
         "~/.multica-codex/heavy.sh": "~/.local/bin/heavy",
         "~/.multica-codex/heavy.py": "~/Code/mac-ops/heavy.py",
@@ -84,8 +85,7 @@ def apply(backup):
         for before, after in mapping.items():
             new = new.replace(before, after)
             new = new.replace(before.replace("~/", str(HOME) + "/"), after.replace("~/", str(HOME) + "/"))
-        if new != old:
-            save(path, new, backup)
+        if save(path, new, backup):
             changed.append(str(path))
     for name in ("pause-heavy-jobs-before-the-mac-locks-up", "auto-size-board-agent-slots"):
         path = WIKI / "source/docs/how-to" / (name + ".md")
@@ -105,15 +105,15 @@ def apply(backup):
                     "Migration preserves running legacy supervisors and blocks new starts until they drain. "
                     "Uninstall archives wrappers and launchd plists and retains job state. See the repository "
                     "state charts and verification skill for exact coverage and limits.\n")
-            save(path, text, backup)
-            changed.append(str(path))
+            if save(path, text, backup):
+                changed.append(str(path))
     installer = WIKI / "runtime/codex/scripts/install_heavy.py"
     if installer.exists():
         code = ('#!/usr/bin/env python3\nimport os\nfrom pathlib import Path\n'
                 'script = Path.home() / "Code/mac-ops/install.sh"\n'
                 'os.execv(str(script), [str(script), "install"])\n')
-        save(installer, code, backup)
-        changed.append(str(installer))
+        if save(installer, code, backup):
+            changed.append(str(installer))
     return changed
 
 
