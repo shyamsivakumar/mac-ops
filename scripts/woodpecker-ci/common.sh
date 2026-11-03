@@ -28,10 +28,52 @@ docker() {
 }
 
 # Read-only SQL against the live Woodpecker SQLite volume.
+# Retries briefly on SQLITE_BUSY (server writes during pipelines).
+# Result rows go to stdout; diagnostics stay on stderr.
 query_db() {
   sql=$1
-  docker run --rm -v woodpecker-ci-server-data:/d:ro alpine:3.22 \
-    sh -c "apk add -q sqlite >/dev/null && sqlite3 -readonly file:/d/woodpecker.sqlite?mode=ro \"$sql\""
+  i=0
+  stdout=$(mktemp "${TMPDIR:-/tmp}/wp-sql-out.XXXXXX")
+  stderr=$(mktemp "${TMPDIR:-/tmp}/wp-sql-err.XXXXXX")
+  while :; do
+    : >"$stdout"
+    : >"$stderr"
+    set +e
+    docker run --rm -v woodpecker-ci-server-data:/d:ro alpine:3.22 \
+      sh -c "apk add -q sqlite >/dev/null && sqlite3 -readonly \"file:/d/woodpecker.sqlite?mode=ro&immutable=0\" \"$sql\"" \
+      >"$stdout" 2>"$stderr"
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+      cat "$stdout"
+      # Surface non-fatal docker/sqlite chatter without polluting the result.
+      if [ -s "$stderr" ]; then
+        cat "$stderr" >&2
+      fi
+      rm -f "$stdout" "$stderr"
+      return 0
+    fi
+    err=$(
+      cat "$stderr"
+      cat "$stdout"
+    )
+    case "$err" in
+      *locked* | *BUSY*)
+        i=$((i + 1))
+        if [ "$i" -gt 30 ]; then
+          printf '%s\n' "$err" >&2
+          rm -f "$stdout" "$stderr"
+          return 1
+        fi
+        sleep 1
+        ;;
+      *)
+        printf '%s\n' "$err" >&2
+        rm -f "$stdout" "$stderr"
+        return 1
+        ;;
+    esac
+  done
 }
 
 # Writable SQL (brief helper container). Prints sqlite stdout (e.g. RETURNING).
@@ -53,6 +95,11 @@ srw_deploy_running() {
     WHERE w.state = 'running'
       AND w.name = 'deploy'
       AND r.full_name LIKE '%strategy-replay-workbench%';"
+}
+
+# Any non-terminal workflow — used by cache-cleanup to avoid deleting live mounts.
+any_workflow_running() {
+  query_db "SELECT COUNT(*) FROM workflows WHERE state = 'running';"
 }
 
 # Match Docker check agents even when the DB still shows the seeded hash name.
