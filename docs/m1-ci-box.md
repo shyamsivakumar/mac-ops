@@ -148,15 +148,29 @@ no matching processes.
 
 ### Logitech / Zoom / Apple Intelligence
 
-- Logi Options+ / LogiRightSight: quit/bootout/disable. Undo: reinstall,
-  then `open -a logioptionsplus`. System plists in
-  `/Library/LaunchAgents/com.logi*` need sudo.
-- Zoom updater (`us.zoom.updater*`): bootout/disable. Undo: restore from
-  archive or reinstall. System plists need sudo.
-- Apple Intelligence agents: `launchctl disable` in `gui/$(id -u)`. Undo:
-  `launchctl enable gui/$(id -u)/LABEL`, then `kickstart` the same label.
+Domain for user agents: `gui/$(id -u)`. Archive (if a plist was moved):
+`~/Library/LaunchAgents/_disabled-mo122-20261103T025356Z/`.
 
-System LaunchAgents/Daemons that still need sudo to fully disable:
+All rows use domain `gui/$(id -u)` (`D` below). Undo for each label:
+`launchctl enable D/LABEL && launchctl kickstart D/LABEL`. If the plist was
+archived, restore it and run `bootstrap` instead of `kickstart`.
+
+| Label | What we did | Undo |
+| --- | --- | --- |
+| `com.logitech.LogiRightSight.Agent` | bootout + disable | enable + kickstart |
+| `com.logi.cp-dev-mgr` | bootout + disable | enable + kickstart |
+| `us.zoom.updater` | bootout + disable | enable + kickstart |
+| `us.zoom.updater.login.check` | bootout + disable | enable + kickstart |
+| `com.apple.intelligence*` (see below) | disable | enable + kickstart |
+
+The Apple row covers `intelligenceplatformd`, `intelligencetasksd`,
+`callintelligenced`, `intelligenceflowd`, `intelligencecontextd` and
+`visualintelligenced` (many already exit -9).
+
+Reopening an app alone does **not** clear `launchctl disable`. Always
+`enable` (then `bootstrap` if the plist was archived, else `kickstart`).
+
+System LaunchAgents/Daemons (still need sudo; not fully disabled yet):
 
 - `/Library/LaunchAgents/com.logi.optionsplus.plist`
 - `/Library/LaunchAgents/com.logitech.LogiRightSight.Agent.plist`
@@ -165,9 +179,12 @@ System LaunchAgents/Daemons that still need sudo to fully disable:
 - `/Library/LaunchAgents/us.zoom.updater.login.check.plist`
 
 ```sh
-# example (Shyam):
+# disable (Shyam):
 sudo launchctl bootout system/com.logi.optionsplus.updater
 sudo launchctl disable system/com.logi.optionsplus.updater
+# undo:
+sudo launchctl enable system/com.logi.optionsplus.updater
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.logi.optionsplus.updater.plist
 ```
 
 ## Archived leftovers (same disk)
