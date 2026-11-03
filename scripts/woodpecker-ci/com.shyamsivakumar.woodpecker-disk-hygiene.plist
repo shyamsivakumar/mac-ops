@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.shyamsivakumar.woodpecker-disk-hygiene</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>/Users/shyamsivakumar/Code/woodpecker-ci/scripts/disk-hygiene.sh</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>45</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/Users/shyamsivakumar/Library/Logs/woodpecker/disk-hygiene.launchd.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/shyamsivakumar/Library/Logs/woodpecker/disk-hygiene.launchd.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>DD_CAP_BYTES</key>
+		<string>21474836480</string>
+		<key>DD_MAX_AGE_DAYS</key>
+		<string>2</string>
+		<key>FREE_FLOOR_PCT</key>
+		<string>25</string>
+		<key>ALERT_BELOW_PCT</key>
+		<string>15</string>
+	</dict>
+</dict>
+</plist>

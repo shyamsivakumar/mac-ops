@@ -4,8 +4,9 @@ The M1 (`ssh m1`, 16 GiB RAM) is the dedicated CI box (MO-117): Colima
 `woodpecker` with two Docker agents (`ci-linux` capacity 4, `ci-deploy`
 capacity 1) plus the native macOS agent `shyams-macbook-pro-ios`
 (`platform: darwin/arm64`, capacity 1). Current topology and quit ledger:
-[m1-ci-lanes.md](m1-ci-lanes.md). Stack details live in the llmwiki
-Woodpecker reference and `~/Code/woodpecker-ci` on the M1.
+[m1-ci-lanes.md](m1-ci-lanes.md). Disk / Spotlight / non-CI agents (MO-122):
+[m1-ci-box.md](m1-ci-box.md). Stack details live in the llmwiki Woodpecker
+reference and `~/Code/woodpecker-ci` on the M1.
 
 ## Budget (MO-117)
 
