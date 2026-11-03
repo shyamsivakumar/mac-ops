@@ -14,6 +14,7 @@
 - [Omp Cursor turn retry](cursor-retry.md).
 - [Controller tick order (restart watcher and idle-agent pause)](controller.md).
 - [Shadow review verdict](shadow-verdict.md).
+- [Load-tool reference update and backups](update-references.md).
 - [Woodpecker runner job and install lifecycle](woodpecker-runner.md).
 - [M1 Woodpecker memory budget (MO-116)](../m1-ci-memory.md).
 
