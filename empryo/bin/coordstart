@@ -1,3 +1,4 @@
 #!/bin/zsh
 unset CLAUDE_CODE_CHILD_SESSION
+unset EMP_HUB_THREAD
 CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 exec claude --permission-mode auto --resume "$(basename "$(ls -t ~/.claude/projects/-Users-shyamsivakumar-Code-coordinator/*.jsonl | head -1)" .jsonl)"

@@ -92,3 +92,11 @@ rollback is a deliberate manual operation, not part of installation.
 Only after an approved live rollback, run `emp drain --restart` if needed.
 To install an earlier source version, check out that commit and run
 `./install.sh empryo` again.
+
+## Model order and merge rules (2026-11-04)
+
+- Model order: MiniMax and GLM 5.3 first, then GPT 6.1 and Cursor, and Claude last. Risky, design, large and review tasks stay on GPT 6.1 Sol.
+- `emp_thread_merge` refuses review threads and any PR whose head branch is not the task's own branch.
+- A PR with no checks can merge only in a `shyamsivakumar` repo. It needs a coordinator-launched review ending in `CHECK: PASS <head sha>` and `VERDICT: PASS`, and a head commit at least five minutes old. A failing check is never overridden.
+- A thread reopens only its own conversation tab. If that tab cannot open, it gets a new tab, and the send result carries `contextLost`.
+- Install mod changes one mod at a time and check Herdr's response time after each. A combined hot reload froze the app on 2026-11-04, and the cause is not proven.

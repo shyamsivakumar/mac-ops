@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import contextlib, json, os, re, socketserver, sqlite3, subprocess, sys, threading, time, uuid
+import contextlib, json, os, re, shutil, socket, socketserver, sqlite3, subprocess, sys, threading, time, uuid
 from datetime import datetime, timedelta, timezone
 
 HOME = os.path.expanduser("~")
@@ -26,7 +26,7 @@ RPC_TIMEOUT = 90
 CANCEL_GRACE_SECONDS = 20
 LIVE = ("running", "waiting", "queued")
 
-DRAINING = {"requested": False}
+DRAINING = {"requested": False, "epoch": 0, "exiting": False}
 LOCK = threading.RLock()
 CHANGED = threading.Condition(LOCK)
 
@@ -144,7 +144,7 @@ class AcpProcess:
         self.users = 0
         self.proc = subprocess.Popen(
             [EMPRYO, "acp"], cwd=root if os.path.isdir(root) else HOME,
-            env={**os.environ, "EMPRYO_NO_PROMPT": "1"}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(f"{HUB_DIR}/engine.log", "a"), text=True, bufsize=1,
+            env={**os.environ, "EMPRYO_NO_PROMPT": "1", "EMP_HUB_THREAD": key}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(f"{HUB_DIR}/engine.log", "a"), text=True, bufsize=1,
         )
         threading.Thread(target=self.read_loop, daemon=True).start()
         try:
@@ -472,22 +472,7 @@ def configure_session(proc, thread, model=None):
     thread["model"] = empryo_model(thread["modelSelection"])
 
 
-def session_tab_ids(thread):
-    directory = session_dir(thread)
-    if directory is None or not os.path.exists(f"{directory}/meta.json"):
-        return []
-    with open(f"{directory}/meta.json") as f:
-        tabs = [tab["id"] for tab in json.load(f)["tabs"]]
-    spoken = []
-    with open(f"{directory}/session.jsonl") as f:
-        for line in f:
-            if line.startswith('{"k":"user"') or line.startswith('{"k":"assistant"'):
-                tab = json.loads(line)["tabId"]
-                if tab in spoken:
-                    spoken.remove(tab)
-                spoken.append(tab)
-    base = thread["sessionId"].split(":")[0]
-    return [f"{base}:{tab}" for tab in spoken[::-1] + [tab for tab in tabs if tab not in spoken]]
+TAB_UNOPENABLE = re.compile(r"^session/resume: .*(not found|changed while reopening)|^session/set_config_option: That tab is not open")
 
 
 def reopen_session(proc, thread, cwd, model):
@@ -498,21 +483,28 @@ def reopen_session(proc, thread, cwd, model):
     configure_session(proc, thread, model)
 
 
-def reopen_on_another_tab(proc, thread, cwd, model, first_error):
-    stored = thread["sessionId"]
-    for candidate in session_tab_ids(thread):
-        if candidate == stored:
-            continue
-        thread["sessionId"] = candidate
-        try:
-            reopen_session(proc, thread, cwd, model)
-        except HubError:
-            continue
-        log(f"{thread['threadId']} session tab {stored.split(':')[-1][:8]} would not open ({first_error}); reopened on tab {candidate.split(':')[-1][:8]}")
+def open_new_tab(proc, thread, cwd, model, reason):
+    previous = {key: thread.get(key) for key in ("sessionId", "sessionDir", "titleDirty")}
+    session_id = proc.call("session/new", {"cwd": cwd, "mcpServers": []})["sessionId"]
+    with LOCK:
+        thread.update(sessionId=session_id, sessionDir=None, titleDirty=True)
+    proc.loaded.add(session_id)
+    try:
+        configure_session(proc, thread, model)
+        persist_session(proc, thread)
+    except BaseException:
+        with LOCK:
+            thread.update(previous)
+        proc.loaded.discard(session_id)
+        raise
+    SESSION_THREAD[session_id] = thread["threadId"]
+    THREADS.save()
+    if thread["runs"]:
+        text = f"This thread has {len(thread['runs'])} earlier run(s) but started a new conversation tab {session_id.split(':')[-1][:8]} because {reason}. The agent does not see the earlier conversation; the saved transcript stays in this thread's history."
+        log(f"{thread['threadId']} {text}")
+        append_item(thread, {"type": "notice", "status": "completed", "text": text})
+        runtime_of(thread["threadId"])["contextLost"] = text
         THREADS.save()
-        return
-    thread["sessionId"] = stored
-    raise first_error
 
 
 def ensure_session(thread, model=None):
@@ -521,25 +513,48 @@ def ensure_session(thread, model=None):
         raise HubError(f"the working directory {cwd} no longer exists (worktree cleaned up?)")
     proc = engine_for(thread)
     try:
-        created = thread["sessionId"] is None
-        if created:
-            thread["sessionId"] = proc.call("session/new", {"cwd": cwd, "mcpServers": []})["sessionId"]
-            proc.loaded.add(thread["sessionId"])
-            configure_session(proc, thread, model)
-            thread["titleDirty"] = True
-            persist_session(proc, thread)
-            THREADS.save()
-        try:
-            reopen_session(proc, thread, cwd, model)
-        except HubError as e:
-            if created:
-                raise
-            reopen_on_another_tab(proc, thread, cwd, model, e)
+        if thread["sessionId"] is None:
+            open_new_tab(proc, thread, cwd, model, "it had no conversation tab (it shared one with another thread and was detached)")
+        else:
+            try:
+                reopen_session(proc, thread, cwd, model)
+            except HubError as e:
+                if not TAB_UNOPENABLE.search(str(e)):
+                    raise
+                lost = thread["sessionId"]
+                open_new_tab(proc, thread, cwd, model, f"its own tab {lost.split(':')[-1][:8]} would not open ({e})")
+                proc.loaded.discard(lost)
+                SESSION_THREAD.pop(lost, None)
     except BaseException:
         release_engine(proc)
         raise
     runtime_of(thread["threadId"])["proc"] = proc
     return proc
+
+
+def detach_shared_tabs():
+    claimants = {}
+    for thread in THREADS.data.values():
+        if thread["sessionId"]:
+            claimants.setdefault(thread["sessionId"], []).append(thread)
+    shared = {tab: threads for tab, threads in claimants.items() if len(threads) > 1}
+    if not shared:
+        return
+    backup = f"{THREADS.path}.before-tab-detach-{time.strftime('%Y%m%d-%H%M%S')}"
+    try:
+        shutil.copy2(THREADS.path, backup)
+    except OSError as e:
+        log(f"{len(shared)} conversation tab(s) are shared by more than one thread; backup to {backup} failed ({e}), detach skipped")
+        return
+    log(f"{len(shared)} conversation tab(s) are shared by more than one thread; threads.json backed up to {backup}")
+    for tab, threads in shared.items():
+        owner = min(threads, key=lambda t: (-t["runCount"], t["createdAt"], t["threadId"]))
+        for thread in threads:
+            if thread is owner:
+                continue
+            log(f"tab {tab.split(':')[-1][:8]} stays with {owner['threadId']} ({owner['title'][:40]!r}, {owner['runCount']} runs); detached {thread['threadId']} ({thread['title'][:40]!r}, {thread['runCount']} runs, history kept), it gets a fresh session on its next send")
+            thread["sessionId"] = None
+            thread["sessionDir"] = None
 
 
 PROVIDERS = ("subscriptions/gpt", "subscriptions/claude", "subscriptions/cursor", "zai-coding-plan", "minimax")
@@ -652,7 +667,12 @@ def running_turns():
     return [t for t in THREADS.data.values() if (t["status"] in LIVE and not t.get("pendingTurn")) or RUNTIME.get(t["threadId"], {}).get("starting")]
 
 
-def finish_drain():
+def finish_drain(epoch):
+    with LOCK:
+        if DRAINING["epoch"] != epoch:
+            log("drain was cancelled before the hub exited")
+            return
+        DRAINING["exiting"] = True
     for engine in list(ENGINES):
         drop_engine(engine)
     THREADS.save()
@@ -662,32 +682,77 @@ def finish_drain():
 
 def tool_hub_drain(a):
     deadline = time.time() + a["timeoutMs"] / 1000 if a.get("timeoutMs") else None
+    timed_out = None
     with CHANGED:
         DRAINING["requested"] = True
+        epoch = DRAINING["epoch"]
         log(f"drain requested; waiting for {len(running_turns())} running turn(s)")
-        while running_turns():
+        while running_turns() and DRAINING["epoch"] == epoch:
             if deadline and time.time() > deadline:
+                timed_out = [t["title"] for t in running_turns()]
                 DRAINING["requested"] = False
-                waiting = [t["title"] for t in running_turns()]
-                resume_pending_turns()
-                return {"drained": False, "stillRunning": waiting}
+                DRAINING["epoch"] += 1
+                break
             CHANGED.wait(timeout=2)
-    threading.Timer(0.5, finish_drain).start()
+        cancelled = DRAINING["epoch"] != epoch
+    if timed_out is not None:
+        resume_pending_turns()
+        return {"drained": False, "stillRunning": timed_out}
+    if cancelled:
+        return {"drained": False, "cancelled": True}
+    threading.Timer(0.5, finish_drain, (epoch,)).start()
     return {"drained": True, "pid": os.getpid(), "queuedForRestart": [t["title"] for t in THREADS.data.values() if t.get("pendingTurn")]}
 
 
+def tool_hub_drain_cancel(a):
+    with CHANGED:
+        if DRAINING["exiting"]:
+            raise HubError("the hub already finished draining and is exiting for restart; cancel came too late")
+        was_draining = DRAINING["requested"]
+        DRAINING["requested"] = False
+        DRAINING["epoch"] += 1
+        CHANGED.notify_all()
+    log(f"drain cancelled (was {'on' if was_draining else 'off'})")
+    resume_pending_turns()
+    return {"cancelled": was_draining, "pid": os.getpid()}
+
+
+RESUMING = set()
+
+
 def resume_pending_turns():
-    for thread in [t for t in THREADS.data.values() if t.get("pendingTurn")]:
-        pending = thread["pendingTurn"]
-        set_status(thread, "idle" if not thread["runs"] else thread["runs"][-1]["status"])
-        try:
-            start_turn(thread, pending["message"], pending["steeredFrom"], from_pending=True)
+    with LOCK:
+        pending = [t for t in THREADS.data.values() if t.get("pendingTurn") and t["threadId"] not in RESUMING]
+        RESUMING.update(t["threadId"] for t in pending)
+    for thread in pending:
+        threading.Thread(target=resume_one_turn, args=(thread,), daemon=True).start()
+
+
+def resume_one_turn(thread):
+    try:
+        resume_turn(thread)
+    finally:
+        with LOCK:
+            RESUMING.discard(thread["threadId"])
+
+
+def resume_turn(thread):
+    pending = thread["pendingTurn"]
+    try:
+        start_turn(thread, pending["message"], pending["steeredFrom"], from_pending=True)
+        runtime_of(thread["threadId"]).pop("contextLost", None)
+        if thread["status"] == "queued":
+            log(f"{thread['threadId']} queued turn put back in the queue (hub is draining again)")
+        else:
             log(f"{thread['threadId']} queued turn started")
-        except HubError as e:
-            thread.pop("pendingTurn", None)
-            thread["lastError"] = str(e)
-            set_status(thread, "failed")
-            log(f"{thread['threadId']} queued turn could not start ({e})")
+    except HubError as e:
+        with LOCK:
+            still_queued = thread["status"] == "queued"
+            if still_queued:
+                thread.pop("pendingTurn", None)
+                thread["lastError"] = str(e)
+                set_status(thread, "failed")
+        log(f"{thread['threadId']} queued turn could not start ({e})" if still_queued else f"{thread['threadId']} queued turn skipped ({e})")
 
 
 def tool_hub_status(a):
@@ -706,9 +771,12 @@ STOP_STATUS = {"end_turn": "completed", "max_tokens": "completed", "max_turn_req
 
 def start_turn(thread, message, steered_from=None, from_pending=False):
     rt = runtime_of(thread["threadId"])
+    rt.pop("contextLost", None)
     require_unheld(thread)
     with LOCK:
-        if thread["status"] in LIVE or rt.get("starting"):
+        if from_pending and (thread["status"] != "queued" or not thread.get("pendingTurn")):
+            raise HubError("the queued turn is no longer pending")
+        if (thread["status"] in LIVE and not from_pending) or rt.get("starting"):
             raise HubError("thread already has an active run")
         if DRAINING["requested"]:
             thread["pendingTurn"] = {"message": message, "steeredFrom": steered_from}
@@ -831,13 +899,13 @@ def finish_run(thread, rt, proc, run_id, slot_key, status, stop, usage, error):
             log(f"{thread['threadId']} pull request auto-link skipped ({e})")
 
 
-def steer_turn(thread, message):
+def steer_turn(thread, message, sender=None):
     rt = runtime_of(thread["threadId"])
     if rt["proc"] is None:
         raise HubError("thread has no engine to steer")
     result = rt["proc"].call("_empryo/session/steer", {"sessionId": thread["sessionId"], "prompt": [{"type": "text", "text": message}]})
     with LOCK:
-        append_item(thread, {"type": "user_message", "status": "completed", "text": message, "steered": True})
+        append_item(thread, {"type": "user_message", "status": "completed", "text": message, "steered": True, "senderThreadId": sender})
         THREADS.save()
     return thread["activeRunId"], result
 
@@ -887,7 +955,7 @@ def new_thread(args, created_by="agent", creation_source="mcp"):
         "status": "idle", "latestRunId": None, "activeRunId": None, "providerInstanceId": selection["instanceId"], "model": empryo_model(selection),
         "modelSelection": selection, "runtimeMode": "full-access", "interactionMode": "default",
         "linkedPullRequest": None, "pullRequests": [], "titleRegeneration": None, "branch": branch, "worktreePath": worktree,
-        "parentThreadId": args.get("delegatedFrom") or args.get("parentThreadId"), "relationshipToParent": "delegated" if args.get("delegatedFrom") or args.get("parentThreadId") else None,
+        "parentThreadId": args.get("delegatedFrom") or args.get("parentThreadId"), "relationshipToParent": "delegated" if args.get("delegatedFrom") or args.get("parentThreadId") else None, "launchedByThread": caller_thread(),
         "runCount": 0, "itemCount": 0, "archived": False, "settled": False, "settledAt": None, "snoozed": False, "snoozedUntil": None,
         "pinned": False, "createdAt": now_iso(), "updatedAt": now_iso(), "sessionId": None, "runs": [], "lastError": None,
         "clientRequestId": args.get("clientRequestId"), "taskType": task_type, "mode": mode,
@@ -1032,7 +1100,7 @@ def tool_thread_read(a):
         window, more = items, False
     else:
         if a.get("view", "messages") == "messages":
-            items = [i for i in items if i["type"] in ("user_message", "assistant_message")]
+            items = [i for i in items if i["type"] in ("user_message", "assistant_message", "notice")]
         limit = a.get("limit", 50)
         if "afterPosition" in a:
             after = [i for i in items if i["position"] > a["afterPosition"]]
@@ -1097,12 +1165,16 @@ def tool_thread_send(a):
     if thread["status"] == "running":
         if mode == "start":
             raise HubError("thread already has an active run")
-        run_id, _ = steer_turn(thread, a["message"])
+        run_id, _ = steer_turn(thread, a["message"], caller_thread())
         return {"threadId": thread["threadId"], "link": link_of(thread), "runId": run_id, "status": "running", "delivery": "steered"}
     if mode == "steer":
         raise HubError("thread has no active run to steer")
-    run_id = start_turn(thread, a["message"])
-    return {"threadId": thread["threadId"], "link": link_of(thread), "runId": run_id, "status": thread["status"], "delivery": "started"}
+    run_id = start_turn(thread, a["message"], caller_thread())
+    result = {"threadId": thread["threadId"], "link": link_of(thread), "runId": run_id, "status": thread["status"], "delivery": "started"}
+    context_lost = runtime_of(thread["threadId"]).pop("contextLost", None)
+    if context_lost:
+        result["contextLost"] = context_lost
+    return result
 
 
 def answer_waiting(thread, message):
@@ -1474,13 +1546,13 @@ def thread_repo(thread):
 def pull_requests_of(thread):
     repo = thread_repo(thread)
     if thread["branch"]:
-        found = gh_json(["pr", "list", "--repo", repo, "--head", thread["branch"], "--state", "all", "--json", "number,state,headRefOid,headRefName,baseRefName,url,isDraft,mergedAt"])
+        found = gh_json(["pr", "list", "--repo", repo, "--head", thread["branch"], "--state", "all", "--json", "number,state,headRefOid,headRefName,baseRefName,url,isDraft,mergedAt,isCrossRepository"])
     else:
         found = []
     linked = {p["number"] for p in thread["pullRequests"] if p.get("repository") == repo}
     known = {p["number"] for p in found}
     for number in linked - known:
-        found.append(gh_json(["pr", "view", str(number), "--repo", repo, "--json", "number,state,headRefOid,headRefName,baseRefName,url,isDraft,mergedAt"]))
+        found.append(gh_json(["pr", "view", str(number), "--repo", repo, "--json", "number,state,headRefOid,headRefName,baseRefName,url,isDraft,mergedAt,isCrossRepository"]))
     return repo, found
 
 
@@ -1494,15 +1566,13 @@ def auto_link_pull_requests(thread):
     numbers = set()
     reports = "\n".join(report["text"] for report in trailing_reports(read_items(thread)))
     for url_repo, number in PR_URL_ANYWHERE.findall(reports):
-        if url_repo.lower() == repo.lower():
+        if url_repo.lower() == repo.lower() and not gh_json(["pr", "view", number, "--repo", repo, "--json", "isCrossRepository"])["isCrossRepository"]:
             numbers.add(int(number))
-    cwd = thread_cwd(thread)
-    branch = sh(["git", "-C", cwd, "branch", "--show-current"])[1]
-    default = sh(["git", "-C", cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])[1].removeprefix("origin/")
-    root_default = not thread["worktreePath"] and branch == default
-    if branch and not root_default:
-        for pr in gh_json(["pr", "list", "--repo", repo, "--head", branch, "--state", "all", "--json", "number"]):
-            numbers.add(pr["number"])
+    branch = own_branch(thread)
+    if branch:
+        for pr in gh_json(["pr", "list", "--repo", repo, "--head", branch, "--state", "all", "--json", "number,isCrossRepository"]):
+            if not pr["isCrossRepository"]:
+                numbers.add(pr["number"])
     for number in sorted(numbers):
         tool_link_pull_request({"threadId": thread["threadId"], "repository": repo, "number": number})
     return sorted(numbers)
@@ -1575,15 +1645,22 @@ def tool_thread_cleanup(a):
     return {**result, "action": "removed", "branchRemoved": code == 0, "branchNote": None if code == 0 else err}
 
 
+PERSONAL_OWNER = "shyamsivakumar"
 TASK_KEY = re.compile(r"[A-Z]{2,5}-\d+")
 VERDICT_LINE = re.compile(r"VERDICT: (PASS|FAIL)")
 
 
-def judge_review(text):
+def check_line_ok(lines, sha):
+    return len(lines) >= 2 and lines[-2] == f"CHECK: PASS {sha}"
+
+
+def judge_review(text, check_sha=None):
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
     verdict = VERDICT_LINE.fullmatch(lines[-1]) if lines else None
     if verdict is None:
         return False, "the review does not end with a VERDICT: PASS or VERDICT: FAIL line"
+    if verdict.group(1) == "PASS" and check_sha and not check_line_ok(lines, check_sha):
+        return False, f"the pull request has no checks, so the review must end with the two lines 'CHECK: PASS {check_sha}' and 'VERDICT: PASS'"
     return verdict.group(1) == "PASS", f"VERDICT: {verdict.group(1)}"
 
 
@@ -1614,24 +1691,61 @@ def last_run_end(thread):
     return ended[-1] if ended else ""
 
 
-def review_gate(thread):
+LEGACY_REVIEW_TITLE = re.compile(r"^[A-Z]{2,5}-\d+ (gate )?review\b", re.I)
+NO_CHECKS_MIN_AGE_SECONDS = 300
+
+
+def is_review_thread(thread):
+    task_type = thread.get("taskType")
+    if task_type is not None:
+        return task_type == "review"
+    return bool(LEGACY_REVIEW_TITLE.match(thread["title"]))
+
+
+def review_origin_problem(review, task):
+    if review.get("taskType") != "review":
+        return "it has no taskType review"
+    if review.get("launchedByThread"):
+        return f"it was launched from inside thread {review['launchedByThread']}"
+    if review.get("parentThreadId") or review.get("relationshipToParent"):
+        return "it was delegated from another thread"
+    if any(item["type"] == "user_message" and item.get("senderThreadId") for item in read_items(review)):
+        return "a message to it came from another thread"
+    return None
+
+
+def parse_time(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def review_gate(thread, check_sha=None, head_committed_at=None):
     key = TASK_KEY.search(thread["title"])
     key_in_title = re.compile(rf"\b{re.escape(key.group(0))}\b") if key else None
-    reviews = [t for t in THREADS.data.values() if key_in_title and not t["archived"] and t["threadId"] != thread["threadId"] and t["projectId"] == thread["projectId"]
-               and key_in_title.search(t["title"]) and re.search("review", t["title"], re.I)]
+    candidates = [t for t in THREADS.data.values() if key_in_title and not t["archived"] and t["threadId"] != thread["threadId"] and t["projectId"] == thread["projectId"]
+                  and key_in_title.search(t["title"]) and is_review_thread(t)]
+    problems = {t["threadId"]: review_origin_problem(t, thread) for t in candidates}
+    reviews = [t for t in candidates if problems[t["threadId"]] is None]
     if reviews:
         review = max(reviews, key=lambda t: t["updatedAt"])
-        message, problem = gate_report(review, lambda text: judge_review(text)[0])
+        message, problem = gate_report(review, lambda text: judge_review(text, check_sha)[0])
         if message is None:
             return False, f"the review thread '{review['title']}' has no usable report: {problem}", {"source": "review thread", "threadId": review["threadId"], "status": review["status"]}
-        passed, why = judge_review(message["text"])
+        passed, why = judge_review(message["text"], check_sha)
         evidence = {"source": "review thread", "threadId": review["threadId"], "title": review["title"], "verdict": why, "excerpt": message["text"][:300]}
         if not passed:
             return False, f"review gate not passed: {why}", evidence
         if last_run_end(review) < last_run_end(thread):
             return False, f"the review '{review['title']}' is older than the task's latest run", evidence
+        if head_committed_at and parse_time(review["runs"][-1]["startedAt"]) < parse_time(head_committed_at):
+            return False, f"the review '{review['title']}' started before the pull request's head commit ({head_committed_at}), so it cannot have reviewed it", evidence
         return True, None, evidence
+    if candidates:
+        ignored = "; ".join(f"'{t['title']}': {problems[t['threadId']]}" for t in candidates[:3])
+        return False, f"no trusted review thread: the review threads for this task were ignored ({ignored}). A review must be a taskType review thread the Coordinator launched itself", {"source": None}
     return False, "no review thread found for this task; start one in the same project with the task key and 'review' in its title", {"source": None}
+
+
+NO_CHECKS_REPORTED = re.compile(r"no (required )?checks reported")
 
 
 def checks_verdict(repo, number):
@@ -1642,8 +1756,10 @@ def checks_verdict(repo, number):
         scope = "required" if required else "all"
         if rows:
             break
+        if code != 0 and not NO_CHECKS_REPORTED.search(err):
+            raise HubError(f"gh pr checks failed: {err or out}")
     if not rows:
-        return False, "no checks are reported for this pull request yet", {"scope": scope}
+        return False, "no checks are reported for this pull request yet", {"scope": scope, "count": 0}
     bad = [f"{r['name']}: {r['bucket']}" for r in rows if r["bucket"] not in ("pass", "skipping")]
     return not bad, (f"checks not green ({scope}): {', '.join(bad[:4])}" if bad else None), {"scope": scope, "count": len(rows)}
 
@@ -1662,17 +1778,48 @@ def merge_method(repo):
     return method, {"allowed": allowed, "lastMergedUsed": used, "deleteBranchOnMerge": settings["deleteBranchOnMerge"]}
 
 
+def own_branch(thread):
+    if thread["branch"]:
+        return thread["branch"]
+    if thread["worktreePath"] and os.path.isdir(thread["worktreePath"]):
+        return sh(["git", "-C", thread["worktreePath"], "branch", "--show-current"])[1] or None
+    return None
+
+
+def task_thread_of(review):
+    if review.get("parentThreadId") in THREADS.data:
+        return THREADS.data[review["parentThreadId"]]
+    key = TASK_KEY.search(review["title"])
+    if key is None:
+        return None
+    key_in_title = re.compile(rf"\b{re.escape(key.group(0))}\b")
+    tasks = [t for t in THREADS.data.values() if t["projectId"] == review["projectId"] and not t["archived"] and not is_review_thread(t) and key_in_title.search(t["title"])]
+    return max(tasks, key=lambda t: t["updatedAt"]) if tasks else None
+
+
 def merge_plan(thread):
     repo, prs = pull_requests_of(thread)
-    open_prs = [p for p in prs if p["state"] == "OPEN"]
     evidence = {"repo": repo}
+    branch = own_branch(thread)
+    if not branch:
+        return False, "this thread has no branch of its own (it ran in a shared checkout), so the hub cannot tell that a linked pull request belongs to it", evidence, None
+    open_prs = [p for p in prs if p["state"] == "OPEN" and p["headRefName"] == branch and not p["isCrossRepository"]]
+    foreign = [p for p in prs if p["state"] == "OPEN" and p not in open_prs]
+    if not open_prs and foreign:
+        pr = foreign[0]
+        if pr["isCrossRepository"]:
+            return False, f"pull request #{pr['number']} comes from a fork; only same-repository pull requests merge here", evidence, None
+        return False, f"linked pull request #{pr['number']} has head branch {pr['headRefName']}, not this task's branch {branch}", evidence, None
     if not open_prs:
         return False, "no open pull request is linked to this task", evidence, None
     if len(open_prs) > 1:
         return False, f"{len(open_prs)} open pull requests match this branch", evidence, None
     number = open_prs[0]["number"]
-    detail = gh_json(["pr", "view", str(number), "--repo", repo, "--json", "number,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,headRefOid,baseRefName"])
+    detail = gh_json(["pr", "view", str(number), "--repo", repo, "--json", "number,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,headRefOid,baseRefName,isCrossRepository,commits"])
+    commits = detail.pop("commits")
     evidence["pullRequest"] = detail
+    if detail["isCrossRepository"]:
+        return False, f"#{number} comes from a fork; only same-repository pull requests merge here", evidence, None
     if detail["isDraft"]:
         return False, f"#{number} is a draft", evidence, None
     if detail["mergeable"] != "MERGEABLE":
@@ -1686,9 +1833,20 @@ def merge_plan(thread):
         return False, "the worktree's HEAD differs from the pull request head (unpushed or newer commits)", evidence, None
     green, why, checks = checks_verdict(repo, number)
     evidence["checks"] = checks
-    if not green:
+    no_checks_allowed = checks["count"] == 0 and repo.split("/")[0].lower() == PERSONAL_OWNER
+    if not green and not no_checks_allowed:
         return False, why, evidence, None
-    passed, why, gate = review_gate(thread)
+    head_committed_at = None
+    if no_checks_allowed:
+        head_commit = next((c for c in reversed(commits) if c["oid"] == detail["headRefOid"]), None)
+        if head_commit is None:
+            return False, f"#{number} has no checks and its head commit {detail['headRefOid'][:7]} is not in the commit list gh returned, so its date cannot be read", evidence, None
+        head_committed_at = head_commit["committedDate"]
+        age = (datetime.now(timezone.utc) - parse_time(head_committed_at)).total_seconds()
+        if age < NO_CHECKS_MIN_AGE_SECONDS:
+            retry_at = (parse_time(head_committed_at) + timedelta(seconds=NO_CHECKS_MIN_AGE_SECONDS)).strftime("%H:%M:%SZ")
+            return False, f"#{number} has no checks yet and its head commit is only {int(age)}s old, so its workflows may not have registered; retry after {retry_at}", evidence, None
+    passed, why, gate = review_gate(thread, detail["headRefOid"] if no_checks_allowed else None, head_committed_at)
     evidence["reviewGate"] = gate
     if not passed:
         return False, why, evidence, None
@@ -1699,6 +1857,10 @@ def merge_plan(thread):
 
 def tool_thread_merge(a):
     thread = thread_of(a["threadId"])
+    if is_review_thread(thread):
+        task = task_thread_of(thread)
+        named = f"the task thread {task['threadId']} ('{task['title']}')" if task else "the task thread (the one whose key is in this title)"
+        return {"threadId": thread["threadId"], "merged": False, "refused": f"{thread['threadId']} is a review thread; call emp_thread_merge on {named} instead"}
     if thread["status"] in LIVE:
         return {"threadId": thread["threadId"], "merged": False, "refused": "the task thread still has a live run"}
     ok, reason, evidence, plan = merge_plan(thread)
@@ -1738,6 +1900,7 @@ TOOLS = {
     "emp_thread_configure": (obj({**THREAD_ID, "modelSelection": MODEL_SELECTION}, ["threadId", "modelSelection"]), tool_thread_configure),
     "emp_hub_status": (obj({}), tool_hub_status),
     "emp_hub_drain": (obj({"timeoutMs": {"type": "integer", "minimum": 1}}), tool_hub_drain),
+    "emp_hub_drain_cancel": (obj({}), tool_hub_drain_cancel),
     "emp_thread_cleanup": (obj({**THREAD_ID, "dryRun": BOOL}, ["threadId"]), tool_thread_cleanup),
     "emp_thread_merge": (obj({**THREAD_ID, "dryRun": BOOL}, ["threadId"]), tool_thread_merge),
     "emp_thread_materialize": (obj({"threadId": STR, "syncTitles": BOOL}), tool_thread_materialize),
@@ -1770,8 +1933,56 @@ def dispatch(request):
     return handler(arguments)
 
 
+CALLER = threading.local()
+SOL_LOCAL, LOCAL_PEERPID = 0, 2
+
+
+ENGINE_TAG = re.compile(r"\bEMP_HUB_THREAD=(\S+)")
+UNRESOLVED_CALLER = "unresolved-caller"
+
+
+def ps_output(*args):
+    return subprocess.run(["ps", *args], capture_output=True, text=True, timeout=3).stdout.strip()
+
+
+def resolve_caller():
+    pid = getattr(CALLER, "pid", 0)
+    if pid is None:
+        return UNRESOLVED_CALLER
+    if pid == 0:
+        return None
+    environment = ps_output("-E", "-ww", "-p", str(pid), "-o", "command=")
+    if not environment:
+        return UNRESOLVED_CALLER
+    tagged = ENGINE_TAG.search(environment)
+    if tagged:
+        return tagged.group(1)
+    engines = {proc.proc.pid: key for key, proc in list(ENGINES.items())}
+    for _ in range(32):
+        if pid in engines:
+            return engines[pid]
+        if pid <= 1:
+            return None
+        parent = ps_output("-o", "ppid=", "-p", str(pid))
+        if not parent:
+            return UNRESOLVED_CALLER
+        pid = int(parent)
+    return UNRESOLVED_CALLER
+
+
+def caller_thread():
+    try:
+        return resolve_caller()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return UNRESOLVED_CALLER
+
+
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):
+        try:
+            CALLER.pid = self.request.getsockopt(SOL_LOCAL, LOCAL_PEERPID)
+        except OSError:
+            CALLER.pid = None
         try:
             result = {"ok": True, "result": dispatch(json.loads(self.rfile.readline()))}
         except HubError as e:
@@ -1789,6 +2000,7 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 def main():
     for directory in (HUB_DIR, WORKTREES, TRANSCRIPTS):
         os.makedirs(directory, exist_ok=True)
+    detach_shared_tabs()
     for thread in THREADS.data.values():
         thread["itemCount"] = len(read_items(thread))
         thread.setdefault("taskType", None)
@@ -1805,7 +2017,7 @@ def main():
         os.unlink(SOCKET)
     threading.Thread(target=forever, args=("scheduler", SCHEDULER_TICK_SECONDS, scheduler_tick), daemon=True).start()
     threading.Thread(target=forever, args=("reaper", REAPER_TICK_SECONDS, reaper_tick), daemon=True).start()
-    threading.Thread(target=resume_pending_turns, daemon=True).start()
+    resume_pending_turns()
     log(f"hub listening on {SOCKET} with {len(PROJECTS.data)} projects and {len(THREADS.data)} threads")
     Server(SOCKET, Handler).serve_forever()
 
