@@ -72,8 +72,9 @@ message bodies, arbitrary metadata, and tool inputs/outputs are never sent.
 Verification uses `--no-export` or mocked HTTP only; no trace is sent off this Mac.
 Run `python3 verification/session-traces/check_export_gate.py` for the current gate.
 The earlier `check_gate.py` is unchanged: its missing-status export assertion is
-incompatible with terminal-only capture and now fails intentionally. Missing-status
-dry-run previews retain their legacy count but are never eligible for real export.
+incompatible with terminal-only capture and now fails. The existing
+`test_posthog_dry_run_and_skip` also expects a missing-status preview count of one;
+it is left unchanged and fails under the corrected, identical preview/export filter.
 
 ## Daily job
 
