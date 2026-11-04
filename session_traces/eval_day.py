@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .scrub import safe_export_projection
 from .store import day_key, evals_dir, load_day_traces, state_root
 
 
@@ -250,6 +251,17 @@ def _merged_pr_metrics(
     }
 
 
+def _publication_score(trace: dict[str, Any]) -> dict[str, Any]:
+    """Score only typed telemetry, retaining counts rather than content."""
+    safe = safe_export_projection(trace, pr_limit=None)
+    safe["named_blocker"] = bool(trace.get("named_blocker"))
+    for key in ("files_outside_worktree", "preview_or_playwright"):
+        value = trace.get(key)
+        if isinstance(value, list):
+            safe[key] = [None] * len(value)
+    return score_trace(safe)
+
+
 def _all_scored_rows(root: Path | None) -> list[dict[str, Any]]:
     from .store import traces_dir
 
@@ -264,14 +276,14 @@ def _all_scored_rows(root: Path | None) -> list[dict[str, Any]]:
         if len(name) != 10 or name[4] != "-" or name[7] != "-":
             continue
         for trace in load_day_traces(name, root=root):
-            rows.append(score_trace(trace))
+            rows.append(_publication_score(trace))
     return rows
 
 
 def evaluate_day(day: str | None = None, *, root: Path | None = None) -> dict[str, Any]:
     day = day or day_key()
     traces = load_day_traces(day, root=root)
-    rows = [score_trace(t) for t in traces]
+    rows = [_publication_score(t) for t in traces]
     by_provider: dict[str, int] = defaultdict(int)
     by_status: dict[str, int] = defaultdict(int)
     flag_counts: dict[str, int] = defaultdict(int)
@@ -386,6 +398,8 @@ def render_markdown(
             "claimed_done_with_proof",
         ):
             before = baseline.get(key, 0)
+            if type(before) not in (int, float) or not (0 <= before < float("inf")):
+                before = 0
             after = summary.get(key, 0)
             worse = (
                 after > before if key != "claimed_done_with_proof" else after < before

@@ -112,6 +112,9 @@ previous day's JSON, rises in the bad flags (or a drop in proof) are marked
 
 ## Privacy
 
-Never ship raw prompts or secrets. Scrubbing is by field name and pattern in
-`session_traces/scrub.py`. Local state stays under `~/.local/state/mac-ops`,
-outside git.
+Never ship raw prompts or secrets. Export and daily publication use the typed
+content-safe projection in `session_traces/scrub.py`; JSON, Markdown, cross-day PR
+identifiers, and coordinator evidence copies contain no arbitrary legacy PR text.
+Local legacy data is projected before scoring and aggregation, not only before
+network export. Unencodable journal IDs are rejected without aborting collection.
+Local state stays under `~/.local/state/mac-ops`, outside git.
