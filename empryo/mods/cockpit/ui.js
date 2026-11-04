@@ -8,8 +8,10 @@ export const H = { head: 42, sub: 16, card: 86, foot: 18, title: 30, child: 24, 
 const TONE = { wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
-const VERDICT_MARK = { pass: "✓", fail: "✗", unknown: "?" };
-const VERDICT_TONE = { pass: "done", fail: "blocked", unknown: "dim" };
+const VERDICT_MARK = { pass: "✓", fail: "✗", unknown: "?", loading: "…" };
+const VERDICT_TONE = { pass: "done", fail: "blocked", unknown: "dim", loading: "working" };
+export const LOADING_VERDICT = { state: "loading", label: "rev …" };
+export const canMerge = (verdict) => verdict?.state === "pass" || verdict?.state === "unknown";
 const MERGE = { MERGEABLE: ["merge ✓", "done", "Mergeable"], CONFLICTING: ["merge ✗", "blocked", "Merge conflict"], UNKNOWN: ["merge ?", "dim", "Merge status unknown"] };
 export const COLUMNS = [["backlog", "Backlog", "idle", "Backlog"], ["needs", "Needs you", "blocked", "Needs"], ["run", "Running", "working", "Running"], ["ready", "Ready to merge", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"]];
 const stop = (_e, cx) => cx.stop_propagation();
@@ -157,7 +159,7 @@ function statusLine(v) {
     const age = ago(c.created, now);
     return `Created ${age === "now" ? "just now" : `${age} ago`}`;
   }
-  if (c.kind === "run") return c.status === "queued" ? "Queued" : `Running ${elapsed(now - v.since)}`;
+  if (c.kind === "run") return c.status === "queued" ? "Queued" : `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}`;
   if (c.kind === "done") return v.reviewed ? "Ready to settle" : "Not reviewed yet";
   return c.context;
 }
@@ -187,7 +189,7 @@ export function card(t, e, v, input, cb) {
   const status = ready
     ? prChips(t, v, fit).on_mouse_down("left", selectOnly(e.key, cb))
     : h_flex().flex_1().min_w(0).gap(5).items_center()
-      .child(div().size(6).flex_none().rounded(3).bg(t[TONE[c.kind]]))
+      .child(div().size(6).flex_none().rounded(3).bg(v.quiet ? t.muted : t[TONE[c.kind]]))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
   const foot = selected
     ? h_flex().h(H.foot).w_full().flex_none().items_center().child(ready ? readyActions : quick)
@@ -209,7 +211,9 @@ export function card(t, e, v, input, cb) {
   const cardEl = div().h(cardHeight(false)).w_full().flex_none().px(6).pb(4).child(body);
   if (!replying) return cardEl;
   return v_flex().w_full().flex_none().child(cardEl)
-    .child(div().h(H.reply).px(6).pt(2).child(Input.new(input).h(28).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(11.5).text_color(t.foreground)));
+    .child(h_flex().h(H.reply).px(6).pt(2).gap(6).items_start()
+      .when(Boolean(v.replyLabel), (el) => el.child(div().flex_none().pt(7).text_size(10.5).font_medium().text_color(t.accent).child(narrow ? "Note" : v.replyLabel)))
+      .child(Input.new(input).flex_1().min_w(0).h(28).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(11.5).text_color(t.foreground)));
 }
 
 export function childRow(t, e, v, cb) {
@@ -230,6 +234,7 @@ export const DEC_WIDTH = 640;
 const DEC_CAP = 640;
 const DEC_COLUMN = { needs: ["Needs you", "blocked"], ready: ["Ready to merge", "accent"] };
 const SETTLEABLE = ["done", "fail", "stop"];
+export const NOTE_LABEL = "Send back with a note";
 
 function checkWords(gh, verdict) {
   const ci = { pass: "CI passing", fail: "CI failing", pending: "CI running", none: "no CI" }[gh?.ci] ?? "CI not loaded";
@@ -256,9 +261,9 @@ const HUMAN_REVIEW = { APPROVED: "approved on GitHub", CHANGES_REQUESTED: "chang
 
 function checksOf(gh, verdict) {
   const loaded = (map, key, none) => map[key] ?? (gh ? [...UNKNOWN, none] : [...WAIT, "Not loaded yet"]);
-  const agent = verdict ? { pass: "agent review found nothing blocking", fail: `agent review ${verdict.label.replace(/^rev /, "")}`, unknown: "agent review unclear" }[verdict.state] : "no agent review yet";
+  const agent = verdict ? { pass: "agent review found nothing blocking", fail: `agent review ${verdict.label.replace(/^rev /, "")}`, unknown: "agent review unclear", loading: "checking the agent review" }[verdict.state] : "no agent review yet";
   const human = HUMAN_REVIEW[gh?.review] ?? "no GitHub verdict";
-  const reviewMark = verdict?.state === "fail" || gh?.review === "CHANGES_REQUESTED" ? BAD : verdict?.state === "pass" ? OK : UNKNOWN;
+  const reviewMark = verdict?.state === "fail" || gh?.review === "CHANGES_REQUESTED" ? BAD : verdict?.state === "pass" ? OK : verdict?.state === "loading" ? WAIT : UNKNOWN;
   return [
     ["CI", ...loaded(CI_CHECK, gh?.ci, "CI state not reported")],
     ["Merge state", ...loaded(MERGE_STATE, gh?.mergeState, "Merge state not reported")],
@@ -272,16 +277,22 @@ export function decisionOf(col, g, info, verdict, now) {
   const c = g.primary;
   const pr = info.status === "open" ? info.pr : null;
   const settle = g.threads.some((x) => SETTLEABLE.includes(x.kind));
+  const sendBack = col === "ready" && pr && verdict?.state === "fail";
   const other = [
     { id: "open", key: "o", label: "Open thread" },
-    ...(c.kind === "wait" && col === "needs" ? [] : [{ id: "reply", key: "r", label: "Reply" }]),
+    ...((c.kind === "wait" && col === "needs") || sendBack ? [] : [{ id: "reply", key: "r", label: "Reply" }]),
+    ...(col === "ready" ? [{ id: "note", key: "d", label: NOTE_LABEL }] : []),
     ...(settle ? [{ id: "settle", key: "s", label: "Settle" }] : []),
     ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }] : []),
   ];
   const age = ago(g.at, now);
   const checks = pr ? checksOf(info.gh, verdict) : null;
   if (col === "ready" && pr) {
-    return { headline: `Merge PR #${pr.number}`, primary: { id: "merge", key: "a", label: "Merge", armed: "Confirm merge" }, why: [g.task ? `${g.task} · ${g.title}` : g.title, checkWords(info.gh, verdict)], other, checks };
+    const title = g.task ? `${g.task} · ${g.title}` : g.title;
+    if (!verdict) return { headline: `Review PR #${pr.number}`, primary: { id: "review", key: "t", label: "Start review", armed: "Confirm review" }, why: [title, "No review yet, so this can't merge."], other, checks };
+    if (verdict.state === "loading") return { headline: `PR #${pr.number}`, primary: { id: "wait", key: "", label: "Checking review…" }, why: [title, checkWords(info.gh, verdict)], other, checks };
+    if (sendBack) return { headline: `Fix PR #${pr.number}`, primary: { id: "answer", key: "r", label: "Send back" }, why: [title, `Review failed: ${verdict.label.replace(/^rev /, "")}.`], other, checks };
+    return { headline: `Merge PR #${pr.number}`, primary: { id: "merge", key: "a", label: "Merge", armed: "Confirm merge" }, why: [title, checkWords(info.gh, verdict)], other, checks };
   }
   if (c.kind === "wait") {
     return { headline: `Answer ${name}'s question`, primary: { id: "answer", key: "r", label: "Reply" }, why: [c.context, `${g.project} · waiting ${age}`], other, checks };
@@ -338,18 +349,19 @@ function fileRows(t, files) {
 }
 
 function primaryButton(t, d, armed, outdated, run) {
-  const label = outdated ? (d.primary.id === "merge" ? "Re-check" : "Out of date, close") : armed ? d.primary.armed : d.primary.label;
+  const label = outdated ? (d.primary.id === "merge" || d.primary.id === "wait" ? "Re-check" : "Out of date, close") : armed ? d.primary.armed : d.primary.label;
   return h_flex().id("dec-primary").h(30).px(14).gap(8).items_center().flex_none().rounded(6)
     .bg(armed ? t.blocked : t.solid).text_color(armed ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
     .cursor_pointer().hover((s) => s.opacity(0.9)).on_click((e, cx) => e.click_count > 1 || run(cx))
+    .when(d.primary.id === "wait" && !outdated, (el) => el.opacity(0.5))
     .child(label)
-    .when(!outdated, (el) => el.child(div().text_size(10.5).font_medium().child(d.primary.key)));
+    .when(!outdated && Boolean(d.primary.key), (el) => el.child(div().text_size(10.5).font_medium().child(d.primary.key)));
 }
 
 export function decisionView(t, v, input, cb) {
   const { col, d, armed, armedKind, outdated, replying, outcome, files } = v;
   const [label, tone] = DEC_COLUMN[col];
-  const hint = outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`;
+  const hint = outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`;
   return v_flex().size_full().min_h(0)
     .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
@@ -362,7 +374,9 @@ export function decisionView(t, v, input, cb) {
         .child(h_flex().gap(10).items_center().child(primaryButton(t, d, armed, outdated, (cx) => cb.primary(cx))))
         .child(div().w_full().text_size(10.5).text_color(t.dim).child(hint))
         .when(Boolean(outcome), (el) => el.child(div().w_full().p(8).rounded(6).border_1().border_color(t.blocked).text_size(12).line_height("17px").text_color(t.foreground).child(outcome.text)))
-        .when(replying, (el) => el.child(div().w_full().h(30).child(Input.new(input).h(30).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))))
+        .when(replying, (el) => el.child(h_flex().w_full().h(30).gap(8).items_center()
+          .when(Boolean(v.replyLabel), (r) => r.child(div().flex_none().text_size(11).font_medium().text_color(t.accent).child(v.replyLabel)))
+          .child(Input.new(input).flex_1().min_w(0).h(30).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))))
         .child(h_flex().gap(6).items_center().flex_wrap()
           .child(div().text_size(10.5).text_color(t.dim).child("Other"))
           .children(d.other.map((x) => action(t, `dec-${x.id}`, x.key, x.id === "settle" && armedKind === "settle" ? "Confirm settle" : x.label, (cx) => cb.other(x.id, cx)))))
@@ -379,6 +393,7 @@ export const KEY_TABLE = [
   { keys: "a", group: "Card", label: "approve", all: "Approve the merge, press twice (Ready cards)", when: (c) => c.entry?.col === "ready" && c.entry.group.info?.status === "open" },
   { keys: "o", group: "Card", label: "thread", all: "Open the thread", when: (c) => c.entry },
   { keys: "r", group: "Card", label: "reply", all: "Reply to the thread", when: (c) => c.entry },
+  { keys: "d", group: "Card", label: "send back", all: "Send back with a note: reply to the thread (Ready cards; on Needs you cards it is a plain reply)", when: (c) => c.entry?.col === "ready" },
   { keys: "s", group: "Card", label: "settle", all: "Settle the card's finished threads", when: (c) => c.entry && settleable(c) },
   { keys: "p", group: "Card", label: "PR", all: "Open the pull request", when: (c) => c.entry?.group.info?.pr },
   { keys: "q", group: "Card", label: "queue", all: "Queue the task, press twice (Backlog cards)", when: (c) => c.entry?.col === "backlog" },
@@ -389,7 +404,7 @@ export const KEY_TABLE = [
   { keys: "→ ←", group: "Move", label: "threads", all: "Show or hide a task's other threads", when: (c) => c.entry?.group.threads.length > 1 },
   { keys: "S", group: "Board", label: "settle reviewed", all: "Settle every reviewed card, press twice (Done)", when: (c) => c.entry?.col === "done" && c.reviewed > 0 },
   { keys: "A", group: "Board", label: "settle all", all: "Settle every finished card, press twice (Done)", when: (c) => c.entry?.col === "done" && c.done > 0 },
-  { keys: "M", group: "Board", label: "approve all", all: "Approve every open PR, press twice (Ready)", when: (c) => c.entry?.col === "ready" && c.approvable > 0 },
+  { keys: "M", group: "Board", label: "approve all", all: "Approve every PR with a passing review, press twice (Ready)", when: (c) => c.entry?.col === "ready" && c.approvable > 0 },
   { keys: "f", group: "Board", label: "fold", all: "Fold or show this column", when: (c) => !c.pop && c.entry },
   { keys: "e", group: "Board", label: "pop-up", all: "Open this column in a pop-up", when: (c) => !c.pop && c.entry },
   { keys: "b", group: "Board", label: "backlog", all: "Fold or show Backlog", when: (c) => !c.pop },
