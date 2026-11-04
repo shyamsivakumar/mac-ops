@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .empryo import collect_empryo
 from .scrub import scrub_path
 from .store import (
     day_key,
@@ -48,7 +49,10 @@ TURN_USAGE_SUM_KEYS = (
 
 def open_db(path: Path | None = None) -> sqlite3.Connection:
     db = Path(path) if path else Path(os.environ.get("T3_STATE_DB", DEFAULT_DB))
-    uri = f"file:{db}?mode=ro"
+    # A retired WAL-mode database may have no sidecars and cannot open read-only
+    # without creating them. Immutable is safe only when no WAL exists.
+    immutable = not Path(str(db) + "-wal").exists()
+    uri = db.resolve().as_uri() + "?mode=ro" + ("&immutable=1" if immutable else "")
     conn = sqlite3.connect(uri, uri=True, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
@@ -296,6 +300,8 @@ def collect_runs(
     run_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build one scrubbed-ready trace dict per T3 run in the window."""
+    if db_path is None and not Path(os.environ.get("T3_STATE_DB", DEFAULT_DB)).is_file():
+        return []  # T3 has been retired on hosts without its database.
     since = since or (datetime.now(timezone.utc) - timedelta(days=1))
     until = until or datetime.now(timezone.utc)
     since_s = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -489,16 +495,22 @@ def collect_and_store(
     reconcile_unfinished: bool = True,
 ) -> dict[str, Any]:
     traces = collect_runs(since=since, until=until, db_path=db_path)
+    traces.extend(collect_empryo(since=since, until=until))
     refreshed = 0
     if reconcile_unfinished:
         unfinished = _unfinished_run_ids(state_root)
         # Avoid double-collecting runs already in this window.
         have = {t["run_id"] for t in traces}
         missing = [rid for rid in unfinished if rid not in have]
-        if missing:
-            extra = collect_runs(db_path=db_path, run_ids=missing)
-            traces.extend(extra)
-            refreshed = len(extra)
+        t3_missing = [rid for rid in missing if not rid.startswith("empryo-")]
+        empryo_missing = [rid for rid in missing if rid.startswith("empryo-")]
+        extra = []
+        if t3_missing:
+            extra.extend(collect_runs(db_path=db_path, run_ids=t3_missing))
+        if empryo_missing:
+            extra.extend(collect_empryo(run_ids=empryo_missing))
+        traces.extend(extra)
+        refreshed = len(extra)
     paths = []
     days: set[str] = set()
     for trace in traces:

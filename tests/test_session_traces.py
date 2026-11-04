@@ -9,6 +9,9 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
+
+from session_traces.empryo import collect_empryo
 
 from session_traces.__main__ import _parse_day
 from session_traces.collect import (
@@ -304,6 +307,95 @@ def _make_db(
         )
     conn.commit()
     conn.close()
+
+
+class EmpryoTests(unittest.TestCase):
+    def test_turns_order_privacy_and_reconciliation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "threads.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TABLE threads (id TEXT, session_dir TEXT)")
+                conn.execute("INSERT INTO threads VALUES (?, ?)", ("thread", str(root)))
+            (root / "meta.json").write_text(json.dumps({"id": "thread", "title": "private"}))
+            events = [
+                {"k": "assistant", "turnId": "turn", "ts": 4000, "status": "complete", "core": "secret"},
+                {"k": "tool-end", "turnId": "turn", "ts": 3500, "toolCallId": "call", "output": "secret"},
+                {"k": "tool-start", "turnId": "turn", "ts": 3000, "toolCallId": "call", "name": "shell", "args": "secret"},
+                {"k": "tool-start", "turnId": "turn", "ts": 3100, "toolCallId": "other", "name": "secret"},
+                {"k": "user", "turnId": "turn", "tabId": "tab", "ts": 2000, "core": "secret"},
+                {"k": "tab", "tabId": "tab", "ts": 1000, "patch": {"activeModel": "subscriptions/gpt-6.1-terra"}},
+            ]
+            (root / "session.jsonl").write_text("\n".join(map(json.dumps, events)) + "\n{broken")
+            with patch.dict("os.environ", {"EMPRYO_THREADS_DB": str(db)}):
+                traces = collect_empryo(since=datetime.fromtimestamp(0, timezone.utc), until=datetime.fromtimestamp(3, timezone.utc))
+                self.assertEqual(len(traces), 1)
+                trace = traces[0]
+                self.assertEqual(trace["duration_ms"], 2000)
+                self.assertEqual(trace["tool_calls"], [{"name": "shell", "type": "tool", "duration_ms": 500}, {"name": "other", "type": "tool"}])
+                self.assertEqual(trace["tool_call_count"], 2)
+                self.assertNotIn("secret", json.dumps(trace))
+                self.assertEqual(collect_empryo(run_ids=[trace["run_id"]]), traces)
+                self.assertEqual(collect_empryo(since=datetime.fromtimestamp(2, timezone.utc), until=datetime.fromtimestamp(2, timezone.utc)), [])
+
+
+    def test_terminal_statuses_and_evidence_privacy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = root / "threads.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TABLE threads (id TEXT, session_dir TEXT)")
+                conn.execute("INSERT INTO threads VALUES (?, ?)", ("thread", str(root)))
+            (root / ".git").mkdir()
+            (root / "meta.json").write_text(json.dumps({"id": "thread", "cwd": str(root), "title": "MO-124 private"}))
+            events = [
+                {"k": "tab", "tabId": "t", "ts": 1, "patch": {"activeModel": "proxy/new-model"}},
+                {"k": "user", "tabId": "t", "turnId": "a", "ts": 2},
+                {"k": "tool-start", "tabId": "t", "turnId": "a", "ts": 3, "toolCallId": "c", "name": "edit_file", "args": {"path": "../private-secret"}},
+                {"k": "tool-start", "tabId": "t", "turnId": "a", "ts": 4, "toolCallId": "p", "name": "run_tool", "args": {"name": "computer_preview"}},
+                {"k": "assistant", "tabId": "t", "turnId": "a", "ts": 5, "status": "error"},
+                {"k": "turn-stop", "tabId": "t", "turnId": "a", "ts": 5},
+                {"k": "user", "tabId": "t", "turnId": "b", "ts": 6},
+                {"k": "turn-stop", "tabId": "t", "turnId": "b", "ts": 7},
+                {"k": "user", "tabId": "t", "turnId": "c", "ts": 8},
+                {"k": "user", "tabId": "t", "turnId": "d", "ts": 9},
+            ]
+            (root / "session.jsonl").write_text("\n".join(map(json.dumps, events)))
+            with patch.dict("os.environ", {"EMPRYO_THREADS_DB": str(db)}):
+                traces = collect_empryo(since=datetime.fromtimestamp(0, timezone.utc), until=datetime.fromtimestamp(1, timezone.utc))
+            self.assertEqual([t["status"] for t in traces], ["failed", "interrupted", "interrupted", "unknown"])
+            self.assertEqual(traces[0]["final_state"], "failed")
+            self.assertEqual(traces[0]["provider"], "proxy")
+            self.assertEqual(traces[0]["task_key"], "MO-124")
+            self.assertIsNone(traces[0]["files_outside_worktree"])
+            self.assertEqual(traces[0]["preview_or_playwright"], ["preview"])
+            self.assertEqual(traces[0]["outcome_evidence"], "unknown")
+            self.assertNotIn("private", json.dumps(traces))
+
+    def test_session_cwd_does_not_establish_assigned_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            checkout = base / "checkout"
+            checkout.mkdir()
+            (checkout / ".git").mkdir()
+            worktree = base / ".worktrees" / "checkout" / "assigned"
+            worktree.mkdir(parents=True)
+            db = base / "threads.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TABLE threads (id TEXT, session_dir TEXT)")
+                conn.execute("INSERT INTO threads VALUES (?, ?)", ("thread", str(base)))
+            (base / "meta.json").write_text(json.dumps({"id": "thread", "cwd": str(checkout)}))
+            events = [
+                {"k": "user", "tabId": "t", "turnId": "a", "ts": 1},
+                {"k": "tool-start", "turnId": "a", "ts": 2, "toolCallId": "1", "name": "edit_file", "args": {"path": str(worktree / "file.py")}},
+                {"k": "tool-start", "turnId": "a", "ts": 3, "toolCallId": "2", "name": "edit_file", "args": {"path": "in-checkout.py"}},
+            ]
+            (base / "session.jsonl").write_text("\n".join(map(json.dumps, events)))
+            with patch.dict("os.environ", {"EMPRYO_THREADS_DB": str(db)}):
+                trace = collect_empryo(since=datetime.fromtimestamp(0, timezone.utc), until=datetime.fromtimestamp(1, timezone.utc))[0]
+            self.assertIsNone(trace["files_outside_worktree"])
+            self.assertNotIn("files_outside_worktree", score_trace(trace)["flags"])
+            self.assertEqual(trace["tool_call_count"], 2)
 
 
 class ScrubTests(unittest.TestCase):

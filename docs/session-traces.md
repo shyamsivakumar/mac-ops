@@ -1,8 +1,10 @@
 # Agent session traces and daily evals (MO-124)
 
-One scrubbed trace per T3 thread run on this Mac (Cursor, Codex, Claude,
-MiniMax, GLM, …). Source is read-only local data under `~/.t3` (primarily
-`userdata/statev2.sqlite`). Nothing writes to the T3 server.
+Collects local Empryo user turns and legacy T3 thread runs. Sources are read-only:
+`~/.empryo/threads.db` points to session directories containing `meta.json` and
+`session.jsonl`; T3 uses `~/.t3/userdata/statev2.sqlite` when present. An absent
+T3 database is treated as retired. `EMPRYO_THREADS_DB` overrides the Empryo
+index for isolated collection. Nothing writes to either source.
 
 Store: local files always; **PostHog** when a project API key is present
 (same free store SRW-619 picks — ask the coordinator before creating an
@@ -17,6 +19,22 @@ runs carry none), cost (always null: no local source has one), final state
 merge sha when present, CI `checksState`, review decision). Prompts, tool
 inputs/outputs, diffs, secrets, emails, and home-directory user segments are
 scrubbed or dropped.
+
+Empryo traces are keyed by a SHA-256 digest of `turnId` (thread IDs are also
+hashed), and ordered by journal timestamps in epoch milliseconds. Only user
+turns with usable timestamps and IDs are collected; missing, malformed, deleted,
+or unindexed session files cannot be recovered. Assistant `complete` and `error`
+mark completed and failed turns; turn-stop or a subsequent user turn on the same
+tab marks a running turn interrupted. Unfinished turns older than three days are
+unknown. Tool start/end pairs supply durations when both are present. Unknown tool
+names become `other`; model IDs are validated. Preview tool use is recorded.
+Empryo worktree assignment is not established by session cwd, so outside-worktree
+status is unknown, not an inference from cwd. Shell writes are not inspected.
+No journal prompts, tool arguments, outputs, titles, paths, or arbitrary metadata
+are persisted. Project IDs are unsalted hashes. Empryo does not provide reliable
+PR/CI proof, tokens, or cost here; completed turns have unknown outcome evidence
+and count as missing proof in evals, including regression counts. Collection is a
+best-effort snapshot; real journal formats have not been verified.
 
 ## Commands
 
