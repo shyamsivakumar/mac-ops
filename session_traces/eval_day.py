@@ -160,7 +160,7 @@ def score_trace(trace: dict[str, Any]) -> dict[str, Any]:
         "claimed_done_without_proof": claimed_without_proof,
         "missing_proof": missing_proof,
         "stopped_before_merge_while_green": stopped_green,
-        "files_outside_worktree_count": len(outside),
+        "files_outside_worktree_count": (len(outside) if trace.get("files_outside_worktree") is not None else None),
         "preview_or_playwright_count": len(preview),
         "pull_requests": trace.get("pull_requests") or [],
         "outcome_evidence": trace.get("outcome_evidence") or "known",

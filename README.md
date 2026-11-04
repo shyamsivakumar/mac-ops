@@ -241,7 +241,7 @@ durable-launcher publication paths.
 
 ## Agent session traces (MO-124)
 
-Read-only traces of every T3 build-session run on this Mac, scrubbed and stored
+Read-only traces of local Empryo turns and legacy T3 runs, scrubbed and stored
 under `~/.local/state/mac-ops/session-traces/`, with a daily eval table in
 `session-evals/`. Optional PostHog export uses the same free store as SRW-619
 when `POSTHOG_API_KEY` is set (ask the coordinator before creating a key). See
