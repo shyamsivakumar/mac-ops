@@ -7,8 +7,41 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
-from check import SCRIPT, age_reflog, command, commit, git
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts/worktree-cleaner/cleaner.py"
+
+
+def command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> str:
+    result = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise RuntimeError(f"fixture command failed: {Path(argv[0]).name} {argv[1] if len(argv) > 1 else ''}")
+    return result.stdout.strip()
+
+
+def git(repo: Path, *args: str) -> str:
+    return command(["git", "-C", str(repo), *args])
+
+
+def commit(repo: Path, name: str, content: str) -> str:
+    (repo / name).write_text(content, encoding="utf-8")
+    git(repo, "add", name)
+    command(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", name])
+    return git(repo, "rev-parse", "HEAD")
+
+
+def age_reflog(path: Path) -> None:
+    gitfile = path / ".git"
+    admin = Path(gitfile.read_text(encoding="utf-8").strip().split("gitdir: ", 1)[1])
+    log = admin / "logs/HEAD"
+    lines = log.read_text(encoding="utf-8").splitlines()
+    aged = []
+    for line in lines:
+        prefix, separator, message = line.partition("\t")
+        fields = prefix.split()
+        fields[-2] = str(int(time.time()) - 25 * 60 * 60)
+        aged.append(" ".join(fields) + (separator + message if separator else ""))
+    log.write_text("\n".join(aged) + "\n", encoding="utf-8")
 
 
 def thread(thread_id: str, path: Path, *, status: str = "running", settled: bool = False, cwd_only: bool = False) -> dict:
