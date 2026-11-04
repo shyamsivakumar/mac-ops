@@ -329,43 +329,6 @@ export function status(t, info, view, at, width, error) {
 }
 
 const CHIP_CLIP = 24;
-const ASKS_MAX_HEIGHT = 260;
-const ASK_TEXT_WIDTH = 700;
-const ASK_CHAR = 6.2;
-const OPTION_CHAR = 5.8;
-const OPTION_PAD = 18;
-const ASK_CHROME = 38;
-const ASK_LINE = 15;
-const ASK_CONTROL = 20;
-const ASK_GAP = 5;
-const ASK_REPLY = 80;
-export const ASKS_HEAD = 34 + 34 + 16;
-
-function optionLines(options) {
-  let lines = 0;
-  let used = 0;
-  for (const o of options) {
-    const w = Math.min(o.length * OPTION_CHAR + OPTION_PAD, ASK_TEXT_WIDTH);
-    if (used && used + w + 4 > ASK_TEXT_WIDTH) {
-      lines++;
-      used = 0;
-    }
-    used += w + 4;
-    lines += Math.ceil((o.length * OPTION_CHAR) / (ASK_TEXT_WIDTH - OPTION_PAD)) - 1;
-  }
-  return used ? lines + 1 : lines;
-}
-
-function askHeight(a) {
-  const question = Math.ceil(a.text.length * ASK_CHAR / ASK_TEXT_WIDTH) * ASK_LINE;
-  const recommended = a.recommended ? Math.ceil(recommendedLine(a.recommended).length * OPTION_CHAR / ASK_TEXT_WIDTH) * ASK_LINE + ASK_GAP : 0;
-  const choices = a.options.length ? optionLines(a.options) * (ASK_CONTROL + 4) - 4 + ASK_GAP : 0;
-  const suggestion = a.recommended?.kind === "text" ? Math.max(0, Math.ceil(a.recommended.text.length * OPTION_CHAR / (ASK_TEXT_WIDTH - OPTION_PAD - ASK_REPLY)) - 1) * ASK_LINE : 0;
-  return ASK_CHROME + question + recommended + choices + suggestion + ASK_GAP + ASK_CONTROL;
-}
-
-export const asksHeight = (list) => list.reduce((sum, a) => sum + askHeight(a), 0);
-
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const recommendedLine = (rec) => `Recommended: ${rec.answer}${rec.reason ? ` · ${rec.reason}` : ""}`;
 const sendLabel = (k) => (k === 0 ? "Send" : `Send ${k} ${k === 1 ? "answer" : "answers"}`);
@@ -397,58 +360,6 @@ function acceptButton(t, onClick) {
     .cursor_pointer().hover((s) => s.bg(t.selected)).on_click(onClick).child("Accept recommended");
 }
 
-function segment(t, id, label, selected, recommended, onClick) {
-  return div().id(id).h(20).px(10).flex().items_center().text_size(10.5).font_medium()
-    .bg(selected ? t.accent : t.raised).text_color(selected ? t.background : recommended ? t.accent : t.foreground)
-    .cursor_pointer().hover((s) => s.opacity(0.85)).on_click(onClick).child(recommended ? `★ ${label}` : label);
-}
-
-function option(t, id, label, selected, recommended, onClick) {
-  return div().id(id).max_w_full().min_w(0).min_h(20).px(8).py(2).flex().items_center().rounded(4).border_1().border_color(selected || recommended ? t.accent : t.input)
-    .bg(selected ? t.accent : t.raised).text_size(10.5).font_medium().text_color(selected ? t.background : recommended ? t.accent : t.foreground)
-    .cursor_pointer().hover((s) => s.opacity(0.85)).on_click(onClick).child(div().min_w(0).child(recommended ? `★ ${label}` : label));
-}
-
-function ask(t, { text: q, options, recommended: rec }, i, view, cb) {
-  const draft = view.drafts.get(q);
-  const open = view.editing.has(q);
-  const tone = draft ? t.done : t.blocked;
-  const choice = (kind) => segment(t, `ask-${i}-${kind}`, kind === "yes" ? "Yes" : "No", draft?.kind === kind, rec?.kind === kind, (_e, cx) => cb.choose(q, kind, kind, cx));
-  const suggestion = rec?.kind === "text"
-    ? option(t, `ask-${i}-s`, rec.text, draft?.kind === "reply" && draft.text === rec.text, true, (_e, cx) => cb.choose(q, "reply", rec.text, cx))
-    : null;
-  const choices = options.length
-    ? h_flex().flex_wrap().gap(4).children(options.map((o, j) => option(t, `ask-${i}-o${j}`, o, draft?.kind === "option" && draft.text === o, rec?.kind === "option" && rec.text === o, (_e, cx) => cb.choose(q, "option", o, cx))))
-    : h_flex().h(20).flex_none().rounded(4).border_1().border_color(t.input).overflow_hidden()
-      .child(choice("yes"))
-      .child(div().w(1).h(20).bg(t.input))
-      .child(choice("no"));
-  const replyButton = h_flex().id(`ask-${i}-r`).h(20).px(8).flex_none().items_center().rounded(4).border_1().border_color(draft?.kind === "reply" || open ? t.accent : t.input)
-    .bg(draft?.kind === "reply" || open ? t.accent + "22" : t.raised).text_size(10.5).font_medium().text_color(t.foreground)
-    .cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => cb.reply(q, cx)).child("Reply…");
-  const shown = draft?.kind === "reply" && !open
-    ? div().id(`ask-${i}-shown`).flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).cursor_pointer().on_click((_e, cx) => cb.reply(q, cx)).child(`✓ ${draft.text}`)
-    : draft && draft.kind !== "reply"
-      ? div().flex_1().min_w(0).truncate().text_size(10.5).font_medium().text_color(t.done).child(`✓ ${draft.text}`)
-      : div().flex_1();
-  return h_flex().flex_none().rounded(6).overflow_hidden().bg(t.surface).border_1().border_color(t.border)
-    .child(div().w(3).flex_none().bg(tone))
-    .child(v_flex().flex_1().min_w(0).px(8).py(6).gap(5)
-      .child(h_flex().gap(6).items_start()
-        .child(div().flex_none().text_size(11).font_semibold().text_color(tone).child(`${i + 1}`))
-        .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.foreground).child(q)))
-      .when(rec, (el) => el.child(div().w_full().text_size(10.5).text_color(t.muted).child(recommendedLine(rec))))
-      .when(options.length > 0, (el) => el.child(choices))
-      .child(h_flex().gap(6).items_center()
-        .when(options.length === 0, (el) => el.child(choices))
-        .when(suggestion, (el) => el.child(suggestion))
-        .child(replyButton)
-        .child(shown))
-      .when(open, (el) => el.child(v_flex().rounded(6).border_1().border_color(t.accent).bg(t.background)
-        .child(Textarea.new(view.editor(q)).w_full().px(8).py(4).text_size(11.5).text_color(t.foreground))
-        .child(div().px(8).pb(4).text_size(10).text_color(t.dim).child("⏎ save · ⇧⏎ newline")))));
-}
-
 export function askRow(t, list, answered, cb) {
   return h_flex().id("ask-row").h(30).px(10).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
     .cursor_pointer().hover((s) => s.bg(t.selected)).tooltip("Open the questions").on_click(() => cb.openAsks())
@@ -457,24 +368,87 @@ export function askRow(t, list, answered, cb) {
     .child(div().flex_none().text_size(10).text_color(t.muted).child(`${answered} of ${list.length} answered`));
 }
 
-export function popupBar(t, count, cb) {
+export function popupBar(t, title, cb) {
   return h_flex().h(34).px(12).flex_none().items_center().border_b(1).border_color(t.border)
-    .child(div().flex_1().text_size(12).font_semibold().text_color(t.foreground).child(count ? "Coordinator questions" : "No open questions"))
+    .child(div().flex_1().text_size(12).font_semibold().text_color(t.foreground).child(title))
     .child(div().id("ask-pop-close").size(22).flex().items_center().justify_center().rounded(4).text_size(12).text_color(t.dim)
       .cursor_pointer().hover((s) => s.bg(t.selected)).on_click(() => cb.close()).child("✕"));
 }
 
-export function asks(t, list, view, cb, room = ASKS_MAX_HEIGHT) {
+export function choicesOf(a) {
+  const rec = a.recommended;
+  const base = a.options.length
+    ? a.options.map((text) => ({ kind: "option", text, label: text, rec: rec?.kind === "option" && rec.text === text }))
+    : [{ kind: "yes", text: "yes", label: "Yes", rec: rec?.kind === "yes" }, { kind: "no", text: "no", label: "No", rec: rec?.kind === "no" }];
+  return rec?.kind === "text" ? [...base, { kind: "reply", text: rec.text, label: rec.text, rec: true }] : base;
+}
+
+export const answerText = (draft) => (draft.kind === "reply" ? draft.text : draft.kind === "yes" || draft.kind === "no" ? draft.kind[0].toUpperCase() + draft.kind.slice(1) : draft.text);
+
+function choiceRow(t, id, n, c, selected, onClick) {
+  return h_flex().id(id).w_full().min_h(30).px(10).py(6).gap(10).items_start().rounded(6).border_1()
+    .border_color(selected ? t.accent : c.rec ? t.accent + "88" : t.input).bg(selected ? t.accent : t.raised)
+    .cursor_pointer().hover((s) => s.opacity(0.9)).on_click(onClick)
+    .child(div().w(14).flex_none().text_size(11).font_semibold().text_color(selected ? t.background : t.dim).child(String(n)))
+    .child(div().flex_1().min_w(0).text_size(12).line_height("17px").font_medium().text_color(selected ? t.background : t.foreground).child(c.label))
+    .when(c.rec, (el) => el.child(div().flex_none().text_size(10).font_medium().text_color(selected ? t.background : t.accent).child("★ recommended")));
+}
+
+function questionBody(t, a, i, view, cb) {
+  const draft = view.drafts.get(a.text);
+  const open = view.editing.has(a.text);
+  const choices = choicesOf(a);
+  const replyOn = draft?.kind === "reply" && !choices.some((c) => c.kind === "reply" && c.text === draft.text);
+  return v_flex().w_full().px(16).py(14).gap(10)
+    .child(div().w_full().text_size(14).line_height("20px").font_medium().text_color(t.foreground).child(a.text))
+    .when(Boolean(a.recommended), (el) => el.child(div().w_full().text_size(11.5).line_height("16px").text_color(t.muted).child(recommendedLine(a.recommended))))
+    .child(v_flex().w_full().gap(6).children(choices.map((c, j) => choiceRow(t, `ask-${i}-c${j}`, j + 1, c, draft?.kind === c.kind && draft.text === c.text, (_e, cx) => cb.pick(a.text, c, cx)))))
+    .child(h_flex().w_full().gap(8).items_start()
+      .child(h_flex().id(`ask-${i}-r`).h(24).px(10).flex_none().items_center().gap(6).rounded(5).border_1().border_color(replyOn || open ? t.accent : t.input)
+        .bg(replyOn || open ? t.accent + "22" : t.raised).text_size(11).font_medium().text_color(t.foreground)
+        .cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => cb.reply(a.text, cx))
+        .child(div().text_size(10).text_color(t.dim).child("r")).child("Reply…"))
+      .when(replyOn && !open, (el) => el.child(div().flex_1().min_w(0).pt(3).text_size(11.5).line_height("17px").text_color(t.done).child(`✓ ${draft.text}`))))
+    .when(open, (el) => el.child(v_flex().w_full().rounded(6).border_1().border_color(t.accent).bg(t.background)
+      .child(Textarea.new(view.editor(a.text)).w_full().px(8).py(4).text_size(12).text_color(t.foreground))
+      .child(div().px(8).pb(4).text_size(10).text_color(t.dim).child("⏎ save · ⇧⏎ newline"))));
+}
+
+function reviewBody(t, list, view, cb) {
+  return v_flex().w_full().px(16).py(14).gap(8)
+    .when(view.changed, (el) => el.child(div().w_full().text_size(11.5).line_height("16px").text_color(t.blocked).child("The questions changed while you were reviewing. Read the list again before sending.")))
+    .children(list.map((a, i) => {
+      const draft = view.drafts.get(a.text);
+      return h_flex().id(`review-${i}`).w_full().px(10).py(8).gap(10).items_start().rounded(6).border_1().border_color(draft ? t.border : t.blocked + "66").bg(t.surface)
+        .cursor_pointer().hover((s) => s.bg(t.raised)).on_click((_e, cx) => cb.go(i, cx))
+        .child(div().w(14).flex_none().text_size(11).font_semibold().text_color(draft ? t.done : t.blocked).child(String(i + 1)))
+        .child(v_flex().flex_1().min_w(0).gap(3)
+          .child(div().w_full().text_size(11.5).line_height("16px").text_color(t.muted).child(a.text))
+          .child(div().w_full().text_size(12.5).line_height("17px").font_medium().text_color(draft ? t.foreground : t.dim).child(draft ? answerText(draft) : "No answer, nothing will be sent for this one")));
+    }));
+}
+
+function footerKey(t, key, label, id, onClick) {
+  return h_flex().id(id).h(22).px(8).gap(5).items_center().flex_none().rounded(4).border_1().border_color(t.input).bg(t.raised)
+    .text_size(10.5).font_medium().text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.selected)).on_click(onClick)
+    .child(div().text_size(9.5).text_color(t.dim).child(key)).child(label);
+}
+
+export function questionPop(t, list, view, cb) {
+  const review = view.step >= list.length;
   const k = view.answers.length;
-  const ready = k > 0 && !view.sending;
   const acceptable = list.some((a) => a.recommended && !view.drafts.has(a.text));
-  return v_flex().flex_none().px(10).py(8).gap(8)
-    .child(h_flex().h(22).gap(8).items_center()
-      .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(`${k} of ${list.length} answered`))
+  const ready = k > 0 && !view.sending;
+  return v_flex().size_full().min_h(0)
+    .child(popupBar(t, review ? "Review your answers" : `Question ${view.step + 1} of ${list.length}`, cb))
+    .child(v_flex().id("ask-body").flex_1().min_h(0).overflow_y_scrollbar().mode("always")
+      .child(review ? reviewBody(t, list, view, cb) : questionBody(t, list[view.step], view.step, view, cb)))
+    .child(h_flex().h(40).px(12).gap(6).flex_none().items_center().border_t(1).border_color(t.border)
+      .child(div().flex_1().min_w(0).text_size(10.5).text_color(t.muted).child(`${k} of ${list.length} answered`))
+      .when(view.step > 0, (el) => el.child(footerKey(t, "k", "Back", "ask-back", (_e, cx) => cb.back(cx))))
+      .when(!review, (el) => el.child(footerKey(t, "→", "Skip", "ask-skip", (_e, cx) => cb.skip(cx))))
       .when(acceptable, (el) => el.child(acceptButton(t, (_e, cx) => cb.accept(cx))))
-      .child(sendButton(t, "ask-send", k ? sendLabel(k) : "Send answers", ready, false, (_e, cx) => cb.send(cx))))
-    .child(v_flex().id("ask-list").w_full().h(Math.min(asksHeight(list), room)).overflow_y_scrollbar().mode("always")
-      .children(list.map((a, i) => div().w_full().flex_none().pb(4).child(ask(t, a, i, view, cb)))));
+      .when(review, (el) => el.child(sendButton(t, "ask-send", k ? `${sendLabel(k)} (s)` : "Send answers (s)", ready, false, (_e, cx) => cb.send(cx)))));
 }
 
 function answerChip(t, a, cb) {

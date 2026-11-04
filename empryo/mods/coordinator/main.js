@@ -2,7 +2,7 @@ import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
 import { loadOlder, readTranscript } from "./transcript.js";
-import { ASKS_HEAD, askRow, asks, asksHeight, clampFrom, composer, conversation, holdFrom, popupBar, status, taskStrip } from "./ui.js";
+import { askRow, choicesOf, clampFrom, composer, conversation, holdFrom, popupBar, questionPop, status, taskStrip } from "./ui.js";
 
 const SHOW_POLL = 50;
 const SHOW_LIMIT = 8000;
@@ -46,9 +46,9 @@ const MIN_ROWS = 2;
 const MAX_ROWS = 8;
 const QUESTION_CLIP = 70;
 const PAGE = 10;
-const POP_WIDTH = 760;
+const CALM = 400;
+const POP_WIDTH = 640;
 const POP_HEIGHT = 560;
-const POP_LIST = POP_HEIGHT - 120;
 
 export default class Coordinator extends View {
   init(_props, cx) {
@@ -64,7 +64,19 @@ export default class Coordinator extends View {
     this.fromBottom = 0;
     this.prepended = false;
     this.heights = new Map();
-    if (this.pop) return;
+    if (this.pop) {
+      this.handle = cx.focus_handle();
+      this.inEditor = false;
+      this.onReview = false;
+      this.stepQ = null;
+      this.reviewSig = "";
+      this.calmUntil = 0;
+      this.changed = false;
+      this.firstOpen();
+      const typed = this.asks().find((a) => this.editing.has(a.text));
+      cx.timer.after(60, () => (typed ? this.editor(typed.text) : this.handle).focus());
+      return;
+    }
     this.input = TextareaState.new({ placeholder: "Message the Coordinator, or answer above", rows: MIN_ROWS });
     this.input.set_auto_grow(MIN_ROWS, MAX_ROWS);
     this.input.on("submit", (e, cx) => !e?.shift && this.send(cx));
@@ -101,10 +113,8 @@ export default class Coordinator extends View {
   }
 
   openAsks() {
-    const list = this.asks();
-    if (!list.length) return;
-    const height = Math.min(POP_HEIGHT, ASKS_HEAD + Math.min(asksHeight(list), POP_LIST));
-    openOverlay({ mod: "coordinator", kind: "dialog", width: POP_WIDTH, height, props: { pop: "asks" } });
+    if (!this.asks().length) return;
+    openOverlay({ mod: "coordinator", kind: "dialog", width: POP_WIDTH, height: POP_HEIGHT, props: { pop: "asks" } });
   }
 
   async close() {
@@ -210,6 +220,8 @@ export default class Coordinator extends View {
       const state = TextareaState.new({ placeholder: "Your reply", rows: 1 });
       state.set_auto_grow(1, 4);
       state.on("submit", (e, cx) => !e?.shift && this.commit(q, cx));
+      state.on("focus", () => (this.inEditor = true));
+      state.on("blur", () => (this.inEditor = false));
       state.on("change", (_e, cx) => {
         this.typingTimers.get(q)?.cancel();
         this.typingTimers.set(q, cx.timer.after(TYPING_SAVE, () => this.keepTyping(q, state.value())));
@@ -222,16 +234,108 @@ export default class Coordinator extends View {
     return this.editors.get(q);
   }
 
-  choose(q, kind, text, cx) {
+  sigOf(list) {
+    return list.map((a) => a.text).join("\n");
+  }
+
+  indexOf(list) {
+    return this.onReview ? list.length : list.findIndex((a) => a.text === this.stepQ);
+  }
+
+  toReview(list) {
+    this.onReview = true;
+    this.stepQ = null;
+    this.changed = false;
+    this.reviewSig = this.sigOf(list);
+    this.calmUntil = Date.now() + CALM;
+  }
+
+  firstOpen() {
+    const list = this.asks();
     const drafts = this.drafts();
-    const current = drafts.get(q);
-    if (current?.kind === kind && current.text === text) drafts.delete(q);
-    else drafts.set(q, { kind, text });
+    const target = list.find((a) => this.editing.has(a.text)) ?? list.find((a) => !drafts.has(a.text));
+    if (target) this.stepQ = target.text;
+    else this.toReview(list);
+  }
+
+  sync(list) {
+    if (this.onReview) {
+      if (this.reviewSig === this.sigOf(list)) return;
+      this.reviewSig = this.sigOf(list);
+      this.changed = true;
+      this.calmUntil = Date.now() + CALM;
+    } else if (!list.some((a) => a.text === this.stepQ)) {
+      const drafts = this.drafts();
+      this.stepQ = (list.find((a) => !drafts.has(a.text)) ?? list[0])?.text ?? null;
+      this.calmUntil = Date.now() + CALM;
+    }
+  }
+
+  stepTo(step, cx) {
+    const list = this.asks();
+    if (step >= list.length) this.toReview(list);
+    else {
+      this.onReview = false;
+      this.stepQ = list[Math.max(0, step)].text;
+    }
+    this.inEditor = false;
+    this.handle.focus();
+    cx.notify();
+  }
+
+  pick(q, choice, cx) {
+    const list = this.asks();
+    const at = list.findIndex((a) => a.text === q);
+    if (at < 0) return;
+    const drafts = this.drafts();
+    const same = drafts.get(q)?.kind === choice.kind && drafts.get(q).text === choice.text;
+    if (same) drafts.delete(q);
+    else drafts.set(q, { kind: choice.kind, text: choice.text });
     this.setDrafts(drafts);
     this.keepTyping(q, "");
     this.editing.delete(q);
     this.editors.get(q)?.set_value("");
-    cx.notify();
+    this.stepTo(same ? at : at + 1, cx);
+  }
+
+  take(a, cx) {
+    const at = this.asks().findIndex((x) => x.text === a.text);
+    if (this.drafts().has(a.text)) return this.stepTo(at + 1, cx);
+    const choice = choicesOf(a).find((c) => c.rec);
+    if (choice) this.pick(a.text, choice, cx);
+  }
+
+  sendReview(cx) {
+    const list = this.asks();
+    this.sync(list);
+    if (!this.onReview || Date.now() < this.calmUntil) return;
+    this.send(cx);
+  }
+
+  askKey(e, cx) {
+    const m = e.modifiers;
+    if (e.is_held || this.inEditor || m.platform || m.control || m.alt) return;
+    const list = this.asks();
+    this.sync(list);
+    if (Date.now() < this.calmUntil) return;
+    const review = this.onReview;
+    const at = this.indexOf(list);
+    const a = list[at];
+    if (!review && !a) return;
+    const k = e.key;
+    const n = /^[1-9]$/.test(k) ? Number(k) - 1 : -1;
+    if (k === "enter") {
+      if (review) return;
+      this.take(a, cx);
+    } else if (k === "s" && review) this.sendReview(cx);
+    else if (k === "k" || k === "left" || k === "up") this.stepTo(at - 1, cx);
+    else if (!review && (k === "j" || k === "right" || k === "down")) this.stepTo(at + 1, cx);
+    else if (k === "a") this.accept(cx);
+    else if (k === "r" && !review) this.reply(a.text, cx);
+    else if (review && n >= 0 && n < list.length) this.stepTo(n, cx);
+    else if (!review && n >= 0 && n < choicesOf(a).length) this.pick(a.text, choicesOf(a)[n], cx);
+    else return;
+    cx.stop_propagation();
   }
 
   reply(q, cx) {
@@ -251,7 +355,8 @@ export default class Coordinator extends View {
     this.setDrafts(drafts);
     this.keepTyping(q, "");
     this.editing.delete(q);
-    cx.notify();
+    const at = this.asks().findIndex((a) => a.text === q);
+    this.stepTo(text ? at + 1 : at, cx);
   }
 
   accept(cx) {
@@ -261,7 +366,7 @@ export default class Coordinator extends View {
       drafts.set(q, { kind: recommended.kind === "text" ? "reply" : recommended.kind, text: recommended.text });
     }
     this.setDrafts(drafts);
-    cx.notify();
+    this.stepTo(this.asks().length, cx);
   }
 
   clear(q, cx) {
@@ -359,12 +464,15 @@ export default class Coordinator extends View {
         cx.notify();
       },
       older: (cx) => this.older(cx),
-      choose: (q, kind, text, cx) => this.choose(q, kind, text, cx),
+      pick: (q, choice, cx) => this.pick(q, choice, cx),
+      go: (i, cx) => this.stepTo(i, cx),
+      back: (cx) => this.stepTo(this.indexOf(this.asks()) - 1, cx),
+      skip: (cx) => this.stepTo(this.indexOf(this.asks()) + 1, cx),
       reply: (q, cx) => this.reply(q, cx),
       commit: (q, cx) => this.commit(q, cx),
       clear: (q, cx) => this.clear(q, cx),
       accept: (cx) => this.accept(cx),
-      send: (cx) => this.send(cx),
+      send: (cx) => (this.pop ? this.sendReview(cx) : this.send(cx)),
       openAsks: () => this.openAsks(),
       close: () => closeOverlay(props()?.overlay),
       opening: this.opening,
@@ -405,11 +513,12 @@ export default class Coordinator extends View {
       },
     };
     const list = this.asks();
-    const form = { answers, drafts, editing: this.editing, editor: (q) => this.editor(q), sending: this.sent === "sending" };
     if (this.pop) {
-      return v_flex().id("co-pop").size_full().bg(t.chrome)
-        .child(popupBar(t, list.length, cb))
-        .when(list.length, (el) => el.child(asks(t, list, form, cb, POP_LIST)));
+      this.sync(list);
+      const form = { answers, drafts, editing: this.editing, editor: (q) => this.editor(q), sending: this.sent === "sending", step: Math.max(0, this.indexOf(list)), changed: this.changed };
+      return v_flex().id("co-pop").size_full().bg(t.chrome).track_focus(this.handle)
+        .on_key_down((e, cx) => this.askKey(e, cx))
+        .child(list.length ? questionPop(t, list, form, cb) : popupBar(t, "No open questions", cb));
     }
     const strip = taskStrip(t, this.view, cb, this.box.width);
     return v_flex().id("co-root").size_full().min_h(0).bg(t.chrome)
