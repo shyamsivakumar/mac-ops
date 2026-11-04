@@ -3,7 +3,7 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { exec, home, notify, shared, theme } from "herdr";
+import { appHome, exec, home, notify, openOverlay, shared, theme } from "herdr";
 import { readFile } from "fs/promises";
 
 const SRW_HEALTH = "https://srw-telegram-paper-production.up.railway.app/health";
@@ -24,6 +24,11 @@ const HUB_CAP = 6;
 const HEALTH_FILE = `${home()}/Code/coordinator/queue/health.json`;
 const HEALTH_STALE_MS = 300000;
 const POLL_LIMIT = 60000;
+const WT_DIR = `${home()}/.local/state/herdr-worktrees`;
+const WT_SCAN = `${appHome()}/mods/worktrees/scan.sh`;
+const WT_EVERY = 600000;
+const WT_HANG = 660000;
+const WT_MAX_LOAD = 10;
 
 const sunday = (year, month, nth) => 1 + ((7 - new Date(Date.UTC(year, month, 1)).getUTCDay()) % 7) + 7 * (nth - 1);
 
@@ -54,6 +59,7 @@ export default class Ops extends View {
     this.m1 = null;
     this.hub = null;
     this.health = null;
+    this.wt = undefined;
     this.load = null;
     this.at = {};
     this.busy = new Set();
@@ -86,6 +92,37 @@ export default class Ops extends View {
     });
   }
 
+  async readWorktrees() {
+    try {
+      const file = (name) => readFile(`${WT_DIR}/${name}`, "utf8").then(JSON.parse, () => null);
+      const status = await file("status.json");
+      const now = Date.now();
+      if (status?.state === "running" && now - status.at * 1000 <= WT_HANG) return { ...this.wt, scanning: true };
+      const due = now - Math.max((status?.finished ?? 0) * 1000, this.wtTried ?? 0) >= WT_EVERY;
+      if (due && this.load !== null && this.load < WT_MAX_LOAD) {
+        this.wtTried = now;
+        const r = await exec("sh", [WT_SCAN, "scan"]);
+        return r.code === 0 && r.stdout.trim() === "started" ? { ...this.wt, scanning: true } : null;
+      }
+      if (status?.state !== "done") return due ? this.wt : null;
+      if (this.wt?.finished === status.finished) return this.wt;
+      const last = await file("last.json");
+      const c = last?.categories;
+      if (!c) return null;
+      const managed = c.safe + c.prune + c.look + c.protected;
+      return { finished: status.finished, stale: c.safe + c.prune, look: c.look, managed, excluded: last.excluded_worktrees ?? 0, rows: managed + (last.excluded_worktrees ?? 0) };
+    } catch {
+      return null;
+    }
+  }
+
+  openWorktrees(cx) {
+    if (this.wtOpening) return;
+    this.wtOpening = true;
+    cx.timer.after(800, () => (this.wtOpening = false));
+    openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
+  }
+
   tick(cx) {
     this.clock = Date.now();
     this.poll(cx, "srw", market(this.clock).open ? 30000 : 300000, () => fetch(SRW_HEALTH).then((r) => r.json(), () => null));
@@ -110,6 +147,7 @@ export default class Ops extends View {
         };
       });
     }
+    this.poll(cx, "wt", this.wt?.scanning ? 4000 : 30000, () => this.readWorktrees());
     this.poll(cx, "health", 30000, () => readFile(HEALTH_FILE, "utf8").then(JSON.parse, () => null));
     this.poll(cx, "m1", 20000, async () => {
       const r = await exec("sh", ["-c", M1_PROBE], { on: "m1" }).catch(() => null);
@@ -165,6 +203,14 @@ export default class Ops extends View {
       .child(div().size(6).rounded(3).bg(healthColor))
       .child(div().text_color(issues.length ? healthColor : t.foreground).font_medium().child(issues[0] ?? "health"));
 
+    const w = this.wt;
+    const wtText = w === undefined ? "…" : !w ? "couldn't scan" : w.managed === undefined ? "scanning…" : `· ${w.stale} stale`;
+    const wtEl = h_flex().id("worktrees").gap(5).items_center().flex_none().cursor_pointer()
+      .on_click((e, cx) => e.click_count > 1 || this.openWorktrees(cx))
+      .tooltip(w?.managed === undefined ? "Linked Git worktrees. Click to review and clean them." : `${w.managed} managed by the cleaner · ${w.stale} safe to clean or prune · ${w.look} need a look · ${w.excluded} more in excluded SRW, dbt and omni repos, not checked for removal. Click to review.`)
+      .child(div().text_color(t.dim).child("Worktrees"))
+      .child(div().text_color(!w ? t.dim : w.stale ? t.working : t.muted).font_medium().child(wtText));
+
     const roomy = this.width >= 1280;
     const tight = this.width >= 980;
     return h_flex().size_full().px(10).gap(roomy ? 12 : 9).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11).overflow_hidden()
@@ -179,6 +225,7 @@ export default class Ops extends View {
       .child(item(srwColor, "SRW", srwDetail, srwTip))
       .when(this.load !== null && roomy, (el) => el.child(plain("M4", `load ${this.load.toFixed(2)}`, t.muted, "load average, 1 minute")))
       .when(tight, (el) => el.child(plain("heavy", h ? ([running && `${running} run`, paused && `${paused} paused`, queued && `${queued} queued`].filter(Boolean).join(" · ") || "idle") : "n/a", heavyColor, "mac-ops heavy status")))
+      .when(tight, (el) => el.child(wtEl))
       .child(plain("M1 CI", ci ? (busy ? `${busy} busy` : "idle") : "n/a", busy ? t.working : t.muted, ci ? `${ci.native} native · ${ci.docker} docker · load ${ci.load}` : "M1 not reachable"))
       .child(div().flex_1());
   }

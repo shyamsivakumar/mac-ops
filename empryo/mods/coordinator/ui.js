@@ -361,11 +361,16 @@ function acceptButton(t, onClick) {
 }
 
 export function askRow(t, list, answered, cb) {
-  return h_flex().id("ask-row").h(30).px(10).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
+  const first = list[0];
+  const detail = [first.options.length ? `${first.options.length} options` : "", first.recommended ? recommendedLine(first.recommended) : ""].filter(Boolean).join(" · ");
+  return h_flex().id("ask-row").min_h(30).px(10).py(6).gap(8).flex_none().items_start().border_b(1).border_color(t.border)
     .cursor_pointer().hover((s) => s.bg(t.selected)).tooltip("Open the questions").on_click(() => cb.openAsks())
-    .child(div().flex_none().text_size(10).font_semibold().text_color(t.blocked).child(`Needs you · ${list.length}`))
-    .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(list[0].text))
-    .child(div().flex_none().text_size(10).text_color(t.muted).child(`${answered} of ${list.length} answered`));
+    .child(div().flex_none().pt(2).text_size(10).font_semibold().text_color(t.blocked).child(`Needs you · ${list.length}`))
+    .child(v_flex().id("ask-text").flex_1().min_w(0).max_h(96).overflow_y_scrollbar().gap(2)
+      .child(div().w_full().text_size(11).line_height("16px").text_color(t.muted).child(first.text))
+      .when(Boolean(detail), (el) => el.child(div().w_full().text_size(10.5).line_height("15px").text_color(t.dim).child(detail)))
+      .when(list.length > 1, (el) => el.child(div().text_size(10.5).text_color(t.dim).child(`+${list.length - 1} more`))))
+    .child(div().flex_none().pt(2).text_size(10).text_color(t.muted).child(`${answered} of ${list.length} answered`));
 }
 
 export function popupBar(t, title, cb) {
