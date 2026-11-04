@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import math
 import re
+from datetime import datetime
 from typing import Any
 
 # Field names whose values are dropped entirely (case-insensitive).
@@ -115,6 +118,8 @@ def _drop_field(field: str) -> bool:
 
 
 def scrub_value(value: Any, *, field: str | None = None) -> Any:
+    if field and field.lower().replace("-", "_") in {"model", "model_id", "modelid", "activemodel", "active_model"}:
+        return safe_model_id(value)
     if field and _drop_field(field):
         return "[DROPPED]"
     if isinstance(value, dict):
@@ -133,3 +138,130 @@ def scrub_value(value: Any, *, field: str | None = None) -> Any:
 def scrub_trace(trace: dict[str, Any]) -> dict[str, Any]:
     """Return a copy safe to persist or ship (no prompts, secrets, PII)."""
     return scrub_value(trace)  # type: ignore[return-value]
+
+
+# Exact identifiers only: syntax and token-pattern checks cannot establish trust.
+KNOWN_MODEL_IDS = frozenset({
+    "proxy/gpt-6.1-terra", "proxy/gpt-6.1-sol", "proxy/gpt-6-luna",
+    "subscriptions/gpt-6.1-terra", "subscriptions/gpt-6.1-sol",
+    "subscriptions/gpt-6-luna", "subscriptions/claude-opus-5-5",
+    "subscriptions/claude-sonnet-5-5", "minimax/MiniMax-M3.1-Flash",
+    "anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-sonnet-4-5", "anthropic/claude-opus-4-5",
+    "openai/gpt-5.4", "openai/gpt-5.3-codex", "openai/gpt-5.2-codex",
+    "openai/gpt-5.2", "openai/gpt-5.1-codex", "openai/gpt-5-codex",
+    "google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview",
+    "claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5",
+    "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2",
+})
+
+
+def safe_model_id(value: Any) -> str | None:
+    return value if isinstance(value, str) and value in KNOWN_MODEL_IDS else None
+
+
+def _hash_identifier(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return hashlib.sha256(value.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def _number(value: Any) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _enum(value: Any, choices: frozenset[str]) -> str | None:
+    return value if isinstance(value, str) and value in choices else None
+
+
+def _timestamp(value: Any) -> str | None:
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return None
+        return dt.isoformat()
+    except ValueError:
+        return None
+
+
+_STATUS = frozenset("running queued pending completed complete failed error interrupted cancelled canceled unknown success failure timed_out skipped".split())
+_TOOL_NAMES = frozenset("shell code_script read run_tool final_response ast_edit grep project edit_file git shell_jobs navigate genome_impact tool_search multi_edit find show refactor link command_execution file_change file_search web_search subagent dynamic_tool other".split())
+_TOKEN_KEYS = frozenset("inputTokens outputTokens totalTokens cachedInputTokens reasoningTokens turnsComplete turnsPartial turnsUnavailable input_tokens output_tokens total_tokens cached_input_tokens costUsd totalCostUsd cost_usd".split())
+
+
+def safe_export_projection(trace: dict[str, Any]) -> dict[str, Any]:
+    """Project untrusted trace data to explicitly typed, non-content telemetry."""
+    out: dict[str, Any] = {}
+    for key in ("run_id", "thread_id", "project_id", "task_key", "branch"):
+        if key in trace:
+            out[key] = _hash_identifier(trace[key])
+    for key in ("ordinal", "duration_ms", "cost_usd"):
+        if key in trace:
+            out[key] = _number(trace[key])
+    for key in ("requested_at", "started_at", "completed_at"):
+        if key in trace:
+            out[key] = _timestamp(trace[key])
+    for key in ("status", "final_state"):
+        if key in trace:
+            out[key] = _enum(trace[key], _STATUS)
+    for key, choices in {
+        "schema": frozenset({"mac-ops.session_trace.v1"}),
+        "source": frozenset({"empryo", "t3"}),
+        "provider": frozenset({"anthropic", "openai", "google", "proxy", "subscriptions", "minimax", "codex", "claude", "cursor", "other"}),
+        "outcome_evidence": frozenset({"known", "unknown"}),
+    }.items():
+        if key in trace:
+            out[key] = _enum(trace[key], choices)
+    if "model" in trace:
+        out["model"] = safe_model_id(trace["model"])
+    tokens = trace.get("tokens")
+    if isinstance(tokens, dict):
+        out["tokens"] = {k: _number(tokens[k]) for k in _TOKEN_KEYS if k in tokens and _number(tokens[k]) is not None}
+    calls = trace.get("tool_calls")
+    if isinstance(calls, list):
+        out["tool_call_count"] = len(calls)
+        out["tool_calls_summary"] = [
+            {"name": _enum(c.get("name"), _TOOL_NAMES) or "other",
+             "type": _enum(c.get("type"), _TOOL_NAMES | frozenset({"tool"})),
+             "duration_ms": _number(c.get("duration_ms")),
+             "status": _enum(c.get("status"), _STATUS)}
+            for c in calls[:200] if isinstance(c, dict)
+        ]
+    prs = trace.get("pull_requests")
+    if isinstance(prs, list):
+        result = []
+        for pr in prs[:200]:
+            if not isinstance(pr, dict):
+                continue
+            item: dict[str, Any] = {}
+            for key in ("repository", "url", "head_branch"):
+                if key in pr:
+                    item[key] = _hash_identifier(pr[key])
+            number = pr.get("number")
+            if type(number) is int and number > 0:
+                item["number"] = number
+            sha = pr.get("merge_sha")
+            if isinstance(sha, str) and re.fullmatch(r"[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", sha):
+                item["merge_sha"] = sha
+            for key, choices in {
+                "state": frozenset({"open", "closed", "merged", "merged_unknown_timing"}),
+                "timing": frozenset({"known", "unknown", "post_run_merge"}),
+                "checks_state": frozenset({"SUCCESS", "FAILURE", "PENDING", "ERROR", "EXPECTED", "success", "failure", "pending", "error", "passing", "failing", "failed", "unknown"}),
+                "review_decision": frozenset({"APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"}),
+            }.items():
+                if key in pr:
+                    item[key] = _enum(pr[key], choices)
+            for key in ("evidence_by_end", "merge_by_end"):
+                if type(pr.get(key)) is bool:
+                    item[key] = pr[key]
+            if "merged_at" in pr:
+                item["merged_at"] = _timestamp(pr["merged_at"])
+            result.append(item)
+        out["pull_requests"] = result
+    return out
