@@ -1,9 +1,14 @@
-import { exec, home } from "herdr";
+import { exec, home, shared } from "herdr";
 
 const DIR = `${home()}/.claude/projects/-Users-shyamsivakumar-Code-coordinator`;
 const TASK_ID = /\b[A-Z]{2,5}-\d{1,4}\b/g;
-const READ_TOOLS = new Set(["Read", "Grep", "Glob", "WebFetch", "WebSearch"]);
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+const DETAIL_MAX = 200;
+const LINE_MAX = 400;
+const OUTPUT_KEEP = 200;
+const TEXT_MAX = 60000;
+const DIFF_KEEP = 40;
+const CODE_KEEP = 400;
+const EVENT_MAX = 200;
 
 const clip = (text, n) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 
@@ -18,16 +23,125 @@ function summary(tool) {
   return clip(`${tool.name} ${String(detail).split("\n")[0]}`.trim(), 90);
 }
 
-export function toolLine(tools) {
-  const parts = [];
-  if (tools.commands) parts.push(`ran ${tools.commands} command${tools.commands > 1 ? "s" : ""}`);
-  if (tools.reads) parts.push(`read ${tools.reads} file${tools.reads > 1 ? "s" : ""}`);
-  if (tools.edits) parts.push(`edited ${tools.edits} file${tools.edits > 1 ? "s" : ""}`);
-  if (tools.other) parts.push(`${tools.other} other call${tools.other > 1 ? "s" : ""}`);
-  return parts.join(" · ");
+const lineCount = (text) => (text ? (text.match(/\n/g)?.length ?? 0) + 1 : 0);
+
+function trimmedDiff(before, after) {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a.at(-1 - tail) === b.at(-1 - tail)) tail++;
+  return { removed: a.slice(head, a.length - tail), added: b.slice(head, b.length - tail) };
+}
+
+function diffOf(name, input) {
+  if (name === "Write") return { removed: [], added: [], hidden: 0, wrote: lineCount(input.content ?? "") };
+  const edits = name === "MultiEdit" ? input.edits ?? [] : [input];
+  const removed = [];
+  const added = [];
+  for (const e of edits) {
+    const d = trimmedDiff(String(e.old_string ?? ""), String(e.new_string ?? ""));
+    removed.push(...d.removed);
+    added.push(...d.added);
+  }
+  const keep = (lines) => lines.slice(0, DIFF_KEEP).map((l) => clip(l, LINE_MAX));
+  return { removed: keep(removed), added: keep(added), hidden: Math.max(0, removed.length - DIFF_KEEP) + Math.max(0, added.length - DIFF_KEEP) };
+}
+
+const DIFF_TOOLS = new Set(["Edit", "MultiEdit", "Write"]);
+
+function toolItem(b, at) {
+  const i = b.input ?? {};
+  const detail = i.command ?? i.file_path ?? i.notebook_path ?? i.pattern ?? i.url ?? i.query ?? i.description ?? i.prompt ?? i.path ?? "";
+  return { k: "tool", id: b.id, name: b.name.replace(/^mcp__/, "").replace(/__/g, "."), at, detail: clip(String(detail).split("\n")[0], DETAIL_MAX), diff: DIFF_TOOLS.has(b.name) ? diffOf(b.name, i) : null, result: null };
+}
+
+function resultOf(block) {
+  const text = textOf(block.content);
+  const body = text.slice(0, TEXT_MAX).replace(/\n+$/, "");
+  return { error: Boolean(block.is_error), total: lineCount(text.replace(/\n+$/, "")), lines: body ? body.split("\n").slice(0, OUTPUT_KEEP).map((l) => clip(l, LINE_MAX)) : [] };
+}
+
+const FENCE = /^\s*```/;
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+function cellsOf(line) {
+  const s = line.trim();
+  const cells = [];
+  let cell = "";
+  let ticked = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "\\" && s[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (ch === "`") {
+      ticked = !ticked;
+      cell += ch;
+    } else if (ch === "|" && !ticked) {
+      cells.push(cell.trim());
+      cell = "";
+    } else cell += ch;
+  }
+  cells.push(cell.trim());
+  if (s.startsWith("|")) cells.shift();
+  if (s.endsWith("|") && !s.endsWith("\\|") && cells.at(-1) === "") cells.pop();
+  return cells;
+}
+const plain = (cell) => cell.replace(/\*\*|__/g, "").replace(/`/g, "");
+
+function tableOf(rows) {
+  const cols = Math.max(...rows.map((r) => r.length));
+  const grid = rows.map((r) => Array.from({ length: cols }, (_x, c) => ({ text: plain(r[c] ?? ""), mono: /^`[^`]+`$/.test(r[c] ?? "") })));
+  const longest = (c, measure) => Math.max(...grid.map((r) => measure(r[c].text)));
+  return {
+    t: "table",
+    head: grid[0],
+    rows: grid.slice(1),
+    ideal: Array.from({ length: cols }, (_x, c) => longest(c, (s) => s.length)),
+    min: Array.from({ length: cols }, (_x, c) => longest(c, (s) => Math.max(0, ...s.split(/\s+/).map((w) => w.length)))),
+  };
+}
+
+export function blocksOf(text) {
+  const lines = text.split("\n");
+  const out = [];
+  let md = [];
+  const flush = () => {
+    const joined = md.join("\n").trim();
+    if (joined) out.push({ t: "md", text: joined });
+    md = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (FENCE.test(line)) {
+      flush();
+      const body = [];
+      for (i++; i < lines.length && !FENCE.test(lines[i]); i++) body.push(lines[i]);
+      out.push({ t: "code", lines: body.slice(0, CODE_KEEP).map((l) => clip(l, LINE_MAX)), more: Math.max(0, body.length - CODE_KEEP) });
+    } else if (TABLE_ROW.test(line) && TABLE_RULE.test(lines[i + 1] ?? "")) {
+      flush();
+      const rows = [cellsOf(line)];
+      for (i += 2; i < lines.length && TABLE_ROW.test(lines[i]); i++) rows.push(cellsOf(lines[i]));
+      i--;
+      out.push(tableOf(rows));
+    } else md.push(line);
+  }
+  flush();
+  return out;
 }
 
 const FILLER = /^(?:should I |should we |should |do I |do you want me to |I )/i;
+const ANSWERS = /^\d+\. /;
+const squash = (text) => text.replace(/\s+/g, " ").trim();
+
+function composed(text, at) {
+  const sent = shared("co.sent");
+  if (!sent || at < sent.since) return ANSWERS.test(text);
+  const wanted = squash(text);
+  return sent.items.some((item) => squash(item.text) === wanted);
+}
 const MARKER = /\(?\s*\bRecommended:\s*(.*?)\)?\s*$/i;
 
 const cleanOption = (p) => p.replace(FILLER, "").replace(/[?.\s]+$/, "").trim();
@@ -77,7 +191,16 @@ export function asksOf(text) {
   return out.slice(0, 5);
 }
 
-const newParser = () => ({ turns: [], pending: null, tokens: 0 });
+const newParser = () => ({ turns: [], open: new Map(), tools: new Map(), pending: null, tokens: 0 });
+
+const NOTE_SUMMARY = /<summary>([\s\S]*?)<\/summary>/;
+
+function lastTurn(p, at) {
+  if (p.turns.at(-1)?.role !== "coordinator") p.turns.push({ role: "coordinator", at, items: [] });
+  const turn = p.turns.at(-1);
+  turn.view = null;
+  return turn;
+}
 
 function feed(p, text) {
   const { turns } = p;
@@ -95,42 +218,64 @@ function feed(p, text) {
     if (rec.type === "assistant") {
       const u = rec.message.usage;
       if (u) p.tokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-      if (turns.at(-1)?.role !== "coordinator") turns.push({ role: "coordinator", at, parts: [], tools: { commands: 0, reads: 0, edits: 0, other: 0 } });
-      const turn = turns.at(-1);
-      turn.view = null;
+      const turn = lastTurn(p, at);
       for (const b of Array.isArray(content) ? content : []) {
         if (b.type === "tool_use") {
-          p.pending = { ...b, at };
-          if (b.name === "Bash") turn.tools.commands++;
-          else if (READ_TOOLS.has(b.name)) turn.tools.reads++;
-          else if (EDIT_TOOLS.has(b.name)) turn.tools.edits++;
-          else turn.tools.other++;
+          const item = toolItem(b, at);
+          turn.items.push(item);
+          p.tools.set(b.id, item);
+          p.open.set(b.id, { ...b, at });
+          p.pending = [...p.open.values()].at(-1);
         }
         if (b.type === "text" && b.text.trim()) {
-          turn.parts.push(b.text.trim());
+          turn.items.push({ k: "text", text: b.text.trim() });
           turn.at = at;
         }
       }
     } else if (rec.type === "user" && !rec.isMeta) {
       if (Array.isArray(content) && content.some((b) => b.type === "tool_result")) {
-        p.pending = null;
+        for (const b of content) {
+          if (b.type !== "tool_result") continue;
+          const item = p.tools.get(b.tool_use_id);
+          if (item) item.result = resultOf(b);
+          p.open.delete(b.tool_use_id);
+          p.tools.delete(b.tool_use_id);
+        }
+        p.pending = [...p.open.values()].at(-1) ?? null;
         continue;
       }
       const raw = textOf(content).replace(/<\/?pasted_content[^>]*>/g, "").trim();
-      const text = raw.startsWith("<hc ") ? raw.replace(/<\/?hc\b[^>]*>/g, "").trim() : raw;
-      if (text && !text.startsWith("<")) turns.push({ role: "you", at, parts: [text], tools: null });
+      const hc = /^<hc\s+from="([^"]*)"/.exec(raw);
+      const text = hc ? raw.replace(/<\/?hc\b[^>]*>/g, "").trim() : raw;
+      const note = raw.startsWith("<task-notification") ? NOTE_SUMMARY.exec(raw)?.[1].trim() : null;
+      if (note) lastTurn(p, at).items.push({ k: "event", text: clip(note.replace(/\s+/g, " "), EVENT_MAX) });
+      else if (text && !text.startsWith("<")) {
+        p.open.clear();
+        p.tools.clear();
+        p.pending = null;
+        turns.push({ role: hc && !composed(text, at) ? "session" : "you", from: hc?.[1] ?? "", at, items: [{ k: "text", text }] });
+      }
     }
   }
 }
 
-const present = (t) => ({ role: t.role, at: t.at, text: t.parts.join("\n\n"), tools: t.tools ? toolLine(t.tools) : "", tasks: t.tools ? [...new Set(t.parts.join("\n").match(TASK_ID) ?? [])].slice(0, 6) : [] });
+function present(t) {
+  const texts = t.items.filter((i) => i.k === "text").map((i) => i.text);
+  return {
+    role: t.role,
+    from: t.from ?? "",
+    at: t.at,
+    text: texts.join("\n\n"),
+    items: t.items.map((i) => (i.k === "text" ? { k: "text", blocks: blocksOf(i.text) } : i)),
+    tasks: t.role === "coordinator" ? [...new Set(texts.join("\n").match(TASK_ID) ?? [])].slice(0, 6) : [],
+  };
+}
 
 function join(older, first) {
   const last = older.at(-1);
   if (!last || first?.role !== "coordinator" || last.role !== "coordinator") return older;
-  if (!first.parts.length) first.at = last.at;
-  first.parts = last.parts.concat(first.parts);
-  for (const k of Object.keys(first.tools)) first.tools[k] += last.tools[k];
+  if (!first.items.length) first.at = last.at;
+  first.items = last.items.concat(first.items);
   first.view = null;
   return older.slice(0, -1);
 }
@@ -170,7 +315,9 @@ async function window(file, end) {
 
 const MAIN_SESSIONS = `cd "${DIR}" && for f in $(ls -t *.jsonl); do if [ "$(grep -c '"type":"user"' "$f")" -ge 5 ]; then echo "${DIR}/$f"; fi; done`;
 
+const FILES_EVERY = 30000;
 let files = [];
+let filesAt = 0;
 let live = null;
 let rev = 0;
 const hist = { file: null, before: 0, lead: [] };
@@ -191,7 +338,7 @@ async function readBefore(target) {
 function snapshot() {
   const raw = hist.lead.concat(live.lead, live.parser.turns);
   const partial = front().before > 0 && raw[0]?.role === "coordinator";
-  const turns = raw.slice(partial ? 1 : 0).filter((t) => t.parts.length).map((t) => (t.view ??= present(t)));
+  const turns = raw.slice(partial ? 1 : 0).filter((t) => t.items.length).map((t) => (t.view ??= present(t)));
   const last = turns.at(-1);
   const { pending } = live.parser;
   return {
@@ -199,6 +346,7 @@ function snapshot() {
     rev,
     unread: front().before > 0,
     hasOlder: files.some((f) => !loaded.has(f)),
+    pendingId: pending?.id ?? "",
     activity: pending ? summary(pending) : "",
     activityAt: pending?.at ?? 0,
     tokens: live.parser.tokens,
@@ -208,9 +356,12 @@ function snapshot() {
 }
 
 async function readNow() {
-  const r = await exec("sh", ["-c", MAIN_SESSIONS]);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || "no coordinator transcript");
-  files = r.stdout.split("\n").filter(Boolean);
+  if (!files.length || Date.now() - filesAt >= FILES_EVERY) {
+    const r = await exec("sh", ["-c", MAIN_SESSIONS]);
+    if (r.code !== 0) throw new Error(r.stderr.trim() || "no coordinator transcript");
+    files = r.stdout.split("\n").filter(Boolean);
+    filesAt = Date.now();
+  }
   if (live?.file !== files[0]) {
     if (live) {
       while (live.before > 0) await readBefore(live);
@@ -250,12 +401,29 @@ async function loadOlderNow(want) {
   return snapshot();
 }
 
-let queue = Promise.resolve();
+const READ_LIMIT = 45000;
 
-const serial = (fn) => (...args) => {
-  const run = queue.then(() => fn(...args));
-  queue = run.catch(() => {});
-  return run;
+const within = (cx, work) => new Promise((resolve, reject) => {
+  let limit;
+  work.then(resolve, reject).finally(() => limit?.cancel());
+  limit = cx.timer.after(READ_LIMIT, () => reject(new Error("reading the Coordinator transcript timed out")));
+});
+
+let running = null;
+
+const serial = (fn) => async (cx, ...args) => {
+  while (running) {
+    if (Date.now() - running.since >= READ_LIMIT) throw new Error("previous transcript read still running");
+    await running.settled;
+  }
+  const work = fn(...args);
+  const mine = { since: Date.now() };
+  const clear = () => {
+    if (running === mine) running = null;
+  };
+  mine.settled = work.then(clear, clear);
+  running = mine;
+  return within(cx, work);
 };
 
 export const readTranscript = serial(readNow);
