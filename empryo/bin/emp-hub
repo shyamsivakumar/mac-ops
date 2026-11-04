@@ -1,0 +1,1765 @@
+#!/usr/bin/env python3
+import contextlib, json, os, re, socketserver, sqlite3, subprocess, sys, threading, time, uuid
+from datetime import datetime, timedelta, timezone
+
+HOME = os.path.expanduser("~")
+HUB_DIR = f"{HOME}/.empryo-hub"
+SOCKET = f"{HUB_DIR}/hub.sock"
+WORKTREES = f"{HUB_DIR}/worktrees"
+TRANSCRIPTS = f"{HUB_DIR}/transcripts"
+EMPRYO = "/opt/homebrew/bin/empryo"
+DEFAULT_MODEL = {"instanceId": "codex", "model": "gpt-6.1-terra"}
+PROVIDER_MODELS = {
+    "codex": ("Codex", ["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-luna"]),
+    "claudeAgent": ("Claude", ["claude-sonnet-5-5", "claude-opus-5-5"]),
+    "cursor": ("Cursor", ["default"]),
+}
+INSTANCE_ROUTES = {"codex": "subscriptions/", "claudeAgent": "subscriptions/", "cursor": "subscriptions/cursor/", "empryo": ""}
+ROUTING_PATH = f"{HUB_DIR}/routing.json"
+EMPRYO_CONFIG = f"{HOME}/.empryo/config.json"
+TASK_TYPES = ["standard", "risky", "design", "large", "ui", "research", "rca", "chore", "review", "panel"]
+MODES = ["auto", "orchestrate", "plan", "default"]
+IDLE_ENGINE_SECONDS = 900
+SCHEDULER_TICK_SECONDS = 20
+REAPER_TICK_SECONDS = 60
+RPC_TIMEOUT = 90
+CANCEL_GRACE_SECONDS = 20
+LIVE = ("running", "waiting", "queued")
+
+DRAINING = {"requested": False}
+LOCK = threading.RLock()
+CHANGED = threading.Condition(LOCK)
+
+
+def log(message):
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}", flush=True)
+
+
+def now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
+
+
+class HubError(Exception):
+    pass
+
+
+def slugify(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:48] or "thread"
+
+
+class Store:
+    def __init__(self, name, default):
+        self.path = f"{HUB_DIR}/{name}.json"
+        if os.path.exists(self.path):
+            with open(self.path) as f:
+                self.data = json.load(f)
+        else:
+            self.data = default
+
+    def save(self):
+        with LOCK:
+            tmp = f"{self.path}.{threading.get_ident()}.tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.data, f, indent=1)
+            os.replace(tmp, self.path)
+
+
+PROJECTS = Store("projects", {})
+THREADS = Store("threads", {})
+SCHEDULES = Store("schedules", {})
+
+
+def new_project(project_id, title, root, created_at=None):
+    stamp = created_at or now_iso()
+    return {
+        "id": project_id, "title": title, "workspaceRoot": root, "repositoryIdentity": None,
+        "faviconPath": None, "projectIcon": None, "defaultModelSelection": DEFAULT_MODEL,
+        "defaultThreadEnvMode": None, "autoPull": False, "scripts": [], "pinnedAt": None,
+        "archivedAt": None, "createdAt": stamp, "updatedAt": stamp, "deletedAt": None,
+    }
+
+
+def project_of(project_id):
+    project = PROJECTS.data.get(project_id)
+    if project is None:
+        raise HubError(f"unknown projectId {project_id}")
+    return project
+
+
+def load_routing():
+    with open(ROUTING_PATH) as f:
+        return json.load(f)
+
+
+def resolve_launch(args):
+    selection, task_type = args.get("modelSelection"), args.get("taskType")
+    if selection is None and task_type is None:
+        raise HubError(f"launch needs taskType (one of {TASK_TYPES}) or an explicit modelSelection")
+    route = load_routing()["types"].get(task_type) if task_type else None
+    if task_type and route is None:
+        raise HubError(f"taskType {task_type!r} is not in {ROUTING_PATH}; use one of {sorted(load_routing()['types'])}")
+    if selection is None:
+        selection = route["modelSelection"]
+        if selection is None:
+            raise HubError(f"taskType {task_type!r} has no model of its own: {route['notes']}")
+    mode = args.get("mode") or (route["mode"] if route else "auto")
+    empryo_model(selection)
+    return {"instanceId": selection["instanceId"], "model": selection["model"]}, mode, task_type
+
+
+def thread_of(thread_id):
+    thread = THREADS.data.get(thread_id)
+    if thread is None:
+        raise HubError(f"unknown threadId {thread_id}")
+    return thread
+
+
+def empryo_model(selection):
+    route = INSTANCE_ROUTES.get(selection.get("instanceId"))
+    if route is None:
+        raise HubError(f"unsupported instanceId {selection.get('instanceId')!r}; use one of {sorted(INSTANCE_ROUTES)}")
+    model = selection.get("model")
+    if not model:
+        raise HubError("modelSelection.model is required")
+    return model if model.startswith(route) else route + model
+
+
+def git(cwd, *args):
+    run = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+    if run.returncode != 0:
+        raise HubError(f"git {' '.join(args)} failed: {run.stderr.strip()}")
+    return run.stdout.strip()
+
+
+class AcpProcess:
+    def __init__(self, root, key):
+        self.root = root
+        self.key = key
+        self.loaded = set()
+        self.pending = {}
+        self.next_id = 0
+        self.write_lock = threading.Lock()
+        self.last_used = time.time()
+        self.dead = False
+        self.users = 0
+        self.proc = subprocess.Popen(
+            [EMPRYO, "acp"], cwd=root if os.path.isdir(root) else HOME,
+            env={**os.environ, "EMPRYO_NO_PROMPT": "1"}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(f"{HUB_DIR}/engine.log", "a"), text=True, bufsize=1,
+        )
+        threading.Thread(target=self.read_loop, daemon=True).start()
+        try:
+            self.call("initialize", {"protocolVersion": 1, "clientCapabilities": {"_meta": {"empryo": {"protocol": "1.0", "extensions": {"steer": 1, "config": 1}}}}})
+        except BaseException:
+            self.proc.kill()
+            self.proc.wait()
+            raise
+        log(f"engine started for {root} pid {self.proc.pid}")
+
+    def send(self, message):
+        with self.write_lock:
+            self.proc.stdin.write(json.dumps(message) + "\n")
+            self.proc.stdin.flush()
+
+    def call(self, method, params, timeout=RPC_TIMEOUT):
+        with LOCK:
+            self.next_id += 1
+            rpc_id = self.next_id
+            slot = {"event": threading.Event(), "response": None}
+            self.pending[rpc_id] = slot
+        self.last_used = time.time()
+        self.send({"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params})
+        if not slot["event"].wait(timeout):
+            raise HubError(f"{method} timed out after {timeout}s")
+        response = slot["response"]
+        if "error" in response:
+            error = response["error"]
+            raise HubError(f"{method}: {error.get('data', {}).get('details') or error['message']}")
+        return response["result"]
+
+    def notify(self, method, params):
+        self.send({"jsonrpc": "2.0", "method": method, "params": params})
+
+    def read_loop(self):
+        try:
+            for line in self.proc.stdout:
+                try:
+                    self.dispatch(json.loads(line))
+                except Exception as e:
+                    log(f"engine {self.root}: dropped a message ({type(e).__name__}: {e})")
+        finally:
+            self.finish()
+
+    def dispatch(self, message):
+        if "method" not in message:
+            slot = self.pending.pop(message["id"], None)
+            if slot:
+                slot["response"] = message
+                slot["event"].set()
+        elif message["method"] == "session/update":
+            handle_update(message["params"]["sessionId"], message["params"]["update"])
+        elif message["method"] == "session/request_permission":
+            handle_permission(self, message)
+
+    def finish(self):
+        self.dead = True
+        log(f"engine for {self.root} exited")
+        for slot in list(self.pending.values()):
+            slot["response"] = {"error": {"message": "engine exited"}}
+            slot["event"].set()
+        self.pending.clear()
+        self.proc.stdout.close()
+        self.proc.wait()
+        with LOCK:
+            if ENGINES.get(self.key) is self:
+                del ENGINES[self.key]
+            for runtime in RUNTIME.values():
+                if runtime["proc"] is self:
+                    runtime["proc"] = None
+            CHANGED.notify_all()
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+
+
+ENGINES = {}
+RUNTIME = {}
+SESSION_THREAD = {}
+
+
+def runtime_of(thread_id):
+    return RUNTIME.setdefault(thread_id, {"buffer": None, "tools": {}, "pending": {}, "interrupt": False, "proc": None, "model": "", "probe": False, "quotaRecorded": False, "progressAt": 0.0, "active": False, "stalled": None})
+
+
+def thread_cwd(thread):
+    return thread["worktreePath"] or project_of(thread["projectId"])["workspaceRoot"]
+
+
+def engine_for(thread):
+    key = thread["threadId"]
+    with LOCK:
+        proc = ENGINES.get(key)
+        if proc and not proc.dead:
+            proc.users += 1
+            return proc
+    proc = AcpProcess(thread_cwd(thread), key)
+    with LOCK:
+        ENGINES[key] = proc
+        proc.users += 1
+    return proc
+
+
+def release_engine(proc):
+    with LOCK:
+        proc.users -= 1
+        proc.last_used = time.time()
+
+
+def append_item(thread, item):
+    with LOCK:
+        thread["itemCount"] += 1
+        item = {"id": f"item:{thread['threadId']}:{thread['itemCount']}", "position": thread["itemCount"], "createdAt": now_iso(), **item}
+        with open(transcript_path(thread), "a") as f:
+            f.write(json.dumps(item) + "\n")
+        thread["updatedAt"] = item["createdAt"]
+        return item
+
+
+def transcript_path(thread):
+    return f"{TRANSCRIPTS}/{slugify(thread['threadId'])}-{thread['threadId'].split(':')[-1][:8]}.jsonl"
+
+
+def read_items(thread):
+    if not os.path.exists(transcript_path(thread)):
+        return []
+    with open(transcript_path(thread)) as f:
+        return [json.loads(line) for line in f]
+
+
+def set_status(thread, status):
+    with LOCK:
+        thread["status"] = status
+        thread["updatedAt"] = now_iso()
+        THREADS.save()
+        CHANGED.notify_all()
+
+
+def flush_message(thread, rt):
+    buffer = rt["buffer"]
+    if buffer and buffer["text"]:
+        append_item(thread, {"type": "assistant_message", "status": "completed", "text": buffer["text"]})
+    rt["buffer"] = None
+
+
+def handle_update(session_id, update):
+    thread_id = SESSION_THREAD.get(session_id)
+    if thread_id is None:
+        return
+    thread = THREADS.data[thread_id]
+    rt = runtime_of(thread_id)
+    kind = update.get("sessionUpdate")
+    with LOCK:
+        rt["progressAt"] = time.time()
+        notice = (update.get("_meta") or {}).get("empryo", {}).get("notice")
+        if kind == "agent_message_chunk" and notice:
+            text = update["content"].get("text", "")
+            switched = FALLBACK_NOTICE.search(text)
+            if (switched or QUOTA_FAILURE.search(text)) and not rt["quotaRecorded"]:
+                record_quota_failure(provider_of(rt["model"]), text[:80])
+                rt["quotaRecorded"] = True
+            if switched:
+                rt["model"] = switched.group(1).rstrip(".")
+            flush_message(thread, rt)
+            append_item(thread, {"type": "notice", "status": "completed", "text": text})
+        elif kind == "agent_message_chunk":
+            message_id = update.get("messageId") or update["content"].get("messageId")
+            if rt["buffer"] and rt["buffer"]["id"] != message_id:
+                flush_message(thread, rt)
+            rt["buffer"] = rt["buffer"] or {"id": message_id, "text": ""}
+            rt["buffer"]["text"] += update["content"].get("text", "")
+        elif kind == "tool_call":
+            flush_message(thread, rt)
+            rt["tools"][update["toolCallId"]] = {"title": update.get("title"), "kind": update.get("kind"), "status": update.get("status"), "since": time.time()}
+            finish_tool(thread, rt, update["toolCallId"])
+        elif kind == "tool_call_update":
+            tool = rt["tools"].setdefault(update["toolCallId"], {"title": None, "kind": None, "status": None, "since": time.time()})
+            tool.update({k: update[k] for k in ("title", "kind", "status") if update.get(k)})
+            finish_tool(thread, rt, update["toolCallId"])
+
+
+def finish_tool(thread, rt, tool_id):
+    tool = rt["tools"][tool_id]
+    if tool["status"] in ("completed", "failed"):
+        append_item(thread, {"type": "command_execution" if tool["kind"] == "execute" else "dynamic_tool", "toolKind": tool["kind"], "title": tool["title"], "status": tool["status"]})
+        del rt["tools"][tool_id]
+
+
+def handle_permission(proc, message):
+    params = message["params"]
+    category = params.get("_meta", {}).get("empryo", {}).get("category")
+    options = params["options"]
+    thread_id = SESSION_THREAD.get(params["sessionId"])
+    if category != "question" or thread_id is None:
+        allow = next((o for o in options if o["kind"] == "allow_always"), None) or next((o for o in options if o["kind"].startswith("allow")), None)
+        outcome = {"outcome": "selected", "optionId": allow["optionId"]} if allow else {"outcome": "cancelled"}
+        proc.send({"jsonrpc": "2.0", "id": message["id"], "result": {"outcome": outcome}})
+        return
+    tool_call = params.get("toolCall", {})
+    request_id = f"request:{uuid.uuid4()}"
+    question = (tool_call.get("rawInput") or {}).get("question") or tool_call.get("title") or "Question"
+    with LOCK:
+        runtime_of(thread_id)["pending"][request_id] = {
+            "requestId": request_id, "kind": "user_input", "status": "pending", "createdAt": now_iso(), "rpcId": message["id"], "proc": proc,
+            "questions": [{"question": question, "header": tool_call.get("title"), "multiSelect": False,
+                           "options": [{"label": o["name"], "optionId": o["optionId"], "kind": o["kind"]} for o in options]}],
+        }
+        set_status(THREADS.data[thread_id], "waiting")
+
+
+def pending_of(thread_id):
+    return runtime_of(thread_id)["pending"]
+
+
+def select_model(proc, thread, model):
+    proc.call("session/set_config_option", {"sessionId": thread["sessionId"], "configId": "model", "value": model})
+
+
+CLOSING_PIDS = set()
+
+
+def drop_engine(key, only_if_free=False):
+    with LOCK:
+        if only_if_free and not engine_free(THREADS.data[key]):
+            return
+        proc = ENGINES.pop(key, None)
+        if proc:
+            CLOSING_PIDS.add(proc.proc.pid)
+    if proc:
+        proc.close()
+        try:
+            proc.proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.proc.kill()
+            proc.proc.wait()
+        CLOSING_PIDS.discard(proc.proc.pid)
+
+
+def engine_free(thread):
+    engine = ENGINES.get(thread["threadId"])
+    return not (engine and engine.users) and thread["status"] not in LIVE
+
+
+def session_dir(thread):
+    if not thread["sessionId"]:
+        return None
+    if not thread.get("sessionDir"):
+        db = sqlite3.connect(f"{HOME}/.empryo/threads.db", timeout=10)
+        row = db.execute("SELECT session_dir FROM threads WHERE id = ?", (thread["sessionId"].split(":")[0],)).fetchone()
+        db.close()
+        thread["sessionDir"] = row and row[0]
+    return thread["sessionDir"]
+
+
+def session_holder(thread):
+    directory = session_dir(thread)
+    if directory is None or not os.path.exists(f"{directory}/writer.lock"):
+        return None
+    with open(f"{directory}/writer.lock") as f:
+        lock = json.load(f)
+    pid = lock["pid"]
+    if pid in CLOSING_PIDS or pid in {p.proc.pid for p in ENGINES.values()}:
+        return None
+    command = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+    return lock if "empryo" in command else None
+
+
+def require_unheld(thread):
+    lock = session_holder(thread)
+    if lock:
+        raise HubError(f"session is open in Empryo ({lock['host']}, pid {lock['pid']}); close it there before sending from the hub")
+
+
+def write_title(thread):
+    directory = session_dir(thread)
+    if directory is None:
+        return
+    session_id = thread["sessionId"].split(":")[0]
+    meta_path = f"{directory}/meta.json"
+    with open(meta_path) as f:
+        meta = json.load(f)
+    meta["title"] = thread["title"]
+    tmp = f"{meta_path}.hub-{threading.get_ident()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(meta, f, indent=2)
+    os.replace(tmp, meta_path)
+    db = sqlite3.connect(f"{HOME}/.empryo/threads.db", timeout=10)
+    with db:
+        db.execute("UPDATE threads SET title = ?, revision = revision + 1 WHERE id = ?", (thread["title"], session_id))
+    db.close()
+    thread["titleDirty"] = False
+
+
+def flush_titles():
+    with LOCK:
+        for thread in [t for t in THREADS.data.values() if t.get("titleDirty") and t["sessionId"]]:
+            if not engine_free(thread):
+                continue
+            try:
+                drop_engine(thread["threadId"])
+                if not session_holder(thread):
+                    write_title(thread)
+            except Exception as e:
+                log(f"title for {thread['threadId']} not written ({type(e).__name__}: {e})")
+        THREADS.save()
+
+
+def persist_session(proc, thread):
+    for effort in ("low", "auto"):
+        try:
+            proc.call("session/set_config_option", {"sessionId": thread["sessionId"], "configId": "effort", "value": effort})
+        except HubError as e:
+            if "no effort levels" not in str(e):
+                raise
+            return
+
+
+def configure_session(proc, thread, model=None):
+    for config_id, value in (("approvals", "full"), ("mode", thread.get("mode", "auto"))):
+        proc.call("session/set_config_option", {"sessionId": thread["sessionId"], "configId": config_id, "value": value})
+    select_model(proc, thread, model or empryo_model(thread["modelSelection"]))
+    thread["model"] = empryo_model(thread["modelSelection"])
+
+
+def ensure_session(thread, model=None):
+    cwd = thread_cwd(thread)
+    if not os.path.isdir(cwd):
+        raise HubError(f"the working directory {cwd} no longer exists (worktree cleaned up?)")
+    proc = engine_for(thread)
+    try:
+        if thread["sessionId"] is None:
+            thread["sessionId"] = proc.call("session/new", {"cwd": cwd, "mcpServers": []})["sessionId"]
+            proc.loaded.add(thread["sessionId"])
+            configure_session(proc, thread, model)
+            thread["titleDirty"] = True
+            persist_session(proc, thread)
+            THREADS.save()
+        if thread["sessionId"] not in proc.loaded:
+            proc.call("session/resume", {"sessionId": thread["sessionId"], "cwd": cwd, "mcpServers": []})
+        proc.loaded.add(thread["sessionId"])
+        SESSION_THREAD[thread["sessionId"]] = thread["threadId"]
+        configure_session(proc, thread, model)
+    except BaseException:
+        release_engine(proc)
+        raise
+    runtime_of(thread["threadId"])["proc"] = proc
+    return proc
+
+
+PROVIDERS = ("subscriptions/gpt", "subscriptions/claude", "subscriptions/cursor", "zai-coding-plan", "minimax")
+WATCHDOG_ABORT = re.compile(r"aborted by the watchdog")
+QUOTA_FAILURE = re.compile(r"\b429\b|\b529\b|rate.?limit|quota|credit|usage limit|too many requests|exhausted|overloaded", re.I)
+FALLBACK_NOTICE = re.compile(r"(?:Falling back to|Switched to fallback model:?)\s*(\S+)", re.I)
+FAILURE_WINDOW_SECONDS = 600
+CIRCUIT_OPEN_SECONDS = 900
+BREAKERS = {}
+SLOTS = {}
+
+
+def provider_of(model):
+    return next((p for p in PROVIDERS if model.startswith(p)), model.split("/")[0])
+
+
+def breaker_of(provider):
+    return BREAKERS.setdefault(provider, {"failures": [], "openUntil": 0.0, "probing": False})
+
+
+def record_quota_failure(provider, why):
+    with LOCK:
+        breaker, now = breaker_of(provider), time.time()
+        breaker["failures"] = [t for t in breaker["failures"] if now - t < FAILURE_WINDOW_SECONDS] + [now]
+        if breaker["probing"]:
+            breaker.update(probing=False, openUntil=now + CIRCUIT_OPEN_SECONDS)
+            log(f"circuit for {provider} reopened after a failed probe ({why})")
+        elif len(breaker["failures"]) >= 2 and breaker["openUntil"] <= now:
+            breaker["openUntil"] = now + CIRCUIT_OPEN_SECONDS
+            log(f"circuit for {provider} OPEN for {CIRCUIT_OPEN_SECONDS // 60} min after {len(breaker['failures'])} failures ({why})")
+
+
+def close_circuit(provider):
+    with LOCK:
+        breaker = breaker_of(provider)
+        if breaker["probing"]:
+            breaker.update(failures=[], openUntil=0.0, probing=False)
+            log(f"circuit for {provider} CLOSED after a successful probe")
+
+
+def circuit_state(provider):
+    breaker = breaker_of(provider)
+    if breaker["openUntil"] > time.time():
+        return "open"
+    return "half-open" if breaker["openUntil"] else "closed"
+
+
+def fallback_chain(model, cwd):
+    chains = {}
+    for path in (EMPRYO_CONFIG, f"{cwd}/.empryo/config.json"):
+        if os.path.exists(path):
+            with open(path) as f:
+                chains.update(json.load(f).get("modelFallback", {}))
+    return chains.get(model, [])
+
+
+def choose_model(thread):
+    base = empryo_model(thread["modelSelection"])
+    provider = provider_of(base)
+    with LOCK:
+        state = circuit_state(provider)
+        if state == "closed":
+            return base, False
+        if state == "half-open" and not breaker_of(provider)["probing"]:
+            breaker_of(provider)["probing"] = True
+            log(f"circuit for {provider} half-open: probing with {base}")
+            return base, True
+    for candidate in fallback_chain(base, thread_cwd(thread)):
+        if circuit_state(provider_of(candidate)) != "open":
+            log(f"{thread['threadId']} routed to {candidate} instead of {base} (circuit for {provider} is {state})")
+            return candidate, False
+    log(f"{thread['threadId']} has no open fallback for {base}; using it anyway")
+    return base, False
+
+
+def limit_of(model):
+    return next(((key, limit) for key, limit in load_routing().get("limits", {}).items() if model.startswith(key)), (None, None))
+
+
+def acquire_slot(thread, key, limit):
+    thread_id = thread["threadId"]
+    rt = runtime_of(thread_id)
+    with CHANGED:
+        slot = SLOTS.setdefault(key, {"running": [], "queue": []})
+        slot["queue"].append(thread_id)
+        waited = False
+        while not (slot["queue"][0] == thread_id and len(slot["running"]) < limit):
+            if rt["interrupt"]:
+                slot["queue"].remove(thread_id)
+                CHANGED.notify_all()
+                return False
+            if not waited:
+                set_status(thread, "queued")
+                waited = True
+            CHANGED.wait(timeout=2)
+        slot["queue"].pop(0)
+        slot["running"].append(thread_id)
+        if waited:
+            set_status(thread, "running")
+        return True
+
+
+def release_slot(key, thread_id):
+    with CHANGED:
+        SLOTS[key]["running"].remove(thread_id)
+        CHANGED.notify_all()
+
+
+def running_turns():
+    return [t for t in THREADS.data.values() if (t["status"] in LIVE and not t.get("pendingTurn")) or RUNTIME.get(t["threadId"], {}).get("starting")]
+
+
+def finish_drain():
+    for engine in list(ENGINES):
+        drop_engine(engine)
+    THREADS.save()
+    log("drained: all turns finished, exiting for restart")
+    os._exit(0)
+
+
+def tool_hub_drain(a):
+    deadline = time.time() + a["timeoutMs"] / 1000 if a.get("timeoutMs") else None
+    with CHANGED:
+        DRAINING["requested"] = True
+        log(f"drain requested; waiting for {len(running_turns())} running turn(s)")
+        while running_turns():
+            if deadline and time.time() > deadline:
+                DRAINING["requested"] = False
+                waiting = [t["title"] for t in running_turns()]
+                resume_pending_turns()
+                return {"drained": False, "stillRunning": waiting}
+            CHANGED.wait(timeout=2)
+    threading.Timer(0.5, finish_drain).start()
+    return {"drained": True, "pid": os.getpid(), "queuedForRestart": [t["title"] for t in THREADS.data.values() if t.get("pendingTurn")]}
+
+
+def resume_pending_turns():
+    for thread in [t for t in THREADS.data.values() if t.get("pendingTurn")]:
+        pending = thread["pendingTurn"]
+        set_status(thread, "idle" if not thread["runs"] else thread["runs"][-1]["status"])
+        try:
+            start_turn(thread, pending["message"], pending["steeredFrom"], from_pending=True)
+            log(f"{thread['threadId']} queued turn started")
+        except HubError as e:
+            thread.pop("pendingTurn", None)
+            thread["lastError"] = str(e)
+            set_status(thread, "failed")
+            log(f"{thread['threadId']} queued turn could not start ({e})")
+
+
+def tool_hub_status(a):
+    now = time.time()
+    circuits = {p: {"state": circuit_state(p), "recentFailures": len([t for t in breaker_of(p)["failures"] if now - t < FAILURE_WINDOW_SECONDS]),
+                    "openUntil": iso(datetime.fromtimestamp(breaker_of(p)["openUntil"], timezone.utc)) if breaker_of(p)["openUntil"] else None,
+                    "probing": breaker_of(p)["probing"]} for p in sorted(set(PROVIDERS) | set(BREAKERS))}
+    titles = lambda ids: [THREADS.data[i]["title"] for i in ids if i in THREADS.data]
+    limits = {key: {"limit": limit, "running": titles(SLOTS.get(key, {"running": []})["running"]), "queued": titles(SLOTS.get(key, {"queue": []})["queue"])}
+              for key, limit in load_routing().get("limits", {}).items()}
+    return {"circuits": circuits, "limits": limits, "engines": len(ENGINES), "routing": ROUTING_PATH, "pid": os.getpid(), "draining": DRAINING["requested"]}
+
+
+STOP_STATUS = {"end_turn": "completed", "max_tokens": "completed", "max_turn_requests": "completed", "cancelled": "interrupted", "refusal": "failed"}
+
+
+def start_turn(thread, message, steered_from=None, from_pending=False):
+    rt = runtime_of(thread["threadId"])
+    require_unheld(thread)
+    with LOCK:
+        if thread["status"] in LIVE or rt.get("starting"):
+            raise HubError("thread already has an active run")
+        if DRAINING["requested"]:
+            thread["pendingTurn"] = {"message": message, "steeredFrom": steered_from}
+            set_status(thread, "queued")
+            log(f"{thread['threadId']} turn queued until the hub restarts (draining)")
+            return f"run:{thread['threadId']}:ordinal:{thread['runCount'] + 1}"
+        rt["starting"] = True
+    model, probe = choose_model(thread)
+    try:
+        proc = ensure_session(thread, model)
+    except BaseException:
+        with CHANGED:
+            rt["starting"] = False
+            CHANGED.notify_all()
+        if probe:
+            breaker_of(provider_of(model))["probing"] = False
+        raise
+    with LOCK:
+        rt.update({"buffer": None, "tools": {}, "interrupt": False, "model": model, "probe": probe, "quotaRecorded": False, "stalled": None})
+        thread["runCount"] += 1
+        run_id = f"run:{thread['threadId']}:ordinal:{thread['runCount']}"
+        thread["activeRunId"] = thread["latestRunId"] = run_id
+        thread["lastError"] = None
+        thread["runs"].append({"runId": run_id, "ordinal": thread["runCount"], "status": "running", "startedAt": now_iso(), "completedAt": None, "stopReason": None, "usage": None, "model": model, "error": None})
+        thread["runs"] = thread["runs"][-50:]
+        append_item(thread, {"type": "user_message", "status": "completed", "text": message, "senderThreadId": steered_from})
+        if from_pending:
+            thread.pop("pendingTurn", None)
+        set_status(thread, "running")
+        rt["starting"] = False
+    threading.Thread(target=run_turn, args=(thread, proc, message, run_id), daemon=True).start()
+    return run_id
+
+
+def settle_breaker(rt, status, error):
+    provider = provider_of(rt["model"])
+    if error and (QUOTA_FAILURE.search(error) or WATCHDOG_ABORT.search(error)) and not rt["quotaRecorded"]:
+        record_quota_failure(provider, error[:80])
+        rt["quotaRecorded"] = True
+    elif rt["probe"] and status == "completed" and not rt["quotaRecorded"]:
+        close_circuit(provider)
+    elif rt["probe"]:
+        breaker_of(provider)["probing"] = False
+
+
+def run_turn(thread, proc, message, run_id):
+    rt = runtime_of(thread["threadId"])
+    status, stop, usage, error = "failed", None, None, None
+    slot_key = None
+    try:
+        key, limit = limit_of(rt["model"])
+        if key and not acquire_slot(thread, key, limit):
+            status, stop = "interrupted", "cancelled"
+        else:
+            slot_key = key
+            rt["progressAt"] = time.time()
+            rt["active"] = True
+            try:
+                result = proc.call("session/prompt", {"sessionId": thread["sessionId"], "prompt": [{"type": "text", "text": message}]}, timeout=None)
+                stop = result.get("stopReason")
+                usage = result.get("_meta", {}).get("empryo", {}).get("usage")
+                status = STOP_STATUS.get(stop, "completed")
+            except (HubError, OSError) as e:
+                error = str(e)
+                status = "interrupted" if rt["interrupt"] else "failed"
+            if rt["stalled"]:
+                status, error = "failed", rt["stalled"]
+    except Exception as e:
+        status, error = "failed", f"{type(e).__name__}: {e}"
+    finally:
+        finish_run(thread, rt, proc, run_id, slot_key, status, stop, usage, error)
+
+
+def finish_run(thread, rt, proc, run_id, slot_key, status, stop, usage, error):
+    try:
+        with LOCK:
+            rt["active"] = False
+            reports = []
+            try:
+                flush_message(thread, rt)
+                for tool_id in list(rt["tools"]):
+                    rt["tools"][tool_id]["status"] = "failed"
+                    finish_tool(thread, rt, tool_id)
+                for request in rt["pending"].values():
+                    try:
+                        request["proc"].send({"jsonrpc": "2.0", "id": request["rpcId"], "result": {"outcome": {"outcome": "cancelled"}}})
+                    except OSError:
+                        pass
+                rt["pending"].clear()
+                if error:
+                    append_item(thread, {"type": "error", "status": "failed", "text": error})
+                append_item(thread, {"type": "run_finished", "status": status, "stopReason": stop, "usage": usage})
+                reports = [r["id"] for r in trailing_reports(read_items(thread))]
+            finally:
+                rt["pending"].clear()
+                thread["runs"][-1].update({"status": status, "completedAt": now_iso(), "stopReason": stop, "usage": usage, "model": rt["model"], "error": error, "reportItemIds": reports})
+                thread["activeRunId"] = None
+                thread["lastError"] = error
+                set_status(thread, status)
+    finally:
+        try:
+            if slot_key:
+                release_slot(slot_key, thread["threadId"])
+        finally:
+            try:
+                settle_breaker(rt, status, error)
+            finally:
+                release_engine(proc)
+    flush_titles()
+    log(f"{thread['threadId']} run {run_id} {status} on {rt['model']} ({stop or error})")
+    if status == "completed":
+        try:
+            linked = auto_link_pull_requests(thread)
+            if linked:
+                log(f"{thread['threadId']} linked pull requests {linked}")
+        except (HubError, OSError, subprocess.SubprocessError) as e:
+            log(f"{thread['threadId']} pull request auto-link skipped ({e})")
+
+
+def steer_turn(thread, message):
+    rt = runtime_of(thread["threadId"])
+    if rt["proc"] is None:
+        raise HubError("thread has no engine to steer")
+    result = rt["proc"].call("_empryo/session/steer", {"sessionId": thread["sessionId"], "prompt": [{"type": "text", "text": message}]})
+    with LOCK:
+        append_item(thread, {"type": "user_message", "status": "completed", "text": message, "steered": True})
+        THREADS.save()
+    return thread["activeRunId"], result
+
+
+def create_worktree(project, thread_id, title, strategy):
+    root = project["workspaceRoot"]
+    path = strategy.get("worktreePath") or f"{WORKTREES}/{slugify(project['title'])}/{slugify(title)}-{thread_id.split(':')[-1][:6]}"
+    if strategy["type"] == "existing_worktree":
+        if not os.path.isdir(path):
+            raise HubError(f"worktreePath {path} does not exist")
+        return path, git(path, "branch", "--show-current") or None
+    branch = strategy.get("branch") or f"empryo/{slugify(title)}-{thread_id.split(':')[-1][:6]}"
+    base = strategy.get("baseRef") or "HEAD"
+    if strategy.get("startFromOrigin"):
+        git(root, "fetch", "origin", base)
+        base = f"origin/{base}"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    branch_exists = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"], capture_output=True).returncode == 0
+    if branch_exists:
+        git(root, "worktree", "add", path, branch)
+    else:
+        git(root, "worktree", "add", "-b", branch, path, base)
+    return path, branch
+
+
+def strategy_of(args):
+    strategy = args.get("workspaceStrategy")
+    if strategy:
+        return strategy
+    if args.get("worktreePath"):
+        return {"type": "existing_worktree", "worktreePath": args["worktreePath"]}
+    if args.get("branch"):
+        return {"type": "worktree", "branch": args["branch"], "baseRef": args.get("baseRef")}
+    return {"type": "root"}
+
+
+def new_thread(args, created_by="agent", creation_source="mcp"):
+    project = project_of(args["projectId"])
+    selection, mode, task_type = resolve_launch(args)
+    thread_id = f"emp:{uuid.uuid4()}"
+    strategy = strategy_of(args)
+    worktree, branch = (None, None)
+    if strategy["type"] != "root":
+        worktree, branch = create_worktree(project, thread_id, args["title"], strategy)
+    thread = {
+        "threadId": thread_id, "projectId": project["id"], "title": args["title"], "createdBy": created_by, "creationSource": creation_source,
+        "status": "idle", "latestRunId": None, "activeRunId": None, "providerInstanceId": selection["instanceId"], "model": empryo_model(selection),
+        "modelSelection": selection, "runtimeMode": "full-access", "interactionMode": "default",
+        "linkedPullRequest": None, "pullRequests": [], "titleRegeneration": None, "branch": branch, "worktreePath": worktree,
+        "parentThreadId": args.get("delegatedFrom") or args.get("parentThreadId"), "relationshipToParent": "delegated" if args.get("delegatedFrom") or args.get("parentThreadId") else None,
+        "runCount": 0, "itemCount": 0, "archived": False, "settled": False, "settledAt": None, "snoozed": False, "snoozedUntil": None,
+        "pinned": False, "createdAt": now_iso(), "updatedAt": now_iso(), "sessionId": None, "runs": [], "lastError": None,
+        "clientRequestId": args.get("clientRequestId"), "taskType": task_type, "mode": mode,
+    }
+    with LOCK:
+        THREADS.data[thread_id] = thread
+        THREADS.save()
+    return thread
+
+
+def link_of(thread):
+    return f"http://127.0.0.1/empryo-hub/{thread['projectId']}/{thread['threadId']}"
+
+
+def thread_summary(thread):
+    rt = RUNTIME.get(thread["threadId"])
+    keys = ("threadId", "projectId", "title", "createdBy", "creationSource", "status", "latestRunId", "activeRunId", "providerInstanceId", "model",
+            "runtimeMode", "interactionMode", "linkedPullRequest", "pullRequests", "titleRegeneration", "branch", "worktreePath", "parentThreadId",
+            "relationshipToParent", "taskType", "mode", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError")
+    summary = {k: thread.get(k) for k in keys}
+    summary["link"] = link_of(thread)
+    summary["activeRunStartedAt"] = thread["runs"][-1]["startedAt"] if thread["activeRunId"] else None
+    summary["journalSessionId"] = thread["sessionId"] and thread["sessionId"].split(":")[0]
+    summary["cwd"] = thread_cwd(thread)
+    summary["pendingRequestCount"] = len(rt["pending"]) if rt else 0
+    return summary
+
+
+JSON_TYPES = {"object": dict, "string": str, "boolean": bool, "array": list, "number": (int, float), "integer": int}
+
+
+def validate(schema, value, path="arguments"):
+    expected = schema.get("type")
+    if expected:
+        ok = isinstance(value, JSON_TYPES[expected]) and not (expected in ("integer", "number") and isinstance(value, bool))
+        if not ok:
+            raise HubError(f"{path} must be {expected}")
+    if "enum" in schema and value not in schema["enum"]:
+        raise HubError(f"{path} must be one of {schema['enum']}")
+    if "minimum" in schema and value < schema["minimum"]:
+        raise HubError(f"{path} must be at least {schema['minimum']}")
+    if "maximum" in schema and value > schema["maximum"]:
+        raise HubError(f"{path} must be at most {schema['maximum']}")
+    if expected == "object":
+        for key in schema.get("required", []):
+            if key not in value:
+                raise HubError(f"{path}.{key} is required")
+        properties = schema.get("properties")
+        for key, item in value.items() if properties is not None else ():
+            if key not in properties:
+                raise HubError(f"{path}.{key} is not accepted; accepted: {sorted(properties)}")
+            validate(properties[key], item, f"{path}.{key}")
+    if expected == "array":
+        for index, item in enumerate(value):
+            validate(schema.get("items", {}), item, f"{path}[{index}]")
+
+
+def obj(properties, required=()):
+    return {"type": "object", "properties": properties, "required": list(required)}
+
+
+STR, INT, BOOL = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}
+MODEL_SELECTION = obj({"instanceId": STR, "model": STR, "provider": {}, "options": {}}, ["model"])
+STRATEGY = obj({"type": {"type": "string", "enum": ["root", "existing_worktree", "worktree"]}, "branch": STR, "worktreePath": STR, "baseRef": STR, "startFromOrigin": BOOL}, ["type"])
+SCHEDULE = obj({"type": {"type": "string", "enum": ["interval", "fixed_time"]}, "everyMs": {"type": "integer", "minimum": 60000}, "timeOfDay": STR,
+                "weekdays": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 6}}}, ["type"])
+STATUSES = ["idle", "preparing", "queued", "starting", "running", "waiting", "completed", "interrupted", "failed", "cancelled", "rolled_back"]
+
+
+def page(items, cursor, limit):
+    cursor = cursor or 0
+    window = items[cursor:cursor + limit]
+    return window, (cursor + limit if cursor + limit < len(items) else None)
+
+
+def tool_project_list(a):
+    projects = [p for p in PROJECTS.data.values() if not p["deletedAt"]]
+    window, nxt = page(projects, a.get("cursor"), a.get("limit", 100))
+    return {"projects": window, "nextCursor": nxt}
+
+
+def tool_project_create(a):
+    root = a["workspaceRoot"]
+    if not os.path.isdir(root):
+        raise HubError(f"workspaceRoot {root} is not a directory")
+    project = new_project(f"proj:{uuid.uuid4()}", a["title"], root)
+    project["defaultModelSelection"] = a.get("defaultModelSelection") or DEFAULT_MODEL
+    with LOCK:
+        PROJECTS.data[project["id"]] = project
+        PROJECTS.save()
+    return project
+
+
+def tool_project_update(a):
+    project = project_of(a["projectId"])
+    with LOCK:
+        for key in ("title", "workspaceRoot", "defaultModelSelection"):
+            if key in a:
+                project[key] = a[key]
+        if "archived" in a:
+            project["archivedAt"] = now_iso() if a["archived"] else None
+        project["updatedAt"] = now_iso()
+        PROJECTS.save()
+    return project
+
+
+def tool_thread_list(a):
+    with LOCK:
+        threads = [t for t in THREADS.data.values() if not t["archived"]]
+        if a.get("projectId"):
+            threads = [t for t in threads if t["projectId"] == a["projectId"]]
+        if a.get("statuses"):
+            threads = [t for t in threads if t["status"] in a["statuses"]]
+        if "settled" in a:
+            threads = [t for t in threads if t["settled"] == a["settled"]]
+        if "snoozed" in a:
+            threads = [t for t in threads if t["snoozed"] == a["snoozed"]]
+        if a.get("titleContains"):
+            threads = [t for t in threads if a["titleContains"].lower() in t["title"].lower()]
+        threads.sort(key=lambda t: t["updatedAt"], reverse=True)
+        window, nxt = page(threads, a.get("cursor"), a.get("limit", 50))
+        return {"projectId": a.get("projectId"), "currentThreadId": None, "threads": [thread_summary(t) for t in window], "nextCursor": nxt, "total": len(threads)}
+
+
+def clip(item, max_chars, offset=0):
+    if "text" in item:
+        text = item["text"][offset:]
+        if max_chars and len(text) > max_chars:
+            item = {**item, "text": text[:max_chars], "truncated": True}
+        else:
+            item = {**item, "text": text}
+    return item
+
+
+def tool_thread_read(a):
+    thread = thread_of(a["threadId"])
+    items = read_items(thread)
+    if a.get("itemId"):
+        items = [i for i in items if i["id"] == a["itemId"]]
+        if not items:
+            raise HubError(f"unknown itemId {a['itemId']}")
+        window, more = items, False
+    else:
+        if a.get("view", "messages") == "messages":
+            items = [i for i in items if i["type"] in ("user_message", "assistant_message")]
+        limit = a.get("limit", 50)
+        if "afterPosition" in a:
+            after = [i for i in items if i["position"] > a["afterPosition"]]
+            window, more = after[:limit], len(after) > limit
+        else:
+            window, more = items[-limit:], False
+    max_chars, offset = a.get("maxCharsPerItem"), a.get("textOffset", 0)
+    return {
+        "thread": {**thread_summary(thread), "heldBy": session_holder(thread)},
+        "recentRuns": thread["runs"][-a.get("runLimit", 10):],
+        "items": [clip(i, max_chars, offset) for i in window],
+        "nextPosition": window[-1]["position"] if window else a.get("afterPosition", 0),
+        "hasMore": more,
+    }
+
+
+def tool_thread_search(a):
+    needle = a["query"].lower()
+    matches = []
+    for thread in list(THREADS.data.values()):
+        if a.get("projectId") and thread["projectId"] != a["projectId"]:
+            continue
+        for item in read_items(thread):
+            if item["type"] in ("user_message", "assistant_message") and needle in item["text"].lower():
+                at = item["text"].lower().index(needle)
+                matches.append({"threadId": thread["threadId"], "projectId": thread["projectId"], "title": thread["title"], "itemId": item["id"],
+                                "role": "user" if item["type"] == "user_message" else "assistant", "snippet": item["text"][max(0, at - 80):at + 160], "createdAt": item["createdAt"]})
+    matches.sort(key=lambda m: m["createdAt"], reverse=True)
+    return {"matches": matches[:a.get("limit", 20)]}
+
+
+REQUEST_LOCK = threading.Lock()
+
+
+def tool_thread_launch(a):
+    request_id = a.get("clientRequestId")
+    with REQUEST_LOCK if request_id else contextlib.nullcontext():
+        existing = request_id and next((t for t in THREADS.data.values() if t.get("clientRequestId") == request_id), None)
+        if existing:
+            return {"threadId": existing["threadId"], "link": link_of(existing), "status": existing["status"], "projectId": existing["projectId"], "title": existing["title"]}
+        thread = new_thread(a)
+    result = {"threadId": thread["threadId"], "link": link_of(thread), "projectId": thread["projectId"], "title": thread["title"], "branch": thread["branch"], "worktreePath": thread["worktreePath"]}
+    try:
+        if a.get("message"):
+            result["runId"] = start_turn(thread, a["message"])
+        else:
+            release_engine(ensure_session(thread))
+            flush_titles()
+    except HubError as e:
+        thread["lastError"] = str(e)
+        set_status(thread, "failed")
+        raise HubError(f"{e} (thread {thread['threadId']} kept with status failed)")
+    result["status"] = thread["status"]
+    return result
+
+
+def tool_thread_send(a):
+    thread = thread_of(a["threadId"])
+    mode = a.get("mode", "auto")
+    if thread["status"] == "waiting":
+        return answer_waiting(thread, a["message"])
+    if thread["status"] == "running":
+        if mode == "start":
+            raise HubError("thread already has an active run")
+        run_id, _ = steer_turn(thread, a["message"])
+        return {"threadId": thread["threadId"], "link": link_of(thread), "runId": run_id, "status": "running", "delivery": "steered"}
+    if mode == "steer":
+        raise HubError("thread has no active run to steer")
+    run_id = start_turn(thread, a["message"])
+    return {"threadId": thread["threadId"], "link": link_of(thread), "runId": run_id, "status": thread["status"], "delivery": "started"}
+
+
+def answer_waiting(thread, message):
+    pending = pending_of(thread["threadId"])
+    request = next(iter(pending.values()))
+    options = request["questions"][0]["options"]
+    wanted = message.strip().lower()
+    chosen = next((o for o in options if o["label"].lower() == wanted), None)
+    if chosen is None:
+        raise HubError(f"thread waits for one of {[o['label'] for o in options]}; the reply must match an option label")
+    result = tool_pending_request({"threadId": thread["threadId"], "action": "answer", "requestId": request["requestId"], "optionId": chosen["optionId"]})
+    return {"threadId": thread["threadId"], "link": link_of(thread), "runId": thread["activeRunId"], "status": thread["status"], "delivery": "answered", "answer": result["answer"]}
+
+
+def tool_thread_interrupt(a):
+    thread = thread_of(a["threadId"])
+    if thread["status"] not in LIVE:
+        raise HubError(f"thread has no active run (status {thread['status']})")
+    rt = runtime_of(thread["threadId"])
+    if thread.get("pendingTurn"):
+        thread.pop("pendingTurn")
+        set_status(thread, "idle" if not thread["runs"] else thread["runs"][-1]["status"])
+        return {"threadId": thread["threadId"], "runId": None, "status": "pending_turn_dropped"}
+    rt["interrupt"] = True
+    if rt["proc"] is None:
+        raise HubError("thread has no engine to interrupt")
+    rt["proc"].notify("session/cancel", {"sessionId": thread["sessionId"]})
+    with CHANGED:
+        CHANGED.notify_all()
+    return {"threadId": thread["threadId"], "runId": thread["activeRunId"], "status": "interrupt_requested"}
+
+
+def tool_thread_wait(a):
+    thread = thread_of(a["threadId"])
+    deadline = time.time() + a.get("timeoutMs", 300000) / 1000
+
+    def busy():
+        family = [thread] + ([t for t in THREADS.data.values() if t["parentThreadId"] == thread["threadId"]] if a.get("untilDelegatedWorkSettled") else [])
+        return any(t["status"] in LIVE for t in family)
+
+    with CHANGED:
+        while busy() and time.time() < deadline:
+            CHANGED.wait(timeout=min(5, max(0.1, deadline - time.time())))
+        timed_out = busy()
+    last = thread["runs"][-1] if thread["runs"] else None
+    return {"threadId": thread["threadId"], "runId": last["runId"] if last else None, "status": thread["status"], "timedOut": timed_out, "resultRun": last}
+
+
+def tool_thread_configure(a):
+    thread = thread_of(a["threadId"])
+    selection = a["modelSelection"]
+    model = empryo_model(selection)
+    with LOCK:
+        thread["modelSelection"] = {"instanceId": selection["instanceId"], "model": selection["model"]}
+        thread["providerInstanceId"] = selection["instanceId"]
+        thread["model"] = model
+        THREADS.save()
+    if thread["sessionId"] and thread["status"] not in LIVE:
+        require_unheld(thread)
+        release_engine(ensure_session(thread))
+    return {"threadId": thread["threadId"], "modelSelection": thread["modelSelection"], "model": model, "providerInstanceId": thread["providerInstanceId"]}
+
+
+def tool_thread_materialize(a):
+    todo = [t for t in THREADS.data.values() if not t["archived"] and t["status"] == "idle" and not t["sessionId"] and (not a.get("threadId") or t["threadId"] == a["threadId"])]
+    if a.get("syncTitles"):
+        for t in THREADS.data.values():
+            t["titleDirty"] = bool(t["sessionId"]) and not t["archived"]
+    done, failed = [], []
+    for cwd in sorted({thread_cwd(t) for t in todo}):
+        for thread in [t for t in todo if thread_cwd(t) == cwd]:
+            try:
+                release_engine(ensure_session(thread))
+                done.append({"threadId": thread["threadId"], "title": thread["title"], "cwd": cwd, "sessionId": thread["sessionId"]})
+            except HubError as e:
+                failed.append({"threadId": thread["threadId"], "title": thread["title"], "error": str(e)})
+    flush_titles()
+    return {"materialized": done, "failed": failed, "titlesPending": [t["threadId"] for t in THREADS.data.values() if t.get("titleDirty")]}
+
+
+def tool_thread_update(a):
+    thread = thread_of(a["threadId"])
+    if "title" not in a:
+        raise HubError("title is required for rename")
+    with LOCK:
+        thread["title"] = a["title"]
+        thread["titleDirty"] = bool(thread["sessionId"])
+        THREADS.save()
+    flush_titles()
+    return {"threadId": thread["threadId"], "title": thread["title"], "titleApplied": not thread["titleDirty"]}
+
+
+def tool_thread_organize(a):
+    thread = thread_of(a["threadId"])
+    action = a["action"]
+    with LOCK:
+        stamp = now_iso()
+        if action == "settle":
+            thread.update(settled=True, settledAt=stamp)
+        elif action == "unsettle":
+            thread.update(settled=False, settledAt=None)
+        elif action == "snooze":
+            thread.update(snoozed=True, snoozedUntil=a.get("snoozedUntil"))
+        elif action == "unsnooze":
+            thread.update(snoozed=False, snoozedUntil=None)
+        elif action in ("archive", "unarchive"):
+            thread["archived"] = action == "archive"
+        elif action in ("pin", "unpin"):
+            thread["pinned"] = action == "pin"
+        THREADS.save()
+    return {"threadId": thread["threadId"], "action": action, "settled": thread["settled"], "snoozed": thread["snoozed"], "archived": thread["archived"], "pinned": thread["pinned"]}
+
+
+def tool_pending_request(a):
+    thread = thread_of(a["threadId"])
+    pending = pending_of(thread["threadId"])
+    action = a["action"]
+    if action == "list":
+        return {"threadId": thread["threadId"], "requestIds": list(pending)}
+    request = pending.get(a.get("requestId"))
+    if request is None:
+        raise HubError(f"no pending request {a.get('requestId')} on this thread")
+    public = {k: v for k, v in request.items() if k not in ("rpcId", "proc")}
+    if action == "read":
+        return public
+    options = request["questions"][0]["options"]
+    if "optionId" in a:
+        chosen = next((o for o in options if o["optionId"] == a["optionId"]), None)
+    else:
+        label = next(iter(a["answers"].values()), None) if a.get("answers") else a.get("answer")
+        chosen = next((o for o in options if o["label"] == label), None)
+    if chosen is None:
+        raise HubError(f"answer must match one of {[o['label'] for o in options]}")
+    request["proc"].send({"jsonrpc": "2.0", "id": request["rpcId"], "result": {"outcome": {"outcome": "selected", "optionId": chosen["optionId"]}}})
+    with LOCK:
+        del pending[request["requestId"]]
+        if not pending:
+            set_status(thread, "running")
+    return {"threadId": thread["threadId"], "requestId": request["requestId"], "status": "resolved", "answer": chosen["label"]}
+
+
+def tool_capabilities(a):
+    search = a.get("search", "").lower()
+    providers = [{"providerInstanceId": instance, "driverKind": instance, "displayName": name, "models": [{"id": m, "options": []} for m in models if search in m],
+                  "canRunChildTask": True, "canRunCrossProviderChildTask": True, "constraints": []} for instance, (name, models) in PROVIDER_MODELS.items()]
+    return {"parentThreadId": None, "inheritedProviderInstanceId": None, "inheritedModel": None, "inheritedOptions": [], "runtimeMode": "full-access",
+            "interactionMode": "default", "providers": providers, "features": ["worktrees", "steer", "schedules"]}
+
+
+PR_URL = re.compile(r"^https?://([^/]+)/([^/]+/[^/]+)/pull/(\d+)")
+
+
+def tool_link_pull_request(a):
+    thread = thread_of(a["threadId"])
+    if a.get("url"):
+        match = PR_URL.match(a["url"])
+        if not match:
+            raise HubError("url must look like https://host/owner/repo/pull/N")
+        host, repository, number = match.group(1), match.group(2), int(match.group(3))
+    elif a.get("repository") and a.get("number"):
+        host, repository, number = a.get("host", "github.com"), a["repository"], a["number"]
+    else:
+        raise HubError("give url, or repository and number")
+    pr = {"host": host, "repository": repository, "number": number, "url": f"https://{host}/{repository}/pull/{number}", "source": "linked", "state": "open"}
+    with LOCK:
+        if not any(p["url"] == pr["url"] for p in thread["pullRequests"]):
+            thread["pullRequests"].append(pr)
+        thread["linkedPullRequest"] = pr
+        THREADS.save()
+    return {"threadId": thread["threadId"], "pullRequests": thread["pullRequests"]}
+
+
+def tool_delegate_task(a):
+    parent = thread_of(a["parentThreadId"])
+    target = a.get("target", {})
+    selection = {"instanceId": target.get("providerInstanceId", parent["modelSelection"]["instanceId"]), "model": target.get("model", parent["modelSelection"]["model"])}
+    launch = {"projectId": parent["projectId"], "title": a.get("title") or a["task"].strip().splitlines()[0][:80],
+              "parentThreadId": parent["threadId"], "message": a["task"], "mode": a.get("mode")}
+    if target.get("model") or a.get("modelSelection"):
+        launch["modelSelection"] = a.get("modelSelection") or selection
+    if a.get("taskType"):
+        launch["taskType"] = a["taskType"]
+    if parent["worktreePath"]:
+        launch["workspaceStrategy"] = {"type": "existing_worktree", "worktreePath": parent["worktreePath"]}
+    return tool_thread_launch(launch)
+
+
+def next_run(schedule, after):
+    if schedule["type"] == "interval":
+        return after + timedelta(milliseconds=schedule["everyMs"])
+    hour, minute = map(int, schedule["timeOfDay"].split(":"))
+    weekdays = schedule.get("weekdays", list(range(7)))
+    local = after.astimezone()
+    for days in range(8):
+        day = local + timedelta(days=days)
+        candidate = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate > local and (candidate.isoweekday() % 7) in weekdays:
+            return candidate.astimezone(timezone.utc)
+    raise HubError("schedule has no weekday")
+
+
+def iso(moment):
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def tool_list_scheduled_tasks(a):
+    tasks = [t for t in SCHEDULES.data.values() if not a.get("projectId") or t["projectId"] == a["projectId"]]
+    return {"tasks": tasks}
+
+
+def tool_schedule_task(a):
+    with LOCK:
+        existing = SCHEDULES.data.get(a.get("scheduledTaskId"))
+        if existing is None:
+            for key in ("projectId", "prompt", "schedule", "title"):
+                if key not in a:
+                    raise HubError(f"{key} is required for a new scheduled task")
+            project_of(a["projectId"])
+            selection, mode, task_type = resolve_launch(a)
+            task = {
+                "scheduledTaskId": a.get("scheduledTaskId") or f"scheduled-task:{uuid.uuid4()}", "title": a["title"], "prompt": a["prompt"], "enabled": True,
+                "projectId": a["projectId"], "boundThreadId": None, "schedule": a["schedule"], "workspaceStrategy": {"type": "root"}, "modelSelection": selection, "mode": mode, "taskType": task_type,
+                "nextRunAt": None, "lastRunAt": None, "lastRunStatus": "never", "runCount": 0, "createdAt": now_iso(), "updatedAt": now_iso(),
+            }
+        else:
+            task = dict(existing)
+        for key in ("title", "prompt", "schedule", "enabled", "workspaceStrategy", "modelSelection", "mode", "taskType"):
+            if key in a:
+                task[key] = a[key]
+        if existing is not None and ("taskType" in a or "mode" in a) and "modelSelection" not in a:
+            task["modelSelection"], task["mode"], task["taskType"] = resolve_launch({"taskType": task["taskType"], "mode": task.get("mode")})
+        if a.get("bindToCurrentThread"):
+            if not a.get("threadId"):
+                raise HubError("bindToCurrentThread needs threadId")
+            task["boundThreadId"] = thread_of(a["threadId"])["threadId"]
+        empryo_model(task["modelSelection"])
+        task["nextRunAt"] = iso(next_run(task["schedule"], datetime.now(timezone.utc))) if task["enabled"] else None
+        task["updatedAt"] = now_iso()
+        SCHEDULES.data[task["scheduledTaskId"]] = task
+        SCHEDULES.save()
+        return task
+
+
+def fire_task(task):
+    try:
+        if task["boundThreadId"]:
+            result = tool_thread_send({"threadId": task["boundThreadId"], "message": task["prompt"]})
+        else:
+            result = tool_thread_launch({"projectId": task["projectId"], "title": task["title"], "message": task["prompt"],
+                                         "workspaceStrategy": task["workspaceStrategy"], "modelSelection": task["modelSelection"], "mode": task.get("mode"), "taskType": task.get("taskType")})
+        status, error = "succeeded", None
+    except HubError as e:
+        result, status, error = None, "failed", str(e)
+    with LOCK:
+        task.update(lastRunAt=now_iso(), lastRunStatus=status, lastRunError=error, runCount=task["runCount"] + 1)
+        SCHEDULES.save()
+    log(f"scheduled task {task['title']!r} {status} {error or ''}")
+    return {"scheduledTaskId": task["scheduledTaskId"], "status": status, "error": error, "threadId": result and result["threadId"]}
+
+
+def tool_run_scheduled_task_now(a):
+    task = SCHEDULES.data.get(a["scheduledTaskId"])
+    if task is None:
+        raise HubError(f"unknown scheduledTaskId {a['scheduledTaskId']}")
+    return fire_task(task)
+
+
+def scheduler_tick():
+    current = datetime.now(timezone.utc)
+    for task in list(SCHEDULES.data.values()):
+        if task["enabled"] and task["nextRunAt"] and task["nextRunAt"] <= iso(current):
+            try:
+                fire_task(task)
+            except Exception as e:
+                log(f"scheduled task {task['title']!r} crashed ({type(e).__name__}: {e})")
+            finally:
+                with LOCK:
+                    task["nextRunAt"] = iso(next_run(task["schedule"], current))
+                    SCHEDULES.save()
+
+
+def format_seconds(seconds):
+    return f"{seconds // 60:g} min" if seconds % 60 == 0 else f"{seconds:g} s"
+
+
+def stall_reason(rt, limits, now):
+    if rt["pending"]:
+        return None
+    if rt["tools"]:
+        running_since = min(tool["since"] for tool in rt["tools"].values())
+        if now - running_since > limits["toolSeconds"]:
+            return f"a tool call ran for over {format_seconds(limits['toolSeconds'])}"
+        return None
+    if now - rt["progressAt"] > limits["noProgressSeconds"]:
+        return f"no progress for {format_seconds(limits['noProgressSeconds'])}"
+    return None
+
+
+def kill_if_still_active(rt, proc):
+    if rt["active"]:
+        log(f"engine pid {proc.proc.pid} ignored session/cancel; killing it")
+        proc.proc.kill()
+
+
+def stall_check():
+    limits = load_routing()["turnLimits"]
+    now = time.time()
+    with LOCK:
+        for thread in THREADS.data.values():
+            rt = RUNTIME.get(thread["threadId"])
+            reason = rt and rt["active"] and not rt["stalled"] and stall_reason(rt, limits, now)
+            if not reason:
+                continue
+            rt["stalled"] = reason
+            log(f"{thread['threadId']} stalled ({reason}); cancelling the turn")
+            rt["proc"].notify("session/cancel", {"sessionId": thread["sessionId"]})
+            threading.Timer(CANCEL_GRACE_SECONDS, kill_if_still_active, (rt, rt["proc"])).start()
+
+
+def reaper_tick():
+    stall_check()
+    with LOCK:
+        idle = [key for key, proc in ENGINES.items() if engine_free(THREADS.data[key]) and time.time() - proc.last_used > IDLE_ENGINE_SECONDS]
+    for key in idle:
+        drop_engine(key, only_if_free=True)
+        log(f"engine for {THREADS.data[key]['title']} idle, closed")
+    flush_titles()
+
+
+def forever(name, seconds, tick):
+    while True:
+        time.sleep(seconds)
+        try:
+            tick()
+        except Exception as e:
+            log(f"{name} tick failed ({type(e).__name__}: {e})")
+
+
+def sh(cmd, cwd=None, timeout=120):
+    run = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    return run.returncode, run.stdout.strip(), run.stderr.strip()
+
+
+def gh_json(args):
+    code, out, err = sh(["gh", *args])
+    if code != 0:
+        raise HubError(f"gh {' '.join(args[:3])} failed: {err or out}")
+    return json.loads(out) if out else None
+
+
+def repo_root_of(worktree):
+    code, out, err = sh(["git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"])
+    if code != 0:
+        raise HubError(f"{worktree} is not a git checkout: {err}")
+    git_dir, common_dir = out.splitlines()
+    return os.path.dirname(common_dir), git_dir != common_dir
+
+
+def thread_repo(thread):
+    for pr in thread["pullRequests"]:
+        if pr.get("repository"):
+            return pr["repository"]
+    code, out, err = sh(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], cwd=thread_cwd(thread))
+    if code != 0:
+        raise HubError(f"cannot tell which GitHub repo this task belongs to: {err}")
+    return out
+
+
+def pull_requests_of(thread):
+    repo = thread_repo(thread)
+    if thread["branch"]:
+        found = gh_json(["pr", "list", "--repo", repo, "--head", thread["branch"], "--state", "all", "--json", "number,state,headRefOid,headRefName,baseRefName,url,isDraft,mergedAt"])
+    else:
+        found = []
+    linked = {p["number"] for p in thread["pullRequests"] if p.get("repository") == repo}
+    known = {p["number"] for p in found}
+    for number in linked - known:
+        found.append(gh_json(["pr", "view", str(number), "--repo", repo, "--json", "number,state,headRefOid,headRefName,baseRefName,url,isDraft,mergedAt"]))
+    return repo, found
+
+
+PR_URL_ANYWHERE = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
+
+
+def auto_link_pull_requests(thread):
+    if not thread.get("repoSlug"):
+        thread["repoSlug"] = thread_repo(thread)
+    repo = thread["repoSlug"]
+    numbers = set()
+    reports = "\n".join(report["text"] for report in trailing_reports(read_items(thread)))
+    for url_repo, number in PR_URL_ANYWHERE.findall(reports):
+        if url_repo.lower() == repo.lower():
+            numbers.add(int(number))
+    cwd = thread_cwd(thread)
+    branch = sh(["git", "-C", cwd, "branch", "--show-current"])[1]
+    default = sh(["git", "-C", cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])[1].removeprefix("origin/")
+    root_default = not thread["worktreePath"] and branch == default
+    if branch and not root_default:
+        for pr in gh_json(["pr", "list", "--repo", repo, "--head", branch, "--state", "all", "--json", "number"]):
+            numbers.add(pr["number"])
+    for number in sorted(numbers):
+        tool_link_pull_request({"threadId": thread["threadId"], "repository": repo, "number": number})
+    return sorted(numbers)
+
+
+def default_branch(root):
+    code, out, err = sh(["git", "-C", root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+    if code != 0:
+        raise HubError(f"cannot read origin's default branch: {err}")
+    return out.removeprefix("origin/")
+
+
+def cleanup_verdict(thread):
+    worktree = thread["worktreePath"]
+    if not worktree or not os.path.isdir(worktree):
+        return "keep", "the task has no worktree on disk", {}
+    root, linked = repo_root_of(worktree)
+    if not linked or os.path.realpath(root) == os.path.realpath(worktree):
+        return "keep", "the path is the repository's main checkout, not a linked worktree", {}
+    users = [t for t in THREADS.data.values() if t["worktreePath"] == worktree]
+    live = [t["title"] for t in users if t["status"] in LIVE]
+    if live:
+        return "keep", f"a live run uses this worktree ({live[0]})", {}
+    for user in users:
+        lock = session_holder(user)
+        if lock:
+            return "keep", f"an Empryo {lock['host']} (pid {lock['pid']}) holds a session in this worktree", {}
+    if not all(engine_free(user) for user in users):
+        return "keep", "an engine is still using this worktree", {}
+    code, status, err = sh(["git", "-C", worktree, "status", "--porcelain"])
+    if code != 0 or status:
+        return "keep", "the worktree has uncommitted or untracked files" if code == 0 else f"git status failed: {err}", {}
+    branch = sh(["git", "-C", worktree, "branch", "--show-current"])[1]
+    if not branch:
+        return "keep", "the worktree has a detached HEAD", {}
+    head = sh(["git", "-C", worktree, "rev-parse", "HEAD"])[1]
+    base = default_branch(root)
+    code, out, err = sh(["git", "-C", root, "fetch", "--quiet", "origin", base], timeout=120)
+    if code != 0:
+        return "keep", f"git fetch origin {base} failed: {err}", {}
+    repo, prs = pull_requests_of(thread)
+    evidence = {"branch": branch, "head": head, "base": base, "pullRequests": [{"number": p["number"], "state": p["state"], "headRefOid": p["headRefOid"]} for p in prs]}
+    if any(p["state"] == "OPEN" for p in prs):
+        return "keep", "an open pull request exists for the branch", evidence
+    ahead = int(sh(["git", "-C", root, "rev-list", "--count", f"origin/{base}..{head}"])[1])
+    evidence["commitsNotOnBase"] = ahead
+    finished = [p for p in prs if p["state"] in ("MERGED", "CLOSED") and p["headRefOid"] == head]
+    if not finished and ahead:
+        return "keep", f"{ahead} commit(s) are not on origin/{base} and no merged or closed pull request has this exact head", evidence
+    evidence["root"] = root
+    return "remove", None, evidence
+
+
+def tool_thread_cleanup(a):
+    thread = thread_of(a["threadId"])
+    verdict, reason, evidence = cleanup_verdict(thread)
+    result = {"threadId": thread["threadId"], "worktreePath": thread["worktreePath"], "branch": thread["branch"], "evidence": evidence}
+    if verdict == "keep":
+        return {**result, "action": "kept", "reason": reason}
+    if a.get("dryRun"):
+        return {**result, "action": "would_remove"}
+    root = evidence["root"]
+    code, out, err = sh(["git", "-C", root, "worktree", "remove", thread["worktreePath"]])
+    if code != 0:
+        return {**result, "action": "kept", "reason": f"git worktree remove refused: {err}"}
+    code, out, err = sh(["git", "-C", root, "branch", "-d", evidence["branch"]])
+    if code != 0 and any(p["state"] == "MERGED" and p["headRefOid"] == evidence["head"] for p in evidence["pullRequests"]):
+        code, out, err = sh(["git", "-C", root, "branch", "-D", evidence["branch"]])
+    log(f"cleanup removed {thread['worktreePath']} ({evidence['branch']}); branch delete: {err or out}")
+    return {**result, "action": "removed", "branchRemoved": code == 0, "branchNote": None if code == 0 else err}
+
+
+TASK_KEY = re.compile(r"[A-Z]{2,5}-\d+")
+VERDICT_LINE = re.compile(r"VERDICT: (PASS|FAIL)")
+
+
+def judge_review(text):
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    verdict = VERDICT_LINE.fullmatch(lines[-1]) if lines else None
+    if verdict is None:
+        return False, "the review does not end with a VERDICT: PASS or VERDICT: FAIL line"
+    return verdict.group(1) == "PASS", f"VERDICT: {verdict.group(1)}"
+
+
+def trailing_reports(items):
+    reports = []
+    for item in reversed(items):
+        if item["type"] == "assistant_message":
+            reports.append(item)
+        elif item["type"] not in ("run_finished", "notice", "error"):
+            break
+    return reports[::-1]
+
+
+def gate_report(thread, accepts):
+    run = thread["runs"][-1] if thread["runs"] else None
+    if run is None or run["status"] != "completed":
+        return None, "the latest run did not complete"
+    reports = trailing_reports(read_items(thread))
+    if not reports:
+        return None, "the latest run left no report"
+    if len({accepts(report["text"]) for report in reports}) > 1:
+        return None, f"the latest run left {len(reports)} reports that disagree"
+    return reports[0], None
+
+
+def last_run_end(thread):
+    ended = [r["completedAt"] for r in thread["runs"] if r["completedAt"]]
+    return ended[-1] if ended else ""
+
+
+def review_gate(thread):
+    key = TASK_KEY.search(thread["title"])
+    key_in_title = re.compile(rf"\b{re.escape(key.group(0))}\b") if key else None
+    reviews = [t for t in THREADS.data.values() if key_in_title and not t["archived"] and t["threadId"] != thread["threadId"] and t["projectId"] == thread["projectId"]
+               and key_in_title.search(t["title"]) and re.search("review", t["title"], re.I)]
+    if reviews:
+        review = max(reviews, key=lambda t: t["updatedAt"])
+        message, problem = gate_report(review, lambda text: judge_review(text)[0])
+        if message is None:
+            return False, f"the review thread '{review['title']}' has no usable report: {problem}", {"source": "review thread", "threadId": review["threadId"], "status": review["status"]}
+        passed, why = judge_review(message["text"])
+        evidence = {"source": "review thread", "threadId": review["threadId"], "title": review["title"], "verdict": why, "excerpt": message["text"][:300]}
+        if not passed:
+            return False, f"review gate not passed: {why}", evidence
+        if last_run_end(review) < last_run_end(thread):
+            return False, f"the review '{review['title']}' is older than the task's latest run", evidence
+        return True, None, evidence
+    return False, "no review thread found for this task; start one in the same project with the task key and 'review' in its title", {"source": None}
+
+
+def checks_verdict(repo, number):
+    scope, rows = "required", []
+    for required in (True, False):
+        code, out, err = sh(["gh", "pr", "checks", str(number), "--repo", repo, *(["--required"] if required else []), "--json", "name,bucket,workflow"])
+        rows = json.loads(out) if out else []
+        scope = "required" if required else "all"
+        if rows:
+            break
+    if not rows:
+        return False, "no checks are reported for this pull request yet", {"scope": scope}
+    bad = [f"{r['name']}: {r['bucket']}" for r in rows if r["bucket"] not in ("pass", "skipping")]
+    return not bad, (f"checks not green ({scope}): {', '.join(bad[:4])}" if bad else None), {"scope": scope, "count": len(rows)}
+
+
+def merge_method(repo):
+    settings = gh_json(["repo", "view", repo, "--json", "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,deleteBranchOnMerge"])
+    allowed = [m for m, flag in (("merge", "mergeCommitAllowed"), ("squash", "squashMergeAllowed"), ("rebase", "rebaseMergeAllowed")) if settings[flag]]
+    if not allowed:
+        raise HubError(f"{repo} allows no merge method")
+    recent = gh_json(["pr", "list", "--repo", repo, "--state", "merged", "--limit", "1", "--json", "number,mergeCommit"])
+    used = None
+    if recent and recent[0].get("mergeCommit"):
+        commit = gh_json(["api", f"repos/{repo}/commits/{recent[0]['mergeCommit']['oid']}"])
+        used = "merge" if len(commit["parents"]) == 2 else ("squash" if "squash" in allowed else "rebase")
+    method = used if used in allowed else (allowed[0] if len(allowed) == 1 else ("squash" if "squash" in allowed else allowed[0]))
+    return method, {"allowed": allowed, "lastMergedUsed": used, "deleteBranchOnMerge": settings["deleteBranchOnMerge"]}
+
+
+def merge_plan(thread):
+    repo, prs = pull_requests_of(thread)
+    open_prs = [p for p in prs if p["state"] == "OPEN"]
+    evidence = {"repo": repo}
+    if not open_prs:
+        return False, "no open pull request is linked to this task", evidence, None
+    if len(open_prs) > 1:
+        return False, f"{len(open_prs)} open pull requests match this branch", evidence, None
+    number = open_prs[0]["number"]
+    detail = gh_json(["pr", "view", str(number), "--repo", repo, "--json", "number,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,headRefOid,baseRefName"])
+    evidence["pullRequest"] = detail
+    if detail["isDraft"]:
+        return False, f"#{number} is a draft", evidence, None
+    if detail["mergeable"] != "MERGEABLE":
+        return False, f"#{number} is not mergeable ({detail['mergeable']})", evidence, None
+    if detail["mergeStateStatus"] not in ("CLEAN", "HAS_HOOKS", "UNSTABLE"):
+        return False, f"#{number} merge state is {detail['mergeStateStatus']}", evidence, None
+    if detail["reviewDecision"] == "CHANGES_REQUESTED":
+        return False, f"#{number} has requested changes", evidence, None
+    worktree = thread["worktreePath"]
+    if worktree and os.path.isdir(worktree) and sh(["git", "-C", worktree, "rev-parse", "HEAD"])[1] != detail["headRefOid"]:
+        return False, "the worktree's HEAD differs from the pull request head (unpushed or newer commits)", evidence, None
+    green, why, checks = checks_verdict(repo, number)
+    evidence["checks"] = checks
+    if not green:
+        return False, why, evidence, None
+    passed, why, gate = review_gate(thread)
+    evidence["reviewGate"] = gate
+    if not passed:
+        return False, why, evidence, None
+    method, method_evidence = merge_method(repo)
+    evidence["method"] = method_evidence
+    return True, None, evidence, {"repo": repo, "number": number, "method": method, "sha": detail["headRefOid"]}
+
+
+def tool_thread_merge(a):
+    thread = thread_of(a["threadId"])
+    if thread["status"] in LIVE:
+        return {"threadId": thread["threadId"], "merged": False, "refused": "the task thread still has a live run"}
+    ok, reason, evidence, plan = merge_plan(thread)
+    if not ok:
+        return {"threadId": thread["threadId"], "merged": False, "refused": reason, "evidence": evidence}
+    if a.get("dryRun"):
+        return {"threadId": thread["threadId"], "merged": False, "dryRun": True, "wouldMerge": plan, "evidence": evidence}
+    code, out, err = sh(["gh", "pr", "merge", str(plan["number"]), "--repo", plan["repo"], f"--{plan['method']}", "--match-head-commit", plan["sha"]], timeout=180)
+    if code != 0:
+        return {"threadId": thread["threadId"], "merged": False, "refused": f"gh pr merge failed: {err or out}", "evidence": evidence}
+    log(f"merged {plan['repo']}#{plan['number']} ({plan['method']}) for {thread['threadId']}")
+    tool_thread_organize({"threadId": thread["threadId"], "action": "settle"})
+    cleanup = tool_thread_cleanup({"threadId": thread["threadId"]})
+    return {"threadId": thread["threadId"], "merged": True, "pullRequest": plan["number"], "method": plan["method"], "evidence": evidence, "cleanup": cleanup}
+
+
+THREAD_ID = {"threadId": STR}
+LAUNCH_PROPS = {"projectId": STR, "title": STR, "modelSelection": MODEL_SELECTION, "runtimeMode": {"type": "string", "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"]},
+                "interactionMode": {"type": "string", "enum": ["default", "plan"]}, "workspaceStrategy": STRATEGY, "worktreePath": STR, "branch": STR, "baseRef": STR,
+                "message": STR, "clientRequestId": STR, "delegatedFrom": STR, "parentThreadId": STR,
+                "taskType": {"type": "string", "enum": TASK_TYPES}, "mode": {"type": "string", "enum": MODES}}
+
+TOOLS = {
+    "emp_project_list": (obj({"limit": {"type": "integer", "minimum": 1, "maximum": 100}, "cursor": {"type": "integer", "minimum": 0}}), tool_project_list),
+    "emp_project_create": (obj({"title": STR, "workspaceRoot": STR, "defaultModelSelection": MODEL_SELECTION}, ["title", "workspaceRoot"]), tool_project_create),
+    "emp_project_update": (obj({"projectId": STR, "title": STR, "workspaceRoot": STR, "defaultModelSelection": MODEL_SELECTION, "archived": BOOL}, ["projectId"]), tool_project_update),
+    "emp_thread_list": (obj({"projectId": STR, "allProjects": BOOL, "statuses": {"type": "array", "items": {"type": "string", "enum": STATUSES}}, "titleContains": STR,
+                            "settled": BOOL, "snoozed": BOOL, "cursor": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}), tool_thread_list),
+    "emp_thread_read": (obj({**THREAD_ID, "itemId": STR, "textOffset": {"type": "integer", "minimum": 0}, "view": {"type": "string", "enum": ["messages", "activity"]},
+                            "afterPosition": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                            "runLimit": {"type": "integer", "minimum": 1, "maximum": 50}, "maxCharsPerItem": {"type": "integer", "minimum": 1}}, ["threadId"]), tool_thread_read),
+    "emp_thread_search": (obj({"query": STR, "projectId": STR, "limit": {"type": "integer", "minimum": 1}}, ["query"]), tool_thread_search),
+    "emp_thread_launch": (obj(LAUNCH_PROPS, ["projectId", "title"]), tool_thread_launch),
+    "emp_thread_send": (obj({**THREAD_ID, "message": STR, "mode": {"type": "string", "enum": ["auto", "steer", "start"]}, "clientRequestId": STR}, ["threadId", "message"]), tool_thread_send),
+    "emp_thread_interrupt": (obj({**THREAD_ID, "runId": STR}, ["threadId"]), tool_thread_interrupt),
+    "emp_thread_wait": (obj({**THREAD_ID, "runId": STR, "timeoutMs": {"type": "number"}, "untilDelegatedWorkSettled": BOOL}, ["threadId"]), tool_thread_wait),
+    "emp_thread_configure": (obj({**THREAD_ID, "modelSelection": MODEL_SELECTION}, ["threadId", "modelSelection"]), tool_thread_configure),
+    "emp_hub_status": (obj({}), tool_hub_status),
+    "emp_hub_drain": (obj({"timeoutMs": {"type": "integer", "minimum": 1}}), tool_hub_drain),
+    "emp_thread_cleanup": (obj({**THREAD_ID, "dryRun": BOOL}, ["threadId"]), tool_thread_cleanup),
+    "emp_thread_merge": (obj({**THREAD_ID, "dryRun": BOOL}, ["threadId"]), tool_thread_merge),
+    "emp_thread_materialize": (obj({"threadId": STR, "syncTitles": BOOL}), tool_thread_materialize),
+    "emp_thread_update": (obj({**THREAD_ID, "action": {"type": "string", "enum": ["rename"]}, "title": STR, "clientRequestId": STR}, ["threadId", "action", "title"]), tool_thread_update),
+    "emp_thread_organize": (obj({**THREAD_ID, "action": {"type": "string", "enum": ["pin", "unpin", "snooze", "unsnooze", "settle", "unsettle", "archive", "unarchive"]}, "snoozedUntil": STR}, ["threadId", "action"]), tool_thread_organize),
+    "emp_pending_request": (obj({**THREAD_ID, "action": {"type": "string", "enum": ["list", "read", "answer"]}, "requestId": STR, "optionId": STR, "answers": {"type": "object"}, "answer": STR}, ["threadId", "action"]), tool_pending_request),
+    "orchestrator_capabilities": (obj({"search": STR}), tool_capabilities),
+    "list_scheduled_tasks": (obj({"projectId": STR}), tool_list_scheduled_tasks),
+    "schedule_task": (obj({"projectId": STR, "prompt": STR, "schedule": SCHEDULE, "title": STR, "enabled": BOOL, "bindToCurrentThread": BOOL, "threadId": STR,
+                           "workspaceStrategy": STRATEGY, "modelSelection": MODEL_SELECTION, "clientRequestId": STR, "scheduledTaskId": STR,
+                           "taskType": {"type": "string", "enum": TASK_TYPES}, "mode": {"type": "string", "enum": MODES}}), tool_schedule_task),
+    "run_scheduled_task_now": (obj({"scheduledTaskId": STR}, ["scheduledTaskId"]), tool_run_scheduled_task_now),
+    "link_pull_request": (obj({**THREAD_ID, "url": STR, "repository": STR, "number": {"type": "integer", "minimum": 1}, "host": STR}, ["threadId"]), tool_link_pull_request),
+    "delegate_task": (obj({"parentThreadId": STR, "task": STR, "title": STR, "taskType": {"type": "string", "enum": TASK_TYPES}, "mode": {"type": "string", "enum": MODES}, "modelSelection": MODEL_SELECTION, "target": obj({"providerInstanceId": STR, "driverKind": STR, "model": STR, "options": {}})}, ["parentThreadId", "task"]), tool_delegate_task),
+}
+
+
+def dispatch(request):
+    method = request["method"]
+    if method == "tools":
+        return sorted(TOOLS)
+    tool = request.get("tool")
+    if tool not in TOOLS:
+        raise HubError(f"unknown tool {tool!r}")
+    schema, handler = TOOLS[tool]
+    if method == "schema":
+        return schema
+    arguments = request.get("arguments") or {}
+    validate(schema, arguments)
+    return handler(arguments)
+
+
+class Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        try:
+            result = {"ok": True, "result": dispatch(json.loads(self.rfile.readline()))}
+        except HubError as e:
+            result = {"ok": False, "error": str(e)}
+        except Exception as e:
+            log(f"internal error: {type(e).__name__}: {e}")
+            result = {"ok": False, "error": f"internal error: {type(e).__name__}: {e}"}
+        self.wfile.write((json.dumps(result) + "\n").encode())
+
+
+class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+def main():
+    for directory in (HUB_DIR, WORKTREES, TRANSCRIPTS):
+        os.makedirs(directory, exist_ok=True)
+    for thread in THREADS.data.values():
+        thread["itemCount"] = len(read_items(thread))
+        thread.setdefault("taskType", None)
+        thread.setdefault("mode", "auto")
+        thread["model"] = empryo_model(thread["modelSelection"])
+        if thread["status"] in LIVE and not thread.get("pendingTurn"):
+            thread["status"] = "interrupted"
+            thread["activeRunId"] = None
+            if thread["runs"]:
+                thread["runs"][-1].update(status="interrupted", stopReason="hub_restart", completedAt=now_iso())
+            append_item(thread, {"type": "run_finished", "status": "interrupted", "stopReason": "hub_restart", "usage": None})
+    THREADS.save()
+    if os.path.exists(SOCKET):
+        os.unlink(SOCKET)
+    threading.Thread(target=forever, args=("scheduler", SCHEDULER_TICK_SECONDS, scheduler_tick), daemon=True).start()
+    threading.Thread(target=forever, args=("reaper", REAPER_TICK_SECONDS, reaper_tick), daemon=True).start()
+    threading.Thread(target=resume_pending_turns, daemon=True).start()
+    log(f"hub listening on {SOCKET} with {len(PROJECTS.data)} projects and {len(THREADS.data)} threads")
+    Server(SOCKET, Handler).serve_forever()
+
+
+main()

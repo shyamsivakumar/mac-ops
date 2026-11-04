@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+import argparse, fcntl, json, os, subprocess, sys, time
+
+DIR = os.environ.get("EMPQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+EMP = os.environ.get("EMPQ_EMP", "emp")
+LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
+MAX_ATTEMPTS = 3
+
+
+def path(name):
+    return os.path.join(DIR, name)
+
+
+def die(message):
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def log(message):
+    with open(path("dispatch.log"), "a") as f:
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+
+
+def cap():
+    with open(path("config.json")) as f:
+        return json.load(f)["cap"]
+
+
+def load():
+    if not os.path.exists(path("queue.json")):
+        return {"next": 1, "items": []}
+    with open(path("queue.json")) as f:
+        return json.load(f)
+
+
+def save(queue):
+    tmp = path("queue.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(queue, f, indent=1)
+    os.replace(tmp, path("queue.json"))
+
+
+def call(tool, args):
+    run = subprocess.run([EMP, "call", tool, "-"], input=json.dumps(args), capture_output=True, text=True)
+    return run.returncode, (run.stdout if run.returncode == 0 else run.stderr).strip()
+
+
+def live():
+    code, out = call("emp_thread_list", {"allProjects": True, "limit": 1, "statuses": LIVE_STATUSES})
+    return json.loads(out)["total"] if code == 0 else None
+
+
+def tool_for(args):
+    return "emp_thread_send" if "threadId" in args else "emp_thread_launch"
+
+
+class Lock:
+    def __init__(self, blocking):
+        self.blocking = blocking
+
+    def __enter__(self):
+        self.f = open(path("queue.lock"), "w")
+        try:
+            fcntl.flock(self.f, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            self.f.close()
+            return None
+        return self
+
+    def __exit__(self, *exc):
+        if self.f and not self.f.closed:
+            self.f.close()
+
+
+def wait_until_counted(before):
+    for _ in range(10):
+        n = live()
+        if n is not None and n > before:
+            return
+        time.sleep(1)
+
+
+def drain():
+    while True:
+        queue = load()
+        ready = sorted((i for i in queue["items"] if i.get("attempts", 0) < MAX_ATTEMPTS), key=lambda i: (-i["priority"], i["id"]))
+        if not ready:
+            return
+        n = live()
+        if n is None:
+            log("cannot read thread count, nothing started")
+            return
+        if n >= cap():
+            log(f"at cap {n}/{cap()}, {len(ready)} waiting")
+            return
+        item = ready[0]
+        code, out = 0, ""
+        for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]:
+            code, out = call(step["tool"], step["args"])
+            if code != 0:
+                break
+        if code == 0:
+            queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
+            save(queue)
+            log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})")
+            wait_until_counted(n)
+        else:
+            item["attempts"] = item.get("attempts", 0) + 1
+            save(queue)
+            log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
+
+
+def cmd_start(a):
+    args = json.loads(a.args)
+    tool = a.tool or tool_for(args)
+    if a.title and tool == "emp_thread_launch":
+        args.setdefault("title", a.title)
+    with Lock(True):
+        queue = load()
+        item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
+        queue["next"] += 1
+        queue["items"].append(item)
+        save(queue)
+        drain()
+        if any(i["id"] == item["id"] for i in load()["items"]):
+            print(f"queued #{item['id']}")
+        else:
+            print(f"started #{item['id']}")
+
+
+def cmd_dispatch(a):
+    with open(path("dispatch.last"), "w") as f:
+        f.write(str(int(time.time())))
+    with Lock(False) as lock:
+        if lock is None:
+            log("lock held by another run, skipping")
+            return
+        drain()
+
+
+def cmd_create(a):
+    args = json.loads(a.args)
+    if args.get("message"):
+        die("refused: create is for idle threads, this has a message. Use empq start.")
+    code, out = call("emp_thread_launch", args)
+    print(out)
+    sys.exit(code)
+
+
+def cmd_list(a):
+    for i in sorted(load()["items"], key=lambda i: (-i["priority"], i["id"])):
+        print(f"#{i['id']} p{i['priority']} {i['tool']} {i['title']}" + (f" (failed {i['attempts']}x)" if i.get("attempts") else ""))
+
+
+def cmd_drop(a):
+    with Lock(True):
+        queue = load()
+        kept = [i for i in queue["items"] if i["id"] != a.id]
+        if len(kept) == len(queue["items"]):
+            die(f"no queue item #{a.id}")
+        queue["items"] = kept
+        save(queue)
+    print(f"dropped #{a.id}")
+
+
+def cmd_status(a):
+    print(json.dumps({"cap": cap(), "live": live(), "queued": len(load()["items"])}))
+
+
+def main():
+    p = argparse.ArgumentParser(prog="empq")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("start")
+    s.add_argument("args")
+    s.add_argument("--title")
+    s.add_argument("--priority", type=int, default=0)
+    s.add_argument("--tool", choices=["emp_thread_send", "emp_thread_launch", "delegate_task"])
+    s.set_defaults(fn=cmd_start)
+    c = sub.add_parser("create")
+    c.add_argument("args")
+    c.set_defaults(fn=cmd_create)
+    sub.add_parser("list").set_defaults(fn=cmd_list)
+    d = sub.add_parser("drop")
+    d.add_argument("id", type=int)
+    d.set_defaults(fn=cmd_drop)
+    sub.add_parser("status").set_defaults(fn=cmd_status)
+    sub.add_parser("dispatch").set_defaults(fn=cmd_dispatch)
+    a = p.parse_args()
+    a.fn(a)
+
+
+main()
