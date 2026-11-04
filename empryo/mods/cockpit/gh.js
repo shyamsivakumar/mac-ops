@@ -1,6 +1,8 @@
 import { exec } from "herdr";
 
 const TTL = 60000;
+const RETRY = 60000;
+const FRESH = 600000;
 const POOL = 4;
 const FINAL = new Set(["MERGED", "CLOSED"]);
 const FAILED = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR", "STARTUP_FAILURE"]);
@@ -10,6 +12,9 @@ const cache = new Map();
 
 export const prKey = (pr) => `${pr.repo}#${pr.number}`;
 export const prState = (pr) => cache.get(prKey(pr))?.data ?? null;
+export const prEntries = (prs) => prs.map((pr) => [prKey(pr), prState(pr), cache.get(prKey(pr))?.at ?? 0]);
+export const seedPrs = (entries) => entries.forEach(([key, data, at]) => cache.set(key, { at, data }));
+export const prFresh = (pr) => Date.now() - (cache.get(prKey(pr))?.at ?? 0) < FRESH;
 
 function ciOf(rollup) {
   if (!rollup?.length) return "none";
@@ -31,15 +36,17 @@ export async function refreshPrs(prs) {
   const due = new Map();
   for (const pr of prs) {
     const entry = cache.get(prKey(pr));
-    if (entry && (FINAL.has(entry.data?.state) || now - entry.at < TTL)) continue;
+    if (entry && (FINAL.has(entry.data?.state) || now - entry.at < TTL || now - (entry.failedAt ?? 0) < RETRY)) continue;
     due.set(prKey(pr), pr);
   }
   const queue = [...due.values()];
   await Promise.all(Array.from({ length: Math.min(POOL, queue.length) }, async () => {
     for (let pr = queue.shift(); pr; pr = queue.shift()) {
-      const old = cache.get(prKey(pr));
-      const data = await fetchPr(pr).catch(() => old?.data ?? null);
-      cache.set(prKey(pr), { at: Date.now(), data });
+      try {
+        cache.set(prKey(pr), { at: Date.now(), data: await fetchPr(pr) });
+      } catch {
+        cache.set(prKey(pr), { ...(cache.get(prKey(pr)) ?? { at: 0, data: null }), failedAt: Date.now() });
+      }
     }
   }));
 }

@@ -1,14 +1,16 @@
 // The hub as the cockpit sees it: threads that need Shyam, grouped by project, and the calls that act on them.
 
-import { exec, home, readTextFile, run } from "herdr";
+import { exec, home, notify, readTextFile, run, terminals } from "herdr";
 
 const LIVE = ["preparing", "queued", "starting", "running", "waiting", "failed", "interrupted"];
 const RUNNING = new Set(["preparing", "queued", "starting", "running"]);
+const RUNNING_OR_WAITING = new Set([...RUNNING, "waiting"]);
 const KIND = { waiting: "wait", failed: "fail", interrupted: "stop", completed: "done", idle: "idle" };
 const IDLE_PAGES = 4;
 const DEFAULT_CAP = 6;
 const URGENCY = { wait: 0, fail: 1, stop: 2, run: 3, done: 4, idle: 5 };
 const TASK_ID = /[A-Z]{2,5}-\d+/;
+const REVIEW_TITLE = /^[A-Z]{2,5}-\d+ (?:gate )?review\b/i;
 const PAGES = 3;
 
 let idleThreads = { at: 0, list: [] };
@@ -88,6 +90,8 @@ function card(thread, names) {
     provider: thread.providerInstanceId,
     model: thread.model ?? "",
     taskType: thread.taskType ?? "",
+    review: thread.taskType ? thread.taskType === "review" : REVIEW_TITLE.test(thread.title),
+    runs: thread.runCount ?? 0,
     at: Date.parse(thread.updatedAt),
     created: Date.parse(thread.createdAt),
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
@@ -120,7 +124,7 @@ const TASK_STATUS = { run: "running", wait: "waiting", fail: "failed", stop: "st
 function taskMap(cards) {
   const tasks = {};
   for (const c of [...cards].sort((a, b) => b.at - a.at)) {
-    if (c.task && !tasks[c.task]) tasks[c.task] = { status: TASK_STATUS[c.kind], title: c.title, key: c.key, session: c.session, cwd: c.cwd, running: c.kind === "run" || c.kind === "wait" };
+    if (c.task && !tasks[c.task]) tasks[c.task] = { status: TASK_STATUS[c.kind], title: c.title, key: c.key };
   }
   return tasks;
 }
@@ -136,11 +140,11 @@ export async function load() {
     threads({ statuses: ["completed"], settled: false }),
     projectNames(),
   ]);
-  const cards = [...live, ...finished].filter((t) => !t.snoozed).map((t) => card(t, names));
-  for (const c of cards.filter((c) => c.kind === "wait")) {
+  const cards = [...live, ...finished].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
+  await Promise.all(cards.filter((c) => c.kind === "wait").map(async (c) => {
     const thread = live.find((t) => t.threadId === c.key);
-    askOf(thread).then((text) => (c.context = text), () => (c.context = "Waiting for your answer"));
-  }
+    c.context = await askOf(thread).catch(() => "Waiting for your answer");
+  }));
   const count = (kind) => cards.filter((c) => c.kind === kind).length;
   return {
     at: Date.now(),
@@ -155,7 +159,7 @@ export async function load() {
 
 export async function loadBacklog() {
   const [idle, names] = await Promise.all([idleList(), projectNames()]);
-  const queued = idle.filter((t) => !t.snoozed).map((t) => card(t, names));
+  const queued = idle.filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
   return { backlog: group(queued).sort((a, b) => a.at - b.at), tasks: taskMap(queued) };
 }
 
@@ -175,6 +179,8 @@ function judge(text) {
   return { state: "unknown", label: "rev ?" };
 }
 
+export const verdictEntries = (threads) => threads.filter((c) => verdicts.has(c.key)).map((c) => [c.key, verdicts.get(c.key)]);
+export const seedVerdicts = (entries) => entries.forEach(([key, value]) => verdicts.set(key, value));
 export const verdictOf = (thread) => verdicts.get(thread.key)?.verdict ?? null;
 export const runModelOf = (thread) => verdicts.get(thread.key)?.runModel ?? "";
 
@@ -202,24 +208,35 @@ export async function queueCap() {
   return Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_CAP;
 }
 
-const SESSION_GONE = `
-test -d "$1" || exit 0
-test -d "$1/.empryo/sessions/$2" && exit 1
-dir=$(sqlite3 -readonly "$3" "SELECT session_dir FROM threads WHERE id = '$2'" 2>/dev/null)
-test -n "$dir" && test -d "$dir" && exit 1
-exit 0
-`;
+const SHOW_POLL = 50;
+const SHOW_LIMIT = 8000;
 
-const sessionGone = async (cwd, session) => (await exec("sh", ["-c", SESSION_GONE, "sh", cwd, session, `${home()}/.empryo/threads.db`])).code === 0;
+async function reusableShow(name, thread) {
+  const kinds = RUNNING_OR_WAITING.has(thread.status) ? ["empryo", "follow"] : thread.session ? ["empryo"] : ["history", "empryo"];
+  const lists = await Promise.all(kinds.map((kind) => exec(`${home()}/.local/bin/hc`, ["ls", "--json", "--label", `emp.show=${kind}`])));
+  for (const r of lists) {
+    const found = r.code === 0 ? JSON.parse(r.stdout).terminals.find((t) => t.name === name && t.state === "live") : null;
+    if (found) return found.address;
+  }
+  return null;
+}
 
-export async function openThread(thread, running) {
-  const name = `${thread.task || thread.title}`;
-  const history = !running && (await sessionGone(thread.cwd, thread.session));
-  const argv = running || history
-    ? [`${home()}/.local/bin/emp`, "follow", thread.key]
-    : ["/opt/homebrew/bin/empryo", "--session", thread.session, "--cwd", thread.cwd];
-  const label = running ? "follow" : history ? "history" : "empryo";
-  run("tab.new", { name: `${name} · ${label}`, folder: thread.cwd, argv });
+export async function openThread(thread, cx) {
+  const name = `show-${thread.key.slice(4, 12)}`;
+  const reuse = await reusableShow(name, thread);
+  if (reuse) return run("terminal.peek", { terminal: reuse });
+  const before = terminals().find((t) => t.name === name)?.address;
+  let finished = false;
+  const shown = exec(`${home()}/.local/bin/emp`, ["show", thread.key]).finally(() => (finished = true));
+  const until = Date.now() + SHOW_LIMIT;
+  while (!finished) {
+    const fresh = terminals().find((t) => t.name === name && t.state === "live" && t.address !== before);
+    if (fresh) return run("terminal.peek", { terminal: fresh.address });
+    if (Date.now() > until) return notify({ title: "Could not open the thread", body: "The terminal did not appear in time.", level: "error" });
+    await cx.sleep(SHOW_POLL);
+  }
+  const r = await shown;
+  if (r.code !== 0) notify({ title: "Could not open the thread", body: r.stderr.trim(), level: "error" });
 }
 
 export const sendArgs = (key, message) => ({ threadId: key, message, mode: "auto" });
