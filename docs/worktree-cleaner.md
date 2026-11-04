@@ -36,7 +36,7 @@ launchctl bootstrap "$DOMAIN" ~/Library/LaunchAgents/$LABEL.plist
 launchctl enable "$DOMAIN/$LABEL"
 ```
 
-This task added the plist but did not install or run it. Run the Empryo regression fixture with `python3 verification/worktree-cleaner/check_empryo.py`. It creates temporary repositories, a local bare remote, and stub GitHub/Empryo CLIs. It covers cross-project pagination, worktreePath and cwd-only holds, unfinished statuses, incomplete/unavailable listings, late-arriving threads, dirty and unpublished trees, and dry-run/apply behavior. The earlier T3 fixture `check.py` is unchanged historical coverage, not the current cleaner's entry point.
+This task added the plist but did not install or run it. Run the complete Empryo regression fixture with `python3 verification/worktree-cleaner/check.py`. It creates temporary repositories, a local bare remote, and stub GitHub/Empryo CLIs. It covers cross-project pagination, worktreePath and cwd-only holds, unfinished statuses, incomplete/unavailable listings, late-arriving threads, dirty and unpublished trees, and dry-run/apply behavior. `check.py` delegates to the Empryo proof in `check_empryo.py`; there is no retired T3 fixture or database dependency.
 
 ## Limits
 
