@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+import json, os, socket, sys, threading, time
+
+SOCKET = os.environ.get("EMP_HUB_SOCKET", os.path.expanduser("~/.empryo-hub/hub.sock"))
+
+
+def fail(message, code=1):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+class HubError(Exception):
+    pass
+
+
+def ask(request):
+    with socket.socket(socket.AF_UNIX) as s:
+        try:
+            s.connect(SOCKET)
+        except OSError as e:
+            raise HubError(f"cannot reach emp-hub at {SOCKET}: {e}")
+        s.sendall((json.dumps(request) + "\n").encode())
+        reply = s.makefile("rb").readline()
+    if not reply:
+        raise HubError("emp-hub closed the connection without a reply")
+    response = json.loads(reply)
+    if not response["ok"]:
+        raise HubError(response["error"])
+    return response["result"]
+
+
+def hub_pid():
+    try:
+        return ask({"method": "call", "tool": "emp_hub_status", "arguments": {}})["pid"]
+    except HubError:
+        return None
+
+
+def drain(restart):
+    old = hub_pid()
+    print(f"draining hub pid {old}: no new turns start; waiting for running turns to finish", flush=True)
+    result = ask({"method": "call", "tool": "emp_hub_drain", "arguments": {}})
+    print(json.dumps(result), flush=True)
+    if not restart:
+        return
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        time.sleep(1)
+        pid = hub_pid()
+        if pid and pid != old:
+            print(f"hub restarted: pid {pid}")
+            return
+    fail("the hub did not come back within 120 s")
+
+
+def follow(thread_id):
+    interactive = sys.stdin.isatty()
+    prompt = "> " if interactive else ""
+    lock = threading.Lock()
+
+    def say(text, redraw=True):
+        with lock:
+            print(f"\r\033[K{text}" if interactive else text, flush=True)
+            if interactive and redraw:
+                print(prompt, end="", flush=True)
+
+    def steer():
+        for line in sys.stdin:
+            message = line.strip()
+            if not message:
+                continue
+            say(f"[you] {message}")
+            try:
+                result = ask({"method": "call", "tool": "emp_thread_send", "arguments": {"threadId": thread_id, "message": message}})
+                say(f"[sent] {json.dumps(result)}")
+            except HubError as e:
+                say(f"[send failed] {e}")
+
+    threading.Thread(target=steer, daemon=True).start()
+    position = 0
+    try:
+        while True:
+            view = ask({"method": "call", "tool": "emp_thread_read", "arguments": {"threadId": thread_id, "view": "activity", "afterPosition": position, "limit": 100}})
+            for item in view["items"]:
+                label = item["type"].replace("_", " ")
+                say(f"[{item['createdAt'][11:19]}] {label}: {(item.get('text') or item.get('title') or item.get('stopReason') or '')}")
+            position = view["nextPosition"]
+            if not view["hasMore"] and view["thread"]["status"] not in ("running", "waiting", "queued"):
+                say(f"\nRun {view['thread']['status']}. To continue, open the task from the Herdr board.", redraw=False)
+                return
+            if not view["hasMore"]:
+                time.sleep(1)
+    except KeyboardInterrupt:
+        print()
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["tools"]:
+        print("\n".join(ask({"method": "tools"})))
+    elif args[:1] == ["schema"] and len(args) == 2:
+        print(json.dumps(ask({"method": "schema", "tool": args[1]}), indent=2))
+    elif args[:1] == ["call"] and len(args) in (2, 3):
+        raw = args[2] if len(args) == 3 else "{}"
+        arguments = json.loads(sys.stdin.read() if raw == "-" else raw)
+        print(json.dumps(ask({"method": "call", "tool": args[1], "arguments": arguments}), indent=2))
+    elif args[:1] == ["drain"] and set(args[1:]) <= {"--restart"}:
+        drain("--restart" in args)
+    elif args[:1] == ["follow"] and len(args) == 2:
+        follow(args[1])
+    else:
+        fail("usage: emp follow <threadId> | drain [--restart] | tools | schema <tool> | call <tool> [json-args | -]", 2)
+
+
+try:
+    main()
+except HubError as e:
+    fail(str(e))
