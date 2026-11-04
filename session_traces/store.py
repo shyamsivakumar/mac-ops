@@ -83,8 +83,10 @@ def load_day_traces(day: str, *, root: Path | None = None) -> list[dict[str, Any
         if path.name == "index.ndjson":
             continue
         try:
-            traces.append(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError):
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(value, dict):
+                traces.append(value)
+        except (OSError, ValueError, RecursionError):
             continue
     return traces
 
@@ -124,15 +126,14 @@ def export_posthog(
         return {"exported": 0, "skipped": "no_api_key"}
     host = (host or posthog_host()).rstrip("/")
     batch = []
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     for trace in traces:
         scrubbed = scrub_trace(trace)
 
         # Use the original identity so distinct IDs do not collapse after redaction.
-        # Older traces may lack a run ID; their scrubbed content is a stable fallback.
+        # Older traces use stable origin fields, never mutable status or usage.
         identity = [trace.get("source") or "", trace.get("run_id")]
         if not identity[1]:
-            identity.append(scrubbed)
+            identity.extend(trace.get(k) for k in ("thread_id", "ordinal", "started_at", "requested_at"))
         event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True, separators=(",", ":"))))
         # Export only known scalar metadata; legacy traces can contain arbitrary
         # nested messages and other free text under unexpected keys.
@@ -154,9 +155,9 @@ def export_posthog(
                 "uuid": event_id,
                 "distinct_id": str(properties.get("thread_id") or properties.get("run_id") or "unknown"),
                 "properties": properties,
-                "timestamp": properties.get("completed_at")
-                or properties.get("started_at")
-                or now,
+                "timestamp": properties.get("started_at")
+                or properties.get("requested_at")
+                or "1970-01-01T00:00:00Z",
             }
         )
     if dry_run:
