@@ -338,30 +338,30 @@ const ASK_CHROME = 38;
 const ASK_LINE = 15;
 const ASK_CONTROL = 20;
 const ASK_GAP = 5;
+const ASK_REPLY = 80;
 export const ASKS_HEAD = 34 + 34 + 16;
 
 function optionLines(options) {
   let lines = 0;
   let used = 0;
   for (const o of options) {
-    const w = o.length * OPTION_CHAR + OPTION_PAD;
+    const w = Math.min(o.length * OPTION_CHAR + OPTION_PAD, ASK_TEXT_WIDTH);
     if (used && used + w + 4 > ASK_TEXT_WIDTH) {
       lines++;
       used = 0;
     }
     used += w + 4;
-    while (used > ASK_TEXT_WIDTH) {
-      lines++;
-      used -= ASK_TEXT_WIDTH;
-    }
+    lines += Math.ceil((o.length * OPTION_CHAR) / (ASK_TEXT_WIDTH - OPTION_PAD)) - 1;
   }
   return used ? lines + 1 : lines;
 }
 
 function askHeight(a) {
   const question = Math.ceil(a.text.length * ASK_CHAR / ASK_TEXT_WIDTH) * ASK_LINE;
+  const recommended = a.recommended ? Math.ceil(recommendedLine(a.recommended).length * OPTION_CHAR / ASK_TEXT_WIDTH) * ASK_LINE + ASK_GAP : 0;
   const choices = a.options.length ? optionLines(a.options) * (ASK_CONTROL + 4) - 4 + ASK_GAP : 0;
-  return ASK_CHROME + question + (a.recommended ? ASK_LINE + ASK_GAP : 0) + choices + ASK_GAP + ASK_CONTROL;
+  const suggestion = a.recommended?.kind === "text" ? Math.max(0, Math.ceil(a.recommended.text.length * OPTION_CHAR / (ASK_TEXT_WIDTH - OPTION_PAD - ASK_REPLY)) - 1) * ASK_LINE : 0;
+  return ASK_CHROME + question + recommended + choices + suggestion + ASK_GAP + ASK_CONTROL;
 }
 
 export const asksHeight = (list) => list.reduce((sum, a) => sum + askHeight(a), 0);
@@ -404,9 +404,9 @@ function segment(t, id, label, selected, recommended, onClick) {
 }
 
 function option(t, id, label, selected, recommended, onClick) {
-  return div().id(id).max_w_full().min_h(20).px(8).py(2).flex().items_center().rounded(4).border_1().border_color(selected || recommended ? t.accent : t.input)
+  return div().id(id).max_w_full().min_w(0).min_h(20).px(8).py(2).flex().items_center().rounded(4).border_1().border_color(selected || recommended ? t.accent : t.input)
     .bg(selected ? t.accent : t.raised).text_size(10.5).font_medium().text_color(selected ? t.background : recommended ? t.accent : t.foreground)
-    .cursor_pointer().hover((s) => s.opacity(0.85)).on_click(onClick).child(recommended ? `★ ${label}` : label);
+    .cursor_pointer().hover((s) => s.opacity(0.85)).on_click(onClick).child(div().min_w(0).child(recommended ? `★ ${label}` : label));
 }
 
 function ask(t, { text: q, options, recommended: rec }, i, view, cb) {
