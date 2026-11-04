@@ -143,8 +143,7 @@ def export_posthog(
         event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True, separators=(",", ":"))))
         # Projection is an explicit typed allowlist, not general-purpose scrubbing.
         properties = safe_export_projection(trace)
-        if terminal:
-            properties["status"] = properties["final_state"] = status.lower()
+        properties["status"] = properties["final_state"] = status.lower()
         properties["$lib"] = "mac-ops-session-traces"
         batch.append(
             {

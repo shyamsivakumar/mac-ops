@@ -67,6 +67,12 @@ def main():
             assert credential not in blob and "PRIVATE MESSAGE" not in blob
         print("credential_shape_survives_local: false (AIza, HF, arbitrary unknown)")
         print("credential_shape_survives_mock_capture: false")
+    for model in ("gpt-5-codex", "claude-opus-4-5", "default"):
+        assert scrub_trace({"source": "t3", "model": model})["model"] == model
+        with patch("urllib.request.urlopen", capture):
+            export_posthog([dict(trace, source="t3", model=model)], api_key="synthetic-key")
+        assert captures[-1]["batch"][0]["properties"]["model"] == model
+    print("legacy T3 known model IDs: retained locally and in typed capture")
     captures.clear()
     with patch("urllib.request.urlopen", capture):
         running = dict(trace, status="running", final_state="running", completed_at=None)
