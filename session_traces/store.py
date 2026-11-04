@@ -6,6 +6,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -126,27 +127,35 @@ def export_posthog(
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     for trace in traces:
         scrubbed = scrub_trace(trace)
-        distinct = scrubbed.get("thread_id") or scrubbed.get("run_id") or "unknown"
+
+        # Use the original identity so distinct IDs do not collapse after redaction.
+        # Older traces may lack a run ID; their scrubbed content is a stable fallback.
+        identity = [trace.get("source") or "", trace.get("run_id")]
+        if not identity[1]:
+            identity.append(scrubbed)
+        event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True, separators=(",", ":"))))
+        # Export only known scalar metadata; legacy traces can contain arbitrary
+        # nested messages and other free text under unexpected keys.
+        allowed = {
+            "schema", "source", "run_id", "thread_id", "ordinal", "project_id",
+            "provider", "model", "status", "requested_at", "started_at",
+            "completed_at", "duration_ms", "cost_usd", "final_state",
+        }
+        properties = {
+            k: v for k, v in scrubbed.items()
+            if k in allowed and (v is None or isinstance(v, (str, int, float, bool)))
+        }
+        calls = scrubbed.get("tool_calls")
+        properties["tool_call_count"] = len(calls) if isinstance(calls, list) else 0
+        properties["$lib"] = "mac-ops-session-traces"
         batch.append(
             {
                 "event": "agent_build_session",
-                "distinct_id": str(distinct),
-                "properties": {
-                    **{k: v for k, v in scrubbed.items() if k not in ("tool_calls",)},
-                    "tool_call_count": len(scrubbed.get("tool_calls") or []),
-                    "tool_calls_summary": [
-                        {
-                            "name": t.get("name"),
-                            "type": t.get("type"),
-                            "duration_ms": t.get("duration_ms"),
-                            "status": t.get("status"),
-                        }
-                        for t in (scrubbed.get("tool_calls") or [])[:200]
-                    ],
-                    "$lib": "mac-ops-session-traces",
-                },
-                "timestamp": scrubbed.get("completed_at")
-                or scrubbed.get("started_at")
+                "uuid": event_id,
+                "distinct_id": str(properties.get("thread_id") or properties.get("run_id") or "unknown"),
+                "properties": properties,
+                "timestamp": properties.get("completed_at")
+                or properties.get("started_at")
                 or now,
             }
         )

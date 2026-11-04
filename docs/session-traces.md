@@ -34,7 +34,10 @@ No journal prompts, tool arguments, outputs, titles, paths, or arbitrary metadat
 are persisted. Project IDs are unsalted hashes. Empryo does not provide reliable
 PR/CI proof, tokens, or cost here; completed turns have unknown outcome evidence
 and count as missing proof in evals, including regression counts. Collection is a
-best-effort snapshot; real journal formats have not been verified.
+size-bounded snapshot: bytes appended after opening the journal are deferred to
+its next collection. Malformed events are ignored without aborting other sessions.
+Unfinished traces are reconciled across all stored days, including old unknown
+turns without terminal evidence.
 
 ## Commands
 
@@ -59,7 +62,10 @@ Merged-PR metrics count **distinct** PRs (run durations summed per PR).
 
 Optional export: set `POSTHOG_API_KEY` (or `POSTHOG_API_KEY_FILE`), and
 optionally `POSTHOG_HOST` (default `https://us.i.posthog.com`). Export is a
-no-op without a key.
+no-op without a key. Retransmissions use a deterministic event UUID derived from
+source and run identity. Export admits only scrubbed scalar trace metadata; titles,
+message bodies, arbitrary nested metadata, and tool inputs/outputs are never sent.
+Verification uses `--no-export` or mocked HTTP only; no trace is sent off this Mac.
 
 ## Daily job
 

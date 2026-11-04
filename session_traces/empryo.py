@@ -47,16 +47,33 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
             meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
             if not isinstance(meta, dict) or meta.get("id") != thread:
                 continue
-            with (folder / "session.jsonl").open(encoding="utf-8") as stream:
-                events = []
-                for line in stream:
-                    try:
-                        event = json.loads(line)
-                        if isinstance(event, dict) and type(event.get("ts")) is int and 0 <= event["ts"] <= 253402300799999:
-                            events.append(event)
-                    except (ValueError, UnicodeError):
-                        continue
-        except (OSError, ValueError, UnicodeError):
+            # A session cannot contain turns before its creation. Missing or
+            # invalid metadata is not a reason to exclude a journal.
+            started = meta.get("startedAt")
+            if run_ids is None and type(started) is int and 0 < started <= 253402300799999 and started >= until.timestamp() * 1000:
+                continue
+            with (folder / "session.jsonl").open("rb") as stream:
+                stat = os.fstat(stream.fileno())
+                # Both metadata and journal mtime must predate the window.
+                # A later append is deferred to the next collection, just like
+                # bytes appended after the size snapshot below.
+                updated = meta.get("updatedAt")
+                if (run_ids is None
+                        and type(updated) is int and 0 < updated <= 253402300799999
+                        and updated < since.timestamp() * 1000
+                        and stat.st_mtime < since.timestamp()):
+                    continue
+                size = stat.st_size
+                data = stream.read(size)
+            events = []
+            for line in data.splitlines():
+                try:
+                    event = json.loads(line)
+                    if isinstance(event, dict) and type(event.get("ts")) is int and 0 <= event["ts"] <= 253402300799999:
+                        events.append(event)
+                except (ValueError, UnicodeError, RecursionError):
+                    continue
+        except (OSError, ValueError, UnicodeError, RecursionError):
             continue
         events.sort(key=lambda e: e["ts"])
         models: dict[str, str] = {}
@@ -104,7 +121,7 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
                     if previous["status"] == "running":
                         finish(previous, "interrupted", ts)
                 started = _timestamp(ts)
-                model = models.get(tab)
+                model = models.get(tab) if isinstance(tab, str) else None
                 turns[run_id] = {"schema": "mac-ops.session_trace.v1", "source": "empryo", "run_id": run_id, "thread_id": "empryo-" + thread_hash, "provider": model.split("/", 1)[0] if model else None, "model": model, "status": "running", "final_state": "running", "task_key": task.group(1) if task else None, "project_id": _id(str(root)) if root else None, "project": None, "title": None, "worktree_path": None, "branch": None, "tokens": None, "cost_usd": None, "pull_requests": [], "named_blocker": None, "files_outside_worktree": None, "preview_or_playwright": [], "requested_at": started, "started_at": started, "tool_calls": [], "outcome_evidence": "unknown", "_start": ts}
                 if isinstance(tab, str):
                     active[tab] = run_id
@@ -113,7 +130,8 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
             if trace is None:
                 continue
             if kind == "assistant":
-                status = {"complete": "completed", "error": "failed"}.get(event.get("status"))
+                raw_status = event.get("status")
+                status = {"complete": "completed", "error": "failed"}.get(raw_status) if isinstance(raw_status, str) else None
                 if status:
                     finish(trace, status, ts)
             elif kind == "turn-stop":
@@ -140,7 +158,7 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
                     call["duration_ms"] = ts - call["_start"]
         for run_id, trace in turns.items():
             start = trace.pop("_start")
-            # Absence of a terminal journal event is not evidence of a crash.
+            # Age is not terminal evidence; unknown turns remain reconcilable.
             if trace["status"] == "running" and start < (datetime.now(timezone.utc) - timedelta(days=3)).timestamp() * 1000:
                 trace["status"] = trace["final_state"] = "unknown"
             for call in trace["tool_calls"]:
