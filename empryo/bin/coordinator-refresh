@@ -49,8 +49,11 @@ def wait_for_done(transcript, offset):
     return False
 
 
-def screen(terminal):
-    return sh(["hc", "read", terminal]).stdout
+def replied_since(transcript, offset):
+    try:
+        return any(True for _ in assistant_texts_since(transcript, offset))
+    except (json.JSONDecodeError, KeyError, OSError):
+        return False
 
 
 def main():
@@ -73,7 +76,7 @@ def main():
         f"wait up to {DONE_TIMEOUT}s for an assistant reply ending in DONE in {transcript}, and a new '## Handoff' heading in notes.md",
         f"hc keys {terminal} / c l e a r, then hc keys {terminal} enter",
         f"hc send {terminal} {FIRST_PROMPT!r}",
-        f"confirm a new transcript starts with context under {FRESH_CONTEXT_MAX // 1000}k",
+        f"confirm the Coordinator replied and its context is under {FRESH_CONTEXT_MAX // 1000}k, in a new transcript or the same one",
     ]
     if args.dry_run:
         print(f"Coordinator terminal {terminal}, status {status}, context {health['context_tokens']} tokens")
@@ -95,20 +98,20 @@ def main():
     time.sleep(1)
     sh(["hc", "keys", terminal, "enter"])
     time.sleep(3)
-    if "Write a handoff now" in screen(terminal):
-        die("/clear did not take effect. The first message was not sent.")
 
+    tokens_before = health["context_tokens"]
+    sent = os.path.getsize(transcript)
     sh(["hc", "send", terminal, FIRST_PROMPT])
     deadline = time.time() + 180
     while time.time() < deadline:
         now = json.loads(sh(["emp-health"]).stdout)["coordinator"]
-        if now["transcript"] != transcript and now["context_tokens"] is not None:
-            print(f"Coordinator restarted: new transcript {now['transcript']}, context {now['context_tokens']} tokens")
-            if now["context_tokens"] > FRESH_CONTEXT_MAX:
-                die("New context is larger than expected; check the Coordinator.")
+        tokens = now["context_tokens"]
+        fresh = now["transcript"] != transcript or (tokens_before is not None and tokens is not None and tokens < tokens_before / 2 and replied_since(transcript, sent))
+        if tokens is not None and tokens < FRESH_CONTEXT_MAX and fresh:
+            print(f"Coordinator restarted: transcript {now['transcript']}, context {tokens} tokens")
             return
         time.sleep(POLL)
-    die("First message sent, but no reply seen in a new transcript within 180s.")
+    die(f"First message sent, but no reply with context under {FRESH_CONTEXT_MAX // 1000}k within 180s. /clear may not have taken effect.")
 
 
 main()

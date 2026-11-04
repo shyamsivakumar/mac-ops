@@ -1,0 +1,94 @@
+#!/bin/sh
+set -u
+mode=${1:-scan}
+role=${2:-start}
+case "$mode" in scan | clean) ;; *) exit 2 ;; esac
+STATE=${WORKTREE_PANEL_STATE:-$HOME/.local/state/herdr-worktrees}
+CLEANER=${WORKTREE_CLEANER:-$HOME/Code/mac-ops/scripts/worktree-cleaner/cleaner.py}
+CLEANER_STATE=${WORKTREE_CLEANER_STATE:-$HOME/.local/state/mac-ops/worktree-cleaner}
+SCAN_LIMIT=${WORKTREE_SCAN_LIMIT:-600}
+CLEAN_LIMIT=${WORKTREE_CLEAN_LIMIT:-1800}
+PYTHON=/usr/bin/python3
+LOCK=$STATE/run.lock
+umask 077
+mkdir -p "$STATE"
+
+record() {
+  printf '%s|%s\n' "$1" "$(ps -o lstart= -p "$1" 2> /dev/null)"
+}
+
+claim() {
+  record "$1" > "$LOCK/pid.tmp"
+  mv "$LOCK/pid.tmp" "$LOCK/pid"
+}
+
+lock_busy() {
+  if [ -f "$LOCK/pid" ]; then
+    rec=$(cat "$LOCK/pid")
+    [ "$(ps -o lstart= -p "${rec%%|*}" 2> /dev/null)" = "${rec#*|}" ]
+  else
+    [ -z "$(find "$LOCK" -maxdepth 0 -mmin +1)" ]
+  fi
+}
+
+status() {
+  printf '{"state":"%s","mode":"%s","at":%s,"finished":%s,"error":"%s"}\n' "$1" "$mode" "$started" "$2" "$3" > "$STATE/status.tmp"
+  mv "$STATE/status.tmp" "$STATE/status.json"
+}
+
+reason() {
+  text=$(sed -n 's/.*"error": "\([^"]*\)".*/\1/p' "$STATE/err.tmp" | head -1)
+  echo "${text:-cleaner failed or timed out}"
+}
+
+step() {
+  "$PYTHON" "$CLEANER" $1 --state-root "$CLEANER_STATE" > "$STATE/$2.tmp" 2> "$STATE/err.tmp" &
+  job=$!
+  (sleep "$3"; kill "$job" 2> /dev/null) &
+  dog=$!
+  wait "$job"
+  code=$?
+  pkill -P "$dog" 2> /dev/null
+  kill "$dog" 2> /dev/null
+  [ "$code" -eq 0 ] && mv "$STATE/$2.tmp" "$STATE/$2.json"
+  return "$code"
+}
+
+if [ "$role" = start ]; then
+  if ! mkdir "$LOCK" 2> /dev/null && lock_busy; then
+    echo busy
+    exit 0
+  fi
+  claim $$
+  started=$(date +%s)
+  status running 0 ""
+  nohup sh "$0" "$mode" worker < /dev/null > /dev/null 2>&1 &
+  waited=0
+  while [ "$waited" -lt 50 ] && [ "$(cat "$LOCK/pid" 2> /dev/null)" = "$(record $$)" ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  echo started
+  exit 0
+fi
+
+claim $$
+started=$(date +%s)
+failed=""
+needs="--no-report"
+[ "$mode" = clean ] && needs="--no-report --prune"
+for flag in $needs; do
+  "$PYTHON" "$CLEANER" --help 2> /dev/null | grep -q -- "$flag" || failed="cleaner out of date: missing $flag"
+done
+if [ -z "$failed" ]; then
+  [ "$mode" = clean ] && { step "--apply --prune --no-report" clean "$CLEAN_LIMIT" || failed=$(reason); }
+  step "--dry-run --no-report" last "$SCAN_LIMIT" || failed=${failed:-$(reason)}
+fi
+finished=$(date +%s)
+if [ -z "$failed" ]; then
+  status done "$finished" ""
+else
+  status failed "$finished" "$failed"
+fi
+rm -f "$LOCK/pid"
+rmdir "$LOCK"
