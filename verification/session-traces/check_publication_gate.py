@@ -48,6 +48,8 @@ def main():
         summary = json.loads(Path(report["json"]).read_text())
         assert summary["run_count"] == 1 and summary["merged_pr_count"] == 1
         assert summary["tokens_per_merged_pr"]["total"] == 3120
+        from session_traces.scrub import safe_export_projection
+        assert safe_export_projection({"pull_requests": [{"review_decision": "changes_requested"}]})["pull_requests"][0]["review_decision"] == "CHANGES_REQUESTED"
     print("daily JSON/Markdown/copied evidence: credential absent; private prompt absent")
     print("objective metrics retained: runs=1, merged PRs=1, tokens=3120")
 
