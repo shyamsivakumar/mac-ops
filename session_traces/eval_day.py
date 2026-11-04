@@ -151,6 +151,7 @@ def score_trace(trace: dict[str, Any]) -> dict[str, Any]:
         "status": trace.get("status"),
         "duration_ms": trace.get("duration_ms"),
         "cost_usd": trace.get("cost_usd"),
+        "tokens_total": (trace.get("tokens") or {}).get("totalTokens"),
         "merged_pr": merged,
         "named_blocker": blocker,
         "ended_with_merge_or_blocker": ended_ok,
@@ -188,7 +189,14 @@ def _merged_pr_metrics(
                 merged_keys.add(key)
 
     by_pr: dict[str, dict[str, Any]] = {
-        key: {"duration_ms": 0, "cost_usd": 0.0, "cost_n": 0, "runs": 0}
+        key: {
+            "duration_ms": 0,
+            "cost_usd": 0.0,
+            "cost_n": 0,
+            "tokens": 0,
+            "tokens_n": 0,
+            "runs": 0,
+        }
         for key in merged_keys
     }
     # Include earlier-day runs that linked the same PR (without changing their
@@ -208,8 +216,12 @@ def _merged_pr_metrics(
             if isinstance(r.get("cost_usd"), (int, float)):
                 bucket["cost_usd"] += float(r["cost_usd"])
                 bucket["cost_n"] += 1
+            if isinstance(r.get("tokens_total"), (int, float)):
+                bucket["tokens"] += r["tokens_total"]
+                bucket["tokens_n"] += 1
     durations = [b["duration_ms"] for b in by_pr.values()]
     costs = [b["cost_usd"] for b in by_pr.values() if b["cost_n"]]
+    token_totals = [b["tokens"] for b in by_pr.values() if b["tokens_n"]]
     return {
         "distinct_merged_prs": len(by_pr),
         "time_per_merged_pr_ms": {
@@ -222,7 +234,17 @@ def _merged_pr_metrics(
             "count": len(costs),
             "total": sum(costs) if costs else 0,
             "mean": (sum(costs) / len(costs)) if costs else None,
-            "note": "sum of contributing run costs per distinct PR across stored days",
+            "note": "no local source carries a cost figure; stays empty until one does",
+        },
+        "tokens_per_merged_pr": {
+            "count": len(token_totals),
+            "total": sum(token_totals) if token_totals else 0,
+            "mean": (sum(token_totals) / len(token_totals)) if token_totals else None,
+            "note": (
+                "sum of input+output tokens over complete provider turns of "
+                "contributing runs per distinct PR; runs without usage "
+                "(cursor provider) add nothing"
+            ),
         },
         "prs": sorted(by_pr.keys()),
     }
@@ -290,6 +312,7 @@ def evaluate_day(day: str | None = None, *, root: Path | None = None) -> dict[st
         "flag_counts": dict(sorted(flag_counts.items())),
         "time_per_merged_pr_ms": pr_metrics["time_per_merged_pr_ms"],
         "cost_per_merged_pr_usd": pr_metrics["cost_per_merged_pr_usd"],
+        "tokens_per_merged_pr": pr_metrics["tokens_per_merged_pr"],
         "distinct_merged_prs": pr_metrics["prs"],
         "regressions": [r for r in rows if r["flags"]],
         "rows": rows,
@@ -308,6 +331,12 @@ def _fmt_ms(ms: float | None) -> str:
         return f"{m}m{s:02d}s"
     h, m = divmod(m, 60)
     return f"{h}h{m:02d}m"
+
+
+def _fmt_tokens(tokens: float | None) -> str:
+    if tokens is None:
+        return "-"
+    return f"{round(tokens):,}"
 
 
 def render_markdown(
@@ -341,7 +370,10 @@ def render_markdown(
         f"(n={summary['time_per_merged_pr_ms']['count']})",
         f"- Cost per distinct merged PR (mean USD): "
         f"**{summary['cost_per_merged_pr_usd']['mean']}** "
-        f"(n={summary['cost_per_merged_pr_usd']['count']}; often absent in T3 projections)",
+        f"(n={summary['cost_per_merged_pr_usd']['count']}; no local source carries a cost figure)",
+        f"- Tokens per distinct merged PR (mean input+output, runs with usage only): "
+        f"**{_fmt_tokens(summary['tokens_per_merged_pr']['mean'])}** "
+        f"(n={summary['tokens_per_merged_pr']['count']})",
         "",
     ]
     if baseline:

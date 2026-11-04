@@ -88,6 +88,20 @@ def _make_db(
           updated_at TEXT NOT NULL,
           payload_json TEXT NOT NULL
         );
+        CREATE TABLE orchestration_v2_projection_run_attempts (
+          attempt_id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          provider_thread_id TEXT NOT NULL
+        );
+        CREATE TABLE orchestration_v2_projection_provider_turns (
+          provider_turn_id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL,
+          provider_thread_id TEXT NOT NULL,
+          run_attempt_id TEXT,
+          ordinal INTEGER NOT NULL,
+          payload_json TEXT NOT NULL
+        );
         """
     )
     now = "2026-11-03T16:00:00.000Z"
@@ -186,6 +200,44 @@ def _make_db(
                 ),
                 "cursor",
             ),
+        )
+    for run_id in ["run1"] + ([extra_run["run_id"]] if extra_run else []):
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_run_attempts VALUES (?,?,?,?)",
+            (f"att-{run_id}", "thread1", run_id, "pthread1"),
+        )
+    run1_turns = [
+        {
+            "turnTokenUsage": {
+                "usageStatus": "complete",
+                "inputTokens": 1000,
+                "cachedInputTokens": 800,
+                "outputTokens": 50,
+                "reasoningTokens": 10,
+            }
+        },
+        {
+            "turnTokenUsage": {
+                "usageStatus": "complete",
+                "inputTokens": 2000,
+                "cachedInputTokens": 1500,
+                "outputTokens": 70,
+                "reasoningTokens": 0,
+            }
+        },
+        {
+            "turnTokenUsage": {
+                "usageStatus": "partial",
+                "inputTokens": 999999,
+                "outputTokens": 999999,
+            }
+        },
+        {"turnTokenUsage": {"usageStatus": "unavailable"}},
+    ]
+    for i, payload in enumerate(run1_turns):
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_provider_turns VALUES (?,?,?,?,?,?)",
+            (f"turn{i}", "thread1", "pthread1", "att-run1", i, json.dumps(payload)),
         )
     tools = [
         (
@@ -369,6 +421,36 @@ class CollectEvalTests(unittest.TestCase):
         self.assertNotIn("synthetic-password", blob)
         self.assertEqual(t["pull_requests"][0]["state"], "merged")
 
+    def test_tokens_sum_complete_turns_and_survive_scrub(self):
+        db = self.root / "tokens.sqlite"
+        _make_db(
+            db,
+            extra_run={"run_id": "run2", "ordinal": 2},
+        )
+        traces = collect_runs(
+            since=datetime(2026, 11, 3, tzinfo=timezone.utc),
+            until=datetime(2026, 11, 4, tzinfo=timezone.utc),
+            db_path=db,
+        )
+        by_id = {t["run_id"]: t for t in traces}
+        self.assertEqual(
+            by_id["run1"]["tokens"],
+            {
+                "inputTokens": 3000,
+                "cachedInputTokens": 2300,
+                "outputTokens": 120,
+                "reasoningTokens": 10,
+                "totalTokens": 3120,
+                "turnsComplete": 2,
+                "turnsPartial": 1,
+                "turnsUnavailable": 1,
+            },
+        )
+        self.assertIsNone(by_id["run1"]["cost_usd"])
+        self.assertIsNone(by_id["run2"]["tokens"])
+        stored = json.loads(write_trace(by_id["run1"], root=self.root).read_text())
+        self.assertEqual(stored["tokens"], by_id["run1"]["tokens"])
+
     def test_store_and_eval_proof(self):
         traces = collect_runs(
             since=datetime(2026, 11, 3, tzinfo=timezone.utc),
@@ -412,6 +494,7 @@ class CollectEvalTests(unittest.TestCase):
             "merged_pr": False,
             "duration_ms": 2000,
             "cost_usd": 2.0,
+            "tokens_total": 500,
             "pull_requests": [
                 {
                     "repository": "o/r",
@@ -425,6 +508,7 @@ class CollectEvalTests(unittest.TestCase):
             "merged_pr": True,
             "duration_ms": 1000,
             "cost_usd": 1.0,
+            "tokens_total": 250,
             "pull_requests": [
                 {
                     "repository": "o/r",
@@ -440,6 +524,7 @@ class CollectEvalTests(unittest.TestCase):
         self.assertEqual(metrics["distinct_merged_prs"], 1)
         self.assertEqual(metrics["time_per_merged_pr_ms"]["total"], 3000)
         self.assertEqual(metrics["cost_per_merged_pr_usd"]["total"], 3.0)
+        self.assertEqual(metrics["tokens_per_merged_pr"]["total"], 750)
         # Prior day alone still has zero merged PRs.
         prior_only = _merged_pr_metrics([prior], contribution_rows=[prior, merge_day])
         self.assertEqual(prior_only["distinct_merged_prs"], 0)

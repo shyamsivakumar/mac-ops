@@ -37,6 +37,13 @@ PREVIEW_RE = re.compile(
 )
 BLOCKER_RE = re.compile(r"(?i)\b(blocked|blocker|named blocker|waiting on shyam)\b")
 NONTERMINAL = frozenset({"queued", "preparing", "starting", "running", "waiting"})
+TURN_USAGE_SUM_KEYS = (
+    "inputTokens",
+    "outputTokens",
+    "cachedInputTokens",
+    "reasoningTokens",
+    "costUsd",
+)
 
 
 def open_db(path: Path | None = None) -> sqlite3.Connection:
@@ -106,6 +113,35 @@ def _tokens_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if any(x in key.lower() for x in ("token", "cost")) and val is not None:
                 out[key] = val
     return out
+
+
+def _tokens_from_provider_turns(turn_payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    totals: dict[str, Any] = {}
+    status_counts = {"complete": 0, "partial": 0, "unavailable": 0}
+    for payload in turn_payloads:
+        usage = payload.get("turnTokenUsage")
+        if not isinstance(usage, dict):
+            continue
+        status = usage.get("usageStatus")
+        if status not in status_counts:
+            continue
+        status_counts[status] += 1
+        if status != "complete":
+            continue
+        for key in TURN_USAGE_SUM_KEYS:
+            val = usage.get(key)
+            if isinstance(val, (int, float)):
+                totals[key] = totals.get(key, 0) + val
+    if not any(status_counts.values()):
+        return {}
+    if "inputTokens" in totals and "outputTokens" in totals:
+        totals["totalTokens"] = totals["inputTokens"] + totals["outputTokens"]
+    return {
+        **totals,
+        "turnsComplete": status_counts["complete"],
+        "turnsPartial": status_counts["partial"],
+        "turnsUnavailable": status_counts["unavailable"],
+    }
 
 
 def _tool_name(item_type: str, payload: dict[str, Any]) -> str:
@@ -315,6 +351,18 @@ def collect_runs(
                 (run["run_id"],),
             ).fetchall()
 
+            provider_turns = conn.execute(
+                """
+                SELECT pt.provider_turn_id, pt.payload_json
+                FROM orchestration_v2_projection_provider_turns pt
+                JOIN orchestration_v2_projection_run_attempts ra
+                  ON ra.attempt_id = pt.run_attempt_id
+                WHERE ra.run_id = ?
+                ORDER BY pt.ordinal
+                """,
+                (run["run_id"],),
+            ).fetchall()
+
             tool_calls: list[dict[str, Any]] = []
             touched_files: list[str] = []
             tokens: dict[str, Any] = {}
@@ -355,6 +403,12 @@ def collect_runs(
                 tool_calls.append(entry)
                 if PREVIEW_RE.search(name):
                     preview_hits.append(name)
+
+            tokens.update(
+                _tokens_from_provider_turns(
+                    [_parse_json(row["payload_json"]) for row in provider_turns]
+                )
+            )
 
             worktree = thread_payload.get("worktreePath")
             workspace = run["workspace_root"]

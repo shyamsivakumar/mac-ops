@@ -11,7 +11,8 @@ account or key).
 ## Trace fields
 
 Per run: thread, project, task key, provider, model, start/end, tool calls
-with durations, tokens/cost when the projection has them, final state
+with durations, token totals (summed over complete provider turns; Cursor
+runs carry none), cost (always null: no local source has one), final state
 (`completed` / `interrupted` / `failed` / …), and outcome links (PR URL,
 merge sha when present, CI `checksState`, review decision). Prompts, tool
 inputs/outputs, diffs, secrets, emails, and home-directory user segments are
@@ -70,7 +71,7 @@ The daily script copies `session-eval-<date>.{md,json}` into
 | Stopped while green | Interrupted/cancelled while checks passed and not merged |
 | Outside worktree | `file_change` outside assigned worktree or project checkout |
 | Preview / Playwright | Tools matching preview/playwright/html_render/device |
-| Time / cost per merge | Distinct PRs; summed contributing run duration/cost |
+| Time / cost / tokens per merge | Distinct PRs; summed contributing run duration, cost, and tokens |
 
 The daily table lists every run; flagged rows are called out. Compared to the
 previous day's JSON, rises in the bad flags (or a drop in proof) are marked
