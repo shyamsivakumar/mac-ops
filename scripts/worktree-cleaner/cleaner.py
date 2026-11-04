@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
-import sqlite3
+
 import subprocess
 import sys
 import tempfile
@@ -18,16 +18,7 @@ from typing import Any
 
 DEFAULT_CODE_ROOT = Path.home() / "Code"
 DEFAULT_STATE_ROOT = Path.home() / ".local/state/mac-ops/worktree-cleaner"
-DEFAULT_T3_DB = Path.home() / ".t3/userdata/statev2.sqlite"
-NONTERMINAL = {"queued", "preparing", "starting", "running", "waiting", "active", "busy", "pending"}
-TERMINAL_OR_IDLE = {"completed", "failed", "interrupted", "cancelled", "stopped", "idle", "ready", "resolved", "closed", "expired", "delivered", "committed"}
-STATUS_TABLES = (
-    ("orchestration_v2_projection_runs", "thread_id", "status"),
-    ("orchestration_v2_projection_provider_threads", "thread_id", "status"),
-    ("orchestration_v2_projection_provider_sessions", "thread_id", "status"),
-    ("orchestration_v2_projection_runtime_requests", "thread_id", "status"),
-    ("orchestration_v2_projection_subagents", "thread_id", "status"),
-)
+
 SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycache__", "DerivedData"}
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
 
@@ -160,82 +151,96 @@ def detached_idle_seconds(path: Path) -> int | None:
     return int(time.time()) - max(stamps) if stamps else None
 
 
-def _read_status_table(conn: sqlite3.Connection, table: str, thread_column: str, status_column: str) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-    for row in conn.execute(f'SELECT "{thread_column}", "{status_column}" FROM "{table}"'):
-        thread_id, status = row
-        if not isinstance(thread_id, str) or not isinstance(status, str) or not status:
-            raise SafetyError("t3_status_shape_invalid")
-        result.setdefault(thread_id, []).append(status.casefold())
-    return result
+class EmpryoState:
+    PAGE_LIMIT = 100
+    MAX_PAGES = 1000
+    FINISHED_STATUSES = {"completed", "interrupted", "failed", "cancelled", "rolled_back"}
 
+    def __init__(self):
+        self._read_pages()
+        first_records = self.records
+        first_pages = self.page_count
+        self._read_pages()
+        if self.records != first_records:
+            raise SafetyError("empryo_list_changed")
+        self.page_count += first_pages
 
-class T3State:
-    def __init__(self, path: Path):
-        if path.is_symlink() or not path.is_file():
-            raise SafetyError("t3_state_unavailable")
-        uri = path.resolve().as_uri() + "?mode=ro"
-        try:
-            self.conn = sqlite3.connect(uri, uri=True, timeout=5)
-            self.conn.row_factory = sqlite3.Row
-            self.conn.execute("BEGIN")
-            tables = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            required = {"orchestration_v2_projection_threads", "orchestration_v2_projection_metadata", *(item[0] for item in STATUS_TABLES), "orchestration_v2_thread_launch_workflows"}
-            if not required.issubset(tables):
-                raise SafetyError("t3_state_schema_unrecognized")
-            metadata = self.conn.execute("SELECT schema_version FROM orchestration_v2_projection_metadata").fetchall()
-            if not metadata or any(not isinstance(row[0], int) or row[0] not in {1, 2} for row in metadata):
-                raise SafetyError("t3_state_version_unrecognized")
-            thread_rows = self.conn.execute("SELECT thread_id, payload_json FROM orchestration_v2_projection_threads").fetchall()
-            if not thread_rows:
-                raise SafetyError("t3_state_empty")
-            self.paths: dict[str, list[str]] = {}
-            self.thread_status: dict[str, list[str]] = {}
-            for row in thread_rows:
-                try:
-                    payload = json.loads(row["payload_json"])
-                except (TypeError, json.JSONDecodeError) as exc:
-                    raise SafetyError("t3_thread_projection_invalid") from exc
-                if not isinstance(payload, dict):
-                    raise SafetyError("t3_thread_projection_invalid")
-                path_value = payload.get("worktreePath")
-                if path_value is not None:
-                    if not isinstance(path_value, str) or not path_value:
-                        raise SafetyError("t3_worktree_path_invalid")
-                    self.paths.setdefault(canonical(path_value), []).append(row["thread_id"])
-            for table, thread_column, status_column in STATUS_TABLES:
-                statuses = _read_status_table(self.conn, table, thread_column, status_column)
-                for thread_id, values in statuses.items():
-                    self.thread_status.setdefault(thread_id, []).extend(values)
-            workflow_rows = self.conn.execute("SELECT worktree_path, status FROM orchestration_v2_thread_launch_workflows").fetchall()
-            self.workflows: dict[str, list[str]] = {}
-            for row in workflow_rows:
-                if row["worktree_path"]:
-                    if not isinstance(row["worktree_path"], str) or not isinstance(row["status"], str):
-                        raise SafetyError("t3_launch_workflow_invalid")
-                    self.workflows.setdefault(canonical(row["worktree_path"]), []).append(row["status"].casefold())
-            self.conn.close()
-        except (sqlite3.Error, OSError) as exc:
-            raise SafetyError("t3_state_read_failed") from exc
+    def _read_pages(self) -> None:
+        self.records: dict[str, tuple[Any, ...]] = {}
+        self.paths: list[tuple[Path, str]] = []
+        self.thread_count = 0
+        self.unfinished_count = 0
+        self.page_count = 0
+        seen: set[str] = set()
+        cursor = 0
+        total: int | None = None
+        while self.page_count < self.MAX_PAGES:
+            args = {"allProjects": True, "limit": self.PAGE_LIMIT, "cursor": cursor}
+            result = run(["emp", "call", "emp_thread_list", json.dumps(args)])
+            if result.returncode != 0:
+                raise SafetyError("empryo_hub_unavailable")
+            try:
+                page = json.loads(result.stdout)
+            except (ValueError, TypeError) as exc:
+                raise SafetyError("empryo_list_invalid") from exc
+            if not isinstance(page, dict) or "projectId" not in page or page["projectId"] is not None:
+                raise SafetyError("empryo_all_projects_unverified")
+            rows = page.get("threads")
+            page_total = page.get("total")
+            if not isinstance(rows, list) or len(rows) > self.PAGE_LIMIT or type(page_total) is not int or page_total < 0:
+                raise SafetyError("empryo_list_invalid")
+            if total is not None and page_total != total:
+                raise SafetyError("empryo_list_changed")
+            total = page_total
+            self.page_count += 1
+            for thread in rows:
+                if not isinstance(thread, dict):
+                    raise SafetyError("empryo_thread_invalid")
+                thread_id = thread.get("threadId")
+                status = thread.get("status")
+                settled = thread.get("settled")
+                pending = thread.get("pendingRequestCount")
+                if not isinstance(thread_id, str) or not thread_id or thread_id in seen:
+                    raise SafetyError("empryo_list_duplicate_or_invalid_thread")
+                if not isinstance(status, str) or not status or type(settled) is not bool or type(pending) is not int or pending < 0:
+                    raise SafetyError("empryo_thread_invalid")
+                if "activeRunId" not in thread or (thread["activeRunId"] is not None and not isinstance(thread["activeRunId"], str)):
+                    raise SafetyError("empryo_thread_invalid")
+                seen.add(thread_id)
+                finished = settled and status in self.FINISHED_STATUSES and thread["activeRunId"] is None and pending == 0
+                thread_paths = []
+                for key in ("worktreePath", "cwd"):
+                    if key not in thread:
+                        raise SafetyError("empryo_thread_path_unverified")
+                    value = thread[key]
+                    if value is not None:
+                        if not isinstance(value, str) or not value or "\0" in value or not Path(value).is_absolute():
+                            raise SafetyError("empryo_thread_path_invalid")
+                        thread_paths.append(Path(canonical(value)))
+                self.records[thread_id] = (status, settled, thread["activeRunId"], pending, tuple(sorted(str(path) for path in set(thread_paths))))
+                if not finished:
+                    if not thread_paths:
+                        raise SafetyError("empryo_thread_path_unverified")
+                    self.unfinished_count += 1
+                    self.paths.extend((path, thread_id) for path in set(thread_paths))
+            self.thread_count = len(seen)
+            if "nextCursor" not in page or self.thread_count > total:
+                raise SafetyError("empryo_list_incomplete")
+            next_cursor = page["nextCursor"]
+            if next_cursor is None:
+                if self.thread_count != total:
+                    raise SafetyError("empryo_list_incomplete")
+                return
+            if not rows or type(next_cursor) is not int or next_cursor != cursor + len(rows) or self.thread_count >= total:
+                raise SafetyError("empryo_list_incomplete")
+            cursor = next_cursor
+        raise SafetyError("empryo_list_incomplete")
+
+    def users(self, path: Path) -> list[str]:
+        return sorted({thread_id for thread_path, thread_id in self.paths if inside(thread_path, path)})
 
     def blockers(self, path: Path) -> list[str]:
-        path_key = canonical(path)
-        reasons: list[str] = []
-        for thread_id in self.paths.get(path_key, []):
-            statuses = self.thread_status.get(thread_id, [])
-            if not statuses:
-                reasons.append("t3_status_unknown")
-            for status in statuses:
-                if status in NONTERMINAL:
-                    reasons.append("t3_thread_active")
-                elif status not in TERMINAL_OR_IDLE:
-                    reasons.append("t3_status_unknown")
-        for status in self.workflows.get(path_key, []):
-            if status in NONTERMINAL:
-                reasons.append("t3_launch_in_progress")
-            elif status not in TERMINAL_OR_IDLE:
-                reasons.append("t3_launch_status_unknown")
-        return sorted(set(reasons))
+        return ["empryo_thread_unfinished"] if self.users(path) else []
 
 
 class GitHub:
@@ -314,7 +319,7 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
-def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, t3_db: Path, github: GitHub, *, refresh: bool = False, t3_state: T3State | None = None) -> dict[str, Any]:
+def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, emp_state: EmpryoState, *, refresh: bool = False) -> dict[str, Any]:
     path = Path(record["path"])
     result: dict[str, Any] = {
         "repo": str(repo_root), "path": str(path), "branch": record.get("branch"),
@@ -322,14 +327,15 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, t3_db: Pa
         "main_checkout": canonical(path) == canonical(repo_root), "dirty": None,
         "remote_commit_present": None, "pull_request": None, "eligible": False, "reasons": [],
     }
-    reasons: list[str] = []
+    reasons = emp_state.blockers(path)
+    result["empryo_threads"] = emp_state.users(path)
     if not inside(repo_root, code_root):
         reasons.append("repository_outside_code_root")
     if result["main_checkout"] or record.get("bare"):
         reasons.append("main_checkout")
     if not any(inside(path, root) for root in (code_root / ".worktrees", Path("/private/tmp"), Path("/tmp"))):
         reasons.append("worktree_outside_scope")
-    if reasons:
+    if any(reason != "empryo_thread_unfinished" for reason in reasons):
         result["reasons"] = reasons
         return result
     if record.get("locked"):
@@ -370,17 +376,12 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, t3_db: Pa
         result["pull_request"] = pr_url
         if not ok and why:
             reasons.append(why)
-    try:
-        t3 = t3_state if t3_state is not None else T3State(t3_db)
-        reasons.extend(t3.blockers(path))
-    except SafetyError as exc:
-        reasons.append(str(exc))
     result["reasons"] = sorted(set(reasons))
     result["eligible"] = not result["reasons"]
     return result
 
 
-def inventory(code_root: Path, t3_db: Path, github: GitHub, t3_state: T3State) -> tuple[list[dict[str, Any]], int]:
+def inventory(code_root: Path, github: GitHub, emp_state: EmpryoState) -> tuple[list[dict[str, Any]], int]:
     rows: list[dict[str, Any]] = []
     excluded = 0
     for repo_root in discover_repositories(code_root):
@@ -390,7 +391,7 @@ def inventory(code_root: Path, t3_db: Path, github: GitHub, t3_state: T3State) -
             continue
         records = worktrees(repo_root)
         for record in records:
-            row = evaluate(repo_root, record, code_root, t3_db, github, t3_state=t3_state)
+            row = evaluate(repo_root, record, code_root, github, emp_state)
             rows.append(row)
     return rows, excluded
 
@@ -450,6 +451,10 @@ def write_daily_report(code_root: Path, rows: list[dict[str, Any]], summary: dic
         lines.append(f"- `{row['path']}` ({row['branch'] or 'detached'}, {state})")
         if row.get("reasons"):
             lines.append(f"  Reasons: {', '.join(row['reasons'])}")
+    lines.extend(["", "## Empryo-held worktrees", ""])
+    for row in rows:
+        if row.get("empryo_threads"):
+            lines.append(f"- `{row['path']}`: {', '.join(row['empryo_threads'])}")
     report_dir = code_root / "coordinator" / "evidence"
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"worktrees-kept-{day}.md"
@@ -466,7 +471,7 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str) -> None:
         "removed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "repo": row["repo"], "path": row["path"], "branch": row["branch"],
         "head": row["head"], "pull_request": row["pull_request"],
-        "reason": "clean, remote commit verified, no active T3 work, and closed PR or detached idle for 24 hours",
+        "reason": "clean, remote commit verified, no unfinished Empryo thread, and closed PR or detached idle for 24 hours",
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
@@ -477,7 +482,7 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str) -> None:
         os.fsync(output.fileno())
 
 
-def scan(code_root: Path, t3_db: Path, state_root: Path, apply: bool) -> dict[str, Any]:
+def scan(code_root: Path, state_root: Path, apply: bool) -> dict[str, Any]:
     state_root = secure_state_dir(state_root)
     lock_path = state_root / "cleaner.lock"
     if lock_path.is_symlink():
@@ -488,11 +493,9 @@ def scan(code_root: Path, t3_db: Path, state_root: Path, apply: bool) -> dict[st
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise SafetyError("cleaner_already_running") from exc
-        if not t3_db.is_file() or t3_db.is_symlink():
-            raise SafetyError("t3_state_unavailable")
-        initial_state = T3State(t3_db)
+        initial_state = EmpryoState()
         github = GitHub()
-        rows, excluded = inventory(code_root, t3_db, github, initial_state)
+        rows, excluded = inventory(code_root, github, initial_state)
         eligible = [row for row in rows if row["eligible"]]
         removed = 0
         if apply:
@@ -503,7 +506,12 @@ def scan(code_root: Path, t3_db: Path, state_root: Path, apply: bool) -> dict[st
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_registration_changed"]
                     continue
-                final = evaluate(repo_root, current, code_root, t3_db, github, refresh=True)
+                try:
+                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), refresh=True)
+                except SafetyError as exc:
+                    candidate["eligible"] = False
+                    candidate["reasons"] = [str(exc)]
+                    continue
                 if current.get("head") != candidate.get("head") or current.get("branch") != candidate.get("branch"):
                     final["eligible"] = False
                     final["reasons"] = sorted(set(final["reasons"] + ["worktree_changed_after_scan"]))
@@ -521,6 +529,28 @@ def scan(code_root: Path, t3_db: Path, state_root: Path, apply: bool) -> dict[st
                     candidate["reasons"] = ["worktree_changed_before_remove"]
                     continue
                 append_removal(state_root, candidate, "removal_attempted")
+                try:
+                    latest_state = EmpryoState()
+                    candidate["empryo_threads"] = latest_state.users(Path(candidate["path"]))
+                    blockers = latest_state.blockers(Path(candidate["path"]))
+                except SafetyError as exc:
+                    blockers = [str(exc)]
+                if blockers:
+                    candidate["eligible"] = False
+                    candidate["reasons"] = blockers
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
+                try:
+                    latest_head = git(Path(candidate["path"]), "rev-parse", "HEAD").strip()
+                    latest_dirty, _ = status_for(Path(candidate["path"]))
+                except SafetyError:
+                    latest_head = ""
+                    latest_dirty = True
+                if latest_head.lower() != str(candidate["head"]).lower() or latest_dirty:
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_changed_before_remove"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
                 try:
                     result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
                 except SafetyError:
@@ -550,6 +580,9 @@ def scan(code_root: Path, t3_db: Path, state_root: Path, apply: bool) -> dict[st
             "held": sum(1 for row in rows if not row["eligible"] and not row.get("removed")),
             "excluded_repositories": excluded,
             "held_reasons": {},
+            "empryo_threads_scanned": initial_state.thread_count,
+            "empryo_unfinished_threads": initial_state.unfinished_count,
+            "empryo_pages_scanned": initial_state.page_count,
         }
         summary["per_repo"] = {}
         for row in rows:
@@ -558,7 +591,7 @@ def scan(code_root: Path, t3_db: Path, state_root: Path, apply: bool) -> dict[st
                 counts["would_remove"] += int(row["eligible"])
                 counts["kept_dirty"] += int(row["dirty"] is True)
                 counts["kept_unpushed"] += int(row["remote_commit_present"] is False)
-                counts["in_use"] += int(any(reason in row["reasons"] for reason in ("t3_thread_active", "t3_launch_in_progress")))
+                counts["in_use"] += int(any(reason in row["reasons"] for reason in ("empryo_thread_unfinished",)))
             for reason in row.get("reasons", []):
                 summary["held_reasons"][reason] = summary["held_reasons"].get(reason, 0) + 1
         report = write_daily_report(code_root, rows, summary, dry_run=not apply)
@@ -571,14 +604,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Safely review and remove eligible Git worktrees under repositories in ~/Code.")
     parser.add_argument("--code-root", type=Path, default=DEFAULT_CODE_ROOT)
     parser.add_argument("--state-root", type=Path, default=DEFAULT_STATE_ROOT)
-    parser.add_argument("--t3-db", type=Path, default=Path(os.environ.get("T3_STATE_DB", DEFAULT_T3_DB)))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="remove only worktrees that pass every safety check")
     mode.add_argument("--dry-run", action="store_false", dest="apply", help="report counts without removing worktrees")
     parser.set_defaults(apply=False)
     args = parser.parse_args(argv)
     try:
-        result = scan(args.code_root.expanduser(), args.t3_db.expanduser(), args.state_root.expanduser(), args.apply)
+        result = scan(args.code_root.expanduser(), args.state_root.expanduser(), args.apply)
     except SafetyError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 2

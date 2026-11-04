@@ -6,7 +6,7 @@ The cleaner discovers repositories under `~/Code` and considers their registered
 
 A branch worktree must be clean, have its exact `HEAD` commit available through GitHub, and have a closed or merged pull request whose head SHA exactly matches that `HEAD`. Any open pull request for the branch blocks removal. A detached worktree must be clean, its exact commit must be available through GitHub, and its latest `HEAD` reflog entry must be at least 24 hours old.
 
-The cleaner reads `~/.t3/userdata/statev2.sqlite` in read-only mode. A missing database, an unrecognized schema, malformed thread data, an unknown status, or an active T3 run for that exact worktree blocks removal. The status check includes runs, provider threads and sessions, runtime requests, subagents, and pending worktree launch records. The database is read again immediately before each removal.
+The cleaner queries `emp call emp_thread_list` across all projects, following every cursor with a limit of 100. Two complete passes must agree on thread identity, paths, status, settled state, active run, and pending requests; any change blocks cleanup because the hub has no snapshot token. Both `worktreePath` and `cwd` (including a cwd beneath a worktree) protect a path. Every unfinished thread blocks removal: idle, snoozed, waiting, unknown-status, and completed-but-unsettled threads included. Only explicitly settled terminal threads without an active run or pending request are finished. Missing or malformed path data, hub failures, incomplete pages, duplicate threads, non-progressing cursors, and changing totals fail closed. A full listing is repeated immediately before each removal; HEAD and cleanliness are then checked again. No retired T3 database is read.
 
 The cleaner never deletes remote branches and never uses `git worktree remove --force`. It excludes SRW and the slash-eureka `dbt` and `omni` repositories based on checkout path or GitHub identity. Those exclusions are in code and need explicit promotion confirmation before they are changed.
 
@@ -36,8 +36,8 @@ launchctl bootstrap "$DOMAIN" ~/Library/LaunchAgents/$LABEL.plist
 launchctl enable "$DOMAIN/$LABEL"
 ```
 
-This task added the plist but did not install or run it. The integration fixture is `python3 verification/worktree-cleaner/check.py`. It creates temporary repositories, a local bare remote, a stub GitHub CLI, and an isolated T3 database, then tests both dry-run and apply behavior.
+This task added the plist but did not install or run it. Run the Empryo regression fixture with `python3 verification/worktree-cleaner/check_empryo.py`. It creates temporary repositories, a local bare remote, and stub GitHub/Empryo CLIs. It covers cross-project pagination, worktreePath and cwd-only holds, unfinished statuses, incomplete/unavailable listings, late-arriving threads, dirty and unpublished trees, and dry-run/apply behavior. The earlier T3 fixture `check.py` is unchanged historical coverage, not the current cleaner's entry point.
 
 ## Limits
 
-GitHub CLI authentication and the local T3 database must be available to the LaunchAgent. Network or state failures block candidates. The 24-hour detached age uses the worktree's latest `HEAD` reflog entry; missing reflog data blocks removal. The cleaner scans repository markers beneath `~/Code` and does not inspect worktrees owned by repositories outside that root.
+GitHub CLI authentication and the Empryo hub/`emp` CLI must be available to the LaunchAgent. Network or state failures block candidates. The 24-hour detached age uses the worktree's latest `HEAD` reflog entry; missing reflog data blocks removal. The cleaner scans repository markers beneath `~/Code` and does not inspect worktrees owned by repositories outside that root.
