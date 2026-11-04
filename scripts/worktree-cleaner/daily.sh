@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
