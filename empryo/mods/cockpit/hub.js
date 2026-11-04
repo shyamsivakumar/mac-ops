@@ -242,7 +242,8 @@ export async function openThread(thread, cx) {
 export const sendArgs = (key, message) => ({ threadId: key, message, mode: "auto" });
 export const sendReply = (key, message) => call("emp_thread_send", sendArgs(key, message));
 export const settle = (key) => call("emp_thread_organize", { threadId: key, action: "settle" });
-export const mergeThread = (key) => call("emp_thread_merge", { threadId: key });
+export const mergeThread = (key, expectedRevision) => call("emp_thread_merge", { threadId: key, expectedRevision });
+export const mergePlan = (key) => call("emp_thread_merge", { threadId: key, dryRun: true });
 export const cleanupThread = (key) => call("emp_thread_cleanup", { threadId: key });
 
 const QUIET_KEEPS = /no worktree on disk|main checkout/;

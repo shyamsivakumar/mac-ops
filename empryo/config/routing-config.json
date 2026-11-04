@@ -90,5 +90,5 @@
   },
   "terminalBrowser": true,
   "terminalBrowserAllowExternal": true,
-  "defaultModel": "subscriptions/gpt-6.1-terra"
+  "defaultModel": "minimax/MiniMax-M3.1-Flash"
 }
