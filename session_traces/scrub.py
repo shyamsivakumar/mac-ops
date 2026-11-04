@@ -198,7 +198,7 @@ _TOOL_NAMES = frozenset("shell code_script read run_tool final_response ast_edit
 _TOKEN_KEYS = frozenset("inputTokens outputTokens totalTokens cachedInputTokens reasoningTokens turnsComplete turnsPartial turnsUnavailable input_tokens output_tokens total_tokens cached_input_tokens costUsd totalCostUsd cost_usd".split())
 
 
-def safe_export_projection(trace: dict[str, Any]) -> dict[str, Any]:
+def safe_export_projection(trace: dict[str, Any], *, pr_limit: int | None = 200) -> dict[str, Any]:
     """Project untrusted trace data to explicitly typed, non-content telemetry."""
     out: dict[str, Any] = {}
     for key in ("run_id", "thread_id", "project_id", "task_key", "branch"):
@@ -239,7 +239,7 @@ def safe_export_projection(trace: dict[str, Any]) -> dict[str, Any]:
     prs = trace.get("pull_requests")
     if isinstance(prs, list):
         result = []
-        for pr in prs[:200]:
+        for pr in prs[:pr_limit]:
             if not isinstance(pr, dict):
                 continue
             item: dict[str, Any] = {}

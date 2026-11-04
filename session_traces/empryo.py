@@ -18,7 +18,11 @@ TOOLS = frozenset("shell code_script read run_tool final_response ast_edit grep 
 def _id(value: Any) -> str | None:
     if not isinstance(value, str) or not value or len(value) > 512:
         return None
-    return hashlib.sha256(value.encode()).hexdigest()
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _timestamp(value: Any) -> str:
