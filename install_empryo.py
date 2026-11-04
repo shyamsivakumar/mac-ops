@@ -24,7 +24,7 @@ BIN_FILES = (
     "coordstart",
 )
 CONFIG_FILES = ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md")
-MODS = ("cockpit", "coordinator", "ops", "git-graph")
+MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees")
 
 
 def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:

@@ -164,16 +164,21 @@ export async function loadBacklog() {
 }
 
 const verdicts = new Map();
+const RETRY_VERDICT = 30000;
+
+const NO_FINDING = /^(none|n\/a|0)\b/i;
 
 function judge(text) {
+  const last = text.split("\n").map((l) => l.trim()).filter(Boolean).at(-1);
   const crit = /(\d+)\s+critical/i.exec(text);
   const major = /(\d+)\s+major/i.exec(text);
+  const counts = crit || major ? `${Number(crit?.[1] ?? 0)}C ${Number(major?.[1] ?? 0)}M` : "verdict FAIL";
+  if (last === "VERDICT: PASS") return { state: "pass", label: "rev pass" };
+  if (last === "VERDICT: FAIL") return { state: "fail", label: `rev ${counts}` };
   if (crit || major) {
-    const c = Number(crit?.[1] ?? 0);
-    const m = Number(major?.[1] ?? 0);
-    return c + m === 0 ? { state: "pass", label: "rev pass" } : { state: "fail", label: `rev ${c}C ${m}M` };
+    return Number(crit?.[1] ?? 0) + Number(major?.[1] ?? 0) === 0 ? { state: "pass", label: "rev pass" } : { state: "fail", label: `rev ${counts}` };
   }
-  const findings = text.match(/^[\s\-*]*\**(critical|major)\**\s*[—:–-]/gim) ?? [];
+  const findings = [...text.matchAll(/^[\s\-*]*\**(?:critical|major)\**\s*[—:–-]\s*\**\s*(.*)$/gim)].filter((m) => !NO_FINDING.test(m[1]));
   if (findings.length) return { state: "fail", label: `rev ${findings.length} found` };
   if (/\b(no (critical|major|blocking)[a-z ]*(findings|issues)|no findings|lgtm|approved|passes?)\b/i.test(text)) return { state: "pass", label: "rev pass" };
   return { state: "unknown", label: "rev ?" };
@@ -186,10 +191,15 @@ export const runModelOf = (thread) => verdicts.get(thread.key)?.runModel ?? "";
 
 export async function loadVerdict(thread) {
   const stamp = `${thread.key}@${thread.at}`;
-  if (verdicts.get(thread.key)?.stamp === stamp) return;
-  const { items, recentRuns } = await call("emp_thread_read", { threadId: thread.key });
-  const last = [...items].reverse().find((i) => i.type === "assistant_message");
-  verdicts.set(thread.key, { stamp, verdict: judge(last?.text ?? ""), runModel: recentRuns?.at(-1)?.model ?? "" });
+  const known = verdicts.get(thread.key);
+  if (known?.stamp === stamp && !(known.retryAt <= Date.now())) return;
+  try {
+    const { items, recentRuns } = await call("emp_thread_read", { threadId: thread.key });
+    const last = [...items].reverse().find((i) => i.type === "assistant_message");
+    verdicts.set(thread.key, { stamp, verdict: judge(last?.text ?? ""), runModel: recentRuns?.at(-1)?.model ?? "" });
+  } catch {
+    verdicts.set(thread.key, { stamp, verdict: { state: "unknown", label: "rev ?" }, runModel: known?.runModel ?? "", retryAt: Date.now() + RETRY_VERDICT });
+  }
 }
 
 export async function shepherdrStates() {
