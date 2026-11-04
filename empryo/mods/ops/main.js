@@ -23,6 +23,7 @@ const HUB_LIVE = ["preparing", "queued", "starting", "running", "waiting"];
 const HUB_CAP = 6;
 const HEALTH_FILE = `${home()}/Code/coordinator/queue/health.json`;
 const HEALTH_STALE_MS = 300000;
+const POLL_LIMIT = 60000;
 
 const sunday = (year, month, nth) => 1 + ((7 - new Date(Date.UTC(year, month, 1)).getUTCDay()) % 7) + 7 * (nth - 1);
 
@@ -55,6 +56,7 @@ export default class Ops extends View {
     this.health = null;
     this.load = null;
     this.at = {};
+    this.busy = new Set();
     this.width = 1200;
     cx.timer.every(5000, (cx) => this.tick(cx));
     this.tick(cx);
@@ -66,56 +68,54 @@ export default class Ops extends View {
     return true;
   }
 
+  poll(cx, name, every, read) {
+    if (this.busy.has(name) || !this.due(name, every)) return;
+    this.busy.add(name);
+    const limit = cx.timer.after(POLL_LIMIT, (cx) => {
+      this[name] = null;
+      cx.notify();
+    });
+    cx.spawn(async (cx) => {
+      try {
+        this[name] = await read();
+      } finally {
+        limit.cancel();
+        this.busy.delete(name);
+      }
+      cx.notify();
+    });
+  }
+
   tick(cx) {
     this.clock = Date.now();
-    if (this.due("srw", market(this.clock).open ? 30000 : 300000)) {
-      cx.spawn(async (cx) => {
-        this.srw = await fetch(SRW_HEALTH).then((r) => r.json(), () => null);
-        cx.notify();
-      });
-    }
-    if (this.due("heavy", 15000)) {
-      cx.spawn(async (cx) => {
-        const r = await exec("heavy", ["status"]);
-        this.heavy = r.code === 0 ? JSON.parse(r.stdout) : null;
-        cx.notify();
-      });
-    }
-    if (this.due("load", 10000)) {
-      cx.spawn(async (cx) => {
-        const r = await exec("sysctl", ["-n", "vm.loadavg"]).catch(() => null);
-        this.load = r && r.code === 0 ? Number(r.stdout.replace(/[{}]/g, "").trim().split(/\s+/)[0]) : null;
-        cx.notify();
-      });
-    }
+    this.poll(cx, "srw", market(this.clock).open ? 30000 : 300000, () => fetch(SRW_HEALTH).then((r) => r.json(), () => null));
+    this.poll(cx, "heavy", 15000, async () => {
+      const r = await exec("heavy", ["status"]);
+      return r.code === 0 ? JSON.parse(r.stdout) : null;
+    });
+    this.poll(cx, "load", 10000, async () => {
+      const r = await exec("sysctl", ["-n", "vm.loadavg"]).catch(() => null);
+      return r && r.code === 0 ? Number(r.stdout.replace(/[{}]/g, "").trim().split(/\s+/)[0]) : null;
+    });
     const board = shared("hub");
     if (board && Date.now() - board.at < 30000) this.hub = board;
-    else if (this.due("hub", 15000)) {
-      cx.spawn(async (cx) => {
+    else {
+      this.poll(cx, "hub", 15000, async () => {
         const r = await exec(`${home()}/.local/bin/emp`, ["call", "emp_thread_list", JSON.stringify({ allProjects: true, limit: 100, statuses: HUB_LIVE })]).catch(() => null);
         const threads = r && r.code === 0 ? JSON.parse(r.stdout).threads : null;
-        this.hub = threads && {
+        return threads && {
           running: threads.filter((t) => t.status !== "waiting").length,
           waiting: threads.filter((t) => t.status === "waiting").length,
           at: Date.now(),
         };
-        cx.notify();
       });
     }
-    if (this.due("health", 30000)) {
-      cx.spawn(async (cx) => {
-        this.health = await readFile(HEALTH_FILE, "utf8").then(JSON.parse, () => null);
-        cx.notify();
-      });
-    }
-    if (this.due("m1", 20000)) {
-      cx.spawn(async (cx) => {
-        const r = await exec("sh", ["-c", M1_PROBE], { on: "m1" }).catch(() => null);
-        const [native, docker, load] = r ? r.stdout.trim().split(/\s+/) : [];
-        this.m1 = r && r.code === 0 ? { native: Number(native), docker: Number(docker), load: Number(load) } : null;
-        cx.notify();
-      });
-    }
+    this.poll(cx, "health", 30000, () => readFile(HEALTH_FILE, "utf8").then(JSON.parse, () => null));
+    this.poll(cx, "m1", 20000, async () => {
+      const r = await exec("sh", ["-c", M1_PROBE], { on: "m1" }).catch(() => null);
+      const [native, docker, load] = r ? r.stdout.trim().split(/\s+/) : [];
+      return r && r.code === 0 ? { native: Number(native), docker: Number(docker), load: Number(load) } : null;
+    });
     cx.notify();
   }
 

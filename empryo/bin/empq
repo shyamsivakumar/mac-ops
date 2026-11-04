@@ -40,8 +40,11 @@ def save(queue):
     os.replace(tmp, path("queue.json"))
 
 
-def call(tool, args):
-    run = subprocess.run([EMP, "call", tool, "-"], input=json.dumps(args), capture_output=True, text=True)
+def call(tool, args, origin=None):
+    env = {k: v for k, v in os.environ.items() if k != "EMP_HUB_THREAD"}
+    if origin:
+        env["EMP_HUB_THREAD"] = origin
+    run = subprocess.run([EMP, "call", tool, "-"], input=json.dumps(args), capture_output=True, text=True, env=env)
     return run.returncode, (run.stdout if run.returncode == 0 else run.stderr).strip()
 
 
@@ -96,7 +99,7 @@ def drain():
         item = ready[0]
         code, out = 0, ""
         for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]:
-            code, out = call(step["tool"], step["args"])
+            code, out = call(step["tool"], step["args"], item.get("origin"))
             if code != 0:
                 break
         if code == 0:
@@ -117,7 +120,7 @@ def cmd_start(a):
         args.setdefault("title", a.title)
     with Lock(True):
         queue = load()
-        item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
+        item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority, "origin": os.environ.get("EMP_HUB_THREAD")}
         queue["next"] += 1
         queue["items"].append(item)
         save(queue)
@@ -142,7 +145,7 @@ def cmd_create(a):
     args = json.loads(a.args)
     if args.get("message"):
         die("refused: create is for idle threads, this has a message. Use empq start.")
-    code, out = call("emp_thread_launch", args)
+    code, out = call("emp_thread_launch", args, os.environ.get("EMP_HUB_THREAD"))
     print(out)
     sys.exit(code)
 

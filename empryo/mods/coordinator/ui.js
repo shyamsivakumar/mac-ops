@@ -1,12 +1,10 @@
 import { div, svg } from "gpui-kit";
+import { settings } from "herdr";
 import { v_flex, h_flex, Textarea, TextView } from "gpui-base";
 
 const TONE = { running: "working", waiting: "blocked", failed: "blocked", stopped: "working", done: "done", idle: "idle" };
 const STATUS = { working: ["working", "working"], blocked: ["asking", "blocked"], done: ["idle", "done"], idle: ["idle", "idle"] };
-const COLLAPSED_LINES = 6;
 const CONTEXT_WINDOW = 1000000;
-
-export const READ_WIDTH = 720;
 
 export function ago(at, now) {
   const m = Math.floor((now - at) / 60000);
@@ -18,31 +16,32 @@ export function elapsed(at, now) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-function chip(t, id, task, open) {
-  const tone = task ? t[TONE[task.status]] : t.dim;
-  const el = h_flex().h(16).px(6).gap(4).flex_none().items_center().rounded(4).border_1().border_color(task ? tone + "66" : t.border)
-    .bg(task ? tone + "18" : t.surface)
+function chip(t, scope, id, task, cb) {
+  const tone = t[TONE[task.status]];
+  return h_flex().id(`chip-${scope}-${id}`).h(16).px(6).gap(4).flex_none().items_center().rounded(4).border_1().border_color(tone + "66").bg(tone + "18")
+    .cursor_pointer().hover((s) => s.bg(t.selected)).tooltip(task.title).on_click((_e, cx) => cb.open(id, task, cx))
     .child(div().size(5).rounded(3).bg(tone))
-    .child(div().text_size(10).font_medium().text_color(task ? t.foreground : t.dim).child(id))
-    .child(div().text_size(9.5).text_color(tone).child(task?.status ?? "no live thread"));
-  return task && open ? el.id(`strip-chip-${id}`).cursor_pointer().hover((s) => s.bg(t.selected)).tooltip(task.title).on_click(() => open(id, task)) : el;
+    .child(div().text_size(10).font_medium().text_color(t.foreground).child(id))
+    .child(div().text_size(9.5).text_color(tone).child(cb.opening === id ? "opening…" : task.status));
 }
+
+export const liveTasks = (ids, tasks) => ids.filter((id) => tasks[id] && tasks[id].status !== "idle");
 
 const STRIP_MAX_IDS = 8;
 const STRIP_MAX_TURNS = 5;
 const STRIP_GAP = 4;
 const STRIP_MORE_WIDTH = 28;
-const chipWidth = (id, task) => 25 + id.length * 6 + (task?.status ?? "no live thread").length * 5.5;
+const chipWidth = (id, task) => 27 + id.length * 6.4 + task.status.length * 5.8;
 
 function recentTasks(view) {
   const ids = new Set();
-  const recent = (view?.turns ?? []).filter((m) => m.role !== "you").slice(-STRIP_MAX_TURNS).reverse();
+  const recent = (view?.turns ?? []).filter((m) => m.role === "coordinator").slice(-STRIP_MAX_TURNS).reverse();
   for (const m of recent) for (const id of m.tasks) if (ids.size < STRIP_MAX_IDS) ids.add(id);
   return [...ids];
 }
 
 export function taskStrip(t, view, cb, width) {
-  const ids = recentTasks(view);
+  const ids = liveTasks(recentTasks(view), cb.tasks);
   if (!ids.length) return null;
   const room = width - 20;
   let used = 0;
@@ -53,39 +52,241 @@ export function taskStrip(t, view, cb, width) {
     fit++;
   }
   const hidden = ids.length - fit;
+  const rest = ids.slice(fit).map((id) => `${id} ${cb.tasks[id].status}`).join(", ");
   return h_flex().h(24).px(10).gap(STRIP_GAP).flex_none().items_center().overflow_hidden().border_b(1).border_color(t.border)
-    .children(ids.slice(0, fit).map((id) => chip(t, id, cb.tasks[id], cb.open)))
-    .when(hidden > 0, (el) => el.child(div().flex_none().text_size(10).text_color(t.dim).child(`+${hidden}`)));
+    .children(ids.slice(0, fit).map((id) => chip(t, "strip", id, cb.tasks[id], cb)))
+    .when(hidden > 0, (el) => el.child(div().id("strip-more").flex_none().text_size(10).text_color(t.muted).tooltip(`${hidden} more: ${rest}`).child(`+${hidden}`)));
 }
 
 function link(t, id, label, onClick) {
-  return div().id(id).text_size(10.5).font_medium().text_color(t.accent).cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click(onClick).child(label);
+  return div().id(id).flex_none().text_size(10.5).font_medium().text_color(t.accent).cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click(onClick).child(label);
 }
 
 export const turnKey = (m) => `${m.role}-${m.at}`;
 
+const monoFont = () => settings().font_family ?? settings().font ?? "JetBrains Mono";
+const MONO = 11;
+const OUTPUT_SHOWN = 3;
+const DIFF_SHOWN = 12;
+const CODE_SHOWN = 30;
+const TOOLS_SHOWN = 40;
+const TABLE_CHAR = 6.1;
+const TABLE_PAD = 14;
+const GROUPED = new Set(["Read", "Grep", "Glob", "WebFetch", "WebSearch"]);
+
+const sum = (list) => list.reduce((a, b) => a + b, 0);
+
+export function fitColumns(ideal, min, room) {
+  const wide = ideal.map((n) => n * TABLE_CHAR + TABLE_PAD);
+  const floor = min.map((n, i) => Math.min(n * TABLE_CHAR + TABLE_PAD, wide[i]));
+  if (sum(wide) <= room) return wide;
+  if (sum(floor) >= room) return floor.map((n) => Math.max(40, (n * room) / sum(floor)));
+  const spare = (room - sum(floor)) / (sum(wide) - sum(floor));
+  return floor.map((n, i) => n + (wide[i] - n) * spare);
+}
+
+function table(t, b, room) {
+  const widths = fitColumns(b.ideal, b.min, room);
+  const row = (cells, head, last) => h_flex().flex_none().children(cells.map((c, i) => div().w(widths[i]).flex_none().px(6).py(3).border_color(t.border)
+    .when(i < cells.length - 1, (el) => el.border_r(1)).when(!last, (el) => el.border_b(1))
+    .text_size(11).text_color(head ? t.foreground : t.muted).when(head, (el) => el.font_semibold().bg(t.surface)).when(c.mono, (el) => el.font_family(monoFont()))
+    .child(c.text || " ")));
+  return v_flex().flex_none().rounded(4).border_1().border_color(t.border).overflow_hidden()
+    .child(row(b.head, true, b.rows.length === 0))
+    .children(b.rows.map((r, i) => row(r, false, i === b.rows.length - 1)));
+}
+
+function codeBlock(t, b, id, cb) {
+  const open = cb.isOpen(`code-${id}`);
+  const shown = open ? b.lines.length : Math.min(CODE_SHOWN, b.lines.length);
+  const hidden = b.lines.length - shown;
+  return v_flex().w_full().flex_none().rounded(4).bg(t.surface).px(10).py(7)
+    .children(b.lines.slice(0, shown).map((l) => div().w_full().min_w(0).font_family(monoFont()).text_size(MONO).text_color(t.foreground).child(l || " ")))
+    .when(hidden > 0 || open && b.lines.length > CODE_SHOWN, (el) => el.child(link(t, `code-more-${id}`, open ? "Show less" : `… +${hidden} lines`, (_e, cx) => cb.toggle(`code-${id}`, cx))))
+    .when(open && b.more > 0, (el) => el.child(div().text_size(10).text_color(t.muted).child(`… ${b.more} more lines not kept`)));
+}
+
+const AUTOLINK = /^<[a-z][a-z0-9+.-]{1,31}:[^\s<>]*>|^<[^\s<>@]+@[^\s<>@]+>/i;
+
+export function escapeAngles(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "`") {
+      const run = /^`+/.exec(text.slice(i))[0];
+      const close = text.indexOf(run, i + run.length);
+      const end = close < 0 ? i + run.length : close + run.length;
+      out += text.slice(i, end);
+      i = end;
+    } else if (ch === "<" && !AUTOLINK.test(text.slice(i))) {
+      out += "\\<";
+      i++;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+function textBlocks(t, id, blocks, color, room, cb) {
+  return blocks.map((b, i) => (b.t === "md"
+    ? TextView.markdown(`md-${id}-${i}`, escapeAngles(b.text)).w_full().text_size(12).text_color(color).on_link_click((url) => cb.link(url))
+    : b.t === "code" ? codeBlock(t, b, `${id}-${i}`, cb) : table(t, b, room)));
+}
+
+const dot = (tone) => div().size(6).flex_none().rounded(3).bg(tone);
+
+function expander(t, id, label, cb) {
+  return link(t, `tool-more-${id}`, label, (_e, cx) => cb.toggle(`tool-${id}`, cx));
+}
+
+function outputLines(t, item, open, cb) {
+  const r = item.result;
+  if (!r || r.total === 0) return null;
+  const shown = open ? r.lines.length : Math.min(OUTPUT_SHOWN, r.lines.length);
+  const hidden = r.total - shown;
+  return v_flex().w_full().min_w(0).pl(12).gap(1)
+    .children(r.lines.slice(0, shown).map((l, i) => h_flex().w_full().gap(6).items_start()
+      .child(div().w(10).flex_none().font_family(monoFont()).text_size(MONO).text_color(t.dim).child(i === 0 ? "⎿" : ""))
+      .child(div().flex_1().min_w(0).font_family(monoFont()).text_size(MONO - 0.5).text_color(r.error ? t.blocked : t.muted).child(l || " "))))
+    .when(hidden > 0 || open && r.lines.length > OUTPUT_SHOWN, (el) => el.child(h_flex().pl(16).child(expander(t, item.id, open ? "Show less" : `… +${hidden} lines`, cb))))
+    .when(open && r.total > r.lines.length, (el) => el.child(div().pl(16).text_size(10).text_color(t.muted).child(`… ${r.total - r.lines.length} more lines not kept`)));
+}
+
+function diffLines(t, item, open, cb) {
+  const d = item.diff;
+  if (d.wrote) return v_flex().pl(12).child(div().text_size(10.5).text_color(t.done).child(`+${d.wrote} lines`));
+  const rows = [...d.removed.map((l) => ["-", l]), ...d.added.map((l) => ["+", l])];
+  if (!rows.length) return null;
+  const shown = open ? rows.length : Math.min(DIFF_SHOWN, rows.length);
+  const hidden = rows.length - shown + d.hidden;
+  return v_flex().w_full().min_w(0).pl(12).gap(1)
+    .children(rows.slice(0, shown).map(([sign, l]) => {
+      const tone = sign === "-" ? t.blocked : t.done;
+      return h_flex().w_full().gap(6).items_start().rounded(2).bg(tone + "18")
+        .child(div().w(10).flex_none().pl(3).font_family(monoFont()).text_size(MONO).text_color(tone).child(sign))
+        .child(div().flex_1().min_w(0).font_family(monoFont()).text_size(MONO - 0.5).text_color(t.foreground).child(l || " "));
+    }))
+    .when(hidden > 0 || open && rows.length > DIFF_SHOWN, (el) => el.child(h_flex().pl(16).child(expander(t, item.id, open ? "Show less" : `… +${hidden} lines`, cb))));
+}
+
+function toolBlock(t, item, now, cb) {
+  const running = cb.working && !item.result && item.id === cb.pendingId;
+  const open = cb.isOpen(`tool-${item.id}`);
+  const head = h_flex().w_full().gap(6).items_center()
+    .child(dot(running ? t.muted : !item.result ? t.dim : item.result.error ? t.blocked : t.done))
+    .child(div().flex_none().font_family(monoFont()).text_size(MONO).font_semibold().text_color(t.foreground).child(item.name))
+    .child(div().flex_1().min_w(0).truncate().font_family(monoFont()).text_size(MONO).text_color(t.muted).child(item.detail ? `(${item.detail})` : ""))
+    .when(running, (el) => el.child(div().flex_none().text_size(10).text_color(t.working).child(elapsed(item.at, now))));
+  const detail = item.diff ? diffLines(t, item, open, cb) : outputLines(t, item, open, cb);
+  return v_flex().w_full().min_w(0).gap(2).child(head).when(detail, (el) => el.child(detail));
+}
+
+function groupLine(t, items, cb) {
+  const count = (names) => items.filter((i) => names.includes(i.name)).length;
+  const reads = count(["Read"]);
+  const searches = count(["Grep", "Glob"]);
+  const pages = count(["WebFetch", "WebSearch"]);
+  const parts = [reads && `read ${reads} ${reads === 1 ? "file" : "files"}`, searches && `searched ${searches} ${searches === 1 ? "pattern" : "patterns"}`, pages && `fetched ${pages} ${pages === 1 ? "page" : "pages"}`].filter(Boolean).join(", ");
+  const running = cb.working && items.some((i) => !i.result && i.id === cb.pendingId);
+  return h_flex().w_full().gap(6).items_center()
+    .child(dot(running ? t.muted : t.done))
+    .child(div().flex_1().min_w(0).truncate().font_family(monoFont()).text_size(MONO).text_color(t.muted).child(parts.charAt(0).toUpperCase() + parts.slice(1)));
+}
+
+function eventLine(t, item) {
+  return h_flex().w_full().gap(6).items_start()
+    .child(div().flex_none().text_size(MONO).text_color(t.dim).child("◦"))
+    .child(div().flex_1().min_w(0).text_size(10.5).text_color(t.muted).child(item.text));
+}
+
+function groupable(item) {
+  return item.k === "tool" && GROUPED.has(item.name) && !item.diff && !item.result?.error;
+}
+
+function bodyOf(t, m, now, color, room, cb) {
+  const out = [];
+  const key = turnKey(m);
+  const tools = m.items.flatMap((it, at) => (it.k === "tool" ? [at] : []));
+  const firstKept = tools.length > TOOLS_SHOWN ? tools[tools.length - TOOLS_SHOWN] : 0;
+  const earlier = cb.isOpen(`earlier-${key}`);
+  for (let i = 0; i < m.items.length; i++) {
+    const item = m.items[i];
+    if (earlier && firstKept > 0 && i === tools[0]) out.push(link(t, `earlier-hide-${key}`, "Hide earlier tool calls", (_e, cx) => cb.toggle(`earlier-${key}`, cx)));
+    if (item.k === "tool" && i < firstKept && !earlier) {
+      let n = 1;
+      while (i + 1 < firstKept && m.items[i + 1].k === "tool") {
+        i++;
+        n++;
+      }
+      out.push(link(t, `earlier-${key}-${i}`, `${n} earlier tool calls`, (_e, cx) => cb.toggle(`earlier-${key}`, cx)));
+    } else if (item.k === "text") out.push(...textBlocks(t, `${key}-${i}`, item.blocks, color, room, cb));
+    else if (item.k === "event") out.push(eventLine(t, item));
+    else if (groupable(item) && m.items[i + 1] && groupable(m.items[i + 1])) {
+      const run = [item];
+      while (groupable(m.items[i + 1] ?? {})) run.push(m.items[++i]);
+      out.push(groupLine(t, run, cb));
+    } else out.push(toolBlock(t, item, now, cb));
+  }
+  return out;
+}
+
 export function turn(t, m, now, cb) {
   const mine = m.role === "you";
-  const all = m.text.split("\n").filter((l) => l.trim());
-  const long = all.length > COLLAPSED_LINES;
-  const open = cb.isOpen(turnKey(m));
-  const shown = long && !open ? all.slice(0, COLLAPSED_LINES) : all;
-  const lines = all.length;
-  const body = TextView.markdown(`md-${turnKey(m)}`, shown.join("\n")).w_full().text_size(12).text_color(mine ? t.foreground : t.muted).on_link_click((url) => cb.link(url));
+  const session = m.role === "session";
+  const live = liveTasks(m.tasks, cb.tasks);
+  const others = m.tasks.length - live.length;
+  const footnote = others ? `${others} other ${others === 1 ? "task" : "tasks"} mentioned` : "";
   const head = h_flex().w_full().gap(8).items_center()
-    .child(div().text_size(11.5).font_semibold().text_color(mine ? t.accent : t.foreground).child(mine ? "You" : "Coordinator"))
-    .child(div().text_size(10).text_color(t.dim).child(ago(m.at, now)))
-    .child(div().flex_1())
-    .when(long, (el) => el.child(link(t, `more-${turnKey(m)}`, open ? "Show less" : `Show more · ${lines} lines`, (_e, cx) => cb.toggle(turnKey(m), cx))));
-  return h_flex().w_full().max_w(READ_WIDTH).flex_none().rounded(6).overflow_hidden().bg(mine ? t.accent + "14" : t.surface).border_1().border_color(mine ? t.accent + "55" : t.border)
-    .child(div().w(3).flex_none().bg(mine ? t.accent : t.border))
-    .child(v_flex().flex_1().min_w(0).px(10).py(7).gap(5).child(head).child(body)
-      .when(m.tasks.length, (el) => el.child(h_flex().gap(4).flex_wrap().children(m.tasks.map((id) => chip(t, id, cb.tasks[id], cb.open)))))
-      .when(m.tools, (el) => el.child(div().text_size(10).text_color(t.dim).child(m.tools))));
+    .child(div().text_size(11.5).font_semibold().text_color(mine ? t.accent : session ? t.muted : t.foreground).child(mine ? "You" : session ? `From ${cb.sender(m.from)}` : "Coordinator"))
+    .child(div().text_size(10).text_color(t.dim).child(ago(m.at, now)));
+  const room = cb.width - 24 - (mine || session ? 22 : 0);
+  const body = v_flex().flex_1().min_w(0).gap(6).child(head).children(bodyOf(t, m, now, session ? t.muted : t.foreground, room, cb))
+    .when(live.length, (el) => el.child(h_flex().gap(4).flex_wrap().children(live.map((id) => chip(t, turnKey(m), id, cb.tasks[id], cb)))))
+    .when(footnote, (el) => el.child(div().text_size(10).text_color(t.muted).child(footnote)));
+  if (!mine && !session) return h_flex().w_full().flex_none().px(2).py(2).child(body);
+  return h_flex().w_full().flex_none().rounded(6).overflow_hidden().bg(mine ? t.accent + "14" : t.background)
+    .child(div().w(3).flex_none().bg(mine ? t.accent : t.input))
+    .child(v_flex().flex_1().min_w(0).px(10).py(7).child(body));
+}
+
+const TURN_ESTIMATE = 160;
+
+function drawTurns(t, turns, now, cb) {
+  const out = [];
+  let below = 0;
+  const from = cb.fromBottom - cb.viewH;
+  const to = cb.fromBottom + 2 * cb.viewH;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const m = turns[i];
+    const key = turnKey(m);
+    const h = cb.heights.get(key);
+    const near = h === undefined || (below + h >= from && below <= to);
+    out.push(near
+      ? div().id(`turn-${key}`).w_full().flex_none().px(12).py(4).on_size_change((size, cx) => cb.turnSize(key, size.height, cx)).child(turn(t, m, now, cb))
+      : div().w_full().flex_none().h(h));
+    below += h ?? TURN_ESTIMATE;
+  }
+  return out.reverse();
 }
 
 const footerLink = (t, id, label, onClick) =>
   div().id(id).w_full().flex_none().py(10).flex().justify_center().text_size(11).font_medium().text_color(t.accent).cursor_pointer().on_click(onClick).child(label);
+
+export const clampFrom = (from, content, view) => Math.min(Math.max(0, from), Math.max(0, content - view));
+export const holdFrom = (from, before, after, view, prepended) => clampFrom(from > 0 && !prepended ? from + after - before : from, after, view);
+
+function thumb(t, top, view, total) {
+  const h = Math.max(24, (view * view) / total);
+  return div().absolute().right(2).top(Math.round((view - h) * (top / (total - view)))).w(3).h(Math.round(h)).rounded(2).bg(t.input);
+}
+
+function latestButton(t, cb) {
+  return div().id("co-latest").absolute().bottom(8).right(16).h(22).px(10).flex().items_center().rounded(11).bg(t.accent).text_color(t.background)
+    .text_size(10.5).font_semibold().cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => cb.latest(cx)).child("Latest ↓");
+}
 
 export function conversation(t, view, error, now, cb) {
   const note = (text) => div().w_full().py(20).flex().justify_center().text_size(11).text_color(t.dim).child(text);
@@ -95,19 +296,24 @@ export function conversation(t, view, error, now, cb) {
   }
   const total = view.turns.length;
   const hidden = total - cb.shown;
-  const column = v_flex().id("co-turns").size_full().overflow_y_scrollbar()
-    .children(view.turns.slice(-cb.shown).reverse().map((m) => div().w_full().flex_none().px(12).py(4).child(turn(t, m, now, cb))))
+  const content = v_flex().id("co-content").w_full().flex_none().relative().top(cb.fromBottom).on_size_change((size, cx) => cb.measure(size, cx))
     .when(hidden > 0, (el) => el.child(footerLink(t, "co-show-older", view.unread ? "Show older" : `Show older · ${hidden} more`, (_e, cx) => cb.more(cx))))
     .when(hidden <= 0 && view.unread, (el) => el.child(footerLink(t, "co-older-block", cb.loading ? "Loading…" : "Show older", (_e, cx) => cb.older(cx))))
-    .when(hidden <= 0 && !view.unread && view.hasOlder, (el) => el.child(footerLink(t, "co-older", cb.loading ? "Loading…" : "↑ Load previous session", (_e, cx) => cb.older(cx))));
+    .when(hidden <= 0 && !view.unread && view.hasOlder, (el) => el.child(footerLink(t, "co-older", cb.loading ? "Loading…" : "↑ Load previous session", (_e, cx) => cb.older(cx))))
+    .children(drawTurns(t, view.turns.slice(-cb.shown), now, cb));
+  const column = div().id("co-turns").size_full().relative().overflow_hidden()
+    .on_scroll_wheel((e, cx) => cb.wheel(e.delta.y, cx))
+    .child(v_flex().size_full().justify_end().child(content))
+    .when(cb.contentH > cb.viewH, (el) => el.child(thumb(t, cb.contentH - cb.viewH - cb.fromBottom, cb.viewH, cb.contentH)))
+    .when(cb.fromBottom > 0, (el) => el.child(latestButton(t, cb)));
   return log.child(column);
 }
 
-export function status(t, info, view, at, width) {
+export function status(t, info, view, at, width, error) {
   const narrow = width < 440;
   const [word, tone] = STATUS[info?.status] ?? ["not running", "dim"];
   const working = info?.status === "working";
-  const doing = working ? (view?.activity ? `${view.activity} · ${elapsed(view.activityAt, at)}` : "Thinking") : view?.lastReplyAt ? `replied ${ago(view.lastReplyAt, at)}` : "";
+  const doing = error ? "transcript unreadable, showing old data" : working ? (view?.activity ? `${view.activity} · ${elapsed(view.activityAt, at)}` : "Thinking") : view?.lastReplyAt ? `replied ${ago(view.lastReplyAt, at)}` : "";
   const tokens = view?.tokens ?? 0;
   const fraction = Math.min(1, tokens / CONTEXT_WINDOW);
   return h_flex().h(26).px(10).gap(6).flex_none().items_center().border_b(1).border_color(t.border)
@@ -122,11 +328,43 @@ export function status(t, info, view, at, width) {
     .when(Boolean(info?.address), (el) => el.child(div().flex_none().text_size(10).text_color(t.dim).child(info.address)));
 }
 
-const ASK_CLIP = 200;
 const CHIP_CLIP = 24;
-const OPTION_CLIP = 40;
 const ASKS_MAX_HEIGHT = 260;
-const ASK_ROW_HEIGHT = 116;
+const ASK_TEXT_WIDTH = 700;
+const ASK_CHAR = 6.2;
+const OPTION_CHAR = 5.8;
+const OPTION_PAD = 18;
+const ASK_CHROME = 38;
+const ASK_LINE = 15;
+const ASK_CONTROL = 20;
+const ASK_GAP = 5;
+export const ASKS_HEAD = 34 + 34 + 16;
+
+function optionLines(options) {
+  let lines = 0;
+  let used = 0;
+  for (const o of options) {
+    const w = o.length * OPTION_CHAR + OPTION_PAD;
+    if (used && used + w + 4 > ASK_TEXT_WIDTH) {
+      lines++;
+      used = 0;
+    }
+    used += w + 4;
+    while (used > ASK_TEXT_WIDTH) {
+      lines++;
+      used -= ASK_TEXT_WIDTH;
+    }
+  }
+  return used ? lines + 1 : lines;
+}
+
+function askHeight(a) {
+  const question = Math.ceil(a.text.length * ASK_CHAR / ASK_TEXT_WIDTH) * ASK_LINE;
+  const choices = a.options.length ? optionLines(a.options) * (ASK_CONTROL + 4) - 4 + ASK_GAP : 0;
+  return ASK_CHROME + question + (a.recommended ? ASK_LINE + ASK_GAP : 0) + choices + ASK_GAP + ASK_CONTROL;
+}
+
+export const asksHeight = (list) => list.reduce((sum, a) => sum + askHeight(a), 0);
 
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const recommendedLine = (rec) => `Recommended: ${rec.answer}${rec.reason ? ` · ${rec.reason}` : ""}`;
@@ -166,9 +404,9 @@ function segment(t, id, label, selected, recommended, onClick) {
 }
 
 function option(t, id, label, selected, recommended, onClick) {
-  return div().id(id).h(20).px(8).flex().items_center().rounded(4).border_1().border_color(selected || recommended ? t.accent : t.input)
+  return div().id(id).max_w_full().min_h(20).px(8).py(2).flex().items_center().rounded(4).border_1().border_color(selected || recommended ? t.accent : t.input)
     .bg(selected ? t.accent : t.raised).text_size(10.5).font_medium().text_color(selected ? t.background : recommended ? t.accent : t.foreground)
-    .cursor_pointer().hover((s) => s.opacity(0.85)).tooltip(label).on_click(onClick).child(clip(recommended ? `★ ${label}` : label, OPTION_CLIP));
+    .cursor_pointer().hover((s) => s.opacity(0.85)).on_click(onClick).child(recommended ? `★ ${label}` : label);
 }
 
 function ask(t, { text: q, options, recommended: rec }, i, view, cb) {
@@ -198,8 +436,8 @@ function ask(t, { text: q, options, recommended: rec }, i, view, cb) {
     .child(v_flex().flex_1().min_w(0).px(8).py(6).gap(5)
       .child(h_flex().gap(6).items_start()
         .child(div().flex_none().text_size(11).font_semibold().text_color(tone).child(`${i + 1}`))
-        .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.foreground).child(clip(q, ASK_CLIP))))
-      .when(rec, (el) => el.child(div().id(`ask-${i}-rec`).w_full().truncate().text_size(10.5).text_color(t.dim).tooltip(recommendedLine(rec)).child(recommendedLine(rec))))
+        .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.foreground).child(q)))
+      .when(rec, (el) => el.child(div().w_full().text_size(10.5).text_color(t.muted).child(recommendedLine(rec))))
       .when(options.length > 0, (el) => el.child(choices))
       .child(h_flex().gap(6).items_center()
         .when(options.length === 0, (el) => el.child(choices))
@@ -211,17 +449,31 @@ function ask(t, { text: q, options, recommended: rec }, i, view, cb) {
         .child(div().px(8).pb(4).text_size(10).text_color(t.dim).child("⏎ save · ⇧⏎ newline")))));
 }
 
-export function asks(t, list, view, cb) {
+export function askRow(t, list, answered, cb) {
+  return h_flex().id("ask-row").h(30).px(10).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
+    .cursor_pointer().hover((s) => s.bg(t.selected)).tooltip("Open the questions").on_click(() => cb.openAsks())
+    .child(div().flex_none().text_size(10).font_semibold().text_color(t.blocked).child(`Needs you · ${list.length}`))
+    .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(list[0].text))
+    .child(div().flex_none().text_size(10).text_color(t.muted).child(`${answered} of ${list.length} answered`));
+}
+
+export function popupBar(t, count, cb) {
+  return h_flex().h(34).px(12).flex_none().items_center().border_b(1).border_color(t.border)
+    .child(div().flex_1().text_size(12).font_semibold().text_color(t.foreground).child(count ? "Coordinator questions" : "No open questions"))
+    .child(div().id("ask-pop-close").size(22).flex().items_center().justify_center().rounded(4).text_size(12).text_color(t.dim)
+      .cursor_pointer().hover((s) => s.bg(t.selected)).on_click(() => cb.close()).child("✕"));
+}
+
+export function asks(t, list, view, cb, room = ASKS_MAX_HEIGHT) {
   const k = view.answers.length;
   const ready = k > 0 && !view.sending;
   const acceptable = list.some((a) => a.recommended && !view.drafts.has(a.text));
-  return v_flex().flex_none().px(10).py(6).gap(6).border_b(1).border_color(t.border)
+  return v_flex().flex_none().px(10).py(8).gap(8)
     .child(h_flex().h(22).gap(8).items_center()
-      .child(div().text_size(10).font_semibold().text_color(t.blocked).child(`Needs you · ${list.length}`))
-      .child(div().flex_1().min_w(0).truncate().text_right().text_size(10).text_color(t.dim).child(`${k}/${list.length}`))
+      .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(`${k} of ${list.length} answered`))
       .when(acceptable, (el) => el.child(acceptButton(t, (_e, cx) => cb.accept(cx))))
       .child(sendButton(t, "ask-send", k ? sendLabel(k) : "Send answers", ready, false, (_e, cx) => cb.send(cx))))
-    .child(v_flex().id("ask-list").w_full().h(Math.min(list.length * ASK_ROW_HEIGHT, ASKS_MAX_HEIGHT)).overflow_y_scrollbar().mode("always")
+    .child(v_flex().id("ask-list").w_full().h(Math.min(asksHeight(list), room)).overflow_y_scrollbar().mode("always")
       .children(list.map((a, i) => div().w_full().flex_none().pb(4).child(ask(t, a, i, view, cb)))));
 }
 

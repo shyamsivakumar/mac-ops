@@ -1,32 +1,33 @@
 {
   "taskRouter": {
-    "ember": "subscriptions/gpt-6.1-terra",
-    "node": "subscriptions/gpt-6.1-terra",
+    "ember": "zai-coding-plan/glm-5.3",
+    "node": "zai-coding-plan/glm-5.3",
     "verify": "subscriptions/gpt-6.1-terra",
-    "routine": "subscriptions/gpt-6.1-terra",
-    "spark": "subscriptions/gpt-6-luna",
-    "webSearch": "subscriptions/gpt-6-luna",
-    "desloppify": "subscriptions/gpt-6-luna",
+    "routine": "zai-coding-plan/glm-5.3",
+    "spark": "minimax/MiniMax-M3.1-Flash",
+    "webSearch": "minimax/MiniMax-M3.1-Flash",
+    "desloppify": "minimax/MiniMax-M3.1-Flash",
     "namer": "subscriptions/gpt-6-luna",
-    "marionette": "subscriptions/gpt-6-luna",
+    "marionette": "minimax/MiniMax-M3.1-Flash",
     "review": "subscriptions/gpt-6.1-sol",
     "goalReview": "subscriptions/gpt-6.1-sol",
     "orchestrate": "subscriptions/gpt-6.1-sol",
-    "judge": "subscriptions/claude-opus-5-5",
-    "advisor": "subscriptions/claude-opus-5-5",
+    "judge": "subscriptions/gpt-6.1-sol",
+    "advisor": "subscriptions/gpt-6-astra",
     "maxConcurrentAgents": 4
   },
   "modelFallback": {
     "subscriptions/gpt-6.1-sol": [
-      "subscriptions/claude-opus-5-5",
-      "subscriptions/gpt-6-astra"
+      "subscriptions/gpt-6-astra",
+      "subscriptions/claude-opus-5-5"
     ],
     "subscriptions/claude-opus-5-5": [
-      "subscriptions/gpt-6-astra"
+      "subscriptions/gpt-6-astra",
+      "subscriptions/claude-sonnet-5-5"
     ],
     "subscriptions/gpt-6.1-terra": [
-      "zai-coding-plan/glm-5.3",
-      "subscriptions/cursor/composer-2.5"
+      "subscriptions/cursor/composer-2.5",
+      "subscriptions/claude-sonnet-5-5"
     ],
     "subscriptions/claude-sonnet-5-5": [
       "subscriptions/gpt-6.1-terra",
@@ -34,18 +35,36 @@
       "subscriptions/cursor/composer-2.5"
     ],
     "zai-coding-plan/glm-5.3": [
-      "subscriptions/cursor/composer-2.5"
+      "minimax/MiniMax-M3.1-Flash",
+      "subscriptions/gpt-6.1-terra",
+      "subscriptions/cursor/composer-2.5",
+      "subscriptions/claude-sonnet-5-5"
     ],
     "subscriptions/gpt-6-luna": [
       "minimax/MiniMax-M3.1-Flash",
-      "zai-coding-plan/glm-5.3-flash"
+      "zai-coding-plan/glm-5.3-flash",
+      "subscriptions/gpt-6.1-terra"
     ],
     "minimax/MiniMax-M3.1-Flash": [
-      "zai-coding-plan/glm-5.3-flash"
+      "zai-coding-plan/glm-5.3-flash",
+      "zai-coding-plan/glm-5.3",
+      "subscriptions/gpt-6.1-terra",
+      "subscriptions/cursor/composer-2.5",
+      "subscriptions/claude-sonnet-5-5"
     ],
     "subscriptions/cursor/default": [
       "subscriptions/gpt-6.1-terra",
-      "zai-coding-plan/glm-5.3"
+      "subscriptions/claude-sonnet-5-5"
+    ],
+    "zai-coding-plan/glm-5.3-flash": [
+      "minimax/MiniMax-M3.1-Flash",
+      "subscriptions/gpt-6.1-terra",
+      "subscriptions/cursor/composer-2.5",
+      "subscriptions/claude-sonnet-5-5"
+    ],
+    "subscriptions/cursor/composer-2.5": [
+      "subscriptions/gpt-6.1-terra",
+      "subscriptions/claude-sonnet-5-5"
     ]
   },
   "instructionFiles": [
