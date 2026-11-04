@@ -259,7 +259,10 @@ def safe_export_projection(trace: dict[str, Any], *, pr_limit: int | None = 200)
                 "review_decision": frozenset({"APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"}),
             }.items():
                 if key in pr:
-                    item[key] = _enum(pr[key], choices)
+                    value = pr[key]
+                    if isinstance(value, str):
+                        value = value.upper() if key == "review_decision" else value.lower()
+                    item[key] = _enum(value, choices)
             for key in ("evidence_by_end", "merge_by_end"):
                 if type(pr.get(key)) is bool:
                     item[key] = pr[key]
