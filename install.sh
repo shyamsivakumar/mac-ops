@@ -14,6 +14,14 @@ case "${1:-install}" in
     shift || true
     exec /usr/bin/python3 -I "$checkout/install_agents.py" "$action" "$@"
     ;;
+  empryo | empryo-status)
+    action=install
+    if [ "$1" = empryo-status ]; then
+      action=status
+    fi
+    shift || true
+    exec /usr/bin/python3 -I "$checkout/install_empryo.py" "$action" "$@"
+    ;;
   *)
     exec /usr/bin/python3 -I "$checkout/install.py" "$@"
     ;;

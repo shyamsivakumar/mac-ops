@@ -239,6 +239,12 @@ the exercised stalled-stream watchdog cases.
 Its [state chart](docs/state-charts/cursor-retry.md) records retry, veto and
 durable-launcher publication paths.
 
+## Empryo task hub
+
+The Empryo hub, queue, launchd jobs, routing config and Herdr mods live under
+`empryo/` and install with `./install.sh empryo`. See
+[docs/empryo-hub.md](docs/empryo-hub.md).
+
 ## Agent session traces (MO-124)
 
 Read-only traces of every T3 build-session run on this Mac, scrubbed and stored
