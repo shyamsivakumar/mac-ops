@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import contextlib, json, os, re, shutil, socket, socketserver, sqlite3, subprocess, sys, threading, time, uuid
+import contextlib, hashlib, json, os, re, shutil, socket, socketserver, sqlite3, subprocess, sys, threading, time, uuid
 from datetime import datetime, timedelta, timezone
 
 HOME = os.path.expanduser("~")
@@ -19,6 +19,9 @@ ROUTING_PATH = f"{HUB_DIR}/routing.json"
 EMPRYO_CONFIG = f"{HOME}/.empryo/config.json"
 TASK_TYPES = ["standard", "risky", "design", "large", "ui", "research", "rca", "chore", "review", "panel"]
 MODES = ["auto", "orchestrate", "plan", "default"]
+PORT_RANGE_START = 40000
+PORT_BLOCK_SIZE = 10
+PORT_BLOCKS = 910
 IDLE_ENGINE_SECONDS = 900
 SCHEDULER_TICK_SECONDS = 20
 REAPER_TICK_SECONDS = 60
@@ -131,8 +134,26 @@ def git(cwd, *args):
     return run.stdout.strip()
 
 
+def port_base_of(thread):
+    if not thread["worktreePath"]:
+        return None
+    with LOCK:
+        others = [t for t in THREADS.data.values() if t is not thread and t.get("portBase") is not None]
+        live = {t["portBase"] for t in others if not t["archived"]}
+        if thread.get("portBase") is None or thread["portBase"] in live:
+            held = {t["portBase"] for t in others}
+            start = int(hashlib.sha256(thread["threadId"].encode()).hexdigest()[:8], 16) % PORT_BLOCKS
+            blocks = [PORT_RANGE_START + ((start + step) % PORT_BLOCKS) * PORT_BLOCK_SIZE for step in range(PORT_BLOCKS)]
+            base = next((b for b in blocks if b not in held), None) or next((b for b in blocks if b not in live), None)
+            if base is None:
+                raise HubError(f"all {PORT_BLOCKS} port blocks are in use by unarchived threads")
+            thread["portBase"] = base
+            THREADS.save()
+        return thread["portBase"]
+
+
 class AcpProcess:
-    def __init__(self, root, key):
+    def __init__(self, root, key, port_base=None):
         self.root = root
         self.key = key
         self.loaded = set()
@@ -144,7 +165,7 @@ class AcpProcess:
         self.users = 0
         self.proc = subprocess.Popen(
             [EMPRYO, "acp"], cwd=root if os.path.isdir(root) else HOME,
-            env={**os.environ, "EMPRYO_NO_PROMPT": "1", "EMP_HUB_THREAD": key}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(f"{HUB_DIR}/engine.log", "a"), text=True, bufsize=1,
+            env={**{k: v for k, v in os.environ.items() if k != "EMP_PORT_BASE"}, "EMPRYO_NO_PROMPT": "1", "EMP_HUB_THREAD": key, **({"EMP_PORT_BASE": str(port_base)} if port_base is not None else {})}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(f"{HUB_DIR}/engine.log", "a"), text=True, bufsize=1,
         )
         threading.Thread(target=self.read_loop, daemon=True).start()
         try:
@@ -244,7 +265,7 @@ def engine_for(thread):
         if proc and not proc.dead:
             proc.users += 1
             return proc
-    proc = AcpProcess(thread_cwd(thread), key)
+    proc = AcpProcess(thread_cwd(thread), key, port_base_of(thread))
     with LOCK:
         ENGINES[key] = proc
         proc.users += 1
@@ -974,7 +995,7 @@ def thread_summary(thread):
     rt = RUNTIME.get(thread["threadId"])
     keys = ("threadId", "projectId", "title", "createdBy", "creationSource", "status", "latestRunId", "activeRunId", "providerInstanceId", "model",
             "runtimeMode", "interactionMode", "linkedPullRequest", "pullRequests", "titleRegeneration", "branch", "worktreePath", "parentThreadId",
-            "relationshipToParent", "taskType", "mode", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError")
+            "relationshipToParent", "taskType", "mode", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError", "portBase")
     summary = {k: thread.get(k) for k in keys}
     summary["link"] = link_of(thread)
     summary["activeRunStartedAt"] = thread["runs"][-1]["startedAt"] if thread["activeRunId"] else None
@@ -1654,6 +1675,21 @@ def check_line_ok(lines, sha):
     return len(lines) >= 2 and lines[-2] == f"CHECK: PASS {sha}"
 
 
+CHECK_LINE = re.compile(r"CHECK: PASS ([0-9a-f]{40})")
+
+
+def checked_sha(text):
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    found = CHECK_LINE.fullmatch(lines[-2]) if len(lines) >= 2 else None
+    return found.group(1) if found else None
+
+
+def verdict_word(text):
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    found = VERDICT_LINE.fullmatch(lines[-1]) if lines else None
+    return found.group(1) if found else None
+
+
 def judge_review(text, check_sha=None):
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
     verdict = VERDICT_LINE.fullmatch(lines[-1]) if lines else None
@@ -1731,7 +1767,7 @@ def review_gate(thread, check_sha=None, head_committed_at=None):
         if message is None:
             return False, f"the review thread '{review['title']}' has no usable report: {problem}", {"source": "review thread", "threadId": review["threadId"], "status": review["status"]}
         passed, why = judge_review(message["text"], check_sha)
-        evidence = {"source": "review thread", "threadId": review["threadId"], "title": review["title"], "verdict": why, "excerpt": message["text"][:300]}
+        evidence = {"source": "review thread", "threadId": review["threadId"], "title": review["title"], "verdict": why, "verdictWord": verdict_word(message["text"]), "checkSha": checked_sha(message["text"]), "excerpt": message["text"][:300]}
         if not passed:
             return False, f"review gate not passed: {why}", evidence
         if last_run_end(review) < last_run_end(thread):
@@ -1759,9 +1795,10 @@ def checks_verdict(repo, number):
         if code != 0 and not NO_CHECKS_REPORTED.search(err):
             raise HubError(f"gh pr checks failed: {err or out}")
     if not rows:
-        return False, "no checks are reported for this pull request yet", {"scope": scope, "count": 0}
+        return False, "no checks are reported for this pull request yet", {"scope": scope, "count": 0, "state": "none reported"}
     bad = [f"{r['name']}: {r['bucket']}" for r in rows if r["bucket"] not in ("pass", "skipping")]
-    return not bad, (f"checks not green ({scope}): {', '.join(bad[:4])}" if bad else None), {"scope": scope, "count": len(rows)}
+    state = f"failing: {', '.join(sorted(bad))}" if bad else "green"
+    return not bad, (f"checks not green ({scope}): {', '.join(bad[:4])}" if bad else None), {"scope": scope, "count": len(rows), "state": state}
 
 
 def merge_method(repo):
@@ -1855,6 +1892,67 @@ def merge_plan(thread):
     return True, None, evidence, {"repo": repo, "number": number, "method": method, "sha": detail["headRefOid"]}
 
 
+REVISION_LABELS = {
+    "pullRequest": "pull request number", "headSha": "pull request head commit", "mergeState": "merge state", "checks": "checks",
+    "reviewThread": "review thread", "reviewVerdict": "review verdict", "reviewSha": "commit the review checked",
+}
+ISSUED_REVISIONS = {}
+ISSUED_REVISIONS_KEPT = 500
+
+
+def revision_inputs(evidence):
+    detail = evidence.get("pullRequest") or {}
+    gate = evidence.get("reviewGate") or {}
+    return {
+        "pullRequest": detail.get("number"), "headSha": detail.get("headRefOid"), "mergeState": detail.get("mergeStateStatus"),
+        "checks": (evidence.get("checks") or {}).get("state"),
+        "reviewThread": gate.get("threadId"), "reviewVerdict": gate.get("verdictWord"), "reviewSha": gate.get("checkSha"),
+    }
+
+
+MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
+
+
+def hashed_inputs(inputs):
+    return {**inputs, "mergeState": "mergeable" if inputs["mergeState"] in MERGEABLE_STATES else inputs["mergeState"]}
+
+
+def revision_of(inputs):
+    return hashlib.sha256(json.dumps(hashed_inputs(inputs), sort_keys=True).encode()).hexdigest()[:12]
+
+
+def revision_differences(before, now, only_read):
+    before, now = hashed_inputs(before), hashed_inputs(now)
+    return [f"{REVISION_LABELS[key]} was {before[key] or 'none'} and is now {now[key] or 'none'}" for key in REVISION_LABELS
+            if before[key] != now[key] and not (only_read and now[key] is None)]
+
+
+def issue_revision(inputs):
+    revision = revision_of(inputs)
+    with LOCK:
+        ISSUED_REVISIONS[revision] = inputs
+        while len(ISSUED_REVISIONS) > ISSUED_REVISIONS_KEPT:
+            del ISSUED_REVISIONS[next(iter(ISSUED_REVISIONS))]
+    return revision
+
+
+def stale_revision_refusal(thread, expected, ok, reason, evidence):
+    inputs = revision_inputs(evidence)
+    if ok and revision_of(inputs) == expected:
+        return None
+    with LOCK:
+        before = ISSUED_REVISIONS.get(expected)
+    differences = revision_differences(before, inputs, only_read=not ok) if before else []
+    if not ok and not differences:
+        return None
+    if before is None:
+        told = f"revision {expected} was not issued by this hub since it started, so the differences cannot be named; read the task again with dryRun"
+    else:
+        told = f"the task changed since revision {expected}: {'; '.join(differences)}; read it again with dryRun before merging"
+    return {"threadId": thread["threadId"], "merged": False, "refused": f"{reason}. Also, {told}" if not ok else told, "expectedRevision": expected,
+            "revision": revision_of(inputs) if ok else None, "current": inputs, "evidence": evidence}
+
+
 def tool_thread_merge(a):
     thread = thread_of(a["threadId"])
     if is_review_thread(thread):
@@ -1864,10 +1962,15 @@ def tool_thread_merge(a):
     if thread["status"] in LIVE:
         return {"threadId": thread["threadId"], "merged": False, "refused": "the task thread still has a live run"}
     ok, reason, evidence, plan = merge_plan(thread)
+    expected = a.get("expectedRevision")
+    if expected is not None:
+        stale = stale_revision_refusal(thread, expected, ok, reason, evidence)
+        if stale:
+            return stale
     if not ok:
         return {"threadId": thread["threadId"], "merged": False, "refused": reason, "evidence": evidence}
     if a.get("dryRun"):
-        return {"threadId": thread["threadId"], "merged": False, "dryRun": True, "wouldMerge": plan, "evidence": evidence}
+        return {"threadId": thread["threadId"], "merged": False, "dryRun": True, "revision": issue_revision(revision_inputs(evidence)), "wouldMerge": plan, "evidence": evidence}
     code, out, err = sh(["gh", "pr", "merge", str(plan["number"]), "--repo", plan["repo"], f"--{plan['method']}", "--match-head-commit", plan["sha"]], timeout=180)
     if code != 0:
         return {"threadId": thread["threadId"], "merged": False, "refused": f"gh pr merge failed: {err or out}", "evidence": evidence}
@@ -1902,7 +2005,7 @@ TOOLS = {
     "emp_hub_drain": (obj({"timeoutMs": {"type": "integer", "minimum": 1}}), tool_hub_drain),
     "emp_hub_drain_cancel": (obj({}), tool_hub_drain_cancel),
     "emp_thread_cleanup": (obj({**THREAD_ID, "dryRun": BOOL}, ["threadId"]), tool_thread_cleanup),
-    "emp_thread_merge": (obj({**THREAD_ID, "dryRun": BOOL}, ["threadId"]), tool_thread_merge),
+    "emp_thread_merge": (obj({**THREAD_ID, "dryRun": BOOL, "expectedRevision": {"type": "string", "description": "The revision a dry run returned. The merge is refused, naming what changed, if the pull request head, merge state, checks or review differ now. Omit it for the earlier behaviour."}}, ["threadId"]), tool_thread_merge),
     "emp_thread_materialize": (obj({"threadId": STR, "syncTitles": BOOL}), tool_thread_materialize),
     "emp_thread_update": (obj({**THREAD_ID, "action": {"type": "string", "enum": ["rename"]}, "title": STR, "clientRequestId": STR}, ["threadId", "action", "title"]), tool_thread_update),
     "emp_thread_organize": (obj({**THREAD_ID, "action": {"type": "string", "enum": ["pin", "unpin", "snooze", "unsnooze", "settle", "unsettle", "archive", "unarchive"]}, "snoozedUntil": STR}, ["threadId", "action"]), tool_thread_organize),

@@ -58,7 +58,7 @@ function headButton(t, id, glyph, tip, run) {
 }
 
 export function columnHead(t, key, col, state, cb) {
-  const [, label, tone] = COLUMNS.find((c) => c[0] === key);
+  const [, label, tone, short] = COLUMNS.find((c) => c[0] === key);
   const capped = key === "run" && state.running >= state.cap;
   const tight = state.colW < 260;
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
@@ -66,7 +66,7 @@ export function columnHead(t, key, col, state, cb) {
     .child(h_flex().h(H.head - H.sub).px(10).gap(6).items_center().overflow_hidden()
       .when(!state.popup, (el) => el.child(div().w(10).text_size(9).text_color(t.dim).child(state.collapsed ? "▸" : "▾")))
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
-      .child(div().min_w(0).text_size(11).font_semibold().text_color(t.foreground).truncate().child(key === "done" && state.colW < 260 ? "Done" : label))
+      .child(div().min_w(0).text_size(11).font_semibold().text_color(t.foreground).truncate().child(tight && (key === "done" || key === "ready") ? short : label))
       .child(div().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).child(key === "run" ? `${state.running}/${state.cap}` : String(col.count)))
       .child(div().flex_1())
       .when(key === "done" && state.reviewed > 0 && state.colW >= 260, (el) => el.child(action(t, "settle-reviewed", "S", state.armed?.kind === "settle" ? `Confirm ${state.reviewed}` : `Settle ${state.reviewed}`, (cx) => cb.settleReviewed(cx))))
@@ -226,22 +226,217 @@ export function childRow(t, e, v, cb) {
     .child(opening === e.key ? div().flex_none().text_size(9.5).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(9.5).text_color(t.muted).child(ago(c.at, now)));
 }
 
-const KEYS = [["h l", "column"], ["j k", "card"], ["→ ←", "threads"], ["r", "reply"], ["o", "open"], ["s", "settle"], ["A", "settle all"], ["a", "approve"], ["M", "approve all"], ["q", "queue"], ["f", "fold column"], ["e", "pop-up"], ["b", "backlog"], ["R", "refresh"]];
+export const DEC_WIDTH = 640;
+const DEC_CAP = 640;
+const DEC_COLUMN = { needs: ["Needs you", "blocked"], ready: ["Ready to merge", "accent"] };
+const SETTLEABLE = ["done", "fail", "stop"];
 
-export function footer(t, width, stale, compact) {
+function checkWords(gh, verdict) {
+  const ci = { pass: "CI passing", fail: "CI failing", pending: "CI running", none: "no CI" }[gh?.ci] ?? "CI not loaded";
+  const merge = { MERGEABLE: "mergeable", CONFLICTING: "has merge conflicts" }[gh?.mergeable] ?? "merge state unknown";
+  return `${ci}, ${merge}, ${verdict ? verdict.label.replace(/^rev /, "review ") : "no review yet"}.`;
+}
+
+const OK = ["✓", "done"];
+const BAD = ["✗", "blocked"];
+const WAIT = ["…", "working"];
+const UNKNOWN = ["?", "dim"];
+const CI_CHECK = { pass: [...OK, "All checks passed"], fail: [...BAD, "A check failed"], pending: [...WAIT, "Checks are still running"], none: [...UNKNOWN, "No checks are configured"] };
+const MERGE_STATE = {
+  CLEAN: [...OK, "All requirements are met"],
+  HAS_HOOKS: [...OK, "All requirements are met"],
+  BLOCKED: [...BAD, "Blocked by a branch rule or a required review"],
+  BEHIND: [...WAIT, "Behind the base branch"],
+  UNSTABLE: [...WAIT, "A check that is not required has failed"],
+  DRAFT: [...WAIT, "Still a draft"],
+  DIRTY: [...BAD, "Has conflicts with the base branch"],
+};
+const CONFLICTS = { MERGEABLE: [...OK, "No conflicts"], CONFLICTING: [...BAD, "Conflicts with the base branch"] };
+const HUMAN_REVIEW = { APPROVED: "approved on GitHub", CHANGES_REQUESTED: "changes requested on GitHub", REVIEW_REQUIRED: "no GitHub review yet" };
+
+function checksOf(gh, verdict) {
+  const loaded = (map, key, none) => map[key] ?? (gh ? [...UNKNOWN, none] : [...WAIT, "Not loaded yet"]);
+  const agent = verdict ? { pass: "agent review found nothing blocking", fail: `agent review ${verdict.label.replace(/^rev /, "")}`, unknown: "agent review unclear" }[verdict.state] : "no agent review yet";
+  const human = HUMAN_REVIEW[gh?.review] ?? "no GitHub verdict";
+  const reviewMark = verdict?.state === "fail" || gh?.review === "CHANGES_REQUESTED" ? BAD : verdict?.state === "pass" ? OK : UNKNOWN;
+  return [
+    ["CI", ...loaded(CI_CHECK, gh?.ci, "CI state not reported")],
+    ["Merge state", ...loaded(MERGE_STATE, gh?.mergeState, "Merge state not reported")],
+    ["Conflicts", ...loaded(CONFLICTS, gh?.mergeable, "GitHub has not worked out conflicts yet")],
+    ["Review", ...reviewMark, `${agent[0].toUpperCase()}${agent.slice(1)}, ${human}`],
+  ];
+}
+
+export function decisionOf(col, g, info, verdict, now) {
+  const name = g.task || g.title;
+  const c = g.primary;
+  const pr = info.status === "open" ? info.pr : null;
+  const settle = g.threads.some((x) => SETTLEABLE.includes(x.kind));
+  const other = [
+    { id: "open", key: "o", label: "Open thread" },
+    ...(c.kind === "wait" && col === "needs" ? [] : [{ id: "reply", key: "r", label: "Reply" }]),
+    ...(settle ? [{ id: "settle", key: "s", label: "Settle" }] : []),
+    ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }] : []),
+  ];
+  const age = ago(g.at, now);
+  const checks = pr ? checksOf(info.gh, verdict) : null;
+  if (col === "ready" && pr) {
+    return { headline: `Merge PR #${pr.number}`, primary: { id: "merge", key: "a", label: "Merge", armed: "Confirm merge" }, why: [g.task ? `${g.task} · ${g.title}` : g.title, checkWords(info.gh, verdict)], other, checks };
+  }
+  if (c.kind === "wait") {
+    return { headline: `Answer ${name}'s question`, primary: { id: "answer", key: "r", label: "Reply" }, why: [c.context, `${g.project} · waiting ${age}`], other, checks };
+  }
+  const retry = c.kind === "fail";
+  return {
+    headline: `${retry ? "Retry" : "Resume"} ${name}`,
+    primary: { id: retry ? "retry" : "resume", key: "t", label: retry ? "Retry" : "Resume", armed: retry ? "Confirm retry" : "Confirm resume" },
+    why: [c.context, `${g.title} · ${retry ? "failed" : "stopped"} ${age} ago`],
+    other,
+    checks,
+  };
+}
+
+export function decisionHeight(d, fileCount) {
+  const lines = (text, size) => Math.ceil((text.length * size * 0.6) / (DEC_WIDTH - 40));
+  const body = lines(d.headline, 18) * 24 + d.why.reduce((sum, w) => sum + lines(w, 12.5) * 18, 0) + 150;
+  const review = d.checks ? 40 + d.checks.length * 26 + 40 + Math.min(fileCount ?? 3, 10) * 24 : 0;
+  return Math.min(DEC_CAP, H.head - 8 + 32 + body + review);
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function section(t, title, right) {
+  return h_flex().w_full().h(22).gap(8).items_center().border_b(1).border_color(t.border)
+    .child(div().flex_1().text_size(10.5).font_semibold().text_color(t.muted).child(title))
+    .when(Boolean(right), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(right)));
+}
+
+function checkRows(t, rows) {
+  return v_flex().w_full().gap(2)
+    .child(section(t, "Checks"))
+    .children(rows.map(([name, mark, tone, reason]) => h_flex().w_full().min_h(24).gap(8).items_start().py(3)
+      .child(div().w(16).flex_none().text_size(12).font_semibold().text_color(t[tone === "dim" ? "muted" : tone]).child(mark))
+      .child(div().w(84).flex_none().text_size(11.5).font_medium().text_color(t.foreground).child(name))
+      .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.muted).child(reason))));
+}
+
+function fileRows(t, files) {
+  const count = (key) => files.files.reduce((sum, f) => sum + f[key], 0);
+  const summary = files.status === "ok" ? `${plural(files.files.length, "file")}  +${count("add")} −${count("del")}` : null;
+  const body = files.status === "loading"
+    ? [div().w_full().h(24).flex().items_center().text_size(11.5).text_color(t.dim).child("Loading changed files…")]
+    : files.status === "fail"
+      ? [div().w_full().py(4).text_size(11.5).line_height("17px").text_color(t.blocked).child(`Could not load changed files: ${files.error}`)]
+      : files.files.length
+        ? [...files.files.map((f, i) => h_flex().id(`dec-file-${i}`).w_full().min_h(22).gap(8).items_start().py(2)
+          .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.foreground).child(f.path))
+          .child(div().flex_none().text_size(11).font_medium().text_color(f.add ? t.done : t.dim).child(`+${f.add}`))
+          .child(div().flex_none().text_size(11).font_medium().text_color(f.del ? t.blocked : t.dim).child(`−${f.del}`))),
+          ...(files.more ? [div().w_full().py(4).text_size(11.5).text_color(t.dim).child(`+${files.more} more files not shown`)] : [])]
+        : [div().w_full().h(24).flex().items_center().text_size(11.5).text_color(t.dim).child("No files changed")];
+  return v_flex().w_full().gap(2).child(section(t, "Changed files", summary)).children(body);
+}
+
+function primaryButton(t, d, armed, outdated, run) {
+  const label = outdated ? (d.primary.id === "merge" ? "Re-check" : "Out of date, close") : armed ? d.primary.armed : d.primary.label;
+  return h_flex().id("dec-primary").h(30).px(14).gap(8).items_center().flex_none().rounded(6)
+    .bg(armed ? t.blocked : t.solid).text_color(armed ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
+    .cursor_pointer().hover((s) => s.opacity(0.9)).on_click((e, cx) => e.click_count > 1 || run(cx))
+    .child(label)
+    .when(!outdated, (el) => el.child(div().text_size(10.5).font_medium().child(d.primary.key)));
+}
+
+export function decisionView(t, v, input, cb) {
+  const { col, d, armed, armedKind, outdated, replying, outcome, files } = v;
+  const [label, tone] = DEC_COLUMN[col];
+  const hint = outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`;
+  return v_flex().size_full().min_h(0)
+    .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
+      .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child(label))
+      .child(headButton(t, "dec-close", "✕", "Close", () => cb.close())))
+    .child(v_flex().id("dec-body").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().w_full().flex_none().px(16).py(14).gap(12)
+        .child(div().w_full().text_size(18).line_height("24px").font_semibold().text_color(t.foreground).child(d.headline))
+        .child(v_flex().w_full().gap(4).children(d.why.map((line) => div().w_full().text_size(12.5).line_height("18px").text_color(t.muted).child(line))))
+        .child(h_flex().gap(10).items_center().child(primaryButton(t, d, armed, outdated, (cx) => cb.primary(cx))))
+        .child(div().w_full().text_size(10.5).text_color(t.dim).child(hint))
+        .when(Boolean(outcome), (el) => el.child(div().w_full().p(8).rounded(6).border_1().border_color(t.blocked).text_size(12).line_height("17px").text_color(t.foreground).child(outcome.text)))
+        .when(replying, (el) => el.child(div().w_full().h(30).child(Input.new(input).h(30).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))))
+        .child(h_flex().gap(6).items_center().flex_wrap()
+          .child(div().text_size(10.5).text_color(t.dim).child("Other"))
+          .children(d.other.map((x) => action(t, `dec-${x.id}`, x.key, x.id === "settle" && armedKind === "settle" ? "Confirm settle" : x.label, (cx) => cb.other(x.id, cx)))))
+        .when(Boolean(d.checks), (el) => el.child(checkRows(t, d.checks)))
+        .when(Boolean(d.checks && files), (el) => el.child(fileRows(t, files)))));
+}
+
+export const DECIDES = new Set(["needs", "ready"]);
+const settleable = (c) => (c.entry.thread ? [c.entry.thread] : c.entry.group.threads).some((x) => SETTLEABLE.includes(x.kind));
+const FOOT_HELP = 64;
+
+export const KEY_TABLE = [
+  { keys: "⏎", group: "Card", label: (c) => (!c.entry.thread && DECIDES.has(c.entry.col) ? "decide" : "open"), all: "Decide on a Needs you or Ready card, open the thread on any other", when: (c) => c.entry },
+  { keys: "a", group: "Card", label: "approve", all: "Approve the merge, press twice (Ready cards)", when: (c) => c.entry?.col === "ready" && c.entry.group.info?.status === "open" },
+  { keys: "o", group: "Card", label: "thread", all: "Open the thread", when: (c) => c.entry },
+  { keys: "r", group: "Card", label: "reply", all: "Reply to the thread", when: (c) => c.entry },
+  { keys: "s", group: "Card", label: "settle", all: "Settle the card's finished threads", when: (c) => c.entry && settleable(c) },
+  { keys: "p", group: "Card", label: "PR", all: "Open the pull request", when: (c) => c.entry?.group.info?.pr },
+  { keys: "q", group: "Card", label: "queue", all: "Queue the task, press twice (Backlog cards)", when: (c) => c.entry?.col === "backlog" },
+  { keys: "n", group: "Move", label: "next urgent", all: "Jump to the oldest Needs you card, then Ready, and cycle", when: (c) => c.urgent > 0 },
+  { keys: "j k", group: "Move", label: "card", all: "Next or previous card (the arrow keys work too)", when: () => true },
+  { keys: "h l", group: "Move", label: (c) => (c.compact ? "section" : "column"), all: "Previous or next column (section on a narrow board)", when: (c) => !c.pop },
+  { keys: "g G", group: "Move", label: "top, end", all: "First or last card in the column", when: (c) => c.entry },
+  { keys: "→ ←", group: "Move", label: "threads", all: "Show or hide a task's other threads", when: (c) => c.entry?.group.threads.length > 1 },
+  { keys: "S", group: "Board", label: "settle reviewed", all: "Settle every reviewed card, press twice (Done)", when: (c) => c.entry?.col === "done" && c.reviewed > 0 },
+  { keys: "A", group: "Board", label: "settle all", all: "Settle every finished card, press twice (Done)", when: (c) => c.entry?.col === "done" && c.done > 0 },
+  { keys: "M", group: "Board", label: "approve all", all: "Approve every open PR, press twice (Ready)", when: (c) => c.entry?.col === "ready" && c.approvable > 0 },
+  { keys: "f", group: "Board", label: "fold", all: "Fold or show this column", when: (c) => !c.pop && c.entry },
+  { keys: "e", group: "Board", label: "pop-up", all: "Open this column in a pop-up", when: (c) => !c.pop && c.entry },
+  { keys: "b", group: "Board", label: "backlog", all: "Fold or show Backlog", when: (c) => !c.pop },
+  { keys: "R", group: "Board", label: "refresh", all: "Reload the board now", when: () => true },
+  { keys: "?", group: "Board", label: "all keys", all: "Show this list", when: () => true },
+];
+
+const labelOf = (row, ctx) => (typeof row.label === "function" ? row.label(ctx) : row.label);
+
+export function footer(t, width, stale, ctx, cb) {
   const fit = [];
-  let used = 20;
-  for (const [k, hint] of KEYS) {
-    const v = compact ? hint.replace("column", "section") : hint;
-    used += (k.length + v.length) * 5.2 + 12;
-    if (used > width) break;
-    fit.push([k, v]);
+  let used = 0;
+  const room = width - 20 - FOOT_HELP - (stale ? 40 : 0);
+  for (const row of KEY_TABLE) {
+    if (row.keys === "?" || !row.when(ctx)) continue;
+    const label = labelOf(row, ctx);
+    used += (row.keys.length + label.length) * 5.8 + 14;
+    if (used > room) break;
+    fit.push([row.keys, label]);
   }
   return h_flex().h(18).px(10).flex_none().gap(8).items_center().border_t(1).border_color(t.border).overflow_hidden()
-    .children(fit.map(([k, v]) => h_flex().gap(4).items_center().flex_none()
-      .child(div().text_size(9.5).font_medium().text_color(t.muted).child(k))
-      .child(div().text_size(9.5).text_color(t.dim).child(v))))
-    .when(stale, (el) => el.child(div().flex_1()).child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")));
+    .child(h_flex().flex_1().min_w(0).gap(8).items_center().overflow_hidden()
+      .children(fit.map(([k, v]) => h_flex().gap(4).items_center().flex_none()
+        .child(div().text_size(9.5).font_medium().text_color(t.muted).child(k))
+        .child(div().text_size(9.5).text_color(t.dim).child(v)))))
+    .when(stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))
+    .child(h_flex().id("keys-help").flex_none().gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.raised)).px(3).rounded(3).on_click((_e, cx) => cb.keys(cx))
+      .child(div().text_size(9.5).font_medium().text_color(t.muted).child("?"))
+      .child(div().text_size(9.5).text_color(t.dim).child("all keys")));
+}
+
+export const SHEET_WIDTH = 640;
+export const sheetHeight = () => Math.min(DEC_CAP, 34 + 24 + [...new Set(KEY_TABLE.map((r) => r.group))].length * 30 + KEY_TABLE.length * 24);
+
+export function keySheet(t, cb) {
+  const groups = [...new Set(KEY_TABLE.map((r) => r.group))];
+  return v_flex().size_full().min_h(0)
+    .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Keys"))
+      .child(headButton(t, "keys-close", "✕", "Close", () => cb.close())))
+    .child(v_flex().id("keys-body").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().w_full().flex_none().px(16).py(10).gap(10)
+        .children(groups.map((group) => v_flex().w_full().gap(2)
+          .child(section(t, group))
+          .children(KEY_TABLE.filter((r) => r.group === group).map((r) => h_flex().w_full().min_h(22).gap(10).items_start().py(2)
+            .child(div().w(54).flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(r.keys))
+            .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.muted).child(r.all))))))));
 }
 
 export function thumb(t, top, view, total) {
