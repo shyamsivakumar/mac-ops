@@ -472,24 +472,69 @@ def configure_session(proc, thread, model=None):
     thread["model"] = empryo_model(thread["modelSelection"])
 
 
+def session_tab_ids(thread):
+    directory = session_dir(thread)
+    if directory is None or not os.path.exists(f"{directory}/meta.json"):
+        return []
+    with open(f"{directory}/meta.json") as f:
+        tabs = [tab["id"] for tab in json.load(f)["tabs"]]
+    spoken = []
+    with open(f"{directory}/session.jsonl") as f:
+        for line in f:
+            if line.startswith('{"k":"user"') or line.startswith('{"k":"assistant"'):
+                tab = json.loads(line)["tabId"]
+                if tab in spoken:
+                    spoken.remove(tab)
+                spoken.append(tab)
+    base = thread["sessionId"].split(":")[0]
+    return [f"{base}:{tab}" for tab in spoken[::-1] + [tab for tab in tabs if tab not in spoken]]
+
+
+def reopen_session(proc, thread, cwd, model):
+    if thread["sessionId"] not in proc.loaded:
+        proc.call("session/resume", {"sessionId": thread["sessionId"], "cwd": cwd, "mcpServers": []})
+    proc.loaded.add(thread["sessionId"])
+    SESSION_THREAD[thread["sessionId"]] = thread["threadId"]
+    configure_session(proc, thread, model)
+
+
+def reopen_on_another_tab(proc, thread, cwd, model, first_error):
+    stored = thread["sessionId"]
+    for candidate in session_tab_ids(thread):
+        if candidate == stored:
+            continue
+        thread["sessionId"] = candidate
+        try:
+            reopen_session(proc, thread, cwd, model)
+        except HubError:
+            continue
+        log(f"{thread['threadId']} session tab {stored.split(':')[-1][:8]} would not open ({first_error}); reopened on tab {candidate.split(':')[-1][:8]}")
+        THREADS.save()
+        return
+    thread["sessionId"] = stored
+    raise first_error
+
+
 def ensure_session(thread, model=None):
     cwd = thread_cwd(thread)
     if not os.path.isdir(cwd):
         raise HubError(f"the working directory {cwd} no longer exists (worktree cleaned up?)")
     proc = engine_for(thread)
     try:
-        if thread["sessionId"] is None:
+        created = thread["sessionId"] is None
+        if created:
             thread["sessionId"] = proc.call("session/new", {"cwd": cwd, "mcpServers": []})["sessionId"]
             proc.loaded.add(thread["sessionId"])
             configure_session(proc, thread, model)
             thread["titleDirty"] = True
             persist_session(proc, thread)
             THREADS.save()
-        if thread["sessionId"] not in proc.loaded:
-            proc.call("session/resume", {"sessionId": thread["sessionId"], "cwd": cwd, "mcpServers": []})
-        proc.loaded.add(thread["sessionId"])
-        SESSION_THREAD[thread["sessionId"]] = thread["threadId"]
-        configure_session(proc, thread, model)
+        try:
+            reopen_session(proc, thread, cwd, model)
+        except HubError as e:
+            if created:
+                raise
+            reopen_on_another_tab(proc, thread, cwd, model, e)
     except BaseException:
         release_engine(proc)
         raise
@@ -674,9 +719,12 @@ def start_turn(thread, message, steered_from=None, from_pending=False):
     model, probe = choose_model(thread)
     try:
         proc = ensure_session(thread, model)
-    except BaseException:
+    except BaseException as e:
         with CHANGED:
             rt["starting"] = False
+            if isinstance(e, HubError):
+                thread["lastError"] = str(e)
+                THREADS.save()
             CHANGED.notify_all()
         if probe:
             breaker_of(provider_of(model))["probing"] = False

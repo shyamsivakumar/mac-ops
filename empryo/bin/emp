@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, socket, sys, threading, time
+import json, os, socket, sqlite3, sys, threading, time
 
 SOCKET = os.environ.get("EMP_HUB_SOCKET", os.path.expanduser("~/.empryo-hub/hub.sock"))
 
@@ -36,12 +36,16 @@ def hub_pid():
         return None
 
 
+def drain_cancel():
+    print(json.dumps(ask({"method": "call", "tool": "emp_hub_drain_cancel", "arguments": {}})))
+
+
 def drain(restart):
     old = hub_pid()
     print(f"draining hub pid {old}: no new turns start; waiting for running turns to finish", flush=True)
     result = ask({"method": "call", "tool": "emp_hub_drain", "arguments": {}})
     print(json.dumps(result), flush=True)
-    if not restart:
+    if not restart or not result["drained"]:
         return
     deadline = time.time() + 120
     while time.time() < deadline:
@@ -51,6 +55,21 @@ def drain(restart):
             print(f"hub restarted: pid {pid}")
             return
     fail("the hub did not come back within 120 s")
+
+
+def session_gone(thread):
+    session = thread.get("journalSessionId")
+    cwd = thread.get("cwd")
+    if not session or not cwd:
+        return False
+    if os.path.isdir(f"{cwd}/.empryo/sessions/{session}"):
+        return False
+    try:
+        with sqlite3.connect("file:" + os.path.expanduser("~/.empryo/threads.db") + "?mode=ro", uri=True) as db:
+            row = db.execute("SELECT session_dir FROM threads WHERE id = ?", (session,)).fetchone()
+    except sqlite3.Error:
+        return True
+    return not (row and os.path.isdir(row[0]))
 
 
 def follow(thread_id):
@@ -86,7 +105,10 @@ def follow(thread_id):
                 say(f"[{item['createdAt'][11:19]}] {label}: {(item.get('text') or item.get('title') or item.get('stopReason') or '')}")
             position = view["nextPosition"]
             if not view["hasMore"] and view["thread"]["status"] not in ("running", "waiting", "queued"):
-                say(f"\nRun {view['thread']['status']}. To continue, open the task from the Herdr board.", redraw=False)
+                if session_gone(view["thread"]):
+                    say("\nThe worktree is gone; this is the saved transcript.", redraw=False)
+                else:
+                    say(f"\nRun {view['thread']['status']}. To continue, open the task from the Herdr board.", redraw=False)
                 return
             if not view["hasMore"]:
                 time.sleep(1)
@@ -104,12 +126,14 @@ def main():
         raw = args[2] if len(args) == 3 else "{}"
         arguments = json.loads(sys.stdin.read() if raw == "-" else raw)
         print(json.dumps(ask({"method": "call", "tool": args[1], "arguments": arguments}), indent=2))
+    elif args == ["drain", "--cancel"]:
+        drain_cancel()
     elif args[:1] == ["drain"] and set(args[1:]) <= {"--restart"}:
         drain("--restart" in args)
     elif args[:1] == ["follow"] and len(args) == 2:
         follow(args[1])
     else:
-        fail("usage: emp follow <threadId> | drain [--restart] | tools | schema <tool> | call <tool> [json-args | -]", 2)
+        fail("usage: emp follow <threadId> | drain [--restart | --cancel] | tools | schema <tool> | call <tool> [json-args | -]", 2)
 
 
 try:

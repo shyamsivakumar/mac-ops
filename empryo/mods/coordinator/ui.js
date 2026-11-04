@@ -71,7 +71,7 @@ export function turn(t, m, now, cb) {
   const open = cb.isOpen(turnKey(m));
   const shown = long && !open ? all.slice(0, COLLAPSED_LINES) : all;
   const lines = all.length;
-  const body = TextView.markdown(`md-${turnKey(m)}`, shown.join("\n")).w_full().text_size(12).text_color(mine ? t.foreground : t.muted).on_link_click((url) => cb.open(url));
+  const body = TextView.markdown(`md-${turnKey(m)}`, shown.join("\n")).w_full().text_size(12).text_color(mine ? t.foreground : t.muted).on_link_click((url) => cb.link(url));
   const head = h_flex().w_full().gap(8).items_center()
     .child(div().text_size(11.5).font_semibold().text_color(mine ? t.accent : t.foreground).child(mine ? "You" : "Coordinator"))
     .child(div().text_size(10).text_color(t.dim).child(ago(m.at, now)))
@@ -98,8 +98,8 @@ export function conversation(t, view, error, now, cb) {
   const column = v_flex().id("co-turns").size_full().overflow_y_scrollbar()
     .children(view.turns.slice(-cb.shown).reverse().map((m) => div().w_full().flex_none().px(12).py(4).child(turn(t, m, now, cb))))
     .when(hidden > 0, (el) => el.child(footerLink(t, "co-show-older", view.unread ? "Show older" : `Show older · ${hidden} more`, (_e, cx) => cb.more(cx))))
-    .when(hidden <= 0 && view.unread, (el) => el.child(footerLink(t, "co-older-block", "Show older", (_e, cx) => cb.older(cx))))
-    .when(hidden <= 0 && !view.unread && view.hasOlder, (el) => el.child(footerLink(t, "co-older", "↑ Load previous session", (_e, cx) => cb.older(cx))));
+    .when(hidden <= 0 && view.unread, (el) => el.child(footerLink(t, "co-older-block", cb.loading ? "Loading…" : "Show older", (_e, cx) => cb.older(cx))))
+    .when(hidden <= 0 && !view.unread && view.hasOlder, (el) => el.child(footerLink(t, "co-older", cb.loading ? "Loading…" : "↑ Load previous session", (_e, cx) => cb.older(cx))));
   return log.child(column);
 }
 
