@@ -120,11 +120,7 @@ def export_posthog(
     host: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Export only terminal traces; PostHog deduplication is not an upsert.
-
-    Dry runs retain the legacy preview count for traces with missing status;
-    these preview-only candidates are never sent in a real export.
-    """
+    """Export only terminal traces; preview uses the identical eligibility filter."""
     key = api_key if api_key is not None else posthog_api_key()
     if not key:
         return {"exported": 0, "skipped": "no_api_key"}
@@ -133,9 +129,10 @@ def export_posthog(
     for trace in traces:
         status = trace.get("status")
         terminal = isinstance(status, str) and status.lower() in {
-            "completed", "failed", "interrupted", "cancelled", "canceled",
+            "completed", "complete", "failed", "error", "timed_out", "skipped",
+            "success", "failure", "interrupted", "cancelled", "canceled",
         }
-        if not terminal and not (dry_run and not status):
+        if not terminal:
             continue
 
         # Use the original identity so distinct IDs do not collapse after redaction.
