@@ -173,7 +173,7 @@ def show(target):
     deadline = time.time() + 5
     while True:
         out = subprocess.run([os.path.expanduser("~/.local/bin/herdr-app"), "do", "terminal.peek", "--terminal", address], capture_output=True, text=True)
-        error = json.loads(out.stdout).get("error")
+        error = json.loads(out.stdout or '{"error": "herdr-app printed nothing"}').get("error")
         if not error:
             return
         if "no running terminal" not in error or time.time() > deadline:
