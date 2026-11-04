@@ -62,10 +62,18 @@ Merged-PR metrics count **distinct** PRs (run durations summed per PR).
 
 Optional export: set `POSTHOG_API_KEY` (or `POSTHOG_API_KEY_FILE`), and
 optionally `POSTHOG_HOST` (default `https://us.i.posthog.com`). Export is a
-no-op without a key. Retransmissions use a deterministic event UUID derived from
-source and run identity. Export admits only scrubbed scalar trace metadata; titles,
-message bodies, arbitrary nested metadata, and tool inputs/outputs are never sent.
+no-op without a key. Nonterminal and unknown-state runs are deferred until terminal
+evidence exists, so capture deduplication cannot pin an earlier running event.
+Terminal retransmissions use a deterministic event UUID derived from source and
+run identity. Models use an exact, maintained allowlist; unknown IDs become null.
+Export uses a typed projection of numeric usage, PR evidence, enum outcome state,
+and stable tool names/durations. Untrusted identifiers are pseudonymized. Titles,
+message bodies, arbitrary metadata, and tool inputs/outputs are never sent.
 Verification uses `--no-export` or mocked HTTP only; no trace is sent off this Mac.
+Run `python3 verification/session-traces/check_export_gate.py` for the current gate.
+The earlier `check_gate.py` is unchanged: its missing-status export assertion is
+incompatible with terminal-only capture and now fails intentionally. Missing-status
+dry-run previews retain their legacy count but are never eligible for real export.
 
 ## Daily job
 

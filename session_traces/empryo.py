@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 import sqlite3
-import re
+
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,7 +37,7 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
         rows = conn.execute("SELECT id, session_dir FROM threads").fetchall()
     # Import lazily: collect.py imports this module.
     from .collect import PREVIEW_RE, TASK_KEY_RE
-    from .scrub import scrub_string
+    from .scrub import safe_model_id
     traces: dict[str, dict[str, Any]] = {}
     remaining = set(run_ids) if run_ids is not None else None
     for thread, directory in rows:
@@ -86,6 +86,7 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
             continue
         events.sort(key=lambda e: e["ts"])
         models: dict[str, str] = {}
+        providers: dict[str, str] = {}
         turns: dict[str, dict[str, Any]] = {}
         calls: dict[tuple[str, str], dict[str, Any]] = {}
         active: dict[str, str] = {}
@@ -113,7 +114,12 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
             if kind == "tab" and isinstance(tab, str) and isinstance(event.get("patch"), dict):
                 model = event["patch"].get("activeModel")
                 if isinstance(model, str):
-                    if re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", model) and len(model) <= 100 and scrub_string(model) == model:
+                    prefix = model.split("/", 1)[0]
+                    if prefix in {"proxy", "subscriptions", "openai", "anthropic", "google", "minimax"}:
+                        providers[tab] = prefix
+                    else:
+                        providers.pop(tab, None)
+                    if safe_model_id(model):
                         models[tab] = model
                     else:
                         models.pop(tab, None)
@@ -131,7 +137,7 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
                         finish(previous, "interrupted", ts)
                 started = _timestamp(ts)
                 model = models.get(tab) if isinstance(tab, str) else None
-                turns[run_id] = {"schema": "mac-ops.session_trace.v1", "source": "empryo", "run_id": run_id, "thread_id": "empryo-" + thread_hash, "provider": model.split("/", 1)[0] if model else None, "model": model, "status": "running", "final_state": "running", "task_key": task.group(1) if task else None, "project_id": _id(str(root)) if root else None, "project": None, "title": None, "worktree_path": None, "branch": None, "tokens": None, "cost_usd": None, "pull_requests": [], "named_blocker": None, "files_outside_worktree": None, "preview_or_playwright": [], "requested_at": started, "started_at": started, "tool_calls": [], "outcome_evidence": "unknown", "_start": ts}
+                turns[run_id] = {"schema": "mac-ops.session_trace.v1", "source": "empryo", "run_id": run_id, "thread_id": "empryo-" + thread_hash, "provider": providers.get(tab) if isinstance(tab, str) else None, "model": model, "status": "running", "final_state": "running", "task_key": task.group(1) if task else None, "project_id": _id(str(root)) if root else None, "project": None, "title": None, "worktree_path": None, "branch": None, "tokens": None, "cost_usd": None, "pull_requests": [], "named_blocker": None, "files_outside_worktree": None, "preview_or_playwright": [], "requested_at": started, "started_at": started, "tool_calls": [], "outcome_evidence": "unknown", "_start": ts}
                 if isinstance(tab, str):
                     active[tab] = run_id
                 continue

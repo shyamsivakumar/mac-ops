@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .scrub import scrub_trace
+from .scrub import safe_export_projection, scrub_trace
 
 DEFAULT_STATE = Path.home() / ".local" / "state" / "mac-ops"
 DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com"
@@ -120,14 +120,23 @@ def export_posthog(
     host: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Ship scrubbed run traces as PostHog capture events. No-op without a key."""
+    """Export only terminal traces; PostHog deduplication is not an upsert.
+
+    Dry runs retain the legacy preview count for traces with missing status;
+    these preview-only candidates are never sent in a real export.
+    """
     key = api_key if api_key is not None else posthog_api_key()
     if not key:
         return {"exported": 0, "skipped": "no_api_key"}
     host = (host or posthog_host()).rstrip("/")
     batch = []
     for trace in traces:
-        scrubbed = scrub_trace(trace)
+        status = trace.get("status")
+        terminal = isinstance(status, str) and status.lower() in {
+            "completed", "failed", "interrupted", "cancelled", "canceled",
+        }
+        if not terminal and not (dry_run and not status):
+            continue
 
         # Use the original identity so distinct IDs do not collapse after redaction.
         # Older traces use stable origin fields, never mutable status or usage.
@@ -135,19 +144,10 @@ def export_posthog(
         if not identity[1]:
             identity.extend(trace.get(k) for k in ("thread_id", "ordinal", "started_at", "requested_at"))
         event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True, separators=(",", ":"))))
-        # Export only known scalar metadata; legacy traces can contain arbitrary
-        # nested messages and other free text under unexpected keys.
-        allowed = {
-            "schema", "source", "run_id", "thread_id", "ordinal", "project_id",
-            "provider", "model", "status", "requested_at", "started_at",
-            "completed_at", "duration_ms", "cost_usd", "final_state",
-        }
-        properties = {
-            k: v for k, v in scrubbed.items()
-            if k in allowed and (v is None or isinstance(v, (str, int, float, bool)))
-        }
-        calls = scrubbed.get("tool_calls")
-        properties["tool_call_count"] = len(calls) if isinstance(calls, list) else 0
+        # Projection is an explicit typed allowlist, not general-purpose scrubbing.
+        properties = safe_export_projection(trace)
+        if terminal:
+            properties["status"] = properties["final_state"] = status.lower()
         properties["$lib"] = "mac-ops-session-traces"
         batch.append(
             {
