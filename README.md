@@ -248,6 +248,12 @@ when `POSTHOG_API_KEY` is set (ask the coordinator before creating a key). See
 [docs/session-traces.md](docs/session-traces.md); daily command:
 `./scripts/session-traces/daily.sh`.
 
+## Worktree cleaner (MO-125)
+
+The [worktree cleaner](docs/worktree-cleaner.md) checks GitHub, local Git state,
+and T3 thread state before removing a worktree. Its LaunchAgent runs every 15
+minutes when installed; the command defaults to a dry run.
+
 ## Reviewer agreement audit (MO-10)
 
 Advisory weekly scorecard for board reviewer flip rate, defect recall, false
