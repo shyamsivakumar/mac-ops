@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+import glob, json, os, subprocess, sys, time, urllib.request
+
+HOME = os.path.expanduser("~")
+QUEUE_DIR = os.environ.get("EMP_HEALTH_DIR", f"{HOME}/Code/coordinator/queue")
+TRANSCRIPTS = f"{HOME}/.claude/projects/-Users-shyamsivakumar-Code-coordinator"
+DISPATCH_MAX_AGE = 120
+CONTEXT_LIMIT = 1_000_000
+CONTEXT_WARN = 0.6
+TAIL_BYTES = 8_000_000
+
+
+def run(cmd, stdin=None):
+    return subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=30)
+
+
+def server_up():
+    return run(["emp", "call", "emp_project_list", "{}"]).returncode == 0
+
+
+def thread_count():
+    r = run(["emp", "call", "emp_thread_list", "-"], json.dumps({"allProjects": True, "limit": 1, "statuses": ["running", "starting", "preparing", "queued"]}))
+    return json.loads(r.stdout)["total"] if r.returncode == 0 else None
+
+
+def coordinator_terminal():
+    for space in json.loads(run(["herdr-app", "ls"]).stdout)["spaces"]:
+        if space["name"] == "Coordinator":
+            for tab in space["tabs"]:
+                for term in tab["terminals"]:
+                    if term["app"] == "claude-code":
+                        return term
+    return None
+
+
+def last_context(transcript):
+    size = os.path.getsize(transcript)
+    with open(transcript, "rb") as f:
+        f.seek(max(0, size - TAIL_BYTES))
+        lines = f.read().decode(errors="replace").splitlines()
+    for line in reversed(lines[1:] if size > TAIL_BYTES else lines):
+        entry = json.loads(line)
+        usage = entry.get("message", {}).get("usage") if entry.get("type") == "assistant" else None
+        if usage and entry.get("entrypoint") == "cli" and not entry.get("isSidechain"):
+            return usage["input_tokens"] + usage["cache_read_input_tokens"] + usage["cache_creation_input_tokens"]
+    return None
+
+
+def coordinator_transcript():
+    files = sorted(glob.glob(f"{TRANSCRIPTS}/*.jsonl"), key=os.path.getmtime, reverse=True)
+    for path in files[:8]:
+        tokens = last_context(path)
+        if tokens is not None:
+            return path, tokens
+    return None, None
+
+
+def plans_out():
+    r = run(["emp", "call", "emp_hub_status", "{}"])
+    return [p for p, c in json.loads(r.stdout)["circuits"].items() if c["state"] == "open"] if r.returncode == 0 else []
+
+
+def check():
+    problems, warnings = [], []
+    up = server_up()
+    if not up:
+        problems.append("Empryo hub down")
+
+    running = thread_count() if up else None
+    if up and running is None:
+        problems.append("emp failing")
+
+    if up:
+        problems += [f"plan out: {provider}" for provider in plans_out()]
+
+    cap = json.load(open(f"{QUEUE_DIR}/config.json"))["cap"]
+    if running is not None and running > cap:
+        problems.append(f"running {running}/{cap}")
+
+    queue_file = f"{QUEUE_DIR}/queue.json"
+    queue = len(json.load(open(queue_file))["items"]) if os.path.exists(queue_file) else 0
+
+    last_run = None
+    last_file = f"{QUEUE_DIR}/dispatch.last"
+    if os.path.exists(last_file):
+        last_run = int(open(last_file).read())
+    if last_run is None or time.time() - last_run > DISPATCH_MAX_AGE:
+        problems.append("dispatcher stalled")
+
+    term = coordinator_terminal()
+    transcript, tokens = coordinator_transcript()
+    if term is None:
+        problems.append("Coordinator terminal gone")
+    elif tokens and tokens > CONTEXT_LIMIT * CONTEXT_WARN and term["status"] != "working":
+        warnings.append(f"Coordinator context {round(tokens / 1000)}k: run coordinator-refresh?")
+
+    return {
+        "hub": up,
+        "coordinator": {
+            "terminal": term and term["terminal"],
+            "status": term and term["status"],
+            "context_tokens": tokens,
+            "transcript": transcript,
+        },
+        "running": running,
+        "cap": cap,
+        "queue": queue,
+        "dispatcher_last_run": last_run and time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(last_run)),
+        "problems": problems,
+        "warnings": warnings,
+        "checked_at": int(time.time()),
+    }
+
+
+def notify(title, body):
+    script = ["on run argv", "display notification (item 2 of argv) with title (item 1 of argv)", "end run"]
+    run(["osascript"] + [x for line in script for x in ("-e", line)] + [title, body])
+
+
+def watch(report):
+    with open(f"{QUEUE_DIR}/health.json.tmp", "w") as f:
+        json.dump(report, f)
+    os.replace(f"{QUEUE_DIR}/health.json.tmp", f"{QUEUE_DIR}/health.json")
+
+    current = report["problems"] + report["warnings"]
+    state_file = f"{QUEUE_DIR}/health.state"
+    previous = json.load(open(state_file)) if os.path.exists(state_file) else []
+    with open(f"{QUEUE_DIR}/health.log", "a") as log:
+        log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {'; '.join(current) or 'ok'}\n")
+    if sorted(current) != sorted(previous):
+        notify("Empryo health", "; ".join(current) or "All clear")
+        with open(state_file, "w") as f:
+            json.dump(current, f)
+
+
+report = check()
+if "--notify" in sys.argv:
+    watch(report)
+print(json.dumps(report, indent=2))

@@ -1,0 +1,88 @@
+{
+  "types": {
+    "standard": {
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
+      },
+      "mode": "auto",
+      "notes": "bug fix, small feature, refactor, test fix"
+    },
+    "risky": {
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol"
+      },
+      "mode": "auto",
+      "notes": "money or trade execution, state machines, concurrency, auth, secrets, migrations, deploy or CI pipelines, data deletion"
+    },
+    "design": {
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol"
+      },
+      "mode": "auto",
+      "notes": "multi-file design, new module, cross-repo plan; the brief makes it plan first and get the plan reviewed before code"
+    },
+    "large": {
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol"
+      },
+      "mode": "orchestrate",
+      "notes": "features touching many files or parts; steps on terra, judged by Opus"
+    },
+    "ui": {
+      "modelSelection": {
+        "instanceId": "claudeAgent",
+        "model": "claude-sonnet-5-5"
+      },
+      "mode": "auto",
+      "notes": "screens, components, styling, visual bugs"
+    },
+    "research": {
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
+      },
+      "mode": "auto",
+      "notes": "gather facts, compare tools, read docs; no code changes"
+    },
+    "rca": {
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol"
+      },
+      "mode": "auto",
+      "notes": "explain a failure, find a root cause; read-only at first"
+    },
+    "chore": {
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6-luna"
+      },
+      "mode": "auto",
+      "notes": "stale PR triage, docs, labels, small config, watches, status checks"
+    },
+    "review": {
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol"
+      },
+      "mode": "auto",
+      "notes": "the separate review thread; never Cursor or GLM"
+    },
+    "panel": {
+      "modelSelection": null,
+      "mode": "auto",
+      "notes": "second opinion or panel: not routed here, pass an explicit modelSelection per seat"
+    }
+  },
+  "limits": {
+    "subscriptions/claude": 1
+  },
+  "turnLimits": {
+    "noProgressSeconds": 1200,
+    "toolSeconds": 10800
+  }
+}
