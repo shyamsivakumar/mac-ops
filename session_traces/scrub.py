@@ -28,6 +28,9 @@ DROP_FIELDS = frozenset(
         "system_prompt",
         "user_prompt",
         "messages",
+        "message",
+        "message_body",
+        "title",
         "content",
         "text",
         "body",
@@ -46,6 +49,11 @@ DROP_FIELDS = frozenset(
 
 # Patterns replaced with [REDACTED] inside remaining strings.
 SECRET_PATTERNS = [
+    re.compile(r"(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{20,}(?![A-Za-z0-9_])"),
+    re.compile(r"(?<![A-Za-z0-9_])(?:sk|pk|key|token|secret|api)[_-][A-Za-z0-9_-]{16,}(?![A-Za-z0-9_])", re.IGNORECASE),
+
+    re.compile(r"(?<![A-Za-z0-9_])(?:ghu|ghs|ghr)_[A-Za-z0-9]{20,}(?![A-Za-z0-9_])"),
+    re.compile(r"(?<![A-Za-z0-9_])(?:pypi-|npm_|xox[baprs]-)[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_])"),
     re.compile(r"\b(phc_[A-Za-z0-9]+)\b"),
     re.compile(r"\b(phx_[A-Za-z0-9]+)\b"),
     re.compile(r"\b(sk-[A-Za-z0-9_-]{10,})\b"),
@@ -100,16 +108,22 @@ def scrub_path(path: str | None) -> str | None:
     return HOME_RE.sub("/Users/[user]", path)
 
 
+def _drop_field(field: str) -> bool:
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", field).lower().replace("-", "_")
+    return (normalized in DROP_FIELDS or normalized.endswith("_title")
+            or normalized.endswith("_message") or normalized.endswith("_message_body"))
+
+
 def scrub_value(value: Any, *, field: str | None = None) -> Any:
-    if field and field.lower().replace("-", "_") in DROP_FIELDS:
+    if field and _drop_field(field):
         return "[DROPPED]"
     if isinstance(value, dict):
         return {
-            k: scrub_value(v, field=str(k))
+            scrub_string(k) if isinstance(k, str) else k: scrub_value(v, field=str(k))
             for k, v in value.items()
-            if str(k).lower().replace("-", "_") not in DROP_FIELDS
+            if not _drop_field(str(k))
         }
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [scrub_value(v, field=field) for v in value]
     if isinstance(value, str):
         return scrub_string(value)

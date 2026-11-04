@@ -18,6 +18,7 @@ from .store import (
     load_day_traces,
     rebuild_day_index,
     write_trace,
+    traces_dir,
 )
 
 DEFAULT_DB = Path.home() / ".t3" / "userdata" / "statev2.sqlite"
@@ -474,12 +475,17 @@ def collect_runs(
 def _unfinished_run_ids(root: Path | None, lookback_days: int = 3) -> list[str]:
     """Stored traces still non-terminal — refresh on the next daily pass."""
     ids: list[str] = []
-    today = datetime.now().astimezone().date()
-    for i in range(lookback_days + 1):
-        day = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-        for trace in load_day_traces(day, root=root):
-            status = (trace.get("status") or "").lower()
-            if status in NONTERMINAL and trace.get("run_id"):
+    # Reconcile every stored day; age alone is not terminal evidence.
+    for directory in traces_dir(root).glob("????-??-??"):
+        if not directory.is_dir():
+            continue
+        for trace in load_day_traces(directory.name, root=root):
+            if not isinstance(trace, dict):
+                continue
+            status = trace.get("status")
+            unresolved_empryo = (trace.get("source") == "empryo" and isinstance(status, str)
+                                 and status.lower() == "unknown" and not trace.get("completed_at"))
+            if isinstance(status, str) and (status.lower() in NONTERMINAL or unresolved_empryo) and trace.get("run_id"):
                 ids.append(str(trace["run_id"]))
     return ids
 
