@@ -153,6 +153,9 @@ KNOWN_MODEL_IDS = frozenset({
     "google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview",
     "claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5",
     "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2",
+    "gpt-5-codex", "gpt-5.1-codex", "claude-opus-4-5", "default", "auto",
+    "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna",
+    "claude-opus-5-5", "claude-sonnet-5-5",
 })
 
 
