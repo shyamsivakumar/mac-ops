@@ -202,12 +202,24 @@ export async function queueCap() {
   return Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_CAP;
 }
 
-export function openThread(thread, running) {
+const SESSION_GONE = `
+test -d "$1" || exit 0
+test -d "$1/.empryo/sessions/$2" && exit 1
+dir=$(sqlite3 -readonly "$3" "SELECT session_dir FROM threads WHERE id = '$2'" 2>/dev/null)
+test -n "$dir" && test -d "$dir" && exit 1
+exit 0
+`;
+
+const sessionGone = async (cwd, session) => (await exec("sh", ["-c", SESSION_GONE, "sh", cwd, session, `${home()}/.empryo/threads.db`])).code === 0;
+
+export async function openThread(thread, running) {
   const name = `${thread.task || thread.title}`;
-  const argv = running
+  const history = !running && (await sessionGone(thread.cwd, thread.session));
+  const argv = running || history
     ? [`${home()}/.local/bin/emp`, "follow", thread.key]
     : ["/opt/homebrew/bin/empryo", "--session", thread.session, "--cwd", thread.cwd];
-  run("tab.new", { name: `${name} · ${running ? "follow" : "empryo"}`, folder: thread.cwd, argv });
+  const label = running ? "follow" : history ? "history" : "empryo";
+  run("tab.new", { name: `${name} · ${label}`, folder: thread.cwd, argv });
 }
 
 export const sendArgs = (key, message) => ({ threadId: key, message, mode: "auto" });

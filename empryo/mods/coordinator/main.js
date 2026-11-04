@@ -1,14 +1,26 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
-import { agents, hc, home, notify, nextCommand, run, shared, theme } from "herdr";
+import { agents, exec, hc, home, notify, nextCommand, run, shared, theme } from "herdr";
 import { loadOlder, readTranscript } from "./transcript.js";
 import { asks, composer, conversation, status, taskStrip } from "./ui.js";
 
-function openTask(id, task) {
-  const argv = task.running
+const SESSION_GONE = `
+test -d "$1" || exit 0
+test -d "$1/.empryo/sessions/$2" && exit 1
+dir=$(sqlite3 -readonly "$3" "SELECT session_dir FROM threads WHERE id = '$2'" 2>/dev/null)
+test -n "$dir" && test -d "$dir" && exit 1
+exit 0
+`;
+
+const sessionGone = async (cwd, session) => (await exec("sh", ["-c", SESSION_GONE, "sh", cwd, session, `${home()}/.empryo/threads.db`])).code === 0;
+
+async function openTask(id, task) {
+  const history = !task.running && (await sessionGone(task.cwd, task.session));
+  const argv = task.running || history
     ? [`${home()}/.local/bin/emp`, "follow", task.key]
     : ["/opt/homebrew/bin/empryo", "--session", task.session, "--cwd", task.cwd];
-  run("tab.new", { name: `${id} · ${task.running ? "follow" : "empryo"}`, folder: task.cwd, argv });
+  const label = task.running ? "follow" : history ? "history" : "empryo";
+  run("tab.new", { name: `${id} · ${label}`, folder: task.cwd, argv });
 }
 
 const EVERY = 3000;
@@ -68,9 +80,9 @@ export default class Coordinator extends View {
   refresh(cx) {
     cx.spawn(async (cx) => {
       try {
-        const before = this.view?.turns.length;
         this.view = await readTranscript();
-        if (before !== undefined) this.shown += Math.max(0, this.view.turns.length - before);
+        if (this.known !== undefined) this.shown += Math.max(0, this.view.turns.length - this.known);
+        this.known = this.view.turns.length;
         this.error = "";
         this.prune();
       } catch (error) {
@@ -188,11 +200,16 @@ export default class Coordinator extends View {
   older(cx) {
     if (this.loading) return;
     this.loading = true;
+    cx.notify();
     cx.spawn(async (cx) => {
-      this.view = await loadOlder(PAGE);
-      this.shown += PAGE;
-      this.loading = false;
-      cx.notify();
+      try {
+        this.view = await loadOlder(PAGE);
+        this.known = this.view.turns.length;
+        this.shown += PAGE;
+      } finally {
+        this.loading = false;
+        cx.notify();
+      }
     });
   }
 
@@ -207,6 +224,7 @@ export default class Coordinator extends View {
       isOpen: (key) => this.open.has(key),
       toggle: (key, cx) => this.toggle(key, cx),
       shown: this.shown,
+      loading: this.loading,
       more: (cx) => {
         this.shown += PAGE;
         cx.notify();
@@ -219,6 +237,7 @@ export default class Coordinator extends View {
       accept: (cx) => this.accept(cx),
       send: (cx) => this.send(cx),
       open: (id, task) => openTask(id, task),
+      link: (url) => exec("open", [url]),
       size: (size, cx) => {
         if (size.width === this.box.width && size.height === this.box.height) return;
         this.box = size;
