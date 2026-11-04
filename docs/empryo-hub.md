@@ -9,7 +9,9 @@ files to the live paths.
 - `emp-hub` is a long-running Python service. It owns task threads, starts one
   `empryo acp` engine per running turn, and serves a local socket
   at `~/.empryo-hub/hub.sock`.
-- `emp` is the client for that socket (`emp call`, `emp follow`, `emp drain`).
+- `emp` is the client for that socket (`emp call`, `emp follow`, `emp drain`,
+  `emp drain --cancel`). `emp show <thread or terminal>` opens a task or terminal
+  over the current Herdr tab.
 - `empq` is the coordinator's work queue. It keeps a cap on live threads.
 - `emp-health` checks the hub, the queue and the coordinator's context size
   every two minutes. `coordinator-refresh` restarts the coordinator when its
@@ -19,6 +21,12 @@ files to the live paths.
   own routing and timeouts.
 - The Herdr mods `cockpit`, `coordinator`, `ops` and `git-graph` show the hub
   in the Herdr app.
+
+## What a rebuild needs first
+
+The installer does not create these: `~/.local/bin/hc`, `~/.local/bin/herdr-app`,
+`gh` on the path, and `~/Code/coordinator/queue/config.json` holding `{"cap": N}`.
+Without that queue file, `dev.coordinator.dispatch` fails every 30 seconds.
 
 ## How a task flows
 
