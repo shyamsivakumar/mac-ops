@@ -26,7 +26,8 @@ def _timestamp(value: Any) -> str:
 
 
 def collect_empryo(*, since: datetime | None = None, until: datetime | None = None,
-                   run_ids: list[str] | None = None) -> list[dict[str, Any]]:
+                   run_ids: list[str] | None = None,
+                   thread_ids: dict[str, str | None] | None = None) -> list[dict[str, Any]]:
     db = Path(os.environ.get("EMPRYO_THREADS_DB", DEFAULT_DB))
     if not db.is_file():
         return []
@@ -38,10 +39,18 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
     from .collect import PREVIEW_RE, TASK_KEY_RE
     from .scrub import scrub_string
     traces: dict[str, dict[str, Any]] = {}
+    remaining = set(run_ids) if run_ids is not None else None
     for thread, directory in rows:
+        if remaining is not None and not remaining:
+            break
         thread_hash = _id(thread)
         if not thread_hash or not isinstance(directory, str) or not directory:
             continue
+        if remaining is not None and thread_ids is not None:
+            journal_thread = "empryo-" + thread_hash
+            if not any(not thread_ids.get(rid) or thread_ids[rid] == journal_thread
+                       for rid in remaining):
+                continue
         folder = Path(directory)
         try:
             meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
@@ -166,4 +175,6 @@ def collect_empryo(*, since: datetime | None = None, until: datetime | None = No
             trace["tool_call_count"] = len(trace["tool_calls"])
             if (run_ids is not None and run_id in run_ids) or (run_ids is None and since.timestamp() * 1000 <= start < until.timestamp() * 1000):
                 traces[run_id] = trace
+                if remaining is not None:
+                    remaining.discard(run_id)
     return sorted(traces.values(), key=lambda t: (t["started_at"], t["run_id"]))

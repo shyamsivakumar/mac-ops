@@ -119,9 +119,9 @@ def scrub_value(value: Any, *, field: str | None = None) -> Any:
         return "[DROPPED]"
     if isinstance(value, dict):
         return {
-            scrub_string(k) if isinstance(k, str) else k: scrub_value(v, field=str(k))
+            k: scrub_value(v, field=str(k))
             for k, v in value.items()
-            if not _drop_field(str(k))
+            if not _drop_field(str(k)) and (not isinstance(k, str) or scrub_string(k) == k)
         }
     if isinstance(value, (list, tuple)):
         return [scrub_value(v, field=field) for v in value]

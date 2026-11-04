@@ -472,7 +472,8 @@ def collect_runs(
         conn.close()
 
 
-def _unfinished_run_ids(root: Path | None, lookback_days: int = 3) -> list[str]:
+def _unfinished_run_ids(root: Path | None, lookback_days: int = 3,
+                        thread_ids: dict[str, str | None] | None = None) -> list[str]:
     """Stored traces still non-terminal — refresh on the next daily pass."""
     ids: list[str] = []
     # Reconcile every stored day; age alone is not terminal evidence.
@@ -486,7 +487,15 @@ def _unfinished_run_ids(root: Path | None, lookback_days: int = 3) -> list[str]:
             unresolved_empryo = (trace.get("source") == "empryo" and isinstance(status, str)
                                  and status.lower() == "unknown" and not trace.get("completed_at"))
             if isinstance(status, str) and (status.lower() in NONTERMINAL or unresolved_empryo) and trace.get("run_id"):
-                ids.append(str(trace["run_id"]))
+                run_id = str(trace["run_id"])
+                ids.append(run_id)
+                if thread_ids is not None:
+                    thread = trace.get("thread_id")
+                    # Conflicting or absent associations must fall back to a full scan.
+                    if run_id in thread_ids and thread_ids[run_id] != thread:
+                        thread_ids[run_id] = None
+                    else:
+                        thread_ids[run_id] = thread if isinstance(thread, str) and thread else None
     return ids
 
 
@@ -504,7 +513,8 @@ def collect_and_store(
     traces.extend(collect_empryo(since=since, until=until))
     refreshed = 0
     if reconcile_unfinished:
-        unfinished = _unfinished_run_ids(state_root)
+        thread_ids: dict[str, str | None] = {}
+        unfinished = _unfinished_run_ids(state_root, thread_ids=thread_ids)
         # Avoid double-collecting runs already in this window.
         have = {t["run_id"] for t in traces}
         missing = [rid for rid in unfinished if rid not in have]
@@ -514,7 +524,7 @@ def collect_and_store(
         if t3_missing:
             extra.extend(collect_runs(db_path=db_path, run_ids=t3_missing))
         if empryo_missing:
-            extra.extend(collect_empryo(run_ids=empryo_missing))
+            extra.extend(collect_empryo(run_ids=empryo_missing, thread_ids=thread_ids))
         traces.extend(extra)
         refreshed = len(extra)
     paths = []

@@ -37,6 +37,13 @@ def main():
     assert ids[0] == ids[1] and UUID(ids[0])
     print("privacy: secret/title/message absent; HTTP mocked")
     print("event UUID: stable across two captures", ids[0])
+    with patch("urllib.request.urlopen", capture):
+        export_posthog([dict(trace, status="running", started_at="2026-11-03T12:00:00Z")], api_key="synthetic-key")
+        export_posthog([dict(trace, status="completed", started_at="2026-11-03T12:00:00Z", completed_at="2026-11-03T12:05:00Z")], api_key="synthetic-key")
+    events = [batch["batch"][0] for batch in captures[-2:]]
+    assert events[0]["uuid"] == events[1]["uuid"] and events[0]["timestamp"] == events[1]["timestamp"]
+    print("event identity: stable through running-to-completed transition")
+    assert secret not in json.dumps(scrub_trace(trace))
     now = datetime.now(timezone.utc)
     ts = int(now.timestamp() * 1000)
     with tempfile.TemporaryDirectory() as tmp:
@@ -78,6 +85,7 @@ def main():
             journal.write_text(json.dumps(user) + "\n" + json.dumps(dict(done, status=[])) + "\n")
             runs = collect_empryo(since=start, until=end)
             assert len(runs) == 2 and {r["run_id"]: r for r in runs}[rid]["status"] == "running"
+            assert next(r for r in runs if r["run_id"] != rid)["status"] == "completed"
             print("malformed status: batch survives; independent journal completed")
             old = now - timedelta(days=5)
             for status in ("running", "unknown"):
