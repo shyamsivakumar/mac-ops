@@ -2,10 +2,10 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
-import { agents, closeOverlay, exec, hc, notify, nextCommand, openOverlay, props, run, setShared, shared, theme } from "herdr";
-import { cleanupNote, cleanupThread, load, loadBacklog, loadVerdict, mergePlan, mergeThread, openThread, queueCap, readTask, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, verdictEntries, verdictOf } from "./hub.js";
+import { agents, closeOverlay, exec, hc, home, notify, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
+import { cleanupNote, cleanupThread, hubStatus, load, loadBacklog, loadVerdict, mergePlan, mergeThread, openThread, queueCap, readTask, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, verdictEntries, verdictOf } from "./hub.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { COLUMNS, DECIDES, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionHeight, decisionOf, decisionView, elapsed, emptyRow, foldedColumn, footer, keySheet, sheetHeight, thumb } from "./ui.js";
+import { COLUMNS, DECIDES, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionHeight, decisionOf, decisionView, elapsed, emptyRow, foldedColumn, footer, keySheet, sheetHeight, thumb, toolbar } from "./ui.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -33,6 +33,14 @@ const DEC_FRESH = 60000;
 const STALE_RUN = 1800000;
 const NO_REVIEW_REFUSAL = /no review thread found/i;
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
+const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
+const WT_EVERY = 30000;
+const PANEL_SIZE = { models: [520, 470], queue: [520, 340], hub: [520, 400] };
+
+const readState = async (name) => {
+  const text = await readTextFile(`${WT_STATE}/${name}`);
+  return text && JSON.parse(text);
+};
 
 export default class Board extends View {
   init(_props, cx) {
@@ -88,6 +96,9 @@ export default class Board extends View {
     this.expanded = new Set();
     this.armed = null;
     this.colW = MIN_COL;
+    this.wt = null;
+    this.hub = null;
+    this.hubBusy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["backlog"]'));
     this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["backlog","done"]'));
     this.compact = false;
@@ -125,6 +136,8 @@ export default class Board extends View {
     }
     if (shared("cockpit.pop")) setShared("cockpit.pop", null);
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
+    cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
+    this.watchWorktrees(cx);
     this.restore();
     shepherdrStates().then((states) => {
       this.shepherdr = states;
@@ -169,6 +182,7 @@ export default class Board extends View {
         if (changed) cx.notify();
         if (fresh) this.persist();
         this.enrich(board, cx, force);
+        this.watchHub(cx);
       } catch (error) {
         if (token !== this.token) return;
         this.error = String(error.message);
@@ -177,6 +191,46 @@ export default class Board extends View {
         cx.notify();
       }
     });
+  }
+
+  async readWorktrees() {
+    try {
+      const status = await readState("status.json");
+      if (status?.state !== "done" || status.finished === this.wt?.finished) return this.wt;
+      const last = await readState("last.json");
+      const c = last?.categories;
+      if (!c) return null;
+      return { finished: status.finished, stale: c.safe + c.prune, look: c.look, rows: c.safe + c.prune + c.look + c.protected + (last.excluded_worktrees ?? 0) };
+    } catch {
+      return null;
+    }
+  }
+
+  watchWorktrees(cx) {
+    cx.spawn(async (cx) => {
+      this.wt = await this.readWorktrees();
+      if (!this.unchanged("wt", this.wt)) cx.notify();
+    });
+  }
+
+  watchHub(cx) {
+    if (this.hubBusy) return;
+    this.hubBusy = true;
+    cx.spawn(async (cx) => {
+      this.hub = await hubStatus();
+      this.hubBusy = false;
+      if (!this.unchanged("hub", this.hub)) cx.notify();
+    });
+  }
+
+  openPanel(id, cx) {
+    if (this.deciding === `panel:${id}`) return;
+    this.deciding = `panel:${id}`;
+    cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
+    if (id === "wt") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
+    const ops = shared("ops");
+    const seed = { hub: this.hub, health: ops?.health ?? null, running: this.board?.running ?? 0, cap: this.cap };
+    openOverlay({ mod: "ops-panels", kind: "dialog", width: PANEL_SIZE[id][0], height: PANEL_SIZE[id][1], props: { panel: id, seed } });
   }
 
   readSaved() {
@@ -401,6 +455,7 @@ export default class Board extends View {
         if (p?.key === key && !p.moved) this.activate(this.entryOf(key), cx);
       },
       keys: (cx) => this.openKeys(cx),
+      panel: (id, cx) => this.openPanel(id, cx),
       reply: (cx) => this.openReply(this.current(), cx),
       open: (cx) => this.openEntry(this.current(), cx),
       settle: (cx) => this.settleEntry(this.current(), cx),
@@ -1201,6 +1256,7 @@ export default class Board extends View {
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
+      .when(!this.compact, (el) => el.child(toolbar(t, this.area.width, { worktrees: this.wt, hub: this.hub, ops: shared("ops"), hasBoard: Boolean(this.board), running: this.board?.running ?? 0, cap: this.cap }, cb)))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()
           .on_size_change((size, cx) => {
