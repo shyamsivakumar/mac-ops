@@ -4,7 +4,7 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex, Input } from "gpui-base";
 import { shortModel } from "./hub.js";
 
-export const H = { head: 42, sub: 16, card: 86, foot: 18, title: 30, child: 24, reply: 34, empty: 50, folded: 44 };
+export const H = { bar: 26, head: 42, sub: 16, card: 86, foot: 18, title: 30, child: 24, reply: 34, empty: 50, folded: 44 };
 const TONE = { wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
@@ -34,8 +34,8 @@ export function elapsed(ms) {
 
 const clip = (text, n) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 
-function action(t, id, hint, label, run, tip, bare) {
-  const el = h_flex().id(id).h(18).px(5).gap(4).items_center().flex_none().rounded(4).border_1().border_color(t.input).bg(t.raised)
+function action(t, id, hint, label, run, tip, bare, tone) {
+  const el = h_flex().id(id).h(18).px(5).gap(4).items_center().flex_none().rounded(4).border_1().border_color(tone ? t[tone] + "88" : t.input).bg(tone ? t[tone] + "22" : t.raised)
     .text_size(10.5).font_medium().text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.selected))
     .on_mouse_down("left", stop).on_click((_e, cx) => run(cx))
     .when(!bare, (e) => e.child(div().text_size(9.5).text_color(t.dim).child(hint)))
@@ -77,6 +77,34 @@ export function columnHead(t, key, col, state, cb) {
       .child(state.popup ? headButton(t, "pop-close", "✕", "Close", () => cb.close()) : headButton(t, `pop-${key}`, "⤢", `Open ${label} in a pop-up`, () => cb.expand(key))))
     .child(h_flex().h(H.sub).px(10).gap(8).items_start().overflow_hidden()
       .children(fitSummary(col.summary, state.colW - 20).map(([text, summaryTone]) => div().flex_none().text_size(9.5).text_color(summaryTone === "dim" ? t.muted : t[summaryTone]).child(text))));
+}
+
+const BAR_GAP = 6;
+const barCost = (item) => (item.label.length + (item.more?.length ?? 0)) * 6.2 + 12;
+function barItems(v) {
+  const { worktrees: w, hub, ops, running, cap } = v;
+  const out = hub?.circuits ? Object.entries(hub.circuits).filter(([, c]) => c.state !== "closed").map(([name]) => name) : null;
+  const health = ops?.health;
+  const issues = health && !health.stale ? health.problems.length + health.warnings.length : 0;
+  const hubLabel = !health ? "Hub" : hub?.draining ? "Hub · draining" : health.stale ? "Hub · no check" : health.problems.length ? `Hub · ${plural(health.problems.length, "problem")}` : health.warnings.length ? `Hub · ${plural(health.warnings.length, "warning")}` : "Hub · ok";
+  const hubTone = !health ? undefined : health.problems.length ? "blocked" : hub?.draining || health.stale || issues ? "working" : undefined;
+  return [
+    { id: "wt", prio: 0, label: w ? `Worktrees · ${w.stale} stale` : "Worktrees", more: w?.look ? ` · ${w.look} need a look` : "", tone: w?.stale ? "working" : undefined, tip: w ? `${w.stale} safe to clean or prune · ${w.look} need a look. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
+    { id: "models", prio: 2, label: !out ? "Models" : out.length ? `Models · ${out.length} out` : "Models · all up", tone: out?.length ? "blocked" : undefined, tip: out?.length ? `Out: ${out.join(", ")}. Click for the probe times and fallback order.` : "Model providers and the fallback order. Click to open." },
+    { id: "queue", prio: 4, label: v.hasBoard ? `Queue · ${running}/${cap}` : "Queue", tone: v.hasBoard && running >= cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
+    { id: "hub", prio: 1, label: hubLabel, tone: hubTone, tip: "Hub health, Coordinator context, uptime. Click to open." },
+  ];
+}
+
+export function toolbar(t, width, v, cb) {
+  const room = width - 20;
+  const fits = (list) => list.reduce((sum, x) => sum + barCost(x), 0) + (list.length - 1) * BAR_GAP <= room;
+  let shown = barItems(v);
+  const wt = shown[0];
+  if (!fits(shown)) wt.more = "";
+  while (shown.length > 1 && !fits(shown)) shown = shown.filter((x) => x !== shown.reduce((a, b) => (b.prio > a.prio ? b : a)));
+  return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
+    .children(shown.map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => cb.panel(x.id, cx), x.tip, true, x.tone)));
 }
 
 export function foldedColumn(t, key, col, state, cb) {

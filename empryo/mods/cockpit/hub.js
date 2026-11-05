@@ -157,6 +157,8 @@ export async function load() {
   };
 }
 
+export const hubStatus = () => call("emp_hub_status", {}).then((s) => ({ circuits: s?.circuits, draining: s?.draining, pid: s?.pid })).catch(() => null);
+
 export async function loadBacklog() {
   const [idle, names] = await Promise.all([idleList(), projectNames()]);
   const queued = idle.filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
