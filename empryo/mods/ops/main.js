@@ -110,7 +110,7 @@ export default class Ops extends View {
       const c = last?.categories;
       if (!c) return null;
       const managed = c.safe + c.prune + c.look + c.protected;
-      return { finished: status.finished, stale: c.safe + c.prune, look: c.look, managed, excluded: last.excluded_worktrees ?? 0, rows: managed + (last.excluded_worktrees ?? 0) };
+      return { finished: status.finished, stale: c.safe + c.prune, look: c.look, managed, rows: managed };
     } catch {
       return null;
     }
@@ -207,7 +207,7 @@ export default class Ops extends View {
     const wtText = w === undefined ? "…" : !w ? "couldn't scan" : w.managed === undefined ? "scanning…" : `· ${w.stale} stale`;
     const wtEl = h_flex().id("worktrees").gap(5).items_center().flex_none().cursor_pointer()
       .on_click((e, cx) => e.click_count > 1 || this.openWorktrees(cx))
-      .tooltip(w?.managed === undefined ? "Linked Git worktrees. Click to review and clean them." : `${w.managed} managed by the cleaner · ${w.stale} safe to clean or prune · ${w.look} need a look · ${w.excluded} more in excluded SRW, dbt and omni repos, not checked for removal. Click to review.`)
+      .tooltip(w?.managed === undefined ? "Linked Git worktrees. Click to review and clean them." : `${w.managed} managed by the cleaner · ${w.stale} safe to clean or prune · ${w.look} need a look. Click to review.`)
       .child(div().text_color(t.dim).child("Worktrees"))
       .child(div().text_color(!w ? t.dim : w.stale ? t.working : t.muted).font_medium().child(wtText));
 

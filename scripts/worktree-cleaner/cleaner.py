@@ -65,6 +65,100 @@ def in_scope(path: Path, code_root: Path, hub_root: Path) -> bool:
     return any(inside(path, root) for root in scope_roots(code_root, hub_root)) or empryo_tmp_nested(path)
 
 
+NESTED_SCAN_MAX_DEPTH = 12
+NESTED_SCAN_MAX_DIRS = 50000
+
+
+def nested_checkout_scan(path: Path, max_depth: int = NESTED_SCAN_MAX_DEPTH, budget: int = NESTED_SCAN_MAX_DIRS) -> tuple[list[Path], bool]:
+    """Find checkouts inside path that Git does not know about. Returns (directories, complete).
+
+    Every folder is probed for its own ".git" before any skip list is applied, so a clone hidden
+    inside an ignored path still counts. Symlinked folders are neither followed nor reported:
+    removing the parent removes the link, never the checkout it points at. A folder that cannot be
+    read, or a tree larger than the budget, makes the scan incomplete, and an incomplete scan
+    holds the candidate instead of guessing.
+    """
+    found: list[Path] = []
+    complete = True
+    visited = 0
+    stack: list[tuple[Path, int]] = [(path, 0)]
+    while stack and complete:
+        current, depth = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                children = list(entries)
+        except OSError:
+            complete = False
+            continue
+        for entry in children:
+            try:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+            except OSError:
+                complete = False
+                break
+            child = Path(entry.path)
+            visited += 1
+            if visited > budget:
+                complete = False
+                break
+            if (child / ".git").exists():
+                found.append(child)
+                continue
+            if entry.name in SKIP_DIRS:
+                try:
+                    with os.scandir(child) as entries:
+                        vendored = list(entries)
+                except OSError:
+                    complete = False
+                    break
+                for vendored_entry in vendored:
+                    try:
+                        if not vendored_entry.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        complete = False
+                        break
+                    vendored_path = Path(vendored_entry.path)
+                    visited += 1
+                    if visited > budget:
+                        complete = False
+                        break
+                    if (vendored_path / ".git").exists():
+                        found.append(vendored_path)
+                continue
+            if depth + 1 < max_depth:
+                stack.append((child, depth + 1))
+        if not complete:
+            break
+    return found, complete
+
+
+def registered_children(path: Path, siblings: list[tuple[Path, str]]) -> list[str]:
+    """Registered worktrees that live inside path; removing path would delete them."""
+    parent = canonical(path)
+    found: list[str] = []
+    for child, child_canonical in siblings:
+        if child_canonical == parent or not child.is_dir():
+            continue
+        try:
+            if os.path.commonpath((child_canonical, parent)) != parent:
+                continue
+        except ValueError:
+            continue
+        found.append(str(child))
+    return found
+
+
+def all_worktree_paths(repos: list[Path]) -> list[tuple[Path, str]]:
+    paths: list[tuple[Path, str]] = []
+    for repo_root in repos:
+        for record in worktrees(repo_root):
+            path = Path(record["path"])
+            paths.append((path, canonical(path)))
+    return paths
+
+
 def discover_repositories(code_root: Path) -> list[Path]:
     if not code_root.is_dir() or code_root.is_symlink():
         raise SafetyError("code_root_unavailable")
@@ -149,7 +243,7 @@ def detached_idle_seconds(path: Path) -> int | None:
     return int(time.time()) - max(stamps) if stamps else None
 
 
-PROTECTED_REASONS = {"main_checkout", "worktree_outside_scope", "empryo_thread_unfinished", "process_cwd_inside", "worktree_locked"}
+PROTECTED_REASONS = {"main_checkout", "worktree_outside_scope", "empryo_thread_unfinished", "process_cwd_inside", "worktree_locked", "contains_nested_worktree", "nested_scan_incomplete"}
 process_cwd_cache: list[Path] = []
 
 
@@ -178,7 +272,8 @@ def prunable(row: dict[str, Any], github: GitHub) -> bool:
     reasons = set(row["reasons"])
     return (
         row["gone"] and not row["locked"] and not row["main_checkout"]
-        and not reasons & {"worktree_outside_scope", "empryo_thread_unfinished", "repository_outside_code_root", "process_cwd_inside", "worktree_status_unknown"}
+        and not reasons & {"worktree_outside_scope", "empryo_thread_unfinished", "repository_outside_code_root", "process_cwd_inside", "worktree_status_unknown", "contains_nested_worktree", "nested_scan_incomplete"}
+        # contains_nested_worktree and nested_scan_incomplete are defensive here: a gone row has no children to destroy.
         and Path(row["path"]).parent.is_dir()
         and github.repo(repo) is not None
         and (row["remote_commit_present"] is True or branch_exists(repo, row["branch"]))
@@ -381,8 +476,9 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
-def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, emp_state: EmpryoState, hub_root: Path, *, refresh: bool = False) -> dict[str, Any]:
+def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, emp_state: EmpryoState, hub_root: Path, siblings: list[tuple[Path, str]] | None = None, *, refresh: bool = False) -> dict[str, Any]:
     path = Path(record["path"])
+    children = registered_children(path, siblings or [])
     result: dict[str, Any] = {
         "repo": str(repo_root), "path": str(path), "branch": record.get("branch"),
         "head": record.get("head"), "detached": bool(record.get("detached")),
@@ -399,8 +495,9 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         reasons.append("main_checkout")
     if not in_scope(path, code_root, hub_root):
         reasons.append("worktree_outside_scope")
+    result["nested_worktrees"] = list(children)
     if any(reason != "empryo_thread_unfinished" for reason in reasons):
-        result["reasons"] = reasons
+        result["reasons"] = sorted(set(reasons))
         return result
     if any(inside(holder, path) for holder in process_cwds(refresh=refresh)):
         reasons.append("process_cwd_inside")
@@ -444,17 +541,32 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         result["pull_request"] = pr_url
         if not ok and why:
             reasons.append(why)
+    if children:
+        reasons.append("contains_nested_worktree")
+    if not reasons and path.is_dir():
+        scanned, complete = nested_checkout_scan(path)
+        if scanned:
+            reasons.append("contains_nested_worktree")
+            result["nested_worktrees"] = sorted(set(children) | {str(item) for item in scanned})
+        elif not complete:
+            reasons.append("nested_scan_incomplete")
     result["reasons"] = sorted(set(reasons))
     result["eligible"] = not result["reasons"]
     result["prunable"] = prunable(result, github)
     return result
 
 
-def inventory(code_root: Path, hub_root: Path, github: GitHub, emp_state: EmpryoState) -> list[dict[str, Any]]:
+def inventory(repos: list[Path], code_root: Path, hub_root: Path, github: GitHub, emp_state: EmpryoState) -> list[dict[str, Any]]:
+    listings: list[tuple[Path, list[dict[str, Any]]]] = []
+    known: list[tuple[Path, str]] = []
+    for repo_root in repos:
+        records = worktrees(repo_root)
+        listings.append((repo_root, records))
+        known.extend((Path(record["path"]), canonical(record["path"])) for record in records)
     rows: list[dict[str, Any]] = []
-    for repo_root in discover_repositories(code_root):
-        for record in worktrees(repo_root):
-            rows.append(evaluate(repo_root, record, code_root, github, emp_state, hub_root))
+    for repo_root, records in listings:
+        for record in records:
+            rows.append(evaluate(repo_root, record, code_root, github, emp_state, hub_root, known))
     return rows
 
 
@@ -556,19 +668,22 @@ def scan(code_root: Path, hub_root: Path, state_root: Path, apply: bool, report:
             raise SafetyError("cleaner_already_running") from exc
         initial_state = EmpryoState()
         github = GitHub()
-        rows = inventory(code_root, hub_root, github, initial_state)
+        repos = discover_repositories(code_root)
+        rows = inventory(repos, code_root, hub_root, github, initial_state)
         eligible = [row for row in rows if row["eligible"]]
         removed = 0
         if apply:
+            known = all_worktree_paths(repos)
             for candidate in eligible:
                 repo_root = Path(candidate["repo"])
-                current = next((r for r in worktrees(repo_root) if canonical(r["path"]) == canonical(candidate["path"])), None)
+                records = worktrees(repo_root)
+                current = next((r for r in records if canonical(r["path"]) == canonical(candidate["path"])), None)
                 if current is None:
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_registration_changed"]
                     continue
                 try:
-                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), hub_root, refresh=True)
+                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), hub_root, known, refresh=True)
                 except SafetyError as exc:
                     candidate["eligible"] = False
                     candidate["reasons"] = [str(exc)]
@@ -639,11 +754,12 @@ def scan(code_root: Path, hub_root: Path, state_root: Path, apply: bool, report:
         if apply and prune:
             for row in [r for r in rows if r["category"] == "prune"]:
                 repo_root = Path(row["repo"])
-                current = next((r for r in worktrees(repo_root) if canonical(r["path"]) == canonical(row["path"])), None)
+                records = worktrees(repo_root)
+                current = next((r for r in records if canonical(r["path"]) == canonical(row["path"])), None)
                 if current is None:
                     continue
                 try:
-                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), hub_root, refresh=True)
+                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), hub_root, known, refresh=True)
                 except SafetyError:
                     continue
                 if not final["prunable"] or current.get("head") != row.get("head"):
