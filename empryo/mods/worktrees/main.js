@@ -11,6 +11,7 @@ const POLL_MS = 2000;
 const HANG_MS = 660000;
 
 const REASONS = {
+  removal_disabled_no_hub_lease: "Removal disabled: hub cannot exclude concurrent or archived tasks",
   empryo_thread_unfinished: "A hub thread is still using it",
   process_cwd_inside: "A running program has its working folder inside it",
   worktree_outside_scope: "Lives outside the folders the cleaner manages",
