@@ -1,6 +1,6 @@
 # Worktree cleaner (MO-125)
 
-The cleaner discovers repositories under `~/Code` and considers their registered linked worktrees only under `~/Code/.worktrees`, `/private/tmp`, or `/tmp`. It skips the main checkout and keeps a worktree unless every required check passes.
+The cleaner discovers repositories under `~/Code` and considers their registered linked worktrees under `~/Code/.worktrees`, `/private/tmp`, `/tmp`, `~/.empryo-hub/worktrees` (the Empryo hub root, overridable with `--hub-root`), and any worktree nested beneath a `.empryo/tmp` directory. It skips the main checkout and keeps a worktree unless every required check passes. A worktree registered anywhere else is held as `worktree_outside_scope`.
 
 ## Checks
 
@@ -8,7 +8,7 @@ A branch worktree must be clean, have its exact `HEAD` commit available through 
 
 The cleaner queries `emp call emp_thread_list` across all projects, following every cursor with a limit of 100. Two complete passes must agree on thread identity, paths, status, settled state, active run, and pending requests; any change blocks cleanup because the hub has no snapshot token. Both `worktreePath` and `cwd` (including a cwd beneath a worktree) protect a path. Every unfinished thread blocks removal: idle, snoozed, waiting, unknown-status, and completed-but-unsettled threads included. Only explicitly settled terminal threads without an active run or pending request are finished. Missing or malformed path data, hub failures, incomplete pages, duplicate threads, non-progressing cursors, and changing totals fail closed. A full listing is repeated immediately before each removal; HEAD and cleanliness are then checked again. No retired T3 database is read.
 
-The cleaner never deletes remote branches and never uses `git worktree remove --force`. It excludes SRW and the slash-eureka `dbt` and `omni` repositories based on checkout path or GitHub identity. Those exclusions are in code and need explicit promotion confirmation before they are changed.
+The cleaner never deletes remote branches and never uses `git worktree remove --force`. The former SRW and slash-eureka `dbt`/`omni` exclusions were removed in MO-129 with explicit promotion confirmation; every repository now follows the same checks, and a completed review thread's detached worktree is removable only through the same 24-hour detached-idle rule.
 
 ## Run a scan
 
@@ -36,8 +36,8 @@ launchctl bootstrap "$DOMAIN" ~/Library/LaunchAgents/$LABEL.plist
 launchctl enable "$DOMAIN/$LABEL"
 ```
 
-This task added the plist but did not install or run it. Run the complete Empryo regression fixture with `python3 verification/worktree-cleaner/check.py`. It creates temporary repositories, a local bare remote, and stub GitHub/Empryo CLIs. It covers cross-project pagination, worktreePath and cwd-only holds, unfinished statuses, incomplete/unavailable listings, late-arriving threads, dirty and unpublished trees, and dry-run/apply behavior. `check.py` delegates to the Empryo proof in `check_empryo.py`; there is no retired T3 fixture or database dependency.
+This task added the plist but did not install or run it. Run the complete Empryo regression fixture with `python3 verification/worktree-cleaner/check.py`. It creates temporary repositories, a local bare remote, and stub GitHub/Empryo CLIs. It covers cross-project pagination, worktreePath and cwd-only holds, unfinished statuses, incomplete/unavailable listings, late-arriving threads, dirty and unpublished trees, dry-run/apply behavior, hub-root and nested `.empryo/tmp` scope, a completed review thread's detached worktree under the 24-hour rule, out-of-scope paths, and a total GitHub CLI failure holding every candidate. `check.py` delegates to the Empryo proof in `check_empryo.py`; there is no retired T3 fixture or database dependency.
 
 ## Limits
 
-GitHub CLI authentication and the Empryo hub/`emp` CLI must be available to the LaunchAgent. Network or state failures block candidates. The 24-hour detached age uses the worktree's latest `HEAD` reflog entry; missing reflog data blocks removal. The cleaner scans repository markers beneath `~/Code` and does not inspect worktrees owned by repositories outside that root.
+GitHub CLI authentication and the Empryo hub/`emp` CLI must be available to the LaunchAgent. Network or state failures block candidates; a failed `emp` listing aborts the whole scan and a failed GitHub call holds every worktree it could not verify. The 24-hour detached age uses the worktree's latest `HEAD` reflog entry; missing reflog data blocks removal. The cleaner scans repository markers beneath `~/Code`; hub worktrees and nested `.empryo/tmp` worktrees are in scope when their owning repository lives beneath `~/Code`, and worktrees owned by repositories outside that root stay held.

@@ -212,30 +212,6 @@ export default class Worktrees extends View {
       .child(label);
   }
 
-  excluded(t) {
-    const rows = this.data?.excluded_rows ?? [];
-    if (!rows.length) return [];
-    const out = [div().w_full().px(14).pt(16).pb(2).text_size(14).font_semibold().text_color(t.foreground).child(`Not managed by the cleaner · ${plural(rows.length, "worktree")}`),
-      div().w_full().px(14).pb(4).text_size(12).line_height("17px").text_color(t.muted).child("The cleaner never inspects these repositories for removal. This list is read-only, so there is nothing to clean here.")];
-    for (const repo of [...new Set(rows.map((r) => r.repo))]) {
-      const mine = rows.filter((r) => r.repo === repo);
-      out.push(div().w_full().px(14).pt(10).pb(4).text_size(12).font_semibold().text_color(t.foreground).child(`${base(repo)}  ·  ${plural(mine.length, "worktree")}  ·  ${mine[0].reason}`));
-      mine.forEach((r, i) => out.push(h_flex().id(`ex-${base(repo)}-${i}`).w_full().gap(10).py(6).px(14).items_start().border_t(1).border_color(t.border)
-        .child(v_flex().flex_1().min_w(0).gap(2)
-          .child(h_flex().gap(8).flex_wrap().items_baseline()
-            .child(div().text_size(13).font_medium().text_color(t.foreground).child(base(r.path)))
-            .child(div().text_size(12).text_color(t.muted).child(r.branch ?? "detached")))
-          .child(div().text_size(12).text_color(t.muted).child(this.exclusionDetail(r))))
-        .child(div().text_size(12).text_color(t.dim).flex_none().w(70).child(age(r.age_seconds)))));
-    }
-    return out;
-  }
-
-  exclusionDetail(r) {
-    const state = r.gone ? "folder is gone" : r.dirty === null ? "status unknown" : r.dirty ? plural(r.uncommitted, "uncommitted file") : "clean";
-    return r.empryo_threads.length ? `${state}. Used by ${plural(r.empryo_threads.length, "hub thread")}` : `${state}. No hub thread uses it`;
-  }
-
   body(t) {
     const rows = this.rows();
     const repos = [...new Set(rows.map((r) => r.repo))].sort((a, b) => base(a).localeCompare(base(b)));
@@ -275,7 +251,7 @@ export default class Worktrees extends View {
         .child(div().text_size(13).font_medium().text_color(t.done).child(`Removed ${plural(this.result.removed, "worktree")}, pruned ${plural(this.result.pruned, "entry")}`))
         .when(this.result.removed + this.result.pruned !== this.shown, (el) => el.child(div().text_size(12).text_color(t.working).child(`${this.shown} were shown as safe. ${this.result.removed + this.result.pruned} were still safe when Clean ran; the rest were skipped.`)))
         .children(result.map((r) => div().text_size(12).text_color(t.muted).child(`${base(r.repo)}  ·  ${rowName(r)}`)))))
-      .child(v_flex().id("wt-list").flex_1().min_h(0).overflow_y_scroll().children(this.body(t)).children(this.excluded(t)))
+      .child(v_flex().id("wt-list").flex_1().min_h(0).overflow_y_scroll().children(this.body(t)))
       .child(h_flex().px(14).py(10).gap(12).items_center().flex_none().border_t(1).border_color(t.border)
         .child(div().flex_1().text_size(12).line_height("17px").text_color(t.muted).child("Clean removes only worktrees that pass every check, and prunes entries whose folder is gone. Rows that need a look are never removed. Branches are kept. Nothing is forced."))
         .child(h_flex().id("wt-clean").h(30).px(14).flex_none().items_center().rounded(6)

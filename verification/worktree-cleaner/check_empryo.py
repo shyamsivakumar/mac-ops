@@ -115,6 +115,8 @@ def main() -> int:
         gh.write_text('''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
+if os.environ.get('MO125_GH') == '1':
+    sys.exit(1)
 args = sys.argv[1:]
 d = json.loads(Path(os.environ['MO125_FIXTURE']).read_text())
 if args[:2] == ['repo', 'view']:
@@ -179,7 +181,7 @@ print(json.dumps(page))
 ''')
         emp.chmod(0o755)
         env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", MO125_FIXTURE=str(fixture), MO125_CALLS=str(calls), MO125_COUNTER=str(counter))
-        args = [sys.executable, str(SCRIPT), "--code-root", str(code), "--state-root", str(base / "state")]
+        args = [sys.executable, str(SCRIPT), "--code-root", str(code), "--hub-root", str(base / "home" / ".empryo-hub" / "worktrees"), "--state-root", str(base / "state")]
         refs_before = git(remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads")
         dry = json.loads(command(args + ["--dry-run"], env=env))
         assert dry["eligible"] == 2 and dry["removed"] == 0, dry
@@ -191,7 +193,8 @@ print(json.dumps(page))
         assert not any("t3" in key or "unknown" in key for key in dry["held_reasons"])
         assert dry["held_reasons"]["worktree_dirty"] == 1
         assert dry["held_reasons"]["remote_commit_unverified"] == 1
-        assert dry["excluded_repositories"] == 3
+        assert "excluded_repositories" not in dry and "excluded_rows" not in dry
+        assert dry["repositories_scanned"] == 4
         for mode in ("unavailable", "invalid-json", "truncated", "duplicate", "changed-total", "loop", "missing-cursor", "wrong-project", "pathless", "missing-path", "snapshot-change"):
             counter.write_text("0")
             result = subprocess.run(args + ["--apply"], env=dict(env, MO125_MODE=mode), capture_output=True, text=True)
@@ -215,7 +218,64 @@ print(json.dumps(page))
         requests = [json.loads(line) for line in calls.read_text().splitlines()]
         assert any(request["cursor"] == 100 for request in requests)
         assert all(request["allProjects"] and request["limit"] <= 100 for request in requests)
-        print(json.dumps({"ok": True, "empryo_held": 6, "pages_per_pass": 2, "passes": 2, "fixture_removed": applied["removed"], "failure_modes_blocked": 14, "remote_refs_preserved": True}))
+        hub = base / "home" / ".empryo-hub" / "worktrees" / "fixture-repo"
+        hub_trees = {}
+        for name in ("hub-merged", "hub-held"):
+            sha = commit(repo, f"{name}.txt", name + "\n")
+            shas[name] = sha
+            git(repo, "branch", name, sha)
+            git(repo, "push", "origin", "main")
+            hub_trees[name] = hub / name
+            git(repo, "worktree", "add", str(hub_trees[name]), name)
+        nested = repo / ".empryo" / "tmp" / "tabs" / "tab-1" / "nested-sol"
+        shas["nested"] = commit(repo, "nested.txt", "nested\n")
+        git(repo, "branch", "nested", shas["nested"])
+        git(repo, "push", "origin", "main")
+        git(repo, "worktree", "add", str(nested), "nested")
+        stray = code / "stray" / "stray-tree"
+        git(repo, "worktree", "add", "--detach", str(stray), base_sha)
+        review_aged = hub / "review-24h"
+        review_fresh = hub / "review-fresh"
+        git(repo, "worktree", "add", "--detach", str(review_aged), base_sha)
+        age_reflog(review_aged)
+        git(repo, "worktree", "add", "--detach", str(review_fresh), base_sha)
+        refs_phase2 = git(remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads")
+        payload = {
+            "threads": threads + [
+                thread("hub-held-active", hub_trees["hub-held"]),
+                thread("review-settled-24h", review_aged, status="completed", settled=True),
+                thread("review-settled-fresh", review_fresh, status="completed", settled=True),
+            ],
+            "lateThreads": threads,
+            "present": [base_sha] + [sha for name, sha in shas.items() if name != "unpublished"],
+            "prs": {name: [{"number": i + 1, "state": "MERGED", "headRefName": name, "headRefOid": sha}] for i, (name, sha) in enumerate(shas.items())},
+        }
+        fixture.write_text(json.dumps(payload))
+        counter.write_text("0")
+        dry2 = json.loads(command(args + ["--dry-run"], env=dict(env, MO125_GH="1")))
+        assert dry2["eligible"] == 0 and dry2["removed"] == 0, dry2
+        counter.write_text("0")
+        applied_gh_fail = json.loads(command(args + ["--apply"], env=dict(env, MO125_GH="1")))
+        assert applied_gh_fail["removed"] == 0, applied_gh_fail
+        assert all(path.is_dir() for path in (*hub_trees.values(), nested, stray, review_aged, review_fresh))
+        counter.write_text("0")
+        dry3 = json.loads(command(args + ["--dry-run"], env=env))
+        assert dry3["eligible"] == 3 and dry3["held_reasons"]["empryo_thread_unfinished"] == 8, dry3["held_reasons"]
+        assert dry3["held_reasons"]["detached_not_proven_24h_old"] == 1
+
+        def phase2_row(path):
+            return next(row for row in dry3["rows"] if Path(row["path"]).resolve() == path.resolve())
+
+        assert phase2_row(stray)["reasons"] == ["worktree_outside_scope"]
+        assert phase2_row(review_fresh)["reasons"] == ["detached_not_proven_24h_old"]
+        assert "empryo_thread_unfinished" in phase2_row(hub_trees["hub-held"])["reasons"]
+        counter.write_text("0")
+        applied2 = json.loads(command(args + ["--apply"], env=env))
+        assert applied2["removed"] == 3 and not hub_trees["hub-merged"].exists() and not nested.exists() and not review_aged.exists(), applied2
+        assert hub_trees["hub-held"].is_dir() and review_fresh.is_dir() and stray.is_dir()
+        assert git(remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads") == refs_phase2
+        assert git(repo, "show-ref", "--verify", "refs/heads/hub-merged") and git(repo, "show-ref", "--verify", "refs/heads/nested")
+        print(json.dumps({"ok": True, "empryo_held": 6, "pages_per_pass": 2, "passes": 2, "fixture_removed": applied["removed"], "failure_modes_blocked": 14, "remote_refs_preserved": True, "hub_scope_removed": applied2["removed"], "github_failure_holds": True}))
     return 0
 
 
