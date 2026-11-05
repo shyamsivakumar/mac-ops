@@ -65,73 +65,40 @@ def in_scope(path: Path, code_root: Path, hub_root: Path) -> bool:
     return any(inside(path, root) for root in scope_roots(code_root, hub_root)) or empryo_tmp_nested(path)
 
 
-NESTED_SCAN_MAX_DEPTH = 12
 NESTED_SCAN_MAX_DIRS = 50000
 
 
-def nested_checkout_scan(path: Path, max_depth: int = NESTED_SCAN_MAX_DEPTH, budget: int = NESTED_SCAN_MAX_DIRS) -> tuple[list[Path], bool]:
-    """Find checkouts inside path that Git does not know about. Returns (directories, complete).
-
-    Every folder is probed for its own ".git" before any skip list is applied, so a clone hidden
-    inside an ignored path still counts. Symlinked folders are neither followed nor reported:
-    removing the parent removes the link, never the checkout it points at. A folder that cannot be
-    read, or a tree larger than the budget, makes the scan incomplete, and an incomplete scan
-    holds the candidate instead of guessing.
-    """
+def nested_checkout_scan(path: Path, budget: int = NESTED_SCAN_MAX_DIRS) -> tuple[list[Path], bool]:
+    """Find nested repositories at any depth; an incomplete scan always holds the parent."""
     found: list[Path] = []
-    complete = True
     visited = 0
-    stack: list[tuple[Path, int]] = [(path, 0)]
-    while stack and complete:
-        current, depth = stack.pop()
+    stack = [path]
+    while stack:
+        current = stack.pop()
         try:
             with os.scandir(current) as entries:
-                children = list(entries)
-        except OSError:
-            complete = False
-            continue
-        for entry in children:
-            try:
-                if not entry.is_dir(follow_symlinks=False):
-                    continue
-            except OSError:
-                complete = False
-                break
-            child = Path(entry.path)
-            visited += 1
-            if visited > budget:
-                complete = False
-                break
-            if (child / ".git").exists():
-                found.append(child)
-                continue
-            if entry.name in SKIP_DIRS:
-                try:
-                    with os.scandir(child) as entries:
-                        vendored = list(entries)
-                except OSError:
-                    complete = False
-                    break
-                for vendored_entry in vendored:
-                    try:
-                        if not vendored_entry.is_dir(follow_symlinks=False):
-                            continue
-                    except OSError:
-                        complete = False
-                        break
-                    vendored_path = Path(vendored_entry.path)
+                for entry in entries:
+                    if not entry.is_dir(follow_symlinks=False) or (current == path and entry.name == ".git"):
+                        continue
                     visited += 1
                     if visited > budget:
-                        complete = False
-                        break
-                    if (vendored_path / ".git").exists():
-                        found.append(vendored_path)
-                continue
-            if depth + 1 < max_depth:
-                stack.append((child, depth + 1))
-        if not complete:
-            break
-    return found, complete
+                        return found, False
+                    child = Path(entry.path)
+                    try:
+                        os.lstat(child / ".git")
+                    except FileNotFoundError:
+                        try:
+                            for marker in ("HEAD", "objects", "refs"):
+                                os.lstat(child / marker)
+                        except FileNotFoundError:
+                            stack.append(child)
+                        else:
+                            found.append(child)
+                    else:
+                        found.append(child)
+        except OSError:
+            return found, False
+    return found, True
 
 
 def registered_children(path: Path, siblings: list[tuple[Path, str]]) -> list[str]:
@@ -250,7 +217,7 @@ process_cwd_cache: list[Path] = []
 def process_cwds(*, refresh: bool = False) -> list[Path]:
     if refresh or not process_cwd_cache:
         result = run(["lsof", "-d", "cwd", "-Fn"])
-        if not result.stdout:
+        if result.returncode != 0 or not result.stdout:
             raise SafetyError("process_cwd_unavailable")
         process_cwd_cache[:] = [Path(line[1:]) for line in result.stdout.splitlines() if line.startswith("n/")]
     return process_cwd_cache
@@ -731,6 +698,12 @@ def scan(code_root: Path, hub_root: Path, state_root: Path, apply: bool, report:
                     append_removal(state_root, candidate, "removal_blocked")
                     candidate["eligible"] = False
                     candidate["reasons"] = ["process_cwd_inside"]
+                    continue
+                nested, complete = nested_checkout_scan(Path(candidate["path"]))
+                if nested or not complete:
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["contains_nested_worktree" if nested else "nested_scan_incomplete"]
+                    append_removal(state_root, candidate, "removal_blocked")
                     continue
                 try:
                     result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
