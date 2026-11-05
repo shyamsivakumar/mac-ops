@@ -27,6 +27,8 @@ const REASONS = {
   worktree_status_unknown: "Could not read its Git status",
   worktree_root_mismatch: "Folder does not match its Git root",
   worktree_missing_or_prunable: "The folder is gone",
+    contains_nested_worktree: "Another checkout sits inside it",
+    nested_scan_incomplete: "Could not read every folder inside it",
 };
 
 const GROUPS = [

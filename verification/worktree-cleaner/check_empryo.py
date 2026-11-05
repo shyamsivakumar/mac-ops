@@ -232,6 +232,23 @@ print(json.dumps(page))
         git(repo, "branch", "nested", shas["nested"])
         git(repo, "push", "origin", "main")
         git(repo, "worktree", "add", str(nested), "nested")
+        hub_parent = hub / "hub-parent"
+        shas["hub-parent"] = commit(repo, "hub-parent.txt", "hub-parent\n")
+        git(repo, "branch", "hub-parent", shas["hub-parent"])
+        git(repo, "push", "origin", "main")
+        git(repo, "worktree", "add", str(hub_parent), "hub-parent")
+        hub_child = hub_parent / ".empryo" / "tmp" / "tabs" / "tab-1" / "hub-child"
+        shas["hub-child"] = commit(repo, "hub-child.txt", "hub-child\n")
+        git(repo, "branch", "hub-child", shas["hub-child"])
+        git(repo, "push", "origin", "main")
+        git(repo, "worktree", "add", str(hub_child), "hub-child")
+        hub_unsafe = hub / "hub-unsafe"
+        shas["hub-unsafe"] = commit(repo, "hub-unsafe.txt", "hub-unsafe\n")
+        git(repo, "branch", "hub-unsafe", shas["hub-unsafe"])
+        git(repo, "push", "origin", "main")
+        git(repo, "worktree", "add", str(hub_unsafe), "hub-unsafe")
+        unsafe_clone = hub_unsafe / ".empryo" / "tmp" / "tabs" / "tab-1" / "vendored-clone"
+        command(["git", "init", "-q", str(unsafe_clone)])
         stray = code / "stray" / "stray-tree"
         git(repo, "worktree", "add", "--detach", str(stray), base_sha)
         review_aged = hub / "review-24h"
@@ -240,6 +257,7 @@ print(json.dumps(page))
         age_reflog(review_aged)
         git(repo, "worktree", "add", "--detach", str(review_fresh), base_sha)
         refs_phase2 = git(remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads")
+        (repo / ".git" / "info" / "exclude").write_text(".empryo/\n", encoding="utf-8")
         payload = {
             "threads": threads + [
                 thread("hub-held-active", hub_trees["hub-held"]),
@@ -257,11 +275,12 @@ print(json.dumps(page))
         counter.write_text("0")
         applied_gh_fail = json.loads(command(args + ["--apply"], env=dict(env, MO125_GH="1")))
         assert applied_gh_fail["removed"] == 0, applied_gh_fail
-        assert all(path.is_dir() for path in (*hub_trees.values(), nested, stray, review_aged, review_fresh))
+        assert all(path.is_dir() for path in (*hub_trees.values(), nested, stray, review_aged, review_fresh, hub_parent, hub_child, hub_unsafe, unsafe_clone))
         counter.write_text("0")
         dry3 = json.loads(command(args + ["--dry-run"], env=env))
-        assert dry3["eligible"] == 3 and dry3["held_reasons"]["empryo_thread_unfinished"] == 8, dry3["held_reasons"]
+        assert dry3["eligible"] == 4 and dry3["held_reasons"]["empryo_thread_unfinished"] == 8, dry3["held_reasons"]
         assert dry3["held_reasons"]["detached_not_proven_24h_old"] == 1
+        assert dry3["held_reasons"]["contains_nested_worktree"] == 2
 
         def phase2_row(path):
             return next(row for row in dry3["rows"] if Path(row["path"]).resolve() == path.resolve())
@@ -269,10 +288,21 @@ print(json.dumps(page))
         assert phase2_row(stray)["reasons"] == ["worktree_outside_scope"]
         assert phase2_row(review_fresh)["reasons"] == ["detached_not_proven_24h_old"]
         assert "empryo_thread_unfinished" in phase2_row(hub_trees["hub-held"])["reasons"]
+        parent_row = phase2_row(hub_parent)
+        assert parent_row["reasons"] == ["contains_nested_worktree"], parent_row["reasons"]
+        assert [Path(item).resolve() for item in parent_row["nested_worktrees"]] == [hub_child.resolve()], parent_row["nested_worktrees"]
+        assert parent_row["dirty"] is False, "the parent must be clean, so only the nested-worktree hold keeps it"
+        assert "contains_nested_worktree" not in phase2_row(hub_child)["reasons"]
+        unsafe_row = phase2_row(hub_unsafe)
+        assert unsafe_row["reasons"] == ["contains_nested_worktree"], unsafe_row["reasons"]
+        assert unsafe_row["dirty"] is False, "a gitignored clone must not make the parent dirty"
+        assert [Path(item).resolve() for item in unsafe_row["nested_worktrees"]] == [unsafe_clone.resolve()], unsafe_row["nested_worktrees"]
         counter.write_text("0")
         applied2 = json.loads(command(args + ["--apply"], env=env))
-        assert applied2["removed"] == 3 and not hub_trees["hub-merged"].exists() and not nested.exists() and not review_aged.exists(), applied2
+        assert applied2["removed"] == 4 and not hub_trees["hub-merged"].exists() and not nested.exists() and not review_aged.exists(), applied2
         assert hub_trees["hub-held"].is_dir() and review_fresh.is_dir() and stray.is_dir()
+        assert hub_parent.is_dir() and not hub_child.exists(), "a parent worktree is held while a nested worktree lives inside it"
+        assert hub_unsafe.is_dir() and unsafe_clone.is_dir(), "a parent with a vendored clone inside is held and the clone survives"
         assert git(remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads") == refs_phase2
         assert git(repo, "show-ref", "--verify", "refs/heads/hub-merged") and git(repo, "show-ref", "--verify", "refs/heads/nested")
         print(json.dumps({"ok": True, "empryo_held": 6, "pages_per_pass": 2, "passes": 2, "fixture_removed": applied["removed"], "failure_modes_blocked": 14, "remote_refs_preserved": True, "hub_scope_removed": applied2["removed"], "github_failure_holds": True}))

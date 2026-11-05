@@ -10,6 +10,8 @@ The cleaner queries `emp call emp_thread_list` across all projects, following ev
 
 The cleaner never deletes remote branches and never uses `git worktree remove --force`. The former SRW and slash-eureka `dbt`/`omni` exclusions were removed in MO-129 with explicit promotion confirmation; every repository now follows the same checks, and a completed review thread's detached worktree is removable only through the same 24-hour detached-idle rule.
 
+A worktree that contains another checkout inside it is held as `contains_nested_worktree`. `git worktree remove` deletes a worktree's whole folder, so removing a parent would destroy a nested child — or a vendored clone that Git ignores, which Git would otherwise delete without asking — and the nested checkout's own clean, unpushed, pull-request, thread, and process checks would never have run. Children are therefore removed first; a parent becomes eligible only once nothing is left inside it. The check covers registered worktrees of any repository plus any folder inside the candidate that carries its own `.git`, including inside an ignored path; dependency folders (`node_modules`, `vendor`, `Pods`, …) are probed one level deep. If a folder cannot be read, the candidate is held as `nested_scan_incomplete` rather than guessed at.
+
 ## Run a scan
 
 The command defaults to dry-run and prints JSON counts per repository and for scanned worktrees, eligible items, holds, and hold reasons. It writes the current day's dirty or unverified list to `~/Code/coordinator/evidence/worktrees-kept-<date>.md`.
@@ -22,9 +24,9 @@ The daily report is replaced by each scan with the newest snapshot. The append-o
 
 ## LaunchAgent
 
-The checked-in plist runs `scripts/worktree-cleaner/daily.sh` every 900 seconds from the main `~/Code/mac-ops` checkout. The daily script passes `--apply`; manual invocations remain dry-run unless `--apply` is supplied.
+The checked-in plist runs `scripts/worktree-cleaner/daily.sh` every 900 seconds from the main `~/Code/mac-ops` checkout. The daily script passes `--apply`; manual invocations remain dry-run unless `--apply` is supplied. The plist is not managed by `install.py`, so `install.sh` never installs or starts this job: it is installed by hand after review.
 
-After reviewing a dry-run and obtaining explicit authorization to install and enable this production job, a future install can use:
+After reviewing a dry-run and obtaining explicit authorization to install and enable this production job, the install is:
 
 ```sh
 mkdir -p ~/.local/state/mac-ops/worktree-cleaner/logs ~/Library/LaunchAgents
@@ -32,11 +34,15 @@ chmod 700 ~/.local/state/mac-ops/worktree-cleaner
 cp scripts/worktree-cleaner/com.shyam.worktree-cleaner.plist ~/Library/LaunchAgents/
 DOMAIN=gui/$(id -u)
 LABEL=com.shyam.worktree-cleaner
-launchctl bootstrap "$DOMAIN" ~/Library/LaunchAgents/$LABEL.plist
 launchctl enable "$DOMAIN/$LABEL"
+launchctl bootstrap "$DOMAIN" ~/Library/LaunchAgents/$LABEL.plist
 ```
 
-This task added the plist but did not install or run it. Run the complete Empryo regression fixture with `python3 verification/worktree-cleaner/check.py`. It creates temporary repositories, a local bare remote, and stub GitHub/Empryo CLIs. It covers cross-project pagination, worktreePath and cwd-only holds, unfinished statuses, incomplete/unavailable listings, late-arriving threads, dirty and unpublished trees, dry-run/apply behavior, hub-root and nested `.empryo/tmp` scope, a completed review thread's detached worktree under the 24-hour rule, out-of-scope paths, and a total GitHub CLI failure holding every candidate. `check.py` delegates to the Empryo proof in `check_empryo.py`; there is no retired T3 fixture or database dependency.
+Two things to know before running it. The job executes the copy of `cleaner.py` in the main `~/Code/mac-ops` checkout, so this change must be merged to `main` first; installing from a task worktree still runs the main checkout's copy. The panel's Clean button runs that same main-checkout copy (`empryo/mods/worktrees/scan.sh` calls `$HOME/Code/mac-ops/scripts/worktree-cleaner/cleaner.py`), so the panel is on the old code until the merge lands too. And the job needs `gh` (already on the plist's PATH via `/opt/homebrew/bin`) and `emp` (found through `~/.local/bin`, which `daily.sh` puts on PATH) to be authenticated for the user account that launchd runs as; without them the scan fails closed and removes nothing.
+
+MO-129 changed the cleaner and its proof but deliberately did not install the LaunchAgent and never ran `--apply`; installation waits for Shyam's gate.
+
+Run the complete Empryo regression fixture with `python3 verification/worktree-cleaner/check.py`. It creates temporary repositories, a local bare remote, and stub GitHub/Empryo CLIs. It covers cross-project pagination, worktreePath and cwd-only holds, unfinished statuses, incomplete/unavailable listings, late-arriving threads, dirty and unpublished trees, dry-run/apply behavior, hub-root and nested `.empryo/tmp` scope, a completed review thread's detached worktree under the 24-hour rule, out-of-scope paths, a parent worktree held while a nested worktree lives inside it, and a total GitHub CLI failure holding every candidate. `check.py` delegates to the Empryo proof in `check_empryo.py`; there is no retired T3 fixture or database dependency.
 
 ## Limits
 
