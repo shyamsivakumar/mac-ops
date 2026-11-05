@@ -27,6 +27,9 @@ SCHEDULER_TICK_SECONDS = 20
 REAPER_TICK_SECONDS = 60
 RPC_TIMEOUT = 90
 CANCEL_GRACE_SECONDS = 20
+SWEEP_TICK_SECONDS = 900
+REVIEW_DETACHED_MIN_IDLE_SECONDS = 24 * 3600
+EVIDENCE_DIR = f"{HUB_DIR}/evidence"
 LIVE = ("running", "waiting", "queued")
 
 DRAINING = {"requested": False, "epoch": 0, "exiting": False}
@@ -528,10 +531,36 @@ def open_new_tab(proc, thread, cwd, model, reason):
         THREADS.save()
 
 
+def recreate_removed_worktree(thread):
+    path = thread["worktreePath"]
+    removed = thread.get("worktreeRemoved") or {}
+    root, base = removed.get("repoRoot"), removed.get("base")
+    if not path or not root or not base or not os.path.isdir(root):
+        where = "the hub removed it after cleanup" if removed else "it was removed outside the hub"
+        raise HubError(f"the working directory {path} no longer exists ({where}) and the hub cannot recreate it (repository root {root!r}); launch a new thread or run: git -C <repo> worktree add {path}")
+    code, out, err = sh(["git", "-C", root, "fetch", "--quiet", "origin", base], timeout=120)
+    if code != 0:
+        raise HubError(f"cannot recreate the removed worktree {path}: git fetch origin {base} in {root} failed: {err}")
+    branch = f"empryo/resume-{thread['threadId'].split(':')[-1][:6]}"
+    if subprocess.run(["git", "-C", root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"], capture_output=True).returncode == 0:
+        code, out, err = sh(["git", "-C", root, "worktree", "add", path, branch])
+    else:
+        code, out, err = sh(["git", "-C", root, "worktree", "add", "-b", branch, path, f"origin/{base}"])
+    if code != 0:
+        raise HubError(f"cannot recreate the removed worktree {path} from origin/{base}: {err or out}")
+    with LOCK:
+        thread.pop("worktreeRemoved", None)
+        thread["branch"] = branch
+        THREADS.save()
+    log(f"recreated worktree {path} on {branch} from origin/{base} for {thread['threadId']}")
+    return path
+
+
 def ensure_session(thread, model=None):
     cwd = thread_cwd(thread)
     if not os.path.isdir(cwd):
-        raise HubError(f"the working directory {cwd} no longer exists (worktree cleaned up?)")
+        recreate_removed_worktree(thread)
+        cwd = thread_cwd(thread)
     proc = engine_for(thread)
     try:
         if thread["sessionId"] is None:
@@ -995,7 +1024,7 @@ def thread_summary(thread):
     rt = RUNTIME.get(thread["threadId"])
     keys = ("threadId", "projectId", "title", "createdBy", "creationSource", "status", "latestRunId", "activeRunId", "providerInstanceId", "model",
             "runtimeMode", "interactionMode", "linkedPullRequest", "pullRequests", "titleRegeneration", "branch", "worktreePath", "parentThreadId",
-            "relationshipToParent", "taskType", "mode", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError", "portBase")
+            "relationshipToParent", "taskType", "mode", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError", "worktreeRemoved", "portBase")
     summary = {k: thread.get(k) for k in keys}
     summary["link"] = link_of(thread)
     summary["activeRunStartedAt"] = thread["runs"][-1]["startedAt"] if thread["activeRunId"] else None
@@ -1623,9 +1652,11 @@ def cleanup_verdict(thread):
             return "keep", f"an Empryo {lock['host']} (pid {lock['pid']}) holds a session in this worktree", {}
     if not all(engine_free(user) for user in users):
         return "keep", "an engine is still using this worktree", {}
-    code, status, err = sh(["git", "-C", worktree, "status", "--porcelain"])
-    if code != 0 or status:
-        return "keep", "the worktree has uncommitted or untracked files" if code == 0 else f"git status failed: {err}", {}
+    dirty, held_ignored = worktree_unsaved(worktree)
+    if dirty:
+        return "keep", f"the worktree has uncommitted or untracked files ({', '.join(dirty[:3])})", {}
+    if held_ignored:
+        return "keep", f"the worktree has ignored files that are not known-rebuildable ({', '.join(held_ignored[:3])})", {}
     branch = sh(["git", "-C", worktree, "branch", "--show-current"])[1]
     if not branch:
         return "keep", "the worktree has a detached HEAD", {}
@@ -1633,7 +1664,7 @@ def cleanup_verdict(thread):
     base = default_branch(root)
     code, out, err = sh(["git", "-C", root, "fetch", "--quiet", "origin", base], timeout=120)
     if code != 0:
-        return "keep", f"git fetch origin {base} failed: {err}", {}
+        raise HubError(f"git fetch origin {base} failed: {err}")
     repo, prs = pull_requests_of(thread)
     evidence = {"branch": branch, "head": head, "base": base, "pullRequests": [{"number": p["number"], "state": p["state"], "headRefOid": p["headRefOid"]} for p in prs]}
     if any(p["state"] == "OPEN" for p in prs):
@@ -1641,29 +1672,185 @@ def cleanup_verdict(thread):
     ahead = int(sh(["git", "-C", root, "rev-list", "--count", f"origin/{base}..{head}"])[1])
     evidence["commitsNotOnBase"] = ahead
     finished = [p for p in prs if p["state"] in ("MERGED", "CLOSED") and p["headRefOid"] == head]
+    evidence["finishedPullRequests"] = [{"number": p["number"], "state": p["state"]} for p in finished]
     if not finished and ahead:
         return "keep", f"{ahead} commit(s) are not on origin/{base} and no merged or closed pull request has this exact head", evidence
     evidence["root"] = root
     return "remove", None, evidence
 
 
+def rebuildable_ignored(path):
+    """node_modules at any depth and .empryo/jobs logs are rebuildable; any other ignored path is not."""
+    segments = path.strip("/").split("/")
+    return "node_modules" in segments or segments[:2] == [".empryo", "jobs"]
+
+
+def worktree_unsaved(worktree):
+    """One pass over `git status --porcelain --ignored=matching -uall`.
+
+    Returns (dirty, held_ignored): dirty is uncommitted/untracked work;
+    held_ignored lists ignored paths that are not known-rebuildable. git
+    collapses wholly-ignored directories to one entry, so a collapsed
+    directory that is not itself rebuildable is walked (never following
+    symlinks, pruning rebuildable subtrees) to check every file it holds.
+    Raises HubError when git itself cannot answer, so callers treat that
+    as uncertainty, not safety."""
+    code, out, err = sh(["git", "-C", worktree, "status", "--porcelain", "--ignored=matching", "-uall"])
+    if code != 0:
+        raise HubError(f"git status --ignored failed: {err}")
+    dirty, held_ignored = [], []
+    for line in out.splitlines():
+        flag, path = line[:2].strip(), line[3:]
+        path = path.strip('"').rstrip("/")
+        if not path:
+            continue
+        if flag != "!!":
+            dirty.append(path.split(" -> ")[-1])
+        elif rebuildable_ignored(path):
+            continue
+        elif os.path.isdir(os.path.join(worktree, path)) and not os.path.islink(os.path.join(worktree, path)):
+            for current, directories, files in os.walk(os.path.join(worktree, path)):
+                relative = os.path.relpath(current, worktree)
+                directories[:] = [d for d in directories if not rebuildable_ignored(f"{relative}/{d}")]
+                held_ignored += [f"{relative}/{name}" for name in files if not rebuildable_ignored(f"{relative}/{name}")]
+        else:
+            held_ignored.append(path)
+    return dirty, held_ignored
+
+
+def copy_jobs_evidence(thread, worktree, evidence):
+    """Copy .empryo/jobs logs and the removal record under ~/.empryo-hub/evidence."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    target = f"{EVIDENCE_DIR}/{thread['threadId'].split(':')[-1][:8]}-{stamp}"
+    os.makedirs(target, exist_ok=True)
+    jobs = f"{worktree}/.empryo/jobs"
+    if os.path.isdir(jobs):
+        shutil.copytree(jobs, f"{target}/jobs", dirs_exist_ok=True)
+    with open(f"{target}/removal.json", "w") as f:
+        json.dump({"threadId": thread["threadId"], "title": thread.get("title"), "worktreePath": worktree, "removedAt": now_iso(), "evidence": evidence}, f, indent=1)
+    return target
+
+
+def remove_worktree_safely(thread, evidence, actor):
+    """Remove a worktree while holding the same lock that starts turns.
+
+    The expensive checks (fetch, pull request state) already ran outside the
+    lock; under it, every cheap safety is re-checked, .empryo/jobs logs are
+    copied to evidence, and only then is the worktree removed. Threads using
+    the worktree are marked worktreeRemoved so a later resume recreates it."""
+    worktree = thread["worktreePath"]
+    root = evidence["root"]
+    kept = lambda reason: {"action": "kept", "reason": reason, "branchRemoved": False, "branchNote": None, "evidenceDir": None}
+    if not worktree or not os.path.isdir(worktree):
+        return kept("the worktree is already gone")
+    with LOCK:
+        users = [t for t in THREADS.data.values() if t["worktreePath"] == worktree]
+        for user in users:
+            rt = RUNTIME.get(user["threadId"])
+            if user["status"] in LIVE or user.get("pendingTurn") or (rt and rt.get("starting")):
+                return kept(f"{user['threadId']} started using this worktree again")
+        if not all(engine_free(user) for user in users):
+            return kept("an engine is still using this worktree")
+        for user in users:
+            if session_holder(user):
+                return kept(f"an Empryo session holder appeared in {worktree}")
+        try:
+            dirty, held_ignored = worktree_unsaved(worktree)
+        except HubError as e:
+            return kept(f"the final safety re-check failed: {e}")
+        if dirty or held_ignored:
+            return kept(f"the worktree changed before removal: {', '.join((dirty + held_ignored)[:3])}")
+        evidence_dir = copy_jobs_evidence(thread, worktree, evidence)
+        code, out, err = sh(["git", "-C", root, "worktree", "remove", "--force", worktree])
+        if code != 0:
+            return kept(f"git worktree remove refused: {err}")
+        branch_removed, branch_note = False, None
+        if evidence.get("branch"):
+            code, out, err = sh(["git", "-C", root, "branch", "-d", evidence["branch"]])
+            if code != 0 and any(p["state"] == "MERGED" and p["headRefOid"] == evidence.get("head") for p in evidence.get("pullRequests", [])):
+                code, out, err = sh(["git", "-C", root, "branch", "-D", evidence["branch"]])
+            branch_removed, branch_note = code == 0, None if code == 0 else err
+        stamp = now_iso()
+        for user in users:
+            user["worktreeRemoved"] = {"removedAt": stamp, "by": actor, "repoRoot": root, "base": evidence.get("base"), "branch": user.get("branch"), "evidenceDir": evidence_dir}
+        THREADS.save()
+    log(f"{actor} removed {worktree} ({evidence.get('branch') or 'detached'}) for {thread['threadId']}; branch delete: {branch_note or 'ok' if evidence.get('branch') else 'n/a'}; evidence: {evidence_dir}")
+    return {"action": "removed", "branchRemoved": branch_removed, "branchNote": branch_note, "evidenceDir": evidence_dir}
+
+
 def tool_thread_cleanup(a):
     thread = thread_of(a["threadId"])
-    verdict, reason, evidence = cleanup_verdict(thread)
+    try:
+        verdict, reason, evidence = cleanup_verdict(thread)
+    except HubError as e:
+        return {"threadId": thread["threadId"], "worktreePath": thread["worktreePath"], "branch": thread["branch"], "evidence": {}, "action": "kept", "reason": f"cleanup held: {e}"}
     result = {"threadId": thread["threadId"], "worktreePath": thread["worktreePath"], "branch": thread["branch"], "evidence": evidence}
     if verdict == "keep":
         return {**result, "action": "kept", "reason": reason}
     if a.get("dryRun"):
         return {**result, "action": "would_remove"}
-    root = evidence["root"]
-    code, out, err = sh(["git", "-C", root, "worktree", "remove", thread["worktreePath"]])
-    if code != 0:
-        return {**result, "action": "kept", "reason": f"git worktree remove refused: {err}"}
-    code, out, err = sh(["git", "-C", root, "branch", "-d", evidence["branch"]])
-    if code != 0 and any(p["state"] == "MERGED" and p["headRefOid"] == evidence["head"] for p in evidence["pullRequests"]):
-        code, out, err = sh(["git", "-C", root, "branch", "-D", evidence["branch"]])
-    log(f"cleanup removed {thread['worktreePath']} ({evidence['branch']}); branch delete: {err or out}")
-    return {**result, "action": "removed", "branchRemoved": code == 0, "branchNote": None if code == 0 else err}
+    return {**result, **remove_worktree_safely(thread, evidence, "cleanup")}
+
+
+def task_sweep_verdict(thread):
+    verdict, reason, evidence = cleanup_verdict(thread)
+    if verdict != "remove":
+        return verdict, reason, evidence
+    if not evidence.get("finishedPullRequests"):
+        return "keep", "no merged or closed pull request has this exact head; the sweeper only removes finished pull requests", evidence
+    return "remove", None, evidence
+
+
+def review_sweep_verdict(thread):
+    worktree = thread["worktreePath"]
+    root, linked = repo_root_of(worktree)
+    if not linked or os.path.realpath(root) == os.path.realpath(worktree):
+        return "keep", "the path is the repository's main checkout, not a linked worktree", {}
+    users = [t for t in THREADS.data.values() if t["worktreePath"] == worktree and not t.get("worktreeRemoved")]
+    for user in users:
+        if not is_review_thread(user):
+            return "keep", f"non-review thread {user['threadId']} ({user['title']!r}) still uses this worktree", {}
+    freshest = max((parse_time(t["updatedAt"]) for t in users), default=None)
+    if freshest and (datetime.now(timezone.utc) - freshest).total_seconds() < REVIEW_DETACHED_MIN_IDLE_SECONDS:
+        return "keep", f"the worktree was last used within 24 h ({iso(freshest)})", {}
+    if sh(["git", "-C", worktree, "branch", "--show-current"])[1]:
+        return "keep", "the review worktree is on a branch, not detached", {}
+    head = sh(["git", "-C", worktree, "rev-parse", "HEAD"])[1]
+    code, out, err = sh(["git", "-C", worktree, "branch", "--remotes", "--contains", head])
+    if code != 0 or not out:
+        return "keep", "the detached HEAD is not contained by any remote branch", {}
+    dirty, held_ignored = worktree_unsaved(worktree)
+    if dirty or held_ignored:
+        return "keep", f"the worktree has uncommitted, untracked or non-rebuildable ignored files ({', '.join((dirty + held_ignored)[:3])})", {}
+    base = default_branch(root)
+    evidence = {"root": root, "branch": None, "head": head, "base": base, "pullRequests": [], "finishedPullRequests": [], "reviewWorktree": True, "users": [t["threadId"] for t in users]}
+    return "remove", None, evidence
+
+
+def sweep_tick():
+    with LOCK:
+        candidates = [t for t in THREADS.data.values()
+                      if t["worktreePath"] and os.path.isdir(t["worktreePath"]) and not t.get("worktreeRemoved")
+                      and t["status"] not in LIVE and not t.get("pendingTurn")
+                      and not (RUNTIME.get(t["threadId"]) or {}).get("starting")]
+    verdicts, failures = [], []
+    for thread in candidates:
+        try:
+            verdict, reason, evidence = review_sweep_verdict(thread) if is_review_thread(thread) else task_sweep_verdict(thread)
+            verdicts.append((thread, verdict, reason, evidence))
+        except (HubError, OSError, subprocess.SubprocessError) as e:
+            failures.append((thread["threadId"], f"{type(e).__name__}: {e}"))
+    if failures:
+        log(f"worktree sweep held all {len(verdicts)} removal(s); check failed for {failures[0][0]}: {failures[0][1]}")
+        return
+    removed = 0
+    for thread, verdict, reason, evidence in verdicts:
+        if verdict != "remove":
+            continue
+        if remove_worktree_safely(thread, evidence, "worktree sweep")["action"] == "removed":
+            removed += 1
+    if removed:
+        log(f"worktree sweep: removed {removed}, kept {len(candidates) - removed} of {len(candidates)} candidate(s)")
 
 
 PERSONAL_OWNER = "shyamsivakumar"
@@ -2101,7 +2288,7 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 
 
 def main():
-    for directory in (HUB_DIR, WORKTREES, TRANSCRIPTS):
+    for directory in (HUB_DIR, WORKTREES, TRANSCRIPTS, EVIDENCE_DIR):
         os.makedirs(directory, exist_ok=True)
     detach_shared_tabs()
     for thread in THREADS.data.values():
@@ -2120,9 +2307,11 @@ def main():
         os.unlink(SOCKET)
     threading.Thread(target=forever, args=("scheduler", SCHEDULER_TICK_SECONDS, scheduler_tick), daemon=True).start()
     threading.Thread(target=forever, args=("reaper", REAPER_TICK_SECONDS, reaper_tick), daemon=True).start()
+    threading.Thread(target=forever, args=("worktree-sweeper", SWEEP_TICK_SECONDS, sweep_tick), daemon=True).start()
     resume_pending_turns()
     log(f"hub listening on {SOCKET} with {len(PROJECTS.data)} projects and {len(THREADS.data)} threads")
     Server(SOCKET, Handler).serve_forever()
 
 
-main()
+if __name__ == "__main__":
+    main()

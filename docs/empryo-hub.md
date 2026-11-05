@@ -101,9 +101,32 @@ Only after an approved live rollback, run `emp drain --restart` if needed.
 To install an earlier source version, check out that commit and run
 `./install.sh empryo` again.
 
+## Hub-owned worktree sweeping (2026-11-04)
+
+The hub owns worktree cleanup; the outside scanner in draft #56 cannot lock
+against thread starts and stays unmerged. Every 15 minutes a sweeper thread
+inside the hub removes a linked worktree when:
+
+- its task thread is finished and a pull request with the worktree's exact
+  head is merged or closed (`emp_thread_cleanup` rules), or
+- only review threads use it, it is detached, its HEAD is contained by a
+  remote branch, and no thread touched it in the last 24 hours.
+
+The verdict (git fetch, `gh` lookups) runs without the lock; the removal runs
+under the same `LOCK` that `start_turn` takes, after re-checking that no
+thread is live, queued, pending or starting, no engine or session holder uses
+the worktree, and git status is clean including ignored files. Only
+`node_modules` (any depth) and `.empryo/jobs` are rebuildable; the jobs logs
+are copied to `~/.empryo-hub/evidence/<thread>/<timestamp>/` before removal
+and any other ignored or untracked file holds the worktree. If any
+candidate's git or GitHub check fails, the whole pass removes nothing. Each
+removal is one line in `hub.log`. A resumed thread whose worktree the hub
+removed gets it recreated at `origin/<base>` on `empryo/resume-<id>`, or a
+clear error naming the missing repository root.
+
 ## Model order and merge rules (2026-11-04)
 
-- Model order: MiniMax and GLM 5.3 first, then GPT 6.1 and Cursor, and Claude last. Risky, design, large and review tasks stay on GPT 6.1 Sol.
+- Model order: MiniMax and GLM 5.3 first, then GPT 6.1 and Cursor, and Claude last. Risky, design, large and review tasks also run GLM 5.3, judged by Sol (Shyam, 2026-11-04).
 - `emp_thread_merge` refuses review threads and any PR whose head branch is not the task's own branch.
 - A PR with no checks can merge only in a `shyamsivakumar` repo. It needs a coordinator-launched review ending in `CHECK: PASS <head sha>` and `VERDICT: PASS`, and a head commit at least five minutes old. A failing check is never overridden.
 - A thread reopens only its own conversation tab. If that tab cannot open, it gets a new tab, and the send result carries `contextLost`.

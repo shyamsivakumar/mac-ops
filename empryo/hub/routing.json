@@ -10,27 +10,27 @@
     },
     "risky": {
       "modelSelection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-sol"
+        "instanceId": "empryo",
+        "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "auto",
       "notes": "money or trade execution, state machines, concurrency, auth, secrets, migrations, deploy or CI pipelines, data deletion"
     },
     "design": {
       "modelSelection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-sol"
+        "instanceId": "empryo",
+        "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "auto",
       "notes": "multi-file design, new module, cross-repo plan; the brief makes it plan first and get the plan reviewed before code"
     },
     "large": {
       "modelSelection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-sol"
+        "instanceId": "empryo",
+        "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "orchestrate",
-      "notes": "features touching many files or parts; Sol orchestrates, steps run on GLM 5.3 (taskRouter), judged by Sol"
+      "notes": "features touching many files or parts; GLM 5.3 first (Shyam, 2026-11-04), judged by Sol"
     },
     "ui": {
       "modelSelection": {
@@ -66,11 +66,11 @@
     },
     "review": {
       "modelSelection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-sol"
+        "instanceId": "empryo",
+        "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "auto",
-      "notes": "the separate review thread on Sol, a different vendor from the GLM and MiniMax writers; never Cursor"
+      "notes": "the separate review thread; GLM 5.3 or MiniMax first, then GPT 6.1 (Shyam, 2026-11-04); the coordinator picks a vendor different from the author; never Cursor"
     },
     "panel": {
       "modelSelection": null,
