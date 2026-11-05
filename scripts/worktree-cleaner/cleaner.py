@@ -147,6 +147,24 @@ def discover_repositories(code_root: Path) -> list[Path]:
     return [Path(item) for item in sorted(found)]
 
 
+def discover_hub_repositories(hub_root: Path) -> list[Path]:
+    """Find owners of hub worktrees, including owners outside the code root."""
+    if not hub_root.exists():
+        return []
+    if hub_root.is_symlink() or not hub_root.is_dir():
+        raise SafetyError("hub_root_unavailable")
+    found: set[str] = set()
+    errors: list[OSError] = []
+    for current, dirs, files in os.walk(hub_root, topdown=True, followlinks=False, onerror=errors.append):
+        dirs[:] = [name for name in dirs if name not in SKIP_DIRS and not (Path(current) / name).is_symlink()]
+        if ".git" in files:
+            records = worktrees(Path(current))
+            found.add(canonical(records[0]["path"]))
+    if errors:
+        raise SafetyError("hub_repository_scan_incomplete")
+    return [Path(item) for item in sorted(found)]
+
+
 def worktrees(repo: Path) -> list[dict[str, Any]]:
     output = git(repo, "worktree", "list", "--porcelain", "-z")
     entries: list[dict[str, Any]] = []
@@ -210,7 +228,7 @@ def detached_idle_seconds(path: Path) -> int | None:
     return int(time.time()) - max(stamps) if stamps else None
 
 
-PROTECTED_REASONS = {"main_checkout", "worktree_outside_scope", "empryo_thread_unfinished", "process_cwd_inside", "worktree_locked", "contains_nested_worktree", "nested_scan_incomplete"}
+PROTECTED_REASONS = {"main_checkout", "worktree_outside_scope", "empryo_thread_unfinished", "process_cwd_inside", "worktree_locked", "contains_nested_worktree", "nested_scan_incomplete", "removal_disabled_no_hub_lease"}
 process_cwd_cache: list[Path] = []
 
 
@@ -635,115 +653,17 @@ def scan(code_root: Path, hub_root: Path, state_root: Path, apply: bool, report:
             raise SafetyError("cleaner_already_running") from exc
         initial_state = EmpryoState()
         github = GitHub()
-        repos = discover_repositories(code_root)
+        repos = sorted(set(discover_repositories(code_root) + discover_hub_repositories(hub_root)))
         rows = inventory(repos, code_root, hub_root, github, initial_state)
-        eligible = [row for row in rows if row["eligible"]]
-        removed = 0
-        if apply:
-            known = all_worktree_paths(repos)
-            for candidate in eligible:
-                repo_root = Path(candidate["repo"])
-                records = worktrees(repo_root)
-                current = next((r for r in records if canonical(r["path"]) == canonical(candidate["path"])), None)
-                if current is None:
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_registration_changed"]
-                    continue
-                try:
-                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), hub_root, known, refresh=True)
-                except SafetyError as exc:
-                    candidate["eligible"] = False
-                    candidate["reasons"] = [str(exc)]
-                    continue
-                if current.get("head") != candidate.get("head") or current.get("branch") != candidate.get("branch"):
-                    final["eligible"] = False
-                    final["reasons"] = sorted(set(final["reasons"] + ["worktree_changed_after_scan"]))
-                if not final["eligible"]:
-                    candidate.update(final)
-                    continue
-                try:
-                    latest_head = git(Path(candidate["path"]), "rev-parse", "HEAD").strip()
-                    latest_dirty, _ = status_for(Path(candidate["path"]))
-                except SafetyError:
-                    latest_head = ""
-                    latest_dirty = True
-                if latest_head.lower() != str(candidate["head"]).lower() or latest_dirty:
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_changed_before_remove"]
-                    continue
-                append_removal(state_root, candidate, "removal_attempted")
-                try:
-                    latest_state = EmpryoState()
-                    candidate["empryo_threads"] = latest_state.users(Path(candidate["path"]))
-                    blockers = latest_state.blockers(Path(candidate["path"]))
-                except SafetyError as exc:
-                    blockers = [str(exc)]
-                if blockers:
-                    candidate["eligible"] = False
-                    candidate["reasons"] = blockers
-                    append_removal(state_root, candidate, "removal_blocked")
-                    continue
-                try:
-                    latest_head = git(Path(candidate["path"]), "rev-parse", "HEAD").strip()
-                    latest_dirty, _ = status_for(Path(candidate["path"]))
-                except SafetyError:
-                    latest_head = ""
-                    latest_dirty = True
-                if latest_head.lower() != str(candidate["head"]).lower() or latest_dirty:
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_changed_before_remove"]
-                    append_removal(state_root, candidate, "removal_blocked")
-                    continue
-                if cwd_held(Path(candidate["path"])):
-                    append_removal(state_root, candidate, "removal_blocked")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["process_cwd_inside"]
-                    continue
-                nested, complete = nested_checkout_scan(Path(candidate["path"]))
-                if nested or not complete:
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["contains_nested_worktree" if nested else "nested_scan_incomplete"]
-                    append_removal(state_root, candidate, "removal_blocked")
-                    continue
-                try:
-                    result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
-                except SafetyError:
-                    append_removal(state_root, candidate, "removal_outcome_unknown")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_remove_outcome_unknown"]
-                    continue
-                if result.returncode != 0 or Path(candidate["path"]).exists():
-                    append_removal(state_root, candidate, "removal_failed")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_remove_failed"]
-                    continue
-                append_removal(state_root, candidate, "removed")
-                candidate["eligible"] = False
-                candidate["removed"] = True
-                removed += 1
+        # No hub-wide lease exists: archived threads and concurrent starts cannot be excluded.
+        # Never call git worktree remove, including the panel's prune path.
         for row in rows:
+            row["eligible"] = False
+            row["prunable"] = False
+            row["reasons"] = sorted(set(row["reasons"] + ["removal_disabled_no_hub_lease"]))
             row["category"] = categorize(row)
+        removed = 0
         pruned = 0
-        if apply and prune:
-            for row in [r for r in rows if r["category"] == "prune"]:
-                repo_root = Path(row["repo"])
-                records = worktrees(repo_root)
-                current = next((r for r in records if canonical(r["path"]) == canonical(row["path"])), None)
-                if current is None:
-                    continue
-                try:
-                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), hub_root, known, refresh=True)
-                except SafetyError:
-                    continue
-                if not final["prunable"] or current.get("head") != row.get("head"):
-                    continue
-                append_removal(state_root, row, "prune_attempted")
-                if run(["git", "-C", str(repo_root), "worktree", "remove", row["path"]]).returncode != 0:
-                    append_removal(state_root, row, "prune_failed")
-                    continue
-                append_removal(state_root, row, "pruned")
-                row["category"] = "removed"
-                pruned += 1
         summary = {
             "mode": "apply" if apply else "dry-run",
             "repositories_scanned": len({row["repo"] for row in rows}),
