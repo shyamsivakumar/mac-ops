@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 DEFAULT_CODE_ROOT = Path.home() / "Code"
+DEFAULT_HUB_ROOT = Path.home() / ".empryo-hub" / "worktrees"
 DEFAULT_STATE_ROOT = Path.home() / ".local/state/mac-ops/worktree-cleaner"
 
 SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycache__", "DerivedData"}
@@ -52,23 +53,16 @@ def inside(path: Path, root: Path) -> bool:
         return False
 
 
-def srw_repo(root: Path, repo_slug: str | None = None) -> bool:
-    identities = {part.casefold() for part in root.parts} | ({part.casefold() for part in repo_slug.split("/")} if repo_slug else set())
-    return "srw" in identities or any(part.startswith("srw-") for part in identities) or any("strategy-replay-workbench" in part for part in identities)
+def scope_roots(code_root: Path, hub_root: Path) -> tuple[Path, ...]:
+    return (code_root / ".worktrees", Path("/private/tmp"), Path("/tmp"), hub_root)
 
 
-def excluded_repo(root: Path, repo_slug: str | None = None) -> bool:
-    parts = {part.casefold() for part in root.parts}
-    remote_parts = {part.casefold() for part in repo_slug.split("/")} if repo_slug else set()
-    if srw_repo(root, repo_slug):
-        return True
-    if "slash-eureka" in parts and ("dbt" in parts or "omni" in parts or root.name.casefold() == "slash-eureka"):
-        return True
-    if "slash-eureka" in remote_parts and remote_parts.intersection({"dbt", "omni"}):
-        return True
-    if any("slash-eureka" in part and (part.endswith("-dbt") or part.endswith("-omni")) for part in remote_parts):
-        return True
-    return False
+def empryo_tmp_nested(path: Path) -> bool:
+    return any(parent.name == "tmp" and parent.parent.name == ".empryo" for parent in Path(canonical(path)).parents)
+
+
+def in_scope(path: Path, code_root: Path, hub_root: Path) -> bool:
+    return any(inside(path, root) for root in scope_roots(code_root, hub_root)) or empryo_tmp_nested(path)
 
 
 def discover_repositories(code_root: Path) -> list[Path]:
@@ -387,7 +381,7 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
-def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, emp_state: EmpryoState, *, refresh: bool = False) -> dict[str, Any]:
+def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, emp_state: EmpryoState, hub_root: Path, *, refresh: bool = False) -> dict[str, Any]:
     path = Path(record["path"])
     result: dict[str, Any] = {
         "repo": str(repo_root), "path": str(path), "branch": record.get("branch"),
@@ -403,7 +397,7 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         reasons.append("repository_outside_code_root")
     if result["main_checkout"] or record.get("bare"):
         reasons.append("main_checkout")
-    if not any(inside(path, root) for root in (code_root / ".worktrees", Path("/private/tmp"), Path("/tmp"))):
+    if not in_scope(path, code_root, hub_root):
         reasons.append("worktree_outside_scope")
     if any(reason != "empryo_thread_unfinished" for reason in reasons):
         result["reasons"] = reasons
@@ -456,38 +450,12 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
     return result
 
 
-def excluded_row(repo_root: Path, record: dict[str, Any], reason: str, emp_state: EmpryoState) -> dict[str, Any]:
-    path = Path(record["path"])
-    row: dict[str, Any] = {
-        "repo": str(repo_root), "path": str(path), "branch": record.get("branch"), "reason": reason,
-        "gone": not path.is_dir(), "age_seconds": created_seconds_ago(path), "dirty": None,
-        "uncommitted": None, "empryo_threads": emp_state.users(path),
-    }
-    if not row["gone"]:
-        try:
-            row["dirty"], status = status_for(path)
-            row["uncommitted"] = len(status.splitlines())
-        except SafetyError:
-            pass
-    return row
-
-
-def inventory(code_root: Path, github: GitHub, emp_state: EmpryoState) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+def inventory(code_root: Path, hub_root: Path, github: GitHub, emp_state: EmpryoState) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    excluded = 0
-    excluded_rows: list[dict[str, Any]] = []
     for repo_root in discover_repositories(code_root):
-        repo_slug = github.repo(repo_root)
-        if excluded_repo(repo_root, repo_slug):
-            excluded += 1
-            reason = "SRW repository" if srw_repo(repo_root, repo_slug) else "Slash dbt or omni repository"
-            excluded_rows.extend(excluded_row(repo_root, record, reason, emp_state) for record in worktrees(repo_root) if canonical(record["path"]) != canonical(repo_root))
-            continue
-        records = worktrees(repo_root)
-        for record in records:
-            row = evaluate(repo_root, record, code_root, github, emp_state)
-            rows.append(row)
-    return rows, excluded, excluded_rows
+        for record in worktrees(repo_root):
+            rows.append(evaluate(repo_root, record, code_root, github, emp_state, hub_root))
+    return rows
 
 
 def report_day() -> str:
@@ -531,7 +499,6 @@ def write_daily_report(code_root: Path, rows: list[dict[str, Any]], summary: dic
         f"- Worktrees scanned: {summary['worktrees_scanned']}",
         f"- Eligible: {summary['eligible']}",
         f"- Removed: {summary['removed']}",
-        f"- Excluded repositories: {summary['excluded_repositories']}",
         "",
         "## Dirty or unverified worktrees",
         "",
@@ -576,7 +543,7 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str) -> None:
         os.fsync(output.fileno())
 
 
-def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, prune: bool = False) -> dict[str, Any]:
+def scan(code_root: Path, hub_root: Path, state_root: Path, apply: bool, report: bool = True, prune: bool = False) -> dict[str, Any]:
     state_root = secure_state_dir(state_root)
     lock_path = state_root / "cleaner.lock"
     if lock_path.is_symlink():
@@ -589,7 +556,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
             raise SafetyError("cleaner_already_running") from exc
         initial_state = EmpryoState()
         github = GitHub()
-        rows, excluded, excluded_rows = inventory(code_root, github, initial_state)
+        rows = inventory(code_root, hub_root, github, initial_state)
         eligible = [row for row in rows if row["eligible"]]
         removed = 0
         if apply:
@@ -601,7 +568,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_registration_changed"]
                     continue
                 try:
-                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), refresh=True)
+                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), hub_root, refresh=True)
                 except SafetyError as exc:
                     candidate["eligible"] = False
                     candidate["reasons"] = [str(exc)]
@@ -676,7 +643,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 if current is None:
                     continue
                 try:
-                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), refresh=True)
+                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), hub_root, refresh=True)
                 except SafetyError:
                     continue
                 if not final["prunable"] or current.get("head") != row.get("head"):
@@ -696,10 +663,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
             "removed": removed,
             "pruned": pruned,
             "categories": {name: sum(1 for row in rows if row["category"] == name and not row["main_checkout"]) for name in ("safe", "look", "protected", "prune", "removed")},
-            "excluded_worktrees": len(excluded_rows),
-            "excluded_rows": excluded_rows,
             "held": sum(1 for row in rows if not row["eligible"] and not row.get("removed")),
-            "excluded_repositories": excluded,
             "held_reasons": {},
             "empryo_threads_scanned": initial_state.thread_count,
             "empryo_unfinished_threads": initial_state.unfinished_count,
@@ -724,6 +688,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Safely review and remove eligible Git worktrees under repositories in ~/Code.")
     parser.add_argument("--code-root", type=Path, default=DEFAULT_CODE_ROOT)
+    parser.add_argument("--hub-root", type=Path, default=DEFAULT_HUB_ROOT)
     parser.add_argument("--state-root", type=Path, default=DEFAULT_STATE_ROOT)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="remove only worktrees that pass every safety check")
@@ -733,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.set_defaults(apply=False)
     args = parser.parse_args(argv)
     try:
-        result = scan(args.code_root.expanduser(), args.state_root.expanduser(), args.apply, not args.no_report, args.prune)
+        result = scan(args.code_root.expanduser(), args.hub_root.expanduser(), args.state_root.expanduser(), args.apply, not args.no_report, args.prune)
     except SafetyError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 2
