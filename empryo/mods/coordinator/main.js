@@ -2,7 +2,7 @@ import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
 import { loadOlder, readTranscript } from "./transcript.js";
-import { askRow, choicesOf, clampFrom, composer, conversation, holdFrom, popupBar, questionPop, status, taskStrip } from "./ui.js";
+import { askRow, choicesOf, clampFrom, composer, conversation, holdFrom, popupBar, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
 
 const SHOW_POLL = 50;
 const SHOW_LIMIT = 8000;
@@ -63,6 +63,8 @@ export default class Coordinator extends View {
     this.contentH = 0;
     this.fromBottom = 0;
     this.prepended = false;
+    this.grew = 0;
+    this.grewAbove = 0;
     this.heights = new Map();
     if (this.pop) {
       this.handle = cx.focus_handle();
@@ -149,7 +151,7 @@ export default class Coordinator extends View {
     cx.spawn(async (cx) => {
       try {
         this.view = await readTranscript(cx);
-        if (this.known !== undefined) this.shown += Math.max(0, this.view.turns.length - this.known);
+        if (this.known !== undefined && this.fromBottom > 0) this.shown += Math.max(0, this.view.turns.length - this.known);
         this.known = this.view.turns.length;
         this.error = "";
         this.prune();
@@ -447,7 +449,10 @@ export default class Coordinator extends View {
     const now = Date.now();
     this.drawn = now;
     const info = this.info();
-    this.fromBottom = clampFrom(this.fromBottom, this.contentH, this.box.height);
+    this.fromBottom = holdFrom(this.fromBottom, this.contentH - (this.grew - this.grewAbove), this.contentH, this.box.height, this.prepended);
+    if (this.grew !== 0) this.prepended = false;
+    this.grew = 0;
+    this.grewAbove = 0;
     const drafts = this.drafts();
     const answers = this.answers(drafts);
     const cb = {
@@ -481,9 +486,10 @@ export default class Coordinator extends View {
       link: (url) => (/^https?:\/\//i.test(url) ? exec("open", [url]) : notify({ title: "Link not opened", body: "Only web links open from the chat.", level: "info", timeout: 2500 })),
       heights: this.heights,
       working: info?.status === "working",
-      turnSize: (key, height, cx) => {
+      turnSize: (key, height, cx, above) => {
         const known = this.heights.get(key);
         if (known !== undefined && Math.abs(known - height) < 1) return;
+        if (above) this.grewAbove += height - (known ?? TURN_ESTIMATE);
         this.heights.set(key, height);
         cx.notify();
       },
@@ -496,8 +502,7 @@ export default class Coordinator extends View {
       },
       measure: (size, cx) => {
         if (size.height === this.contentH) return;
-        this.fromBottom = holdFrom(this.fromBottom, this.contentH, size.height, this.box.height, this.prepended);
-        this.prepended = false;
+        this.grew += size.height - this.contentH;
         this.contentH = size.height;
         cx.notify();
       },
