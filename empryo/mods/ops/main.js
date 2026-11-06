@@ -3,7 +3,7 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { appHome, exec, home, notify, openOverlay, shared, theme } from "herdr";
+import { appHome, exec, home, notify, setShared, shared, theme } from "herdr";
 import { readFile } from "fs/promises";
 
 const SRW_HEALTH = "https://srw-telegram-paper-production.up.railway.app/health";
@@ -29,6 +29,8 @@ const WT_SCAN = `${appHome()}/mods/worktrees/scan.sh`;
 const WT_EVERY = 600000;
 const WT_HANG = 660000;
 const WT_MAX_LOAD = 10;
+
+const healthStale = (hl) => !hl || Date.now() - hl.checked_at * 1000 > HEALTH_STALE_MS;
 
 const sunday = (year, month, nth) => 1 + ((7 - new Date(Date.UTC(year, month, 1)).getUTCDay()) % 7) + 7 * (nth - 1);
 
@@ -58,10 +60,11 @@ export default class Ops extends View {
     this.heavy = null;
     this.m1 = null;
     this.hub = null;
-    this.health = null;
+    this.health = undefined;
     this.wt = undefined;
     this.load = null;
     this.at = {};
+    this.published = "";
     this.busy = new Set();
     this.width = 1200;
     cx.timer.every(5000, (cx) => this.tick(cx));
@@ -88,14 +91,25 @@ export default class Ops extends View {
         limit.cancel();
         this.busy.delete(name);
       }
+      if (name === "health") this.publish();
       cx.notify();
     });
   }
 
+  publish() {
+    const hl = this.health;
+    const payload = {
+      health: hl === undefined ? undefined : { stale: healthStale(hl), problems: hl?.problems ?? [], warnings: hl?.warnings ?? [] },
+    };
+    const stamp = JSON.stringify(payload);
+    if (stamp === this.published) return;
+    this.published = stamp;
+    setShared("ops", payload);
+  }
+
   async readWorktrees() {
     try {
-      const file = (name) => readFile(`${WT_DIR}/${name}`, "utf8").then(JSON.parse, () => null);
-      const status = await file("status.json");
+      const status = await readFile(`${WT_DIR}/status.json`, "utf8").then(JSON.parse, () => null);
       const now = Date.now();
       if (status?.state === "running" && now - status.at * 1000 <= WT_HANG) return { ...this.wt, scanning: true };
       const due = now - Math.max((status?.finished ?? 0) * 1000, this.wtTried ?? 0) >= WT_EVERY;
@@ -104,23 +118,10 @@ export default class Ops extends View {
         const r = await exec("sh", [WT_SCAN, "scan"]);
         return r.code === 0 && r.stdout.trim() === "started" ? { ...this.wt, scanning: true } : null;
       }
-      if (status?.state !== "done") return due ? this.wt : null;
-      if (this.wt?.finished === status.finished) return this.wt;
-      const last = await file("last.json");
-      const c = last?.categories;
-      if (!c) return null;
-      const managed = c.safe + c.prune + c.look + c.protected;
-      return { finished: status.finished, stale: c.safe + c.prune, look: c.look, managed, excluded: last.excluded_worktrees ?? 0, rows: managed + (last.excluded_worktrees ?? 0) };
+      return status?.state === "done" ? { finished: status.finished } : due ? this.wt : null;
     } catch {
       return null;
     }
-  }
-
-  openWorktrees(cx) {
-    if (this.wtOpening) return;
-    this.wtOpening = true;
-    cx.timer.after(800, () => (this.wtOpening = false));
-    openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
   }
 
   tick(cx) {
@@ -194,7 +195,7 @@ export default class Ops extends View {
     const hubColor = !b ? t.dim : b.waiting ? t.blocked : b.running ? t.working : t.muted;
 
     const hl = this.health;
-    const stale = !hl || Date.now() - hl.checked_at * 1000 > HEALTH_STALE_MS;
+    const stale = healthStale(hl);
     const issues = stale ? ["health check not running"] : [...hl.problems, ...hl.warnings];
     const healthColor = stale || hl.problems.length ? t.blocked : hl.warnings.length ? t.working : t.done;
     const healthEl = h_flex().id("health").gap(6).items_center().flex_none().cursor_pointer()
@@ -202,14 +203,6 @@ export default class Ops extends View {
       .tooltip(issues.length ? issues.join(" · ") : "Empryo hub, Coordinator, dispatcher: all ok")
       .child(div().size(6).rounded(3).bg(healthColor))
       .child(div().text_color(issues.length ? healthColor : t.foreground).font_medium().child(issues[0] ?? "health"));
-
-    const w = this.wt;
-    const wtText = w === undefined ? "…" : !w ? "couldn't scan" : w.managed === undefined ? "scanning…" : `· ${w.stale} stale`;
-    const wtEl = h_flex().id("worktrees").gap(5).items_center().flex_none().cursor_pointer()
-      .on_click((e, cx) => e.click_count > 1 || this.openWorktrees(cx))
-      .tooltip(w?.managed === undefined ? "Linked Git worktrees. Click to review and clean them." : `${w.managed} managed by the cleaner · ${w.stale} safe to clean or prune · ${w.look} need a look · ${w.excluded} more in excluded SRW, dbt and omni repos, not checked for removal. Click to review.`)
-      .child(div().text_color(t.dim).child("Worktrees"))
-      .child(div().text_color(!w ? t.dim : w.stale ? t.working : t.muted).font_medium().child(wtText));
 
     const roomy = this.width >= 1280;
     const tight = this.width >= 980;
@@ -225,7 +218,6 @@ export default class Ops extends View {
       .child(item(srwColor, "SRW", srwDetail, srwTip))
       .when(this.load !== null && roomy, (el) => el.child(plain("M4", `load ${this.load.toFixed(2)}`, t.muted, "load average, 1 minute")))
       .when(tight, (el) => el.child(plain("heavy", h ? ([running && `${running} run`, paused && `${paused} paused`, queued && `${queued} queued`].filter(Boolean).join(" · ") || "idle") : "n/a", heavyColor, "mac-ops heavy status")))
-      .when(tight, (el) => el.child(wtEl))
       .child(plain("M1 CI", ci ? (busy ? `${busy} busy` : "idle") : "n/a", busy ? t.working : t.muted, ci ? `${ci.native} native · ${ci.docker} docker · load ${ci.load}` : "M1 not reachable"))
       .child(div().flex_1());
   }
