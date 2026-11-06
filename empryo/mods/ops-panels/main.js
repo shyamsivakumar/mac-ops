@@ -42,7 +42,8 @@ function circuitLine(c) {
 }
 
 function reasonNote(c) {
-  if (!c.lastError) return "The hub has recorded no provider error since it started.";
+  if (c.lastError === undefined) return "Restart the hub to see provider errors (emp drain --restart).";
+  if (c.lastError === null) return "The hub saw a fallback switch but no provider error text.";
   return `Last error: ${c.lastError} (${since(Date.parse(c.lastErrorAt))})`;
 }
 
