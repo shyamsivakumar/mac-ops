@@ -8,11 +8,7 @@ const EMP = `${home()}/.local/bin/emp`;
 const EMPQ = `${home()}/.local/bin/empq`;
 const HEALTH_FILE = `${home()}/Code/coordinator/queue/health.json`;
 const EMPRYO_CONFIG = `${home()}/.empryo/config.json`;
-const HUB_LOG = `${home()}/.empryo-hub/hub.log`;
-const HUB_LOG_LINES = "4000";
 const HOLD_MS = 15 * 60000;
-const CIRCUIT_LINE = /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) circuit for (\S+) (?:OPEN for \d+ min after \d+ failures|reopened after a failed probe) \((.*)\)$/;
-const FALLBACK_ONLY = /^(?:Falling back to|Switched to fallback model)/i;
 const PROVIDERS = [["zai-coding-plan", "GLM"], ["minimax", "MiniMax"], ["subscriptions/gpt", "GPT"], ["subscriptions/cursor", "Cursor"], ["subscriptions/claude", "Claude"]];
 const TITLES = { models: "Models", queue: "Queue", hub: "Hub" };
 const QUEUE_LINE = /^#(\d+) p(\d+) (\S+) (.*?)(?: \(failed (\d+)x\))?$/;
@@ -36,15 +32,6 @@ const since = (ms) => `${span(Date.now() - ms)} ago`;
 const until = (ms) => (ms > Date.now() ? `in ${span(ms - Date.now())}` : "now");
 const epoch = (value) => (typeof value === "number" ? value : Date.parse(value));
 
-function lastReasons(logText) {
-  const reasons = {};
-  for (const line of logText.split("\n")) {
-    const m = CIRCUIT_LINE.exec(line);
-    if (m) reasons[m[2]] = { at: Date.parse(m[1].replace(" ", "T")), text: m[3] };
-  }
-  return reasons;
-}
-
 function circuitLine(c) {
   if (c.state === "closed") return { text: "up", tone: "done" };
   const failures = c.recentFailures ? ` · ${plural(c.recentFailures, "recent failure")}` : "";
@@ -54,11 +41,9 @@ function circuitLine(c) {
   return { text: `waiting to retry${failedAt ? ` · last failed ${since(failedAt)}` : ""} · next task will try it`, tone: "muted" };
 }
 
-function reasonNote(reason) {
-  if (!reason) return "The hub log has no failure recorded for this provider.";
-  const when = Number.isNaN(reason.at) ? "" : ` (${since(reason.at)})`;
-  const text = reason.text.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, "").replace(/[\x00-\x1f\x7f\s]+/g, " ").trim();
-  return FALLBACK_ONLY.test(text) ? `The hub logged only a fallback switch, not the provider's own error${when}.` : `Last logged: ${text}${when}`;
+function reasonNote(c) {
+  if (!c.lastError) return "The hub has recorded no provider error since it started.";
+  return `Last error: ${c.lastError} (${since(Date.parse(c.lastErrorAt))})`;
 }
 
 export default class Panels extends View {
@@ -98,8 +83,8 @@ export default class Panels extends View {
   }
 
   async read_models() {
-    const [status, config, log] = await Promise.all([this.hubStatus(), this.readFile(EMPRYO_CONFIG), exec("tail", ["-n", HUB_LOG_LINES, HUB_LOG])]);
-    return { circuits: status.circuits, fallback: config.modelFallback, reasons: log.code === 0 ? lastReasons(log.stdout) : {} };
+    const [status, config] = await Promise.all([this.hubStatus(), this.readFile(EMPRYO_CONFIG)]);
+    return { circuits: status.circuits, fallback: config.modelFallback };
   }
 
   async read_queue() {
@@ -167,7 +152,7 @@ export default class Panels extends View {
       const c = circuits[id];
       const { text, tone } = circuitLine(c);
       const row = this.line(t, providerName(id), text, tone);
-      return c.state !== "closed" && this.data ? [row, this.note(t, reasonNote(this.data.reasons[id]))] : [row];
+      return c.state !== "closed" ? [row, this.note(t, reasonNote(c))] : [row];
     });
     const fallback = Object.entries(this.data?.fallback ?? {}).map(([primary, chain]) => h_flex().w_full().px(14).py(3).gap(6).flex_wrap().items_baseline()
       .children([primary, ...chain].flatMap((model, i) => [
