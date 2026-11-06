@@ -252,7 +252,7 @@ export function turn(t, m, now, cb) {
     .child(v_flex().flex_1().min_w(0).px(10).py(7).child(body));
 }
 
-const TURN_ESTIMATE = 160;
+export const TURN_ESTIMATE = 160;
 
 function drawTurns(t, turns, now, cb) {
   const out = [];
@@ -262,12 +262,13 @@ function drawTurns(t, turns, now, cb) {
   for (let i = turns.length - 1; i >= 0; i--) {
     const m = turns[i];
     const key = turnKey(m);
-    const h = cb.heights.get(key);
-    const near = h === undefined || (below + h >= from && below <= to);
+    const h = cb.heights.get(key) ?? TURN_ESTIMATE;
+    const near = below + h >= from && below <= to;
+    const above = below >= cb.fromBottom + cb.viewH;
     out.push(near
-      ? div().id(`turn-${key}`).w_full().flex_none().px(12).py(4).on_size_change((size, cx) => cb.turnSize(key, size.height, cx)).child(turn(t, m, now, cb))
+      ? div().id(`turn-${key}`).w_full().flex_none().px(12).py(4).on_size_change((size, cx) => cb.turnSize(key, size.height, cx, above)).child(turn(t, m, now, cb))
       : div().w_full().flex_none().h(h));
-    below += h ?? TURN_ESTIMATE;
+    below += h;
   }
   return out.reverse();
 }
