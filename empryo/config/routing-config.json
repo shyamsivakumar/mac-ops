@@ -36,8 +36,8 @@
     ],
     "zai-coding-plan/glm-5.3": [
       "minimax/MiniMax-M3.1-Flash",
-      "subscriptions/gpt-6.1-terra",
       "subscriptions/cursor/composer-2.5",
+      "subscriptions/gpt-6.1-terra",
       "subscriptions/claude-sonnet-5-5"
     ],
     "subscriptions/gpt-6-luna": [
@@ -46,10 +46,10 @@
       "subscriptions/gpt-6.1-terra"
     ],
     "minimax/MiniMax-M3.1-Flash": [
-      "zai-coding-plan/glm-5.3-flash",
       "zai-coding-plan/glm-5.3",
-      "subscriptions/gpt-6.1-terra",
+      "zai-coding-plan/glm-5.3-flash",
       "subscriptions/cursor/composer-2.5",
+      "subscriptions/gpt-6.1-terra",
       "subscriptions/claude-sonnet-5-5"
     ],
     "subscriptions/cursor/default": [
@@ -58,8 +58,8 @@
     ],
     "zai-coding-plan/glm-5.3-flash": [
       "minimax/MiniMax-M3.1-Flash",
-      "subscriptions/gpt-6.1-terra",
       "subscriptions/cursor/composer-2.5",
+      "subscriptions/gpt-6.1-terra",
       "subscriptions/claude-sonnet-5-5"
     ],
     "subscriptions/cursor/composer-2.5": [
