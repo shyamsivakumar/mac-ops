@@ -8,6 +8,7 @@ DISPATCH_MAX_AGE = 120
 CONTEXT_LIMIT = 1_000_000
 CONTEXT_WARN = 0.6
 TAIL_BYTES = 8_000_000
+EMPRYO_RECEIPT = f"{HOME}/.local/state/mac-ops/empryo-installation.json"
 
 
 def run(cmd, stdin=None):
@@ -60,6 +61,12 @@ def plans_out():
     return [p for p, c in json.loads(r.stdout)["circuits"].items() if c["state"] == "open"] if r.returncode == 0 else []
 
 
+def drifted_files():
+    checkout = json.load(open(EMPRYO_RECEIPT))["checkout"]
+    status = json.loads(run(["/usr/bin/python3", "-I", f"{checkout}/install_empryo.py", "status"]).stdout)
+    return [os.path.basename(path) for path in status["differs"]]
+
+
 def check():
     problems, warnings = [], []
     up = server_up()
@@ -93,6 +100,10 @@ def check():
         problems.append("Coordinator terminal gone")
     elif tokens and tokens > CONTEXT_LIMIT * CONTEXT_WARN and term["status"] != "working":
         warnings.append(f"Coordinator context {round(tokens / 1000)}k: run coordinator-refresh?")
+
+    drift = drifted_files()
+    if drift:
+        warnings.append(f"Live files differ from the repo: {', '.join(drift)}")
 
     return {
         "hub": up,

@@ -40,7 +40,11 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     for mod in MODS:
         base = root / "mods" / mod
         items += [
-            (f, home / ".config/herdr-app/mods" / mod / f.relative_to(base), 0o644)
+            (
+                f,
+                home / ".config/herdr-app/mods" / mod / f.relative_to(base),
+                0o755 if os.access(f, os.X_OK) else 0o644,
+            )
             for f in sorted(base.rglob("*"))
             if f.is_file()
         ]
