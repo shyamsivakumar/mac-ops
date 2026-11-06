@@ -3,39 +3,39 @@
     "standard": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
       "notes": "bug fix, small feature, refactor, test fix; GLM 5.3 first, then MiniMax, GPT 6.1 Terra, Cursor, Claude"
     },
     "risky": {
       "modelSelection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-sol"
+        "instanceId": "empryo",
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
       "notes": "money or trade execution, state machines, concurrency, auth, secrets, migrations, deploy or CI pipelines, data deletion"
     },
     "design": {
       "modelSelection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-sol"
+        "instanceId": "empryo",
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
       "notes": "multi-file design, new module, cross-repo plan; the brief makes it plan first and get the plan reviewed before code"
     },
     "large": {
       "modelSelection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-sol"
+        "instanceId": "empryo",
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "orchestrate",
-      "notes": "features touching many files or parts; Sol orchestrates, steps run on GLM 5.3 (taskRouter), judged by Sol"
+      "notes": "features touching many files or parts; GLM 5.3 first (Shyam, 2026-11-04), judged by Sol"
     },
     "ui": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
       "notes": "screens, components, styling, visual bugs; GLM 5.3 first"
@@ -43,7 +43,7 @@
     "research": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
       "notes": "gather facts, compare tools, read docs; no code changes; GLM 5.3 first"
@@ -51,7 +51,7 @@
     "rca": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
       "notes": "explain a failure, find a root cause; read-only at first; GLM 5.3 first"
@@ -66,14 +66,17 @@
     },
     "review": {
       "modelSelection": {
-        "instanceId": "codex",
-        "model": "gpt-6.1-sol"
+        "instanceId": "empryo",
+        "model": "anthropic/claude-opus-5-5"
       },
       "mode": "auto",
-      "notes": "the separate review thread on Sol, a different vendor from the GLM and MiniMax writers; never Cursor"
+      "notes": "Anthropic API key first (Shyam, 2026-11-05), Terra then Sol when credit runs out; different vendor from the author"
     },
     "panel": {
-      "modelSelection": null,
+      "modelSelection": {
+        "instanceId": "empryo",
+        "model": "minimax/MiniMax-M3.1-Flash"
+      },
       "mode": "auto",
       "notes": "second opinion or panel: not routed here, pass an explicit modelSelection per seat"
     }
