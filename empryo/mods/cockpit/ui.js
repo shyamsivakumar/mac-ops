@@ -83,14 +83,19 @@ const BAR_GAP = 6;
 const barCost = (item) => (item.label.length + (item.more?.length ?? 0)) * 6.2 + 12;
 function barItems(v) {
   const { worktrees: w, hub, ops, running, cap } = v;
-  const out = hub?.circuits ? Object.entries(hub.circuits).filter(([, c]) => c.state !== "closed").map(([name]) => name) : null;
+  const circuits = hub?.circuits ? Object.entries(hub.circuits) : null;
+  const out = circuits?.filter(([, c]) => c.state === "open").map(([name]) => name);
+  const retrying = circuits?.filter(([, c]) => c.state === "half-open").map(([name]) => name);
+  const modelsLabel = !circuits ? "Models" : out.length ? `Models · ${out.length} out` : retrying.length ? `Models · ${retrying.length} retrying` : "Models · all up";
+  const modelsTone = out?.length ? "blocked" : retrying?.length ? "muted" : undefined;
+  const modelsTip = out?.length ? `Out: ${out.join(", ")}. Click for the retry times and fallback order.` : retrying?.length ? `Waiting to retry: ${retrying.join(", ")}. The next task will try ${retrying.length === 1 ? "it" : "them"}. Click for details.` : "Model providers and the fallback order. Click to open.";
   const health = ops?.health;
   const issues = health && !health.stale ? health.problems.length + health.warnings.length : 0;
   const hubLabel = !health ? "Hub" : hub?.draining ? "Hub · draining" : health.stale ? "Hub · no check" : health.problems.length ? `Hub · ${plural(health.problems.length, "problem")}` : health.warnings.length ? `Hub · ${plural(health.warnings.length, "warning")}` : "Hub · ok";
   const hubTone = !health ? undefined : health.problems.length ? "blocked" : hub?.draining || health.stale || issues ? "working" : undefined;
   return [
     { id: "wt", prio: 0, label: w ? `Worktrees · ${w.stale} stale` : "Worktrees", more: w?.look ? ` · ${w.look} need a look` : "", tone: w?.stale ? "working" : undefined, tip: w ? `${w.stale} safe to clean or prune · ${w.look} need a look. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
-    { id: "models", prio: 2, label: !out ? "Models" : out.length ? `Models · ${out.length} out` : "Models · all up", tone: out?.length ? "blocked" : undefined, tip: out?.length ? `Out: ${out.join(", ")}. Click for the probe times and fallback order.` : "Model providers and the fallback order. Click to open." },
+    { id: "models", prio: 2, label: modelsLabel, tone: modelsTone, tip: modelsTip },
     { id: "queue", prio: 4, label: v.hasBoard ? `Queue · ${running}/${cap}` : "Queue", tone: v.hasBoard && running >= cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
     { id: "hub", prio: 1, label: hubLabel, tone: hubTone, tip: "Hub health, Coordinator context, uptime. Click to open." },
   ];
