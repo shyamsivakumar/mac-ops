@@ -112,3 +112,4 @@ To install an earlier source version, check out that commit and run
 - A thread with its own worktree gets `EMP_PORT_BASE`, a block of 10 ports from 40000 to 49099, kept on the thread as `portBase`.
 - On the board, a click or Enter on a Needs you or Ready card opens a decision pop-up. Merge needs an arming press and a separate confirming press, and it re-checks the pull request first.
 - The status bar shows `Worktrees · N stale`, and clicking it opens a pop-up over the worktree cleaner. `Clean N safe` needs two presses and runs `cleaner.py --apply --prune`. It removes only worktrees the cleaner proves safe, and never forces. SRW, dbt and omni repos are listed read-only. The cleaner's launchd job is not installed.
+- A bar above the board has Worktrees, Models, Queue and Hub buttons, each showing its problem on the button and opening a pop-up. They are read-only apart from Clean and Cancel drain. The `ops-panels` mod serves Models, Queue and Hub.
