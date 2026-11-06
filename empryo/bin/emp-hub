@@ -328,7 +328,7 @@ def handle_update(session_id, update):
             text = update["content"].get("text", "")
             switched = FALLBACK_NOTICE.search(text)
             if (switched or QUOTA_FAILURE.search(text)) and not rt["quotaRecorded"]:
-                record_quota_failure(provider_of(rt["model"]), text[:80])
+                record_quota_failure(provider_of(rt["model"]), text)
                 rt["quotaRecorded"] = True
             if switched:
                 rt["model"] = switched.group(1).rstrip(".")
@@ -582,6 +582,8 @@ PROVIDERS = ("subscriptions/gpt", "subscriptions/claude", "subscriptions/cursor"
 WATCHDOG_ABORT = re.compile(r"aborted by the watchdog")
 QUOTA_FAILURE = re.compile(r"\b429\b|\b529\b|rate.?limit|quota|credit|usage limit|too many requests|exhausted|overloaded", re.I)
 FALLBACK_NOTICE = re.compile(r"(?:Falling back to|Switched to fallback model:?)\s*(\S+)", re.I)
+CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+ERROR_CHARS = 300
 FAILURE_WINDOW_SECONDS = 600
 CIRCUIT_OPEN_SECONDS = 900
 BREAKERS = {}
@@ -593,11 +595,23 @@ def provider_of(model):
 
 
 def breaker_of(provider):
-    return BREAKERS.setdefault(provider, {"failures": [], "openUntil": 0.0, "probing": False})
+    return BREAKERS.setdefault(provider, {"failures": [], "openUntil": 0.0, "probing": False, "lastError": None, "lastErrorAt": None})
 
 
-def record_quota_failure(provider, why):
+def clean_error(text):
+    return CONTROL_CHARS.sub("", " ".join(text.split()))[:ERROR_CHARS]
+
+
+def remember_error(provider, text):
+    why = clean_error(text)
+    if not FALLBACK_NOTICE.search(why):
+        breaker_of(provider).update(lastError=why, lastErrorAt=iso(datetime.now(timezone.utc)))
+    return why
+
+
+def record_quota_failure(provider, text):
     with LOCK:
+        why = remember_error(provider, text)
         breaker, now = breaker_of(provider), time.time()
         breaker["failures"] = [t for t in breaker["failures"] if now - t < FAILURE_WINDOW_SECONDS] + [now]
         if breaker["probing"]:
@@ -780,7 +794,8 @@ def tool_hub_status(a):
     now = time.time()
     circuits = {p: {"state": circuit_state(p), "recentFailures": len([t for t in breaker_of(p)["failures"] if now - t < FAILURE_WINDOW_SECONDS]),
                     "openUntil": iso(datetime.fromtimestamp(breaker_of(p)["openUntil"], timezone.utc)) if breaker_of(p)["openUntil"] else None,
-                    "probing": breaker_of(p)["probing"]} for p in sorted(set(PROVIDERS) | set(BREAKERS))}
+                    "probing": breaker_of(p)["probing"],
+                    "lastError": breaker_of(p)["lastError"], "lastErrorAt": breaker_of(p)["lastErrorAt"]} for p in sorted(set(PROVIDERS) | set(BREAKERS))}
     titles = lambda ids: [THREADS.data[i]["title"] for i in ids if i in THREADS.data]
     limits = {key: {"limit": limit, "running": titles(SLOTS.get(key, {"running": []})["running"]), "queued": titles(SLOTS.get(key, {"queue": []})["queue"])}
               for key, limit in load_routing().get("limits", {}).items()}
@@ -837,8 +852,11 @@ def start_turn(thread, message, steered_from=None, from_pending=False):
 
 def settle_breaker(rt, status, error):
     provider = provider_of(rt["model"])
-    if error and (QUOTA_FAILURE.search(error) or WATCHDOG_ABORT.search(error)) and not rt["quotaRecorded"]:
-        record_quota_failure(provider, error[:80])
+    quota_error = error and (QUOTA_FAILURE.search(error) or WATCHDOG_ABORT.search(error))
+    if quota_error and rt["quotaRecorded"]:
+        remember_error(provider, error)
+    if quota_error and not rt["quotaRecorded"]:
+        record_quota_failure(provider, error)
         rt["quotaRecorded"] = True
     elif rt["probe"] and status == "completed" and not rt["quotaRecorded"]:
         close_circuit(provider)
