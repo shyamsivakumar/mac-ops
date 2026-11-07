@@ -9,4 +9,4 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
 - Merges, deploys, secrets, paid actions and product decisions follow the repo's rules and the coordinator's instructions in your task. When unsure, stop and say what you need.
 - End with a short report: what changed, what you ran and its result, the review verdict, and what is left.
 
-Dev servers and previews use `EMP_PORT_BASE` when it is set: that port and the next nine are yours. Before trusting a page on any port, check which process owns the port and which directory it runs from (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, then `lsof -p <pid> | grep cwd`). Never run `git stash` or switch branches in a checkout another task uses.
+Dev servers and previews use the port block in your task text ("Your port block: A-B"): those ten ports are yours. The shell does not export `EMP_PORT_BASE`, so type the number. Before trusting a page on any port, check which process owns the port and which directory it runs from (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, then `lsof -p <pid> | grep cwd`). Never run `git stash` or switch branches in a checkout another task uses.

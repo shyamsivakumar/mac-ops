@@ -864,6 +864,13 @@ def settle_breaker(rt, status, error):
         breaker_of(provider)["probing"] = False
 
 
+def prompt_for_engine(thread, message):
+    base = thread.get("portBase")
+    if base is None:
+        return message
+    return f"{message}\n\nYour port block: {base}-{base + PORT_BLOCK_SIZE - 1} (EMP_PORT_BASE is not exported to your shell; type the number)."
+
+
 def run_turn(thread, proc, message, run_id):
     rt = runtime_of(thread["threadId"])
     status, stop, usage, error = "failed", None, None, None
@@ -877,7 +884,7 @@ def run_turn(thread, proc, message, run_id):
             rt["progressAt"] = time.time()
             rt["active"] = True
             try:
-                result = proc.call("session/prompt", {"sessionId": thread["sessionId"], "prompt": [{"type": "text", "text": message}]}, timeout=None)
+                result = proc.call("session/prompt", {"sessionId": thread["sessionId"], "prompt": [{"type": "text", "text": prompt_for_engine(thread, message)}]}, timeout=None)
                 stop = result.get("stopReason")
                 usage = result.get("_meta", {}).get("empryo", {}).get("usage")
                 status = STOP_STATUS.get(stop, "completed")
