@@ -2,10 +2,10 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
-import { agents, closeOverlay, exec, hc, home, notify, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { cleanupNote, cleanupThread, hubStatus, load, loadBacklog, loadVerdict, mergePlan, mergeThread, openThread, queueCap, readTask, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, verdictEntries, verdictOf } from "./hub.js";
+import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
+import { cleanupNote, cleanupThread, closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, readTask, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { COLUMNS, DECIDES, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionHeight, decisionOf, decisionView, elapsed, emptyRow, foldedColumn, footer, keySheet, sheetHeight, thumb, toolbar } from "./ui.js";
+import { COLUMNS, DECIDES, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionHeight, decisionOf, decisionView, elapsed, emptyRow, foldedColumn, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -32,10 +32,25 @@ const CONFIRM_GAP = 400;
 const DEC_FRESH = 60000;
 const STALE_RUN = 1800000;
 const NO_REVIEW_REFUSAL = /no review thread found/i;
+const RECHECK_AFTER = 300000;
+const PLAN_STALE = 60000;
+const OPEN_IN_EMPRYO = /session is open in Empryo/;
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
 const PANEL_SIZE = { models: [520, 470], queue: [520, 340], hub: [520, 400] };
+
+const NOTICE_FOR = 8000;
+let noticeSeq = 0;
+
+const say = (level, title, body, items = [], explicit = false) => {
+  const shown = shared("cockpit.notice");
+  if (level === "info" && !explicit && shown?.level === "error" && shown.items.length) return;
+  setShared("cockpit.notice", { id: `${Date.now()}.${++noticeSeq}`, level, text: body ? `${title}: ${body}` : title, items });
+};
+const dismiss = () => setShared("cockpit.notice", null);
+
+const failureText = (message) => (OPEN_IN_EMPRYO.test(message) ? "An Empryo window is open on this task. Close it, then send again." : message);
 
 const readState = async (name) => {
   const text = await readTextFile(`${WT_STATE}/${name}`);
@@ -47,8 +62,11 @@ export default class Board extends View {
     this.pop = props()?.pop ?? null;
     this.overlay = props()?.overlay ?? null;
     this.dec = props()?.dec ?? null;
-    this.sheet = Boolean(props()?.keys);
+    this.notice = props()?.notice ?? null;
+    this.sheet = Boolean(props()?.keys || this.notice);
     this.outcome = null;
+    this.noticeSeen = null;
+    this.noticeTimer = null;
     this.deciding = null;
     this.files = null;
     this.peeked = new Set();
@@ -74,6 +92,9 @@ export default class Board extends View {
     this.pressed = null;
     this.enriching = { backlog: 0, prs: 0 };
     this.stamps = {};
+    this.asked = new Map();
+    this.planning = 0;
+    this.windows = [];
     this.cursor = props()?.cursor ?? null;
     this.published = null;
     this.opening = null;
@@ -135,6 +156,7 @@ export default class Board extends View {
       return;
     }
     if (shared("cockpit.pop")) setShared("cockpit.pop", null);
+    if (shared("cockpit.notice")) dismiss();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
     this.watchWorktrees(cx);
@@ -172,13 +194,16 @@ export default class Board extends View {
         if (token !== this.token) return;
         const stuck = this.loading && Date.now() - this.loadingSince > STUCK_AFTER;
         const fresh = !this.unchanged("board", { ...board, at: 0 });
-        const changed = fresh || Boolean(this.error) || this.stale || this.restored || stuck;
+        this.windows = empryoWindows();
+        const moved = !this.unchanged("windows", this.windows);
+        const changed = fresh || moved || Boolean(this.error) || this.stale || this.restored || stuck;
         this.board = board;
         this.error = "";
         this.stale = false;
         this.restored = false;
         this.loading = false;
         this.share();
+        this.pruneRefused();
         if (changed) cx.notify();
         if (fresh) this.persist();
         this.enrich(board, cx, force);
@@ -266,13 +291,13 @@ export default class Board extends View {
 
   prBlocked(prs) {
     const old = prs.find((pr) => !prFresh(pr));
-    if (old) notify({ title: `PR data for ${old.repo}#${old.number} is not current`, body: "Wait for the PR refresh, then try again.", level: "info", timeout: 3000 });
+    if (old) say("info", `PR data for ${old.repo}#${old.number} is not current`, "Wait for the PR refresh, then try again.");
     return Boolean(old);
   }
 
   guard(bound) {
-    if (bound && this.followed) notify({ title: "Select the card again", body: "The selection moved when the board changed.", level: "info", timeout: 2500 });
-    else if (this.unsure()) notify({ title: "Board data is out of date", body: "Wait for the refresh to finish.", level: "info", timeout: 2500 });
+    if (bound && this.followed) say("info", "Select the card again", "The selection moved when the board changed.");
+    else if (this.unsure()) say("info", "Board data is out of date", "Wait for the refresh to finish.");
     return (bound && this.followed) || this.unsure();
   }
 
@@ -290,6 +315,7 @@ export default class Board extends View {
     this.backlogLoaded = true;
     this.cap = snap.cap;
     this.shepherdr = new Map(snap.shepherdr);
+    this.windows = snap.windows;
     this.stale = snap.unsure;
     seedPrs(snap.prs);
     seedVerdicts(snap.verdicts);
@@ -309,6 +335,7 @@ export default class Board extends View {
       prs: prEntries(groups.flatMap((g) => g.prs)),
       verdicts: verdictEntries(threads),
       shepherdr: [...this.shepherdr].filter(([thread]) => keys.has(thread)),
+      windows: this.windows,
     };
   }
 
@@ -379,7 +406,8 @@ export default class Board extends View {
       this.cap = await queueCap().catch(() => 6);
       const late = !this.unchanged("prs", this.prStamp());
       if (late) this.persist();
-      return late;
+      const planned = await this.planNext();
+      return planned || late;
     }, cx, force);
   }
 
@@ -455,6 +483,8 @@ export default class Board extends View {
         if (p?.key === key && !p.moved) this.activate(this.entryOf(key), cx);
       },
       keys: (cx) => this.openKeys(cx),
+      notice: (cx) => this.openNotice(shared("cockpit.notice"), cx),
+      dismiss,
       panel: (id, cx) => this.openPanel(id, cx),
       reply: (cx) => this.openReply(this.current(), cx),
       open: (cx) => this.openEntry(this.current(), cx),
@@ -469,6 +499,7 @@ export default class Board extends View {
       approveAll: (cx) => this.approveAll(cx),
       queue: (cx) => this.queue(this.current(), cx),
       openPr: () => this.openPr(this.current()),
+      closeWindow: (key, cx) => this.closeEmpryo(this.entryOf(key), cx),
       fold: (key, cx) => {
         this.toggleFold(key);
         cx.notify();
@@ -488,7 +519,8 @@ export default class Board extends View {
         const replying = this.replyKey === gkey;
         const selected = this.cursor === gkey;
         const c = { ...g.primary, title: g.title, task: g.task };
-        const view = (extra) => ({ opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const refusal = variant === "ready" ? this.refusalOf(g) : null;
+        const view = (extra) => ({ opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -501,7 +533,7 @@ export default class Board extends View {
       col.summary = this.summary(key, col, now);
     }
     const open = cols.ready.groups.filter((g) => g.info.status === "open" && g.info.pr);
-    const approvable = open.filter((g) => canMerge(this.verdictFor(g))).map((g) => ({ name: g.task || g.title, number: g.info.pr.number, group: g }));
+    const approvable = open.filter((g) => canMerge(this.verdictFor(g)) && !this.refusalOf(g)?.planned).map((g) => ({ name: g.task || g.title, number: g.info.pr.number, group: g }));
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length };
     return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, running: this.board?.running ?? 0, cap: this.cap } };
   }
@@ -621,7 +653,7 @@ export default class Board extends View {
 
   nextEntry() {
     const all = this.keys().flatMap((k) => this.entries(k));
-    if (!all.length) return notify({ title: "Nothing needs you", level: "success", timeout: 2000 });
+    if (!all.length) return say("success", "Nothing needs you");
     const at = all.findIndex((r) => r.key === this.cursor);
     this.moveTo(all[(at + 1) % all.length].key);
   }
@@ -634,7 +666,7 @@ export default class Board extends View {
     if (this.pop) return;
     const order = ["needs", "ready"]
       .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => a.at - b.at).map((g) => ({ col: key, key: `g:${key}:${g.key}` })));
-    if (!order.length) return notify({ title: "Nothing needs you", level: "success", timeout: 2000 });
+    if (!order.length) return say("success", "Nothing needs you");
     const next = order[(order.findIndex((x) => x.key === this.cursor) + 1) % order.length];
     if (this.isFolded(next.col)) this.peeked.add(next.col);
     this.moveTo(next.key);
@@ -659,6 +691,20 @@ export default class Board extends View {
     const content = this.pairs(this.layout.cols[key]?.rows ?? []).reduce((sum, r) => sum + r.h, 0) || H.empty;
     const height = Math.min(POP_HEIGHT, H.head + POP_PAD + content);
     openOverlay({ mod: "cockpit", kind: "dialog", width: POP_WIDTH, height, props: { pop: key, cursor: this.cursor, snap: { ...snap, rev: ++this.popRev } } });
+  }
+
+  expireNotice(notice, cx) {
+    if (this.noticeSeen === notice.id) return;
+    this.noticeSeen = notice.id;
+    this.noticeTimer?.cancel();
+    this.noticeTimer = notice.level === "error" ? null : cx.timer.after(NOTICE_FOR, () => shared("cockpit.notice")?.id === notice.id && dismiss());
+  }
+
+  openNotice(notice, cx) {
+    if (this.deciding === "notice") return;
+    this.deciding = "notice";
+    cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
+    openOverlay({ mod: "cockpit", kind: "dialog", width: SHEET_WIDTH, height: noticeHeight(notice), props: { notice } });
   }
 
   openKeys(cx) {
@@ -828,12 +874,14 @@ export default class Board extends View {
   openEntry(e, cx) {
     if (!e || this.opening === e.key) return;
     const thread = this.threadOf(e);
-    if (!thread.session && !thread.runs) return notify({ title: "No Empryo session yet", body: "Send a message first.", level: "info", timeout: 3000 });
+    if (!thread.session && !thread.runs) return say("info", "No Empryo session yet", "Send a message first.");
     this.opening = e.key;
     cx.notify();
     cx.spawn(async (cx) => {
       try {
         await openThread(thread, cx);
+      } catch (error) {
+        say("error", "Could not open the thread", error.message);
       } finally {
         this.opening = null;
         if (this.pop || this.dec) closeOverlay(this.overlay);
@@ -884,17 +932,19 @@ export default class Board extends View {
   }
 
   settleThreads(threads, cx) {
-    if (!threads.length) return notify({ title: "Only finished threads can be settled", level: "info", timeout: 2500 });
+    if (!threads.length) return say("info", "Only finished threads can be settled");
     this.acted = Date.now();
     if (this.dec) setShared("cockpit.acted", Date.now());
     for (const c of threads) this.settled.set(c.key, c.at);
     const label = threads.length === 1 ? `Settled ${threads[0].task || threads[0].title}` : `Settled ${threads.length} threads`;
     const undo = () => threads.forEach((c) => this.settled.delete(c.key));
     this.attempt(label, async () => {
+      const notes = [];
       for (const c of threads) {
         await settle(c.key);
-        await this.cleanup(c);
+        notes.push(await this.cleanup(c));
       }
+      return { note: notes.map((n) => n.text).filter(Boolean).join("; "), level: notes.some((n) => n.failed) ? "error" : "success" };
     }, cx, undo);
     cx.notify();
   }
@@ -903,9 +953,9 @@ export default class Board extends View {
     const name = c.task || c.title;
     try {
       const note = cleanupNote(await cleanupThread(c.key));
-      if (note) notify({ title: name, body: note, level: "info", timeout: 5000 });
+      return { text: note && `${name}: ${note}` };
     } catch (error) {
-      notify({ title: `Cleanup failed · ${name}`, body: error.message, level: "error" });
+      return { text: `Cleanup failed · ${name}: ${error.message}`, failed: true };
     }
   }
 
@@ -927,10 +977,90 @@ export default class Board extends View {
     return null;
   }
 
-  report(name, label, hubText) {
+  stamp(g) {
+    const { pr, gh } = this.prInfo(g);
+    const review = this.reviewOf(g);
+    return [pr?.number, gh?.sha, gh?.ci, gh?.mergeState, gh?.mergeable, review?.key, review?.at].join(":");
+  }
+
+  refusalOf(g) {
+    const refusal = shared("cockpit.refused")?.[g.key];
+    return refusal?.stamp === this.stamp(g) ? refusal : null;
+  }
+
+  pruneRefused() {
+    const refused = shared("cockpit.refused");
+    if (!refused) return;
+    const live = new Map(this.groups().map((g) => [g.key, g]));
+    const kept = Object.entries(refused).filter(([key, r]) => live.has(key) && r.stamp === this.stamp(live.get(key)));
+    if (kept.length !== Object.keys(refused).length) setShared("cockpit.refused", Object.fromEntries(kept));
+  }
+
+  refuse(g, name, hubText, planned) {
     const text = NO_REVIEW_REFUSAL.test(hubText) ? "No review yet, so this can't merge. Start a review for this task first." : hubText;
-    if (this.dec) this.outcome = { text: `${label}: ${text}` };
-    notify({ title: `${label} · ${name}`, body: text, level: "error", timeout: 9000 });
+    const live = this.groups().find((x) => x.key === g.key) ?? g;
+    setShared("cockpit.refused", { ...shared("cockpit.refused"), [g.key]: { text, stamp: this.stamp(live), planned, at: Date.now() } });
+    return { name, merged: false, text };
+  }
+
+  readyCandidates() {
+    return this.groups().filter((x) => {
+      const info = this.prInfo(x);
+      return this.mergeCandidate({ ...x, info }) && info.gh && canMerge(this.verdictFor(x));
+    });
+  }
+
+  async askHub(g) {
+    const stamp = this.stamp(g);
+    this.asked.set(g.key, stamp);
+    this.planning = Date.now();
+    const plan = await mergePlan(this.taskThread(g).key).finally(() => (this.planning = 0));
+    const live = this.groups().find((x) => x.key === g.key);
+    if (!live || this.stamp(live) !== stamp) return undefined;
+    const existing = this.refusalOf(live);
+    if (existing && !existing.planned) return { refused: existing.text };
+    if (!plan.dryRun) return { refused: this.refuse(live, g.task || g.title, plan.refused, true).text };
+    if (existing) {
+      const kept = { ...shared("cockpit.refused") };
+      delete kept[live.key];
+      setShared("cockpit.refused", kept);
+    }
+    return { refused: null };
+  }
+
+  checking() {
+    return Date.now() - this.planning < PLAN_STALE;
+  }
+
+  async planNext() {
+    if (this.checking()) return false;
+    const ready = this.readyCandidates();
+    const old = (x) => {
+      const refusal = this.refusalOf(x);
+      return refusal?.planned && Date.now() - refusal.at > RECHECK_AFTER;
+    };
+    const g = ready.find((x) => this.asked.get(x.key) !== this.stamp(x)) ?? ready.find(old);
+    if (!g) return false;
+    await this.askHub(g);
+    return true;
+  }
+
+  recheckBlocked(e, cx) {
+    if (this.checking()) return say("info", "Checking with the hub", "Try again in a moment.");
+    say("info", "Checking with the hub", "Asking whether it can merge now.");
+    cx.spawn(async (cx) => {
+      try {
+        const answer = await this.askHub(e.group);
+        if (!answer) say("info", "The board changed", "Select the card again.");
+        else if (answer.refused) say("info", "Not approved", answer.refused, [], true);
+        else {
+          this.approve(this.entryOf(e.key) ?? e, cx);
+        }
+      } catch (error) {
+        say("error", "Check failed", error.message);
+      }
+      cx.notify();
+    });
   }
 
   async mergeOne(g, shown) {
@@ -941,15 +1071,15 @@ export default class Board extends View {
     } catch (error) {
       problem = `Could not re-check #${g.info.pr.number}: ${error.message}`;
     }
-    if (problem) return this.report(name, "Not merged", problem);
+    if (problem) return this.refuse(g, name, problem);
     try {
       const r = await mergeThread(this.taskThread(g).key, this.planned);
-      if (r.merged) notify({ title: `Merged #${r.pullRequest} · ${name}`, body: cleanupNote(r.cleanup) ?? "Done", level: "success", timeout: 5000 });
-      else this.report(name, "Not merged", r.refused);
+      if (r.merged) return { name, merged: true, text: cleanupNote(r.cleanup) ?? "" };
+      return this.refuse(g, name, r.refused);
     } catch (error) {
       const state = await fetchPr(g.info.pr).then((x) => x.state, () => null);
-      if (state === "MERGED") notify({ title: `Merged #${g.info.pr.number} · ${name}`, body: "The hub took too long to answer, but GitHub shows it merged.", level: "success", timeout: 5000 });
-      else this.report(name, "Merge failed", `${error.message}. It may still merge, so check GitHub before trying again.`);
+      if (state === "MERGED") return { name, merged: true, text: "The hub took too long to answer, but GitHub shows it merged." };
+      return this.refuse(g, name, `${error.message}. It may still merge, so check GitHub before trying again.`);
     }
   }
 
@@ -958,10 +1088,20 @@ export default class Board extends View {
     this.merging = true;
     this.acted = Date.now();
     this.outcome = null;
+    const refused = { ...shared("cockpit.refused") };
+    groups.forEach((g) => delete refused[g.key]);
+    setShared("cockpit.refused", refused);
     if (this.dec) setShared("cockpit.acted", Date.now());
     cx.spawn(async (cx) => {
       try {
-        for (const [i, g] of groups.entries()) await this.mergeOne(g, seen[i]);
+        const results = [];
+        for (const [i, g] of groups.entries()) {
+          results.push(await this.mergeOne(g, seen[i]).catch((error) => this.refuse(g, g.task || g.title, error.message)));
+        }
+        const notice = mergeNotice(results);
+        say(notice.level, notice.text, null, notice.items);
+        const first = results.find((r) => !r.merged);
+        if (this.dec && first) this.outcome = { text: `Not merged: ${first.text}` };
         await this.refresh(cx, true);
       } finally {
         this.merging = false;
@@ -1004,7 +1144,7 @@ export default class Board extends View {
 
   tell(text, label, cx) {
     const info = agents().find((a) => a.space_name === "Coordinator");
-    if (!info) return notify({ title: "The Coordinator isn't running", level: "error" });
+    if (!info) return say("error", "The Coordinator isn't running");
     this.attempt(label, async () => {
       await hc(["send", info.address, text]);
     }, cx);
@@ -1014,14 +1154,16 @@ export default class Board extends View {
     const pr = e?.col === "ready" && e.group.info?.status === "open" ? e.group.info.pr : null;
     if (!pr || this.merging || !this.owns("ready") || this.guard(true) || this.prBlocked([pr])) return;
     const block = this.reviewBlock(e.group);
-    if (block) return notify({ title: "Not approved", body: block, level: "info", timeout: 3500 });
+    if (block) return say("info", "Not approved", block, [], true);
+    const refusal = this.refusalOf(e.group);
+    if (refusal?.planned) return this.recheckBlocked(e, cx);
     this.confirm("approve", e.key, (seen) => this.merge([e.group], cx, [seen]), cx, prState(pr));
   }
 
   approveAll(cx) {
     if (this.merging || !this.owns("ready")) return;
     const { approvable: prs, skipped } = this.layout;
-    if (skipped && this.armed?.kind !== "approve-all") notify({ title: `${skipped} skipped`, body: "No passing review yet, so they can't merge.", level: "info", timeout: 3500 });
+    if (skipped && this.armed?.kind !== "approve-all") say("info", `${skipped} skipped`, "No passing review yet, or the hub says they can't merge.");
     if (!prs.length || this.guard(false) || this.prBlocked(prs.map((p) => p.group.info.pr))) return;
     this.confirm("approve-all", "all", (seen) => this.merge(prs.map((p) => p.group), cx, seen), cx, prs.map((p) => prState(p.group.info.pr)));
   }
@@ -1029,6 +1171,13 @@ export default class Board extends View {
   queue(e, cx) {
     if (e?.col !== "backlog" || this.guard(true)) return;
     this.confirm("queue", e.key, () => this.tell(this.ask("Queue", e.group, "start it when a slot frees"), `Queued ${e.group.task || e.group.title}`, cx), cx);
+  }
+
+  closeEmpryo(e, cx) {
+    if (!e) return;
+    const name = e.group.task || e.group.title;
+    const open = e.group.threads.filter((x) => this.windows.includes(showName(x.key)));
+    this.confirm("close-window", e.key, () => this.attempt(`Closed the Empryo window for ${name}`, () => Promise.all(open.map((x) => closeWindow(x.key))), cx), cx);
   }
 
   openPr(e) {
@@ -1040,12 +1189,12 @@ export default class Board extends View {
     cx.spawn(async (cx) => {
       let ok = true;
       try {
-        await work();
-        notify({ title: label, level: "success", timeout: 2000 });
+        const done = await work();
+        say(done?.level ?? "success", label, typeof done === "string" ? done : typeof done?.note === "string" ? done.note : undefined);
       } catch (error) {
         ok = false;
         undo?.();
-        notify({ title: `${label.split(" ")[0]} failed`, body: error.message, level: "error" });
+        say("error", `${label.split(" ")[0]} failed`, failureText(error.message));
       }
       await this.refresh(cx, true);
       if (this.dec && ok) closeOverlay(this.overlay);
@@ -1188,7 +1337,7 @@ export default class Board extends View {
     return v_flex().id("ck-keys").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(keySheet(t, { close: () => closeOverlay(this.overlay) }));
+      .child(this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
   }
 
   renderDecision(t) {
@@ -1196,7 +1345,8 @@ export default class Board extends View {
     const cb = { primary: (cx) => this.live() && this.decide(cx, false), other: (id, cx) => this.live() && this.decideOther(id, cx), close: () => closeOverlay(this.overlay) };
     const primaryKind = cur?.d.primary.id === "merge" ? "approve" : cur?.d.primary.id;
     const armedKind = this.armed?.key === cur?.entry.key ? this.armed?.kind : null;
-    const view = cur && { col: cur.entry.col, d: cur.d, armed: armedKind === primaryKind, armedKind, outdated: this.outdated, replying: Boolean(this.replyKey), replyLabel: this.replyLabel, outcome: this.outcome, files: this.files };
+    const refusal = cur && this.refusalOf(cur.entry.group);
+    const view = cur && { col: cur.entry.col, d: cur.d, armed: armedKind === primaryKind, armedKind, outdated: this.outdated, replying: Boolean(this.replyKey), replyLabel: this.replyLabel, outcome: this.outcome ?? (refusal && { text: `Not merged: ${refusal.text}` }), files: this.files };
     return v_flex().id("ck-dec").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
@@ -1224,6 +1374,8 @@ export default class Board extends View {
       this.refresh(cx, true);
     } else if (resumed && this.board && !this.pop) this.refresh(cx);
     this.compact = !this.pop && this.area.width < COMPACT_BELOW;
+    const notice = shared("cockpit.notice");
+    if (notice && !this.pop) this.expireNotice(notice, cx);
     const folded = COLUMN_KEYS.filter((k) => this.isFolded(k)).length;
     this.colW = this.pop ? POP_WIDTH : this.compact ? this.area.width : Math.max(MIN_COL, Math.floor((this.area.width - folded * H.folded) / Math.max(1, COLUMN_KEYS.length - folded)));
     const before = this.current();
@@ -1256,7 +1408,7 @@ export default class Board extends View {
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .when(!this.compact, (el) => el.child(toolbar(t, this.area.width, { worktrees: this.wt, hub: this.hub, ops: shared("ops"), hasBoard: Boolean(this.board), running: this.board?.running ?? 0, cap: this.cap }, cb)))
+      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, hub: this.hub, ops: shared("ops"), hasBoard: Boolean(this.board), running: this.board?.running ?? 0, cap: this.cap }, cb))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()
           .on_size_change((size, cx) => {
@@ -1267,7 +1419,6 @@ export default class Board extends View {
           .child(this.compact
             ? this.lane(t, cols, state, cb)
             : h_flex().id("ck-cols").size_full().overflow_x_scroll()
-              .children(COLUMN_KEYS.map((k) => (this.isFolded(k) ? foldedColumn(t, k, cols[k], state, cb) : this.column(t, k, cols[k], state, cb))))))
-      .child(footer(t, this.area.width, this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), { entry: this.current(), pop: false, compact: this.compact, urgent: cols.needs.count + cols.ready.count, reviewed: state.reviewed, done: state.done, approvable: state.approvable }, cb));
+              .children(COLUMN_KEYS.map((k) => (this.isFolded(k) ? foldedColumn(t, k, cols[k], state, cb) : this.column(t, k, cols[k], state, cb))))));
   }
 }

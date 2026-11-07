@@ -1,6 +1,6 @@
 // The hub as the cockpit sees it: threads that need Shyam, grouped by project, and the calls that act on them.
 
-import { exec, home, notify, readTextFile, run, terminals } from "herdr";
+import { exec, hc, home, readTextFile, run, terminals } from "herdr";
 
 const LIVE = ["preparing", "queued", "starting", "running", "waiting", "failed", "interrupted"];
 const RUNNING = new Set(["preparing", "queued", "starting", "running"]);
@@ -233,8 +233,17 @@ async function reusableShow(name, thread) {
   return null;
 }
 
+export const showName = (key) => `show-${key.slice(4, 12)}`;
+
+export const empryoWindows = () => terminals().filter((t) => t.state === "live" && t.labels?.["emp.show"] === "empryo").map((t) => t.name);
+
+export async function closeWindow(key) {
+  const r = await hc(["kill", showName(key)]);
+  if (r.code !== 0) throw new Error(r.stderr.trim() || `Could not close ${showName(key)}`);
+}
+
 export async function openThread(thread, cx) {
-  const name = `show-${thread.key.slice(4, 12)}`;
+  const name = showName(thread.key);
   const reuse = await reusableShow(name, thread);
   if (reuse) return run("terminal.peek", { terminal: reuse });
   const before = terminals().find((t) => t.name === name)?.address;
@@ -244,11 +253,11 @@ export async function openThread(thread, cx) {
   while (!finished) {
     const fresh = terminals().find((t) => t.name === name && t.state === "live" && t.address !== before);
     if (fresh) return run("terminal.peek", { terminal: fresh.address });
-    if (Date.now() > until) return notify({ title: "Could not open the thread", body: "The terminal did not appear in time.", level: "error" });
+    if (Date.now() > until) throw new Error("The terminal did not appear in time.");
     await cx.sleep(SHOW_POLL);
   }
   const r = await shown;
-  if (r.code !== 0) notify({ title: "Could not open the thread", body: r.stderr.trim(), level: "error" });
+  if (r.code !== 0) throw new Error(r.stderr.trim());
 }
 
 export const sendArgs = (key, message) => ({ threadId: key, message, mode: "auto" });
@@ -263,6 +272,17 @@ const QUIET_KEEPS = /no worktree on disk|main checkout/;
 export function cleanupNote(result) {
   if (result.action === "removed") return result.branchRemoved ? "Worktree and branch removed" : `Worktree removed, branch kept: ${result.branchNote}`;
   return QUIET_KEEPS.test(result.reason) ? null : `Worktree kept: ${result.reason}`;
+}
+
+export function mergeNotice(results) {
+  const merged = results.filter((r) => r.merged).length;
+  const refused = results.length - merged;
+  const items = results.map((r) => ({ name: r.name, ok: r.merged, text: r.text || "Merged" }));
+  const [only] = results;
+  const text = only && results.length === 1
+    ? only.merged ? `Merged ${only.name}${only.text ? `: ${only.text}` : ""}` : `Not merged · ${only.name}: ${only.text}`
+    : [merged && `Merged ${merged}`, refused && `${refused} not merged`].filter(Boolean).join(", ");
+  return { level: refused ? "error" : "success", text, items };
 }
 
 export async function readTask(thread) {

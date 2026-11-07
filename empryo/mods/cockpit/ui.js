@@ -80,6 +80,9 @@ export function columnHead(t, key, col, state, cb) {
 }
 
 const BAR_GAP = 6;
+const NOTICE_MIN = 140;
+const HINT_ROOM = 64;
+const NOTICE_TONE = { success: "done", error: "blocked", info: "muted" };
 const barCost = (item) => (item.label.length + (item.more?.length ?? 0)) * 6.2 + 12;
 function barItems(v) {
   const { worktrees: w, hub, ops, running, cap } = v;
@@ -101,15 +104,32 @@ function barItems(v) {
   ];
 }
 
-export function toolbar(t, width, v, cb) {
-  const room = width - 20;
+export function fitBar(width, v) {
+  if (v.compact) return [];
+  const room = width - 20 - HINT_ROOM - (v.notice ? NOTICE_MIN + BAR_GAP : 0);
   const fits = (list) => list.reduce((sum, x) => sum + barCost(x), 0) + (list.length - 1) * BAR_GAP <= room;
   let shown = barItems(v);
   const wt = shown[0];
   if (!fits(shown)) wt.more = "";
   while (shown.length > 1 && !fits(shown)) shown = shown.filter((x) => x !== shown.reduce((a, b) => (b.prio > a.prio ? b : a)));
+  return shown;
+}
+
+function noticeLine(t, notice, cb) {
+  return h_flex().id("bar-notice").flex_1().min_w(0).gap(4).items_center().overflow_hidden()
+    .child(h_flex().id("bar-notice-text").flex_1().min_w(0).h(18).gap(6).items_center().cursor_pointer().on_mouse_down("left", stop).on_click((_e, cx) => cb.notice(cx)).tooltip(notice.text)
+      .child(div().size(6).flex_none().rounded(3).bg(t[NOTICE_TONE[notice.level]]))
+      .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(notice.text)))
+    .child(headButton(t, "bar-notice-x", "✕", "Dismiss", () => cb.dismiss()));
+}
+
+export function toolbar(t, width, v, cb) {
   return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
-    .children(shown.map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => cb.panel(x.id, cx), x.tip, true, x.tone)));
+    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => cb.panel(x.id, cx), x.tip, true, x.tone)))
+    .when(Boolean(v.notice), (el) => el.child(noticeLine(t, v.notice, cb)))
+    .when(!v.notice, (el) => el.child(div().flex_1()))
+    .when(v.stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))
+    .child(keysHint(t, cb));
 }
 
 export function foldedColumn(t, key, col, state, cb) {
@@ -203,9 +223,10 @@ export function card(t, e, v, input, cb) {
   const narrow = v.narrow;
   const line = ready ? null : statusLine(v);
   const fit = ready ? readyFit(v, narrow) : null;
+  const refused = ready && Boolean(v.refusal);
   const armedHere = v.armed?.key === e.key ? v.armed.kind : null;
-  const readyActions = h_flex().gap(4).h(H.foot).flex_1().min_w(0).items_center().overflow_hidden()
-    .child(action(t, `ap-${e.key}`, "a", armedHere === "approve" ? "Confirm" : "Approve", (cx) => cb.approve(cx), armedHere === "approve" ? "Press again to send the merge approval" : "Approve merge (a)", narrow))
+  const readyActions = h_flex().gap(4).h(H.foot).min_w(0).when(!refused, (el) => el.flex_1()).items_center().overflow_hidden()
+    .child(action(t, `ap-${e.key}`, "a", armedHere === "approve" ? "Confirm" : "Approve", (cx) => cb.approve(cx), armedHere === "approve" ? "Press again to send the merge approval" : v.blocked ? v.refusal : "Approve merge (a)", narrow).when(v.blocked, (el) => el.opacity(0.5)))
     .child(action(t, `pr-${e.key}`, "p", "PR", () => cb.openPr(), "Open the PR (p)", narrow))
     .child(action(t, `op-${e.key}`, "o", narrow ? "Open" : "Thread", (cx) => cb.open(cx), "Open the thread (o)", narrow))
     .when(canSettle && !narrow, (el) => el.child(action(t, `se-${e.key}`, "s", "Settle", (cx) => cb.settle(cx))));
@@ -218,14 +239,19 @@ export function card(t, e, v, input, cb) {
     .when(count > 1, (el) => el.child(fold(t, e.key, count, expanded, cb)))
     .when(variant === "backlog" && v.state, (el) => el.child(chip(t, v.state, "idle")))
     .when(v.merged, (el) => el.child(chip(t, "merged", "done")))
-    .when(!ready || fit.model, (el) => el.child(modelChips(t, c, v.runModel)));
-  const status = ready
+    .when(!refused && (!ready || fit.model), (el) => el.child(modelChips(t, c, v.runModel)));
+  const status = refused
+    ? h_flex().id(`why-${e.key}`).flex_1().min_w(0).gap(5).items_center().tooltip(v.refusal).on_mouse_down("left", selectOnly(e.key, cb))
+      .child(div().size(6).flex_none().rounded(3).bg(t.blocked))
+      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).child(v.refusal))
+    : ready
     ? prChips(t, v, fit).on_mouse_down("left", selectOnly(e.key, cb))
     : h_flex().flex_1().min_w(0).gap(5).items_center()
       .child(div().size(6).flex_none().rounded(3).bg(v.quiet ? t.muted : t[TONE[c.kind]]))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
   const foot = selected
-    ? h_flex().h(H.foot).w_full().flex_none().items_center().child(ready ? readyActions : quick)
+    ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(ready ? readyActions : quick)
+      .when(refused, (el) => el.child(div().id(`why-${e.key}`).flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).tooltip(v.refusal).child(v.refusal)))
     : h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(status).child(meta);
   const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
     .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
@@ -237,6 +263,7 @@ export function card(t, e, v, input, cb) {
       .when(Boolean(c.task), (el) => el.child(div().flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(c.task)))
       .when(!c.task, (el) => el.child(div().min_w(0).truncate().text_size(11).font_medium().text_color(t.muted).child(c.project ?? "thread")))
       .child(div().flex_1())
+      .when(v.window, (el) => el.child(action(t, `win-${e.key}`, "", armedHere === "close-window" ? "Close it?" : narrow ? "Empryo" : "open in Empryo", (cx) => cb.closeWindow(e.key, cx), armedHere === "close-window" ? "Press again to close the Empryo window" : "An Empryo window is open on this task, so the hub can't send to it. Click to close it.", true, "working")))
       .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now))))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
     .child(div().flex_1())
@@ -418,55 +445,34 @@ export function decisionView(t, v, input, cb) {
 }
 
 export const DECIDES = new Set(["needs", "ready"]);
-const settleable = (c) => (c.entry.thread ? [c.entry.thread] : c.entry.group.threads).some((x) => SETTLEABLE.includes(x.kind));
-const FOOT_HELP = 64;
-
 export const KEY_TABLE = [
-  { keys: "⏎", group: "Card", label: (c) => (!c.entry.thread && DECIDES.has(c.entry.col) ? "decide" : "open"), all: "Decide on a Needs you or Ready card, open the thread on any other", when: (c) => c.entry },
-  { keys: "a", group: "Card", label: "approve", all: "Approve the merge, press twice (Ready cards)", when: (c) => c.entry?.col === "ready" && c.entry.group.info?.status === "open" },
-  { keys: "o", group: "Card", label: "thread", all: "Open the thread", when: (c) => c.entry },
-  { keys: "r", group: "Card", label: "reply", all: "Reply to the thread", when: (c) => c.entry },
-  { keys: "d", group: "Card", label: "send back", all: "Send back with a note: reply to the thread (Ready cards; on Needs you cards it is a plain reply)", when: (c) => c.entry?.col === "ready" },
-  { keys: "s", group: "Card", label: "settle", all: "Settle the card's finished threads", when: (c) => c.entry && settleable(c) },
-  { keys: "p", group: "Card", label: "PR", all: "Open the pull request", when: (c) => c.entry?.group.info?.pr },
-  { keys: "q", group: "Card", label: "queue", all: "Queue the task, press twice (Backlog cards)", when: (c) => c.entry?.col === "backlog" },
-  { keys: "n", group: "Move", label: "next urgent", all: "Jump to the oldest Needs you card, then Ready, and cycle", when: (c) => c.urgent > 0 },
-  { keys: "j k", group: "Move", label: "card", all: "Next or previous card (the arrow keys work too)", when: () => true },
-  { keys: "h l", group: "Move", label: (c) => (c.compact ? "section" : "column"), all: "Previous or next column (section on a narrow board)", when: (c) => !c.pop },
-  { keys: "g G", group: "Move", label: "top, end", all: "First or last card in the column", when: (c) => c.entry },
-  { keys: "→ ←", group: "Move", label: "threads", all: "Show or hide a task's other threads", when: (c) => c.entry?.group.threads.length > 1 },
-  { keys: "S", group: "Board", label: "settle reviewed", all: "Settle every reviewed card, press twice (Done)", when: (c) => c.entry?.col === "done" && c.reviewed > 0 },
-  { keys: "A", group: "Board", label: "settle all", all: "Settle every finished card, press twice (Done)", when: (c) => c.entry?.col === "done" && c.done > 0 },
-  { keys: "M", group: "Board", label: "approve all", all: "Approve every PR with a passing review, press twice (Ready)", when: (c) => c.entry?.col === "ready" && c.approvable > 0 },
-  { keys: "f", group: "Board", label: "fold", all: "Fold or show this column", when: (c) => !c.pop && c.entry },
-  { keys: "e", group: "Board", label: "pop-up", all: "Open this column in a pop-up", when: (c) => !c.pop && c.entry },
-  { keys: "b", group: "Board", label: "backlog", all: "Fold or show Backlog", when: (c) => !c.pop },
-  { keys: "R", group: "Board", label: "refresh", all: "Reload the board now", when: () => true },
-  { keys: "?", group: "Board", label: "all keys", all: "Show this list", when: () => true },
+  { keys: "⏎", group: "Card", all: "Decide on a Needs you or Ready card, open the thread on any other" },
+  { keys: "a", group: "Card", all: "Approve the merge, press twice (Ready cards)" },
+  { keys: "o", group: "Card", all: "Open the thread" },
+  { keys: "r", group: "Card", all: "Reply to the thread" },
+  { keys: "d", group: "Card", all: "Send back with a note: reply to the thread (Ready cards; on Needs you cards it is a plain reply)" },
+  { keys: "s", group: "Card", all: "Settle the card's finished threads" },
+  { keys: "p", group: "Card", all: "Open the pull request" },
+  { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards)" },
+  { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then Ready, and cycle" },
+  { keys: "j k", group: "Move", all: "Next or previous card (the arrow keys work too)" },
+  { keys: "h l", group: "Move", all: "Previous or next column (section on a narrow board)" },
+  { keys: "g G", group: "Move", all: "First or last card in the column" },
+  { keys: "→ ←", group: "Move", all: "Show or hide a task's other threads" },
+  { keys: "S", group: "Board", all: "Settle every reviewed card, press twice (Done)" },
+  { keys: "A", group: "Board", all: "Settle every finished card, press twice (Done)" },
+  { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (Ready)" },
+  { keys: "f", group: "Board", all: "Fold or show this column" },
+  { keys: "e", group: "Board", all: "Open this column in a pop-up" },
+  { keys: "b", group: "Board", all: "Fold or show Backlog" },
+  { keys: "R", group: "Board", all: "Reload the board now" },
+  { keys: "?", group: "Board", all: "Show this list" },
 ];
 
-const labelOf = (row, ctx) => (typeof row.label === "function" ? row.label(ctx) : row.label);
-
-export function footer(t, width, stale, ctx, cb) {
-  const fit = [];
-  let used = 0;
-  const room = width - 20 - FOOT_HELP - (stale ? 40 : 0);
-  for (const row of KEY_TABLE) {
-    if (row.keys === "?" || !row.when(ctx)) continue;
-    const label = labelOf(row, ctx);
-    used += (row.keys.length + label.length) * 5.8 + 14;
-    if (used > room) break;
-    fit.push([row.keys, label]);
-  }
-  return h_flex().h(18).px(10).flex_none().gap(8).items_center().border_t(1).border_color(t.border).overflow_hidden()
-    .child(h_flex().flex_1().min_w(0).gap(8).items_center().overflow_hidden()
-      .children(fit.map(([k, v]) => h_flex().gap(4).items_center().flex_none()
-        .child(div().text_size(9.5).font_medium().text_color(t.muted).child(k))
-        .child(div().text_size(9.5).text_color(t.dim).child(v)))))
-    .when(stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))
-    .child(h_flex().id("keys-help").flex_none().gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.raised)).px(3).rounded(3).on_click((_e, cx) => cb.keys(cx))
-      .child(div().text_size(9.5).font_medium().text_color(t.muted).child("?"))
-      .child(div().text_size(9.5).text_color(t.dim).child("all keys")));
+function keysHint(t, cb) {
+  return h_flex().id("keys-help").flex_none().gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.raised)).px(3).rounded(3).on_click((_e, cx) => cb.keys(cx))
+    .child(div().text_size(9.5).font_medium().text_color(t.muted).child("?"))
+    .child(div().text_size(9.5).text_color(t.dim).child("all keys"));
 }
 
 export const SHEET_WIDTH = 640;
@@ -485,6 +491,24 @@ export function keySheet(t, cb) {
           .children(KEY_TABLE.filter((r) => r.group === group).map((r) => h_flex().w_full().min_h(22).gap(10).items_start().py(2)
             .child(div().w(54).flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(r.keys))
             .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.muted).child(r.all))))))));
+}
+
+export const noticeHeight = (notice) => Math.min(DEC_CAP, 34 + 24 + Math.ceil(notice.text.length / 70) * 18 + notice.items.length * 56);
+
+export function noticeSheet(t, notice, cb) {
+  return v_flex().size_full().min_h(0)
+    .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
+      .child(div().size(7).flex_none().rounded(4).bg(t[NOTICE_TONE[notice.level]]))
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Board message"))
+      .child(headButton(t, "notice-close", "✕", "Close", () => cb.close())))
+    .child(v_flex().id("notice-body").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().w_full().flex_none().px(16).py(10).gap(10)
+        .child(div().w_full().text_size(12.5).line_height("18px").text_color(t.foreground).child(notice.text))
+        .children(notice.items.map((x) => v_flex().w_full().gap(2)
+          .child(h_flex().gap(6).items_center()
+            .child(div().size(6).flex_none().rounded(3).bg(t[x.ok ? "done" : "blocked"]))
+            .child(div().text_size(11.5).font_semibold().text_color(t.foreground).child(x.name)))
+          .child(div().w_full().pl(12).text_size(11.5).line_height("17px").text_color(t.muted).child(x.text))))));
 }
 
 export function thumb(t, top, view, total) {
