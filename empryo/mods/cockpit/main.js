@@ -46,7 +46,7 @@ let noticeSeq = 0;
 const say = (level, title, body, items = [], explicit = false) => {
   const shown = shared("cockpit.notice");
   if (level === "info" && !explicit && shown?.level === "error" && shown.items.length) return;
-  setShared("cockpit.notice", { id: `${Date.now()}.${++noticeSeq}`, level, text: body ? `${title}: ${body}` : title, items });
+  setShared("cockpit.notice", { id: `${Date.now()}.${++noticeSeq}`, level, text: body ? `${title}: ${body}` : title, items, sticky: explicit });
 };
 const dismiss = () => setShared("cockpit.notice", null);
 
@@ -436,6 +436,7 @@ export default class Board extends View {
   }
 
   reviewBlock(g) {
+    if (g.info.gh?.draft) return "Draft PR: mark it ready first";
     const verdict = this.verdictFor(g);
     if (canMerge(verdict)) return null;
     if (!verdict) return "No review yet, so this can't merge. Open the card and start a review.";
@@ -520,7 +521,8 @@ export default class Board extends View {
         const selected = this.cursor === gkey;
         const c = { ...g.primary, title: g.title, task: g.task };
         const refusal = variant === "ready" ? this.refusalOf(g) : null;
-        const view = (extra) => ({ opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const block = variant === "ready" && g.info.status === "open" ? this.reviewBlock(g) : null;
+        const view = (extra) => ({ opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: block ?? refusal?.text, blocked: Boolean(block || refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -533,7 +535,7 @@ export default class Board extends View {
       col.summary = this.summary(key, col, now);
     }
     const open = cols.ready.groups.filter((g) => g.info.status === "open" && g.info.pr);
-    const approvable = open.filter((g) => canMerge(this.verdictFor(g)) && !this.refusalOf(g)?.planned).map((g) => ({ name: g.task || g.title, number: g.info.pr.number, group: g }));
+    const approvable = open.filter((g) => !this.reviewBlock(g) && !this.refusalOf(g)?.planned).map((g) => ({ name: g.task || g.title, number: g.info.pr.number, group: g }));
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length };
     return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, running: this.board?.running ?? 0, cap: this.cap } };
   }
@@ -697,7 +699,7 @@ export default class Board extends View {
     if (this.noticeSeen === notice.id) return;
     this.noticeSeen = notice.id;
     this.noticeTimer?.cancel();
-    this.noticeTimer = notice.level === "error" ? null : cx.timer.after(NOTICE_FOR, () => shared("cockpit.notice")?.id === notice.id && dismiss());
+    this.noticeTimer = notice.level === "error" || notice.sticky ? null : cx.timer.after(NOTICE_FOR, () => shared("cockpit.notice")?.id === notice.id && dismiss());
   }
 
   openNotice(notice, cx) {
@@ -1006,7 +1008,7 @@ export default class Board extends View {
   readyCandidates() {
     return this.groups().filter((x) => {
       const info = this.prInfo(x);
-      return this.mergeCandidate({ ...x, info }) && info.gh && canMerge(this.verdictFor(x));
+      return this.mergeCandidate({ ...x, info }) && info.gh && !this.reviewBlock({ ...x, info });
     });
   }
 
