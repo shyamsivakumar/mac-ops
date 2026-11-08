@@ -4,7 +4,7 @@ import { div } from "gpui-kit";
 import { v_flex, h_flex, Input } from "gpui-base";
 import { shortModel } from "./hub.js";
 
-export const H = { bar: 26, head: 42, sub: 16, card: 86, foot: 18, title: 30, child: 24, reply: 34, empty: 50, folded: 44 };
+export const H = { bar: 26, head: 42, sub: 16, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, empty: 50, folded: 44 };
 const TONE = { wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
@@ -13,6 +13,8 @@ const VERDICT_TONE = { pass: "done", fail: "blocked", unknown: "dim", loading: "
 export const LOADING_VERDICT = { state: "loading", label: "rev …" };
 export const canMerge = (verdict) => verdict?.state === "pass" || verdict?.state === "unknown";
 const MERGE = { MERGEABLE: ["merge ✓", "done", "Mergeable"], CONFLICTING: ["merge ✗", "blocked", "Merge conflict"], UNKNOWN: ["merge ?", "dim", "Merge status unknown"] };
+const DRAFT = ["Draft", "dim", "Draft PR, not ready to merge"];
+const mergeOf = (gh) => (gh?.draft ? DRAFT : MERGE[gh?.mergeable] ?? MERGE.UNKNOWN);
 export const COLUMNS = [["backlog", "Backlog", "idle", "Backlog"], ["needs", "Needs you", "blocked", "Needs"], ["run", "Running", "working", "Running"], ["ready", "Ready to merge", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"]];
 const stop = (_e, cx) => cx.stop_propagation();
 const selectOnly = (key, cb) => (e, cx) => {
@@ -20,7 +22,8 @@ const selectOnly = (key, cb) => (e, cx) => {
   cx.stop_propagation();
 };
 
-export const cardHeight = (replying) => H.card + (replying ? H.reply : 0);
+export const hasReason = (c, variant) => variant === "std" && c.kind === "fail" && Boolean(c.context);
+export const cardHeight = (replying, reason) => H.card + (replying ? H.reply : 0) + (reason ? H.reason : 0);
 
 export function ago(at, now) {
   const m = Math.floor((now - at) / 60000);
@@ -195,7 +198,7 @@ function modelChips(t, c, runModel) {
 const chipWidth = (text) => 8 + text.length * 5.5;
 
 function readyFit(v, narrow) {
-  const [mergeLabel] = MERGE[v.gh?.mergeable] ?? MERGE.UNKNOWN;
+  const [mergeLabel] = mergeOf(v.gh);
   const { label, used } = modelParts(v.c, v.runModel);
   const room = v.colW - 36 - (v.count > 1 ? 30 : 0) - (v.merged ? chipWidth("merged") + 6 : 0);
   const core = chipWidth(`#${v.pr.number}`) + chipWidth("CI ✓") + chipWidth(mergeLabel) + 6;
@@ -209,16 +212,16 @@ function readyFit(v, narrow) {
 function prChips(t, v, fit) {
   const gh = v.gh;
   const verdict = v.verdict;
-  const [mergeLabel, mergeTone, mergeTip] = MERGE[gh?.mergeable] ?? MERGE.UNKNOWN;
+  const [mergeLabel, mergeTone, mergeTip] = mergeOf(gh);
   const ci = gh ? gh.ci : "none";
   const { label, used } = modelParts(v.c, v.runModel);
   const dropped = [!fit.rev && `Review ${verdict?.label ?? "none yet"}`, !fit.model && label && `Model ${label}`, !fit.model && used && `Ran on ${used}`].filter(Boolean);
   const prTip = [`PR #${v.pr.number}${gh?.draft ? " (draft)" : ""}`, ...dropped].join(" · ");
   return h_flex().h(H.foot).flex_1().min_w(0).gap(3).items_center().overflow_hidden()
-    .child(chip(t, `#${v.pr.number}${gh?.draft && fit.rev ? " draft" : ""}`, "accent", prTip))
+    .child(chip(t, `#${v.pr.number}`, "accent", prTip))
     .child(chip(t, `CI ${gh ? CI_MARK[ci] ?? "?" : "…"}`, CI_TONE[ci] ?? "dim", gh ? `CI ${ci}` : "CI loading"))
     .when(fit.rev, (el) => el.child(chip(t, `rev ${verdict ? VERDICT_MARK[verdict.state] ?? "?" : "—"}`, verdict ? VERDICT_TONE[verdict.state] ?? "dim" : "dim", verdict?.label ?? "No review yet")))
-    .child(chip(t, fit.short ? mergeLabel.slice(-1) : mergeLabel, mergeTone, mergeTip));
+    .child(chip(t, fit.short ? (gh?.draft ? "D" : mergeLabel.slice(-1)) : mergeLabel, mergeTone, mergeTip));
 }
 
 function statusLine(v) {
@@ -236,7 +239,8 @@ export function card(t, e, v, input, cb) {
   const { c, count, expanded, selected, mark, replying, now, canSettle, variant, opening } = v;
   const ready = variant === "ready";
   const narrow = v.narrow;
-  const line = ready ? null : statusLine(v);
+  const reason = hasReason(c, variant);
+  const line = ready ? null : reason ? "Failed" : statusLine(v);
   const fit = ready ? readyFit(v, narrow) : null;
   const refused = ready && Boolean(v.refusal);
   const armedHere = v.armed?.key === e.key ? v.armed.kind : null;
@@ -263,12 +267,12 @@ export function card(t, e, v, input, cb) {
     ? prChips(t, v, fit).on_mouse_down("left", selectOnly(e.key, cb))
     : h_flex().flex_1().min_w(0).gap(5).items_center()
       .child(div().size(6).flex_none().rounded(3).bg(v.quiet ? t.muted : t[TONE[c.kind]]))
-      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).when(c.error, (el) => el.id(`err-${e.key}`).tooltip(c.error)).child(line));
+      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
   const foot = selected
     ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(ready ? readyActions : quick)
       .when(refused, (el) => el.child(div().id(`why-${e.key}`).flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).tooltip(v.refusal).child(v.refusal)))
     : h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(status).child(meta);
-  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
+  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
     .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
     .border_color(selected ? (mark === "focus" ? t.accent : t.input) : t.border).px(8).py(5).gap(2)
     .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
@@ -281,9 +285,10 @@ export function card(t, e, v, input, cb) {
       .when(v.window, (el) => el.child(action(t, `win-${e.key}`, "", armedHere === "close-window" ? "Close it?" : narrow ? "Empryo" : "open in Empryo", (cx) => cb.closeWindow(e.key, cx), armedHere === "close-window" ? "Press again to close the Empryo window" : "An Empryo window is open on this task, so the hub can't send to it. Click to close it.", true, "working")))
       .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now))))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
+    .when(reason, (el) => el.child(div().id(`err-${e.key}`).w_full().h(H.reason - 2).flex_none().overflow_hidden().text_size(10).line_height("13px").text_color(t.muted).tooltip(c.error).child(c.context)))
     .child(div().flex_1())
     .child(foot);
-  const cardEl = div().h(cardHeight(false)).w_full().flex_none().px(6).pb(4).child(body);
+  const cardEl = div().h(cardHeight(false, reason)).w_full().flex_none().px(6).pb(4).child(body);
   if (!replying) return cardEl;
   return v_flex().w_full().flex_none().child(cardEl)
     .child(h_flex().h(H.reply).px(6).pt(2).gap(6).items_start()

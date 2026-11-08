@@ -5,7 +5,7 @@ import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
 import { cleanupNote, cleanupThread, closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, readTask, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { COLUMNS, DECIDES, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionHeight, decisionOf, decisionView, elapsed, emptyRow, foldedColumn, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
+import { COLUMNS, DECIDES, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionHeight, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -522,7 +522,7 @@ export default class Board extends View {
         const refusal = variant === "ready" ? this.refusalOf(g) : null;
         const view = (extra) => ({ opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
-        col.rows.push({ key: gkey, h: cardHeight(replying), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
+        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
         for (const th of g.threads.slice(1)) {
           const tkey = `t:${th.key}`;
@@ -557,7 +557,7 @@ export default class Board extends View {
       return [
         ...seg(groups.filter((g) => ci(g) === "pass").length, "pass", "done"),
         ...seg(groups.filter((g) => ci(g) === "fail").length, "failing", "blocked"),
-        ...seg(groups.filter((g) => g.info.gh?.mergeable === "CONFLICTING").length, "conflict", "blocked"),
+        ...seg(groups.filter((g) => !g.info.gh?.draft && g.info.gh?.mergeable === "CONFLICTING").length, "conflict", "blocked"),
         ...seg(groups.filter((g) => ci(g) === "pending" || ci(g) === "loading").length, "pending", "working"),
       ];
     }
