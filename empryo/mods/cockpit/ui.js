@@ -54,6 +54,14 @@ function fitSummary(parts, room) {
   return fit;
 }
 
+const buttonWidth = (label, bare) => label.length * 6 + 12 + (bare ? 0 : 10);
+
+export function headTitle(label, short, colW, popup, count, buttons) {
+  const children = (popup ? 0 : 1) + 5 + buttons.length;
+  const used = 20 + (popup ? 0 : 10) + 7 + count.length * 7 + 18 + 6 * (children - 1) + buttons.reduce((sum, b) => sum + buttonWidth(b.label, b.bare), 0);
+  return label.length * 6.4 <= colW - used ? label : short;
+}
+
 function headButton(t, id, glyph, tip, run) {
   return div().id(id).size(18).flex_none().flex().items_center().justify_center().rounded(4).text_size(12).text_color(t.muted)
     .cursor_pointer().hover((s) => s.bg(t.selected).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => run(cx)).tooltip(tip).child(glyph);
@@ -63,17 +71,24 @@ export function columnHead(t, key, col, state, cb) {
   const [, label, tone, short] = COLUMNS.find((c) => c[0] === key);
   const capped = key === "run" && state.running >= state.cap;
   const tight = state.colW < 260;
+  const count = key === "run" ? `${state.running}/${state.cap}` : String(col.count);
+  const settleReviewed = key === "done" && state.reviewed > 0 && !tight ? { label: state.armed?.kind === "settle" ? `Confirm ${state.reviewed}` : `Settle ${state.reviewed}` } : null;
+  const bulk = key === "done" && state.done > 0
+    ? { id: "settle-all", hint: "A", label: state.armed?.kind === "settle-all" ? `Confirm ${state.done}` : tight ? `Settle ${state.done}` : `Settle all ${state.done}`, run: (cx) => cb.settleAll(cx), tip: `Settle all ${state.done} (A)` }
+    : key === "ready" && state.approvable > 0
+    ? { id: "approve-all", hint: "M", label: state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, run: (cx) => cb.approveAll(cx), tip: `Approve all ${state.approvable} (M)` }
+    : null;
+  const buttons = [settleReviewed, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
     .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)).tooltip(`${state.collapsed ? "Show" : "Hide"} ${label}`))
     .child(h_flex().h(H.head - H.sub).px(10).gap(6).items_center().overflow_hidden()
       .when(!state.popup, (el) => el.child(div().w(10).text_size(9).text_color(t.dim).child(state.collapsed ? "▸" : "▾")))
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
-      .child(div().min_w(0).text_size(11).font_semibold().text_color(t.foreground).truncate().child(tight && (key === "done" || key === "ready") ? short : label))
-      .child(div().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).child(key === "run" ? `${state.running}/${state.cap}` : String(col.count)))
+      .child(div().min_w(0).text_size(11).font_semibold().text_color(t.foreground).truncate().child(headTitle(label, short, state.colW, state.popup, count, buttons)))
+      .child(div().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).child(count))
       .child(div().flex_1())
-      .when(key === "done" && state.reviewed > 0 && state.colW >= 260, (el) => el.child(action(t, "settle-reviewed", "S", state.armed?.kind === "settle" ? `Confirm ${state.reviewed}` : `Settle ${state.reviewed}`, (cx) => cb.settleReviewed(cx))))
-      .when(key === "done" && state.done > 0, (el) => el.child(action(t, "settle-all", "A", state.armed?.kind === "settle-all" ? `Confirm ${state.done}` : tight ? `Settle ${state.done}` : `Settle all ${state.done}`, (cx) => cb.settleAll(cx), `Settle all ${state.done} (A)`, tight)))
-      .when(key === "ready" && state.approvable > 0, (el) => el.child(action(t, "approve-all", "M", state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, (cx) => cb.approveAll(cx), `Approve all ${state.approvable} (M)`, tight)))
+      .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
+      .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight)))
       .child(state.popup ? headButton(t, "pop-close", "✕", "Close", () => cb.close()) : headButton(t, `pop-${key}`, "⤢", `Open ${label} in a pop-up`, () => cb.expand(key))))
     .child(h_flex().h(H.sub).px(10).gap(8).items_start().overflow_hidden()
       .children(fitSummary(col.summary, state.colW - 20).map(([text, summaryTone]) => div().flex_none().text_size(9.5).text_color(summaryTone === "dim" ? t.muted : t[summaryTone]).child(text))));
@@ -248,7 +263,7 @@ export function card(t, e, v, input, cb) {
     ? prChips(t, v, fit).on_mouse_down("left", selectOnly(e.key, cb))
     : h_flex().flex_1().min_w(0).gap(5).items_center()
       .child(div().size(6).flex_none().rounded(3).bg(v.quiet ? t.muted : t[TONE[c.kind]]))
-      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
+      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).when(c.error, (el) => el.id(`err-${e.key}`).tooltip(c.error)).child(line));
   const foot = selected
     ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(ready ? readyActions : quick)
       .when(refused, (el) => el.child(div().id(`why-${e.key}`).flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).tooltip(v.refusal).child(v.refusal)))
@@ -361,7 +376,7 @@ export function decisionOf(col, g, info, verdict, now) {
   return {
     headline: `${retry ? "Retry" : "Resume"} ${name}`,
     primary: { id: retry ? "retry" : "resume", key: "t", label: retry ? "Retry" : "Resume", armed: retry ? "Confirm retry" : "Confirm resume" },
-    why: [c.context, `${g.title} · ${retry ? "failed" : "stopped"} ${age} ago`],
+    why: [c.error ?? c.context, `${g.title} · ${retry ? "failed" : "stopped"} ${age} ago`],
     other,
     checks,
   };

@@ -72,6 +72,18 @@ export function shortModel(model) {
 
 const CONTEXT = { idle: "Not started", run: "Running", fail: "The last run failed", stop: "The run was interrupted", done: "Finished, not settled" };
 
+export function plainError(raw) {
+  const text = raw.replace(/^session\/\w+:\s*/, "").replace(/\b(.{6,}?)(?: — \1)+/g, "$1");
+  const model = text.match(/^Model "(?:subscriptions\/)?([^"]+)" is not available/);
+  if (model) return `Model ${model[1]} isn't available`;
+  const tool = text.match(/failed the same way (\d+) times/);
+  if (tool) return `Stopped: the same tool failed ${tool[1]} times`;
+  if (text.includes("stream stalled")) return "Stalled with no output";
+  const provider = text.match(/^Provider request failed \(HTTP (4\d\d)\) from (?:api\.)?(\w+)\./);
+  if (provider) return `${provider[2][0].toUpperCase()}${provider[2].slice(1)} rejected the request (HTTP ${provider[1]})`;
+  return text;
+}
+
 function card(thread, names) {
   const kind = RUNNING.has(thread.status) ? "run" : KIND[thread.status];
   const task = TASK_ID.exec(thread.title)?.[0] ?? "";
@@ -96,7 +108,8 @@ function card(thread, names) {
     created: Date.parse(thread.createdAt),
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
     status: thread.status,
-    context: kind === "fail" && thread.lastError ? thread.lastError : CONTEXT[kind] ?? "",
+    context: kind === "fail" && thread.lastError ? plainError(thread.lastError) : CONTEXT[kind] ?? "",
+    error: kind === "fail" ? thread.lastError : undefined,
     prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state })),
   };
 }
