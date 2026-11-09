@@ -12,6 +12,7 @@ const EVENT_MAX = 200;
 
 const IMAGE_SOURCE = /\[Image: source: ([^\]]+)\]/g;
 const IMAGE_MARK = /\[Image #\d+\]/g;
+const IMAGE_PATH = /(^|\s)((?:\/|~\/)[^\n]*?\.(?:png|jpe?g|gif|webp|heic))(?=\s|$)/gi;
 const SAMPLES = 8;
 const SAMPLE_LEN = 64;
 const IMAGE_DIR = "data/coordinator/img";
@@ -33,6 +34,11 @@ function keyOf(text) {
 const extOf = (path) => /\.([a-z0-9]{2,5})$/i.exec(path)?.[1].toLowerCase() ?? "png";
 
 const fileImage = (path) => ({ key: keyOf(path), ext: extOf(path), path, data: null });
+
+export function pathImages(text) {
+  const paths = [...text.matchAll(IMAGE_PATH)].map((m) => (m[2].startsWith("~/") ? `${home()}${m[2].slice(1)}` : m[2]));
+  return { images: paths.map(fileImage), rest: text.replace(IMAGE_PATH, "$1") };
+}
 
 function resultImages(content) {
   if (!Array.isArray(content)) return [];
@@ -312,8 +318,10 @@ function feed(p, text) {
         p.pending = [...p.open.values()].at(-1) ?? null;
         continue;
       }
-      const whole = textOf(content);
+      const typed = pathImages(textOf(content));
+      const whole = typed.rest;
       const images = [...whole.matchAll(IMAGE_SOURCE)].map((m) => fileImage(m[1].trim()));
+      for (const ref of typed.images) if (!images.some((i) => i.path === ref.path)) images.push(ref);
       const raw = whole.replace(IMAGE_SOURCE, "").replace(IMAGE_MARK, "").replace(/<\/?pasted_content[^>]*>/g, "").trim();
       const hc = /^<hc\s+from="([^"]*)"/.exec(raw);
       const text = hc ? raw.replace(/<\/?hc\b[^>]*>/g, "").trim() : raw;

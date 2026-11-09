@@ -203,11 +203,12 @@ function eventLine(t, item) {
 }
 
 const IMAGE_MAX = 220;
+const ATTACH_MAX = 64;
 
-function imageTile(t, ref, id, cb) {
+function imageTile(t, ref, id, cb, max = IMAGE_MAX) {
   const img = cb.image(ref);
   if (img.state === "ready") {
-    const scale = Math.min(1, IMAGE_MAX / img.w, IMAGE_MAX / img.h);
+    const scale = Math.min(1, max / img.w, max / img.h);
     const w = Math.round(img.w * scale);
     const h = Math.round(img.h * scale);
     return div().id(id).w(w).h(h).flex_none().rounded(6).border_1().border_color(t.border).overflow_hidden()
@@ -215,7 +216,7 @@ function imageTile(t, ref, id, cb) {
       .child(image(img.rel).w(w).h(h));
   }
   const label = img.state === "missing" ? "image not found" : img.state === "failed" ? "image failed" : "image";
-  return div().id(id).w(120).h(60).flex_none().flex().items_center().justify_center().rounded(6).border_1().border_color(t.border).bg(t.surface)
+  return div().id(id).w(Math.min(120, max)).h(Math.min(60, max)).flex_none().flex().items_center().justify_center().rounded(6).border_1().border_color(t.border).bg(t.surface)
     .text_size(10.5).text_color(t.muted).child(label);
 }
 
@@ -495,9 +496,11 @@ export function composer(t, info, input, state, focused, answers, cb) {
   const k = answers.length;
   const ready = (Boolean(text.trim()) || k > 0) && Boolean(info) && state !== "sending";
   const button = sendIconButton(t, ready, state, k, (_e, cx) => cb.send(cx));
+  const attached = cb.attachments(text);
   return v_flex().flex_none().px(10).py(8).border_t(1).border_color(t.border)
     .child(v_flex().rounded(8).border_1().border_color(focused ? t.accent : t.input).bg(t.background)
       .when(k > 0, (el) => el.child(h_flex().px(8).pt(8).gap(4).flex_wrap().children(answers.map((a) => answerChip(t, a, cb)))))
+      .when(attached.length > 0, (el) => el.child(h_flex().px(8).pt(8).gap(6).flex_wrap().children(attached.map((ref, i) => imageTile(t, ref, `attach-${i}`, cb, ATTACH_MAX)))))
       .child(Textarea.new(input).w_full().px(10).pt(8).pb(4).text_size(12).text_color(t.foreground))
       .child(h_flex().h(30).px(8).gap(8).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim).child(state === "sending" ? "" : "⏎ send · ⇧⏎ new line"))
