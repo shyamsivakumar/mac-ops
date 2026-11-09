@@ -1,7 +1,7 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
-import { loadOlder, materialize, readTranscript } from "./transcript.js";
+import { loadOlder, materialize, pathImages, readTranscript } from "./transcript.js";
 import { askRow, choicesOf, clampFrom, composer, conversation, holdFrom, popupBar, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
 
 const SHOW_POLL = 50;
@@ -531,6 +531,7 @@ export default class Coordinator extends View {
       link: (url) => (/^https?:\/\//i.test(url) ? exec("open", [url]) : notify({ title: "Link not opened", body: "Only web links open from the chat.", level: "info", timeout: 2500 })),
       heights: this.heights,
       image: (ref) => this.wantImage(ref, cx),
+      attachments: (text) => pathImages(text).images,
       openImage: (path) => exec("open", [path]),
       working: info?.status === "working",
       turnSize: (key, height, cx, above) => {
