@@ -1,4 +1,4 @@
-import { exec, home, shared } from "herdr";
+import { appHome, exec, home, shared, writeTextFile } from "herdr";
 
 const DIR = `${home()}/.claude/projects/-Users-shyamsivakumar-Code-coordinator`;
 const TASK_ID = /\b[A-Z]{2,5}-\d{1,4}\b/g;
@@ -9,6 +9,61 @@ const TEXT_MAX = 60000;
 const DIFF_KEEP = 40;
 const CODE_KEEP = 400;
 const EVENT_MAX = 200;
+
+const IMAGE_SOURCE = /\[Image: source: ([^\]]+)\]/g;
+const IMAGE_MARK = /\[Image #\d+\]/g;
+const SAMPLES = 8;
+const SAMPLE_LEN = 64;
+const IMAGE_DIR = "data/coordinator/img";
+
+function keyOf(text) {
+  let h = 5381;
+  const mix = (s) => {
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  };
+  mix(String(text.length));
+  const span = Math.max(0, text.length - SAMPLE_LEN);
+  for (let n = 0; n < SAMPLES; n++) {
+    const at = Math.floor((span * n) / (SAMPLES - 1));
+    mix(text.slice(at, at + SAMPLE_LEN));
+  }
+  return `${h.toString(36)}${text.length.toString(36)}`;
+}
+
+const extOf = (path) => /\.([a-z0-9]{2,5})$/i.exec(path)?.[1].toLowerCase() ?? "png";
+
+const fileImage = (path) => ({ key: keyOf(path), ext: extOf(path), path, data: null });
+
+function resultImages(content) {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((b) => b.type === "image" && b.source?.type === "base64")
+    .map((b) => ({ key: keyOf(b.source.data), ext: b.source.media_type === "image/jpeg" ? "jpg" : b.source.media_type.replace("image/", ""), path: "", data: b.source.data }));
+}
+
+export async function materialize(ref) {
+  const dir = `${appHome()}/${IMAGE_DIR}`;
+  const file = `${dir}/${ref.key}.${ref.ext}`;
+  if ((await exec("test", ["-f", file])).code !== 0) {
+    await exec("mkdir", ["-p", dir]);
+    if (ref.path) {
+      if ((await exec("cp", [ref.path, file])).code !== 0) return null;
+    } else {
+      const b64 = `${dir}/${ref.key}.b64`;
+      await exec("rm", ["-f", b64]);
+      await writeTextFile(b64, ref.data, null);
+      const r = await exec("/usr/bin/base64", ["-D", "-i", b64, "-o", file]);
+      await exec("rm", ["-f", b64]);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot decode image");
+    }
+  }
+  ref.data = null;
+  const dims = await exec("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file]);
+  const w = Number(/pixelWidth: (\d+)/.exec(dims.stdout)?.[1]);
+  const h = Number(/pixelHeight: (\d+)/.exec(dims.stdout)?.[1]);
+  if (!w || !h) throw new Error("cannot read image size");
+  return { file, rel: `${IMAGE_DIR}/${ref.key}.${ref.ext}`, w, h };
+}
 
 const clip = (text, n) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 
@@ -232,28 +287,43 @@ function feed(p, text) {
           turn.at = at;
         }
       }
+    } else if (rec.type === "user" && rec.isMeta) {
+      const last = turns.at(-1);
+      const attached = [...textOf(content).matchAll(IMAGE_SOURCE)].map((m) => fileImage(m[1].trim()));
+      if (attached.length && last && last.role !== "coordinator") {
+        const strip = last.items.find((i) => i.k === "images");
+        if (strip) strip.images.push(...attached);
+        else last.items.push({ k: "images", images: attached });
+        last.view = null;
+      }
     } else if (rec.type === "user" && !rec.isMeta) {
       if (Array.isArray(content) && content.some((b) => b.type === "tool_result")) {
         for (const b of content) {
           if (b.type !== "tool_result") continue;
           const item = p.tools.get(b.tool_use_id);
-          if (item) item.result = resultOf(b);
+          if (item) {
+            item.result = resultOf(b);
+            const images = resultImages(b.content);
+            if (images.length) item.images = images;
+          }
           p.open.delete(b.tool_use_id);
           p.tools.delete(b.tool_use_id);
         }
         p.pending = [...p.open.values()].at(-1) ?? null;
         continue;
       }
-      const raw = textOf(content).replace(/<\/?pasted_content[^>]*>/g, "").trim();
+      const whole = textOf(content);
+      const images = [...whole.matchAll(IMAGE_SOURCE)].map((m) => fileImage(m[1].trim()));
+      const raw = whole.replace(IMAGE_SOURCE, "").replace(IMAGE_MARK, "").replace(/<\/?pasted_content[^>]*>/g, "").trim();
       const hc = /^<hc\s+from="([^"]*)"/.exec(raw);
       const text = hc ? raw.replace(/<\/?hc\b[^>]*>/g, "").trim() : raw;
       const note = raw.startsWith("<task-notification") ? NOTE_SUMMARY.exec(raw)?.[1].trim() : null;
       if (note) lastTurn(p, at).items.push({ k: "event", text: clip(note.replace(/\s+/g, " "), EVENT_MAX) });
-      else if (text && !text.startsWith("<")) {
+      else if ((text || images.length) && !text.startsWith("<")) {
         p.open.clear();
         p.tools.clear();
         p.pending = null;
-        turns.push({ role: hc && !composed(text, at) ? "session" : "you", from: hc?.[1] ?? "", at, items: [{ k: "text", text }] });
+        turns.push({ role: hc && !composed(text, at) ? "session" : "you", from: hc?.[1] ?? "", at, items: [...(text ? [{ k: "text", text }] : []), ...(images.length ? [{ k: "images", images }] : [])] });
       }
     }
   }

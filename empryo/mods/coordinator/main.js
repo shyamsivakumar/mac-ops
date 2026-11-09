@@ -1,12 +1,30 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
-import { agents, closeOverlay, exec, hc, home, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
-import { loadOlder, readTranscript } from "./transcript.js";
+import { agents, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
+import { loadOlder, materialize, readTranscript } from "./transcript.js";
 import { askRow, choicesOf, clampFrom, composer, conversation, holdFrom, popupBar, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
 
 const SHOW_POLL = 50;
 const SHOW_LIMIT = 8000;
 const LIVE_STATUSES = new Set(["running", "waiting"]);
+
+async function swapChat() {
+  const tree = JSON.parse(JSON.stringify(layout()));
+  const split = (function find(node) {
+    if (node.id === "work-split") return node;
+    for (const child of node.children ?? []) {
+      const hit = find(child);
+      if (hit) return hit;
+    }
+    return null;
+  })(tree);
+  const from = split?.children.findIndex((c) => c.id === "coordinator");
+  if (from === undefined || from < 0) return;
+  const [chat] = split.children.splice(from, 1);
+  split.children.splice(from === 0 ? 1 : 0, 0, chat);
+  const result = await exec(`${home()}/.local/bin/herdr-app`, ["do", "layout.set", JSON.stringify({ layout: tree })]);
+  if (result.code) notify({ title: "Chat not moved", body: result.stderr.trim(), level: "error" });
+}
 
 async function reusableShow(name, task) {
   const kinds = LIVE_STATUSES.has(task.status) ? ["empryo", "follow"] : ["empryo"];
@@ -66,6 +84,8 @@ export default class Coordinator extends View {
     this.grew = 0;
     this.grewAbove = 0;
     this.heights = new Map();
+    this.images = new Map();
+    this.imageTail = Promise.resolve();
     if (this.pop) {
       this.handle = cx.focus_handle();
       this.inEditor = false;
@@ -109,6 +129,7 @@ export default class Coordinator extends View {
         run("layout.show", { id: "coordinator" });
         if (name === "message") cx.timer.after(60, () => this.input.focus());
         if (name === "asks") this.openAsks();
+        if (name === "swap") swapChat();
         cx.notify();
       }
     });
@@ -143,6 +164,30 @@ export default class Coordinator extends View {
 
   info() {
     return agents().find((a) => a.space_name === "Coordinator") ?? null;
+  }
+
+  wantImage(ref, cx) {
+    const known = this.images.get(ref.key);
+    if (known) return known;
+    const entry = { state: "loading" };
+    this.images.set(ref.key, entry);
+    const before = this.imageTail;
+    let release;
+    this.imageTail = new Promise((resolve) => {
+      release = resolve;
+    });
+    cx.spawn(async (cx) => {
+      await before;
+      try {
+        const done = await materialize(ref);
+        Object.assign(entry, done ? { state: "ready", ...done } : { state: "missing" });
+      } catch {
+        entry.state = "failed";
+      }
+      release();
+      cx.notify();
+    });
+    return entry;
   }
 
   refresh(cx) {
@@ -485,6 +530,8 @@ export default class Coordinator extends View {
       sender: (from) => agents().find((a) => a.address === from)?.tab_name ?? from,
       link: (url) => (/^https?:\/\//i.test(url) ? exec("open", [url]) : notify({ title: "Link not opened", body: "Only web links open from the chat.", level: "info", timeout: 2500 })),
       heights: this.heights,
+      image: (ref) => this.wantImage(ref, cx),
+      openImage: (path) => exec("open", [path]),
       working: info?.status === "working",
       turnSize: (key, height, cx, above) => {
         const known = this.heights.get(key);

@@ -40,6 +40,9 @@ const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
 const PANEL_SIZE = { models: [520, 470], queue: [520, 340], hub: [520, 400] };
 
+const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/^Still checking/, "still checking"], [/^The review found/, "review failed"]];
+const HUB_BUCKET = "refused by the hub";
+
 const NOTICE_FOR = 8000;
 let noticeSeq = 0;
 
@@ -130,7 +133,7 @@ export default class Board extends View {
     this.reveal = null;
     this.box = Object.fromEntries([...COLUMN_KEYS, "compact"].map((k) => [k, { width: 300, height: 200 }]));
     this.drawn = Date.now();
-    this.layout = { cols: {}, reviewed: [], finished: [], approvable: [], skipped: 0 };
+    this.layout = { cols: {}, reviewed: [], finished: [], approvable: [], skipped: 0, nothing: "" };
     if (this.sheet) {
       cx.timer.after(60, () => this.handle.focus());
       cx.timer.after(POP_FOLLOW, () => closeOverlay(this.overlay));
@@ -535,9 +538,18 @@ export default class Board extends View {
       col.summary = this.summary(key, col, now);
     }
     const open = cols.ready.groups.filter((g) => g.info.status === "open" && g.info.pr);
-    const approvable = open.filter((g) => !this.reviewBlock(g) && !this.refusalOf(g)?.planned).map((g) => ({ name: g.task || g.title, number: g.info.pr.number, group: g }));
-    this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length };
-    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, running: this.board?.running ?? 0, cap: this.cap } };
+    const approvable = [];
+    const blocked = new Map();
+    for (const g of open) {
+      const block = this.reviewBlock(g);
+      const bucket = block ? BLOCK_BUCKETS.find(([pattern]) => pattern.test(block))[1] : this.refusalOf(g)?.planned ? HUB_BUCKET : null;
+      if (bucket) blocked.set(bucket, (blocked.get(bucket) ?? 0) + 1);
+      else approvable.push({ name: g.task || g.title, number: g.info.pr.number, group: g });
+    }
+    const why = [...BLOCK_BUCKETS.map(([, name]) => name), HUB_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
+    const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
+    this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing };
+    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
 
   summary(key, col, now) {
@@ -674,10 +686,28 @@ export default class Board extends View {
     this.moveTo(next.key);
   }
 
+  focusBlockedAgent() {
+    const blocked = agents().filter((a) => a.status === "blocked").sort((a, b) => a.seq - b.seq);
+    if (!blocked.length) return false;
+    const next = blocked[(blocked.findIndex((a) => a.address === this.lastBlocked) + 1) % blocked.length];
+    this.lastBlocked = next.address;
+    run("agent.focus", { terminal: next.address });
+    return true;
+  }
+
+  needsCard() {
+    const order = [...this.layout.cols.needs.groups].sort((a, b) => a.at - b.at).map((g) => `g:needs:${g.key}`);
+    if (!order.length) return say("info", "Nothing needs you");
+    if (this.isFolded("needs")) this.peeked.add("needs");
+    this.moveTo(order[(order.indexOf(this.cursor) + 1) % order.length]);
+  }
+
   command(name, cx) {
     if (this.pop) return;
+    if (name === "needs" && this.focusBlockedAgent()) return;
     run("layout.show", { id: "cockpit" });
     this.handle.focus();
+    if (name === "needs") this.needsCard();
     if (name === "next") this.nextEntry();
     const e = this.current();
     if (name === "settle" && e) this.settleEntry(e, cx);
@@ -1164,9 +1194,10 @@ export default class Board extends View {
 
   approveAll(cx) {
     if (this.merging || !this.owns("ready")) return;
-    const { approvable: prs, skipped } = this.layout;
+    const { approvable: prs, skipped, nothing } = this.layout;
+    if (!prs.length) return say("info", nothing, "", [], true);
     if (skipped && this.armed?.kind !== "approve-all") say("info", `${skipped} skipped`, "No passing review yet, or the hub says they can't merge.");
-    if (!prs.length || this.guard(false) || this.prBlocked(prs.map((p) => p.group.info.pr))) return;
+    if (this.guard(false) || this.prBlocked(prs.map((p) => p.group.info.pr))) return;
     this.confirm("approve-all", "all", (seen) => this.merge(prs.map((p) => p.group), cx, seen), cx, prs.map((p) => prState(p.group.info.pr)));
   }
 

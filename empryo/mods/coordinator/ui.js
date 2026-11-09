@@ -1,4 +1,4 @@
-import { div, svg } from "gpui-kit";
+import { div, image, svg } from "gpui-kit";
 import { settings } from "herdr";
 import { v_flex, h_flex, Textarea, TextView } from "gpui-base";
 
@@ -202,8 +202,29 @@ function eventLine(t, item) {
     .child(div().flex_1().min_w(0).text_size(10.5).text_color(t.muted).child(item.text));
 }
 
+const IMAGE_MAX = 220;
+
+function imageTile(t, ref, id, cb) {
+  const img = cb.image(ref);
+  if (img.state === "ready") {
+    const scale = Math.min(1, IMAGE_MAX / img.w, IMAGE_MAX / img.h);
+    const w = Math.round(img.w * scale);
+    const h = Math.round(img.h * scale);
+    return div().id(id).w(w).h(h).flex_none().rounded(6).border_1().border_color(t.border).overflow_hidden()
+      .cursor_pointer().hover((s) => s.opacity(0.85)).tooltip("Open in Preview").on_click(() => cb.openImage(ref.path || img.file))
+      .child(image(img.rel).w(w).h(h));
+  }
+  const label = img.state === "missing" ? "image not found" : img.state === "failed" ? "image failed" : "image";
+  return div().id(id).w(120).h(60).flex_none().flex().items_center().justify_center().rounded(6).border_1().border_color(t.border).bg(t.surface)
+    .text_size(10.5).text_color(t.muted).child(label);
+}
+
+function imageStrip(t, images, id, cb) {
+  return h_flex().w_full().gap(6).flex_wrap().children(images.map((ref, i) => imageTile(t, ref, `${id}-${i}`, cb)));
+}
+
 function groupable(item) {
-  return item.k === "tool" && GROUPED.has(item.name) && !item.diff && !item.result?.error;
+  return item.k === "tool" && GROUPED.has(item.name) && !item.diff && !item.result?.error && !item.images;
 }
 
 function bodyOf(t, m, now, color, room, cb) {
@@ -224,11 +245,15 @@ function bodyOf(t, m, now, color, room, cb) {
       out.push(link(t, `earlier-${key}-${i}`, `${n} earlier tool calls`, (_e, cx) => cb.toggle(`earlier-${key}`, cx)));
     } else if (item.k === "text") out.push(...textBlocks(t, `${key}-${i}`, item.blocks, color, room, cb));
     else if (item.k === "event") out.push(eventLine(t, item));
+    else if (item.k === "images") out.push(imageStrip(t, item.images, `img-${key}-${i}`, cb));
     else if (groupable(item) && m.items[i + 1] && groupable(m.items[i + 1])) {
       const run = [item];
       while (groupable(m.items[i + 1] ?? {})) run.push(m.items[++i]);
       out.push(groupLine(t, run, cb));
-    } else out.push(toolBlock(t, item, now, cb));
+    } else {
+      out.push(toolBlock(t, item, now, cb));
+      if (item.images) out.push(imageStrip(t, item.images, `img-${key}-${i}`, cb));
+    }
   }
   return out;
 }
@@ -348,7 +373,7 @@ function sendIconButton(t, ready, state, k, onClick) {
   return h_flex().id("co-send").size(24).flex_none().relative().items_center().justify_center().rounded(12)
     .accessibility_label(k > 0 ? sendLabel(k) : "Send")
     .tooltip(k > 0 ? sendLabel(k) : "Send (⏎) · ⇧⏎ for a new line")
-    .bg(ready ? t.accent : t.surface).text_color(ready ? t.background : t.dim)
+    .border_1().border_color(ready ? t.accent : t.input).bg(ready ? t.accent : t.selected).text_color(ready ? t.background : t.muted)
     .when(state === "sent", (el) => el.bg(t.done + "22").text_color(t.done))
     .when(ready, (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click(onClick))
     .when(!ready, (el) => el.cursor_not_allowed())
@@ -474,5 +499,7 @@ export function composer(t, info, input, state, focused, answers, cb) {
     .child(v_flex().rounded(8).border_1().border_color(focused ? t.accent : t.input).bg(t.background)
       .when(k > 0, (el) => el.child(h_flex().px(8).pt(8).gap(4).flex_wrap().children(answers.map((a) => answerChip(t, a, cb)))))
       .child(Textarea.new(input).w_full().px(10).pt(8).pb(4).text_size(12).text_color(t.foreground))
-      .child(h_flex().h(30).px(8).items_center().justify_end().child(button)));
+      .child(h_flex().h(30).px(8).gap(8).items_center()
+        .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim).child(state === "sending" ? "" : "⏎ send · ⇧⏎ new line"))
+        .child(button)));
 }
