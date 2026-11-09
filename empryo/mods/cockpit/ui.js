@@ -78,8 +78,8 @@ export function columnHead(t, key, col, state, cb) {
   const settleReviewed = key === "done" && state.reviewed > 0 && !tight ? { label: state.armed?.kind === "settle" ? `Confirm ${state.reviewed}` : `Settle ${state.reviewed}` } : null;
   const bulk = key === "done" && state.done > 0
     ? { id: "settle-all", hint: "A", label: state.armed?.kind === "settle-all" ? `Confirm ${state.done}` : tight ? `Settle ${state.done}` : `Settle all ${state.done}`, run: (cx) => cb.settleAll(cx), tip: `Settle all ${state.done} (A)` }
-    : key === "ready" && state.approvable > 0
-    ? { id: "approve-all", hint: "M", label: state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, run: (cx) => cb.approveAll(cx), tip: `Approve all ${state.approvable} (M)` }
+    : key === "ready" && col.count > 0
+    ? { id: "approve-all", hint: "M", label: state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, run: (cx) => cb.approveAll(cx), tip: state.approvable ? `Approve all ${state.approvable} (M)` : `${state.nothing} (M)`, dim: state.approvable === 0 }
     : null;
   const buttons = [settleReviewed, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
@@ -91,7 +91,7 @@ export function columnHead(t, key, col, state, cb) {
       .child(div().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).child(count))
       .child(div().flex_1())
       .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
-      .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight)))
+      .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5))))
       .child(state.popup ? headButton(t, "pop-close", "✕", "Close", () => cb.close()) : headButton(t, `pop-${key}`, "⤢", `Open ${label} in a pop-up`, () => cb.expand(key))))
     .child(h_flex().h(H.sub).px(10).gap(8).items_start().overflow_hidden()
       .children(fitSummary(col.summary, state.colW - 20).map(([text, summaryTone]) => div().flex_none().text_size(9.5).text_color(summaryTone === "dim" ? t.muted : t[summaryTone]).child(text))));
@@ -195,6 +195,12 @@ function modelChips(t, c, runModel) {
     .when(Boolean(used), (el) => el.child(chip(t, `→ ${used}`, "working", `Ran on ${runModel}`)));
 }
 
+const COLD_AFTER = 300000;
+const CLAUDE_MODEL = /claude|opus|sonnet|haiku/i;
+const NEEDS_KINDS = new Set(["wait", "fail", "stop"]);
+
+const isCold = (v) => (v.variant === "ready" || NEEDS_KINDS.has(v.c.kind)) && v.now - v.c.at > COLD_AFTER && CLAUDE_MODEL.test(v.c.model || v.runModel);
+
 const chipWidth = (text) => 8 + text.length * 5.5;
 
 function readyFit(v, narrow) {
@@ -258,6 +264,7 @@ export function card(t, e, v, input, cb) {
     .when(count > 1, (el) => el.child(fold(t, e.key, count, expanded, cb)))
     .when(variant === "backlog" && v.state, (el) => el.child(chip(t, v.state, "idle")))
     .when(v.merged, (el) => el.child(chip(t, "merged", "done")))
+    .when(isCold(v), (el) => el.child(chip(t, "cold", "dim", "Prompt cache expired: the next message re-reads the whole context")))
     .when(!refused && (!ready || fit.model), (el) => el.child(modelChips(t, c, v.runModel)));
   const status = refused
     ? h_flex().id(`why-${e.key}`).flex_1().min_w(0).gap(5).items_center().tooltip(v.refusal).on_mouse_down("left", selectOnly(e.key, cb))
@@ -475,6 +482,7 @@ export const KEY_TABLE = [
   { keys: "p", group: "Card", all: "Open the pull request" },
   { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards)" },
   { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then Ready, and cycle" },
+  { keys: "⌥⌘N", group: "Move", all: "Jump to the next blocked agent in any space, else the next Needs you card (bind cockpit.needs)" },
   { keys: "j k", group: "Move", all: "Next or previous card (the arrow keys work too)" },
   { keys: "h l", group: "Move", all: "Previous or next column (section on a narrow board)" },
   { keys: "g G", group: "Move", all: "First or last card in the column" },

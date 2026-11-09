@@ -1,4 +1,4 @@
-// Read-only pop-ups opened from the cockpit toolbar: model providers, the task queue and hub health.
+// Read-only pop-ups: model providers, the task queue and hub health (cockpit toolbar), memory (status bar).
 
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
@@ -10,7 +10,12 @@ const HEALTH_FILE = `${home()}/Code/coordinator/queue/health.json`;
 const EMPRYO_CONFIG = `${home()}/.empryo/config.json`;
 const HOLD_MS = 15 * 60000;
 const PROVIDERS = [["zai-coding-plan", "GLM"], ["minimax", "MiniMax"], ["subscriptions/gpt", "GPT"], ["subscriptions/cursor", "Cursor"], ["subscriptions/claude", "Claude"]];
-const TITLES = { models: "Models", queue: "Queue", hub: "Hub" };
+const TITLES = { models: "Models", queue: "Queue", hub: "Hub", memory: "Memory" };
+const MEM_REFRESH = 10000;
+const MEM_ROWS = 14;
+const PS_LINE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/;
+const AGENT_KINDS = [["Claude", /(^|\/)claude(\s|$)/], ["Codex", /(^|\/)codex(\s|$)/]];
+const RUNTIME_KINDS = [["node", /(^|\/)node(\s|$)/], ["python", /(^|\/)[Pp]ython[\d.]*(\s|$)/]];
 const QUEUE_LINE = /^#(\d+) p(\d+) (\S+) (.*?)(?: \(failed (\d+)x\))?$/;
 
 const stamp = (ms) => (ms ? `${new Date(ms).toTimeString().slice(0, 5)}` : "");
@@ -28,6 +33,9 @@ function span(ms) {
   return m < 1 ? "under a minute" : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
 }
 
+const gigabytes = (kb) => `${(kb / 1048576).toFixed(1)} GB`;
+const megabytes = (kb) => (kb >= 1048576 ? gigabytes(kb) : `${Math.round(kb / 1024)} MB`);
+const kindOf = (kinds, command) => kinds.find(([, pattern]) => pattern.test(command))?.[0] ?? null;
 const since = (ms) => `${span(Date.now() - ms)} ago`;
 const until = (ms) => (ms > Date.now() ? `in ${span(ms - Date.now())}` : "now");
 const epoch = (value) => (typeof value === "number" ? value : Date.parse(value));
@@ -58,12 +66,21 @@ export default class Panels extends View {
     this.busy = false;
     this.handle = cx.focus_handle();
     cx.timer.after(60, () => this.handle.focus());
+    this.load(cx);
+    if (this.panel === "memory") cx.timer.every(MEM_REFRESH, (cx) => this.load(cx));
+  }
+
+  load(cx) {
+    if (this.loading) return;
+    this.loading = true;
     cx.spawn(async (cx) => {
       try {
         this.data = await this[`read_${this.panel}`]();
+        this.error = null;
       } catch (error) {
         this.error = error.message;
       }
+      this.loading = false;
       cx.notify();
     });
   }
@@ -102,6 +119,33 @@ export default class Panels extends View {
     const [health, status] = await Promise.all([this.readFile(HEALTH_FILE), this.hubStatus()]);
     const ps = await exec("ps", ["-o", "lstart=", "-p", String(status.pid)]);
     return { health, draining: status.draining, pid: status.pid, started: ps.code === 0 ? Date.parse(ps.stdout.trim()) : null };
+  }
+
+  async read_memory() {
+    const [pressure, size, ps] = await Promise.all([exec("memory_pressure", []), exec("sysctl", ["-n", "hw.memsize"]), exec("ps", ["-axo", "pid=,ppid=,rss=,etime=,command="])]);
+    const free = /free percentage: (\d+)%/.exec(pressure.stdout);
+    if (pressure.code !== 0 || !free) throw new Error("memory_pressure gave no free percentage");
+    if (size.code !== 0 || ps.code !== 0) throw new Error(size.stderr.trim() || ps.stderr.trim() || "ps failed");
+    const procs = new Map(ps.stdout.split("\n").map((line) => PS_LINE.exec(line)).filter(Boolean)
+      .map(([, pid, ppid, rss, etime, command]) => [Number(pid), { pid: Number(pid), ppid: Number(ppid), rss: Number(rss), etime, command }]));
+    const agentOf = (p) => {
+      for (let cur = p; cur; cur = procs.get(cur.ppid)) if (kindOf(AGENT_KINDS, cur.command)) return cur;
+      return null;
+    };
+    const sessions = new Map();
+    const loose = [];
+    for (const p of procs.values()) {
+      const root = agentOf(p);
+      if (root) {
+        const s = sessions.get(root.pid) ?? { label: kindOf(AGENT_KINDS, root.command), pid: root.pid, etime: root.etime, command: root.command, rss: 0, count: 0 };
+        s.rss += p.rss;
+        s.count += 1;
+        sessions.set(root.pid, s);
+      } else if (kindOf(RUNTIME_KINDS, p.command)) loose.push({ label: kindOf(RUNTIME_KINDS, p.command), pid: p.pid, etime: p.etime, command: p.command, rss: p.rss, count: 1 });
+    }
+    const rows = [...sessions.values(), ...loose].sort((a, b) => b.rss - a.rss);
+    const totalKb = Number(size.stdout.trim()) / 1024;
+    return { free: Number(free[1]), totalKb, rows: rows.slice(0, MEM_ROWS), agentKb: [...sessions.values()].reduce((sum, s) => sum + s.rss, 0) };
   }
 
   cancelDrain(cx) {
@@ -161,6 +205,32 @@ export default class Panels extends View {
         div().text_size(12).font_medium().text_color(out.has(providerOf(model)) ? t.blocked : i ? t.muted : t.foreground).child(short(model)),
       ])));
     return [this.section(t, "Providers"), ...rows, this.section(t, "Fallback order, first choice then what it falls back to"), ...(this.data ? fallback : [this.note(t, "Loading the fallback order…")])];
+  }
+
+  memory(t) {
+    const d = this.data;
+    const free = d?.free ?? this.seed.free;
+    if (free === undefined) return [this.note(t, "Loading memory…")];
+    const lines = [
+      this.section(t, "System"),
+      this.line(t, "Free", `${free}%`, free < 15 ? "blocked" : undefined),
+    ];
+    if (!d) return [...lines, this.note(t, "Loading processes…")];
+    lines.push(
+      this.line(t, "Used", `${gigabytes((d.totalKb * (100 - free)) / 100)} of ${gigabytes(d.totalKb)}`),
+      this.line(t, "Agent sessions", `${gigabytes(d.agentKb)} across Claude and Codex, with everything they started`),
+      this.section(t, "Largest agents and runtimes, by resident memory"),
+    );
+    for (const r of d.rows) {
+      lines.push(
+        h_flex().w_full().px(14).pt(4).gap(8).items_baseline()
+          .child(div().w(52).flex_none().text_size(12).font_medium().text_color(t.foreground).child(r.label))
+          .child(div().w(64).flex_none().text_size(12.5).text_color(t.foreground).child(megabytes(r.rss)))
+          .child(div().flex_1().min_w(0).text_size(12).text_color(t.muted).child(`pid ${r.pid} · up ${r.etime}${r.count > 1 ? ` · ${r.count} processes` : ""}`)),
+        this.note(t, r.command.length > 90 ? `${r.command.slice(0, 89)}…` : r.command, "dim"),
+      );
+    }
+    return lines;
   }
 
   queue(t) {

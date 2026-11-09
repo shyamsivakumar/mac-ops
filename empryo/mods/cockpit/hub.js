@@ -51,13 +51,13 @@ function questionOf(read) {
 }
 
 async function askOf(thread) {
-  const stamp = `${thread.threadId}@${thread.updatedAt}`;
-  if (asks.has(stamp)) return asks.get(stamp);
+  const cached = asks.get(thread.threadId);
+  if (cached?.stamp === thread.updatedAt) return cached.text;
   const { requestIds } = await call("emp_pending_request", { action: "list", threadId: thread.threadId });
   const text = requestIds.length
     ? questionOf(await call("emp_pending_request", { action: "read", threadId: thread.threadId, requestId: requestIds[0] })) || "Waiting for your answer"
     : "Waiting for an approval";
-  asks.set(stamp, text);
+  asks.set(thread.threadId, { stamp: thread.updatedAt, text });
   return text;
 }
 

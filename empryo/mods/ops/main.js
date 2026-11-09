@@ -3,7 +3,7 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { appHome, exec, home, notify, setShared, shared, theme } from "herdr";
+import { appHome, exec, home, nextCommand, notify, openOverlay, setShared, shared, theme } from "herdr";
 import { readFile } from "fs/promises";
 
 const SRW_HEALTH = "https://srw-telegram-paper-production.up.railway.app/health";
@@ -29,6 +29,17 @@ const WT_SCAN = `${appHome()}/mods/worktrees/scan.sh`;
 const WT_EVERY = 600000;
 const WT_HANG = 660000;
 const WT_MAX_LOAD = 10;
+const CLAUDE_USAGE = `${home()}/.claude/plugins/claude-hud/.usage-cache.json`;
+const CLAUDE_FIVE_HOUR = 5 * 3600000;
+const CLAUDE_WEEK = 7 * 86400000;
+const CLAUDE_STALE_MS = 600000;
+const MMX_ENV = ["PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", "mmx", "quota", "show", "--output", "json", "--non-interactive"];
+const USAGE_EVERY = 60000;
+const PACE_SLACK = 5;
+const MEM_EVERY = 30000;
+const MEM_LOW = 15;
+const MEM_PANEL = [560, 520];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const healthStale = (hl) => !hl || Date.now() - hl.checked_at * 1000 > HEALTH_STALE_MS;
 
@@ -40,6 +51,28 @@ function newYork(ms) {
   const d = new Date(ms - (dst ? 4 : 5) * 3600000);
   return { day: d.getUTCDay(), minutes: d.getUTCHours() * 60 + d.getUTCMinutes(), date: d.toISOString().slice(0, 10), ms: d.getTime() };
 }
+
+const readJson = (path) => readFile(path, "utf8").then(JSON.parse).catch(() => null);
+
+const usageColor = (t, used) => (used > 80 ? t.blocked : used >= 50 ? t.working : t.done);
+
+function clockAt(ms) {
+  const d = new Date(ms);
+  const time = d.toTimeString().slice(0, 5);
+  return ms - Date.now() > 18 * 3600000 ? `${WEEKDAYS[d.getDay()]} ${time}` : time;
+}
+
+function pace(w, now) {
+  if (w.used === null || !(w.reset > now)) return null;
+  const start = w.reset - w.span;
+  const elapsed = Math.min(100, ((now - start) / w.span) * 100);
+  const ahead = w.used > elapsed + PACE_SLACK;
+  return { used: w.used, elapsed, ahead, reset: w.reset, runout: ahead ? start + ((now - start) * 100) / w.used : null };
+}
+
+const claudeWindow = (used, reset, span) => ({ used, reset: reset ? Date.parse(reset) : null, span });
+
+const minimaxWindow = (remaining, start, end) => ({ used: 100 - remaining, reset: end, span: end - start });
 
 const trading = (ny) => ny.day > 0 && ny.day < 6 && !HOLIDAYS.has(ny.date);
 const span = (m) => (m >= 1440 ? `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h` : m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}` : `${m}m`);
@@ -63,12 +96,24 @@ export default class Ops extends View {
     this.health = undefined;
     this.wt = undefined;
     this.load = null;
+    this.mem = null;
+    this.claude = null;
+    this.minimax = null;
     this.at = {};
     this.published = "";
     this.busy = new Set();
     this.width = 1200;
     cx.timer.every(5000, (cx) => this.tick(cx));
     this.tick(cx);
+    cx.spawn(async () => {
+      for (;;) {
+        if ((await nextCommand()) === "memory") this.openMemory();
+      }
+    });
+  }
+
+  openMemory() {
+    openOverlay({ mod: "ops-panels", kind: "dialog", width: MEM_PANEL[0], height: MEM_PANEL[1], props: { panel: "memory", seed: { free: this.mem ?? undefined } } });
   }
 
   due(name, every) {
@@ -148,6 +193,34 @@ export default class Ops extends View {
         };
       });
     }
+    this.poll(cx, "mem", MEM_EVERY, async () => {
+      const r = await exec("memory_pressure", [], { timeout: 10000 }).catch(() => null);
+      const free = r && r.code === 0 ? /free percentage: (\d+)%/.exec(r.stdout) : null;
+      return free ? Number(free[1]) : null;
+    });
+    this.poll(cx, "claude", USAGE_EVERY, async () => {
+      const cache = await readJson(CLAUDE_USAGE);
+      if (!cache || cache.data.apiUnavailable) return null;
+      const { data, timestamp } = cache;
+      return {
+        at: timestamp,
+        windows: [
+          ["5h", claudeWindow(data.fiveHour, data.fiveHourResetAt, CLAUDE_FIVE_HOUR)],
+          ["wk", claudeWindow(data.sevenDay, data.sevenDayResetAt, CLAUDE_WEEK)],
+        ],
+      };
+    });
+    this.poll(cx, "minimax", USAGE_EVERY, async () => {
+      const r = await exec("/usr/bin/env", MMX_ENV, { timeout: 20000 }).catch(() => null);
+      const plan = r && r.code === 0 ? JSON.parse(r.stdout).model_remains.find((m) => m.model_name === "general") : null;
+      return plan && {
+        at: Date.now(),
+        windows: [
+          [`${(plan.end_time - plan.start_time) / 3600000}h`, minimaxWindow(plan.current_interval_remaining_percent, plan.start_time, plan.end_time)],
+          ["wk", minimaxWindow(plan.current_weekly_remaining_percent, plan.weekly_start_time, plan.weekly_end_time)],
+        ],
+      };
+    });
     this.poll(cx, "wt", this.wt?.scanning ? 4000 : 30000, () => this.readWorktrees());
     this.poll(cx, "health", 30000, () => readFile(HEALTH_FILE, "utf8").then(JSON.parse, () => null));
     this.poll(cx, "m1", 20000, async () => {
@@ -174,6 +247,28 @@ export default class Ops extends View {
         .child(div().text_color(color ?? t.muted).font_medium().child(detail));
       return tip ? el.tooltip(tip) : el;
     };
+
+    const usage = (label, source) => {
+      if (!source) return null;
+      const paced = source.windows.map(([name, w]) => [name, pace(w, this.clock)]).filter(([, p]) => p);
+      if (!paced.length) return null;
+      const stale = Date.now() - source.at > CLAUDE_STALE_MS;
+      const el = h_flex().gap(5).items_center().flex_none().child(div().text_color(t.dim).child(label));
+      paced.forEach(([name, p], i) => {
+        const text = `${name} ${Math.round(p.used)}%${p.ahead ? " ▲" : ""}`;
+        const detail = p.ahead ? `At this pace you run out before the window resets at ${clockAt(p.reset)}, around ${clockAt(p.runout)}. ${Math.round(p.used)}% used, ${Math.round(p.elapsed)}% of the window gone.`
+          : `${Math.round(p.used)}% used, ${Math.round(p.elapsed)}% of the window gone. Resets ${clockAt(p.reset)}.`;
+        if (i) el.child(div().text_color(t.dim).child("·"));
+        el.child(div().text_color(stale ? t.dim : usageColor(t, p.used)).font_medium().child(text).tooltip(stale ? `Cache last refreshed ${clockAt(source.at)}. ${detail}` : detail));
+      });
+      return el;
+    };
+
+    const memEl = this.mem === null ? null : h_flex().id("mem").gap(5).items_center().flex_none().cursor_pointer()
+      .on_click((e) => e.click_count > 1 || this.openMemory())
+      .tooltip("Free memory. Click to see which agent processes use the most.")
+      .child(div().text_color(t.dim).child("mem"))
+      .child(div().text_color(this.mem < MEM_LOW ? t.blocked : t.muted).font_medium().child(`${this.mem}% free`));
 
     const srw = this.srw;
     const poll = srw?.telegram?.pollHealth;
@@ -218,6 +313,9 @@ export default class Ops extends View {
       .child(item(srwColor, "SRW", srwDetail, srwTip))
       .when(this.load !== null && roomy, (el) => el.child(plain("M4", `load ${this.load.toFixed(2)}`, t.muted, "load average, 1 minute")))
       .when(tight, (el) => el.child(plain("heavy", h ? ([running && `${running} run`, paused && `${paused} paused`, queued && `${queued} queued`].filter(Boolean).join(" · ") || "idle") : "n/a", heavyColor, "mac-ops heavy status")))
+      .when(memEl !== null, (el) => el.child(memEl))
+      .when(tight && this.claude !== null, (el) => el.child(usage("Claude", this.claude)))
+      .when(roomy && this.minimax !== null, (el) => el.child(usage("MiniMax", this.minimax)))
       .child(plain("M1 CI", ci ? (busy ? `${busy} busy` : "idle") : "n/a", busy ? t.working : t.muted, ci ? `${ci.native} native · ${ci.docker} docker · load ${ci.load}` : "M1 not reachable"))
       .child(div().flex_1());
   }
