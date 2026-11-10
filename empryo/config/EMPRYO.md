@@ -14,6 +14,11 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
   a per-edit quote, as long as no check gets weaker and every changed
   line is listed in the PR. Anything on the base branch still needs
   Shyam's quoted approval of the exact edit.
+- Build each change in the module that owns it, with clean separation of
+  concerns (Shyam, 2026-11-09). Do not bolt a feature on: no parallel
+  paths, special cases in the wrong layer, or shims. If the change can't be
+  built naturally in the existing structure, stop before coding and report
+  the refactor you recommend instead.
 - Prove your work by running it: the repo's own tests, typecheck, build, or
   the real command. Say what you ran and what it printed.
 - Before you report a coding task done, dispatch the `code-reviewer` agent
