@@ -3,7 +3,7 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { cleanupNote, cleanupThread, closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
+import { cleanupNote, cleanupThread, closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, oldShells, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
@@ -39,6 +39,7 @@ const OPEN_IN_EMPRYO = /session is open in Empryo/;
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
+const SHELL_EVERY = 60000;
 const PANEL_SIZE = { models: [520, 470], queue: [520, 340], hub: [520, 400] };
 
 const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/^Still checking/, "still checking"], [/^The review found/, "review failed"], [/^Review unreadable/, "review unreadable"]];
@@ -128,7 +129,9 @@ export default class Board extends View {
     this.colW = MIN_COL;
     this.wt = null;
     this.hub = null;
+    this.shells = { changed: 0, cwds: [] };
     this.hubBusy = false;
+    this.shellsBusy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["backlog"]'));
     this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["backlog","done"]'));
     this.compact = false;
@@ -171,7 +174,9 @@ export default class Board extends View {
     if (shared("cockpit.notice")) dismiss();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
+    cx.timer.every(SHELL_EVERY, (cx) => this.watching() && this.watchShells(cx));
     this.watchWorktrees(cx);
+    this.watchShells(cx);
     this.restore();
     shepherdrStates().then((states) => {
       this.shepherdr = states;
@@ -247,6 +252,16 @@ export default class Board extends View {
     cx.spawn(async (cx) => {
       this.wt = await this.readWorktrees();
       if (!this.unchanged("wt", this.wt)) cx.notify();
+    });
+  }
+
+  watchShells(cx) {
+    if (this.shellsBusy) return;
+    this.shellsBusy = true;
+    cx.spawn(async (cx) => {
+      this.shells = await oldShells();
+      this.shellsBusy = false;
+      if (!this.unchanged("shells", this.shells)) cx.notify();
     });
   }
 
@@ -328,6 +343,7 @@ export default class Board extends View {
     this.cap = snap.cap;
     this.shepherdr = new Map(snap.shepherdr);
     this.windows = snap.windows;
+    this.shells = snap.shells;
     this.stale = snap.unsure;
     seedPrs(snap.prs);
     seedVerdicts(snap.verdicts);
@@ -350,6 +366,7 @@ export default class Board extends View {
       origins: originEntries(threads),
       shepherdr: [...this.shepherdr].filter(([thread]) => keys.has(thread)),
       windows: this.windows,
+      shells: this.shells,
     };
   }
 
@@ -553,7 +570,7 @@ export default class Board extends View {
         const block = variant === "ready" && g.info.status === "open" ? this.reviewBlock(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
-        const view = (extra) => ({ origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: block ?? refusal?.text, blocked: Boolean(block || refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: block ?? refusal?.text, blocked: Boolean(block || refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), oldShell: this.shells.cwds.includes(c.cwd), shells: this.shells, since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -795,7 +812,7 @@ export default class Board extends View {
 
   decisionSnap(e) {
     const g = { ...e.group, info: undefined };
-    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads), shepherdr: [] };
+    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads), shepherdr: [], shells: this.shells };
   }
 
   openDecision(e, cx) {

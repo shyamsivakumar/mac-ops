@@ -8,6 +8,7 @@ const CONFIRM_GAP = 400;
 const ARM_FOR = 6000;
 const FRESH_MS = 60000;
 const POLL_MS = 2000;
+const PORT_POLL_MS = 5000;
 const HANG_MS = 660000;
 
 const REASONS = {
@@ -41,6 +42,51 @@ const base = (path) => path.slice(path.lastIndexOf("/") + 1);
 const rowName = (row) => (base(row.path) === base(row.repo) ? `${base(row.path.slice(0, row.path.lastIndexOf("/")))}/${base(row.path)}` : base(row.path));
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+function parseListeners(out) {
+  const byPid = new Map();
+  let entry = null;
+  for (const line of out.split("\n")) {
+    const value = line.slice(1);
+    if (line[0] === "p") {
+      entry = { name: "", ports: new Set() };
+      byPid.set(value, entry);
+    } else if (line[0] === "c" && entry) entry.name = value;
+    else if (line[0] === "n" && entry) {
+      const port = Number(value.slice(value.lastIndexOf(":") + 1));
+      if (port) entry.ports.add(port);
+    }
+  }
+  return byPid;
+}
+
+function parseCwds(out) {
+  const cwds = new Map();
+  let pid = null;
+  for (const line of out.split("\n")) {
+    if (line[0] === "p") pid = line.slice(1);
+    else if (line[0] === "n" && pid) cwds.set(pid, line.slice(1));
+  }
+  return cwds;
+}
+
+async function listeningPorts(paths) {
+  const listing = await exec("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"]);
+  const listeners = parseListeners(listing.stdout);
+  const byPath = new Map();
+  if (!listeners.size) return byPath;
+  const cwdOut = await exec("/usr/sbin/lsof", ["-a", "-d", "cwd", "-p", [...listeners.keys()].join(","), "-Fpn"]);
+  const longestFirst = [...paths].sort((a, b) => b.length - a.length);
+  for (const [pid, cwd] of parseCwds(cwdOut.stdout)) {
+    const path = longestFirst.find((p) => cwd === p || cwd.startsWith(`${p}/`));
+    if (!path) continue;
+    const { name, ports } = listeners.get(pid);
+    const mine = byPath.get(path) ?? [];
+    for (const port of ports) if (!mine.some((m) => m.port === port)) mine.push({ port, name });
+    byPath.set(path, mine.sort((a, b) => a.port - b.port));
+  }
+  return byPath;
+}
+
 function age(seconds) {
   if (seconds === null || seconds === undefined) return "";
   const m = Math.floor(seconds / 60);
@@ -73,9 +119,13 @@ export default class Worktrees extends View {
     this.result = null;
     this.armed = null;
     this.polling = false;
+    this.ports = new Map();
+    this.scanningPorts = false;
     this.handle = cx.focus_handle();
     cx.timer.after(60, () => this.handle.focus());
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
+    cx.timer.every(PORT_POLL_MS, (cx) => this.pollPorts(cx));
+    this.pollPorts(cx);
     cx.spawn(async (cx) => {
       this.data = await read("last.json");
       const status = await read("status.json");
@@ -145,6 +195,34 @@ export default class Worktrees extends View {
     });
   }
 
+  pollPorts(cx) {
+    const paths = [...this.rows(), ...(this.data?.excluded_rows ?? [])].filter((r) => !r.gone).map((r) => r.path);
+    if (this.scanningPorts || !paths.length) return;
+    this.scanningPorts = true;
+    cx.spawn(async (cx) => {
+      try {
+        const next = await listeningPorts(paths);
+        const changed = JSON.stringify([...next]) !== JSON.stringify([...this.ports]);
+        this.ports = next;
+        if (changed) cx.notify();
+      } finally {
+        this.scanningPorts = false;
+      }
+    });
+  }
+
+  chips(t, path, key) {
+    return (this.ports.get(path) ?? []).map((p) => div().id(`port-${key}-${p.port}`).flex_none().h(17).px(5).flex().items_center().rounded(4)
+      .text_size(11).bg(t.accent + "1f").text_color(t.accent).cursor_pointer().hover((s) => s.bg(t.accent + "38"))
+      .tooltip(`${p.name} · open http://localhost:${p.port}`)
+      .on_click((e, cx) => {
+        if (e.click_count > 1) return;
+        cx.stop_propagation();
+        exec("open", [`http://localhost:${p.port}`]);
+      })
+      .child(`:${p.port} ${p.name}`));
+  }
+
   rows() {
     return (this.data?.rows ?? []).filter((r) => !r.main_checkout);
   }
@@ -199,7 +277,8 @@ export default class Worktrees extends View {
         .child(h_flex().gap(8).flex_wrap().items_baseline()
           .child(div().text_size(13).font_medium().text_color(t.foreground).child(rowName(r)))
           .child(div().text_size(12).text_color(t.muted).child(r.branch ?? "detached")))
-        .child(div().text_size(12).line_height("17px").text_color(t.muted).child(reasonText(r))))
+        .child(div().text_size(12).line_height("17px").text_color(t.muted).child(reasonText(r)))
+        .when(this.ports.has(r.path), (el) => el.child(h_flex().pt(2).gap(4).flex_wrap().items_center().children(this.chips(t, r.path, i)))))
       .child(div().text_size(12).text_color(t.dim).flex_none().w(70).child(age(r.age_seconds)))
       .child(div().w(96).flex_none().flex().justify_end()
         .when(r.category === "look" && !r.gone, (el) => el.child(this.small(t, `open-${i}`, "Open folder", () => this.openFolder(r)))));
@@ -225,7 +304,8 @@ export default class Worktrees extends View {
           .child(h_flex().gap(8).flex_wrap().items_baseline()
             .child(div().text_size(13).font_medium().text_color(t.foreground).child(base(r.path)))
             .child(div().text_size(12).text_color(t.muted).child(r.branch ?? "detached")))
-          .child(div().text_size(12).text_color(t.muted).child(this.exclusionDetail(r))))
+          .child(div().text_size(12).text_color(t.muted).child(this.exclusionDetail(r)))
+          .when(this.ports.has(r.path), (el) => el.child(h_flex().pt(2).gap(4).flex_wrap().items_center().children(this.chips(t, r.path, `ex-${base(repo)}-${i}`)))))
         .child(div().text_size(12).text_color(t.dim).flex_none().w(70).child(age(r.age_seconds)))));
     }
     return out;

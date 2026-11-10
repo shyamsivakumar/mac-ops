@@ -170,6 +170,33 @@ export async function load() {
   };
 }
 
+const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+
+export async function oldShells() {
+  const [rc, cwds] = await Promise.all([
+    exec("/usr/bin/stat", ["-L", "-f", "%m", `${home()}/.zshrc`]),
+    exec("/usr/sbin/lsof", ["-a", "-d", "cwd", "-c", "empryo", "-Fpn"]),
+  ]);
+  const changed = Number(rc.stdout) * 1000;
+  const dirs = new Map();
+  let pid = "";
+  for (const line of cwds.stdout.split("\n")) {
+    if (line[0] === "p") pid = line.slice(1);
+    else if (line[0] === "n") dirs.set(pid, line.slice(1));
+  }
+  if (!dirs.size) return { changed, cwds: [] };
+  const ps = await exec("/bin/ps", ["-o", "pid=,lstart=", "-p", [...dirs.keys()].join(",")]);
+  const newest = new Map();
+  for (const line of ps.stdout.split("\n")) {
+    const m = /^\s*(\d+)\s+\w+\s+(\w+)\s+(\d+)\s+(\d+):(\d+):(\d+)\s+(\d+)/.exec(line);
+    if (!m) continue;
+    const started = new Date(Number(m[7]), MONTHS[m[2]], Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])).getTime();
+    const dir = dirs.get(m[1]);
+    newest.set(dir, Math.max(newest.get(dir) ?? 0, started));
+  }
+  return { changed, cwds: [...newest].filter(([, started]) => started < changed).map(([dir]) => dir) };
+}
+
 export const hubStatus = () => call("emp_hub_status", {}).then((s) => ({ circuits: s?.circuits, draining: s?.draining, pid: s?.pid })).catch(() => null);
 
 export async function loadBacklog() {
