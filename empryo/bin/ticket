@@ -301,19 +301,39 @@ def fetch_issue(repo, n):
     return gh_json(["issue", "view", str(n), "-R", repo, "--json", "id,number,title,body,state,labels,comments,url,blockedBy"])
 
 
+def template_markers(cfg, lines):
+    names = {s.lower(): s for s in cfg["template"]}
+    markers = []
+    for i, line in enumerate(lines):
+        m = HEADING.match(line)
+        if m:
+            text = m.group(2).strip().strip("*").strip().rstrip(":").strip().lower()
+            if text in names:
+                markers.append((i, names[text], len(m.group(1)), ""))
+            continue
+        for lower, section in names.items():
+            m = re.match(rf"\s*(?:\*\*)?\s*{re.escape(lower)}\s*(?:\*\*)?\s*:\s*(?:\*\*)?(.*)$", line, re.I)
+            if m:
+                markers.append((i, section, 0, m.group(1)))
+                break
+    return markers
+
+
 def template_status(cfg, body):
     lines = body.splitlines()
-    headings = [(i, len(m.group(1)), m.group(2).strip().rstrip(":").strip().lower()) for i, line in enumerate(lines) for m in [HEADING.match(line)] if m]
+    markers = template_markers(cfg, lines)
     status = {}
     for section in cfg["template"]:
-        wanted = section.lower()
-        found = next(((i, level) for i, level, text in headings if text == wanted), None)
+        found = next((m for m in markers if m[1] == section), None)
         if found is None:
             status[section] = "missing"
             continue
-        start, level = found
-        end = next((j for j, lvl, _ in headings if j > start and lvl <= level), len(lines))
-        content = re.sub(r"<!--.*?-->", "", "\n".join(lines[start + 1:end]), flags=re.S).strip()
+        start, _, level, rest = found
+        stops = [m[0] for m in markers if m[0] > start]
+        if level:
+            stops += [j for j in range(start + 1, len(lines)) if (h := HEADING.match(lines[j])) and len(h.group(1)) <= level]
+        end = min(stops, default=len(lines))
+        content = re.sub(r"<!--.*?-->", "", "\n".join([rest] + lines[start + 1:end]), flags=re.S).strip()
         status[section] = "ok" if content else "empty"
     return status
 
@@ -608,6 +628,7 @@ def cmd_show(a):
             "title": t["title"],
             "state": t["state"],
             "body": t["body"],
+            "bodyHash": hashlib.sha256(t["body"].encode()).hexdigest()[:16],
             "stage": t["stage"],
             "priority": int(t["priority"]) if t["priority"] else None,
             "type": t["type"],
@@ -631,6 +652,64 @@ def cmd_show(a):
     print(json.dumps(out, indent=1))
 
 
+def set_target(cfg, family, value):
+    if value == "none":
+        return None
+    valid = {
+        "stage": cfg["labels"]["stage"],
+        "priority": cfg["labels"]["priority"],
+        "builder": list(cfg["models"]),
+        "reviewer": [a for a, m in cfg["models"].items() if not m.get("noGate")],
+    }[family]
+    if value not in valid:
+        if family == "reviewer" and cfg["models"].get(value, {}).get("noGate"):
+            raise Refuse(f"reviewer {value} cannot gate (noGate)")
+        raise Refuse(f"unknown {family} {value!r}, expected one of: {', '.join(valid)}, none")
+    return value
+
+
+def cmd_set(a):
+    cfg = load_config()
+    repo, n = parse_ref(a.ref)
+    wanted = {f: getattr(a, f) for f in ("stage", "priority", "builder", "reviewer") if getattr(a, f) is not None}
+    if not wanted:
+        die("nothing to set: pass --priority, --builder, --reviewer or --stage", 2)
+    try:
+        repo_config(cfg, repo)
+        targets = {f: set_target(cfg, f, v) for f, v in wanted.items()}
+        issue = gh_json(["issue", "view", str(n), "-R", repo, "--json", "labels"])
+        names = [l["name"] for l in issue["labels"]]
+        groups, _ = split_labels(cfg, names)
+        pair = {f: targets[f] if f in targets else one(groups[f]) for f in ("builder", "reviewer")}
+        type_ = one(groups["type"])
+        if type_ and (pair["builder"] is None or pair["reviewer"] is None):
+            routing = load_routing()
+            pair["builder"] = pair["builder"] or alias_for_selection(cfg, routing[type_]["modelSelection"])
+            pair["reviewer"] = pair["reviewer"] or alias_for_selection(cfg, routing["review"]["modelSelection"])
+        if pair["builder"] and pair["reviewer"]:
+            if cfg["models"][pair["reviewer"]].get("noGate"):
+                raise Refuse(f"reviewer {pair['reviewer']} cannot gate (noGate)")
+            if cfg["models"][pair["builder"]]["vendor"] == cfg["models"][pair["reviewer"]]["vendor"]:
+                raise Refuse(f"builder {pair['builder']} and reviewer {pair['reviewer']} are both vendor {cfg['models'][pair['builder']]['vendor']}")
+        add, remove = [], []
+        for family, value in targets.items():
+            remove += [f"{family}:{v}" for v in groups[family] if v != value]
+            if value and value not in groups[family]:
+                add.append(f"{family}:{value}")
+        if add or remove:
+            args = ["issue", "edit", str(n), "-R", repo]
+            if add:
+                args += ["--add-label", ",".join(add)]
+            if remove:
+                args += ["--remove-label", ",".join(remove)]
+            gh(args)
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    except GhError as e:
+        die(f"gh failed ({e.kind}): {e}")
+    print(json.dumps(sorted((set(names) | set(add)) - set(remove))))
+
+
 def main():
     p = argparse.ArgumentParser(prog="ticket")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -649,6 +728,13 @@ def main():
     s.add_argument("ref")
     s.add_argument("--reason", required=True)
     s.set_defaults(fn=cmd_abandon)
+    s = sub.add_parser("set")
+    s.add_argument("ref")
+    s.add_argument("--priority")
+    s.add_argument("--builder")
+    s.add_argument("--reviewer")
+    s.add_argument("--stage")
+    s.set_defaults(fn=cmd_set)
     s = sub.add_parser("show")
     s.add_argument("ref")
     s.add_argument("--json", action="store_true")
