@@ -1,6 +1,7 @@
 // Elements of the board. Every row has a fixed height, so each column can window itself.
 
 import { div } from "gpui-kit";
+import { shared } from "herdr";
 import { v_flex, h_flex, Input, TextView } from "gpui-base";
 import { shortModel } from "./hub.js";
 import { changedSinceLaunch, issueRef, pickerOptions, startBlock } from "./tickets.js";
@@ -115,7 +116,14 @@ function barItems(v) {
   const issues = health && !health.stale ? health.problems.length + health.warnings.length : 0;
   const hubLabel = !health ? "Hub" : hub?.draining ? "Hub · draining" : health.stale ? "Hub · no check" : health.problems.length ? `Hub · ${plural(health.problems.length, "problem")}` : health.warnings.length ? `Hub · ${plural(health.warnings.length, "warning")}` : "Hub · ok";
   const hubTone = !health ? undefined : health.problems.length ? "blocked" : hub?.draining || health.stale || issues ? "working" : undefined;
+  const asks = shared("co.asks")?.items ?? [];
+  const decided = shared("co.decided") ?? {};
+  const waiting = asks.filter((a) => !decided[a.id]);
+  const sent = asks.length - waiting.length;
+  const decisionsLabel = `Decisions · ${waiting.length ? `${waiting.length} waiting` : "none"}${sent ? ` · ${sent} sent` : ""}`;
+  const decisionsTip = waiting.length ? `${waiting.slice(0, 3).map((a) => a.text).join(" · ")}${waiting.length > 3 ? ` · and ${waiting.length - 3} more` : ""}. Click to answer.` : "Nothing is waiting on you. Click to open the decisions pop-up.";
   return [
+    { id: "decisions", prio: -1, command: "coordinator.asks", label: decisionsLabel, tone: waiting.length ? "blocked" : undefined, tip: decisionsTip },
     { id: "wt", prio: 0, label: w ? `Worktrees · ${w.stale} stale` : "Worktrees", more: w?.look ? ` · ${w.look} need a look` : "", tone: w?.stale ? "working" : undefined, tip: w ? `${w.stale} safe to clean or prune · ${w.look} need a look. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     { id: "models", prio: 2, label: modelsLabel, tone: modelsTone, tip: modelsTip },
     { id: "queue", prio: 4, label: v.hasBoard ? `Queue · ${running}/${cap}` : "Queue", tone: v.hasBoard && running >= cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
@@ -128,7 +136,7 @@ export function fitBar(width, v) {
   const room = width - 20 - HINT_ROOM - (v.notice ? NOTICE_MIN + BAR_GAP : 0);
   const fits = (list) => list.reduce((sum, x) => sum + barCost(x), 0) + (list.length - 1) * BAR_GAP <= room;
   let shown = barItems(v);
-  const wt = shown[0];
+  const wt = shown.find((x) => x.id === "wt");
   if (!fits(shown)) wt.more = "";
   while (shown.length > 1 && !fits(shown)) shown = shown.filter((x) => x !== shown.reduce((a, b) => (b.prio > a.prio ? b : a)));
   return shown;
@@ -144,7 +152,7 @@ function noticeLine(t, notice, cb) {
 
 export function toolbar(t, width, v, cb) {
   return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
-    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => cb.panel(x.id, cx), x.tip, true, x.tone)))
+    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
     .when(Boolean(v.notice), (el) => el.child(noticeLine(t, v.notice, cb)))
     .when(!v.notice, (el) => el.child(div().flex_1()))
     .when(v.stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))

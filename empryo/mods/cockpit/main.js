@@ -514,6 +514,7 @@ export default class Board extends View {
       notice: (cx) => this.openNotice(shared("cockpit.notice"), cx),
       dismiss,
       panel: (id, cx) => this.openPanel(id, cx),
+      command: (name) => run(name),
       reply: (cx) => this.openReply(this.current(), cx),
       open: (cx) => this.openEntry(this.current(), cx),
       settle: (cx) => this.settleEntry(this.current(), cx),
