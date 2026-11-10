@@ -267,7 +267,7 @@ SESSION_THREAD = {}
 
 
 def runtime_of(thread_id):
-    return RUNTIME.setdefault(thread_id, {"buffer": None, "tools": {}, "pending": {}, "interrupt": False, "proc": None, "model": "", "probe": False, "quotaRecorded": False, "progressAt": 0.0, "active": False, "stalled": None})
+    return RUNTIME.setdefault(thread_id, {"buffer": None, "tools": {}, "pending": {}, "interrupt": False, "proc": None, "model": "", "probe": False, "quotaRecorded": False, "progressAt": 0.0, "turnStartedAt": 0.0, "active": False, "stalled": None})
 
 
 def thread_cwd(thread):
@@ -897,8 +897,9 @@ def run_turn(thread, proc, message, run_id):
             status, stop = "interrupted", "cancelled"
         else:
             slot_key = key
-            rt["progressAt"] = time.time()
-            rt["active"] = True
+            with LOCK:
+                rt["turnStartedAt"] = rt["progressAt"] = time.time()
+                rt["active"] = True
             try:
                 result = proc.call("session/prompt", {"sessionId": thread["sessionId"], "prompt": [{"type": "text", "text": prompt_for_engine(thread, message)}]}, timeout=None)
                 stop = result.get("stopReason")
@@ -1021,6 +1022,7 @@ def new_thread(args, created_by="agent", creation_source="mcp"):
         "runCount": 0, "itemCount": 0, "archived": False, "settled": False, "settledAt": None, "snoozed": False, "snoozedUntil": None,
         "pinned": False, "createdAt": now_iso(), "updatedAt": now_iso(), "sessionId": None, "runs": [], "lastError": None,
         "clientRequestId": args.get("clientRequestId"), "taskType": task_type, "mode": mode,
+        "turnSeconds": args.get("turnSeconds", load_routing()["turnLimits"].get("turnSeconds", 7200)),
     }
     with LOCK:
         THREADS.data[thread_id] = thread
@@ -1036,7 +1038,7 @@ def thread_summary(thread):
     rt = RUNTIME.get(thread["threadId"])
     keys = ("threadId", "projectId", "title", "createdBy", "creationSource", "status", "latestRunId", "activeRunId", "providerInstanceId", "model",
             "runtimeMode", "interactionMode", "linkedPullRequest", "pullRequests", "titleRegeneration", "branch", "worktreePath", "parentThreadId",
-            "relationshipToParent", "taskType", "mode", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError", "portBase", "clientRequestId")
+            "relationshipToParent", "taskType", "mode", "turnSeconds", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError", "portBase", "clientRequestId")
     summary = {k: thread.get(k) for k in keys}
     summary["link"] = link_of(thread)
     summary["activeRunStartedAt"] = thread["runs"][-1]["startedAt"] if thread["activeRunId"] else None
@@ -1547,6 +1549,11 @@ def format_seconds(seconds):
 def stall_reason(rt, limits, now):
     if rt["pending"]:
         return None
+    # Answers are sent before pending is cleared under LOCK. Defer expiry
+    # until then; elapsed permission wait still counts toward the budget.
+    turn_seconds = limits.get("turnSeconds", 7200)
+    if now - rt["turnStartedAt"] > turn_seconds:
+        return f"turn ran over {turn_seconds / 60:g} min"
     if rt["tools"]:
         running_since = min(tool["since"] for tool in rt["tools"].values())
         if now - running_since > limits["toolSeconds"]:
@@ -1557,10 +1564,11 @@ def stall_reason(rt, limits, now):
     return None
 
 
-def kill_if_still_active(rt, proc):
-    if rt["active"]:
-        log(f"engine pid {proc.proc.pid} ignored session/cancel; killing it")
-        proc.proc.kill()
+def kill_if_still_active(rt, proc, turn_started_at):
+    with LOCK:
+        if rt["active"] and rt["turnStartedAt"] == turn_started_at:
+            log(f"engine pid {proc.proc.pid} ignored session/cancel; killing it")
+            proc.proc.kill()
 
 
 def stall_check():
@@ -1569,13 +1577,13 @@ def stall_check():
     with LOCK:
         for thread in THREADS.data.values():
             rt = RUNTIME.get(thread["threadId"])
-            reason = rt and rt["active"] and not rt["stalled"] and stall_reason(rt, limits, now)
+            reason = rt and rt["active"] and not rt["stalled"] and stall_reason(rt, {**limits, "turnSeconds": thread.get("turnSeconds", limits.get("turnSeconds", 7200))}, now)
             if not reason:
                 continue
             rt["stalled"] = reason
             log(f"{thread['threadId']} stalled ({reason}); cancelling the turn")
             rt["proc"].notify("session/cancel", {"sessionId": thread["sessionId"]})
-            threading.Timer(CANCEL_GRACE_SECONDS, kill_if_still_active, (rt, rt["proc"])).start()
+            threading.Timer(CANCEL_GRACE_SECONDS, kill_if_still_active, (rt, rt["proc"], rt["turnStartedAt"])).start()
 
 
 def reaper_tick():
@@ -1830,7 +1838,7 @@ def review_gate(thread, check_sha=None, head_committed_at=None):
         if message is None:
             return False, f"the review thread '{review['title']}' has no usable report: {problem}", {"source": "review thread", "threadId": review["threadId"], "status": review["status"]}
         passed, why = judge_review(message["text"], check_sha)
-        evidence = {"source": "review thread", "threadId": review["threadId"], "title": review["title"], "verdict": why, "verdictWord": verdict_word(message["text"]), "checkSha": checked_sha(message["text"]), "excerpt": message["text"][:300]}
+        evidence = {"source": "review thread", "threadId": review["threadId"], "title": review["title"], "model": review["runs"][-1].get("model"), "runId": review["runs"][-1]["runId"], "verdict": why, "verdictWord": verdict_word(message["text"]), "checkSha": checked_sha(message["text"]), "excerpt": message["text"][:300]}
         if not passed:
             return False, f"review gate not passed: {why}", evidence
         if last_run_end(review) < last_run_end(thread):
@@ -2047,6 +2055,7 @@ THREAD_ID = {"threadId": STR}
 LAUNCH_PROPS = {"projectId": STR, "title": STR, "modelSelection": MODEL_SELECTION, "runtimeMode": {"type": "string", "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"]},
                 "interactionMode": {"type": "string", "enum": ["default", "plan"]}, "workspaceStrategy": STRATEGY, "worktreePath": STR, "branch": STR, "baseRef": STR,
                 "message": STR, "clientRequestId": STR, "delegatedFrom": STR, "parentThreadId": STR,
+                "turnSeconds": {"type": "integer", "minimum": 600},
                 "taskType": {"type": "string", "enum": TASK_TYPES}, "mode": {"type": "string", "enum": MODES}}
 
 TOOLS = {

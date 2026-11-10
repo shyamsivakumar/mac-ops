@@ -1,0 +1,45 @@
+test_defaults_validation_and_extended_tool (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-vu_mh6l9/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 12:39:26 emp:0d9c784b-497b-4e1b-b5d0-530f37f405c7 stalled (turn ran over 120 min); cancelling the turn
+2026-11-10 12:39:26 emp:0d9c784b-497b-4e1b-b5d0-530f37f405c7 run run:emp:0d9c784b-497b-4e1b-b5d0-530f37f405c7:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 12:39:26 emp:1f15b341-0bb5-47ed-9683-9d7373e7ebe4 stalled (turn ran over 120 min); cancelling the turn
+2026-11-10 12:39:26 emp:1f15b341-0bb5-47ed-9683-9d7373e7ebe4 run run:emp:1f15b341-0bb5-47ed-9683-9d7373e7ebe4:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+ok
+test_drain_reload_preserves_override (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-e2g2reg9/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 12:39:27 emp:8c7f7c6e-4418-4ef3-a595-ea1e69c4318c turn queued until the hub restarts (draining)
+2026-11-10 12:39:27 drain requested; waiting for 0 running turn(s)
+2026-11-10 12:39:27 drained: all turns finished, exiting for restart
+SECOND HUB socket=/tmp/hb-e2g2reg9/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 12:39:28 emp:8c7f7c6e-4418-4ef3-a595-ea1e69c4318c queued turn started
+2026-11-10 12:39:28 emp:8c7f7c6e-4418-4ef3-a595-ea1e69c4318c stalled (turn ran over 150 min); cancelling the turn
+2026-11-10 12:39:28 emp:8c7f7c6e-4418-4ef3-a595-ea1e69c4318c run run:emp:8c7f7c6e-4418-4ef3-a595-ea1e69c4318c:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+ok
+test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof) ... DRAIN/RESTART: persisted 9000-second override; resume_turn applied it
+SECOND HUB socket=/tmp/hb-9e2g1j7i/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 12:39:28 emp:6a843ab6-1a7e-4a58-9a9f-ca1bca255067 run run:emp:6a843ab6-1a7e-4a58-9a9f-ca1bca255067:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+2026-11-10 12:39:28 emp:e53a8090-0416-4462-bb25-cf4a1c4a6f28 run run:emp:e53a8090-0416-4462-bb25-cf4a1c4a6f28:ordinal:1 completed on subscriptions/gpt-6.1-terra (end_turn)
+DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName": "main", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isCrossRepository": false, "isDraft": false, "mergeStateStatus": "CLEAN", "mergeable": "MERGEABLE", "number": 1, "reviewDecision": "", "state": "OPEN", "url": "https://github.com/disposable/proof/pull/1"}, "repo": "disposable/proof", "reviewGate": {"checkSha": null, "excerpt": "Checked all changes and the builder proof.\nVERDICT: PASS", "model": "subscriptions/gpt-6.1-terra", "runId": "run:emp:e53a8090-0416-4462-bb25-cf4a1c4a6f28:ordinal:1", "source": "review thread", "threadId": "emp:e53a8090-0416-4462-bb25-cf4a1c4a6f28", "title": "MO-147 review", "verdict": "VERDICT: PASS", "verdictWord": "PASS"}}, "merged": false, "revision": "95c7b5d485b8", "threadId": "emp:6a843ab6-1a7e-4a58-9a9f-ca1bca255067", "wouldMerge": {"method": "squash", "number": 1, "repo": "disposable/proof", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+2026-11-10 12:39:28 emp:a37d7b2a-1427-4630-a4f4-1fa747d75940 run run:emp:a37d7b2a-1427-4630-a4f4-1fa747d75940:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+ok
+test_permission_answer_not_cut (__main__.TurnBudgetProof) ... NORMAL DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName": "main", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isCrossRepository": false, "isDraft": false, "mergeStateStatus": "CLEAN", "mergeable": "MERGEABLE", "number": 1, "reviewDecision": "", "state": "OPEN", "url": "https://github.com/disposable/proof/pull/1"}, "repo": "disposable/proof", "reviewGate": {"checkSha": null, "excerpt": "Checked all changes and the builder proof.\nVERDICT: PASS", "model": "subscriptions/claude-opus-5-5", "runId": "run:emp:a37d7b2a-1427-4630-a4f4-1fa747d75940:ordinal:1", "source": "review thread", "threadId": "emp:a37d7b2a-1427-4630-a4f4-1fa747d75940", "title": "MO-147 normal review", "verdict": "VERDICT: PASS", "verdictWord": "PASS"}}, "merged": false, "revision": "1bb40e7f7961", "threadId": "emp:6a843ab6-1a7e-4a58-9a9f-ca1bca255067", "wouldMerge": {"method": "squash", "number": 1, "repo": "disposable/proof", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+SECOND HUB socket=/tmp/hb-8ekyfqfg/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 12:39:29 emp:68904a45-3938-47f9-81ce-aaf22fed978f stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 12:39:29 emp:68904a45-3938-47f9-81ce-aaf22fed978f run run:emp:68904a45-3938-47f9-81ce-aaf22fed978f:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+ok
+test_sleep_cancel_queue_and_resumed_clock (__main__.TurnBudgetProof) ... PERMISSION: deferred while pending and while answer send blocks; expiry after answer; wait time charged
+SECOND HUB socket=/tmp/hb-ej6gtdzm/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 12:39:30 emp:07cafff8-2771-4562-a629-39d18990b41f stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 12:39:30 emp:07cafff8-2771-4562-a629-39d18990b41f run run:emp:07cafff8-2771-4562-a629-39d18990b41f:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+FAILED RUN {"runId": "run:emp:07cafff8-2771-4562-a629-39d18990b41f:ordinal:1", "ordinal": 1, "status": "failed", "startedAt": "2026-11-10T20:39:30.093Z", "completedAt": "2026-11-10T20:39:30.100Z", "stopReason": "cancelled", "usage": null, "model": "subscriptions/claude-opus-5-5", "error": "turn ran over 10 min", "reportItemIds": []}
+2026-11-10 12:39:30 emp:c02ca6bd-9bf6-4f5e-aa14-d52f3e85fcb1 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 12:39:30 emp:c02ca6bd-9bf6-4f5e-aa14-d52f3e85fcb1 run run:emp:c02ca6bd-9bf6-4f5e-aa14-d52f3e85fcb1:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 12:39:30 emp:07cafff8-2771-4562-a629-39d18990b41f stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 12:39:30 emp:07cafff8-2771-4562-a629-39d18990b41f run run:emp:07cafff8-2771-4562-a629-39d18990b41f:ordinal:2 failed on subscriptions/claude-opus-5-5 (cancelled)
+ok
+test_total_budget_precedes_tool_and_progress_limits (__main__.TurnBudgetProof) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 4.493s
+
+OK
+QUEUE/RESUME: no queued budget; fresh resumed clock; one release per run
+SECOND HUB socket=/tmp/hb-nt5zavmv/.empryo-hub/hub.sock; synthetic clock; no production access
