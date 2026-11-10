@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import contextlib, hashlib, json, os, re, shutil, socket, socketserver, sqlite3, subprocess, sys, threading, time, uuid
+import contextlib, fcntl, hashlib, json, os, re, shutil, socket, socketserver, sqlite3, subprocess, sys, threading, time, uuid
 from datetime import datetime, timedelta, timezone
 
 HOME = os.path.expanduser("~")
@@ -48,6 +48,26 @@ class HubError(Exception):
 
 def slugify(text):
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:48] or "thread"
+
+
+def prepare_startup():
+    if sys.argv[1:]:
+        print("Usage: emp-hub\nStart the hub with no arguments. Any argument prints this usage without starting.")
+        raise SystemExit(0)
+    os.makedirs(HUB_DIR, exist_ok=True)
+    lock_file = open(f"{HUB_DIR}/hub.lock", "a")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        print(f"emp-hub: already running (instance lock: {HUB_DIR}/hub.lock)", file=sys.stderr)
+        raise SystemExit(1)
+    return lock_file
+
+
+# Hold the descriptor for the process lifetime, before even reading hub stores.
+# Never unlink the lock file: competing starters must lock the same inode.
+INSTANCE_LOCK = prepare_startup() if __name__ == "__main__" else None
 
 
 class Store:
@@ -603,7 +623,6 @@ ERROR_CHARS = 300
 FAILURE_WINDOW_SECONDS = 600
 CIRCUIT_OPEN_SECONDS = 900
 BREAKERS = {}
-SLOTS = {}
 
 
 def provider_of(model):
@@ -679,39 +698,6 @@ def choose_model(thread):
             return candidate, False
     log(f"{thread['threadId']} has no open fallback for {base}; using it anyway")
     return base, False
-
-
-def limit_of(model):
-    return next(((key, limit) for key, limit in load_routing().get("limits", {}).items() if model.startswith(key)), (None, None))
-
-
-def acquire_slot(thread, key, limit):
-    thread_id = thread["threadId"]
-    rt = runtime_of(thread_id)
-    with CHANGED:
-        slot = SLOTS.setdefault(key, {"running": [], "queue": []})
-        slot["queue"].append(thread_id)
-        waited = False
-        while not (slot["queue"][0] == thread_id and len(slot["running"]) < limit):
-            if rt["interrupt"]:
-                slot["queue"].remove(thread_id)
-                CHANGED.notify_all()
-                return False
-            if not waited:
-                set_status(thread, "queued")
-                waited = True
-            CHANGED.wait(timeout=2)
-        slot["queue"].pop(0)
-        slot["running"].append(thread_id)
-        if waited:
-            set_status(thread, "running")
-        return True
-
-
-def release_slot(key, thread_id):
-    with CHANGED:
-        SLOTS[key]["running"].remove(thread_id)
-        CHANGED.notify_all()
 
 
 def running_turns():
@@ -812,10 +798,7 @@ def tool_hub_status(a):
                     "openUntil": iso(datetime.fromtimestamp(breaker_of(p)["openUntil"], timezone.utc)) if breaker_of(p)["openUntil"] else None,
                     "probing": breaker_of(p)["probing"],
                     "lastError": breaker_of(p)["lastError"], "lastErrorAt": breaker_of(p)["lastErrorAt"]} for p in sorted(set(PROVIDERS) | set(BREAKERS))}
-    titles = lambda ids: [THREADS.data[i]["title"] for i in ids if i in THREADS.data]
-    limits = {key: {"limit": limit, "running": titles(SLOTS.get(key, {"running": []})["running"]), "queued": titles(SLOTS.get(key, {"queue": []})["queue"])}
-              for key, limit in load_routing().get("limits", {}).items()}
-    return {"circuits": circuits, "limits": limits, "engines": len(ENGINES), "routing": ROUTING_PATH, "pid": os.getpid(), "draining": DRAINING["requested"]}
+    return {"circuits": circuits, "engines": len(ENGINES), "routing": ROUTING_PATH, "pid": os.getpid(), "draining": DRAINING["requested"]}
 
 
 STOP_STATUS = {"end_turn": "completed", "max_tokens": "completed", "max_turn_requests": "completed", "cancelled": "interrupted", "refusal": "failed"}
@@ -890,33 +873,27 @@ def prompt_for_engine(thread, message):
 def run_turn(thread, proc, message, run_id):
     rt = runtime_of(thread["threadId"])
     status, stop, usage, error = "failed", None, None, None
-    slot_key = None
     try:
-        key, limit = limit_of(rt["model"])
-        if key and not acquire_slot(thread, key, limit):
-            status, stop = "interrupted", "cancelled"
-        else:
-            slot_key = key
-            with LOCK:
-                rt["turnStartedAt"] = rt["progressAt"] = time.time()
-                rt["active"] = True
-            try:
-                result = proc.call("session/prompt", {"sessionId": thread["sessionId"], "prompt": [{"type": "text", "text": prompt_for_engine(thread, message)}]}, timeout=None)
-                stop = result.get("stopReason")
-                usage = result.get("_meta", {}).get("empryo", {}).get("usage")
-                status = STOP_STATUS.get(stop, "completed")
-            except (HubError, OSError) as e:
-                error = str(e)
-                status = "interrupted" if rt["interrupt"] else "failed"
-            if rt["stalled"]:
-                status, error = "failed", rt["stalled"]
+        with LOCK:
+            rt["turnStartedAt"] = rt["progressAt"] = time.time()
+            rt["active"] = True
+        try:
+            result = proc.call("session/prompt", {"sessionId": thread["sessionId"], "prompt": [{"type": "text", "text": prompt_for_engine(thread, message)}]}, timeout=None)
+            stop = result.get("stopReason")
+            usage = result.get("_meta", {}).get("empryo", {}).get("usage")
+            status = STOP_STATUS.get(stop, "completed")
+        except (HubError, OSError) as e:
+            error = str(e)
+            status = "interrupted" if rt["interrupt"] else "failed"
+        if rt["stalled"]:
+            status, error = "failed", rt["stalled"]
     except Exception as e:
         status, error = "failed", f"{type(e).__name__}: {e}"
     finally:
-        finish_run(thread, rt, proc, run_id, slot_key, status, stop, usage, error)
+        finish_run(thread, rt, proc, run_id, status, stop, usage, error)
 
 
-def finish_run(thread, rt, proc, run_id, slot_key, status, stop, usage, error):
+def finish_run(thread, rt, proc, run_id, status, stop, usage, error):
     try:
         with LOCK:
             rt["active"] = False
@@ -944,13 +921,9 @@ def finish_run(thread, rt, proc, run_id, slot_key, status, stop, usage, error):
                 set_status(thread, status)
     finally:
         try:
-            if slot_key:
-                release_slot(slot_key, thread["threadId"])
+            settle_breaker(rt, status, error)
         finally:
-            try:
-                settle_breaker(rt, status, error)
-            finally:
-                release_engine(proc)
+            release_engine(proc)
     flush_titles()
     log(f"{thread['threadId']} run {run_id} {status} on {rt['model']} ({stop or error})")
     if status == "completed":
@@ -2197,4 +2170,5 @@ def main():
     Server(SOCKET, Handler).serve_forever()
 
 
-main()
+if __name__ == "__main__":
+    main()

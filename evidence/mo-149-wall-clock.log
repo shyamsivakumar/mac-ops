@@ -1,0 +1,7 @@
+UNCAPPED HUB socket=/tmp/hb-sq1kn57y/.empryo-hub/hub.sock; fake ACP only; real sleep children
+WALL CLOCK: two concurrent real sleep processes; 601 actual seconds; no clock offset
+2026-11-10 14:06:27 emp:e141fd7f-cfd3-4d44-a123-03674b7ed597 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:06:27 emp:5ed4e35b-56d5-467f-81f6-fda280e9014e stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:06:27 emp:e141fd7f-cfd3-4d44-a123-03674b7ed597 run run:emp:e141fd7f-cfd3-4d44-a123-03674b7ed597:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 14:06:27 emp:5ed4e35b-56d5-467f-81f6-fda280e9014e run run:emp:5ed4e35b-56d5-467f-81f6-fda280e9014e:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+WALL CLOCK PASS: both concurrent runs expired; one cancellation/engine release each; failed records persisted

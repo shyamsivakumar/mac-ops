@@ -1,0 +1,129 @@
+$ python3 verification/check_hub_single_instance.py
+exit=0
+test_arguments_do_not_touch_state (__main__.SingleInstanceProof) ... ok
+test_help_does_not_create_hub_directory (__main__.SingleInstanceProof) ... ok
+test_help_preserves_live_socket_and_lock_releases_on_exit (__main__.SingleInstanceProof) ... ok
+test_lock_precedes_reading_stores (__main__.SingleInstanceProof) ... ok
+test_second_start_changes_nothing (__main__.SingleInstanceProof) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 1.232s
+
+OK
+
+$ python3 verification/check_hub_turn_budget.py
+exit=0
+SECOND HUB socket=/tmp/hb-53ktyxxk/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 14:14:53 emp:330bea6c-5f25-4167-9fe2-70afce957635 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:14:53 emp:1bccf001-04d8-4332-b290-358a5deac0df stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:14:53 emp:1bccf001-04d8-4332-b290-358a5deac0df run run:emp:1bccf001-04d8-4332-b290-358a5deac0df:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 14:14:53 emp:330bea6c-5f25-4167-9fe2-70afce957635 run run:emp:330bea6c-5f25-4167-9fe2-70afce957635:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 14:14:53 emp:330bea6c-5f25-4167-9fe2-70afce957635 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:14:53 emp:330bea6c-5f25-4167-9fe2-70afce957635 run run:emp:330bea6c-5f25-4167-9fe2-70afce957635:ordinal:2 failed on subscriptions/claude-opus-5-5 (cancelled)
+SECOND HUB socket=/tmp/hb-k8cwrfqn/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 14:14:54 emp:e8f15659-1167-44af-b134-2b6f64f8aa3c stalled (turn ran over 120 min); cancelling the turn
+2026-11-10 14:14:54 emp:e8f15659-1167-44af-b134-2b6f64f8aa3c run run:emp:e8f15659-1167-44af-b134-2b6f64f8aa3c:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 14:14:54 emp:93467a5b-3ee1-4dfd-aff7-480c5a27a4a7 stalled (turn ran over 120 min); cancelling the turn
+2026-11-10 14:14:54 emp:93467a5b-3ee1-4dfd-aff7-480c5a27a4a7 run run:emp:93467a5b-3ee1-4dfd-aff7-480c5a27a4a7:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+SECOND HUB socket=/tmp/hb-bvk2b7ym/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 14:14:54 emp:866a8de2-b455-4e7b-8c51-c9c0b42f4195 turn queued until the hub restarts (draining)
+2026-11-10 14:14:54 drain cancelled (was on)
+2026-11-10 14:14:54 emp:866a8de2-b455-4e7b-8c51-c9c0b42f4195 queued turn started
+2026-11-10 14:14:54 emp:866a8de2-b455-4e7b-8c51-c9c0b42f4195 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:14:54 emp:866a8de2-b455-4e7b-8c51-c9c0b42f4195 run run:emp:866a8de2-b455-4e7b-8c51-c9c0b42f4195:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+SECOND HUB socket=/tmp/hb-8fx5c__1/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 14:14:55 emp:92661b58-61ba-4b9c-bb9e-e50f9bd0e241 turn queued until the hub restarts (draining)
+2026-11-10 14:14:55 drain requested; waiting for 0 running turn(s)
+2026-11-10 14:14:55 drained: all turns finished, exiting for restart
+SECOND HUB socket=/tmp/hb-8fx5c__1/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 14:14:56 emp:92661b58-61ba-4b9c-bb9e-e50f9bd0e241 queued turn started
+2026-11-10 14:14:56 emp:92661b58-61ba-4b9c-bb9e-e50f9bd0e241 stalled (turn ran over 150 min); cancelling the turn
+2026-11-10 14:14:56 emp:92661b58-61ba-4b9c-bb9e-e50f9bd0e241 run run:emp:92661b58-61ba-4b9c-bb9e-e50f9bd0e241:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+DRAIN/RESTART: persisted 9000-second override; resume_turn applied it
+SECOND HUB socket=/tmp/hb-f62t5r3s/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 14:14:56 emp:b722dcf0-0c51-44d8-9faa-29c5399d5998 run run:emp:b722dcf0-0c51-44d8-9faa-29c5399d5998:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+2026-11-10 14:14:56 emp:5d9a6abb-650f-4344-8c47-2b8f99d0088c run run:emp:5d9a6abb-650f-4344-8c47-2b8f99d0088c:ordinal:1 completed on subscriptions/gpt-6.1-terra (end_turn)
+DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName": "main", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isCrossRepository": false, "isDraft": false, "mergeStateStatus": "CLEAN", "mergeable": "MERGEABLE", "number": 1, "reviewDecision": "", "state": "OPEN", "url": "https://github.com/disposable/proof/pull/1"}, "repo": "disposable/proof", "reviewGate": {"checkSha": null, "excerpt": "Checked all changes and the builder proof.\nVERDICT: PASS", "model": "subscriptions/gpt-6.1-terra", "runId": "run:emp:5d9a6abb-650f-4344-8c47-2b8f99d0088c:ordinal:1", "source": "review thread", "threadId": "emp:5d9a6abb-650f-4344-8c47-2b8f99d0088c", "title": "MO-147 review", "verdict": "VERDICT: PASS", "verdictWord": "PASS"}}, "merged": false, "revision": "fed81740148e", "threadId": "emp:b722dcf0-0c51-44d8-9faa-29c5399d5998", "wouldMerge": {"method": "squash", "number": 1, "repo": "disposable/proof", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+2026-11-10 14:14:56 emp:0842efb5-4845-48ff-b39d-a7b9d557b020 run run:emp:0842efb5-4845-48ff-b39d-a7b9d557b020:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+NORMAL DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName": "main", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isCrossRepository": false, "isDraft": false, "mergeStateStatus": "CLEAN", "mergeable": "MERGEABLE", "number": 1, "reviewDecision": "", "state": "OPEN", "url": "https://github.com/disposable/proof/pull/1"}, "repo": "disposable/proof", "reviewGate": {"checkSha": null, "excerpt": "Checked all changes and the builder proof.\nVERDICT: PASS", "model": "subscriptions/claude-opus-5-5", "runId": "run:emp:0842efb5-4845-48ff-b39d-a7b9d557b020:ordinal:1", "source": "review thread", "threadId": "emp:0842efb5-4845-48ff-b39d-a7b9d557b020", "title": "MO-147 normal review", "verdict": "VERDICT: PASS", "verdictWord": "PASS"}}, "merged": false, "revision": "6ec78729a5ce", "threadId": "emp:b722dcf0-0c51-44d8-9faa-29c5399d5998", "wouldMerge": {"method": "squash", "number": 1, "repo": "disposable/proof", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+SECOND HUB socket=/tmp/hb-9xszrv36/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 14:14:57 emp:e020d12d-b9ee-4a28-a8b6-a2cf2fafb454 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:14:57 emp:e020d12d-b9ee-4a28-a8b6-a2cf2fafb454 run run:emp:e020d12d-b9ee-4a28-a8b6-a2cf2fafb454:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+PERMISSION: deferred while pending and while answer send blocks; expiry after answer; wait time charged
+SECOND HUB socket=/tmp/hb-fpgtks7d/.empryo-hub/hub.sock; synthetic clock; no production access
+test_concurrent_provider_turns_and_resumed_clock (__main__.TurnBudgetProof) ... ok
+test_defaults_validation_and_extended_tool (__main__.TurnBudgetProof) ... ok
+test_drain_queue_does_not_charge_budget (__main__.TurnBudgetProof) ... ok
+test_drain_reload_preserves_override (__main__.TurnBudgetProof) ... ok
+test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof) ... ok
+test_permission_answer_not_cut (__main__.TurnBudgetProof) ... ok
+test_total_budget_precedes_tool_and_progress_limits (__main__.TurnBudgetProof) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 4.782s
+
+OK
+
+$ python3 -m unittest discover -s tests -v
+exit=0
+[1/1] shadow replay llmwiki-10--r7--52aad4c3a99777ce
+Scorecard: 1 bundles, pairwise flip n/a, incomplete 1, recall 0.0, false blocks 0/0, loops median/p90 1.0/2.0
+test_busy_when_foreground_command (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_busy_when_python_script (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_critical_incomplete_census_holds_state (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_failed_resume_kept_pending (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_multi_agent_pause_and_resume_on_admit (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_not_busy_for_cursor_agent_foreground (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_tick_pauses_with_verified_identities (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_release_includes_pause_module (test_agent_heavy_wait_pause.InstallReleaseTests) ... ok
+test_census_process_exit_passes_and_controller_failure_rolls_back (test_install_if_behind.InstallObservationTests) ... ok
+test_controller_failure_stops_observation_for_rollback (test_install_if_behind.InstallObservationTests) ... ok
+test_observe_waits_past_install_clock_for_tick_quota (test_install_if_behind.InstallObservationTests) ... ok
+test_zero_slots_still_fail_immediately (test_install_if_behind.InstallObservationTests) ... ok
+test_all_errors_incomplete_no_false_block (test_metrics.TestFlipMetrics) ... ok
+test_pairwise_flip_rate_mixed_last (test_metrics.TestFlipMetrics) ... ok
+test_api_evidence_phrasing (test_requirements_recall.TestSrw61RecallSubjects) ... ok
+test_spx_level_track_phrasing (test_requirements_recall.TestSrw61RecallSubjects) ... ok
+test_unparseable_raw_stays_error (test_rescore.TestRescoreVerdict) ... ok
+test_same_head_different_rounds_share_hash (test_retrospective.TestRetrospectiveHash) ... ok
+test_srw61_round1_base_from_checks (test_retrospective.TestRetrospectiveHash) ... ok
+test_legacy_policy_reaches_replay (test_scorecard_policy.TestScorecardReviewPolicy) ... ok
+test_collect_builds_trace_without_command_secrets (test_session_traces.CollectEvalTests) ... ok
+test_cross_day_pr_contributions (test_session_traces.CollectEvalTests) ... ok
+test_distinct_pr_metrics (test_session_traces.CollectEvalTests) ... ok
+test_dst_day_boundary (test_session_traces.CollectEvalTests) ... ok
+test_later_snapshot_ci_does_not_disprove (test_session_traces.CollectEvalTests) ... ok
+test_missing_proof_when_no_pr (test_session_traces.CollectEvalTests) ... ok
+test_post_run_merge_and_interrupted_not_proven (test_session_traces.CollectEvalTests) ... ok
+test_post_run_merge_strips_ci_for_scoring (test_session_traces.CollectEvalTests) ... ok
+test_posthog_dry_run_and_skip (test_session_traces.CollectEvalTests) ... ok
+test_pre_merge_runs_count_toward_pr_totals (test_session_traces.CollectEvalTests) ... ok
+test_same_pr_proof_required (test_session_traces.CollectEvalTests) ... ok
+test_store_and_eval_proof (test_session_traces.CollectEvalTests) ... ok
+test_path_traversal_rejected (test_session_traces.PathAndToolTests) ... ok
+test_post_run_merge_not_credited (test_session_traces.PathAndToolTests) ... ok
+test_sibling_worktree_not_auto_allowed (test_session_traces.PathAndToolTests) ... ok
+test_tool_name_never_command_text (test_session_traces.PathAndToolTests) ... ok
+test_drops_prompt_fields (test_session_traces.ScrubTests) ... ok
+test_redacts_keys_home_phone_ssn_basic_auth (test_session_traces.ScrubTests) ... ok
+test_scrub_path (test_session_traces.ScrubTests) ... ok
+test_first_line_json_with_codex_banner (test_shadow.TestParseVerdict) ... ok
+test_nested_finding_object_is_not_verdict (test_shadow.TestParseVerdict) ... ok
+test_pass_false_without_findings_array_is_incomplete_for_rescore (test_shadow.TestParseVerdict) ... ok
+test_board_policy_includes_ship_and_score (test_shadow_prompt.TestShadowPrompt) ... ok
+test_legacy_policy_uses_major_gate (test_shadow_prompt.TestShadowPrompt) ... ok
+test_prompt_never_leaks_adjudicated_requirement_ids (test_shadow_prompt.TestShadowPrompt) ... ok
+test_save_skips_unchanged_and_reports_writes (test_update_references.TestUpdateReferencesSave) ... ok
+test_common_exports_wait_helpers (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+test_drain_writes_hold_file_at_pause_claim (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+test_install_to_m1_ships_safe_restart (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+test_safe_restart_script_exists_and_drains_first (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+test_watchdog_rechecks_idle_when_reusing_held_drain (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+
+----------------------------------------------------------------------
+Ran 51 tests in 0.385s
+
+OK
+
+$ python3 -m py_compile empryo/bin/emp-hub verification/check_hub_single_instance.py verification/check_hub_turn_budget.py
+exit=0
