@@ -152,6 +152,21 @@ def port_base_of(thread):
         return thread["portBase"]
 
 
+def rbenv_env():
+    """Engine env additions so task shells resolve rbenv's Ruby for repos with
+    a .ruby-version, no matter how the hub was started. Shims go first because
+    macOS path_helper reorders PATH in login shells and /usr/bin/ruby would win."""
+    env = {}
+    shims = f"{HOME}/.rbenv/shims"
+    if os.path.isdir(shims):
+        env["RBENV_ROOT"] = os.environ.get("RBENV_ROOT") or f"{HOME}/.rbenv"
+        path = os.environ.get("PATH", "")
+        parts = [p for p in path.split(os.pathsep) if p and p != shims]
+        parts.insert(0, shims)
+        env["PATH"] = os.pathsep.join(parts)
+    return env
+
+
 class AcpProcess:
     def __init__(self, root, key, port_base=None):
         self.root = root
@@ -165,7 +180,7 @@ class AcpProcess:
         self.users = 0
         self.proc = subprocess.Popen(
             [EMPRYO, "acp"], cwd=root if os.path.isdir(root) else HOME,
-            env={**{k: v for k, v in os.environ.items() if k != "EMP_PORT_BASE"}, "EMPRYO_NO_PROMPT": "1", "EMP_HUB_THREAD": key, **({"EMP_PORT_BASE": str(port_base)} if port_base is not None else {})}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(f"{HUB_DIR}/engine.log", "a"), text=True, bufsize=1,
+            env={**{k: v for k, v in os.environ.items() if k != "EMP_PORT_BASE"}, **rbenv_env(), "EMPRYO_NO_PROMPT": "1", "EMP_HUB_THREAD": key, **({"EMP_PORT_BASE": str(port_base)} if port_base is not None else {})}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(f"{HUB_DIR}/engine.log", "a"), text=True, bufsize=1,
         )
         threading.Thread(target=self.read_loop, daemon=True).start()
         try:
