@@ -62,29 +62,7 @@ const ELAPSED_EVERY = 5000;
 const SENT_KEEP = 40;
 const MIN_ROWS = 2;
 const MAX_ROWS = 8;
-const EDIT_KEYS = [
-  ["cmd-a", "SelectAll"],
-  ["cmd-c", "Copy"],
-  ["cmd-x", "Cut"],
-  ["cmd-v", "Paste"],
-  ["cmd-z", "Undo"],
-  ["cmd-shift-z", "Redo"],
-  ["alt-shift-left", "SelectToPreviousWordStart"],
-  ["alt-shift-right", "SelectToNextWordEnd"],
-  ["cmd-shift-left", "SelectToStartOfLine"],
-  ["cmd-shift-right", "SelectToEndOfLine"],
-  ["cmd-shift-up", "SelectToStart"],
-  ["cmd-shift-down", "SelectToEnd"],
-  ["alt-left", "MoveToPreviousWord"],
-  ["alt-right", "MoveToNextWord"],
-  ["cmd-left", "MoveToStartOfLine"],
-  ["cmd-right", "MoveToEndOfLine"],
-  ["cmd-up", "MoveToStart"],
-  ["cmd-down", "MoveToEnd"],
-  ["alt-backspace", "DeleteToPreviousWordStart"],
-  ["cmd-backspace", "DeleteToBeginningOfLine"],
-].map(([keystroke, action]) => ({ keystroke, action: `input::${action}`, context: "Input" }));
-const KEYS = [...EDIT_KEYS, { keystroke: "cmd-alt-v", action: "coordinator_preview", context: "CoordinatorBox" }];
+const KEYS = [{ keystroke: "cmd-alt-v", action: "coordinator_preview", context: "CoordinatorBox" }];
 let keysBound = false;
 let chipCount = 0;
 const QUESTION_CLIP = 70;
