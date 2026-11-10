@@ -229,6 +229,11 @@ function modelChips(t, c, runModel) {
 }
 
 const COLD_AFTER = 300000;
+const OLD_SHELL_STATES = new Set(["run", "wait"]);
+const stamp = (ms) => {
+  const d = new Date(ms);
+  return `${d.toDateString().slice(4, 10)} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
 const CLAUDE_MODEL = /claude|opus|sonnet|haiku/i;
 const NEEDS_KINDS = new Set(["wait", "fail", "stop"]);
 
@@ -299,6 +304,7 @@ export function card(t, e, v, input, cb) {
     .when(count > 1, (el) => el.child(fold(t, e.key, count, expanded, cb)))
     .when(variant === "backlog" && v.state, (el) => el.child(chip(t, v.state, "idle")))
     .when(v.merged, (el) => el.child(chip(t, "merged", "done")))
+    .when(OLD_SHELL_STATES.has(c.kind) && v.oldShell, (el) => el.child(chip(t, "old shell", "working", `This task's engine started before ~/.zshrc changed (${stamp(v.shells.changed)}), so its commands use the old PATH. Restart the task to pick up the change.`)))
     .when(isCold(v), (el) => el.child(chip(t, "cold", "dim", "Prompt cache expired: the next message re-reads the whole context")))
     .when(!refused && (!ready || fit.model), (el) => el.child(modelChips(t, c, v.runModel)));
   const status = refused
