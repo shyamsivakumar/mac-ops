@@ -316,7 +316,7 @@ export default class Ops extends View {
       ? item(t.blocked, "hub down", hh.state !== "running" ? hh.state : "no socket", `Hub down: ${hubReasons.join(" and ")}. Restart with: ${HUB_RESTART}`)
       : hubStale
         ? item(t.working, "hub stale", `read ${span(Math.round(readAge / 60000))} ago`, `The cockpit's last hub read was ${span(Math.round(readAge / 60000))} ago (limit 2m). The launchd job is running (pid ${hh.pid}) and hub.sock exists, so the hub may be hung or the cockpit stopped polling. Restart with: ${HUB_RESTART}`)
-        : item(t.done, "hub", hh.board ? `${hh.board.running} running` : "up", `The launchd job is running (pid ${hh.pid}) and hub.sock exists${readAge === null ? "" : `. The cockpit read the hub ${Math.round(readAge / 1000)}s ago`}.`);
+        : item(t.done, "hub", "", `The launchd job is running (pid ${hh.pid}) and hub.sock exists${readAge === null ? "" : `. The cockpit read the hub ${Math.round(readAge / 1000)}s ago`}.`);
 
     const srw = this.srw;
     const poll = srw?.telegram?.pollHealth;
