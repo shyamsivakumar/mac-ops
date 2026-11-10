@@ -137,14 +137,25 @@ fallback), not launch `modelSelection`; it is evidence, not model approval or
 part of `revision_inputs`. It cannot prove a model switch that the engine did
 not report.
 
+Every merge-gate evaluation appends one JSON line to
+`~/.empryo-hub/merges.jsonl`: the time, the task thread, the pull request
+number, the head commit, the checks state, the review thread, the verdict
+word, the review model and run, whether the merge happened, and whether the
+call was a dry run. The record never holds message text. A write that fails
+is logged and the merge continues. A refusal before the gate (a review thread,
+a live run) is not a merge-gate evaluation and writes no record.
+
 Run `python3 verification/check_hub_single_instance.py` for isolated startup
 proofs and `python3 verification/check_hub_turn_budget.py` for the slot-free
 second-socket proof (synthetic elapsed time, real sleep subprocesses, fake
 ACP/GitHub I/O). Add `--wall-clock` to the latter for a real 601-second
-concurrent-turn proof. Neither installs or restarts production or calls a paid
-provider. The ticket-approved proof migration preserves the other MO-147
-assertions and checks drain queueing separately from uncapped provider turns.
-See `evidence/mo-149-hub-proof.md`.
+concurrent-turn proof. `python3 verification/check_hub_merge_evidence.py`
+proves the merge-gate record: a dry run and a real merge each append one
+record, a refused merge records the gate it read, and a record that cannot be
+written does not fail the merge. None installs or restarts production or
+calls a paid provider. The ticket-approved proof migration preserves the
+other MO-147 assertions and checks drain queueing separately from uncapped
+provider turns. See `evidence/mo-149-hub-proof.md`.
 
 ## Model order and merge rules (2026-11-04)
 
