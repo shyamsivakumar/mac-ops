@@ -484,6 +484,10 @@ def post_comment(repo, n, text):
     gh(["issue", "comment", str(n), "-R", repo, "--body", text])
 
 
+def default_branch(repo):
+    return gh(["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]).strip()
+
+
 def build_start(cfg, t, attempt):
     rcfg = cfg["repos"][t["repo"]]
     request_id = f"ticket:{t['repo']}#{t['number']}:a{attempt}"
@@ -492,6 +496,7 @@ def build_start(cfg, t, attempt):
         "taskType": t["type"],
         "message": f"Ticket: {t['url']}\nReviewer for the gate: {t['reviewerAlias']}\n\n{t['body']}",
         "clientRequestId": request_id,
+        "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}"},
     }
     if t["builder"]:
         payload["modelSelection"] = cfg["models"][t["builder"]]["selection"]
@@ -499,7 +504,7 @@ def build_start(cfg, t, attempt):
     title = f"{t['key']} · {title_rest}"
     priority = EMPQ_PRIORITY[int(t["priority"])] if t["priority"] else NO_PRIORITY
     command = [EMPQ, "start", json.dumps(payload), "--title", title, "--priority", str(priority)]
-    return request_id, command
+    return request_id, command, payload
 
 
 def with_ticket_lock(repo, n):
@@ -527,7 +532,7 @@ def cmd_start(a):
         ledger = ledger_of(issue, authed_login())
         assert_not_active(cfg, t, ledger)
         attempt = max([e["attempt"] for e in intents(ledger)], default=0) + 1
-        request_id, command = build_start(cfg, t, attempt)
+        request_id, command, payload = build_start(cfg, t, attempt)
         stamp = now()
         body_hash = hashlib.sha256(t["body"].encode()).hexdigest()[:16]
         intent = {"kind": "intent", "attempt": attempt, "requestId": request_id, "bodyHash": body_hash,
@@ -540,6 +545,8 @@ def cmd_start(a):
     if a.dry_run:
         print("checks passed")
         print("intent comment:\n" + intent_text + "\n")
+        strategy = payload["workspaceStrategy"]
+        print(f"workspace: {strategy['type']} from {strategy['baseRef']}")
         print("command:\n" + shlex.join(command) + "\n")
         print(f"receipt comment (after empq):\n<!-- empryo-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"empq\":\"<empq output>\"}} -->\n")
         print(f"then remove label stage:{t['stage']}")
