@@ -1,0 +1,92 @@
+$ python3 -u verification/check_hub_merge_evidence.py
+test_a_failed_write_does_not_fail_the_merge (__main__.MergeEvidenceProof) ... 2026-11-10 15:53:34 merged disposable/proof#1 (squash) for emp:c490632d-68e9-4f49-8f43-50d844e3ca9f
+2026-11-10 15:53:34 merge evidence not written to /tmp/hm-3z389fo4/blocked: IsADirectoryError: [Errno 21] Is a directory: '/tmp/hm-3z389fo4/blocked'
+ok
+test_a_refused_merge_still_records_the_gate_evidence (__main__.MergeEvidenceProof) ... ok
+test_dry_run_and_merge_each_write_one_record (__main__.MergeEvidenceProof) ... 2026-11-10 15:53:34 merged disposable/proof#1 (squash) for emp:efe0fa82-cd90-4a9b-9176-1e25a667c2fa
+ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.034s
+
+OK
+exit=0
+
+$ python3 -u verification/check_hub_turn_budget.py
+test_concurrent_provider_turns_and_resumed_clock (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-3wgmiu1x/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 15:53:34 emp:4625f0ce-98f7-4fc0-8707-fe26650f730d stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 15:53:34 emp:6a7271ff-5fb0-4928-951d-9e7d3e1298d2 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 15:53:34 emp:4625f0ce-98f7-4fc0-8707-fe26650f730d run run:emp:4625f0ce-98f7-4fc0-8707-fe26650f730d:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)2026-11-10 15:53:34 emp:6a7271ff-5fb0-4928-951d-9e7d3e1298d2 run run:emp:6a7271ff-5fb0-4928-951d-9e7d3e1298d2:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+
+2026-11-10 15:53:34 emp:4625f0ce-98f7-4fc0-8707-fe26650f730d stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 15:53:34 emp:4625f0ce-98f7-4fc0-8707-fe26650f730d run run:emp:4625f0ce-98f7-4fc0-8707-fe26650f730d:ordinal:2 failed on subscriptions/claude-opus-5-5 (cancelled)
+ok
+test_defaults_validation_and_extended_tool (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-_hhjf9z4/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 15:53:35 emp:8cd621ae-785a-4b70-8ef5-d26f28672ca5 stalled (turn ran over 120 min); cancelling the turn
+2026-11-10 15:53:35 emp:8cd621ae-785a-4b70-8ef5-d26f28672ca5 run run:emp:8cd621ae-785a-4b70-8ef5-d26f28672ca5:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 15:53:35 emp:09d0dbd4-8b41-4db7-b511-b704e4f15ee5 stalled (turn ran over 120 min); cancelling the turn
+2026-11-10 15:53:35 emp:09d0dbd4-8b41-4db7-b511-b704e4f15ee5 run run:emp:09d0dbd4-8b41-4db7-b511-b704e4f15ee5:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+ok
+test_drain_queue_does_not_charge_budget (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-xbdhn29e/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 15:53:35 emp:7d2ae8e8-9dd6-4661-bd9e-daf99f458563 turn queued until the hub restarts (draining)
+2026-11-10 15:53:35 drain cancelled (was on)
+2026-11-10 15:53:35 emp:7d2ae8e8-9dd6-4661-bd9e-daf99f458563 queued turn started
+2026-11-10 15:53:35 emp:7d2ae8e8-9dd6-4661-bd9e-daf99f458563 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 15:53:35 emp:7d2ae8e8-9dd6-4661-bd9e-daf99f458563 run run:emp:7d2ae8e8-9dd6-4661-bd9e-daf99f458563:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+ok
+test_drain_reload_preserves_override (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-jgtu54k_/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 15:53:36 emp:36b26fd9-486e-461a-b973-7645b85d3064 turn queued until the hub restarts (draining)
+2026-11-10 15:53:36 drain requested; waiting for 0 running turn(s)
+2026-11-10 15:53:36 drained: all turns finished, exiting for restart
+SECOND HUB socket=/tmp/hb-jgtu54k_/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 15:53:37 emp:36b26fd9-486e-461a-b973-7645b85d3064 queued turn started
+2026-11-10 15:53:37 emp:36b26fd9-486e-461a-b973-7645b85d3064 stalled (turn ran over 150 min); cancelling the turn
+2026-11-10 15:53:37 emp:36b26fd9-486e-461a-b973-7645b85d3064 run run:emp:36b26fd9-486e-461a-b973-7645b85d3064:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+DRAIN/RESTART: persisted 9000-second override; resume_turn applied it
+ok
+test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-i82m233t/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 15:53:37 emp:6fcc92b8-18cf-4a17-817c-a8b9f8d58dc8 run run:emp:6fcc92b8-18cf-4a17-817c-a8b9f8d58dc8:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+2026-11-10 15:53:37 emp:5eb92d85-66f1-4128-a2f6-4505de135696 run run:emp:5eb92d85-66f1-4128-a2f6-4505de135696:ordinal:1 completed on subscriptions/gpt-6.1-terra (end_turn)
+DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName": "main", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isCrossRepository": false, "isDraft": false, "mergeStateStatus": "CLEAN", "mergeable": "MERGEABLE", "number": 1, "reviewDecision": "", "state": "OPEN", "url": "https://github.com/disposable/proof/pull/1"}, "repo": "disposable/proof", "reviewGate": {"checkSha": null, "excerpt": "Checked all changes and the builder proof.\nVERDICT: PASS", "model": "subscriptions/gpt-6.1-terra", "runId": "run:emp:5eb92d85-66f1-4128-a2f6-4505de135696:ordinal:1", "source": "review thread", "threadId": "emp:5eb92d85-66f1-4128-a2f6-4505de135696", "title": "MO-147 review", "verdict": "VERDICT: PASS", "verdictWord": "PASS"}}, "merged": false, "revision": "047661f49a3f", "threadId": "emp:6fcc92b8-18cf-4a17-817c-a8b9f8d58dc8", "wouldMerge": {"method": "squash", "number": 1, "repo": "disposable/proof", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+2026-11-10 15:53:37 emp:fe8f2fb3-acce-45a7-bf40-7a987432402c run run:emp:fe8f2fb3-acce-45a7-bf40-7a987432402c:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+NORMAL DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName": "main", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isCrossRepository": false, "isDraft": false, "mergeStateStatus": "CLEAN", "mergeable": "MERGEABLE", "number": 1, "reviewDecision": "", "state": "OPEN", "url": "https://github.com/disposable/proof/pull/1"}, "repo": "disposable/proof", "reviewGate": {"checkSha": null, "excerpt": "Checked all changes and the builder proof.\nVERDICT: PASS", "model": "subscriptions/claude-opus-5-5", "runId": "run:emp:fe8f2fb3-acce-45a7-bf40-7a987432402c:ordinal:1", "source": "review thread", "threadId": "emp:fe8f2fb3-acce-45a7-bf40-7a987432402c", "title": "MO-147 normal review", "verdict": "VERDICT: PASS", "verdictWord": "PASS"}}, "merged": false, "revision": "d9386fbbb68e", "threadId": "emp:6fcc92b8-18cf-4a17-817c-a8b9f8d58dc8", "wouldMerge": {"method": "squash", "number": 1, "repo": "disposable/proof", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+ok
+test_permission_answer_not_cut (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-6kteozwc/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-10 15:53:38 emp:526a7d59-3b48-4243-a2de-70f9cbecfd66 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 15:53:38 emp:526a7d59-3b48-4243-a2de-70f9cbecfd66 run run:emp:526a7d59-3b48-4243-a2de-70f9cbecfd66:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+PERMISSION: deferred while pending and while answer send blocks; expiry after answer; wait time charged
+ok
+test_total_budget_precedes_tool_and_progress_limits (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-_fxm86cw/.empryo-hub/hub.sock; synthetic clock; no production access
+ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 4.762s
+
+OK
+exit=0
+
+$ python3 -u verification/check_hub_single_instance.py
+test_arguments_do_not_touch_state (__main__.SingleInstanceProof) ... ok
+test_help_does_not_create_hub_directory (__main__.SingleInstanceProof) ... ok
+test_help_preserves_live_socket_and_lock_releases_on_exit (__main__.SingleInstanceProof) ... ok
+test_lock_precedes_reading_stores (__main__.SingleInstanceProof) ... ok
+test_second_start_changes_nothing (__main__.SingleInstanceProof) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 1.240s
+
+OK
+exit=0
+
+$ python3 -m unittest discover -s tests -t .
+...................[1/1] shadow replay llmwiki-10--r7--52aad4c3a99777ce
+................................
+----------------------------------------------------------------------
+Ran 51 tests in 0.372s
+
+OK
+Scorecard: 1 bundles, pairwise flip n/a, incomplete 1, recall 0.0, false blocks 0/0, loops median/p90 1.0/2.0
+exit=0
+
+$ python3 -c "import ast,pathlib; [ast.parse(pathlib.Path(p).read_text()) for p in (\"empryo/bin/emp-hub\",\"verification/check_hub_merge_evidence.py\")]"
+exit=0
