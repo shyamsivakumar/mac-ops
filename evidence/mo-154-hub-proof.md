@@ -20,16 +20,19 @@ merge and a stale-revision refusal, writes exactly one record.
 ## Implementation
 
 - `empryo/bin/emp-hub:10` — `MERGE_RECORD` names the append-only file.
-- `empryo/bin/emp-hub:1958` — `merge_record` builds the record from the
+- `empryo/bin/emp-hub:1959` — `merge_record` builds the record from the
   evidence the gate already produced (`revision_inputs` for the pull request,
   head commit, checks state, review thread and verdict word; the gate for the
   review model and run).
-- `empryo/bin/emp-hub:1966` — `write_merge_record` appends one line under the
-  hub lock and logs a failed write instead of raising.
-- `empryo/bin/emp-hub:2025` — `tool_thread_merge` now computes its result and
-  then writes the record once, so a dry run, a refused merge and a real merge
-  each write exactly one record. The merge rules, the revision logic and the
-  returned payloads are unchanged.
+- `empryo/bin/emp-hub:1967` — `write_merge_record` appends one line under a
+  dedicated lock (`MERGE_LOCK`, so a slow disk cannot block the hub's other
+  work) and logs a failed write instead of raising.
+- `empryo/bin/emp-hub:2026` — `tool_thread_merge` now computes its result and
+  then writes the record, so a dry run, a refused merge and a real merge each
+  write exactly one record. The merge rules, the revision logic and the
+  returned payloads are unchanged. A merged pull request is recorded right
+  after `gh pr merge` succeeds, before settle and cleanup, so a cleanup error
+  cannot lose the record.
 
 ## Proof
 
@@ -45,6 +48,11 @@ faked; no production store, socket, engine or pull request is touched.
   false.
 - A refused merge (`gh pr merge` fails) still writes one record with the gate
   it read.
+- A failed review gate writes one record with the `FAIL` verdict word, the
+  review model and the review run.
+- A stale `expectedRevision` refusal writes one record with the gate it read
+  now (the checks state that changed).
+- A refusal before the gate (a review thread, a live run) writes no record.
 - A record that cannot be written (the path is a directory) is logged and the
   merge still succeeds.
 
@@ -52,7 +60,7 @@ Full output: `evidence/mo-154-hub-proof.log`.
 
 ## Verification
 
-- `python3 -u verification/check_hub_merge_evidence.py`: **3 tests OK**.
+- `python3 -u verification/check_hub_merge_evidence.py`: **7 tests OK**.
 - `python3 -u verification/check_hub_turn_budget.py`: **7 tests OK** (existing
   hub proof, unchanged, including the merge-review provenance dry runs).
 - `python3 -u verification/check_hub_single_instance.py`: **5 tests OK**
@@ -62,6 +70,26 @@ Full output: `evidence/mo-154-hub-proof.log`.
   `verification/check_hub_merge_evidence.py`: exit 0.
 - `python3 scripts/mac_ops_fast_check.py --plan`: selects the new proof for a
   syntax check and no `tests/` module (the hub is not a `.py` module).
+
+## Review
+
+One in-session Claude Opus review of commit `6ee6adf` (read-only, nothing
+rerun by the reviewer): **VERDICT: PASS**. No critical or major findings; five
+minor findings, all fixed in this branch before the PR. The fixes are
+builder-verified (proof output above), not reviewer-verified:
+
+- the record is written right after `gh pr merge` succeeds, before settle and
+  cleanup, so a cleanup error cannot lose the record of a merged pull request
+- the record file is written under a dedicated lock, so a slow disk cannot
+  block the hub's other work
+- the proof now covers a failed review gate, a stale-revision refusal and the
+  two refusals that write no record
+- the proof docstring no longer claims that only GitHub I/O is faked
+- the proof now asserts that a failed write is logged
+
+Open item: MO-152's collector does not read `merges.jsonl` yet. The ticket
+allows a follow-up note in MO-152; the record fields are listed above and in
+`docs/empryo-hub.md`.
 
 ## Deployment hold
 

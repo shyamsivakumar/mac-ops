@@ -3,12 +3,14 @@
 
 A dry run and a real merge on disposable threads each append exactly one
 record to ~/.empryo-hub/merges.jsonl, a refused merge records the gate it
-read, and a record that cannot be written does not fail the merge. Only GitHub
-I/O is faked: the hub runs from this repository with HOME pointed at a
-temporary directory, so no production store, socket, engine or pull request is
-touched.
+read, and a record that cannot be written does not fail the merge. Only
+outbound command I/O is faked (gh and git): the hub runs from this repository
+with HOME pointed at a temporary directory, so no production store, socket,
+engine or pull request is touched.
 """
 from importlib.machinery import SourceFileLoader
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -125,9 +127,60 @@ class MergeEvidenceProof(unittest.TestCase):
         blocked = self.home / "blocked"
         blocked.mkdir()
         self.hub.MERGE_RECORD = str(blocked)
-        result = self.merge()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = self.merge()
         self.assertTrue(result["merged"], "a record that cannot be written must not fail the merge")
+        self.assertIn("merge evidence not written", output.getvalue())
         self.assertEqual(list(blocked.iterdir()), [])
+
+    def test_a_failed_review_gate_records_the_verdict(self):
+        h = self.hub
+        failing = self.make_thread("MO-154 failing review", "review")
+        failing["runs"].append({"runId": "run-review-fail", "ordinal": 1, "status": "completed", "startedAt": h.now_iso(),
+                                 "completedAt": h.now_iso(), "stopReason": "end_turn", "usage": None,
+                                 "model": "subscriptions/claude-opus-5-5", "error": None})
+        failing["runCount"] = 1
+        failing["latestRunId"] = "run-review-fail"
+        h.append_item(failing, {"type": "assistant_message", "status": "completed", "text": "Found a critical finding.\nVERDICT: FAIL"})
+        h.THREADS.save()
+        self.review["updatedAt"] = "2026-01-01T00:00:00.000Z"
+        failing["updatedAt"] = "2026-06-01T00:00:00.000Z"
+        result = self.merge()
+        self.assertFalse(result["merged"])
+        self.assertIn("review gate not passed", result["refused"])
+        records = self.records()
+        self.assertEqual(len(records), 1, "a refused merge writes exactly one record")
+        self.assertEqual(records[0]["verdictWord"], "FAIL")
+        self.assertEqual(records[0]["reviewModel"], "subscriptions/claude-opus-5-5")
+        self.assertEqual(records[0]["reviewRunId"], "run-review-fail")
+        self.assertFalse(records[0]["merged"])
+
+    def test_a_stale_revision_records_the_current_gate(self):
+        dry = self.merge(dryRun=True)
+        self.assertTrue(dry["dryRun"])
+        self.hub.checks_verdict = lambda repo, number: (True, None, {"count": 1, "state": "failing: build"})
+        result = self.merge(expectedRevision=dry["revision"])
+        self.assertFalse(result["merged"])
+        self.assertIn("the task changed since revision", result["refused"])
+        records = self.records()
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[1]["checksState"], "failing: build")
+        self.assertFalse(records[1]["merged"])
+        self.assertFalse(records[1]["dryRun"])
+
+    def test_a_review_thread_refusal_writes_no_record(self):
+        result = self.hub.dispatch({"method": "call", "tool": "emp_thread_merge", "arguments": {"threadId": self.review["threadId"]}})
+        self.assertFalse(result["merged"])
+        self.assertIn("is a review thread", result["refused"])
+        self.assertEqual(self.records(), [])
+
+    def test_a_live_run_refusal_writes_no_record(self):
+        self.task["status"] = "running"
+        result = self.merge()
+        self.assertFalse(result["merged"])
+        self.assertEqual(result["refused"], "the task thread still has a live run")
+        self.assertEqual(self.records(), [])
 
 
 if __name__ == "__main__":

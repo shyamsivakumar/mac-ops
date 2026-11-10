@@ -33,6 +33,7 @@ LIVE = ("running", "waiting", "queued")
 DRAINING = {"requested": False, "epoch": 0, "exiting": False}
 LOCK = threading.RLock()
 CHANGED = threading.Condition(LOCK)
+MERGE_LOCK = threading.Lock()
 
 
 def log(message):
@@ -1972,7 +1973,7 @@ def write_merge_record(thread, evidence, merged, dry_run):
     """
     try:
         line = json.dumps(merge_record(thread, evidence, merged, dry_run), sort_keys=True)
-        with LOCK:
+        with MERGE_LOCK:
             with open(MERGE_RECORD, "a") as f:
                 f.write(line + "\n")
     except Exception as e:
@@ -2033,7 +2034,6 @@ def tool_thread_merge(a):
     ok, reason, evidence, plan = merge_plan(thread)
     expected = a.get("expectedRevision")
     stale = stale_revision_refusal(thread, expected, ok, reason, evidence) if expected is not None else None
-    merged = False
     if stale is not None:
         result = stale
     elif not ok:
@@ -2045,12 +2045,12 @@ def tool_thread_merge(a):
         if code != 0:
             result = {"threadId": thread["threadId"], "merged": False, "refused": f"gh pr merge failed: {err or out}", "evidence": evidence}
         else:
-            merged = True
             log(f"merged {plan['repo']}#{plan['number']} ({plan['method']}) for {thread['threadId']}")
+            write_merge_record(thread, evidence, merged=True, dry_run=False)
             tool_thread_organize({"threadId": thread["threadId"], "action": "settle"})
             cleanup = tool_thread_cleanup({"threadId": thread["threadId"]})
-            result = {"threadId": thread["threadId"], "merged": True, "pullRequest": plan["number"], "method": plan["method"], "evidence": evidence, "cleanup": cleanup}
-    write_merge_record(thread, evidence, merged=merged, dry_run=bool(a.get("dryRun")))
+            return {"threadId": thread["threadId"], "merged": True, "pullRequest": plan["number"], "method": plan["method"], "evidence": evidence, "cleanup": cleanup}
+    write_merge_record(thread, evidence, merged=False, dry_run=bool(a.get("dryRun")))
     return result
 
 
