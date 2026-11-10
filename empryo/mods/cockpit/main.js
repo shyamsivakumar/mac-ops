@@ -4,8 +4,9 @@ import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
 import { cleanupNote, cleanupThread, closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
+import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -40,7 +41,7 @@ const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
 const PANEL_SIZE = { models: [520, 470], queue: [520, 340], hub: [520, 400] };
 
-const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/^Still checking/, "still checking"], [/^The review found/, "review failed"]];
+const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/^Still checking/, "still checking"], [/^The review found/, "review failed"], [/^Review unreadable/, "review unreadable"]];
 const HUB_BUCKET = "refused by the hub";
 
 const NOTICE_FOR = 8000;
@@ -73,6 +74,10 @@ export default class Board extends View {
     this.deciding = null;
     this.files = null;
     this.ticket = null;
+    this.picker = null;
+    this.issues = null;
+    this.issueGroups = [];
+    this.ticketError = "";
     this.peeked = new Set();
     this.merging = false;
     this.outdated = false;
@@ -326,6 +331,7 @@ export default class Board extends View {
     this.stale = snap.unsure;
     seedPrs(snap.prs);
     seedVerdicts(snap.verdicts);
+    seedOrigins(snap.origins);
   }
 
   snapshot(key) {
@@ -341,6 +347,7 @@ export default class Board extends View {
       groups,
       prs: prEntries(groups.flatMap((g) => g.prs)),
       verdicts: verdictEntries(threads),
+      origins: originEntries(threads),
       shepherdr: [...this.shepherdr].filter(([thread]) => keys.has(thread)),
       windows: this.windows,
     };
@@ -403,13 +410,24 @@ export default class Board extends View {
       if (fresh) this.persist();
       return fresh;
     }, cx, force);
+    this.background("tickets", async () => {
+      try {
+        this.issues = await listIssues(force);
+        this.issueGroups = this.issues.issues.map(issueGroup);
+        this.ticketError = "";
+      } catch (error) {
+        this.ticketError = error.message;
+      }
+      return !this.unchanged("tickets", [this.issues, this.ticketError]);
+    }, cx, force);
+    this.background("origins", () => loadOrigins(board.groups.flatMap((g) => g.threads)), cx, force);
     this.background("prs", async () => {
       await refreshPrs(board.groups.filter((g) => !g.threads.some((c) => c.kind === "run")).flatMap((g) => g.prs).filter((p) => p.state === "open"));
       if (!this.unchanged("prs", this.prStamp())) {
         this.persist();
         cx.notify();
       }
-      await Promise.all(this.groups().filter((g) => this.mergeCandidate({ ...g, info: this.prInfo(g) })).map((g) => this.reviewOf(g)).filter(Boolean).map((th) => loadVerdict(th).catch(() => undefined)));
+      await Promise.all(this.groups().filter((g) => this.mergeCandidate({ ...g, info: this.prInfo(g) })).map((g) => [this.reviewOf(g), this.authorOf(g)]).filter(([review]) => review).map(([review, author]) => loadVerdict(review, author).catch(() => undefined)));
       this.cap = await queueCap().catch(() => 6);
       const late = !this.unchanged("prs", this.prStamp());
       if (late) this.persist();
@@ -448,6 +466,7 @@ export default class Board extends View {
     if (canMerge(verdict)) return null;
     if (!verdict) return "No review yet, so this can't merge. Open the card and start a review.";
     if (verdict === LOADING_VERDICT) return "Still checking the review. Try again in a moment.";
+    if (verdict.state === "unverified") return "Review unreadable, retrying. Merging stays blocked until it reads.";
     return `The review found problems (${verdict.label.replace(/^rev /, "")}). Send it back first.`;
   }
 
@@ -471,7 +490,8 @@ export default class Board extends View {
       g.info = this.prInfo(g);
       cols[this.mergeCandidate(g) ? "ready" : COLUMN_OF[g.kind]].groups.push(g);
     }
-    for (const g of this.backlog) cols.backlog.groups.push(g);
+    const replaced = new Set(this.issueGroups.map((g) => g.key));
+    cols.backlog.groups.push(...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key)));
     const reviewed = cols.done.groups.flatMap((g) => g.threads).filter((c) => c.review);
     const cb = {
       press: (key, e, cx) => {
@@ -514,6 +534,7 @@ export default class Board extends View {
       },
       expand: (key) => this.expand(key),
       close: () => closeOverlay(this.overlay),
+      link: (url) => exec("open", [url]),
     };
     for (const key of COLUMN_KEYS) {
       const col = cols[key];
@@ -529,9 +550,11 @@ export default class Board extends View {
         const c = { ...g.primary, title: g.title, task: g.task };
         const refusal = variant === "ready" ? this.refusalOf(g) : null;
         const block = variant === "ready" && g.info.status === "open" ? this.reviewBlock(g) : null;
-        const view = (extra) => ({ opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: block ?? refusal?.text, blocked: Boolean(block || refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const author = g.issue ? null : this.taskThread(g);
+        const origin = author && originOf(author);
+        const view = (extra) => ({ origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: block ?? refusal?.text, blocked: Boolean(block || refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
-        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
+        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
         for (const th of g.threads.slice(1)) {
           const tkey = `t:${th.key}`;
@@ -557,7 +580,7 @@ export default class Board extends View {
   }
 
   summary(key, col, now) {
-    if (!col.groups.length) return [[key === "backlog" && !this.backlogLoaded ? "loading" : "empty", "dim"]];
+    if (!col.groups.length) return [...(key === "backlog" ? this.ticketNote(now) : []), [key === "backlog" && !this.backlogLoaded ? "loading" : "empty", "dim"]];
     const groups = col.groups;
     const seg = (n, text, tone) => (n ? [[`${n} ${text}`, tone]] : []);
     const oldest = ["oldest " + ago(Math.min(...groups.map((g) => g.at)), now), "dim"];
@@ -584,7 +607,15 @@ export default class Board extends View {
       return [...seg(reviewedCards, "reviewed", "done"), ...seg(col.count - reviewedCards, "unreviewed", "dim"), oldest];
     }
     const queued = groups.filter((g) => g.threads.some((x) => /queued/i.test(this.shepherdr.get(x.key) ?? ""))).length;
-    return [...seg(queued, "queued", "idle"), oldest];
+    return [...this.ticketNote(now), ...seg(queued, "queued", "idle"), oldest];
+  }
+
+  ticketNote(now) {
+    if (this.ticketError) return [["GitHub list failed", "blocked"]];
+    const data = this.issues;
+    if (!data?.stale) return [];
+    const age = ago(Date.parse(data.fetchedAt), now);
+    return [[`${STALE_TEXT[data.error.kind] ?? "GitHub error"} · ${age === "now" ? "<1m" : age} old`, "working"]];
   }
 
   foldSet() {
@@ -763,7 +794,7 @@ export default class Board extends View {
 
   decisionSnap(e) {
     const g = { ...e.group, info: undefined };
-    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), shepherdr: [] };
+    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads), shepherdr: [] };
   }
 
   openDecision(e, cx) {
@@ -798,14 +829,33 @@ export default class Board extends View {
     cx.spawn(async (cx) => {
       try {
         const group = this.groups()[0];
-        this.ticket = { status: "ok", ...(await readTicket(this.taskThread(group))) };
-        const review = this.reviewOf(group);
-        if (review && !verdictOf(review)) await loadVerdict(review);
+        if (group.issue) {
+          const [config, issue] = await Promise.all([loadConfig(), showIssue(issueRef(group.issue))]);
+          this.ticket = { status: "ok", text: issue.body, issue, config };
+        } else {
+          const thread = this.taskThread(group);
+          const read = await readTicket(thread);
+          const origin = parseOrigin(read.text);
+          this.ticket = { status: "ok", ...read, origin };
+          cx.notify();
+          if (origin.ticket) await this.readOriginIssue(origin, thread);
+          const review = this.reviewOf(group);
+          if (review && !verdictOf(review)) await loadVerdict(review, this.authorOf(group));
+        }
       } catch (error) {
         this.ticket = { status: "fail", error: error.message };
       }
       cx.notify();
     });
+  }
+
+  async readOriginIssue(origin, thread) {
+    try {
+      const [config, show] = await Promise.all([loadConfig(), showIssue(`${origin.ticket.repo}#${origin.ticket.number}`)]);
+      this.ticket = { ...this.ticket, changed: changedSinceLaunch(show), fell: fellBack(requestedModel(config, show), runModelOf(thread) || thread.model) };
+    } catch (error) {
+      this.ticket = { ...this.ticket, issueError: error.message };
+    }
   }
 
   decision() {
@@ -814,6 +864,7 @@ export default class Board extends View {
     g.info = this.prInfo(g);
     if (this.dec.col === "ready" && g.info.status !== "open") return null;
     const entry = { key: this.dec.key, col: this.dec.col, group: g, thread: null };
+    if (g.issue) return { entry, d: issueDecision(g, this.ticket, Boolean(this.replyKey), this.armed?.kind === "abandon") };
     return { entry, d: decisionOf(entry.col, g, g.info, this.verdictFor(g), Date.now()) };
   }
 
@@ -843,7 +894,7 @@ export default class Board extends View {
         storePr(info.pr, fresh);
         const review = this.reviewOf(this.groups()[0]);
         const loading = Boolean(review) && !verdictOf(review);
-        if (loading) await this.checkReview(review);
+        if (loading) await this.checkReview(review, this.authorOf(this.groups()[0]));
         const wasStale = this.stale;
         this.stale = false;
         if (changes.length) {
@@ -858,9 +909,9 @@ export default class Board extends View {
     });
   }
 
-  async checkReview(review) {
+  async checkReview(review, author) {
     try {
-      await loadVerdict(review);
+      await loadVerdict(review, author);
     } catch (error) {
       this.outcome = { text: `Could not check the review: ${error.message}` };
     }
@@ -870,6 +921,7 @@ export default class Board extends View {
     const cur = this.decision();
     if (!cur || this.merging) return;
     const { entry, d } = cur;
+    if (d.primary.id === "start") return viaEnter && this.armed ? undefined : this.startIssue(entry, d, cx);
     if (d.primary.id === "open") return this.openEntry(entry, cx);
     if (this.outdated) return d.primary.id === "merge" || d.primary.id === "wait" ? this.recheck(cx) : closeOverlay(this.overlay);
     if (d.primary.id === "wait") return;
@@ -881,6 +933,29 @@ export default class Board extends View {
     const verb = d.primary.label;
     const note = verb === "Retry" ? "run it again after the last failure" : "continue the interrupted run";
     this.confirm(d.primary.id, entry.key, () => this.tell(this.ask(verb, entry.group, note), `${verb} sent for ${entry.group.task || entry.group.title}`, cx), cx);
+  }
+
+  startIssue(entry, d, cx) {
+    const issue = entry.group.issue;
+    if (d.primary.disabled) return say("info", "Can't start", d.primary.disabled, [], true);
+    this.confirm("start", entry.key, () => this.attempt(`Start ${entry.group.task || issueRef(issue)}`, () => ticketStart(issueRef(issue)), cx, undefined, true), cx);
+  }
+
+  changeField(family, value, cx) {
+    const issue = this.groups()[0].issue;
+    this.picker = null;
+    this.armed = null;
+    cx.spawn(async (cx) => {
+      try {
+        await setIssueField(issueRef(issue), family, value);
+        say("success", `Set ${family} to ${value}`, `on ${issueRef(issue)}`, [], true);
+        this.startTicket(cx);
+        this.refresh(cx, true);
+      } catch (error) {
+        say("error", `Could not set ${family}`, error.message);
+      }
+      cx.notify();
+    });
   }
 
   cleanTitle(g) {
@@ -901,6 +976,8 @@ export default class Board extends View {
     if (id === "open") this.openEntry(cur.entry, cx);
     else if (id === "reply") this.openReply(cur.entry, cx);
     else if (id === "note") this.openReply(cur.entry, cx, NOTE_LABEL);
+    else if (id === "edit") exec("open", [cur.entry.group.issue.url]);
+    else if (id === "abandon") this.openReply(cur.entry, cx, ABANDON_LABEL);
     else if (id === "settle") {
       if (this.guard(true)) return;
       this.confirm("settle", cur.entry.key, () => this.settleEntry(cur.entry, cx), cx);
@@ -925,6 +1002,7 @@ export default class Board extends View {
 
   openEntry(e, cx) {
     if (!e || this.opening === e.key) return;
+    if (e.group.issue) return exec("open", [e.group.issue.url]);
     const thread = this.threadOf(e);
     if (!thread.session && !thread.runs) return say("info", "No Empryo session yet", "Send a message first.");
     this.opening = e.key;
@@ -943,7 +1021,7 @@ export default class Board extends View {
   }
 
   openReply(e, cx, label = null) {
-    if (!e) return;
+    if (!e || (e.group.issue && label !== ABANDON_LABEL)) return;
     this.replyLabel = label;
     this.followed = false;
     this.cursor = e.key;
@@ -956,6 +1034,7 @@ export default class Board extends View {
   }
 
   closeInput() {
+    this.armed = null;
     this.replyKey = null;
     this.replyLabel = null;
     this.typing = false;
@@ -966,8 +1045,16 @@ export default class Board extends View {
     const text = this.input.value().trim();
     const thread = this.replyThread;
     if (!text || !thread || !this.replyKey) return;
+    if (thread.issue) return this.confirm("abandon", this.replyKey, () => this.abandon(thread, cx), cx);
     this.closeInput();
     this.attempt(`Sent to ${thread.task || thread.title}`, () => sendReply(thread.key, text), cx);
+  }
+
+  abandon(thread, cx) {
+    const reason = this.input.value().trim();
+    if (!reason) return say("info", "Abandon needs a reason");
+    this.closeInput();
+    this.attempt(`Abandon ${thread.task || issueRef(thread.issue)}`, () => ticketAbandon(issueRef(thread.issue), reason), cx, undefined, true);
   }
 
   publish(entry, cx) {
@@ -976,6 +1063,7 @@ export default class Board extends View {
     const known = this.tasks.get(thread.key);
     if (known) return setShared("task", { ...base, ...known });
     setShared("task", { ...base, worktree: null, branch: null, repo: null });
+    if (entry.group.issue) return;
     readTask(thread).then((info) => {
       this.tasks.set(thread.key, info);
       if (this.published === entry.key) setShared("task", { ...base, ...info });
@@ -1011,9 +1099,13 @@ export default class Board extends View {
     }
   }
 
-  taskThread(group) {
+  authorOf(group) {
     const own = group.threads.filter((c) => !c.review);
-    return own.find((c) => c.led) ?? own[0] ?? group.primary;
+    return own.find((c) => c.led) ?? own[0] ?? null;
+  }
+
+  taskThread(group) {
+    return this.authorOf(group) ?? group.primary;
   }
 
   async verifyMerge(g, shown) {
@@ -1222,6 +1314,7 @@ export default class Board extends View {
   }
 
   queue(e, cx) {
+    if (e?.group.issue) return say("info", "Open the ticket to start it", "Press Enter on the card.");
     if (e?.col !== "backlog" || this.guard(true)) return;
     this.confirm("queue", e.key, () => this.tell(this.ask("Queue", e.group, "start it when a slot frees"), `Queued ${e.group.task || e.group.title}`, cx), cx);
   }
@@ -1238,12 +1331,12 @@ export default class Board extends View {
     if (info?.pr) exec("open", [info.gh?.url ?? info.pr.url]);
   }
 
-  attempt(label, work, cx, undo) {
+  attempt(label, work, cx, undo, sticky = false) {
     cx.spawn(async (cx) => {
       let ok = true;
       try {
         const done = await work();
-        say(done?.level ?? "success", label, typeof done === "string" ? done : typeof done?.note === "string" ? done.note : undefined);
+        say(done?.level ?? "success", label, typeof done === "string" ? done : typeof done?.note === "string" ? done.note : undefined, [], sticky);
       } catch (error) {
         ok = false;
         undo?.();
@@ -1395,11 +1488,14 @@ export default class Board extends View {
 
   renderDecision(t) {
     const cur = this.decision();
-    const cb = { primary: (cx) => this.live() && this.decide(cx, false), other: (id, cx) => this.live() && this.decideOther(id, cx), close: () => closeOverlay(this.overlay), link: (url) => exec("open", [url]) };
+    const cb = { primary: (cx) => this.live() && this.decide(cx, false), other: (id, cx) => this.live() && this.decideOther(id, cx), close: () => closeOverlay(this.overlay), link: (url) => exec("open", [url]), pick: (family, cx) => {
+      this.picker = this.picker === family ? null : family;
+      cx.notify();
+    }, setField: (family, value, cx) => this.changeField(family, value, cx) };
     const primaryKind = cur?.d.primary.id === "merge" ? "approve" : cur?.d.primary.id;
     const armedKind = this.armed?.key === cur?.entry.key ? this.armed?.kind : null;
     const refusal = cur && this.refusalOf(cur.entry.group);
-    const view = cur && { col: cur.entry.col, d: cur.d, armed: armedKind === primaryKind, armedKind, outdated: this.outdated, replying: Boolean(this.replyKey), replyLabel: this.replyLabel, outcome: this.outcome ?? (refusal && { text: `Not merged: ${refusal.text}` }), files: this.files, ticket: this.ticket, verdict: this.verdictFor(cur.entry.group) };
+    const view = cur && { col: cur.entry.col, d: cur.d, armed: armedKind === primaryKind, armedKind, outdated: this.outdated, replying: Boolean(this.replyKey), replyLabel: this.replyLabel, outcome: this.outcome ?? (refusal && { text: `Not merged: ${refusal.text}` }), files: this.files, ticket: this.ticket, issue: cur.entry.group.issue, picker: this.picker, verdict: this.verdictFor(cur.entry.group) };
     return v_flex().id("ck-dec").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())

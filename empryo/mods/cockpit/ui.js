@@ -3,13 +3,14 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex, Input, TextView } from "gpui-base";
 import { shortModel } from "./hub.js";
+import { changedSinceLaunch, issueRef, pickerOptions, startBlock } from "./tickets.js";
 
-export const H = { bar: 26, head: 42, sub: 16, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, empty: 50, folded: 44 };
+export const H = { bar: 26, head: 42, sub: 16, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, chips: 18, empty: 50, folded: 44 };
 const TONE = { wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
-const VERDICT_MARK = { pass: "✓", fail: "✗", unknown: "?", loading: "…" };
-const VERDICT_TONE = { pass: "done", fail: "blocked", unknown: "dim", loading: "working" };
+const VERDICT_MARK = { pass: "✓", fail: "✗", unknown: "?", unverified: "?", loading: "…" };
+const VERDICT_TONE = { pass: "done", fail: "blocked", unknown: "dim", unverified: "dim", loading: "working" };
 export const LOADING_VERDICT = { state: "loading", label: "rev …" };
 export const canMerge = (verdict) => verdict?.state === "pass" || verdict?.state === "unknown";
 const MERGE = { MERGEABLE: ["merge ✓", "done", "Mergeable"], CONFLICTING: ["merge ✗", "blocked", "Merge conflict"], UNKNOWN: ["merge ?", "dim", "Merge status unknown"] };
@@ -23,7 +24,7 @@ const selectOnly = (key, cb) => (e, cx) => {
 };
 
 export const hasReason = (c, variant) => variant === "std" && c.kind === "fail" && Boolean(c.context);
-export const cardHeight = (replying, reason) => H.card + (replying ? H.reply : 0) + (reason ? H.reason : 0);
+export const cardHeight = (replying, reason, chips) => H.card + (replying ? H.reply : 0) + (reason ? H.reason : 0) + (chips ? H.chips : 0);
 
 export function ago(at, now) {
   const m = Math.floor((now - at) / 60000);
@@ -181,6 +182,30 @@ function chip(t, text, tone, tip) {
   return tip ? el.id(`chip-${tip}`).tooltip(tip) : el;
 }
 
+function linkChip(t, id, text, tone, url, tip, cb) {
+  return div().id(id).flex_none().px(4).h(13).flex().items_center().rounded(3).bg(t[tone] + "22").text_size(9.5).font_medium().text_color(t[tone])
+    .cursor_pointer().hover((s) => s.bg(t[tone] + "44")).on_mouse_down("left", stop).on_click(() => cb.link(url)).tooltip(tip).child(text);
+}
+
+const PRIORITY_TONE = { 1: "blocked", 2: "working" };
+
+function issueChips(t, issue) {
+  return h_flex().h(H.chips).w_full().flex_none().gap(3).items_center().overflow_hidden()
+    .children(issue.problems.map((p) => chip(t, clip(p, 28), "blocked", p)))
+    .child(chip(t, issue.stage ?? "no stage", issue.stage === "todo" ? "accent" : "dim"))
+    .when(Boolean(issue.priority), (el) => el.child(chip(t, `P${issue.priority}`, PRIORITY_TONE[issue.priority] ?? "dim")))
+    .when(Boolean(issue.builder), (el) => el.child(chip(t, `build ${issue.builder}`, "dim")))
+    .when(Boolean(issue.reviewer), (el) => el.child(chip(t, `rev ${issue.reviewer}`, "dim")));
+}
+
+function originChips(t, e, v, cb) {
+  const ticket = v.origin?.ticket;
+  return h_flex().min_w(0).gap(3).items_center().overflow_hidden()
+    .when(Boolean(ticket), (el) => el.child(linkChip(t, `tk-${e.key}`, `#${ticket.number}`, "accent", ticket.url, `${ticket.repo}#${ticket.number} on GitHub`, cb)))
+    .when(Boolean(v.origin?.linear), (el) => el.child(linkChip(t, `ln-${e.key}`, "Linear", "muted", v.origin.linear, "Open the Linear issue", cb)))
+    .when(Boolean(v.fell), (el) => el.child(chip(t, "fell back", "working", `Asked for ${shortModel(v.fell)}`)));
+}
+
 function modelParts(c, runModel) {
   const base = shortModel(c.model);
   const used = shortModel(runModel);
@@ -227,6 +252,7 @@ function prChips(t, v, fit) {
     .child(chip(t, `#${v.pr.number}`, "accent", prTip))
     .child(chip(t, `CI ${gh ? CI_MARK[ci] ?? "?" : "…"}`, CI_TONE[ci] ?? "dim", gh ? `CI ${ci}` : "CI loading"))
     .when(fit.rev, (el) => el.child(chip(t, `rev ${verdict ? VERDICT_MARK[verdict.state] ?? "?" : "—"}`, verdict ? VERDICT_TONE[verdict.state] ?? "dim" : "dim", verdict?.label ?? "No review yet")))
+    .when(fit.rev && Boolean(verdict?.note), (el) => el.child(chip(t, verdict.note, "dim", verdict.note)))
     .child(chip(t, fit.short ? (gh?.draft ? "D" : mergeLabel.slice(-1)) : mergeLabel, mergeTone, mergeTip));
 }
 
@@ -234,7 +260,7 @@ function statusLine(v) {
   const { c, variant, now } = v;
   if (variant === "backlog") {
     const age = ago(c.created, now);
-    return `Created ${age === "now" ? "just now" : `${age} ago`}`;
+    return `${c.issue ? "Updated" : "Created"} ${age === "now" ? "just now" : `${age} ago`}`;
   }
   if (c.kind === "run") return c.status === "queued" ? "Queued" : `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}`;
   if (c.kind === "done") return v.reviewed ? "Ready to settle" : "Not reviewed yet";
@@ -246,6 +272,7 @@ export function card(t, e, v, input, cb) {
   const ready = variant === "ready";
   const narrow = v.narrow;
   const reason = hasReason(c, variant);
+  const issue = c.issue;
   const line = ready ? null : reason ? "Failed" : statusLine(v);
   const fit = ready ? readyFit(v, narrow) : null;
   const refused = ready && Boolean(v.refusal);
@@ -257,8 +284,8 @@ export function card(t, e, v, input, cb) {
     .when(canSettle && !narrow, (el) => el.child(action(t, `se-${e.key}`, "s", "Settle", (cx) => cb.settle(cx))));
   const quick = variant === "backlog"
     ? h_flex().gap(4).flex_none()
-      .child(action(t, `qu-${e.key}`, "q", armedHere === "queue" ? "Confirm" : "Queue", (cx) => cb.queue(cx), armedHere === "queue" ? "Press again to queue" : "Queue this task"))
-      .child(action(t, `op-${e.key}`, "o", "Open", (cx) => cb.open(cx), "Open the thread (o)", narrow))
+      .when(!issue, (el) => el.child(action(t, `qu-${e.key}`, "q", armedHere === "queue" ? "Confirm" : "Queue", (cx) => cb.queue(cx), armedHere === "queue" ? "Press again to queue" : "Queue this task")))
+      .child(action(t, `op-${e.key}`, "o", issue ? "GitHub" : "Open", (cx) => cb.open(cx), issue ? "Open the issue on GitHub (o)" : "Open the thread (o)", narrow))
     : actions(t, e.key, canSettle, cb, narrow);
   const meta = h_flex().gap(6).flex_none().items_center().on_mouse_down("left", selectOnly(e.key, cb))
     .when(count > 1, (el) => el.child(fold(t, e.key, count, expanded, cb)))
@@ -279,7 +306,7 @@ export function card(t, e, v, input, cb) {
     ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(ready ? readyActions : quick)
       .when(refused, (el) => el.child(div().id(`why-${e.key}`).flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).tooltip(v.refusal).child(v.refusal)))
     : h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(status).child(meta);
-  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
+  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason, issue) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
     .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
     .border_color(selected ? (mark === "focus" ? t.accent : t.input) : t.border).px(8).py(5).gap(2)
     .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
@@ -288,14 +315,16 @@ export function card(t, e, v, input, cb) {
     .child(h_flex().h(18).flex_none().gap(6).items_center()
       .when(Boolean(c.task), (el) => el.child(div().flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(c.task)))
       .when(!c.task, (el) => el.child(div().min_w(0).truncate().text_size(11).font_medium().text_color(t.muted).child(c.project ?? "thread")))
+      .child(originChips(t, e, v, cb))
       .child(div().flex_1())
       .when(v.window, (el) => el.child(action(t, `win-${e.key}`, "", armedHere === "close-window" ? "Close it?" : narrow ? "Empryo" : "open in Empryo", (cx) => cb.closeWindow(e.key, cx), armedHere === "close-window" ? "Press again to close the Empryo window" : "An Empryo window is open on this task, so the hub can't send to it. Click to close it.", true, "working")))
       .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now))))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
+    .when(Boolean(issue), (el) => el.child(issueChips(t, issue)))
     .when(reason, (el) => el.child(div().id(`err-${e.key}`).w_full().h(H.reason - 2).flex_none().overflow_hidden().text_size(10).line_height("13px").text_color(t.muted).tooltip(c.error).child(c.context)))
     .child(div().flex_1())
     .child(foot);
-  const cardEl = div().h(cardHeight(false, reason)).w_full().flex_none().px(6).pb(4).child(body);
+  const cardEl = div().h(cardHeight(false, reason, issue)).w_full().flex_none().px(6).pb(4).child(body);
   if (!replying) return cardEl;
   return v_flex().w_full().flex_none().child(cardEl)
     .child(h_flex().h(H.reply).px(6).pt(2).gap(6).items_start()
@@ -351,7 +380,7 @@ const HUMAN_REVIEW = { APPROVED: "approved on GitHub", CHANGES_REQUESTED: "chang
 
 function checksOf(gh, verdict) {
   const loaded = (map, key, none) => map[key] ?? (gh ? [...UNKNOWN, none] : [...WAIT, "Not loaded yet"]);
-  const agent = verdict ? { pass: "agent review found nothing blocking", fail: `agent review ${verdict.label.replace(/^rev /, "")}`, unknown: "agent review unclear", loading: "checking the agent review" }[verdict.state] : "no agent review yet";
+  const agent = verdict ? { pass: "agent review found nothing blocking", fail: `agent review ${verdict.label.replace(/^rev /, "")}`, unknown: "agent review unclear", unverified: "review unreadable, retrying", loading: "checking the agent review" }[verdict.state] : "no agent review yet";
   const human = HUMAN_REVIEW[gh?.review] ?? "no GitHub verdict";
   const reviewMark = verdict?.state === "fail" || gh?.review === "CHANGES_REQUESTED" ? BAD : verdict?.state === "pass" ? OK : verdict?.state === "loading" ? WAIT : UNKNOWN;
   return [
@@ -406,6 +435,24 @@ export function decisionOf(col, g, info, verdict, now) {
   };
 }
 
+export const ABANDON_LABEL = "Abandon reason";
+
+export function issueDecision(g, ticket, replying, abandonArmed) {
+  const issue = g.issue;
+  const show = ticket?.status === "ok" ? ticket.issue : null;
+  const x = show ?? issue;
+  const block = ticket?.status === "fail" ? "Could not load the ticket" : startBlock(show);
+  const hint = replying ? (abandonArmed ? "Press Enter again to close this issue as not planned. Esc cancels." : "Type the reason, press Enter to arm, then Enter again to close this issue as not planned. Esc cancels.") : block ? `Can't start: ${block}.` : "Press t or Enter to arm, then t or click to confirm.";
+  return {
+    headline: g.task ? `${g.task} · ${g.title}` : g.title,
+    primary: { id: "start", key: "t", label: "Start", armed: "Confirm start", disabled: block },
+    why: [issueRef(issue), [x.stage ?? "no stage", x.priority ? `P${x.priority}` : "no priority", x.type ?? "no type"].join(" · ")],
+    other: [{ id: "edit", key: "e", label: "Edit on GitHub" }, { id: "abandon", key: "x", label: "Abandon" }],
+    checks: null,
+    hint,
+  };
+}
+
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function section(t, title, right) {
@@ -445,7 +492,7 @@ function primaryButton(t, d, armed, outdated, run) {
   return h_flex().id("dec-primary").h(30).px(14).gap(8).items_center().flex_none().rounded(6)
     .bg(armed ? t.blocked : t.solid).text_color(armed ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
     .cursor_pointer().hover((s) => s.opacity(0.9)).on_click((e, cx) => e.click_count > 1 || run(cx))
-    .when(d.primary.id === "wait" && !outdated, (el) => el.opacity(0.5))
+    .when((d.primary.id === "wait" && !outdated) || Boolean(d.primary.disabled), (el) => el.opacity(0.5))
     .child(label)
     .when(!outdated && Boolean(d.primary.key), (el) => el.child(div().text_size(10.5).font_medium().child(d.primary.key)));
 }
@@ -465,6 +512,74 @@ function field(t, name, value) {
     .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.foreground).child(value));
 }
 
+function ticketLinks(t, ticket, cb) {
+  const { origin, changed, fell, issueError } = ticket;
+  const gh = origin.ticket;
+  return v_flex().w_full().gap(4)
+    .child(section(t, "Ticket"))
+    .child(h_flex().w_full().gap(6).items_center().flex_wrap()
+      .when(Boolean(gh), (el) => el.child(action(t, "dec-gh", "", `${gh.repo.split("/").at(-1)}#${gh.number}`, () => cb.link(gh.url), gh.url, true)))
+      .when(Boolean(origin.linear), (el) => el.child(action(t, "dec-linear", "", "Linear", () => cb.link(origin.linear), origin.linear, true)))
+      .when(Boolean(changed), (el) => el.child(chip(t, "changed since launch", "working", "The issue body no longer matches what the agent was given")))
+      .when(Boolean(fell), (el) => el.child(chip(t, "fell back", "working", `Asked for ${fell}`))))
+    .when(Boolean(issueError), (el) => el.child(div().w_full().text_size(11).line_height("16px").text_color(t.blocked).child(`Could not load the ticket: ${issueError}`)));
+}
+
+function pickerRow(t, label, family, value, options, open, cb) {
+  return v_flex().w_full().gap(3)
+    .child(h_flex().w_full().min_h(20).gap(8).items_center()
+      .child(div().w(52).flex_none().text_size(11).text_color(t.dim).child(label))
+      .child(action(t, `pick-${family}`, "", `${value ?? "none"} ▾`, (cx) => cb.pick(family, cx), `Change ${label.toLowerCase()}`, true)))
+    .when(open, (el) => el.child(h_flex().w_full().gap(4).flex_wrap().pl(60)
+      .children(options.map((o) => action(t, `set-${family}-${o}`, "", o, (cx) => cb.setField(family, o, cx), undefined, true, String(o) === String(value ?? "none") ? "accent" : undefined)))));
+}
+
+const ATTEMPT_DATE = (iso) => iso.slice(0, 16).replace("T", " ");
+
+function issuePanel(t, v, cb) {
+  const { ticket, picker } = v;
+  const show = ticket?.status === "ok" ? ticket.issue : null;
+  const x = show ?? v.issue;
+  const cfg = ticket?.config;
+  const intents = show?.ledger.filter((e) => e.kind === "intent") ?? [];
+  const attempt = (e) => {
+    const receipt = show.ledger.some((r) => r.kind === "receipt" && r.attempt === e.attempt);
+    return `#${e.attempt} ${e.builder} / ${e.reviewer} · ${ATTEMPT_DATE(e.at)}${receipt ? " · queued" : " · no receipt"}`;
+  };
+  const missing = show ? Object.entries(show.template).filter(([, status]) => status !== "ok") : [];
+  const open = show?.blockers ?? [];
+  const abandoned = show?.ledger.filter((e) => e.kind === "abandon") ?? [];
+  const row = (name, value) => field(t, name, value);
+  return v_flex().id("dec-side").w(DEC_SIDE).h_full().min_h(0).flex_none().overflow_y_scrollbar().border_l(1).border_color(t.border)
+    .child(v_flex().w_full().flex_none().px(14).py(12).gap(10)
+      .child(v_flex().w_full().gap(4)
+        .child(section(t, "Issue"))
+        .child(h_flex().w_full().min_h(20).gap(8).items_center()
+          .child(div().w(52).flex_none().text_size(11).text_color(t.dim).child("Link"))
+          .child(action(t, "dec-issue-link", "", `${x.repo.split("/").at(-1)}#${x.number}`, () => cb.link(x.url), x.url, true)))
+        .when(Boolean(show), (el) => el.child(row("State", show.state.toLowerCase())))
+        .child(row("Type", x.type ?? "none"))
+        .when(Boolean(show && changedSinceLaunch(show)), (el) => el.child(h_flex().w_full().child(chip(t, "changed since launch", "working", "The issue body no longer matches what the agent was given")))))
+      .when(Boolean(cfg), (el) => el.child(v_flex().w_full().gap(4)
+        .child(section(t, "Fields"))
+        .child(pickerRow(t, "Stage", "stage", x.stage, pickerOptions(cfg, "stage"), picker === "stage", cb))
+        .child(pickerRow(t, "Priority", "priority", x.priority, pickerOptions(cfg, "priority"), picker === "priority", cb))
+        .child(pickerRow(t, "Builder", "builder", x.builder, pickerOptions(cfg, "builder"), picker === "builder", cb))
+        .child(pickerRow(t, "Reviewer", "reviewer", x.reviewer, pickerOptions(cfg, "reviewer"), picker === "reviewer", cb))))
+      .when(x.problems.length > 0, (el) => el.child(v_flex().w_full().gap(2)
+        .child(section(t, "Problems"))
+        .children(x.problems.map((p) => div().w_full().text_size(11.5).line_height("16px").text_color(t.blocked).child(p)))))
+      .when(Boolean(show), (el) => el.child(v_flex().w_full().gap(2)
+        .child(section(t, "Blockers"))
+        .children(open.length ? open.map((b) => div().w_full().text_size(11.5).line_height("16px").text_color(b.state === "OPEN" ? t.blocked : t.muted).child(`${b.repo.split("/").at(-1)}#${b.number} ${b.state.toLowerCase()} · ${b.title}`)) : [div().text_size(11.5).text_color(t.dim).child("None")])))
+      .when(Boolean(show), (el) => el.child(v_flex().w_full().gap(2)
+        .child(section(t, "Template"))
+        .children(missing.length ? missing.map(([name, status]) => div().w_full().text_size(11.5).line_height("16px").text_color(t.blocked).child(`${name}: ${status}`)) : [div().text_size(11.5).text_color(t.dim).child("All sections filled")])))
+      .when(intents.length + abandoned.length > 0, (el) => el.child(v_flex().w_full().gap(2)
+        .child(section(t, "Attempts"))
+        .children([...intents.map((e) => div().w_full().text_size(11.5).line_height("16px").text_color(t.muted).child(attempt(e))), ...abandoned.map((e) => div().w_full().text_size(11.5).line_height("16px").text_color(t.muted).child(`abandoned: ${e.reason}`))]))));
+}
+
 function ticketPanel(t, v, cb) {
   const { ticket, verdict, d, files } = v;
   const record = ticket?.status === "ok" ? ticket.record : null;
@@ -482,6 +597,7 @@ function ticketPanel(t, v, cb) {
         .child(section(t, "Pull requests"))
         .child(h_flex().w_full().gap(6).flex_wrap()
           .children(record.pullRequests.map((p) => action(t, `dec-pr-${p.number}`, "", `${p.repository.split("/").at(-1)}#${p.number} ${p.state.toLowerCase()}`, () => cb.link(p.url), p.url, true))))))
+      .when(Boolean(ticket?.origin?.ticket || ticket?.origin?.linear), (el) => el.child(ticketLinks(t, ticket, cb)))
       .when(Boolean(d.checks), (el) => el.child(checkRows(t, d.checks)))
       .when(Boolean(d.checks && files), (el) => el.child(fileRows(t, files)))
       .when(Boolean(record), (el) => el.child(v_flex().w_full().gap(4)
@@ -494,7 +610,7 @@ function ticketPanel(t, v, cb) {
 export function decisionView(t, v, input, cb) {
   const { col, d, armed, armedKind, outdated, replying, outcome } = v;
   const [, label, tone] = COLUMNS.find((c) => c[0] === col);
-  const hint = outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "open" ? "Opens the thread in Empryo." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`;
+  const hint = d.hint ?? (outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "open" ? "Opens the thread in Empryo." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`);
   return v_flex().size_full().min_h(0)
     .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
@@ -516,19 +632,19 @@ export function decisionView(t, v, input, cb) {
               .child(div().text_size(10.5).text_color(t.dim).child("Other"))
               .children(d.other.map((x) => action(t, `dec-${x.id}`, x.key, x.id === "settle" && armedKind === "settle" ? "Confirm settle" : x.label, (cx) => cb.other(x.id, cx)))))))
         .child(div().id("dec-ticket").flex_1().min_h(0).w_full().px(16).py(12).text_size(12.5).line_height("19px").text_color(t.foreground).child(ticketBody(t, v.ticket))))
-      .child(ticketPanel(t, v, cb)));
+      .child(v.issue ? issuePanel(t, v, cb) : ticketPanel(t, v, cb)));
 }
 
 export const DECIDES = new Set(["needs", "ready"]);
 export const KEY_TABLE = [
   { keys: "⏎", group: "Card", all: "Open the card's ticket and decision pop-up" },
   { keys: "a", group: "Card", all: "Approve the merge, press twice (Ready cards)" },
-  { keys: "o", group: "Card", all: "Open the thread" },
+  { keys: "o", group: "Card", all: "Open the thread (the issue on GitHub for ticket cards)" },
   { keys: "r", group: "Card", all: "Reply to the thread" },
   { keys: "d", group: "Card", all: "Send back with a note: reply to the thread (Ready cards; on Needs you cards it is a plain reply)" },
   { keys: "s", group: "Card", all: "Settle the card's finished threads" },
   { keys: "p", group: "Card", all: "Open the pull request" },
-  { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards)" },
+  { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards without a GitHub issue)" },
   { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then Ready, and cycle" },
   { keys: "⌥⌘N", group: "Move", all: "Jump to the next blocked agent in any space, else the next Needs you card (bind cockpit.needs)" },
   { keys: "j k", group: "Move", all: "Next or previous card (the arrow keys work too)" },
