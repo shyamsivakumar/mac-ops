@@ -1,6 +1,7 @@
 import { div, image, svg } from "gpui-kit";
 import { settings } from "herdr";
 import { v_flex, h_flex, Textarea, TextView } from "gpui-base";
+import { blocksOf } from "./transcript.js";
 
 const TONE = { running: "working", waiting: "blocked", failed: "blocked", stopped: "working", done: "done", idle: "idle" };
 const STATUS = { working: ["working", "working"], blocked: ["asking", "blocked"], done: ["idle", "done"], idle: ["idle", "idle"] };
@@ -491,18 +492,37 @@ function answerChip(t, a, cb) {
       .cursor_pointer().hover((s) => s.bg(t.selected)).on_click((_e, cx) => cb.clear(a.q, cx)).child("✕"));
 }
 
+const ROW_H = 18;
+
+function previewPane(t, text, cb) {
+  const body = text.trim()
+    ? v_flex().gap(6).children(textBlocks(t, "preview", blocksOf(text), t.foreground, cb.width - 40, cb))
+    : div().text_size(12).text_color(t.muted).child("Nothing to preview");
+  return div().id("co-preview").w_full().px(10).pt(8).pb(4).min_h(cb.minRows * ROW_H).max_h(cb.maxRows * ROW_H).overflow_y_scroll().child(body);
+}
+
+function previewToggle(t, cb) {
+  return h_flex().id("co-preview-toggle").h(20).px(6).flex_none().items_center().rounded(4).text_size(10.5)
+    .text_color(cb.preview ? t.accent : t.dim).when(cb.preview, (el) => el.bg(t.selected))
+    .cursor_pointer().hover((s) => s.bg(t.selected)).tooltip("Preview markdown (⌘⌥V)").on_click((_e, cx) => cb.togglePreview(cx))
+    .child("Preview");
+}
+
 export function composer(t, info, input, state, focused, answers, cb) {
-  const text = input.value();
+  const text = cb.draft();
   const k = answers.length;
   const ready = (Boolean(text.trim()) || k > 0) && Boolean(info) && state !== "sending";
   const button = sendIconButton(t, ready, state, k, (_e, cx) => cb.send(cx));
   const attached = cb.attachments(text);
-  return v_flex().flex_none().px(10).py(8).border_t(1).border_color(t.border)
+  return v_flex().id("co-composer").flex_none().px(10).py(8).border_t(1).border_color(t.border)
+    .key_context("CoordinatorBox").on_action("coordinator_preview", (_e, cx) => cb.togglePreview(cx))
+    .when(cb.preview, (el) => el.track_focus(cb.boxHandle))
     .child(v_flex().rounded(8).border_1().border_color(focused ? t.accent : t.input).bg(t.background)
       .when(k > 0, (el) => el.child(h_flex().px(8).pt(8).gap(4).flex_wrap().children(answers.map((a) => answerChip(t, a, cb)))))
       .when(attached.length > 0, (el) => el.child(h_flex().px(8).pt(8).gap(6).flex_wrap().children(attached.map((ref, i) => imageTile(t, ref, `attach-${i}`, cb, ATTACH_MAX)))))
-      .child(Textarea.new(input).w_full().px(10).pt(8).pb(4).text_size(12).text_color(t.foreground))
+      .child(cb.preview ? previewPane(t, text, cb) : Textarea.new(input).w_full().px(10).pt(8).pb(4).text_size(12).text_color(t.foreground))
       .child(h_flex().h(30).px(8).gap(8).items_center()
-        .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim).child(state === "sending" ? "" : "⏎ send · ⇧⏎ new line"))
+        .child(div().id("co-hint").flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim).tooltip("⌘⌥V toggles the markdown preview").child(state === "sending" ? "" : "⏎ send · ⇧⏎ new line"))
+        .child(previewToggle(t, cb))
         .child(button)));
 }

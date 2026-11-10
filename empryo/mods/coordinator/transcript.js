@@ -40,6 +40,27 @@ export function pathImages(text) {
   return { images: paths.map(fileImage), rest: text.replace(IMAGE_PATH, "$1") };
 }
 
+export function imagePathSpans(text) {
+  return [...text.matchAll(IMAGE_PATH)].map((m) => ({ start: m.index + m[1].length, end: m.index + m[0].length, path: m[2] }));
+}
+
+export function draftText(content) {
+  let out = "";
+  let at = 0;
+  for (const { range, token } of [...content.tokens].sort((a, b) => a.range.start - b.range.start)) {
+    out += content.text.slice(at, range.start) + token.text;
+    at = range.end;
+  }
+  return out + content.text.slice(at);
+}
+
+const SHOT_TIME = /\bat (\d{1,2})\.(\d{2})\.\d{2}\s*([AP]M)/i;
+
+export function chipLabel(path) {
+  const shot = SHOT_TIME.exec(path);
+  return shot ? `📷 Screenshot ${shot[1]}:${shot[2]} ${shot[3].toUpperCase()}` : `📷 ${path.slice(path.lastIndexOf("/") + 1)}`;
+}
+
 function resultImages(content) {
   if (!Array.isArray(content)) return [];
   return content
