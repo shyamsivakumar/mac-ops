@@ -2,59 +2,59 @@
   "types": {
     "standard": {
       "modelSelection": {
-        "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
       },
       "mode": "auto",
-      "notes": "bug fix, small feature, refactor, test fix; MiniMax and GLM 5.3 first, then GPT, then Claude"
+      "notes": "bug fix, small feature, refactor, test fix; Terra first"
     },
     "risky": {
       "modelSelection": {
-        "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol"
       },
       "mode": "auto",
-      "notes": "money or trade execution, state machines, concurrency, auth, secrets, migrations, deploy or CI pipelines, data deletion; MiniMax and GLM 5.3 first, then GPT, then Claude"
+      "notes": "money or trade execution, state machines, concurrency, auth, secrets, migrations, deploy or CI pipelines, data deletion; Sol first"
     },
     "design": {
       "modelSelection": {
-        "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol"
       },
       "mode": "auto",
-      "notes": "multi-file design, new module, cross-repo plan; the brief makes it plan first and get the plan reviewed before code; MiniMax and GLM 5.3 first, then GPT, then Claude"
+      "notes": "multi-file design, new module, cross-repo plan; the brief makes it plan first and get the plan reviewed before code; Sol first"
     },
     "large": {
       "modelSelection": {
-        "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
       },
       "mode": "orchestrate",
-      "notes": "features touching many files or parts; MiniMax and GLM 5.3 first, then GPT, then Claude; judged by Sol"
+      "notes": "features touching many files or parts; Terra first; judged by Sol"
     },
     "ui": {
       "modelSelection": {
-        "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
       },
       "mode": "auto",
-      "notes": "screens, components, styling, visual bugs; MiniMax and GLM 5.3 first, then GPT, then Claude"
+      "notes": "screens, components, styling, visual bugs; Terra first"
     },
     "research": {
       "modelSelection": {
-        "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
       },
       "mode": "auto",
-      "notes": "gather facts, compare tools, read docs; no code changes; MiniMax and GLM 5.3 first, then GPT, then Claude"
+      "notes": "gather facts, compare tools, read docs; no code changes; Terra first"
     },
     "rca": {
       "modelSelection": {
-        "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
       },
       "mode": "auto",
-      "notes": "explain a failure, find a root cause; read-only at first; MiniMax and GLM 5.3 first, then GPT, then Claude"
+      "notes": "explain a failure, find a root cause; read-only at first; Terra first"
     },
     "chore": {
       "modelSelection": {
@@ -62,12 +62,12 @@
         "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
-      "notes": "stale PR triage, docs, labels, small config, watches, status checks; MiniMax and GLM 5.3 first, then GPT, then Claude"
+      "notes": "stale PR triage, docs, labels, small config, watches, status checks; MiniMax first"
     },
     "review": {
       "modelSelection": {
-        "instanceId": "empryo",
-        "model": "subscriptions/claude-opus-5-5"
+        "instanceId": "claudeAgent",
+        "model": "claude-opus-5-5"
       },
       "mode": "auto",
       "notes": "Opus on the Max plan (the Anthropic API key has no credit since 2026-11-08); different vendor from the author"
