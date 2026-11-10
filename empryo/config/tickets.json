@@ -100,14 +100,14 @@
     "opus": {
       "selection": {
         "instanceId": "empryo",
-        "model": "anthropic/claude-opus-5-5"
+        "model": "subscriptions/claude-opus-5-5"
       },
       "vendor": "anthropic"
     },
     "sonnet": {
       "selection": {
         "instanceId": "empryo",
-        "model": "anthropic/claude-sonnet-5-5"
+        "model": "subscriptions/claude-sonnet-5-5"
       },
       "vendor": "anthropic"
     },
