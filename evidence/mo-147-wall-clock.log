@@ -1,0 +1,7 @@
+SECOND HUB socket=/tmp/hb-qb4h3n0u/.empryo-hub/hub.sock; synthetic clock; no production access
+WALL CLOCK: real /bin/sleep 3600, turnSeconds=600, waiting 601 actual seconds
+2026-11-10 12:46:51 emp:97777ab8-d097-4960-a2b2-ab7d8c284f72 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 12:46:51 emp:97777ab8-d097-4960-a2b2-ab7d8c284f72 run run:emp:97777ab8-d097-4960-a2b2-ab7d8c284f72:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+WALL CLOCK FAILED RUN {"runId": "run:emp:97777ab8-d097-4960-a2b2-ab7d8c284f72:ordinal:1", "ordinal": 1, "status": "failed", "startedAt": "2026-11-10T20:36:50.541Z", "completedAt": "2026-11-10T20:46:51.624Z", "stopReason": "cancelled", "usage": null, "model": "subscriptions/claude-opus-5-5", "error": "turn ran over 10 min", "reportItemIds": []}
+2026-11-10 12:46:51 emp:66758564-4589-4f82-9822-28deb9e1747c run run:emp:66758564-4589-4f82-9822-28deb9e1747c:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+WALL CLOCK PASS: >=600s real elapsed; queued clock stayed zero; one cancellation/release; failed record persisted; slot empty
