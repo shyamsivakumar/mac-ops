@@ -1,0 +1,663 @@
+#!/usr/bin/env python3
+import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
+from datetime import datetime, timezone
+
+EMP = os.environ.get("TICKET_EMP", "emp")
+EMPQ = os.environ.get("TICKET_EMPQ", "empq")
+QUEUE_DIR = os.environ.get("EMPQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+CACHE_DIR = os.environ.get("TICKET_CACHE", os.path.expanduser("~/.cache/tickets"))
+ROUTING = os.environ.get("TICKET_ROUTING", os.path.expanduser("~/.empryo-hub/routing.json"))
+CACHE_TTL = 60
+GH_TIMEOUT = 40
+EMP_TIMEOUT = 30
+EMPQ_TIMEOUT = 120
+LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
+STAGES = ("stage:backlog", "stage:todo")
+FAMILIES = ("stage", "priority", "type", "builder", "reviewer")
+FAMILY_COLORS = {"stage": "1d76db", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
+EMPQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
+NO_PRIORITY = 0
+LEDGER_LINE = re.compile(r"<!-- empryo-ticket (\{.*\}) -->")
+TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+class Refuse(Exception):
+    pass
+
+
+class GhError(Exception):
+    def __init__(self, kind, message):
+        super().__init__(message)
+        self.kind = kind
+
+
+def die(message, code=1):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def now():
+    return datetime.now(timezone.utc).strftime(TIME_FORMAT)[:-4] + "Z"
+
+
+def parse_time(text):
+    return datetime.strptime(text, TIME_FORMAT)
+
+
+def config_path():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for candidate in (os.path.join(here, "..", "config", "tickets.json"), os.path.expanduser("~/.empryo/tickets.json")):
+        if os.path.exists(candidate):
+            return candidate
+    die("tickets.json not found next to the script or in ~/.empryo")
+
+
+def load_config():
+    with open(config_path()) as f:
+        return json.load(f)
+
+
+def label_names(cfg):
+    names = []
+    for stage in cfg["labels"]["stage"]:
+        names.append(("stage", f"stage:{stage}"))
+    for p in cfg["labels"]["priority"]:
+        names.append(("priority", f"priority:{p}"))
+    for t in cfg["labels"]["type"]:
+        names.append(("type", f"type:{t}"))
+    for alias in cfg["models"]:
+        names.append(("builder", f"builder:{alias}"))
+    for alias, model in cfg["models"].items():
+        if not model.get("noGate"):
+            names.append(("reviewer", f"reviewer:{alias}"))
+    return names
+
+
+def run(cmd, timeout, stdin=None):
+    return subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout)
+
+
+def classify(stderr):
+    text = stderr.lower()
+    if "rate limit" in text or "secondary rate" in text or "abuse" in text or ("403" in text and "limit" in text):
+        return "rate_limit"
+    if "401" in text or "bad credentials" in text or "gh auth login" in text or "not logged in" in text or "authentication" in text or "requires authentication" in text:
+        return "auth"
+    if "error connecting" in text or "no such host" in text or "dial tcp" in text or "network" in text or "timeout" in text or "tls" in text or "connection" in text:
+        return "offline"
+    return "error"
+
+
+def gh(args, stdin=None):
+    try:
+        result = run(["gh"] + args, GH_TIMEOUT, stdin)
+    except subprocess.TimeoutExpired:
+        raise GhError("offline", f"gh {' '.join(args[:2])} timed out after {GH_TIMEOUT}s")
+    if result.returncode != 0:
+        raise GhError(classify(result.stderr), result.stderr.strip() or f"gh exited {result.returncode}")
+    return result.stdout
+
+
+def gh_json(args):
+    return json.loads(gh(args))
+
+
+def emp_call(tool, args):
+    try:
+        result = run([EMP, "call", tool, "-"], EMP_TIMEOUT, json.dumps(args))
+    except subprocess.TimeoutExpired:
+        raise Refuse(f"emp call {tool} timed out after {EMP_TIMEOUT}s")
+    if result.returncode != 0:
+        raise Refuse(f"emp call {tool} failed: {result.stderr.strip()}")
+    return json.loads(result.stdout)
+
+
+def parse_ref(ref):
+    match = re.fullmatch(r"([^/\s#]+/[^/\s#]+)#(\d+)", ref)
+    if not match:
+        die(f"bad ticket reference {ref!r}, expected owner/repo#number", 2)
+    return match.group(1), int(match.group(2))
+
+
+def repo_config(cfg, repo):
+    if repo not in cfg["repos"]:
+        raise Refuse(f"repo {repo} is not configured in tickets.json")
+    return cfg["repos"][repo]
+
+
+def ensure_labels(a):
+    cfg = load_config()
+    wanted = label_names(cfg)
+    for repo in cfg["repos"]:
+        existing = {l["name"].lower(): l for l in gh_json(["label", "list", "-R", repo, "--limit", "1000", "--json", "name,color"])}
+        create, recolor, ok = [], [], 0
+        for family, name in wanted:
+            color = FAMILY_COLORS[family]
+            have = existing.get(name.lower())
+            if have is None:
+                create.append((name, color))
+            elif have["color"].lower() != color:
+                recolor.append((name, color))
+            else:
+                ok += 1
+        line = f"{repo}: {ok} ok, {len(create)} to create, {len(recolor)} to recolor"
+        if create and len(create) < len(wanted):
+            line += " [create: " + ", ".join(n for n, _ in create) + "]"
+        if recolor:
+            line += " [recolor: " + ", ".join(n for n, _ in recolor) + "]"
+        print(line)
+        if not a.apply:
+            continue
+        for name, color in create:
+            gh(["label", "create", name, "-R", repo, "--color", color])
+        for name, color in recolor:
+            gh(["label", "edit", name, "-R", repo, "--color", color])
+    if not a.apply:
+        print(f"plan only ({len(wanted)} labels per repo); rerun with --apply to create and recolor")
+
+
+def split_labels(cfg, names):
+    groups = {f: [] for f in FAMILIES}
+    other = []
+    for name in names:
+        family, _, value = name.partition(":")
+        if family in groups and value:
+            groups[family].append(value)
+        else:
+            other.append(name)
+    return groups, other
+
+
+def label_problems(cfg, groups):
+    problems = []
+    valid = {
+        "stage": set(cfg["labels"]["stage"]),
+        "priority": set(cfg["labels"]["priority"]),
+        "type": set(cfg["labels"]["type"]),
+        "builder": set(cfg["models"]),
+        "reviewer": {a for a, m in cfg["models"].items() if not m.get("noGate")},
+    }
+    for family, values in groups.items():
+        if len(values) > 1:
+            problems.append(f"duplicate {family} labels: {', '.join(values)}")
+        for value in values:
+            if value not in valid[family]:
+                problems.append(f"unknown {family} label: {value}")
+    return problems
+
+
+def key_problems(rcfg, title):
+    match = TITLE_KEY.match(title)
+    if rcfg["key"] is None:
+        return (match.group(0) if match else None), []
+    if not match:
+        return None, ["missing key in title"]
+    key = match.group(0)
+    if match.group(1) != rcfg["key"]:
+        return key, [f"key prefix {match.group(1)} does not match repo key {rcfg['key']}"]
+    return key, []
+
+
+def one(values):
+    return values[0] if len(values) == 1 else None
+
+
+def normalize_issue(cfg, repo, raw):
+    rcfg = cfg["repos"][repo]
+    groups, _ = split_labels(cfg, [l["name"] for l in raw["labels"]])
+    key, problems = key_problems(rcfg, raw["title"])
+    problems = label_problems(cfg, groups) + problems
+    priority = one(groups["priority"])
+    return {
+        "repo": repo,
+        "number": raw["number"],
+        "url": raw["url"],
+        "key": key,
+        "title": raw["title"],
+        "stage": one(groups["stage"]),
+        "priority": int(priority) if priority and priority.isdigit() else None,
+        "type": one(groups["type"]),
+        "builder": one(groups["builder"]),
+        "reviewer": one(groups["reviewer"]),
+        "problems": problems,
+        "updatedAt": raw["updatedAt"],
+    }
+
+
+def search_owner(owner, stage):
+    limit = 100
+    while True:
+        rows = gh_json(["search", "issues", "--owner", owner, "--state", "open", "--label", stage, "--limit", str(limit),
+                        "--json", "repository,number,title,labels,updatedAt,url"])
+        if len(rows) < limit or limit >= 1000:
+            return rows
+        limit = min(limit * 2, 1000)
+
+
+def fetch_list(cfg):
+    owners = sorted({repo.split("/")[0] for repo in cfg["repos"]})
+    seen = {}
+    for owner in owners:
+        for stage in STAGES:
+            for row in search_owner(owner, stage):
+                repo = row["repository"]["nameWithOwner"]
+                if repo in cfg["repos"]:
+                    seen[(repo, row["number"])] = normalize_issue(cfg, repo, row)
+    issues = sorted(seen.values(), key=lambda i: (i["priority"] is None, i["priority"] or 0, i["updatedAt"]))
+    return issues
+
+
+def read_cache():
+    try:
+        with open(os.path.join(CACHE_DIR, "list.json")) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+
+def write_cache(data):
+    tmp = os.path.join(CACHE_DIR, "list.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=1)
+    os.replace(tmp, os.path.join(CACHE_DIR, "list.json"))
+
+
+def cache_age(cache):
+    return time.time() - parse_time(cache["fetchedAt"]).replace(tzinfo=timezone.utc).timestamp()
+
+
+def cmd_list(a):
+    cfg = load_config()
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(os.path.join(CACHE_DIR, "list.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        cache = read_cache()
+        if cache and not a.fresh and cache_age(cache) < CACHE_TTL:
+            out = {**cache, "stale": False, "cached": True}
+        else:
+            try:
+                data = {"fetchedAt": now(), "issues": fetch_list(cfg)}
+            except GhError as e:
+                if cache is None:
+                    die(f"list failed ({e.kind}) and no cache exists: {e}")
+                out = {**cache, "stale": True, "cached": True, "error": {"kind": e.kind, "message": str(e)}}
+            else:
+                write_cache(data)
+                out = {**data, "stale": False, "cached": False}
+    if a.json:
+        print(json.dumps(out, indent=1))
+        return
+    if out["stale"]:
+        print(f"STALE ({out['error']['kind']}): {out['error']['message']}")
+    for i in out["issues"]:
+        flags = f" !{'; '.join(i['problems'])}" if i["problems"] else ""
+        print(f"{i['repo']}#{i['number']} {i['stage']} p{i['priority']} {i['type']} {i['builder'] or '-'}/{i['reviewer'] or '-'} {i['title']}{flags}")
+    print(f"{len(out['issues'])} issues, fetched {out['fetchedAt']}")
+
+
+def fetch_issue(repo, n):
+    return gh_json(["issue", "view", str(n), "-R", repo, "--json", "id,number,title,body,state,labels,comments,url,blockedBy"])
+
+
+def template_status(cfg, body):
+    lines = body.splitlines()
+    headings = [(i, len(m.group(1)), m.group(2).strip().rstrip(":").strip().lower()) for i, line in enumerate(lines) for m in [HEADING.match(line)] if m]
+    status = {}
+    for section in cfg["template"]:
+        wanted = section.lower()
+        found = next(((i, level) for i, level, text in headings if text == wanted), None)
+        if found is None:
+            status[section] = "missing"
+            continue
+        start, level = found
+        end = next((j for j, lvl, _ in headings if j > start and lvl <= level), len(lines))
+        content = re.sub(r"<!--.*?-->", "", "\n".join(lines[start + 1:end]), flags=re.S).strip()
+        status[section] = "ok" if content else "empty"
+    return status
+
+
+def blockers_of(issue):
+    blocked = issue["blockedBy"]
+    if blocked["totalCount"] > len(blocked["nodes"]):
+        raise Refuse(f"blocker list truncated ({len(blocked['nodes'])} of {blocked['totalCount']})")
+    return [{"repo": n["repository"]["nameWithOwner"], "number": n["number"], "title": n["title"], "url": n["url"], "state": n["state"]} for n in blocked["nodes"]]
+
+
+def load_routing():
+    with open(ROUTING) as f:
+        return json.load(f)["types"]
+
+
+def alias_for_selection(cfg, selection):
+    for alias, model in cfg["models"].items():
+        if model["selection"] == selection:
+            return alias
+    raise Refuse(f"routing model {selection['instanceId']}/{selection['model']} has no alias in tickets.json")
+
+
+def resolve_models(cfg, ticket, routing):
+    builder = ticket["builder"] or alias_for_selection(cfg, routing[ticket["type"]]["modelSelection"])
+    reviewer = ticket["reviewer"] or alias_for_selection(cfg, routing["review"]["modelSelection"])
+    for role, alias in (("builder", ticket["builder"]), ("reviewer", ticket["reviewer"])):
+        if alias and alias not in cfg["models"]:
+            raise Refuse(f"unknown {role} alias {alias}")
+    if cfg["models"][reviewer].get("noGate"):
+        raise Refuse(f"reviewer {reviewer} cannot gate (noGate)")
+    if cfg["models"][builder]["vendor"] == cfg["models"][reviewer]["vendor"]:
+        raise Refuse(f"builder {builder} and reviewer {reviewer} are both vendor {cfg['models'][builder]['vendor']}")
+    return builder, reviewer
+
+
+def parse_ticket(cfg, repo, issue):
+    rcfg = repo_config(cfg, repo)
+    groups, _ = split_labels(cfg, [l["name"] for l in issue["labels"]])
+    key, key_issues = key_problems(rcfg, issue["title"])
+    return {
+        "repo": repo,
+        "number": issue["number"],
+        "url": issue["url"],
+        "key": key,
+        "keyProblems": key_issues,
+        "title": issue["title"],
+        "state": issue["state"],
+        "body": issue["body"],
+        "groups": groups,
+        "problems": label_problems(cfg, groups) + key_issues,
+        "stage": one(groups["stage"]),
+        "type": one(groups["type"]),
+        "priority": one(groups["priority"]),
+        "builder": one(groups["builder"]),
+        "reviewer": one(groups["reviewer"]),
+    }
+
+
+def ledger_of(issue, login):
+    entries = []
+    for comment in issue["comments"]:
+        if comment["author"]["login"] != login:
+            continue
+        for match in LEDGER_LINE.finditer(comment["body"]):
+            try:
+                entry = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                raise Refuse(f"malformed ledger line in comment {comment['id']}")
+            entries.append({**entry, "commentId": comment["id"]})
+    return entries
+
+
+def validate_start(cfg, repo, issue):
+    rcfg = repo_config(cfg, repo)
+    t = parse_ticket(cfg, repo, issue)
+    if t["state"] != "OPEN":
+        raise Refuse(f"issue is {t['state'].lower()}")
+    if rcfg["key"] is None:
+        raise Refuse(f"repo {repo} has no key configured")
+    if t["keyProblems"]:
+        raise Refuse(t["keyProblems"][0])
+    groups = t["groups"]
+    for family in ("stage", "type"):
+        if len(groups[family]) != 1:
+            raise Refuse(f"needs exactly one {family} label, found {len(groups[family])}")
+    for family in ("priority", "builder", "reviewer"):
+        if len(groups[family]) > 1:
+            raise Refuse(f"more than one {family} label: {', '.join(groups[family])}")
+    if t["type"] not in cfg["labels"]["type"]:
+        raise Refuse(f"unknown type label {t['type']}")
+    if t["stage"] not in cfg["labels"]["stage"]:
+        raise Refuse(f"unknown stage label {t['stage']}")
+    if t["priority"] and t["priority"] not in cfg["labels"]["priority"]:
+        raise Refuse(f"unknown priority label {t['priority']}")
+    for family in ("builder", "reviewer"):
+        if t[family] and t[family] not in cfg["models"]:
+            raise Refuse(f"unknown {family} alias {t[family]}")
+    bad = {s: v for s, v in template_status(cfg, t["body"]).items() if v != "ok"}
+    if bad:
+        raise Refuse("template sections " + ", ".join(f"{s} ({v})" for s, v in bad.items()))
+    open_blockers = [b for b in blockers_of(issue) if b["state"] == "OPEN"]
+    if open_blockers:
+        raise Refuse("blocked by open " + ", ".join(f"{b['repo']}#{b['number']}" for b in open_blockers))
+    t["builderAlias"], t["reviewerAlias"] = resolve_models(cfg, t, load_routing())
+    return t
+
+
+def queue_items(repo, n):
+    try:
+        with open(os.path.join(QUEUE_DIR, "queue.json")) as f:
+            items = json.load(f)["items"]
+    except FileNotFoundError:
+        return []
+    prefix = f"ticket:{repo}#{n}:a"
+    return [i for i in items if str(i["args"].get("clientRequestId", "")).startswith(prefix)]
+
+
+def ticket_threads(cfg, t, since):
+    rcfg = cfg["repos"][t["repo"]]
+    result = emp_call("emp_thread_list", {"projectId": rcfg["projectId"], "titleContains": t["key"], "limit": 100})
+    prefix = f"{t['key']} "
+    floor = parse_time(since)
+    threads = [x for x in result["threads"] if x["title"].startswith(prefix) and parse_time(x["createdAt"]) >= floor]
+    return sorted(threads, key=lambda x: x["createdAt"])
+
+
+def intents(ledger):
+    return [e for e in ledger if e.get("kind") == "intent"]
+
+
+def assert_not_active(cfg, t, ledger):
+    prior = intents(ledger)
+    queued = queue_items(t["repo"], t["number"])
+    if queued:
+        raise Refuse(f"already started: queued as empq #{queued[0]['id']}")
+    if prior:
+        live = [x for x in ticket_threads(cfg, t, min(e["at"] for e in prior)) if x["status"] in LIVE_STATUSES]
+        if live:
+            raise Refuse(f"already started: thread {live[-1]['threadId']} is {live[-1]['status']}")
+
+
+def machine_line(entry):
+    return f"<!-- empryo-ticket {json.dumps(entry, separators=(',', ':'))} -->"
+
+
+def post_comment(repo, n, text):
+    gh(["issue", "comment", str(n), "-R", repo, "--body", text])
+
+
+def build_start(cfg, t, attempt):
+    rcfg = cfg["repos"][t["repo"]]
+    request_id = f"ticket:{t['repo']}#{t['number']}:a{attempt}"
+    payload = {
+        "projectId": rcfg["projectId"],
+        "taskType": t["type"],
+        "message": f"Ticket: {t['url']}\nReviewer for the gate: {t['reviewerAlias']}\n\n{t['body']}",
+        "clientRequestId": request_id,
+    }
+    if t["builder"]:
+        payload["modelSelection"] = cfg["models"][t["builder"]]["selection"]
+    title_rest = t["title"][len(t["key"]):].lstrip(" ·-:·").strip()
+    title = f"{t['key']} · {title_rest}"
+    priority = EMPQ_PRIORITY[int(t["priority"])] if t["priority"] else NO_PRIORITY
+    command = [EMPQ, "start", json.dumps(payload), "--title", title, "--priority", str(priority)]
+    return request_id, command
+
+
+def with_ticket_lock(repo, n):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    f = open(os.path.join(CACHE_DIR, f"start-{repo.replace('/', '_')}-{n}.lock"), "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise Refuse("another ticket start for this issue is running")
+    return f
+
+
+def authed_login():
+    return gh(["api", "user", "-q", ".login"]).strip()
+
+
+def cmd_start(a):
+    cfg = load_config()
+    repo, n = parse_ref(a.ref)
+    try:
+        repo_config(cfg, repo)
+        lock = with_ticket_lock(repo, n)
+        issue = fetch_issue(repo, n)
+        t = validate_start(cfg, repo, issue)
+        ledger = ledger_of(issue, authed_login())
+        assert_not_active(cfg, t, ledger)
+        attempt = max([e["attempt"] for e in intents(ledger)], default=0) + 1
+        request_id, command = build_start(cfg, t, attempt)
+        stamp = now()
+        body_hash = hashlib.sha256(t["body"].encode()).hexdigest()[:16]
+        intent = {"kind": "intent", "attempt": attempt, "requestId": request_id, "bodyHash": body_hash,
+                  "builder": t["builderAlias"], "reviewer": t["reviewerAlias"], "at": stamp}
+        intent_text = f"Starting {t['key']} attempt {attempt}. Builder: {t['builderAlias']}, reviewer: {t['reviewerAlias']}.\n\n{machine_line(intent)}"
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    except GhError as e:
+        die(f"gh failed ({e.kind}): {e}")
+    if a.dry_run:
+        print("checks passed")
+        print("intent comment:\n" + intent_text + "\n")
+        print("command:\n" + shlex.join(command) + "\n")
+        print(f"receipt comment (after empq):\n<!-- empryo-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"empq\":\"<empq output>\"}} -->\n")
+        print(f"then remove label stage:{t['stage']}")
+        return
+    post_comment(repo, n, intent_text)
+    try:
+        result = run(command, EMPQ_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        die(f"empq start timed out after {EMPQ_TIMEOUT}s; intent attempt {attempt} is on the issue, check empq list before retrying")
+    if result.returncode != 0:
+        die(f"empq start failed: {result.stderr.strip()}; intent attempt {attempt} is on the issue, stage label kept")
+    output = result.stdout.strip()
+    print(output)
+    receipt = {"kind": "receipt", "attempt": attempt, "requestId": request_id, "empq": output}
+    receipt_text = f"{t['key']} attempt {attempt}: empq says \"{output}\".\n\n{machine_line(receipt)}"
+    posted = False
+    for tries in range(3):
+        try:
+            post_comment(repo, n, receipt_text)
+            posted = True
+            break
+        except GhError as e:
+            print(f"receipt comment failed ({e.kind}): {e}", file=sys.stderr)
+            time.sleep(2)
+    gh(["issue", "edit", str(n), "-R", repo, "--remove-label", f"stage:{t['stage']}"])
+    if not posted:
+        die(f"started, but the receipt comment could not be posted after 3 tries; empq output was: {output}")
+
+
+def thread_for_attempt(cfg, t, ledger):
+    prior = sorted(intents(ledger), key=lambda e: e["attempt"])
+    if not prior:
+        return None
+    latest = prior[-1]
+    threads = [x for x in ticket_threads(cfg, t, latest["at"])]
+    return threads[-1] if threads else None
+
+
+def cmd_abandon(a):
+    cfg = load_config()
+    repo, n = parse_ref(a.ref)
+    try:
+        repo_config(cfg, repo)
+        issue = fetch_issue(repo, n)
+        t = parse_ticket(cfg, repo, issue)
+        if t["state"] != "OPEN":
+            raise Refuse(f"issue is {t['state'].lower()}")
+        ledger = ledger_of(issue, authed_login())
+        thread = thread_for_attempt(cfg, t, ledger) if t["key"] and intents(ledger) else None
+        queued = queue_items(repo, n)
+        entry = {"kind": "abandon", "reason": a.reason, "at": now()}
+        gh(["issue", "close", str(n), "-R", repo, "--reason", "not planned",
+            "--comment", f"Abandoned: {a.reason}\n\n{machine_line(entry)}"])
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    except GhError as e:
+        die(f"gh failed ({e.kind}): {e}")
+    print(f"closed {repo}#{n} as not planned")
+    if thread and thread["status"] in LIVE_STATUSES:
+        emp_call("emp_thread_interrupt", {"threadId": thread["threadId"]})
+        print(f"interrupted thread {thread['threadId']} (was {thread['status']})")
+    for item in queued:
+        result = run([EMPQ, "drop", str(item["id"])], EMP_TIMEOUT)
+        if result.returncode != 0:
+            die(f"empq drop #{item['id']} failed: {result.stderr.strip()}")
+        print(result.stdout.strip())
+    if not queued and not (thread and thread["status"] in LIVE_STATUSES):
+        print("no live thread or queued item to stop")
+
+
+def cmd_show(a):
+    cfg = load_config()
+    repo, n = parse_ref(a.ref)
+    try:
+        repo_config(cfg, repo)
+        issue = fetch_issue(repo, n)
+        t = parse_ticket(cfg, repo, issue)
+        ledger = ledger_of(issue, authed_login())
+        thread = thread_for_attempt(cfg, t, ledger) if t["key"] and intents(ledger) else None
+        out = {
+            "repo": repo,
+            "number": n,
+            "id": issue["id"],
+            "url": t["url"],
+            "key": t["key"],
+            "title": t["title"],
+            "state": t["state"],
+            "body": t["body"],
+            "stage": t["stage"],
+            "priority": int(t["priority"]) if t["priority"] else None,
+            "type": t["type"],
+            "builder": t["builder"],
+            "reviewer": t["reviewer"],
+            "problems": t["problems"],
+            "template": template_status(cfg, t["body"]),
+            "blockers": blockers_of(issue),
+            "ledger": ledger,
+            "queued": [{"id": i["id"], "title": i["title"]} for i in queue_items(repo, n)],
+            "latestAttempt": {
+                "attempt": max((e["attempt"] for e in intents(ledger)), default=None),
+                "threadId": thread["threadId"] if thread else None,
+                "status": thread["status"] if thread else None,
+            },
+        }
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    except GhError as e:
+        die(f"gh failed ({e.kind}): {e}")
+    print(json.dumps(out, indent=1))
+
+
+def main():
+    p = argparse.ArgumentParser(prog="ticket")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("labels")
+    s.add_argument("--apply", action="store_true")
+    s.set_defaults(fn=ensure_labels)
+    s = sub.add_parser("list")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--fresh", action="store_true")
+    s.set_defaults(fn=cmd_list)
+    s = sub.add_parser("start")
+    s.add_argument("ref")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_start)
+    s = sub.add_parser("abandon")
+    s.add_argument("ref")
+    s.add_argument("--reason", required=True)
+    s.set_defaults(fn=cmd_abandon)
+    s = sub.add_parser("show")
+    s.add_argument("ref")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_show)
+    a = p.parse_args()
+    try:
+        a.fn(a)
+    except GhError as e:
+        die(f"gh failed ({e.kind}): {e}")
+
+
+main()

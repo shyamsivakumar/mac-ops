@@ -22,8 +22,9 @@ BIN_FILES = (
     "emp-health",
     "coordinator-refresh",
     "coordstart",
+    "ticket",
 )
-CONFIG_FILES = ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md")
+CONFIG_FILES = ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels")
 
 
