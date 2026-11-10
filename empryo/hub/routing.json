@@ -67,10 +67,10 @@
     "review": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "anthropic/claude-opus-5-5"
+        "model": "subscriptions/claude-opus-5-5"
       },
       "mode": "auto",
-      "notes": "Anthropic API key first (Shyam, 2026-11-05), Terra then Sol when credit runs out; different vendor from the author"
+      "notes": "Opus on the Max plan (the Anthropic API key has no credit since 2026-11-08); different vendor from the author"
     },
     "panel": {
       "modelSelection": {
