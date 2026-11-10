@@ -1,0 +1,248 @@
+$ python3 -u verification/check_hub_turn_budget.py --wall-clock
+exit=1
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 392, in <module>
+    wall_clock_proof()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 353, in wall_clock_proof
+    proof.setUp()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 87, in setUp
+    self.boot()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 91, in boot
+    h = self.hub = load_hub(self.home)
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 25, in load_hub
+    assert isinstance(tree.body[-1], ast.Expr) and tree.body[-1].value.func.id == "main"
+AssertionError
+
+$ python3 verification/check_hub_single_instance.py (initial extended-run result; see successful rerun below)
+exit=1
+test_arguments_do_not_touch_state (__main__.SingleInstanceProof) ... ok
+test_help_does_not_create_hub_directory (__main__.SingleInstanceProof) ... FAIL
+test_help_preserves_live_socket_and_lock_releases_on_exit (__main__.SingleInstanceProof) ... ok
+test_lock_precedes_reading_stores (__main__.SingleInstanceProof) ... ok
+test_second_start_changes_nothing (__main__.SingleInstanceProof) ... ok
+
+======================================================================
+FAIL: test_help_does_not_create_hub_directory (__main__.SingleInstanceProof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_single_instance.py", line 104, in test_help_does_not_create_hub_directory
+    self.assertFalse(fresh_home.exists())
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 5 tests in 1.290s
+
+FAILED (failures=1)
+
+$ python3 verification/check_hub_single_instance.py (after disabling interpreter bytecode cache writes in fixture)
+exit=0
+test_arguments_do_not_touch_state (__main__.SingleInstanceProof) ... ok
+test_help_does_not_create_hub_directory (__main__.SingleInstanceProof) ... ok
+test_help_preserves_live_socket_and_lock_releases_on_exit (__main__.SingleInstanceProof) ... ok
+test_lock_precedes_reading_stores (__main__.SingleInstanceProof) ... ok
+test_second_start_changes_nothing (__main__.SingleInstanceProof) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 1.282s
+
+OK
+
+$ python3 verification/check_hub_uncapped_turn_budget.py
+exit=0
+UNCAPPED HUB socket=/tmp/hb-k8bj0yay/.empryo-hub/hub.sock; fake ACP only; real sleep children
+2026-11-10 13:57:44 emp:543c537a-109d-453c-9e33-aa58e38964e9 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 13:57:44 emp:6fc19f09-5f75-4df6-840e-f18ec9d14cc2 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 13:57:44 emp:6fc19f09-5f75-4df6-840e-f18ec9d14cc2 run run:emp:6fc19f09-5f75-4df6-840e-f18ec9d14cc2:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 13:57:44 emp:543c537a-109d-453c-9e33-aa58e38964e9 run run:emp:543c537a-109d-453c-9e33-aa58e38964e9:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 13:57:44 emp:543c537a-109d-453c-9e33-aa58e38964e9 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 13:57:44 emp:543c537a-109d-453c-9e33-aa58e38964e9 run run:emp:543c537a-109d-453c-9e33-aa58e38964e9:ordinal:2 failed on subscriptions/claude-opus-5-5 (cancelled)
+UNCAPPED HUB socket=/tmp/hb-sgd13e9a/.empryo-hub/hub.sock; fake ACP only; real sleep children
+2026-11-10 13:57:45 emp:b1c441d3-7a8c-4aff-a984-466ce57bb89c stalled (turn ran over 120 min); cancelling the turn
+2026-11-10 13:57:45 emp:b1c441d3-7a8c-4aff-a984-466ce57bb89c run run:emp:b1c441d3-7a8c-4aff-a984-466ce57bb89c:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+2026-11-10 13:57:45 emp:add18e8e-21b3-4afa-8443-a341f1631afd stalled (turn ran over 120 min); cancelling the turn
+2026-11-10 13:57:45 emp:add18e8e-21b3-4afa-8443-a341f1631afd run run:emp:add18e8e-21b3-4afa-8443-a341f1631afd:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+UNCAPPED HUB socket=/tmp/hb-ockax8yc/.empryo-hub/hub.sock; fake ACP only; real sleep children
+2026-11-10 13:57:45 emp:a860a75b-86c7-4bdd-8b91-0a378607413e turn queued until the hub restarts (draining)
+2026-11-10 13:57:45 drain cancelled (was on)
+2026-11-10 13:57:45 emp:a860a75b-86c7-4bdd-8b91-0a378607413e queued turn started
+2026-11-10 13:57:45 emp:a860a75b-86c7-4bdd-8b91-0a378607413e stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 13:57:45 emp:a860a75b-86c7-4bdd-8b91-0a378607413e run run:emp:a860a75b-86c7-4bdd-8b91-0a378607413e:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+UNCAPPED HUB socket=/tmp/hb-jwpr_e43/.empryo-hub/hub.sock; fake ACP only; real sleep children
+2026-11-10 13:57:46 emp:5c1722f5-8615-4bbb-8a8c-9759865ba836 turn queued until the hub restarts (draining)
+2026-11-10 13:57:46 drain requested; waiting for 0 running turn(s)
+2026-11-10 13:57:46 drained: all turns finished, exiting for restart
+UNCAPPED HUB socket=/tmp/hb-jwpr_e43/.empryo-hub/hub.sock; fake ACP only; real sleep children
+2026-11-10 13:57:47 emp:5c1722f5-8615-4bbb-8a8c-9759865ba836 queued turn started
+2026-11-10 13:57:47 emp:5c1722f5-8615-4bbb-8a8c-9759865ba836 stalled (turn ran over 150 min); cancelling the turn
+2026-11-10 13:57:47 emp:5c1722f5-8615-4bbb-8a8c-9759865ba836 run run:emp:5c1722f5-8615-4bbb-8a8c-9759865ba836:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+DRAIN/RESTART: persisted 9000-second override; resume_turn applied it
+UNCAPPED HUB socket=/tmp/hb-lnuv4gne/.empryo-hub/hub.sock; fake ACP only; real sleep children
+2026-11-10 13:57:47 emp:c0fdb7e7-9d10-4ef8-8bd3-fa0ae9469df1 run run:emp:c0fdb7e7-9d10-4ef8-8bd3-fa0ae9469df1:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+2026-11-10 13:57:47 emp:84ef2a19-c233-4dd9-9eac-d3336aa6b629 run run:emp:84ef2a19-c233-4dd9-9eac-d3336aa6b629:ordinal:1 completed on subscriptions/gpt-6.1-terra (end_turn)
+DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName": "main", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isCrossRepository": false, "isDraft": false, "mergeStateStatus": "CLEAN", "mergeable": "MERGEABLE", "number": 1, "reviewDecision": "", "state": "OPEN", "url": "https://github.com/disposable/proof/pull/1"}, "repo": "disposable/proof", "reviewGate": {"checkSha": null, "excerpt": "Checked all changes and the builder proof.\nVERDICT: PASS", "model": "subscriptions/gpt-6.1-terra", "runId": "run:emp:84ef2a19-c233-4dd9-9eac-d3336aa6b629:ordinal:1", "source": "review thread", "threadId": "emp:84ef2a19-c233-4dd9-9eac-d3336aa6b629", "title": "MO-147 review", "verdict": "VERDICT: PASS", "verdictWord": "PASS"}}, "merged": false, "revision": "8bcedba5a831", "threadId": "emp:c0fdb7e7-9d10-4ef8-8bd3-fa0ae9469df1", "wouldMerge": {"method": "squash", "number": 1, "repo": "disposable/proof", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+2026-11-10 13:57:47 emp:1f23bd98-6c3f-4b73-bccb-13a555d1a299 run run:emp:1f23bd98-6c3f-4b73-bccb-13a555d1a299:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+NORMAL DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName": "main", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isCrossRepository": false, "isDraft": false, "mergeStateStatus": "CLEAN", "mergeable": "MERGEABLE", "number": 1, "reviewDecision": "", "state": "OPEN", "url": "https://github.com/disposable/proof/pull/1"}, "repo": "disposable/proof", "reviewGate": {"checkSha": null, "excerpt": "Checked all changes and the builder proof.\nVERDICT: PASS", "model": "subscriptions/claude-opus-5-5", "runId": "run:emp:1f23bd98-6c3f-4b73-bccb-13a555d1a299:ordinal:1", "source": "review thread", "threadId": "emp:1f23bd98-6c3f-4b73-bccb-13a555d1a299", "title": "MO-147 normal review", "verdict": "VERDICT: PASS", "verdictWord": "PASS"}}, "merged": false, "revision": "01a8dfcc2c25", "threadId": "emp:c0fdb7e7-9d10-4ef8-8bd3-fa0ae9469df1", "wouldMerge": {"method": "squash", "number": 1, "repo": "disposable/proof", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+UNCAPPED HUB socket=/tmp/hb-x7dneakw/.empryo-hub/hub.sock; fake ACP only; real sleep children
+2026-11-10 13:57:48 emp:237a2e8c-4137-4d8c-b01d-9ed1f3070de8 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 13:57:48 emp:237a2e8c-4137-4d8c-b01d-9ed1f3070de8 run run:emp:237a2e8c-4137-4d8c-b01d-9ed1f3070de8:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+PERMISSION: deferred while pending and while answer send blocks; expiry after answer; wait time charged
+UNCAPPED HUB socket=/tmp/hb-0dqxpyzy/.empryo-hub/hub.sock; fake ACP only; real sleep children
+test_concurrent_provider_turns_and_resumed_clock (__main__.UncappedTurnBudgetProof) ... ok
+test_defaults_validation_and_extended_tool (__main__.UncappedTurnBudgetProof) ... ok
+test_drain_queue_does_not_charge_budget (__main__.UncappedTurnBudgetProof) ... ok
+test_drain_reload_preserves_override (__main__.UncappedTurnBudgetProof) ... ok
+test_merge_dry_run_provenance_after_fallback (__main__.UncappedTurnBudgetProof) ... ok
+test_permission_answer_not_cut (__main__.UncappedTurnBudgetProof) ... ok
+test_total_budget_precedes_tool_and_progress_limits (__main__.UncappedTurnBudgetProof) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 4.762s
+
+OK
+
+$ python3 -m unittest discover -s tests -v
+exit=0
+[1/1] shadow replay llmwiki-10--r7--52aad4c3a99777ce
+Scorecard: 1 bundles, pairwise flip n/a, incomplete 1, recall 0.0, false blocks 0/0, loops median/p90 1.0/2.0
+test_busy_when_foreground_command (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_busy_when_python_script (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_critical_incomplete_census_holds_state (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_failed_resume_kept_pending (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_multi_agent_pause_and_resume_on_admit (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_not_busy_for_cursor_agent_foreground (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_tick_pauses_with_verified_identities (test_agent_heavy_wait_pause.AgentHeavyWaitPauseTests) ... ok
+test_release_includes_pause_module (test_agent_heavy_wait_pause.InstallReleaseTests) ... ok
+test_census_process_exit_passes_and_controller_failure_rolls_back (test_install_if_behind.InstallObservationTests) ... ok
+test_controller_failure_stops_observation_for_rollback (test_install_if_behind.InstallObservationTests) ... ok
+test_observe_waits_past_install_clock_for_tick_quota (test_install_if_behind.InstallObservationTests) ... ok
+test_zero_slots_still_fail_immediately (test_install_if_behind.InstallObservationTests) ... ok
+test_all_errors_incomplete_no_false_block (test_metrics.TestFlipMetrics) ... ok
+test_pairwise_flip_rate_mixed_last (test_metrics.TestFlipMetrics) ... ok
+test_api_evidence_phrasing (test_requirements_recall.TestSrw61RecallSubjects) ... ok
+test_spx_level_track_phrasing (test_requirements_recall.TestSrw61RecallSubjects) ... ok
+test_unparseable_raw_stays_error (test_rescore.TestRescoreVerdict) ... ok
+test_same_head_different_rounds_share_hash (test_retrospective.TestRetrospectiveHash) ... ok
+test_srw61_round1_base_from_checks (test_retrospective.TestRetrospectiveHash) ... ok
+test_legacy_policy_reaches_replay (test_scorecard_policy.TestScorecardReviewPolicy) ... ok
+test_collect_builds_trace_without_command_secrets (test_session_traces.CollectEvalTests) ... ok
+test_cross_day_pr_contributions (test_session_traces.CollectEvalTests) ... ok
+test_distinct_pr_metrics (test_session_traces.CollectEvalTests) ... ok
+test_dst_day_boundary (test_session_traces.CollectEvalTests) ... ok
+test_later_snapshot_ci_does_not_disprove (test_session_traces.CollectEvalTests) ... ok
+test_missing_proof_when_no_pr (test_session_traces.CollectEvalTests) ... ok
+test_post_run_merge_and_interrupted_not_proven (test_session_traces.CollectEvalTests) ... ok
+test_post_run_merge_strips_ci_for_scoring (test_session_traces.CollectEvalTests) ... ok
+test_posthog_dry_run_and_skip (test_session_traces.CollectEvalTests) ... ok
+test_pre_merge_runs_count_toward_pr_totals (test_session_traces.CollectEvalTests) ... ok
+test_same_pr_proof_required (test_session_traces.CollectEvalTests) ... ok
+test_store_and_eval_proof (test_session_traces.CollectEvalTests) ... ok
+test_path_traversal_rejected (test_session_traces.PathAndToolTests) ... ok
+test_post_run_merge_not_credited (test_session_traces.PathAndToolTests) ... ok
+test_sibling_worktree_not_auto_allowed (test_session_traces.PathAndToolTests) ... ok
+test_tool_name_never_command_text (test_session_traces.PathAndToolTests) ... ok
+test_drops_prompt_fields (test_session_traces.ScrubTests) ... ok
+test_redacts_keys_home_phone_ssn_basic_auth (test_session_traces.ScrubTests) ... ok
+test_scrub_path (test_session_traces.ScrubTests) ... ok
+test_first_line_json_with_codex_banner (test_shadow.TestParseVerdict) ... ok
+test_nested_finding_object_is_not_verdict (test_shadow.TestParseVerdict) ... ok
+test_pass_false_without_findings_array_is_incomplete_for_rescore (test_shadow.TestParseVerdict) ... ok
+test_board_policy_includes_ship_and_score (test_shadow_prompt.TestShadowPrompt) ... ok
+test_legacy_policy_uses_major_gate (test_shadow_prompt.TestShadowPrompt) ... ok
+test_prompt_never_leaks_adjudicated_requirement_ids (test_shadow_prompt.TestShadowPrompt) ... ok
+test_save_skips_unchanged_and_reports_writes (test_update_references.TestUpdateReferencesSave) ... ok
+test_common_exports_wait_helpers (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+test_drain_writes_hold_file_at_pause_claim (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+test_install_to_m1_ships_safe_restart (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+test_safe_restart_script_exists_and_drains_first (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+test_watchdog_rechecks_idle_when_reusing_held_drain (test_woodpecker_safe_restart.WoodpeckerSafeRestartTests) ... ok
+
+----------------------------------------------------------------------
+Ran 51 tests in 0.486s
+
+OK
+
+$ python3 verification/check_hub_turn_budget.py
+exit=1
+test_defaults_validation_and_extended_tool (__main__.TurnBudgetProof) ... FAIL
+test_drain_reload_preserves_override (__main__.TurnBudgetProof) ... FAIL
+test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof) ... FAIL
+test_permission_answer_not_cut (__main__.TurnBudgetProof) ... FAIL
+test_sleep_cancel_queue_and_resumed_clock (__main__.TurnBudgetProof) ... FAIL
+test_total_budget_precedes_tool_and_progress_limits (__main__.TurnBudgetProof) ... FAIL
+
+======================================================================
+FAIL: test_defaults_validation_and_extended_tool (__main__.TurnBudgetProof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 87, in setUp
+    self.boot()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 91, in boot
+    h = self.hub = load_hub(self.home)
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 25, in load_hub
+    assert isinstance(tree.body[-1], ast.Expr) and tree.body[-1].value.func.id == "main"
+AssertionError
+
+======================================================================
+FAIL: test_drain_reload_preserves_override (__main__.TurnBudgetProof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 87, in setUp
+    self.boot()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 91, in boot
+    h = self.hub = load_hub(self.home)
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 25, in load_hub
+    assert isinstance(tree.body[-1], ast.Expr) and tree.body[-1].value.func.id == "main"
+AssertionError
+
+======================================================================
+FAIL: test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 87, in setUp
+    self.boot()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 91, in boot
+    h = self.hub = load_hub(self.home)
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 25, in load_hub
+    assert isinstance(tree.body[-1], ast.Expr) and tree.body[-1].value.func.id == "main"
+AssertionError
+
+======================================================================
+FAIL: test_permission_answer_not_cut (__main__.TurnBudgetProof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 87, in setUp
+    self.boot()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 91, in boot
+    h = self.hub = load_hub(self.home)
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 25, in load_hub
+    assert isinstance(tree.body[-1], ast.Expr) and tree.body[-1].value.func.id == "main"
+AssertionError
+
+======================================================================
+FAIL: test_sleep_cancel_queue_and_resumed_clock (__main__.TurnBudgetProof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 87, in setUp
+    self.boot()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 91, in boot
+    h = self.hub = load_hub(self.home)
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 25, in load_hub
+    assert isinstance(tree.body[-1], ast.Expr) and tree.body[-1].value.func.id == "main"
+AssertionError
+
+======================================================================
+FAIL: test_total_budget_precedes_tool_and_progress_limits (__main__.TurnBudgetProof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 87, in setUp
+    self.boot()
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 91, in boot
+    h = self.hub = load_hub(self.home)
+  File "/Users/shyamsivakumar/.empryo-hub/worktrees/mac-ops/mo-149-hub-single-instance-guard-install-mo-147--2a749f/verification/check_hub_turn_budget.py", line 25, in load_hub
+    assert isinstance(tree.body[-1], ast.Expr) and tree.body[-1].value.func.id == "main"
+AssertionError
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.113s
+
+FAILED (failures=6)
