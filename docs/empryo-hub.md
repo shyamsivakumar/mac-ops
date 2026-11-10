@@ -101,6 +101,35 @@ Only after an approved live rollback, run `emp drain --restart` if needed.
 To install an earlier source version, check out that commit and run
 `./install.sh empryo` again.
 
+## Turn budgets and review provenance
+
+`routing.json` sets `turnLimits.turnSeconds` (default 7200). A launch may
+set integer `turnSeconds` >= 600; the effective value is stored on the thread
+and retained on sends, resumed turns, and drain/restart. Each turn gets a fresh
+execution clock only after acquiring its provider slot. Provider queue time
+is excluded; tool-internal queues and tool execution count. Threads created
+before this field existed use the routing default (7200 if absent).
+
+The reaper checks the budget on its existing 60-second tick. Expiry uses the
+existing stalled cancellation and 20-second kill grace: the run finishes
+`failed` with `turn ran over N min`, with normal run recording and slot release.
+Pending permission questions defer all stall cancellation, including while an
+answer is being sent. The permission wait still counts: after the answer is
+sent and removed from pending, an expired turn is cancelled on the next check.
+An unanswered question can therefore defer the deadline indefinitely. No
+automatic resume is added; retries remain coordinator policy.
+
+Merge dry-run `evidence.reviewGate` includes the last review run
+`model` and `runId`. Model comes from the persisted run (including a reported
+fallback), not launch `modelSelection`; it is evidence, not model approval or
+part of `revision_inputs`. It cannot prove a model switch that the engine did
+not report.
+
+Run `python3 verification/check_hub_turn_budget.py` for the disposable
+second-socket proof (synthetic elapsed time, real sleep subprocesses, fake
+ACP/GitHub I/O), or add `--wall-clock` for a real 601-second budget/queue proof.
+Neither mode installs or restarts the production hub or calls a paid provider.
+
 ## Model order and merge rules (2026-11-04)
 
 - Model order: MiniMax and GLM 5.3 first, then GPT 6.1 and Cursor, and Claude last. Risky, design, large and review tasks stay on GPT 6.1 Sol.
