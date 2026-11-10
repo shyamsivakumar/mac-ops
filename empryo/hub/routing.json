@@ -85,6 +85,7 @@
     "subscriptions/claude": 1
   },
   "turnLimits": {
+    "turnSeconds": 7200,
     "noProgressSeconds": 1200,
     "toolSeconds": 10800
   }
