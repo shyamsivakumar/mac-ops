@@ -381,7 +381,7 @@ def memory_load_block_reason(
     if pressure == WARNING_PRESSURE_LEVEL and free_percent <= WARNING_FREE_PERCENT:
         return "memory-pressure-warning-low-free"
     if not all(_finite_nonnegative(rate) for rate in rates):
-        return "swap-baseline-unavailable"
+        return "first swap sample; normal wait, a few seconds"
     if headroom < max(MIN_HEADROOM_BYTES, int(physical * headroom_fraction)):
         return "memory-headroom"
     return None
