@@ -8,6 +8,12 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
   your brief quotes Shyam approving that exact edit; then change only what
   he approved and show each changed line. New checks go in new files only
   when the task asks for them.
+- Exception (Shyam, 2026-11-09): tests, checks, fixtures and proof
+  scripts that this task's own branch created (absent from the base
+  branch, per `git diff --diff-filter=A <base>`) may be edited without
+  a per-edit quote, as long as no check gets weaker and every changed
+  line is listed in the PR. Anything on the base branch still needs
+  Shyam's quoted approval of the exact edit.
 - Prove your work by running it: the repo's own tests, typecheck, build, or
   the real command. Say what you ran and what it printed.
 - Before you report a coding task done, dispatch the `code-reviewer` agent
