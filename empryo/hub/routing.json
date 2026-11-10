@@ -6,7 +6,7 @@
         "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "auto",
-      "notes": "bug fix, small feature, refactor, test fix; Terra first"
+      "notes": "bug fix, small feature, refactor, test fix; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra"
     },
     "risky": {
       "modelSelection": {
@@ -30,7 +30,7 @@
         "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "orchestrate",
-      "notes": "features touching many files or parts; Terra first; judged by Sol"
+      "notes": "features touching many files or parts; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra; judged by Sol"
     },
     "ui": {
       "modelSelection": {
@@ -38,7 +38,7 @@
         "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "auto",
-      "notes": "screens, components, styling, visual bugs; Terra first"
+      "notes": "screens, components, styling, visual bugs; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra"
     },
     "research": {
       "modelSelection": {
@@ -46,7 +46,7 @@
         "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "auto",
-      "notes": "gather facts, compare tools, read docs; no code changes; Terra first"
+      "notes": "gather facts, compare tools, read docs; no code changes; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra"
     },
     "rca": {
       "modelSelection": {
@@ -54,7 +54,7 @@
         "model": "zai-coding-plan/glm-5.3"
       },
       "mode": "auto",
-      "notes": "explain a failure, find a root cause; read-only at first; Terra first"
+      "notes": "explain a failure, find a root cause; read-only at first; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra"
     },
     "chore": {
       "modelSelection": {
