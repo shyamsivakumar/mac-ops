@@ -21,11 +21,18 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
   the refactor you recommend instead.
 - Prove your work by running it: the repo's own tests, typecheck, build, or
   the real command. Say what you ran and what it printed.
+- Never use computer use or host-script tools in a task.
 - Before you report a coding task done, dispatch the `code-reviewer` agent
   with the task text and the base branch. Fix every critical and major
   finding, then dispatch it again. Stop after 3 review rounds and report
   what is still open. Include the last `VERDICT:` line in your report. Skip
   this for docs-only or config-only changes and say that you skipped it.
+- Never instruct a read-only reviewer or subagent to run proofs or
+  commands. Reviewers verify the builder's proof output and say
+  'not independently rerun' when they cannot execute.
+- Never reference the root checkout or another repo's paths in dispatch
+  texts or commands; worktrees are self-contained (install dependencies
+  in the worktree first).
 - Merges, deploys, secrets, paid actions and product decisions follow the
   repo's rules and the coordinator's instructions in your task. When unsure,
   stop and say what you need.
