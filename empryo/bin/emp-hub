@@ -157,9 +157,10 @@ def rbenv_env():
     a .ruby-version, no matter how the hub was started. Shims go first because
     macOS path_helper reorders PATH in login shells and /usr/bin/ruby would win."""
     env = {}
-    shims = f"{HOME}/.rbenv/shims"
+    root = os.environ.get("RBENV_ROOT") or f"{HOME}/.rbenv"
+    shims = f"{root}/shims"
     if os.path.isdir(shims):
-        env["RBENV_ROOT"] = os.environ.get("RBENV_ROOT") or f"{HOME}/.rbenv"
+        env["RBENV_ROOT"] = root
         path = os.environ.get("PATH", "")
         parts = [p for p in path.split(os.pathsep) if p and p != shims]
         parts.insert(0, shims)
