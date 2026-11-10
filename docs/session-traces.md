@@ -1,8 +1,8 @@
 # Agent session traces and daily evals (MO-124)
 
-One scrubbed trace per T3 thread run on this Mac (Cursor, Codex, Claude,
-MiniMax, GLM, …). Source is read-only local data under `~/.t3` (primarily
-`userdata/statev2.sqlite`). Nothing writes to the T3 server.
+One scrubbed trace per Empryo hub run on this Mac. The collector reads
+`~/.empryo-hub/threads.json`, `hub.log`, and transcript files read-only.
+It does not invoke the hub.
 
 Store: local files always; **PostHog** when a project API key is present
 (same free store SRW-619 picks — ask the coordinator before creating an
@@ -10,25 +10,25 @@ account or key).
 
 ## Trace fields
 
-Per run: thread, project, task key, provider, model, start/end, tool calls
-with durations, tokens/cost when the projection has them, final state
-(`completed` / `interrupted` / `failed` / …), and outcome links (PR URL,
-merge sha when present, CI `checksState`, review decision). Prompts, tool
-inputs/outputs, diffs, secrets, emails, and home-directory user segments are
-scrubbed or dropped.
+Per run: thread, project, task key and type, requested and actual model,
+fallbacks, start/end, tool-call counts and available durations, final state,
+PR, merge SHA, CI state and review verdict and model when supported by
+recorded evidence. Missing evidence stays unknown. Only a review thread’s
+final verdict word, run model, thread ID and time are retained from its report.
+Prompts, outputs, diffs, secrets and emails are never retained.
 
 ## Commands
 
 ```sh
 # Collect a local calendar day into ~/.local/state/mac-ops/session-traces/
-python3 mo124 collect --day 2026-11-03 --no-export
+python3 mo124 collect --day 2026-11-10 --no-export
 
 # Score stored traces → session-evals/<day>.{md,json}
-python3 mo124 eval --day 2026-11-03
+python3 mo124 eval --day 2026-11-10
 
 # LaunchAgent entry: previous local day by default, plus unfinished-run reconcile
 ./scripts/session-traces/daily.sh            # yesterday (America/Los_Angeles)
-./scripts/session-traces/daily.sh 2026-11-03 # explicit day
+./scripts/session-traces/daily.sh 2026-11-10 # explicit day
 
 python3 mo124 status   # paths + whether POSTHOG_API_KEY is set
 ```
