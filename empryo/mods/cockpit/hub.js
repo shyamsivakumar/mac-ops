@@ -204,16 +204,37 @@ export const seedVerdicts = (entries) => entries.forEach(([key, value]) => verdi
 export const verdictOf = (thread) => verdicts.get(thread.key)?.verdict ?? null;
 export const runModelOf = (thread) => verdicts.get(thread.key)?.runModel ?? "";
 
-export async function loadVerdict(thread) {
-  const stamp = `${thread.key}@${thread.at}`;
+const VENDORS = [[/gpt|codex/i, "openai"], [/claude|opus|sonnet|haiku|anthropic/i, "anthropic"], [/glm|zai|zhipu/i, "zhipu"], [/minimax/i, "minimax"], [/cursor/i, "cursor"]];
+export const vendorOf = (model) => (model ? VENDORS.find(([pattern]) => pattern.test(model))?.[1] ?? null : null);
+
+function vendorGate(verdict, reviewModel, authorModel) {
+  if (verdict.state !== "pass" && verdict.state !== "unknown") return verdict;
+  const reviewer = vendorOf(reviewModel);
+  const author = vendorOf(authorModel);
+  if (!author || !reviewer) return { ...verdict, note: "author unknown: vendor not checked" };
+  return reviewer === author ? { state: "fail", label: "rev ✗ same vendor" } : verdict;
+}
+
+const actualModel = (read, fallback) => {
+  const run = read?.recentRuns?.at(-1)?.model;
+  return vendorOf(run) ? run : fallback || "";
+};
+
+export async function loadVerdict(thread, author) {
+  const stamp = `${thread.key}@${thread.at}+${author?.key}@${author?.at}`;
   const known = verdicts.get(thread.key);
   if (known?.stamp === stamp && !(known.retryAt <= Date.now())) return;
   try {
-    const { items, recentRuns } = await call("emp_thread_read", { threadId: thread.key });
-    const last = [...items].reverse().find((i) => i.type === "assistant_message");
-    verdicts.set(thread.key, { stamp, verdict: judge(last?.text ?? ""), runModel: recentRuns?.at(-1)?.model ?? "" });
+    const [read, authorRead] = await Promise.all([
+      call("emp_thread_read", { threadId: thread.key }),
+      author ? call("emp_thread_read", { threadId: author.key, limit: 1 }) : null,
+    ]);
+    const last = [...read.items].reverse().find((i) => i.type === "assistant_message");
+    const runModel = read.recentRuns?.at(-1)?.model ?? "";
+    const verdict = vendorGate(judge(last?.text ?? ""), actualModel(read, thread.model), author ? actualModel(authorRead, author.model) : "");
+    verdicts.set(thread.key, { stamp, verdict, runModel });
   } catch {
-    verdicts.set(thread.key, { stamp, verdict: { state: "unknown", label: "rev ?" }, runModel: known?.runModel ?? "", retryAt: Date.now() + RETRY_VERDICT });
+    verdicts.set(thread.key, { stamp, verdict: { state: "unverified", label: "rev ? unreadable, retrying" }, runModel: known?.runModel ?? "", retryAt: Date.now() + RETRY_VERDICT });
   }
 }
 
@@ -301,6 +322,11 @@ export function mergeNotice(results) {
 export async function readTask(thread) {
   const { thread: read } = await call("emp_thread_read", { threadId: thread.key, limit: 1 });
   return { worktree: read.worktreePath ?? null, branch: read.branch ?? null, repo: projects.roots.get(thread.projectId) ?? null };
+}
+
+export async function firstMessage(key) {
+  const read = await call("emp_thread_read", { threadId: key, afterPosition: 0, limit: 3 });
+  return read.items.find((i) => i.type === "user_message")?.text ?? null;
 }
 
 export async function readTicket(thread) {
