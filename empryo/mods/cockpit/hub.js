@@ -302,3 +302,12 @@ export async function readTask(thread) {
   const { thread: read } = await call("emp_thread_read", { threadId: thread.key, limit: 1 });
   return { worktree: read.worktreePath ?? null, branch: read.branch ?? null, repo: projects.roots.get(thread.projectId) ?? null };
 }
+
+export async function readTicket(thread) {
+  const [opening, latest] = await Promise.all([
+    call("emp_thread_read", { threadId: thread.key, afterPosition: 0, limit: 10 }),
+    call("emp_thread_read", { threadId: thread.key, limit: 20, maxCharsPerItem: 20000 }),
+  ]);
+  const report = [...latest.items].reverse().find((i) => i.type === "assistant_message");
+  return { record: latest.thread, text: opening.items.find((i) => i.type === "user_message")?.text ?? null, report: report?.text ?? null };
+}
