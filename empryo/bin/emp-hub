@@ -1203,7 +1203,29 @@ def tool_thread_launch(a):
     return result
 
 
+SENT_REQUESTS_KEPT = 50
+
+
 def tool_thread_send(a):
+    request_id = a.get("clientRequestId")
+    if not request_id:
+        return send_message(a)
+    with REQUEST_LOCK:
+        thread = thread_of(a["threadId"])
+        earlier = thread.get("sentRequests", {}).get(request_id)
+        if earlier:
+            return {"threadId": thread["threadId"], "link": link_of(thread), "runId": earlier["runId"], "status": thread["status"], "delivery": earlier["delivery"], "deduped": True}
+        result = send_message(a)
+        with LOCK:
+            sent = thread.setdefault("sentRequests", {})
+            sent[request_id] = {"runId": result["runId"], "delivery": result["delivery"]}
+            while len(sent) > SENT_REQUESTS_KEPT:
+                del sent[next(iter(sent))]
+            THREADS.save()
+        return result
+
+
+def send_message(a):
     thread = thread_of(a["threadId"])
     mode = a.get("mode", "auto")
     if thread["status"] == "waiting":
