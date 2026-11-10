@@ -2,7 +2,7 @@ import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
 import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
 import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript } from "./transcript.js";
-import { askRow, choicesOf, clampFrom, composer, conversation, holdFrom, popupBar, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
+import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
 
 const SHOW_POLL = 50;
 const SHOW_LIMIT = 8000;
@@ -65,11 +65,27 @@ const MAX_ROWS = 8;
 const KEYS = [{ keystroke: "cmd-alt-v", action: "coordinator_preview", context: "CoordinatorBox" }];
 let keysBound = false;
 let chipCount = 0;
-const QUESTION_CLIP = 70;
 const PAGE = 10;
 const CALM = 400;
 const POP_WIDTH = 640;
 const POP_HEIGHT = 560;
+const DECISIONS_FILE = `${home()}/Code/coordinator/decisions.json`;
+
+const askOf = ({ id, group, title, why, kind, options }) => ({
+  id,
+  group,
+  text: title,
+  why,
+  action: kind === "action",
+  choices: kind === "action"
+    ? [{ kind: "done", text: "Done", label: "Done", detail: "", rec: false }]
+    : options.map((o) => ({ kind: "option", text: o.label, label: o.label, detail: o.detail, rec: Boolean(o.recommended) })),
+});
+
+const clock = (at) => {
+  const d = new Date(at);
+  return `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
 
 export default class Coordinator extends View {
   init(_props, cx) {
@@ -98,8 +114,8 @@ export default class Coordinator extends View {
       this.calmUntil = 0;
       this.changed = false;
       this.firstOpen();
-      const typed = this.asks().find((a) => this.editing.has(a.text));
-      cx.timer.after(60, () => (typed ? this.editor(typed.text) : this.handle).focus());
+      const typed = this.asks().find((a) => this.editing.has(a.id));
+      cx.timer.after(60, () => (typed ? this.editor(typed.id) : this.handle).focus());
       return;
     }
     this.input = TextareaState.new({ placeholder: "Message the Coordinator, or answer above", rows: MIN_ROWS });
@@ -128,6 +144,8 @@ export default class Coordinator extends View {
     }
     this.view = null;
     this.error = "";
+    this.decisions = { items: [], error: "" };
+    this.decisionsStat = "";
     this.stamp = "";
     this.open = new Set();
     this.loading = false;
@@ -150,7 +168,6 @@ export default class Coordinator extends View {
   }
 
   openAsks() {
-    if (!this.asks().length) return;
     openOverlay({ mod: "coordinator", kind: "dialog", width: POP_WIDTH, height: POP_HEIGHT, props: { pop: "asks" } });
   }
 
@@ -209,30 +226,60 @@ export default class Coordinator extends View {
     this.refreshing = true;
     cx.spawn(async (cx) => {
       try {
+        await this.readDecisions();
+        this.prune();
         this.view = await readTranscript(cx);
         if (this.known !== undefined && this.fromBottom > 0) this.shown += Math.max(0, this.view.turns.length - this.known);
         this.known = this.view.turns.length;
         this.error = "";
-        this.prune();
       } catch (error) {
         this.error = String(error.message);
       }
       this.refreshing = false;
       const v = this.view;
-      const stamp = JSON.stringify([v?.rev, v?.activity, v?.activityAt, v?.tokens, this.error, this.info()?.status === "working" && v?.activity ? Math.floor(Date.now() / ELAPSED_EVERY) : 0]);
+      const stamp = JSON.stringify([v?.rev, v?.activity, v?.activityAt, v?.tokens, this.error, this.decisionsStat, this.info()?.status === "working" && v?.activity ? Math.floor(Date.now() / ELAPSED_EVERY) : 0]);
       if (stamp === this.stamp) return;
       this.stamp = stamp;
-      const published = JSON.stringify(v?.asks ?? []);
+      const published = JSON.stringify(this.decisions);
       if (published !== this.published) {
         this.published = published;
-        setShared("co.asks", v?.asks ?? []);
+        setShared("co.asks", this.decisions);
       }
       cx.notify();
     });
   }
 
+  async readDecisions() {
+    const stat = await exec("stat", ["-f", "%Fm %z %i", DECISIONS_FILE]);
+    const seen = stat.code === 0 ? stat.stdout.trim() : "";
+    if (seen === this.decisionsStat) return;
+    this.decisionsStat = seen;
+    if (!seen) {
+      this.decisions = { items: [], error: "" };
+      return;
+    }
+    const file = await exec("cat", [DECISIONS_FILE]);
+    if (file.code !== 0) {
+      this.decisionsStat = "";
+      this.decisions = { items: [], error: `decisions.json: ${file.stderr.trim()}` };
+      return;
+    }
+    try {
+      this.decisions = { items: JSON.parse(file.stdout).items.map(askOf), error: "" };
+    } catch (error) {
+      this.decisions = { items: [], error: `decisions.json: ${error.message}` };
+    }
+  }
+
   prune() {
-    const live = new Set(this.view.asks.map((a) => a.text));
+    if (this.decisions.error) return;
+    const live = new Set(this.decisions.items.map((a) => a.id));
+    const decided = this.decided();
+    const gone = Object.keys(decided).filter((id) => !live.has(id));
+    if (gone.length) {
+      for (const id of gone) delete decided[id];
+      setShared("co.decided", decided);
+    }
     const drafts = this.drafts();
     for (const q of drafts.keys()) if (!live.has(q)) drafts.delete(q);
     if (drafts.size !== this.drafts().size) this.setDrafts(drafts);
@@ -268,12 +315,22 @@ export default class Coordinator extends View {
     this.setTyping(typing);
   }
 
+  decided() {
+    return { ...shared("co.decided") };
+  }
+
+  decisionsError() {
+    return (this.pop ? shared("co.asks") : this.decisions)?.error ?? "";
+  }
+
   asks() {
-    return this.pop ? shared("co.asks") ?? [] : this.view?.asks ?? [];
+    const items = (this.pop ? shared("co.asks") : this.decisions)?.items ?? [];
+    const decided = this.decided();
+    return [...items.filter((a) => !decided[a.id]), ...items.filter((a) => decided[a.id])];
   }
 
   answers(drafts) {
-    return this.asks().flatMap(({ text: q }, n) => (drafts.has(q) ? [{ n: n + 1, q, ...drafts.get(q) }] : []));
+    return this.asks().flatMap((a, n) => (drafts.has(a.id) ? [{ n: n + 1, id: a.id, q: a.text, ...drafts.get(a.id) }] : []));
   }
 
   editor(q) {
@@ -296,11 +353,11 @@ export default class Coordinator extends View {
   }
 
   sigOf(list) {
-    return list.map((a) => a.text).join("\n");
+    return list.map((a) => a.id).join("\n");
   }
 
   indexOf(list) {
-    return this.onReview ? list.length : list.findIndex((a) => a.text === this.stepQ);
+    return this.onReview ? list.length : list.findIndex((a) => a.id === this.stepQ);
   }
 
   toReview(list) {
@@ -314,8 +371,9 @@ export default class Coordinator extends View {
   firstOpen() {
     const list = this.asks();
     const drafts = this.drafts();
-    const target = list.find((a) => this.editing.has(a.text)) ?? list.find((a) => !drafts.has(a.text));
-    if (target) this.stepQ = target.text;
+    const decided = this.decided();
+    const target = list.find((a) => this.editing.has(a.id)) ?? list.find((a) => !drafts.has(a.id) && !decided[a.id]);
+    if (target) this.stepQ = target.id;
     else this.toReview(list);
   }
 
@@ -325,19 +383,26 @@ export default class Coordinator extends View {
       this.reviewSig = this.sigOf(list);
       this.changed = true;
       this.calmUntil = Date.now() + CALM;
-    } else if (!list.some((a) => a.text === this.stepQ)) {
+    } else if (!list.some((a) => a.id === this.stepQ)) {
       const drafts = this.drafts();
-      this.stepQ = (list.find((a) => !drafts.has(a.text)) ?? list[0])?.text ?? null;
+      const decided = this.decided();
+      this.stepQ = (list.find((a) => !drafts.has(a.id) && !decided[a.id]) ?? list[0])?.id ?? null;
       this.calmUntil = Date.now() + CALM;
     }
   }
 
-  stepTo(step, cx) {
+  stepTo(step, cx, exact = false) {
     const list = this.asks();
-    if (step >= list.length) this.toReview(list);
+    const from = this.indexOf(list);
+    const decided = this.decided();
+    const dir = step >= from ? 1 : -1;
+    let to = step;
+    if (!exact) while (to >= 0 && to < list.length && decided[list[to].id]) to += dir;
+    if (to < 0) to = from;
+    if (to >= list.length) this.toReview(list);
     else {
       this.onReview = false;
-      this.stepQ = list[Math.max(0, step)].text;
+      this.stepQ = list[Math.max(0, to)].id;
     }
     this.inEditor = false;
     this.handle.focus();
@@ -346,7 +411,7 @@ export default class Coordinator extends View {
 
   pick(q, choice, cx) {
     const list = this.asks();
-    const at = list.findIndex((a) => a.text === q);
+    const at = list.findIndex((a) => a.id === q);
     if (at < 0) return;
     const drafts = this.drafts();
     const same = drafts.get(q)?.kind === choice.kind && drafts.get(q).text === choice.text;
@@ -356,14 +421,14 @@ export default class Coordinator extends View {
     this.keepTyping(q, "");
     this.editing.delete(q);
     this.editors.get(q)?.set_value("");
-    this.stepTo(same ? at : at + 1, cx);
+    this.stepTo(same ? at : at + 1, cx, same);
   }
 
   take(a, cx) {
-    const at = this.asks().findIndex((x) => x.text === a.text);
-    if (this.drafts().has(a.text)) return this.stepTo(at + 1, cx);
-    const choice = choicesOf(a).find((c) => c.rec);
-    if (choice) this.pick(a.text, choice, cx);
+    const at = this.asks().findIndex((x) => x.id === a.id);
+    if (this.drafts().has(a.id)) return this.stepTo(at + 1, cx);
+    const choice = a.choices.find((c) => c.rec);
+    if (choice) this.pick(a.id, choice, cx);
   }
 
   sendReview(cx) {
@@ -392,9 +457,9 @@ export default class Coordinator extends View {
     else if (k === "k" || k === "left" || k === "up") this.stepTo(at - 1, cx);
     else if (!review && (k === "j" || k === "right" || k === "down")) this.stepTo(at + 1, cx);
     else if (k === "a") this.accept(cx);
-    else if (k === "r" && !review) this.reply(a.text, cx);
-    else if (review && n >= 0 && n < list.length) this.stepTo(n, cx);
-    else if (!review && n >= 0 && n < choicesOf(a).length) this.pick(a.text, choicesOf(a)[n], cx);
+    else if (k === "r" && !review) this.reply(a.id, cx);
+    else if (review && n >= 0 && n < list.length) this.stepTo(n, cx, true);
+    else if (!review && n >= 0 && n < a.choices.length) this.pick(a.id, a.choices[n], cx);
     else return;
     cx.stop_propagation();
   }
@@ -416,15 +481,17 @@ export default class Coordinator extends View {
     this.setDrafts(drafts);
     this.keepTyping(q, "");
     this.editing.delete(q);
-    const at = this.asks().findIndex((a) => a.text === q);
-    this.stepTo(text ? at + 1 : at, cx);
+    const at = this.asks().findIndex((a) => a.id === q);
+    this.stepTo(text ? at + 1 : at, cx, !text);
   }
 
   accept(cx) {
     const drafts = this.drafts();
-    for (const { text: q, recommended } of this.asks()) {
-      if (!recommended || drafts.has(q)) continue;
-      drafts.set(q, { kind: recommended.kind === "text" ? "reply" : recommended.kind, text: recommended.text });
+    const decided = this.decided();
+    for (const a of this.asks()) {
+      const rec = a.choices.find((c) => c.rec);
+      if (!rec || drafts.has(a.id) || decided[a.id]) continue;
+      drafts.set(a.id, { kind: rec.kind, text: rec.text });
     }
     this.setDrafts(drafts);
     this.stepTo(this.asks().length, cx);
@@ -480,12 +547,14 @@ export default class Coordinator extends View {
   }
 
   message() {
-    const lines = this.answers(this.drafts()).map(({ n, q, text }) => `${n}. ${q.length > QUESTION_CLIP ? `${q.slice(0, QUESTION_CLIP - 1)}…` : q}: ${text}`);
-    return [lines.join("\n"), this.pop ? "" : draftText(this.input.content()).trim()].filter(Boolean).join("\n\n");
+    const lines = this.answers(this.drafts()).map(({ id, q, text }) => `- ${id} (${q}): ${text.replace(/\s+/g, " ").trim()}`);
+    return [lines.length ? `Decisions:\n${lines.join("\n")}` : "", this.pop ? "" : draftText(this.input.content()).trim()].filter(Boolean).join("\n\n");
   }
 
   send(cx) {
     const text = this.message();
+    const answered = this.answers(this.drafts());
+    const typed = this.pop ? "" : draftText(this.input.content()).trim();
     const info = this.info();
     if (!text || !info || this.sent === "sending") return;
     this.sent = "sending";
@@ -499,12 +568,22 @@ export default class Coordinator extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        await hc(["send", info.address, text]);
-        if (!this.pop) this.input.set_value("");
-        this.setDrafts(new Map());
-        this.setTyping(new Map());
-        this.editing.clear();
-        for (const state of this.editors.values()) state.set_value("");
+        const r = await hc(["send", info.address, text]);
+        if (r.code !== 0) throw new Error(r.stderr.trim() || `hc send exited ${r.code}`);
+        if (!this.pop && draftText(this.input.content()).trim() === typed) this.input.set_value("");
+        const decided = this.decided();
+        const drafts = this.drafts();
+        const typing = this.typing();
+        for (const a of answered) {
+          decided[a.id] = { text: a.text, at: Date.now() };
+          drafts.delete(a.id);
+          typing.delete(a.id);
+          this.editing.delete(a.id);
+          this.editors.get(a.id)?.set_value("");
+        }
+        setShared("co.decided", decided);
+        this.setDrafts(drafts);
+        this.setTyping(typing);
         this.sent = "sent";
         if (this.pop) closeOverlay(overlay);
       } catch (error) {
@@ -568,7 +647,7 @@ export default class Coordinator extends View {
       },
       older: (cx) => this.older(cx),
       pick: (q, choice, cx) => this.pick(q, choice, cx),
-      go: (i, cx) => this.stepTo(i, cx),
+      go: (i, cx) => this.stepTo(i, cx, true),
       back: (cx) => this.stepTo(this.indexOf(this.asks()) - 1, cx),
       skip: (cx) => this.stepTo(this.indexOf(this.asks()) + 1, cx),
       reply: (q, cx) => this.reply(q, cx),
@@ -625,18 +704,21 @@ export default class Coordinator extends View {
       },
     };
     const list = this.asks();
+    const decided = this.decided();
     if (this.pop) {
       this.sync(list);
-      const form = { answers, drafts, editing: this.editing, editor: (q) => this.editor(q), sending: this.sent === "sending", step: Math.max(0, this.indexOf(list)), changed: this.changed };
+      const form = { answers, drafts, decided, clock, editing: this.editing, editor: (q) => this.editor(q), sending: this.sent === "sending", step: Math.max(0, this.indexOf(list)), changed: this.changed };
       return v_flex().id("co-pop").size_full().bg(t.chrome).track_focus(this.handle)
         .on_key_down((e, cx) => this.askKey(e, cx))
-        .child(list.length ? questionPop(t, list, form, cb) : popupBar(t, "No open questions", cb));
+        .child(list.length ? questionPop(t, list, form, cb) : emptyPop(t, this.decisionsError(), cb));
     }
     const strip = taskStrip(t, this.view, cb, this.box.width);
+    const open = list.filter((a) => !decided[a.id]);
+    const error = this.decisionsError();
     return v_flex().id("co-root").size_full().min_h(0).bg(t.chrome)
       .child(status(t, info, this.view, now, this.box.width, this.error))
       .when(strip, (el) => el.child(strip))
-      .when(list.length, (el) => el.child(askRow(t, list, answers.length, cb)))
+      .when(open.length || error, (el) => el.child(askRow(t, open, open.filter((a) => drafts.has(a.id)).length, error, cb)))
       .child(conversation(t, this.view, this.error, now, cb))
       .child(composer(t, info, this.input, this.sent, this.focused, answers, cb));
   }

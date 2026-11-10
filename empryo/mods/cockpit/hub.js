@@ -109,7 +109,7 @@ function card(thread, names) {
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
     status: thread.status,
     context: kind === "fail" && thread.lastError ? plainError(thread.lastError) : CONTEXT[kind] ?? "",
-    error: kind === "fail" ? thread.lastError : undefined,
+    error: kind === "fail" ? thread.lastError ?? CONTEXT.fail : undefined,
     prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state })),
   };
 }
