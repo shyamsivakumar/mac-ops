@@ -1,16 +1,17 @@
 // Read-only pop-ups: model providers, the task queue and hub health (cockpit toolbar), memory (status bar).
 
 import { View, div } from "gpui-kit";
-import { h_flex, v_flex } from "gpui-base";
+import { TextView, h_flex, v_flex } from "gpui-base";
 import { closeOverlay, exec, home, notify, props, readTextFile, theme } from "herdr";
 
 const EMP = `${home()}/.local/bin/emp`;
+const HERDR_APP = `${home()}/.local/bin/herdr-app`;
 const EMPQ = `${home()}/.local/bin/empq`;
 const HEALTH_FILE = `${home()}/Code/coordinator/queue/health.json`;
 const EMPRYO_CONFIG = `${home()}/.empryo/config.json`;
 const HOLD_MS = 15 * 60000;
 const PROVIDERS = [["zai-coding-plan", "GLM"], ["minimax", "MiniMax"], ["subscriptions/gpt", "GPT"], ["subscriptions/cursor", "Cursor"], ["subscriptions/claude", "Claude"]];
-const TITLES = { models: "Models", queue: "Queue", hub: "Hub", memory: "Memory" };
+const TITLES = { models: "Models", queue: "Queue", hub: "Hub", memory: "Memory", errors: "Mod errors" };
 const MEM_REFRESH = 10000;
 const MEM_ROWS = 14;
 const PS_LINE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/;
@@ -67,7 +68,7 @@ export default class Panels extends View {
     this.handle = cx.focus_handle();
     cx.timer.after(60, () => this.handle.focus());
     this.load(cx);
-    if (this.panel === "memory") cx.timer.every(MEM_REFRESH, (cx) => this.load(cx));
+    if (this.panel === "memory" || this.panel === "errors") cx.timer.every(MEM_REFRESH, (cx) => this.load(cx));
   }
 
   load(cx) {
@@ -119,6 +120,10 @@ export default class Panels extends View {
     const [health, status] = await Promise.all([this.readFile(HEALTH_FILE), this.hubStatus()]);
     const ps = await exec("ps", ["-o", "lstart=", "-p", String(status.pid)]);
     return { health, draining: status.draining, pid: status.pid, started: ps.code === 0 ? Date.parse(ps.stdout.trim()) : null };
+  }
+
+  async read_errors() {
+    return (await this.json(HERDR_APP, ["status"])).errors;
   }
 
   async read_memory() {
@@ -205,6 +210,18 @@ export default class Panels extends View {
         div().text_size(12).font_medium().text_color(out.has(providerOf(model)) ? t.blocked : i ? t.muted : t.foreground).child(short(model)),
       ])));
     return [this.section(t, "Providers"), ...rows, this.section(t, "Fallback order, first choice then what it falls back to"), ...(this.data ? fallback : [this.note(t, "Loading the fallback order…")])];
+  }
+
+  errors(t) {
+    const list = this.data ?? this.seed.errors;
+    if (!list) return [this.note(t, "Loading mod errors…")];
+    if (!list.length) return [this.note(t, "No mod errors.", "done")];
+    return list.flatMap((raw, i) => {
+      const m = /^mod (\S+?): ([\s\S]*)$/.exec(raw);
+      const text = (m ? m[2] : raw).trim().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+      const name = m ? m[1] : "app";
+      return [this.section(t, name), div().w_full().px(14).py(2).text_size(12).text_color(t.blocked).child(TextView.html(`err-${i}-${name}`, `<span>${text}</span>`).selectable(true))];
+    });
   }
 
   memory(t) {

@@ -214,8 +214,7 @@ export function blocksOf(text) {
   return out;
 }
 
-const FILLER = /^(?:should I |should we |should |do I |do you want me to |I )/i;
-const ANSWERS = /^\d+\. /;
+const ANSWERS = /^Decisions:\n/;
 const squash = (text) => text.replace(/\s+/g, " ").trim();
 
 function composed(text, at) {
@@ -223,54 +222,6 @@ function composed(text, at) {
   if (!sent || at < sent.since) return ANSWERS.test(text);
   const wanted = squash(text);
   return sent.items.some((item) => squash(item.text) === wanted);
-}
-const MARKER = /\(?\s*\bRecommended:\s*(.*?)\)?\s*$/i;
-
-const cleanOption = (p) => p.replace(FILLER, "").replace(/[?.\s]+$/, "").trim();
-
-function optionsOf(question) {
-  const body = question.replace(/^[^:]*:\s*/, "");
-  const parts = body.split(/,\s*or\s+|\s+or\s+/i).map(cleanOption);
-  if (parts.length < 2 || parts.length > 4) return [];
-  if (parts.some((p) => p.length < 3 || p.length > 80)) return [];
-  return parts.map((p) => p[0].toUpperCase() + p.slice(1));
-}
-
-function recommendationOf(raw, options) {
-  const answer = raw.trim();
-  if (!answer) return null;
-  const key = cleanOption(answer).toLowerCase();
-  const keys = options.map((o) => o.toLowerCase());
-  const at = keys.includes(key) ? keys.indexOf(key) : keys.findIndex((o) => o.includes(key) || key.includes(o));
-  if (at >= 0) return { answer, reason: "", kind: "option", text: options[at] };
-  const yesNo = /^(yes|no)\b/i.exec(answer);
-  if (yesNo) {
-    const kind = yesNo[1].toLowerCase();
-    return { answer: kind, reason: answer.includes(",") ? answer.slice(answer.indexOf(",") + 1).trim() : "", kind, text: kind };
-  }
-  return { answer, reason: "", kind: "text", text: answer };
-}
-
-export function asksOf(text) {
-  const out = [];
-  let fenced = false;
-  for (const raw of text.split("\n")) {
-    if (raw.startsWith("```")) fenced = !fenced;
-    const cleaned = raw.replace(/^\s*(?:[-*]|\d+[.)])\s+/, "").replace(/\*\*|`/g, "").trim();
-    if (fenced || !cleaned || cleaned.startsWith("|")) continue;
-    const marker = MARKER.exec(cleaned);
-    const line = marker ? cleaned.slice(0, marker.index).trim() : cleaned;
-    const first = out.length;
-    for (const s of line.match(/[^.!?]+[.!?]?/g) ?? []) {
-      const q = s.trim();
-      if (q.endsWith("?") && q.length > 8) out.push({ text: q, options: optionsOf(q), recommended: null });
-    }
-    if (marker && out.length > first) {
-      const last = out.at(-1);
-      last.recommended = recommendationOf(marker[1], last.options);
-    }
-  }
-  return out.slice(0, 5);
 }
 
 const newParser = () => ({ turns: [], open: new Map(), tools: new Map(), pending: null, tokens: 0 });
@@ -438,7 +389,6 @@ function snapshot() {
   const raw = hist.lead.concat(live.lead, live.parser.turns);
   const partial = front().before > 0 && raw[0]?.role === "coordinator";
   const turns = raw.slice(partial ? 1 : 0).filter((t) => t.items.length).map((t) => (t.view ??= present(t)));
-  const last = turns.at(-1);
   const { pending } = live.parser;
   return {
     turns,
@@ -450,7 +400,6 @@ function snapshot() {
     activityAt: pending?.at ?? 0,
     tokens: live.parser.tokens,
     lastReplyAt: turns.filter((t) => t.role === "coordinator").at(-1)?.at ?? 0,
-    asks: last?.role === "coordinator" ? asksOf(last.text) : [],
   };
 }
 

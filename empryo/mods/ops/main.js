@@ -1,5 +1,6 @@
 // Status bar for the work: US market clock and the live SRW paper trader's /health, this Mac's load and the
-// `heavy` queue, the M1 Woodpecker runners. Read-only; each source polls on its own cadence.
+// `heavy` queue, the M1 Woodpecker runners, the Empryo hub (socket and launchd job) and the mod error count.
+// Read-only; each source polls on its own cadence.
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
@@ -39,6 +40,14 @@ const PACE_SLACK = 5;
 const MEM_EVERY = 30000;
 const MEM_LOW = 15;
 const MEM_PANEL = [560, 520];
+const HERDR_APP = `${home()}/.local/bin/herdr-app`;
+const ERRORS_EVERY = 30000;
+const ERRORS_PANEL = [640, 440];
+const HUB_JOB = "dev.coordinator.emp-hub";
+const HUB_PROBE = `test -S "$1" && echo socket=up || echo socket=missing; launchctl print gui/$(id -u)/${HUB_JOB} 2>&1`;
+const HUB_RESTART = `launchctl kickstart -k gui/$(id -u)/${HUB_JOB}`;
+const HUB_HEALTH_EVERY = 15000;
+const HUB_STALE_MS = 120000;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const healthStale = (hl) => !hl || Date.now() - hl.checked_at * 1000 > HEALTH_STALE_MS;
@@ -99,6 +108,8 @@ export default class Ops extends View {
     this.mem = null;
     this.claude = null;
     this.minimax = null;
+    this.modErrors = null;
+    this.hubHealth = null;
     this.at = {};
     this.published = "";
     this.busy = new Set();
@@ -114,6 +125,10 @@ export default class Ops extends View {
 
   openMemory() {
     openOverlay({ mod: "ops-panels", kind: "dialog", width: MEM_PANEL[0], height: MEM_PANEL[1], props: { panel: "memory", seed: { free: this.mem ?? undefined } } });
+  }
+
+  openErrors() {
+    openOverlay({ mod: "ops-panels", kind: "dialog", width: ERRORS_PANEL[0], height: ERRORS_PANEL[1], props: { panel: "errors", seed: { errors: this.modErrors ?? undefined } } });
   }
 
   due(name, every) {
@@ -198,6 +213,20 @@ export default class Ops extends View {
       const free = r && r.code === 0 ? /free percentage: (\d+)%/.exec(r.stdout) : null;
       return free ? Number(free[1]) : null;
     });
+    this.poll(cx, "modErrors", ERRORS_EVERY, async () => {
+      const r = await exec(HERDR_APP, ["status"]).catch(() => null);
+      return r && r.code === 0 ? JSON.parse(r.stdout).errors : null;
+    });
+    this.poll(cx, "hubHealth", HUB_HEALTH_EVERY, async () => {
+      const r = await exec("sh", ["-c", HUB_PROBE, "sh", `${home()}/.empryo-hub/hub.sock`]).catch(() => null);
+      const board = shared("hub");
+      return r && {
+        socket: r.stdout.startsWith("socket=up"),
+        state: /^\tstate = (\S+)/m.exec(r.stdout)?.[1] ?? "not loaded",
+        pid: /^\tpid = (\d+)/m.exec(r.stdout)?.[1],
+        board: board && { at: board.at, running: board.running },
+      };
+    });
     this.poll(cx, "claude", USAGE_EVERY, async () => {
       const cache = await readJson(CLAUDE_USAGE);
       if (!cache || cache.data.apiUnavailable) return null;
@@ -270,6 +299,25 @@ export default class Ops extends View {
       .child(div().text_color(t.dim).child("mem"))
       .child(div().text_color(this.mem < MEM_LOW ? t.blocked : t.muted).font_medium().child(`${this.mem}% free`));
 
+    const errors = this.modErrors ?? [];
+    const errorEl = errors.length === 0 ? null : h_flex().id("mod-errors").gap(6).items_center().flex_none().cursor_pointer()
+      .on_click((e) => e.click_count > 1 || this.openErrors())
+      .tooltip(`${errors.length === 1 ? "A mod failed" : "Mods failed"} to load or reload, so the old version may still be running. Click for the error text.`)
+      .child(div().size(6).rounded(3).bg(t.blocked))
+      .child(div().text_color(t.blocked).font_medium().child(`${errors.length} mod error${errors.length === 1 ? "" : "s"}`))
+      .child(div().text_color(t.muted).child(/^mod (\S+?):/.exec(errors[0])?.[1] ?? "app"));
+
+    const hh = this.hubHealth;
+    const readAge = hh?.board ? Date.now() - hh.board.at : null;
+    const hubDown = hh && (hh.state !== "running" || !hh.socket);
+    const hubStale = hh && !hubDown && readAge !== null && readAge > HUB_STALE_MS;
+    const hubReasons = hh ? [hh.state !== "running" && `the launchd job is ${hh.state}`, !hh.socket && "hub.sock is missing"].filter(Boolean) : [];
+    const hubEl = !hh ? null : hubDown
+      ? item(t.blocked, "hub down", hh.state !== "running" ? hh.state : "no socket", `Hub down: ${hubReasons.join(" and ")}. Restart with: ${HUB_RESTART}`)
+      : hubStale
+        ? item(t.working, "hub stale", `read ${span(Math.round(readAge / 60000))} ago`, `The cockpit's last hub read was ${span(Math.round(readAge / 60000))} ago (limit 2m). The launchd job is running (pid ${hh.pid}) and hub.sock exists, so the hub may be hung or the cockpit stopped polling. Restart with: ${HUB_RESTART}`)
+        : item(t.done, "hub", hh.board ? `${hh.board.running} running` : "up", `The launchd job is running (pid ${hh.pid}) and hub.sock exists${readAge === null ? "" : `. The cockpit read the hub ${Math.round(readAge / 1000)}s ago`}.`);
+
     const srw = this.srw;
     const poll = srw?.telegram?.pollHealth;
     const srwOk = srw?.ok && srw.ready && poll?.state === "ok";
@@ -308,8 +356,10 @@ export default class Ops extends View {
         cx.notify();
       })
       .child(item(now.open ? t.done : t.dim, "NYSE", now.text))
+      .when(errorEl !== null, (el) => el.child(errorEl))
       .child(plain("Tasks", b ? `${b.running}/${HUB_CAP} run${b.waiting ? ` · ${b.waiting} waiting` : ""}` : "n/a", hubColor, "Empryo tasks running (cap 6) and waiting for you"))
       .child(healthEl)
+      .when(hubEl !== null && (roomy || hubDown || hubStale), (el) => el.child(hubEl))
       .child(item(srwColor, "SRW", srwDetail, srwTip))
       .when(this.load !== null && roomy, (el) => el.child(plain("M4", `load ${this.load.toFixed(2)}`, t.muted, "load average, 1 minute")))
       .when(tight, (el) => el.child(plain("heavy", h ? ([running && `${running} run`, paused && `${paused} paused`, queued && `${queued} queued`].filter(Boolean).join(" · ") || "idle") : "n/a", heavyColor, "mac-ops heavy status")))
