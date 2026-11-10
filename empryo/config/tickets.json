@@ -1,0 +1,158 @@
+{
+  "repos": {
+    "shyamsivakumar/strategy-replay-workbench": {
+      "key": "SRW",
+      "projectId": "mcp:a187512a-ba4d-430a-826c-e305adc8f72e"
+    },
+    "shyamsivakumar/mac-ops": {
+      "key": "MO",
+      "projectId": "mcp:a55b7217-1c6b-462c-806f-81c1b9604f33"
+    },
+    "shyamsivakumar/scrapers": {
+      "key": "SCR",
+      "projectId": "mcp:6c792995-7da6-49cf-88ac-53188fb1cfbd"
+    },
+    "shyamsivakumar/sams-llm-wiki": {
+      "key": "LMW",
+      "projectId": "mcp:53d72301-944e-470c-aced-9ecbca84bd8e"
+    },
+    "shyamsivakumar/scripture-scroll": {
+      "key": "STS",
+      "projectId": "mcp:a064ca62-3006-4afd-af51-1061d21ab29b"
+    },
+    "shyamsivakumar/CineJar": {
+      "key": "JAR",
+      "projectId": "mcp:44f6ef91-82c0-4022-8f8a-ccccdbde2b67"
+    },
+    "shyamsivakumar/fantasy-football-toolkit": {
+      "key": "FFBT",
+      "projectId": "mcp:81c77e25-64b1-48ee-a4ef-1b9ca2b50407"
+    },
+    "shyamsivakumar/openscan": {
+      "key": "OPN",
+      "projectId": "mcp:443142ae-f2b3-4c2e-8d12-8774042fd47c"
+    },
+    "shyamsivakumar/recoup": {
+      "key": "RCP",
+      "projectId": "mcp:7a64fb00-f498-43c2-a560-e792deb71715"
+    },
+    "shyamsivakumar/catalouge": {
+      "key": "CTL",
+      "projectId": "mcp:5aa90db1-b09a-4637-903f-7057b9a4fea1"
+    },
+    "shyamsivakumar/cairn": {
+      "key": "CRN",
+      "projectId": "mcp:f0c9c670-4c5a-4e57-b7df-2d0934be9374"
+    },
+    "shyamsivakumar/tunerise": {
+      "key": "TNR",
+      "projectId": "mcp:de991f1e-33dc-4570-86d9-5a0a8a47a8f5"
+    },
+    "shyamsivakumar/qabot": {
+      "key": "QBT",
+      "projectId": "mcp:d1260b54-4da2-4e8e-9d7c-5d623fde7a19"
+    },
+    "shyamsivakumar/strata": {
+      "key": null,
+      "projectId": "mcp:3a66a171-99ba-46d3-90a5-a8c3434847de"
+    },
+    "digitized/Concerning": {
+      "key": "NING",
+      "projectId": "mcp:fd6cecd8-8494-41bb-9d42-63dac0ae1a8d"
+    }
+  },
+  "models": {
+    "glm-5.3": {
+      "selection": {
+        "instanceId": "empryo",
+        "model": "zai-coding-plan/glm-5.3"
+      },
+      "vendor": "zhipu"
+    },
+    "minimax": {
+      "selection": {
+        "instanceId": "empryo",
+        "model": "minimax/MiniMax-M3.1-Flash"
+      },
+      "vendor": "minimax"
+    },
+    "terra": {
+      "selection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-terra"
+      },
+      "vendor": "openai"
+    },
+    "sol": {
+      "selection": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol"
+      },
+      "vendor": "openai"
+    },
+    "astra": {
+      "selection": {
+        "instanceId": "codex",
+        "model": "gpt-6-astra"
+      },
+      "vendor": "openai"
+    },
+    "opus": {
+      "selection": {
+        "instanceId": "empryo",
+        "model": "anthropic/claude-opus-5-5"
+      },
+      "vendor": "anthropic"
+    },
+    "sonnet": {
+      "selection": {
+        "instanceId": "empryo",
+        "model": "anthropic/claude-sonnet-5-5"
+      },
+      "vendor": "anthropic"
+    },
+    "cursor": {
+      "selection": {
+        "instanceId": "cursor",
+        "model": "default"
+      },
+      "vendor": "cursor",
+      "noGate": true
+    }
+  },
+  "labels": {
+    "stage": [
+      "backlog",
+      "todo"
+    ],
+    "priority": [
+      "1",
+      "2",
+      "3",
+      "4"
+    ],
+    "type": [
+      "standard",
+      "risky",
+      "design",
+      "large",
+      "ui",
+      "research",
+      "rca",
+      "chore"
+    ]
+  },
+  "template": [
+    "Goal and why",
+    "Context",
+    "Scope and non-goals",
+    "Blocked by",
+    "Acceptance and proof",
+    "CI",
+    "Must not cause",
+    "Data/secrets and stop conditions",
+    "Rollback",
+    "Gate",
+    "Finish"
+  ]
+}
