@@ -1020,7 +1020,7 @@ def thread_summary(thread):
     rt = RUNTIME.get(thread["threadId"])
     keys = ("threadId", "projectId", "title", "createdBy", "creationSource", "status", "latestRunId", "activeRunId", "providerInstanceId", "model",
             "runtimeMode", "interactionMode", "linkedPullRequest", "pullRequests", "titleRegeneration", "branch", "worktreePath", "parentThreadId",
-            "relationshipToParent", "taskType", "mode", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError", "portBase")
+            "relationshipToParent", "taskType", "mode", "runCount", "itemCount", "archived", "settled", "settledAt", "snoozed", "snoozedUntil", "createdAt", "updatedAt", "lastError", "portBase", "clientRequestId")
     summary = {k: thread.get(k) for k in keys}
     summary["link"] = link_of(thread)
     summary["activeRunStartedAt"] = thread["runs"][-1]["startedAt"] if thread["activeRunId"] else None
