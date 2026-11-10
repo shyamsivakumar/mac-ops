@@ -81,9 +81,6 @@
       "notes": "second opinion or panel: not routed here, pass an explicit modelSelection per seat"
     }
   },
-  "limits": {
-    "subscriptions/claude": 1
-  },
   "turnLimits": {
     "turnSeconds": 7200,
     "noProgressSeconds": 1200,

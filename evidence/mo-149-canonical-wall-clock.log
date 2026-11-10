@@ -1,0 +1,12 @@
+$ python3 -u verification/check_hub_turn_budget.py --wall-clock
+exit=0
+elapsed=10m 1s (601 actual seconds; managed shell job-4 completion)
+Captured output follows unchanged; concurrent stdout writes interleaved on one line.
+
+SECOND HUB socket=/tmp/hb-sbxz0y8w/.empryo-hub/hub.sock; synthetic clock; no production access
+WALL CLOCK: two concurrent real sleep processes; 601 actual seconds; no clock offset
+2026-11-10 14:23:49 emp:d0c72595-b1c3-4de3-9a7b-69bcc6f03ad7 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:23:49 emp:0e48c0e5-3cfe-48d5-bc4d-2953f35f5622 stalled (turn ran over 10 min); cancelling the turn
+2026-11-10 14:23:49 emp:d0c72595-b1c3-4de3-9a7b-69bcc6f03ad7 run run:emp:d0c72595-b1c3-4de3-9a7b-69bcc6f03ad7:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)2026-11-10 14:23:49 emp:0e48c0e5-3cfe-48d5-bc4d-2953f35f5622 run run:emp:0e48c0e5-3cfe-48d5-bc4d-2953f35f5622:ordinal:1 failed on subscriptions/claude-opus-5-5 (cancelled)
+
+WALL CLOCK PASS: both concurrent runs expired; one cancellation/engine release each; failed records persisted
