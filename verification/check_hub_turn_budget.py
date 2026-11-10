@@ -4,7 +4,7 @@
 Only ACP/provider and GitHub I/O are faked. No production stores, engines,
 sockets, threads, installed binaries, or pull requests are touched.
 """
-import ast
+from importlib.machinery import SourceFileLoader
 import json
 import os
 from pathlib import Path
@@ -21,12 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_hub(home):
-    tree = ast.parse((ROOT / "empryo/bin/emp-hub").read_text())
-    assert isinstance(tree.body[-1], ast.Expr) and tree.body[-1].value.func.id == "main"
-    tree.body.pop()
-    hub = types.ModuleType("disposable_hub")
+    loader = SourceFileLoader("disposable_hub", str(ROOT / "empryo/bin/emp-hub"))
+    hub = types.ModuleType(loader.name)
     with patch.dict(os.environ, {"HOME": str(home)}):
-        exec(compile(tree, "emp-hub", "exec"), hub.__dict__)
+        loader.exec_module(hub)
     return hub
 
 
@@ -100,11 +98,11 @@ class TurnBudgetProof(unittest.TestCase):
         h.PROJECTS.data["proof"] = h.new_project("proof", "disposable", str(self.home))
         h.PROJECTS.save()
         self.releases = []
-        release = h.release_slot
+        release = h.release_engine
 
-        def release_slot(key, tid):
-            self.releases.append(tid)
-            release(key, tid)
+        def release_engine(proc):
+            self.releases.append(proc.thread["threadId"])
+            release(proc)
 
         def ensure(thread, model=None):
             proc = SleepEngine(h, thread)
@@ -123,7 +121,7 @@ class TurnBudgetProof(unittest.TestCase):
             self.timers.append(obj)
             return obj
 
-        h.release_slot = release_slot
+        h.release_engine = release_engine
         h.ensure_session = ensure
         h.threading = types.SimpleNamespace(**{k: getattr(threading, k) for k in dir(threading) if not k.startswith("__")})
         h.threading.Timer = timer
@@ -195,28 +193,27 @@ class TurnBudgetProof(unittest.TestCase):
         rt["pending"].clear()
         self.assertEqual(h.stall_reason(rt, limits, 2000), "turn ran over 10 min")
 
-    def test_sleep_cancel_queue_and_resumed_clock(self):
+    def test_concurrent_provider_turns_and_resumed_clock(self):
         h = self.hub
+        routing = json.loads(Path(h.ROUTING_PATH).read_text())
+        self.assertNotIn("limits", routing)
+        self.assertEqual(routing["turnLimits"], {"turnSeconds": 7200, "noProgressSeconds": 1200, "toolSeconds": 10800})
         first = self.launch(turnSeconds=600)
-        proc = self.wait_started(first)
-        second = self.launch(title="MO-147 queued", turnSeconds=600)
-        self.until(lambda: second["status"] == "queued")
-        queued_rt = h.runtime_of(second["threadId"])
-        self.assertFalse(queued_rt["active"])
-        self.assertEqual(queued_rt["turnStartedAt"], 0)
+        first_proc = self.wait_started(first)
+        second = self.launch(title="same provider, no queue", turnSeconds=600)
+        second_proc = self.wait_started(second)
+        self.assertEqual((first["status"], second["status"]), ("running", "running"))
+        self.assertIsNone(first_proc.proc.poll())
+        self.assertIsNone(second_proc.proc.poll())
+        self.assertNotIn("limits", self.rpc("emp_hub_status"))
+        for name in ("SLOTS", "limit_of", "acquire_slot", "release_slot"):
+            self.assertFalse(hasattr(h, name), name)
         self.clock.offset += 601
-        record = self.expire(first)
-        self.assertEqual((record["status"], record["error"]), ("failed", "turn ran over 10 min"))
-        self.assertEqual(proc.cancels, 1)
-        self.assertEqual(self.releases.count(first["threadId"]), 1)
-        self.wait_started(second)
-        self.assertGreaterEqual(queued_rt["turnStartedAt"], h.time.time() - 2)
-        h.stall_check()
-        self.assertIsNone(queued_rt["stalled"])
-        print("FAILED RUN", json.dumps(record))
-        self.clock.offset += 601
-        self.expire(second)
-        self.assertFalse(h.SLOTS["subscriptions/claude"]["running"])
+        for thread, proc in ((first, first_proc), (second, second_proc)):
+            record = self.expire(thread)
+            self.assertEqual((record["status"], record["error"]), ("failed", "turn ran over 10 min"))
+            self.assertEqual(proc.cancels, 1)
+            self.assertEqual(self.releases.count(thread["threadId"]), 1)
         old_start = h.runtime_of(first["threadId"])["turnStartedAt"]
         self.rpc("emp_thread_send", threadId=first["threadId"], message="resume")
         resumed = self.wait_started(first)
@@ -229,7 +226,26 @@ class TurnBudgetProof(unittest.TestCase):
         self.assertEqual(first["runCount"], 2)
         self.assertEqual(len(first["runs"]), 2)
         self.assertEqual(self.releases.count(first["threadId"]), 2)
-        print("QUEUE/RESUME: no queued budget; fresh resumed clock; one release per run")
+
+    def test_drain_queue_does_not_charge_budget(self):
+        h = self.hub
+        h.DRAINING["requested"] = True
+        thread = self.launch(turnSeconds=600)
+        rt = h.runtime_of(thread["threadId"])
+        self.assertEqual(thread["status"], "queued")
+        self.assertEqual(rt["turnStartedAt"], 0)
+        self.clock.offset += 601
+        h.stall_check()
+        self.assertFalse(rt["active"])
+        self.assertIsNone(rt["stalled"])
+        self.assertEqual(rt["turnStartedAt"], 0)
+        self.rpc("emp_hub_drain_cancel")
+        self.wait_started(thread)
+        self.assertGreaterEqual(rt["turnStartedAt"], h.time.time() - 2)
+        self.assertIsNone(rt["stalled"])
+        self.clock.offset += 601
+        self.assertEqual(self.expire(thread)["error"], "turn ran over 10 min")
+        self.assertEqual(self.releases.count(thread["threadId"]), 1)
 
     def test_permission_answer_not_cut(self):
         h = self.hub
@@ -352,36 +368,23 @@ def wall_clock_proof():
     proof = TurnBudgetProof()
     proof.setUp()
     try:
-        h = proof.hub
         first = proof.launch(turnSeconds=600)
-        proc = proof.wait_started(first)
-        second = proof.launch(title="MO-147 wall-clock queued", turnSeconds=600)
-        proof.until(lambda: second["status"] == "queued")
-        started = h.runtime_of(first["threadId"])["turnStartedAt"]
-        print("WALL CLOCK: real /bin/sleep 3600, turnSeconds=600, waiting 601 actual seconds", flush=True)
+        first_proc = proof.wait_started(first)
+        second = proof.launch(title="wall-clock concurrent", turnSeconds=600)
+        second_proc = proof.wait_started(second)
+        h = proof.hub
+        started = max(h.runtime_of(t["threadId"])["turnStartedAt"] for t in (first, second))
+        print("WALL CLOCK: two concurrent real sleep processes; 601 actual seconds; no clock offset", flush=True)
         threading.Event().wait(max(0, started + 601 - time.time()))
         proof.assertEqual(proof.clock.offset, 0)
-        queued = h.runtime_of(second["threadId"])
-        proof.assertFalse(queued["active"])
-        proof.assertEqual(queued["turnStartedAt"], 0)
-        record = proof.expire(first)
-        proof.assertEqual(record["status"], "failed")
-        proof.assertEqual(record["error"], "turn ran over 10 min")
-        proof.assertEqual(proc.cancels, 1)
-        proof.assertEqual(proof.releases.count(first["threadId"]), 1)
-        second_proc = proof.wait_started(second)
-        proof.assertGreater(queued["turnStartedAt"], started + 600)
-        h.stall_check()
-        proof.assertIsNone(queued["stalled"])
-        proof.assertEqual(second_proc.cancels, 0)
-        print("WALL CLOCK FAILED RUN", json.dumps(record), flush=True)
-        second_proc.proc.terminate()
-        proof.until(lambda: not second["activeRunId"])
-        proof.until(lambda: second_proc.users == 0)
-        proof.assertFalse(h.SLOTS["subscriptions/claude"]["running"])
-        persisted = json.loads(Path(h.THREADS.path).read_text())
-        proof.assertEqual(persisted[first["threadId"]]["runs"][-1], record)
-        print("WALL CLOCK PASS: >=600s real elapsed; queued clock stayed zero; one cancellation/release; failed record persisted; slot empty", flush=True)
+        for thread, proc in ((first, first_proc), (second, second_proc)):
+            record = proof.expire(thread)
+            proof.assertEqual((record["status"], record["error"]), ("failed", "turn ran over 10 min"))
+            proof.assertEqual(proc.cancels, 1)
+            proof.assertEqual(proof.releases.count(thread["threadId"]), 1)
+            persisted = json.loads(Path(h.THREADS.path).read_text())[thread["threadId"]]
+            proof.assertEqual(persisted["runs"][-1], record)
+        print("WALL CLOCK PASS: both concurrent runs expired; one cancellation/engine release each; failed records persisted", flush=True)
     finally:
         proof.doCleanups()
 
