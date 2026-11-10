@@ -3,9 +3,9 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { cleanupNote, cleanupThread, closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, readTask, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
+import { cleanupNote, cleanupThread, closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { COLUMNS, DECIDES, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionHeight, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
+import { COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -72,6 +72,7 @@ export default class Board extends View {
     this.noticeTimer = null;
     this.deciding = null;
     this.files = null;
+    this.ticket = null;
     this.peeked = new Set();
     this.merging = false;
     this.outdated = false;
@@ -144,9 +145,12 @@ export default class Board extends View {
       this.stale = Boolean(this.dec.snap.stale);
       this.restored = Boolean(this.dec.snap.restored);
       this.born = Date.now();
-      this.watchFresh(cx);
-      this.recheck(cx);
-      this.startFiles(cx);
+      if (DECIDES.has(this.dec.col)) {
+        this.watchFresh(cx);
+        this.recheck(cx);
+        this.startFiles(cx);
+      }
+      this.startTicket(cx);
       cx.timer.after(60, () => this.handle.focus());
       cx.timer.after(POP_FOLLOW, () => closeOverlay(this.overlay));
       return;
@@ -753,22 +757,22 @@ export default class Board extends View {
   }
 
   activate(e, cx) {
-    if (e && !e.thread && DECIDES.has(e.col)) this.openDecision(e, cx);
+    if (e && !e.thread) this.openDecision(e, cx);
     else this.openEntry(e, cx);
   }
 
   decisionSnap(e) {
     const g = { ...e.group, info: undefined };
-    return { key: e.col, running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), shepherdr: [] };
+    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), shepherdr: [] };
   }
 
   openDecision(e, cx) {
     if (this.deciding === e.key) return;
     this.deciding = e.key;
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
-    const d = decisionOf(e.col, e.group, e.group.info, this.verdictFor(e.group), Date.now());
-    const files = e.group.info.pr ? cachedFiles(e.group.info.pr, e.group.info.gh?.sha) : null;
-    openOverlay({ mod: "cockpit", kind: "dialog", width: DEC_WIDTH, height: decisionHeight(d, files?.files.length), props: { dec: { key: e.key, col: e.col, snap: this.decisionSnap(e), files } } });
+    const info = this.prInfo(e.group);
+    const files = info.pr ? cachedFiles(info.pr, info.gh?.sha) : null;
+    openOverlay({ mod: "cockpit", kind: "dialog", width: DEC_WIDTH, height: DEC_HEIGHT, props: { dec: { key: e.key, col: e.col, snap: this.decisionSnap(e), files } } });
   }
 
   startFiles(cx) {
@@ -784,6 +788,21 @@ export default class Board extends View {
         this.files = { status: "ok", ...(await loadFiles(info.pr)) };
       } catch (error) {
         this.files = { status: "fail", error: error.message };
+      }
+      cx.notify();
+    });
+  }
+
+  startTicket(cx) {
+    this.ticket = { status: "loading" };
+    cx.spawn(async (cx) => {
+      try {
+        const group = this.groups()[0];
+        this.ticket = { status: "ok", ...(await readTicket(this.taskThread(group))) };
+        const review = this.reviewOf(group);
+        if (review && !verdictOf(review)) await loadVerdict(review);
+      } catch (error) {
+        this.ticket = { status: "fail", error: error.message };
       }
       cx.notify();
     });
@@ -851,6 +870,7 @@ export default class Board extends View {
     const cur = this.decision();
     if (!cur || this.merging) return;
     const { entry, d } = cur;
+    if (d.primary.id === "open") return this.openEntry(entry, cx);
     if (this.outdated) return d.primary.id === "merge" || d.primary.id === "wait" ? this.recheck(cx) : closeOverlay(this.overlay);
     if (d.primary.id === "wait") return;
     if (d.primary.id === "answer") return this.openReply(entry, cx);
@@ -1375,11 +1395,11 @@ export default class Board extends View {
 
   renderDecision(t) {
     const cur = this.decision();
-    const cb = { primary: (cx) => this.live() && this.decide(cx, false), other: (id, cx) => this.live() && this.decideOther(id, cx), close: () => closeOverlay(this.overlay) };
+    const cb = { primary: (cx) => this.live() && this.decide(cx, false), other: (id, cx) => this.live() && this.decideOther(id, cx), close: () => closeOverlay(this.overlay), link: (url) => exec("open", [url]) };
     const primaryKind = cur?.d.primary.id === "merge" ? "approve" : cur?.d.primary.id;
     const armedKind = this.armed?.key === cur?.entry.key ? this.armed?.kind : null;
     const refusal = cur && this.refusalOf(cur.entry.group);
-    const view = cur && { col: cur.entry.col, d: cur.d, armed: armedKind === primaryKind, armedKind, outdated: this.outdated, replying: Boolean(this.replyKey), replyLabel: this.replyLabel, outcome: this.outcome ?? (refusal && { text: `Not merged: ${refusal.text}` }), files: this.files };
+    const view = cur && { col: cur.entry.col, d: cur.d, armed: armedKind === primaryKind, armedKind, outdated: this.outdated, replying: Boolean(this.replyKey), replyLabel: this.replyLabel, outcome: this.outcome ?? (refusal && { text: `Not merged: ${refusal.text}` }), files: this.files, ticket: this.ticket, verdict: this.verdictFor(cur.entry.group) };
     return v_flex().id("ck-dec").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())

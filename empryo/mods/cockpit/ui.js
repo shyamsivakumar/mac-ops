@@ -1,7 +1,7 @@
 // Elements of the board. Every row has a fixed height, so each column can window itself.
 
 import { div } from "gpui-kit";
-import { v_flex, h_flex, Input } from "gpui-base";
+import { v_flex, h_flex, Input, TextView } from "gpui-base";
 import { shortModel } from "./hub.js";
 
 export const H = { bar: 26, head: 42, sub: 16, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, empty: 50, folded: 44 };
@@ -317,9 +317,12 @@ export function childRow(t, e, v, cb) {
     .child(opening === e.key ? div().flex_none().text_size(9.5).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(9.5).text_color(t.muted).child(ago(c.at, now)));
 }
 
-export const DEC_WIDTH = 640;
+export const DEC_WIDTH = 920;
 const DEC_CAP = 640;
-const DEC_COLUMN = { needs: ["Needs you", "blocked"], ready: ["Ready to merge", "accent"] };
+export const DEC_HEIGHT = DEC_CAP;
+const DEC_SIDE = 280;
+const REPORT_HEIGHT = 200;
+const DEC_STRIP = 240;
 const SETTLEABLE = ["done", "fail", "stop"];
 export const NOTE_LABEL = "Send back with a note";
 
@@ -373,6 +376,15 @@ export function decisionOf(col, g, info, verdict, now) {
     ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }] : []),
   ];
   const age = ago(g.at, now);
+  if (!DECIDES.has(col)) {
+    return {
+      headline: g.task ? `${g.task} · ${g.title}` : g.title,
+      primary: { id: "open", key: "o", label: "Open thread" },
+      why: [`${c.context} · ${g.project} · updated ${age}`],
+      other: other.filter((x) => x.id !== "open"),
+      checks: null,
+    };
+  }
   const checks = pr ? checksOf(info.gh, verdict) : null;
   if (col === "ready" && pr) {
     const title = g.task ? `${g.task} · ${g.title}` : g.title;
@@ -392,13 +404,6 @@ export function decisionOf(col, g, info, verdict, now) {
     other,
     checks,
   };
-}
-
-export function decisionHeight(d, fileCount) {
-  const lines = (text, size) => Math.ceil((text.length * size * 0.6) / (DEC_WIDTH - 40));
-  const body = lines(d.headline, 18) * 24 + d.why.reduce((sum, w) => sum + lines(w, 12.5) * 18, 0) + 150;
-  const review = d.checks ? 40 + d.checks.length * 26 + 40 + Math.min(fileCount ?? 3, 10) * 24 : 0;
-  return Math.min(DEC_CAP, H.head - 8 + 32 + body + review);
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -445,35 +450,78 @@ function primaryButton(t, d, armed, outdated, run) {
     .when(!outdated && Boolean(d.primary.key), (el) => el.child(div().text_size(10.5).font_medium().child(d.primary.key)));
 }
 
+const VERDICT_TEXT = (verdict) => (verdict.state === "loading" ? "checking" : verdict.label.replace(/^rev /, ""));
+
+function ticketBody(t, ticket) {
+  if (!ticket || ticket.status === "loading") return div().text_size(12.5).text_color(t.dim).child("Loading ticket…");
+  if (ticket.status === "fail") return div().w_full().text_size(12.5).line_height("18px").text_color(t.blocked).child(`Could not load the ticket: ${ticket.error}`);
+  if (ticket.text === null) return div().text_size(12.5).text_color(t.dim).child("This thread has no messages yet.");
+  return TextView.markdown("dec-ticket-md", ticket.text).selectable(true).scrollable(true).size_full();
+}
+
+function field(t, name, value) {
+  return h_flex().w_full().min_h(18).gap(8).items_start()
+    .child(div().w(52).flex_none().text_size(11).text_color(t.dim).child(name))
+    .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.foreground).child(value));
+}
+
+function ticketPanel(t, v, cb) {
+  const { ticket, verdict, d, files } = v;
+  const record = ticket?.status === "ok" ? ticket.record : null;
+  const details = record ? [["Status", record.status], ["Model", shortModel(record.model)], ["Type", record.taskType], ["Branch", record.branch]].filter(([, value]) => value) : [];
+  const verdictLine = verdict ? `${VERDICT_MARK[verdict.state]} ${VERDICT_TEXT(verdict)}` : "No review yet";
+  return v_flex().id("dec-side").w(DEC_SIDE).h_full().min_h(0).flex_none().overflow_y_scrollbar().border_l(1).border_color(t.border)
+    .child(v_flex().w_full().flex_none().px(14).py(12).gap(10)
+      .child(v_flex().w_full().gap(2)
+        .child(section(t, "Details"))
+        .children(details.map(([name, value]) => field(t, name, value)))
+        .child(h_flex().w_full().min_h(18).gap(8).items_start()
+          .child(div().w(52).flex_none().text_size(11).text_color(t.dim).child("Review"))
+          .child(div().flex_1().min_w(0).text_size(11.5).font_medium().text_color(verdict ? t[VERDICT_TONE[verdict.state]] : t.muted).child(verdictLine))))
+      .when(Boolean(record?.pullRequests.length), (el) => el.child(v_flex().w_full().gap(4)
+        .child(section(t, "Pull requests"))
+        .child(h_flex().w_full().gap(6).flex_wrap()
+          .children(record.pullRequests.map((p) => action(t, `dec-pr-${p.number}`, "", `${p.repository.split("/").at(-1)}#${p.number} ${p.state.toLowerCase()}`, () => cb.link(p.url), p.url, true))))))
+      .when(Boolean(d.checks), (el) => el.child(checkRows(t, d.checks)))
+      .when(Boolean(d.checks && files), (el) => el.child(fileRows(t, files)))
+      .when(Boolean(record), (el) => el.child(v_flex().w_full().gap(4)
+        .child(section(t, "Latest report"))
+        .child(ticket.report === null
+          ? div().text_size(11.5).text_color(t.dim).child("No report yet")
+          : div().w_full().h(REPORT_HEIGHT).text_size(11.5).text_color(t.foreground).child(TextView.markdown("dec-report-md", ticket.report).selectable(true).scrollable(true).size_full())))));
+}
+
 export function decisionView(t, v, input, cb) {
-  const { col, d, armed, armedKind, outdated, replying, outcome, files } = v;
-  const [label, tone] = DEC_COLUMN[col];
-  const hint = outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`;
+  const { col, d, armed, armedKind, outdated, replying, outcome } = v;
+  const [, label, tone] = COLUMNS.find((c) => c[0] === col);
+  const hint = outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "open" ? "Opens the thread in Empryo." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`;
   return v_flex().size_full().min_h(0)
     .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
       .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child(label))
       .child(headButton(t, "dec-close", "✕", "Close", () => cb.close())))
-    .child(v_flex().id("dec-body").flex_1().min_h(0).overflow_y_scrollbar()
-      .child(v_flex().w_full().flex_none().px(16).py(14).gap(12)
-        .child(div().w_full().text_size(18).line_height("24px").font_semibold().text_color(t.foreground).child(d.headline))
-        .child(v_flex().w_full().gap(4).children(d.why.map((line) => div().w_full().text_size(12.5).line_height("18px").text_color(t.muted).child(line))))
-        .child(h_flex().gap(10).items_center().child(primaryButton(t, d, armed, outdated, (cx) => cb.primary(cx))))
-        .child(div().w_full().text_size(10.5).text_color(t.dim).child(hint))
-        .when(Boolean(outcome), (el) => el.child(div().w_full().p(8).rounded(6).border_1().border_color(t.blocked).text_size(12).line_height("17px").text_color(t.foreground).child(outcome.text)))
-        .when(replying, (el) => el.child(h_flex().w_full().h(30).gap(8).items_center()
-          .when(Boolean(v.replyLabel), (r) => r.child(div().flex_none().text_size(11).font_medium().text_color(t.accent).child(v.replyLabel)))
-          .child(Input.new(input).flex_1().min_w(0).h(30).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))))
-        .child(h_flex().gap(6).items_center().flex_wrap()
-          .child(div().text_size(10.5).text_color(t.dim).child("Other"))
-          .children(d.other.map((x) => action(t, `dec-${x.id}`, x.key, x.id === "settle" && armedKind === "settle" ? "Confirm settle" : x.label, (cx) => cb.other(x.id, cx)))))
-        .when(Boolean(d.checks), (el) => el.child(checkRows(t, d.checks)))
-        .when(Boolean(d.checks && files), (el) => el.child(fileRows(t, files)))));
+    .child(h_flex().flex_1().min_h(0).w_full()
+      .child(v_flex().flex_1().min_w(0).min_h(0)
+        .child(v_flex().id("dec-strip").w_full().flex_none().max_h(DEC_STRIP).overflow_y_scrollbar().border_b(1).border_color(t.border)
+          .child(v_flex().w_full().flex_none().px(16).py(14).gap(12)
+            .child(div().w_full().text_size(18).line_height("24px").font_semibold().text_color(t.foreground).child(d.headline))
+            .child(v_flex().w_full().gap(4).children(d.why.map((line) => div().w_full().text_size(12.5).line_height("18px").text_color(t.muted).child(line))))
+            .child(h_flex().gap(10).items_center().child(primaryButton(t, d, armed, outdated, (cx) => cb.primary(cx))))
+            .child(div().w_full().text_size(10.5).text_color(t.dim).child(hint))
+            .when(Boolean(outcome), (el) => el.child(div().w_full().p(8).rounded(6).border_1().border_color(t.blocked).text_size(12).line_height("17px").text_color(t.foreground).child(outcome.text)))
+            .when(replying, (el) => el.child(h_flex().w_full().h(30).gap(8).items_center()
+              .when(Boolean(v.replyLabel), (r) => r.child(div().flex_none().text_size(11).font_medium().text_color(t.accent).child(v.replyLabel)))
+              .child(Input.new(input).flex_1().min_w(0).h(30).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))))
+            .child(h_flex().gap(6).items_center().flex_wrap()
+              .child(div().text_size(10.5).text_color(t.dim).child("Other"))
+              .children(d.other.map((x) => action(t, `dec-${x.id}`, x.key, x.id === "settle" && armedKind === "settle" ? "Confirm settle" : x.label, (cx) => cb.other(x.id, cx)))))))
+        .child(div().id("dec-ticket").flex_1().min_h(0).w_full().px(16).py(12).text_size(12.5).line_height("19px").text_color(t.foreground).child(ticketBody(t, v.ticket))))
+      .child(ticketPanel(t, v, cb)));
 }
 
 export const DECIDES = new Set(["needs", "ready"]);
 export const KEY_TABLE = [
-  { keys: "⏎", group: "Card", all: "Decide on a Needs you or Ready card, open the thread on any other" },
+  { keys: "⏎", group: "Card", all: "Open the card's ticket and decision pop-up" },
   { keys: "a", group: "Card", all: "Approve the merge, press twice (Ready cards)" },
   { keys: "o", group: "Card", all: "Open the thread" },
   { keys: "r", group: "Card", all: "Reply to the thread" },
