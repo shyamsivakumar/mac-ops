@@ -24,8 +24,8 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
 - Never use computer use or host-script tools in a task.
 - Before you report a coding task done, dispatch the `code-reviewer` agent
   with the task text and the base branch. Fix every critical and major
-  finding, then dispatch it again. Stop after 3 review rounds and report
-  what is still open. Include the last `VERDICT:` line in your report. Skip
+  finding. Run one review round and report what is still open. Include the
+  last `VERDICT:` line in your report. Skip
   this for docs-only or config-only changes and say that you skipped it.
 - Never instruct a read-only reviewer or subagent to run proofs or
   commands. Reviewers verify the builder's proof output and say
