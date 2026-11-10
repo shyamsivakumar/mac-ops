@@ -1,7 +1,7 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
-import { agents, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
-import { loadOlder, materialize, pathImages, readTranscript } from "./transcript.js";
+import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
+import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript } from "./transcript.js";
 import { askRow, choicesOf, clampFrom, composer, conversation, holdFrom, popupBar, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
 
 const SHOW_POLL = 50;
@@ -62,6 +62,31 @@ const ELAPSED_EVERY = 5000;
 const SENT_KEEP = 40;
 const MIN_ROWS = 2;
 const MAX_ROWS = 8;
+const EDIT_KEYS = [
+  ["cmd-a", "SelectAll"],
+  ["cmd-c", "Copy"],
+  ["cmd-x", "Cut"],
+  ["cmd-v", "Paste"],
+  ["cmd-z", "Undo"],
+  ["cmd-shift-z", "Redo"],
+  ["alt-shift-left", "SelectToPreviousWordStart"],
+  ["alt-shift-right", "SelectToNextWordEnd"],
+  ["cmd-shift-left", "SelectToStartOfLine"],
+  ["cmd-shift-right", "SelectToEndOfLine"],
+  ["cmd-shift-up", "SelectToStart"],
+  ["cmd-shift-down", "SelectToEnd"],
+  ["alt-left", "MoveToPreviousWord"],
+  ["alt-right", "MoveToNextWord"],
+  ["cmd-left", "MoveToStartOfLine"],
+  ["cmd-right", "MoveToEndOfLine"],
+  ["cmd-up", "MoveToStart"],
+  ["cmd-down", "MoveToEnd"],
+  ["alt-backspace", "DeleteToPreviousWordStart"],
+  ["cmd-backspace", "DeleteToBeginningOfLine"],
+].map(([keystroke, action]) => ({ keystroke, action: `input::${action}`, context: "Input" }));
+const KEYS = [...EDIT_KEYS, { keystroke: "cmd-alt-v", action: "coordinator_preview", context: "CoordinatorBox" }];
+let keysBound = false;
+let chipCount = 0;
 const QUESTION_CLIP = 70;
 const PAGE = 10;
 const CALM = 400;
@@ -102,7 +127,11 @@ export default class Coordinator extends View {
     this.input = TextareaState.new({ placeholder: "Message the Coordinator, or answer above", rows: MIN_ROWS });
     this.input.set_auto_grow(MIN_ROWS, MAX_ROWS);
     this.input.on("submit", (e, cx) => !e?.shift && this.send(cx));
-    this.input.on("change", (_e, cx) => cx.notify());
+    this.input.on("change", (_e, cx) => {
+      this.chipImagePaths();
+      cx.notify();
+    });
+    this.input.on("paste_other", (_e, cx) => this.pasteImage(cx));
     this.input.on("focus", (_e, cx) => {
       this.focused = true;
       cx.notify();
@@ -112,6 +141,13 @@ export default class Coordinator extends View {
       cx.notify();
     });
     this.focused = false;
+    this.preview = false;
+    this.chipping = false;
+    this.boxHandle = cx.focus_handle();
+    if (!keysBound) {
+      cx.bind_keys(KEYS);
+      keysBound = true;
+    }
     this.view = null;
     this.error = "";
     this.stamp = "";
@@ -426,9 +462,48 @@ export default class Coordinator extends View {
     cx.notify();
   }
 
+  chipImagePaths() {
+    if (this.chipping) return;
+    const { text, tokens } = this.input.content();
+    const loose = imagePathSpans(text).filter((s) => !tokens.some((t) => t.range.start < s.end && t.range.end > s.start));
+    if (!loose.length) return;
+    this.chipping = true;
+    for (const s of loose.reverse()) {
+      this.input.replace_range_with_token({ start: s.start, end: s.end }, { id: `img-${Date.now().toString(36)}-${chipCount++}`, text: s.path, label: chipLabel(s.path) });
+    }
+    this.chipping = false;
+  }
+
+  pasteImage(cx) {
+    cx.spawn(async (cx) => {
+      const dir = `${appHome()}/data/coordinator/paste`;
+      const at = Date.now();
+      const file = `${dir}/${at}.png`;
+      await exec("mkdir", ["-p", dir]);
+      const saved = await exec("osascript", [
+        "-e", "set png to the clipboard as \u00abclass PNGf\u00bb",
+        "-e", `set f to open for access POSIX file "${file}" with write permission`,
+        "-e", "set eof f to 0",
+        "-e", "write png to f",
+        "-e", "close access f",
+      ]);
+      if (saved.code !== 0) return;
+      const time = new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+      this.input.replace_with_token({ id: `img-${at.toString(36)}-${chipCount++}`, text: file, label: `📷 Pasted image ${time}` });
+      cx.notify();
+    });
+  }
+
+  togglePreview(cx) {
+    this.preview = !this.preview;
+    this.focused = false;
+    cx.timer.after(60, () => (this.preview ? this.boxHandle : this.input).focus());
+    cx.notify();
+  }
+
   message() {
     const lines = this.answers(this.drafts()).map(({ n, q, text }) => `${n}. ${q.length > QUESTION_CLIP ? `${q.slice(0, QUESTION_CLIP - 1)}…` : q}: ${text}`);
-    return [lines.join("\n"), this.pop ? "" : this.input.value().trim()].filter(Boolean).join("\n\n");
+    return [lines.join("\n"), this.pop ? "" : draftText(this.input.content()).trim()].filter(Boolean).join("\n\n");
   }
 
   send(cx) {
@@ -531,6 +606,12 @@ export default class Coordinator extends View {
       link: (url) => (/^https?:\/\//i.test(url) ? exec("open", [url]) : notify({ title: "Link not opened", body: "Only web links open from the chat.", level: "info", timeout: 2500 })),
       heights: this.heights,
       image: (ref) => this.wantImage(ref, cx),
+      draft: () => draftText(this.input.content()),
+      preview: this.preview,
+      boxHandle: this.boxHandle,
+      minRows: MIN_ROWS,
+      maxRows: MAX_ROWS,
+      togglePreview: (cx) => this.togglePreview(cx),
       attachments: (text) => pathImages(text).images,
       openImage: (path) => exec("open", [path]),
       working: info?.status === "working",
