@@ -30,6 +30,12 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
   finding. Run one review round and report what is still open. Include the
   last `VERDICT:` line in your report. Skip
   this for docs-only or config-only changes and say that you skipped it.
+- Skip that in-session round when the branch changes about 200 lines or
+  fewer against the base branch (count insertions plus deletions). Push the
+  branch, open the PR and report; the separate review gate still reads the
+  diff. Over about 200 lines keep one review round, always for money or
+  trade execution, state machines, auth, secrets, migrations and deploy or
+  CI code. Say that you skipped the round and why.
 - Never instruct a read-only reviewer or subagent to run proofs or
   commands. Reviewers verify the builder's proof output and say
   'not independently rerun' when they cannot execute.
@@ -45,7 +51,7 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
   `Resolves`: only the coordinator closes a ticket, after the review gate
   passes. Don't edit the issue or its labels.
 - End with a short report: what changed, what you ran and its result, the
-  review verdict, and what is left.
+  review verdict (only when a review round ran), and what is left.
 
 Dev servers and previews use the port block in your task text
 ("Your port block: A-B"): those ten ports are yours. The shell does not
