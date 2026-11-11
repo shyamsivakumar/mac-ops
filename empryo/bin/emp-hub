@@ -34,6 +34,9 @@ DRAINING = {"requested": False, "epoch": 0, "exiting": False}
 LOCK = threading.RLock()
 CHANGED = threading.Condition(LOCK)
 MERGE_LOCK = threading.Lock()
+MERGE_REPO_LOCKS = {}
+AUTO_MERGE_WAKE = threading.Event()
+AUTO_MERGE_CONFIG = f"{HUB_DIR}/config.json"
 
 
 def log(message):
@@ -813,6 +816,8 @@ def start_turn(thread, message, steered_from=None, from_pending=False):
     with LOCK:
         if from_pending and (thread["status"] != "queued" or not thread.get("pendingTurn")):
             raise HubError("the queued turn is no longer pending")
+        if rt.get("merging"):
+            raise HubError("thread is being evaluated by the merge train; retry after it finishes")
         if (thread["status"] in LIVE and not from_pending) or rt.get("starting"):
             raise HubError("thread already has an active run")
         if DRAINING["requested"]:
@@ -935,6 +940,11 @@ def finish_run(thread, rt, proc, run_id, status, stop, usage, error):
                 log(f"{thread['threadId']} linked pull requests {linked}")
         except (HubError, OSError, subprocess.SubprocessError) as e:
             log(f"{thread['threadId']} pull request auto-link skipped ({e})")
+        if is_review_thread(thread):
+            try:
+                enqueue_auto_merge(thread)
+            except (HubError, OSError, ValueError, subprocess.SubprocessError) as e:
+                log(f"{thread['threadId']} auto-merge enqueue deferred ({e})")
 
 
 def steer_turn(thread, message, sender=None):
@@ -1881,7 +1891,8 @@ def checks_verdict(repo, number):
         return False, "no checks are reported for this pull request yet", {"scope": scope, "count": 0, "state": "none reported"}
     bad = [f"{r['name']}: {r['bucket']}" for r in rows if r["bucket"] not in ("pass", "skipping")]
     state = f"failing: {', '.join(sorted(bad))}" if bad else "green"
-    return not bad, (f"checks not green ({scope}): {', '.join(bad[:4])}" if bad else None), {"scope": scope, "count": len(rows), "state": state}
+    return not bad, (f"checks not green ({scope}): {', '.join(bad[:4])}" if bad else None), {"scope": scope, "count": len(rows), "state": state,
+            "failed": any(r["bucket"] in ("fail", "cancel") for r in rows)}
 
 
 def merge_method(repo):
@@ -1938,6 +1949,8 @@ def merge_plan(thread):
     detail = gh_json(["pr", "view", str(number), "--repo", repo, "--json", "number,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,headRefOid,baseRefName,isCrossRepository,commits"])
     commits = detail.pop("commits")
     evidence["pullRequest"] = detail
+    if detail["state"] != "OPEN":
+        return False, f"#{number} is not open", evidence, None
     if detail["isCrossRepository"]:
         return False, f"#{number} comes from a fork; only same-repository pull requests merge here", evidence, None
     if detail["isDraft"]:
@@ -1948,10 +1961,12 @@ def merge_plan(thread):
         return False, f"#{number} merge state is {detail['mergeStateStatus']}", evidence, None
     if detail["reviewDecision"] == "CHANGES_REQUESTED":
         return False, f"#{number} has requested changes", evidence, None
+    carry = carried_review(thread, detail["headRefOid"])
     worktree = thread["worktreePath"]
-    if worktree and os.path.isdir(worktree) and sh(["git", "-C", worktree, "rev-parse", "HEAD"])[1] != detail["headRefOid"]:
+    if worktree and os.path.isdir(worktree) and sh(["git", "-C", worktree, "rev-parse", "HEAD"])[1] not in (detail["headRefOid"], carry.get("originalHead")):
         return False, "the worktree's HEAD differs from the pull request head (unpushed or newer commits)", evidence, None
-    green, why, checks = checks_verdict(repo, number)
+    candidate = thread.get("autoMerge", {}).get("candidateTree", {})
+    green, why, checks = merge_checks(repo, number, detail["headRefOid"], candidate.get("tree") if candidate.get("head") == detail["headRefOid"] else None)
     evidence["checks"] = checks
     no_checks_allowed = checks["count"] == 0 and repo.split("/")[0].lower() == PERSONAL_OWNER
     if not green and not no_checks_allowed:
@@ -1966,7 +1981,9 @@ def merge_plan(thread):
         if age < NO_CHECKS_MIN_AGE_SECONDS:
             retry_at = (parse_time(head_committed_at) + timedelta(seconds=NO_CHECKS_MIN_AGE_SECONDS)).strftime("%H:%M:%SZ")
             return False, f"#{number} has no checks yet and its head commit is only {int(age)}s old, so its workflows may not have registered; retry after {retry_at}", evidence, None
-    passed, why, gate = review_gate(thread, detail["headRefOid"] if no_checks_allowed else None, head_committed_at)
+    review_sha = carry.get("originalHead", detail["headRefOid"])
+    review_date = carry.get("originalCommittedAt") or head_committed_at
+    passed, why, gate = review_gate(thread, review_sha if no_checks_allowed else None, review_date if no_checks_allowed else None)
     evidence["reviewGate"] = gate
     if not passed:
         return False, why, evidence, None
@@ -2001,7 +2018,7 @@ def merge_record(thread, evidence, merged, dry_run):
             "reviewModel": gate.get("model"), "reviewRunId": gate.get("runId"), "merged": merged, "dryRun": dry_run}
 
 
-def write_merge_record(thread, evidence, merged, dry_run):
+def write_merge_record(thread, evidence, merged, dry_run, **extra):
     """Append the merge-gate evidence to ~/.empryo-hub/merges.jsonl.
 
     The record holds the verdict word, the review model and run, the checks
@@ -2009,7 +2026,7 @@ def write_merge_record(thread, evidence, merged, dry_run):
     must not fail the merge, so it is logged and the merge continues.
     """
     try:
-        line = json.dumps(merge_record(thread, evidence, merged, dry_run), sort_keys=True)
+        line = json.dumps({**merge_record(thread, evidence, merged, dry_run), **extra}, sort_keys=True)
         with MERGE_LOCK:
             with open(MERGE_RECORD, "a") as f:
                 f.write(line + "\n")
@@ -2060,7 +2077,7 @@ def stale_revision_refusal(thread, expected, ok, reason, evidence):
             "revision": revision_of(inputs) if ok else None, "current": inputs, "evidence": evidence}
 
 
-def tool_thread_merge(a):
+def execute_thread_merge(a, automatic=None):
     thread = thread_of(a["threadId"])
     if is_review_thread(thread):
         task = task_thread_of(thread)
@@ -2069,6 +2086,11 @@ def tool_thread_merge(a):
     if thread["status"] in LIVE:
         return {"threadId": thread["threadId"], "merged": False, "refused": "the task thread still has a live run"}
     ok, reason, evidence, plan = merge_plan(thread)
+    if automatic and ok:
+        problem = auto_merge_problem(thread, automatic)
+        gate = evidence.get("reviewGate", {})
+        if problem or gate.get("threadId") != automatic["reviewThread"] or gate.get("runId") != automatic["reviewRunId"]:
+            ok, reason = False, problem or "the authoritative review changed during evaluation"
     expected = a.get("expectedRevision")
     stale = stale_revision_refusal(thread, expected, ok, reason, evidence) if expected is not None else None
     if stale is not None:
@@ -2083,12 +2105,315 @@ def tool_thread_merge(a):
             result = {"threadId": thread["threadId"], "merged": False, "refused": f"gh pr merge failed: {err or out}", "evidence": evidence}
         else:
             log(f"merged {plan['repo']}#{plan['number']} ({plan['method']}) for {thread['threadId']}")
-            write_merge_record(thread, evidence, merged=True, dry_run=False)
+            if automatic:
+                auto_merge_note(thread, "merged", "merged with the checked revision", evidence)
+            else:
+                write_merge_record(thread, evidence, merged=True, dry_run=False)
             tool_thread_organize({"threadId": thread["threadId"], "action": "settle"})
             cleanup = tool_thread_cleanup({"threadId": thread["threadId"]})
             return {"threadId": thread["threadId"], "merged": True, "pullRequest": plan["number"], "method": plan["method"], "evidence": evidence, "cleanup": cleanup}
-    write_merge_record(thread, evidence, merged=False, dry_run=bool(a.get("dryRun")))
+    if not automatic:
+        write_merge_record(thread, evidence, merged=False, dry_run=bool(a.get("dryRun")))
     return result
+
+
+def merge_repo_lock(repo):
+    with LOCK:
+        return MERGE_REPO_LOCKS.setdefault(repo.lower(), threading.RLock())
+
+
+@contextlib.contextmanager
+def merge_guard(thread, automatic=None):
+    guarded = [thread] + ([thread_of(automatic["reviewThread"])] if automatic else [])
+    owner = threading.get_ident()
+    with LOCK:
+        if any(t["status"] in LIVE or runtime_of(t["threadId"]).get("starting")
+               or runtime_of(t["threadId"]).get("merging") not in (None, owner) for t in guarded):
+            raise HubError("the task or review has a live, starting or merging run")
+        previous = [runtime_of(t["threadId"]).get("merging") for t in guarded]
+        for t in guarded:
+            runtime_of(t["threadId"])["merging"] = owner
+    try:
+        yield
+    finally:
+        with LOCK:
+            for t, before in zip(guarded, previous):
+                runtime_of(t["threadId"])["merging"] = before
+
+
+def tool_thread_merge(a, automatic=None):
+    thread = thread_of(a["threadId"])
+    if is_review_thread(thread) or thread["status"] in LIVE:
+        return execute_thread_merge(a)
+    try:
+        with merge_repo_lock(thread_repo(thread)), merge_guard(thread, automatic):
+            if automatic:
+                problem = auto_merge_problem(thread, automatic)
+                if problem:
+                    return {"merged": False, "refused": problem}
+            return execute_thread_merge(a, automatic=automatic)
+    except HubError as e:
+        return {"threadId": thread["threadId"], "merged": False, "refused": str(e)}
+
+
+def merge_checks(repo, number, head_sha, tree=None):
+    """Head-check contract today; tree receipts can replace this lookup later."""
+    green, why, checks = checks_verdict(repo, number)
+    current = gh_json(["pr", "view", str(number), "--repo", repo, "--json", "headRefOid"])
+    if current["headRefOid"] != head_sha:
+        return False, "the pull request head changed while reading checks", {"count": 1, "state": "head changed"}
+    return green, why, checks
+
+
+def auto_merge_enabled():
+    try:
+        with open(AUTO_MERGE_CONFIG) as f:
+            return json.load(f).get("autoMerge") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def auto_merge_problem(thread, entry):
+    if not auto_merge_enabled():
+        return "autoMerge is disabled"
+    repo = thread_repo(thread)
+    key = TASK_KEY.search(thread["title"])
+    if not re.fullmatch(rf"{PERSONAL_OWNER}/[\w.-]+", repo, re.I) or (key and key.group(0).split("-")[0] in ("AUH", "MCP", "OPS", "DBT", "OMN")):
+        return "only personal repositories may auto-merge; Ascend requires Shyam"
+    review = thread_of(entry["reviewThread"])
+    if thread.get("latestRunId") != entry["taskRunId"] or review.get("latestRunId") != entry["reviewRunId"]:
+        return "the task or review run changed; a new review is required"
+    if thread.get("archived") or review.get("archived"):
+        return "the task or review is archived"
+    if thread["status"] in LIVE or review["status"] in LIVE:
+        return "the task or review has a live run"
+    passed, why, gate = review_gate(thread)
+    if not passed:
+        return why
+    if gate.get("threadId") != review["threadId"] or gate.get("runId") != entry["reviewRunId"]:
+        return "a different review is now authoritative"
+    allowed = load_routing().get("autoMergeReviewerModels", ["subscriptions/claude-opus-5-5"])
+    if not isinstance(allowed, list) or gate.get("model") not in allowed:
+        return "the reviewer model is not allowed for auto-merge"
+    if last_run_end(review) <= last_run_end(thread):
+        return "the review is not newer than the task's latest run"
+    return None
+
+
+def auto_merge_note(thread, state, reason, evidence=None, **extra):
+    entry = thread["autoMerge"]
+    reason_key = re.sub(r"head commit is only \d+s old", "head commit is young", reason)
+    if (entry.get("state"), entry.get("reasonKey")) == (state, reason_key):
+        return
+    with LOCK:
+        entry.update(state=state, reason=reason, reasonKey=reason_key)
+        if state == "waiting" and reason != "autoMerge is disabled":
+            entry.setdefault("waitSince", now_iso())
+        else:
+            entry.pop("waitSince", None)
+        write_merge_record(thread, evidence or {}, state == "merged", False, automatic=True, reason=reason, **extra)
+        append_item(thread, {"type": "notice", "status": "completed", "text": f"Auto-merge {state}: {reason}"})
+        THREADS.save()
+        CHANGED.notify_all()
+
+
+def enqueue_auto_merge(review):
+    task = task_thread_of(review)
+    if task is None:
+        write_merge_record(review, {}, False, False, automatic=True, reason="no matching task thread")
+        append_item(review, {"type": "notice", "text": "Auto-merge skipped: no matching task thread"})
+        THREADS.save()
+        return
+    with LOCK:
+        previous = task.get("autoMerge", {})
+        if previous.get("reviewRunId") == review.get("latestRunId") and previous.get("reviewThread") == review["threadId"]:
+            return
+        task["autoMerge"] = {"reviewThread": review["threadId"], "reviewRunId": review.get("latestRunId"),
+                             "taskRunId": task.get("latestRunId"), "queuedAt": now_iso(), "state": "queued"}
+        THREADS.save()
+    problem = auto_merge_problem(task, task["autoMerge"])
+    if problem:
+        auto_merge_note(task, "waiting" if problem == "autoMerge is disabled" else "skipped", problem)
+    AUTO_MERGE_WAKE.set()
+
+
+def carried_review(thread, head):
+    entry = thread.get("autoMerge", {})
+    carry = entry.get("carry", {})
+    review = THREADS.data.get(entry.get("reviewThread"), {})
+    if (carry.get("head") == head and carry.get("taskRunId") == thread.get("latestRunId")
+            and carry.get("reviewRunId") == review.get("latestRunId") and carry.get("reviewThread") == review.get("threadId")):
+        return carry
+    return {}
+
+
+def train_git(thread, *args):
+    code, out, err = sh(["git", *args], cwd=thread_cwd(thread))
+    if code:
+        raise HubError(f"merge train git {args[0]} failed: {err or out}")
+    return out
+
+
+def train_patch_id(thread, base, head):
+    ancestor = train_git(thread, "merge-base", base, head)
+    diff = train_git(thread, "diff", "--binary", ancestor, head)
+    result = subprocess.run(["git", "patch-id", "--stable"], input=diff + "\n", capture_output=True, text=True, timeout=30)
+    if result.returncode or not result.stdout.strip():
+        raise HubError("cannot compute the PR diff's patch-id")
+    return result.stdout.split()[0]
+
+
+def train_return(thread, target, reason):
+    # Deliver after releasing the run lease: delivery may start the target run.
+    thread["autoMerge"].update(returnTo=target, returnReason=reason)
+    auto_merge_note(thread, "returning", reason)
+
+
+def train_deliver(thread):
+    entry = thread["autoMerge"]
+    target, reason = entry["returnTo"], entry["returnReason"]
+    action = "Re-review the current remote PR head and end with a fresh verdict." if is_review_thread(thread_of(target)) else "Correct the branch or checks, push, and obtain a new gate review."
+    tool_thread_send({"threadId": target, "message": f"Merge train stopped for {thread['title']}: {reason}. {action}",
+                      "clientRequestId": f"merge-train:{thread['threadId']}:{entry['reviewRunId']}:{target}"})
+    del entry["returnTo"]
+    auto_merge_note(thread, "blocked", reason)
+
+
+def train_prepare(thread, entry, evidence, allow_update=False):
+    repo, pr = evidence["repo"], evidence["pullRequest"]
+    if pr["state"] != "OPEN" or pr["isDraft"] or pr["isCrossRepository"] or pr["baseRefName"] != "main":
+        raise HubError("the PR must be open, non-draft, same-repository and target main")
+    url = f"https://github.com/{repo}.git"
+    head = pr["headRefOid"]
+    train_git(thread, "fetch", "--no-tags", url, head)
+    train_git(thread, "fetch", "--no-tags", url, "refs/heads/main")
+    base = train_git(thread, "rev-parse", "FETCH_HEAD")
+    pending = entry.get("update")
+    if pending:
+        if head == pending["oldHead"]:
+            if (datetime.now(timezone.utc) - parse_time(pending["requestedAt"])).total_seconds() > 300:
+                train_return(thread, thread["threadId"], "GitHub branch update timed out; check the remote branch")
+                return False
+            auto_merge_note(thread, "waiting", "waiting for GitHub's updated head", evidence)
+            return False
+        commit = gh_json(["api", f"repos/{repo}/commits/{head}"])
+        parents = [p["sha"] for p in commit["parents"]]
+        from_main = len(parents) == 2 and sh(["git", "merge-base", "--is-ancestor", parents[1], base], cwd=thread_cwd(thread))[0] == 0
+        if not from_main or parents[0] != pending["oldHead"] or train_patch_id(thread, parents[1], head) != pending["patchId"]:
+            train_return(thread, entry["reviewThread"], "update changed the PR diff's patch-id; a new review is required")
+            return False
+        previous = entry.get("carry", {})
+        entry["carry"] = {**pending, "head": head, "originalHead": previous.get("originalHead", pending["oldHead"]),
+                          "originalCommittedAt": previous.get("originalCommittedAt", pending.get("originalCommittedAt"))}
+        del entry["update"]
+        THREADS.save()
+        auto_merge_note(thread, "waiting", "clean update; patch-id unchanged; waiting for the new head's checks", evidence,
+                        patchIdUnchanged=True, patchId=pending["patchId"], oldHead=pending["oldHead"], updatedHead=head)
+        return False
+    code, tree, err = sh(["git", "merge-tree", "--write-tree", base, head], cwd=thread_cwd(thread))
+    if code == 1:
+        train_return(thread, thread["threadId"], "merge conflict with main; builder must resolve it")
+        return False
+    if code:
+        raise HubError(f"merge-tree failed: {err or tree}")
+    code, out, err = sh(["git", "merge-base", "--is-ancestor", base, head], cwd=thread_cwd(thread))
+    if code not in (0, 1):
+        raise HubError(f"cannot compare main and PR head: {err or out}")
+    if code == 0:
+        entry["candidateTree"] = {"head": head, "base": base, "tree": tree.splitlines()[0]}
+        return True
+    if not allow_update:
+        auto_merge_note(thread, "waiting", "waiting for an eligible GitHub merge state before updating main", evidence)
+        return False
+    patch_id = train_patch_id(thread, base, head)
+    original = gh_json(["api", f"repos/{repo}/commits/{head}"])
+    entry["update"] = {"oldHead": head, "patchId": patch_id, "taskRunId": entry["taskRunId"], "requestedAt": now_iso(),
+                       "reviewThread": entry["reviewThread"], "reviewRunId": entry["reviewRunId"],
+                       "originalCommittedAt": original.get("commit", {}).get("committer", {}).get("date")}
+    THREADS.save()
+    problem = auto_merge_problem(thread, entry)
+    if problem:
+        del entry["update"]
+        raise HubError(problem)
+    code, out, err = sh(["gh", "api", f"repos/{repo}/pulls/{pr['number']}/update-branch", "--method", "PUT", "-f", f"expected_head_sha={head}"], timeout=180)
+    if code:
+        del entry["update"]
+        if "conflict" in (err + out).lower():
+            train_return(thread, thread["threadId"], "GitHub reports an update conflict; builder must resolve it")
+            return False
+        raise HubError(f"GitHub update-branch failed: {err or out}")
+    auto_merge_note(thread, "waiting", "branch update requested; waiting for the new head and checks", evidence)
+    return False
+
+
+def auto_merge_tick():
+    heads = {}
+    with LOCK:
+        queued = sorted([t for t in THREADS.data.values() if t.get("autoMerge", {}).get("state") in ("queued", "waiting", "returning")],
+                        key=lambda t: (t["autoMerge"]["queuedAt"], t["threadId"]))
+    for thread in queued:
+        try:
+            repo = thread_repo(thread).lower()
+            if repo in heads:
+                continue
+            heads[repo] = thread
+            with merge_repo_lock(repo), merge_guard(thread, thread["autoMerge"]):
+                entry = thread["autoMerge"]
+                if entry["state"] not in ("queued", "waiting"):
+                    continue
+                problem = auto_merge_problem(thread, entry)
+                if problem:
+                    auto_merge_note(thread, "waiting" if problem == "autoMerge is disabled" else "skipped", problem)
+                    continue
+                if entry.get("waitSince") and (datetime.now(timezone.utc) - parse_time(entry["waitSince"])).total_seconds() > 3600:
+                    train_return(thread, thread["threadId"], "merge train wait exceeded one hour; inspect the PR and checks")
+                    continue
+                dry = tool_thread_merge({"threadId": thread["threadId"], "dryRun": True}, automatic=entry)
+                evidence = dry.get("evidence", {})
+                if not evidence.get("pullRequest"):
+                    _, prs = pull_requests_of(thread)
+                    closed = any(p["headRefName"] == own_branch(thread) and p["state"] in ("MERGED", "CLOSED") for p in prs)
+                    auto_merge_note(thread, "skipped" if closed else "waiting", "the pull request is already merged or closed" if closed else dry.get("refused", "no pull request found"), evidence)
+                    continue
+                pr = evidence["pullRequest"]
+                if pr["isDraft"] or pr["state"] != "OPEN" or pr["isCrossRepository"]:
+                    auto_merge_note(thread, "skipped", dry.get("refused", "PR is not eligible"), evidence)
+                    continue
+                if pr["reviewDecision"] == "CHANGES_REQUESTED" or pr["mergeable"] == "CONFLICTING":
+                    train_return(thread, thread["threadId"], dry.get("refused", "requested changes or merge conflict"))
+                    continue
+                update_allowed = pr["mergeStateStatus"] in (*MERGEABLE_STATES, "BEHIND")
+                checks = evidence.get("checks", {})
+                if update_allowed and not checks:
+                    _, _, checks = merge_checks(repo, pr["number"], pr["headRefOid"])
+                if checks.get("failed"):
+                    train_return(thread, thread["threadId"], f"checks failed: {checks['state']}")
+                    continue
+                if not train_prepare(thread, entry, evidence, allow_update=update_allowed):
+                    continue
+                if not dry.get("dryRun"):
+                    auto_merge_note(thread, "waiting", dry.get("refused", "merge gate refused"), evidence)
+                    continue
+                result = tool_thread_merge({"threadId": thread["threadId"], "expectedRevision": dry["revision"]}, automatic=entry)
+                auto_merge_note(thread, "merged" if result.get("merged") else "waiting", "merged with the checked revision" if result.get("merged") else result.get("refused", "merge refused"), result.get("evidence", evidence))
+        except (HubError, OSError, ValueError, subprocess.SubprocessError) as e:
+            auto_merge_note(thread, "waiting", str(e))
+        finally:
+            if thread.get("autoMerge", {}).get("returnTo"):
+                try:
+                    train_deliver(thread)
+                except (HubError, OSError, ValueError, subprocess.SubprocessError) as e:
+                    auto_merge_note(thread, "returning", f"return delivery failed: {e}")
+
+
+def auto_merge_loop():
+    while True:
+        AUTO_MERGE_WAKE.wait(SCHEDULER_TICK_SECONDS)
+        AUTO_MERGE_WAKE.clear()
+        try:
+            auto_merge_tick()
+        except Exception as e:
+            log(f"auto-merge tick failed ({type(e).__name__}: {e})")
 
 
 THREAD_ID = {"threadId": STR}
@@ -2232,6 +2557,7 @@ def main():
         os.unlink(SOCKET)
     threading.Thread(target=forever, args=("scheduler", SCHEDULER_TICK_SECONDS, scheduler_tick), daemon=True).start()
     threading.Thread(target=forever, args=("reaper", REAPER_TICK_SECONDS, reaper_tick), daemon=True).start()
+    threading.Thread(target=auto_merge_loop, daemon=True).start()
     resume_pending_turns()
     log(f"hub listening on {SOCKET} with {len(PROJECTS.data)} projects and {len(THREADS.data)} threads")
     Server(SOCKET, Handler).serve_forever()
