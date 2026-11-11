@@ -19,6 +19,7 @@ EMPQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
 NO_PRIORITY = 0
 LEDGER_LINE = re.compile(r"<!-- empryo-ticket (\{.*\}) -->")
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+BLOCKER_URL = re.compile(r"^https?://[^/]+/([^/\s#]+/[^/\s#]+)/issues/\d+")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
@@ -338,11 +339,24 @@ def template_status(cfg, body):
     return status
 
 
+def blocker_repo(node):
+    # gh issue view --json blockedBy returns nodes without "repository", so the
+    # repo comes from the node url (owner/repo before /issues/).
+    repository = node.get("repository") or {}
+    name = repository.get("nameWithOwner")
+    if name:
+        return name
+    match = BLOCKER_URL.match(node.get("url") or "")
+    if not match:
+        raise Refuse(f"cannot tell which repo blocker #{node.get('number')} lives in")
+    return match.group(1)
+
+
 def blockers_of(issue):
     blocked = issue["blockedBy"]
     if blocked["totalCount"] > len(blocked["nodes"]):
         raise Refuse(f"blocker list truncated ({len(blocked['nodes'])} of {blocked['totalCount']})")
-    return [{"repo": n["repository"]["nameWithOwner"], "number": n["number"], "title": n["title"], "url": n["url"], "state": n["state"]} for n in blocked["nodes"]]
+    return [{"repo": blocker_repo(n), "number": n["number"], "title": n["title"], "url": n["url"], "state": n["state"]} for n in blocked["nodes"]]
 
 
 def load_routing():
