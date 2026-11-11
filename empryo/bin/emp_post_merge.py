@@ -107,6 +107,17 @@ def _remove(path):
         pass
 
 
+def _is_checkout(path):
+    """True when the path holds a git checkout.
+
+    A clone keeps its metadata in a .git directory. A linked worktree keeps a
+    .git file that points at the metadata the clone shares, so both are
+    checkouts the fast-forward can run in.
+    """
+    marker = path / ".git"
+    return marker.is_dir() or marker.is_file()
+
+
 def _sync_config(checkout, home, names, sha, changed):
     """Copy the declared config files the merge changed into ~/.empryo.
 
@@ -226,7 +237,7 @@ def _post_merge(repo, base, home, config_path=None, changed_files=None):
     if not CHECKOUT_PATTERN.fullmatch(name) or name in (".", ".."):
         return skip("the configured checkout name is not usable")
     checkout = Path(home) / "Code" / name
-    if not (checkout / ".git").is_dir():
+    if not _is_checkout(checkout):
         return skip("there is no checkout at " + str(checkout))
     origin = _git(checkout, "config", "--get", "remote.origin.url")
     if origin.returncode != 0:
