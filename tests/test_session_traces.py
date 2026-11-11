@@ -89,9 +89,11 @@ def _run(
     stop_reason: str = "end_turn",
     cost_usd: float = 0.25,
     steps: int = 3,
+    model: str = TASK_MODEL,
 ) -> dict:
     return {
         "runId": run_id,
+        "model": model,
         "ordinal": ordinal,
         "status": status,
         "startedAt": started_at,
@@ -339,7 +341,7 @@ def _build_hub(
         "activeRunId": None,
         "providerInstanceId": "codex",
         "model": task_model,
-        "modelSelection": {"instanceId": "codex", "model": task_model.split("/")[-1]},
+        "modelSelection": {"instanceId": "empryo", "model": "anthropic/claude-opus-5-5"},
         "runtimeMode": "full-access",
         "interactionMode": "default",
         "linkedPullRequest": pull_requests[0] if pull_requests else None,
@@ -371,10 +373,6 @@ def _build_hub(
     transcripts = {TASK_THREAD_ID: _task_transcript(runs)}
     log_lines = [
         f"{_hub_stamp('2026-11-03T16:00:00Z')} engine started for {WORKTREE} pid 4242",
-        f"{_hub_stamp('2026-11-03T16:00:02Z')} {TASK_THREAD_ID} routed to {task_model} "
-        "instead of anthropic/claude-opus-5-5 (circuit for anthropic is open)",
-        f"{_hub_stamp(runs[0]['completedAt'])} {TASK_THREAD_ID} run {runs[0]['runId']} "
-        f"completed on {task_model} (end_turn)",
     ]
     if merge_at:
         log_lines.append(
@@ -388,6 +386,7 @@ def _build_hub(
             completed_at=review_run_times[1],
             cost_usd=0.1,
             steps=2,
+            model=review_model,
         )
         threads.append(
             _review_thread(
@@ -401,10 +400,6 @@ def _build_hub(
             review_verdict,
             started_at=review_run_times[0],
             completed_at=review_run_times[1],
-        )
-        log_lines.append(
-            f"{_hub_stamp(review_run_times[1])} {REVIEW_THREAD_ID} run {REVIEW_RUN_1} "
-            f"completed on {review_model} (end_turn)"
         )
     log_lines.extend(extra_log)
     return _write_hub(
@@ -541,10 +536,33 @@ class CollectEvalTests(unittest.TestCase):
             self.assertNotIn(COMMAND_SENTINEL, json.dumps(call))
             self.assertNotIn(TOOL_TITLE_SENTINEL, json.dumps(call))
         self.assertEqual(task["pull_requests"][0]["number"], 99)
-        # The hub log recorded the routing fallback for this thread.
+        # Requested Opus (modelSelection) but the run record shows Terra.
         self.assertTrue(task.get("model_fallback"))
         self.assertEqual(task.get("fallback_model"), TASK_MODEL)
         self.assertEqual(task.get("base_model"), "anthropic/claude-opus-5-5")
+
+    def test_fallback_is_per_run_from_run_records(self):
+        hub = _build_hub(
+            self.root / "fallback",
+            runs=[
+                _run(TASK_RUN_1, model="subscriptions/claude-opus-5-5"),
+                _run(
+                    TASK_RUN_2,
+                    ordinal=2,
+                    started_at="2026-11-03T16:20:00.000Z",
+                    completed_at="2026-11-03T16:30:00.000Z",
+                    model=TASK_MODEL,
+                ),
+            ],
+        )
+        by_run = {t["run_id"]: t for t in self._collect(hub) if t["thread_id"] == TASK_THREAD_ID}
+        same_family = by_run[TASK_RUN_1]
+        self.assertFalse(same_family["model_fallback"])
+        self.assertEqual(same_family["model"], "subscriptions/claude-opus-5-5")
+        fell_back = by_run[TASK_RUN_2]
+        self.assertTrue(fell_back["model_fallback"])
+        self.assertEqual(fell_back["model"], TASK_MODEL)
+        self.assertEqual(fell_back["requested_model"], "anthropic/claude-opus-5-5")
 
     def test_stored_trace_keeps_no_sentinels_or_text(self):
         traces = self._collect()
