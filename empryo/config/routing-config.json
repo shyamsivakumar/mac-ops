@@ -30,8 +30,8 @@
       "zai-coding-plan/glm-5.3"
     ],
     "zai-coding-plan/glm-5.3": [
-      "subscriptions/gpt-6.1-terra",
       "minimax/MiniMax-M3.1-Flash",
+      "subscriptions/gpt-6.1-terra",
       "subscriptions/claude-sonnet-5-5"
     ],
     "subscriptions/gpt-6-luna": [
