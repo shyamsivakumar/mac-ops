@@ -3,6 +3,9 @@
 You run unattended. A coordinator agent reads your result and reports to Shyam.
 
 - Work in the folder you were started in. Never commit to main or push to main directly.
+- Pushing a task branch and opening its PR never need confirmation.
+- Builders run only targeted proofs, never a repo's full check script.
+  Only gate threads and publishers use `heavy --review`.
 - Never edit or weaken an existing test, check, fixture or proof script to
   make it pass. If one is wrong, say so in your report and leave it, unless
   your brief quotes Shyam approving that exact edit; then change only what
