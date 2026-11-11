@@ -16,5 +16,8 @@
   },
   "shyamsivakumar/sams-llm-wiki": {
     "checkout": "llmwiki"
+  },
+  "shyamsivakumar/strategy-replay-workbench": {
+    "checkout": "strategy-replay-workbench-main"
   }
 }

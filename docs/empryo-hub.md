@@ -324,6 +324,15 @@ only fast-forwarded when it is on `main`, clean, and its `origin` remote is the
 merged repository; otherwise the step is skipped and the reason is named. The
 hub never forces, resets or stashes a checkout, so local work is never lost.
 
+The checkout may be a linked git worktree: its `.git` is a file that points at
+the metadata the clone shares, and the fast-forward runs in it. A repository
+that keeps its own clone on another branch can therefore declare a dedicated
+clean main worktree, and the clone it shares the metadata with keeps its branch
+and its local files. `shyamsivakumar/strategy-replay-workbench` declares
+`~/Code/strategy-replay-workbench-main`, a worktree of the clone in
+`~/Code/strategy-replay-workbench`, and declares no install step, so a merge
+only fast-forwards it.
+
 The steps are declared per repository in `~/.empryo/post-merge.json`, installed
 from `empryo/config/post-merge.json`: the checkout name, the install command,
 its timeout, and the config files a merge may copy into `~/.empryo`. A file
