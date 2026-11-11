@@ -6,7 +6,7 @@ Each firing moves through idle, locked, decided, installing, observing and then 
 
 The model checks four things. At most one firing is installing or observing. A firing that decided up_to_date while the receipt holds the new commit sees a verified release. A rollback leaves the old release active and the old receipt in place. With no crashes and weakly fair steps, every firing eventually ends done, rolledback or deferred.
 
-`InstallIfBehind.cfg` sets `AllowCrash` to FALSE and is expected to pass. `InstallIfBehindCrash.cfg` sets `AllowCrash` to TRUE and is expected to fail on `NoUnverifiedAccepted`. On 2026-10-31 the safe config explored 59 distinct states (69 generated) to depth 11 with no error, and the liveness property held. The crash config stopped at 53 distinct states (80 generated) with a depth 8 counterexample: F1 installs, crashes while observing, takes the lock again, and decides up_to_date on the unverified receipt. `replay_crash.py` originally reproduced the crash path against the pre-marker code: the killed firing was followed by `up_to_date` on the unverified receipt. A crash kills the holder at any point and releases the lock. The process may start again as a new firing, which loses its in-memory state. The code at `dd91e98` persisted no marker for observation. After a holder dies during observation, the receipt already names the new commit, so a later firing compares it with `origin/main`, returns up_to_date, and accepts a release that never passed observation. The failure shows that the receipt cannot distinguish "installed and verified" from "installed and unobserved". A fix needs a persisted observation state, written before install and cleared by observation, that the comparison step reads.
+`InstallIfBehind.cfg` sets `AllowCrash` to FALSE and is expected to pass. `InstallIfBehindCrash.cfg` sets `AllowCrash` to TRUE and is expected to fail on `NoUnverifiedAccepted`. On 2026-10-31 the safe config explored 59 distinct states (69 generated) to depth 11 with no error, and the liveness property held. The crash config stopped at 53 distinct states (80 generated) with a depth 8 counterexample: F1 installs, crashes while observing, takes the lock again, and decides up_to_date on the unverified receipt. `replay_crash.py` reproduces the crash path against the real code: run `python3 formal/install-if-behind/replay_crash.py` and the killed firing is followed by `up_to_date` on the unverified receipt. A crash kills the holder at any point and releases the lock. The process may start again as a new firing, which loses its in-memory state. The real code persists no marker for observation. After a holder dies during observation, the receipt already names the new commit, so a later firing compares it with `origin/main`, returns up_to_date, and accepts a release that never passed observation. The failure shows that the receipt cannot distinguish "installed and verified" from "installed and unobserved". A fix needs a persisted observation state, written before install and cleared by observation, that the comparison step reads.
 
 The model does not cover fetch failure, a dirty or non-main checkout, diverged history, dry runs, migration, agent parity, partial installs, a crash inside rollback, observation timing, or more than two firings. It assumes a firing that fails the gate or loses the lock takes no further action in that run. Rollback and install are single atomic steps. The remote commit is fixed as new, and the receipt starts as old. A missing receipt is not modelled. The second gate check before install is folded into the one gate step. Because rollback is one atomic step that cannot fail, `RollbackRestoresOld` holds by construction; the real rollback can fail and keep the new receipt (`scripts/install_if_behind.py:1003`), which the next model run should add.
 
@@ -18,16 +18,3 @@ Run both checks from this folder, one at a time, through `heavy`:
 ```
 
 The first run should report no error. The second should report that `NoUnverifiedAccepted` is violated and print the trace. The check requires Java 17 and the existing `~/Code/llmwiki/runtime/tla/tla2tools.jar`.
-
-## Observation marker model
-
-`InstallIfBehindMarker.tla` separately models the persisted observation marker introduced in commit `5921917`. A crash preserves the pending marker; a matching unverified receipt resumes observation rather than being accepted as up to date. Successful observation or successful rollback clears it. The original model and configurations remain unchanged.
-
-`InstallIfBehindMarker.cfg` checks safety and crash-free eventual completion; `InstallIfBehindMarkerCrash.cfg` checks safety with crashes. Both include `PendingBlocksAcceptance` and should pass. From this folder, run:
-
-```sh
-java -cp "$TLA_JAR" tlc2.TLC -config InstallIfBehindMarker.cfg InstallIfBehindMarker.tla
-java -cp "$TLA_JAR" tlc2.TLC -config InstallIfBehindMarkerCrash.cfg InstallIfBehindMarker.tla
-```
-
-The marker model abstracts marker writes and rollback as atomic and does not cover partial installs, failed rollback, marker/receipt mismatches, or more than two firings.
