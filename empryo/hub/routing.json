@@ -4,10 +4,10 @@
     "standard": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
-      "notes": "bug fix, small feature, refactor, test fix; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra"
+      "notes": "bug fix, small feature, refactor, test fix; MiniMax M3.1 Flash first (Shyam 2026-11-10 18:00)"
     },
     "risky": {
       "modelSelection": {
@@ -28,34 +28,34 @@
     "large": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "orchestrate",
-      "notes": "features touching many files or parts; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra; judged by Sol"
+      "notes": "features touching many files or parts; MiniMax M3.1 Flash first (Shyam 2026-11-10 18:00); judged by Sol"
     },
     "ui": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
-      "notes": "screens, components, styling, visual bugs; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra"
+      "notes": "screens, components, styling, visual bugs; MiniMax M3.1 Flash first (Shyam 2026-11-10 18:00)"
     },
     "research": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
-      "notes": "gather facts, compare tools, read docs; no code changes; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra"
+      "notes": "gather facts, compare tools, read docs; no code changes; MiniMax M3.1 Flash first (Shyam 2026-11-10 18:00)"
     },
     "rca": {
       "modelSelection": {
         "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "mode": "auto",
-      "notes": "explain a failure, find a root cause; read-only at first; GLM 5.3 first, then MiniMax M3.1 Flash, then Terra"
+      "notes": "explain a failure, find a root cause; read-only at first; MiniMax M3.1 Flash first (Shyam 2026-11-10 18:00)"
     },
     "chore": {
       "modelSelection": {
