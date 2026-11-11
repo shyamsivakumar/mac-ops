@@ -957,15 +957,20 @@ def create_worktree(project, thread_id, title, strategy):
         return path, git(path, "branch", "--show-current") or None
     branch = strategy.get("branch") or f"empryo/{slugify(title)}-{thread_id.split(':')[-1][:6]}"
     base = strategy.get("baseRef") or "HEAD"
-    if strategy.get("startFromOrigin"):
-        git(root, "fetch", "origin", base)
-        base = f"origin/{base}"
+    if base == "HEAD":
+        remote_head = git(root, "ls-remote", "--symref", "origin", "HEAD")
+        prefix = "ref: refs/heads/"
+        base = next((line[len(prefix):].split("\t", 1)[0] for line in remote_head.splitlines() if line.startswith(prefix)), None)
+        if not base:
+            raise HubError("origin HEAD does not point to a default branch")
+    elif base.startswith("origin/"):
+        base = base[len("origin/"):]
+    git(root, "fetch", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     branch_exists = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"], capture_output=True).returncode == 0
     if branch_exists:
-        git(root, "worktree", "add", path, branch)
-    else:
-        git(root, "worktree", "add", "-b", branch, path, base)
+        raise HubError(f"branch {branch} already exists; refusing to start from a stale base")
+    git(root, "worktree", "add", "-b", branch, path, f"origin/{base}")
     return path, branch
 
 
