@@ -7,6 +7,7 @@ HUB_DIR = f"{HOME}/.empryo-hub"
 SOCKET = f"{HUB_DIR}/hub.sock"
 WORKTREES = f"{HUB_DIR}/worktrees"
 TRANSCRIPTS = f"{HUB_DIR}/transcripts"
+MERGE_RECORD = f"{HUB_DIR}/merges.jsonl"
 EMPRYO = "/opt/homebrew/bin/empryo"
 DEFAULT_MODEL = {"instanceId": "codex", "model": "gpt-6.1-terra"}
 PROVIDER_MODELS = {
@@ -32,6 +33,7 @@ LIVE = ("running", "waiting", "queued")
 DRAINING = {"requested": False, "epoch": 0, "exiting": False}
 LOCK = threading.RLock()
 CHANGED = threading.Condition(LOCK)
+MERGE_LOCK = threading.Lock()
 
 
 def log(message):
@@ -1954,6 +1956,30 @@ def revision_inputs(evidence):
     }
 
 
+def merge_record(thread, evidence, merged, dry_run):
+    inputs = revision_inputs(evidence)
+    gate = evidence.get("reviewGate") or {}
+    return {"time": now_iso(), "threadId": thread["threadId"], "pullRequest": inputs["pullRequest"], "headSha": inputs["headSha"],
+            "checksState": inputs["checks"], "reviewThread": inputs["reviewThread"], "verdictWord": inputs["reviewVerdict"],
+            "reviewModel": gate.get("model"), "reviewRunId": gate.get("runId"), "merged": merged, "dryRun": dry_run}
+
+
+def write_merge_record(thread, evidence, merged, dry_run):
+    """Append the merge-gate evidence to ~/.empryo-hub/merges.jsonl.
+
+    The record holds the verdict word, the review model and run, the checks
+    state and the head commit. It never holds message text. A write that fails
+    must not fail the merge, so it is logged and the merge continues.
+    """
+    try:
+        line = json.dumps(merge_record(thread, evidence, merged, dry_run), sort_keys=True)
+        with MERGE_LOCK:
+            with open(MERGE_RECORD, "a") as f:
+                f.write(line + "\n")
+    except Exception as e:
+        log(f"merge evidence not written to {MERGE_RECORD}: {type(e).__name__}: {e}")
+
+
 MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
 
 
@@ -2007,21 +2033,25 @@ def tool_thread_merge(a):
         return {"threadId": thread["threadId"], "merged": False, "refused": "the task thread still has a live run"}
     ok, reason, evidence, plan = merge_plan(thread)
     expected = a.get("expectedRevision")
-    if expected is not None:
-        stale = stale_revision_refusal(thread, expected, ok, reason, evidence)
-        if stale:
-            return stale
-    if not ok:
-        return {"threadId": thread["threadId"], "merged": False, "refused": reason, "evidence": evidence}
-    if a.get("dryRun"):
-        return {"threadId": thread["threadId"], "merged": False, "dryRun": True, "revision": issue_revision(revision_inputs(evidence)), "wouldMerge": plan, "evidence": evidence}
-    code, out, err = sh(["gh", "pr", "merge", str(plan["number"]), "--repo", plan["repo"], f"--{plan['method']}", "--match-head-commit", plan["sha"]], timeout=180)
-    if code != 0:
-        return {"threadId": thread["threadId"], "merged": False, "refused": f"gh pr merge failed: {err or out}", "evidence": evidence}
-    log(f"merged {plan['repo']}#{plan['number']} ({plan['method']}) for {thread['threadId']}")
-    tool_thread_organize({"threadId": thread["threadId"], "action": "settle"})
-    cleanup = tool_thread_cleanup({"threadId": thread["threadId"]})
-    return {"threadId": thread["threadId"], "merged": True, "pullRequest": plan["number"], "method": plan["method"], "evidence": evidence, "cleanup": cleanup}
+    stale = stale_revision_refusal(thread, expected, ok, reason, evidence) if expected is not None else None
+    if stale is not None:
+        result = stale
+    elif not ok:
+        result = {"threadId": thread["threadId"], "merged": False, "refused": reason, "evidence": evidence}
+    elif a.get("dryRun"):
+        result = {"threadId": thread["threadId"], "merged": False, "dryRun": True, "revision": issue_revision(revision_inputs(evidence)), "wouldMerge": plan, "evidence": evidence}
+    else:
+        code, out, err = sh(["gh", "pr", "merge", str(plan["number"]), "--repo", plan["repo"], f"--{plan['method']}", "--match-head-commit", plan["sha"]], timeout=180)
+        if code != 0:
+            result = {"threadId": thread["threadId"], "merged": False, "refused": f"gh pr merge failed: {err or out}", "evidence": evidence}
+        else:
+            log(f"merged {plan['repo']}#{plan['number']} ({plan['method']}) for {thread['threadId']}")
+            write_merge_record(thread, evidence, merged=True, dry_run=False)
+            tool_thread_organize({"threadId": thread["threadId"], "action": "settle"})
+            cleanup = tool_thread_cleanup({"threadId": thread["threadId"]})
+            return {"threadId": thread["threadId"], "merged": True, "pullRequest": plan["number"], "method": plan["method"], "evidence": evidence, "cleanup": cleanup}
+    write_merge_record(thread, evidence, merged=False, dry_run=bool(a.get("dryRun")))
+    return result
 
 
 THREAD_ID = {"threadId": STR}
