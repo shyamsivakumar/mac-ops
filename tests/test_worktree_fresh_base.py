@@ -51,7 +51,7 @@ class FreshWorktreeTests(unittest.TestCase):
         return self.hub["create_worktree"]({"workspaceRoot": str(self.checkout), "title": "project"}, "emp:123456", "task", strategy)
 
     def test_fresh_default_and_explicit_bases(self):
-        for name, base in (("absent", None), ("head", "HEAD"), ("remote", "origin/main"), ("plain", "main")):
+        for name, base in (("absent", None), ("head", "HEAD"), ("origin-head", "origin/HEAD"), ("remote", "origin/main"), ("plain", "main")):
             with self.subTest(base=base):
                 # Reset the tracking ref to simulate a checkout that has not fetched the new tip.
                 self.run_git("-C", str(self.checkout), "update-ref", "refs/remotes/origin/main", self.first)

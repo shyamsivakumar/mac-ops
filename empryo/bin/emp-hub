@@ -969,8 +969,11 @@ def worktree_for_branch(root, branch):
 
 def advance_branch(root, branch, target):
     """Move a branch that carries no work of its own onto the fetched remote tip."""
-    if subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", target], capture_output=True).returncode != 0:
+    check = subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", target], capture_output=True, text=True)
+    if check.returncode == 1:
         return
+    if check.returncode != 0:
+        raise HubError(f"git merge-base --is-ancestor failed: {check.stderr.strip()}")
     git(root, "branch", "--force", branch, target)
 
 
@@ -983,10 +986,9 @@ def create_worktree(project, thread_id, title, strategy):
         return path, git(path, "branch", "--show-current") or None
     branch = strategy.get("branch") or f"empryo/{slugify(title)}-{thread_id.split(':')[-1][:6]}"
     base = strategy.get("baseRef") or "HEAD"
+    base = base.removeprefix("origin/").removeprefix("refs/heads/")
     if base == "HEAD":
         base = remote_default_branch(root)
-    else:
-        base = base.removeprefix("origin/").removeprefix("refs/heads/")
     git(root, "fetch", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     branch_exists = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"], capture_output=True).returncode == 0
