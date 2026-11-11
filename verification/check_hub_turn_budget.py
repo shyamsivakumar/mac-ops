@@ -339,6 +339,7 @@ class TurnBudgetProof(unittest.TestCase):
         detail = {"number": 1, "url": "https://github.com/disposable/proof/pull/1", "state": "OPEN", "isDraft": False, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "reviewDecision": "", "headRefOid": sha, "baseRefName": "main", "isCrossRepository": False, "commits": []}
         task["branch"] = "proof"
         h.pull_requests_of = lambda t: ("disposable/proof", [{"number": 1, "state": "OPEN", "headRefName": "proof", "isCrossRepository": False}])
+        h.thread_repo = lambda t: "disposable/proof"
         h.own_branch = lambda t: "proof"
         h.gh_json = lambda args: dict(detail)
         h.checks_verdict = lambda repo, number: (True, None, {"count": 1, "state": "green"})
