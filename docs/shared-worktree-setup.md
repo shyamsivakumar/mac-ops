@@ -18,6 +18,8 @@ pnpm, Bun, uv, and pip run through heavy in each worktree. Their package caches 
 
 The pnpm path rejects ancestor workspaces and configured `workspace-dir` overrides, and pins its lockfile and output directories inside the requested root. Native setup requires a local `Package.swift` or CocoaPods manifest and passes the requested project directory to the tool.
 
+Some repositories have more than one dependency root. A repository table inside the script names the roots that one command prepares. `strategy-replay-workbench` prepares the repository root and `b2c`. The repository is recognised from `remote.origin.url` when the requested directory is the repository top level; a request for a subdirectory keeps the single-root behaviour. Each root is detected, installed and cached on its own, and a root that fails does not stop the others. The command exits non-zero and names every failed root.
+
 ## Workspace setup commands
 
 Set these only after the script is present in the canonical mac-ops checkout. Do not activate host installers during worktree setup.
@@ -32,8 +34,9 @@ Set these only after the script is present in the canonical mac-ops checkout. Do
 | omni | `python3 "$HOME/Code/mac-ops/scripts/shared_npm_install.py" tools/omni-mcp` | uv lock, shared uv cache, worktree-local environment |
 | dbt | `"$HOME/.local/bin/heavy" dbt deps` | Requires an already provisioned dbt CLI; does not install the unpinned adapter |
 | llmwiki | `(cd claude/hooks && "$HOME/.local/bin/heavy" npm ci --no-audit --no-fund --ignore-scripts)` | Existing CI preparation only; native hook runtime is not proven by this command |
+| strategy-replay-workbench | `python3 "$HOME/Code/mac-ops/scripts/shared_npm_install.py" .` | Root and `b2c` npm roots |
 
-dbt's ingestion project and llmwiki's Bun tools are separate dependency roots. Point the script at the directory that contains the lockfile. dbt package installation remains `dbt deps` because it is not a Python or JavaScript lockfile. Python environments and CocoaPods or Swift checkouts stay in the worktree that created them.
+dbt's ingestion project, llmwiki's Bun tools, and strategy-replay-workbench's `b2c` service are separate dependency roots. Point the script at the directory that contains the lockfile, or at the repository top level when the repository table prepares every root for you. dbt package installation remains `dbt deps` because it is not a Python or JavaScript lockfile. Python environments and CocoaPods or Swift checkouts stay in the worktree that created them.
 
 ## Deferred gateway consolidation
 
