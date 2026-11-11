@@ -15,10 +15,19 @@ INSTALLERS = {
     ('fsevents', '2.3.3'): 'sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==',
 }
 
+# Repositories the shared installer prepares as a whole. The value lists the
+# dependency roots, relative to the repository top level, that one command
+# prepares. The copy-on-write cache is keyed by lockfile, so every worktree of
+# the same commit reuses the published node_modules.
+REPOSITORIES = {
+    'strategy-replay-workbench': ('.', 'b2c'),
+}
 
-def run(*args, cwd=None, capture=False, env=None):
+
+def run(*args, cwd=None, capture=False, env=None, quiet=False):
     return subprocess.run(args, cwd=cwd, check=True, text=True, env=env,
-                          stdout=subprocess.PIPE if capture else None).stdout
+                          stdout=subprocess.PIPE if capture else None,
+                          stderr=subprocess.DEVNULL if quiet else None).stdout
 
 
 @contextmanager
@@ -106,6 +115,25 @@ def git_common(root):
     return Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir', cwd=root, capture=True).strip())
 
 
+def repository_name(root):
+    """Return the repository name when root is a repository top level."""
+    try:
+        top = run('git', 'rev-parse', '--show-toplevel', cwd=root, capture=True, quiet=True).strip()
+        url = run('git', 'config', '--get', 'remote.origin.url', cwd=root, capture=True, quiet=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    if not url or Path(top).resolve() != root:
+        return None
+    name = url.rstrip('/').rsplit('/', 1)[-1]
+    return name[:-4] if name.endswith('.git') else name
+
+
+def dependency_roots(root):
+    """Return every dependency root the installer prepares for root."""
+    roots = REPOSITORIES.get(repository_name(root))
+    return [root / relative for relative in roots] if roots else [root]
+
+
 def install_other(root, manager):
     started = time.monotonic()
     if sys.platform != 'darwin':
@@ -162,11 +190,24 @@ def install_other(root, manager):
                 run(heavy, 'python3', '-m', 'venv', '.venv', cwd=root)
                 command = (str(destination / 'bin/python'), '-m', 'pip', '--isolated', 'install', '--require-hashes', '--cache-dir', str(cache), '-r', 'requirements.txt')
             run(heavy, *command, cwd=root, env=env)
-    print(json.dumps({'manager': manager, 'mode': 'installed', 'seconds': round(time.monotonic() - started, 3), 'cache': str(cache)}))
+    print(json.dumps({'root': str(root), 'manager': manager, 'mode': 'installed', 'seconds': round(time.monotonic() - started, 3), 'cache': str(cache)}))
 
 
 def main():
     root = Path(sys.argv[1] if len(sys.argv) > 1 else '.').resolve()
+    failures = []
+    for target in dependency_roots(root):
+        try:
+            install_root(target)
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            failures.append({'root': str(target), 'error': str(error)})
+            print(f'shared worktree setup: {target}: {error}', file=sys.stderr)
+    if failures:
+        print(json.dumps({'ok': False, 'failures': failures}), file=sys.stderr)
+        sys.exit(1)
+
+
+def install_root(root):
     manager = detect(root)
     if manager != 'npm':
         install_other(root, manager)
@@ -214,7 +255,7 @@ def install_npm(root):
                     clone = Path(stage) / 'node_modules'
                     run('/bin/cp', '-cR', str(root / 'node_modules'), str(clone))
                     clone.rename(cache)
-    print(json.dumps({'manager': 'npm', 'mode': mode, 'seconds': round(time.monotonic() - started, 3), 'key': key}))
+    print(json.dumps({'root': str(root), 'manager': 'npm', 'mode': mode, 'seconds': round(time.monotonic() - started, 3), 'key': key}))
 
 
 if __name__ == '__main__':
