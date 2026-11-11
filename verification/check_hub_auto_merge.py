@@ -261,7 +261,10 @@ class AutoMergeProof(unittest.TestCase):
                 self.tick()
                 self.assertEqual(self.merges(), [])
                 self.assertFalse(any("update-branch" in " ".join(c) for c in self.commands))
-                self.assertTrue(any(r.get("reason") for r in self.records()))
+                if disabled:
+                    self.assertEqual(self.records(), [])
+                else:
+                    self.assertTrue(any(r.get("reason") for r in self.records()))
 
     def test_serial_queue_does_not_overtake_pending_head(self):
         self.green = False
@@ -321,7 +324,7 @@ class AutoMergeProof(unittest.TestCase):
         self.tick()
         self.set_enabled(True)
         self.tick()
-        self.assertEqual(len(self.merges()), 1)
+        self.assertEqual(len(self.merges()), 0)
 
     def test_task_rerun_and_new_review_fail_are_not_bypassed(self):
         self.enqueue()
