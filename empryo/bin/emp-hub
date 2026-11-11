@@ -948,6 +948,32 @@ def steer_turn(thread, message, sender=None):
     return thread["activeRunId"], result
 
 
+def remote_default_branch(root):
+    prefix = "ref: refs/heads/"
+    for line in git(root, "ls-remote", "--symref", "origin", "HEAD").splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].split("\t", 1)[0]
+    raise HubError("origin HEAD does not point to a default branch")
+
+
+def worktree_for_branch(root, branch):
+    ref = f"refs/heads/{branch}"
+    path = None
+    for line in git(root, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line.startswith("branch ") and line[len("branch "):] == ref:
+            return path
+    return None
+
+
+def advance_branch(root, branch, target):
+    """Move a branch that carries no work of its own onto the fetched remote tip."""
+    if subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", target], capture_output=True).returncode != 0:
+        return
+    git(root, "branch", "--force", branch, target)
+
+
 def create_worktree(project, thread_id, title, strategy):
     root = project["workspaceRoot"]
     path = strategy.get("worktreePath") or f"{WORKTREES}/{slugify(project['title'])}/{slugify(title)}-{thread_id.split(':')[-1][:6]}"
@@ -958,19 +984,23 @@ def create_worktree(project, thread_id, title, strategy):
     branch = strategy.get("branch") or f"empryo/{slugify(title)}-{thread_id.split(':')[-1][:6]}"
     base = strategy.get("baseRef") or "HEAD"
     if base == "HEAD":
-        remote_head = git(root, "ls-remote", "--symref", "origin", "HEAD")
-        prefix = "ref: refs/heads/"
-        base = next((line[len(prefix):].split("\t", 1)[0] for line in remote_head.splitlines() if line.startswith(prefix)), None)
-        if not base:
-            raise HubError("origin HEAD does not point to a default branch")
-    elif base.startswith("origin/"):
-        base = base[len("origin/"):]
+        base = remote_default_branch(root)
+    else:
+        base = base.removeprefix("origin/").removeprefix("refs/heads/")
     git(root, "fetch", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     branch_exists = subprocess.run(["git", "-C", root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"], capture_output=True).returncode == 0
-    if branch_exists:
-        raise HubError(f"branch {branch} already exists; refusing to start from a stale base")
-    git(root, "worktree", "add", "-b", branch, path, f"origin/{base}")
+    if not branch_exists:
+        git(root, "worktree", "add", "-b", branch, path, f"origin/{base}")
+        return path, branch
+    git(root, "worktree", "prune")
+    holder = worktree_for_branch(root, branch)
+    if holder:
+        if os.path.realpath(holder) != os.path.realpath(path):
+            raise HubError(f"branch {branch} is already checked out at {holder}")
+    else:
+        advance_branch(root, branch, f"origin/{base}")
+    git(root, "worktree", "add", path, branch)
     return path, branch
 
 
@@ -1063,7 +1093,7 @@ def obj(properties, required=()):
 
 STR, INT, BOOL = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}
 MODEL_SELECTION = obj({"instanceId": STR, "model": STR, "provider": {}, "options": {}}, ["model"])
-STRATEGY = obj({"type": {"type": "string", "enum": ["root", "existing_worktree", "worktree"]}, "branch": STR, "worktreePath": STR, "baseRef": STR, "startFromOrigin": BOOL}, ["type"])
+STRATEGY = obj({"type": {"type": "string", "enum": ["root", "existing_worktree", "worktree"]}, "branch": STR, "worktreePath": STR, "baseRef": STR}, ["type"])
 SCHEDULE = obj({"type": {"type": "string", "enum": ["interval", "fixed_time"]}, "everyMs": {"type": "integer", "minimum": 60000}, "timeOfDay": STR,
                 "weekdays": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 6}}}, ["type"])
 STATUSES = ["idle", "preparing", "queued", "starting", "running", "waiting", "completed", "interrupted", "failed", "cancelled", "rolled_back"]

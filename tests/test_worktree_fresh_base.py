@@ -13,7 +13,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "empryo/bin/emp-hub"
 
 def load_worktree_functions():
     tree = ast.parse(SOURCE.read_text())
-    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in {"git", "create_worktree"}]
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in {"git", "create_worktree", "remote_default_branch", "worktree_for_branch", "advance_branch"}]
     namespace = {"os": os, "subprocess": subprocess, "HubError": type("HubError", (Exception,), {}), "slugify": lambda value: value, "WORKTREES": "unused"}
     exec(compile(ast.Module(body=functions, type_ignores=[]), str(SOURCE), "exec"), namespace)
     return namespace
@@ -35,6 +35,7 @@ class FreshWorktreeTests(unittest.TestCase):
         self.commit()
         self.run_git("-C", str(self.writer), "push", "origin", "main")
         self.tip = self.run_git("-C", str(self.writer), "rev-parse", "HEAD")
+        self.first = self.run_git("-C", str(self.writer), "rev-parse", "HEAD~1")
         self.hub = load_worktree_functions()
 
     def run_git(self, *args):
@@ -53,7 +54,7 @@ class FreshWorktreeTests(unittest.TestCase):
         for name, base in (("absent", None), ("head", "HEAD"), ("remote", "origin/main"), ("plain", "main")):
             with self.subTest(base=base):
                 # Reset the tracking ref to simulate a checkout that has not fetched the new tip.
-                self.run_git("-C", str(self.checkout), "update-ref", "refs/remotes/origin/main", self.tip + "^")
+                self.run_git("-C", str(self.checkout), "update-ref", "refs/remotes/origin/main", self.first)
                 path, _ = self.create(name, base)
                 self.assertEqual(self.run_git("-C", path, "rev-parse", "HEAD"), self.tip)
 
@@ -63,10 +64,25 @@ class FreshWorktreeTests(unittest.TestCase):
             self.create("failed", "main")
         self.assertFalse((self.root / "failed").exists())
 
-    def test_existing_branch_is_not_reused(self):
-        self.run_git("-C", str(self.checkout), "branch", "old", self.tip + "^")
-        with self.assertRaisesRegex(self.hub["HubError"], "already exists"):
-            self.create("old", "main")
+    def test_existing_branch_without_worktree_is_reused(self):
+        self.run_git("-C", str(self.checkout), "branch", "old", self.first)
+        path, branch = self.create("old", "main")
+        self.assertEqual(branch, "old")
+        self.assertEqual(self.run_git("-C", path, "rev-parse", "HEAD"), self.tip)
+
+    def test_existing_branch_keeps_its_own_commits(self):
+        self.run_git("-C", str(self.checkout), "checkout", "-b", "wip", self.first)
+        self.run_git("-C", str(self.checkout), "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "work")
+        wip = self.run_git("-C", str(self.checkout), "rev-parse", "HEAD")
+        self.run_git("-C", str(self.checkout), "checkout", "main")
+        path, _ = self.create("wip", "main")
+        self.assertEqual(self.run_git("-C", path, "rev-parse", "HEAD"), wip)
+
+    def test_existing_branch_checked_out_elsewhere_is_refused(self):
+        self.run_git("-C", str(self.checkout), "branch", "busy", self.first)
+        self.run_git("-C", str(self.checkout), "worktree", "add", str(self.root / "busy-here"), "busy")
+        with self.assertRaisesRegex(self.hub["HubError"], "already checked out at"):
+            self.create("busy", "main")
 
 
 if __name__ == "__main__":
