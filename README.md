@@ -260,6 +260,15 @@ The [worktree cleaner](docs/worktree-cleaner.md) checks GitHub, local Git state,
 and T3 thread state before removing a worktree. Its LaunchAgent runs every 15
 minutes when installed; the command defaults to a dry run.
 
+## SRW boot images (MO-160)
+
+Every SRW boot check builds one image per commit, so the boot image tags
+accumulate. The prune script lists the images older than 24 hours and
+removes them only with `--apply`; the image of the current SRW `main` and
+every image a container still uses are kept. See
+[docs/srw-image-prune.md](docs/srw-image-prune.md); command:
+`python3 scripts/srw_image_prune.py`.
+
 ## Reviewer agreement audit (MO-10)
 
 Advisory weekly scorecard for board reviewer flip rate, defect recall, false

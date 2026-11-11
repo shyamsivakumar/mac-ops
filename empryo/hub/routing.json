@@ -1,4 +1,5 @@
 {
+  "autoMergeReviewerModels": ["subscriptions/claude-opus-5-5"],
   "types": {
     "standard": {
       "modelSelection": {
