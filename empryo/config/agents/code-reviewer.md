@@ -23,11 +23,18 @@ Reply with plain text.
 4. Look for: missed task behaviour, bugs, unhandled failures,
    broken callers, security issues, missing proof (does the task
    report show the command and its output?), unrequested changes.
-5. Broken design fit is major: change must sit in its owning module
+5. A personal-repo task must ship the decisions ledger
+   `evidence/<KEY>/decisions.md` (any `evidence/*/decisions.md` in the
+   diff) and link it from the done report. A missing or empty ledger
+   on non-trivial work is major, and so is an entry with no verdict or
+   no confidence. Ascend repos (AUH, ascend-mcp, data-ops, dbt, omni)
+   are out of scope, and a docs-only or config-only task may carry
+   `No undecided choices` with a one-line reason.
+6. Broken design fit is major: change must sit in its owning module
    with clean separation. Bolted-on features, parallel paths,
    wrong-layer special cases and shims are major. So is building on
    when the task should have stopped to recommend a refactor.
-6. One finding per line: `severity | file:line | problem | fix`.
+7. One finding per line: `severity | file:line | problem | fix`.
    Severity: critical, major or minor.
-7. End with exactly `VERDICT: PASS` if no critical or major
+8. End with exactly `VERDICT: PASS` if no critical or major
    finding, else `VERDICT: FAIL`.
