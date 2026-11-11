@@ -1965,8 +1965,7 @@ def merge_plan(thread):
     worktree = thread["worktreePath"]
     if worktree and os.path.isdir(worktree) and sh(["git", "-C", worktree, "rev-parse", "HEAD"])[1] not in (detail["headRefOid"], carry.get("originalHead")):
         return False, "the worktree's HEAD differs from the pull request head (unpushed or newer commits)", evidence, None
-    candidate = thread.get("autoMerge", {}).get("candidateTree", {})
-    green, why, checks = merge_checks(repo, number, detail["headRefOid"], candidate.get("tree") if candidate.get("head") == detail["headRefOid"] else None)
+    green, why, checks = merge_checks(repo, number, detail["headRefOid"])
     evidence["checks"] = checks
     no_checks_allowed = checks["count"] == 0 and repo.split("/")[0].lower() == PERSONAL_OWNER
     if not green and not no_checks_allowed:
@@ -2088,6 +2087,9 @@ def execute_thread_merge(a, automatic=None):
     ok, reason, evidence, plan = merge_plan(thread)
     if automatic and ok:
         problem = auto_merge_problem(thread, automatic)
+        head = evidence["pullRequest"]["headRefOid"]
+        if head != automatic.get("reviewedHead") and not carried_review(thread, head):
+            problem = "the PR head differs from the reviewed head; a new review is required"
         gate = evidence.get("reviewGate", {})
         if problem or gate.get("threadId") != automatic["reviewThread"] or gate.get("runId") != automatic["reviewRunId"]:
             ok, reason = False, problem or "the authoritative review changed during evaluation"
@@ -2156,8 +2158,8 @@ def tool_thread_merge(a, automatic=None):
         return {"threadId": thread["threadId"], "merged": False, "refused": str(e)}
 
 
-def merge_checks(repo, number, head_sha, tree=None):
-    """Head-check contract today; tree receipts can replace this lookup later."""
+def merge_checks(repo, number, head_sha):
+    """Read checks only for the expected PR head."""
     green, why, checks = checks_verdict(repo, number)
     current = gh_json(["pr", "view", str(number), "--repo", repo, "--json", "headRefOid"])
     if current["headRefOid"] != head_sha:
@@ -2218,6 +2220,8 @@ def auto_merge_note(thread, state, reason, evidence=None, **extra):
 
 
 def enqueue_auto_merge(review):
+    if not auto_merge_enabled():
+        return
     task = task_thread_of(review)
     if task is None:
         write_merge_record(review, {}, False, False, automatic=True, reason="no matching task thread")
@@ -2228,8 +2232,13 @@ def enqueue_auto_merge(review):
         previous = task.get("autoMerge", {})
         if previous.get("reviewRunId") == review.get("latestRunId") and previous.get("reviewThread") == review["threadId"]:
             return
+        repo, prs = pull_requests_of(task)
+        matching = [p for p in prs if p["state"] == "OPEN" and p["headRefName"] == own_branch(task) and not p["isCrossRepository"]]
+        reviewed_head = None
+        if len(matching) == 1:
+            reviewed_head = gh_json(["pr", "view", str(matching[0]["number"]), "--repo", repo, "--json", "headRefOid"])["headRefOid"]
         task["autoMerge"] = {"reviewThread": review["threadId"], "reviewRunId": review.get("latestRunId"),
-                             "taskRunId": task.get("latestRunId"), "queuedAt": now_iso(), "state": "queued"}
+                             "taskRunId": task.get("latestRunId"), "reviewedHead": reviewed_head, "queuedAt": now_iso(), "state": "queued"}
         THREADS.save()
     problem = auto_merge_problem(task, task["autoMerge"])
     if problem:
@@ -2285,10 +2294,15 @@ def train_prepare(thread, entry, evidence, allow_update=False):
         raise HubError("the PR must be open, non-draft, same-repository and target main")
     url = f"https://github.com/{repo}.git"
     head = pr["headRefOid"]
+    reviewed_head = entry.get("reviewedHead")
+    accepted_head = entry.get("carry", {}).get("head", reviewed_head)
+    pending = entry.get("update")
+    if not reviewed_head or (pending["oldHead"] if pending else head) != accepted_head:
+        train_return(thread, entry["reviewThread"], "the PR head differs from the reviewed head; a new review is required")
+        return False
     train_git(thread, "fetch", "--no-tags", url, head)
     train_git(thread, "fetch", "--no-tags", url, "refs/heads/main")
     base = train_git(thread, "rev-parse", "FETCH_HEAD")
-    pending = entry.get("update")
     if pending:
         if head == pending["oldHead"]:
             if (datetime.now(timezone.utc) - parse_time(pending["requestedAt"])).total_seconds() > 300:
@@ -2320,7 +2334,6 @@ def train_prepare(thread, entry, evidence, allow_update=False):
     if code not in (0, 1):
         raise HubError(f"cannot compare main and PR head: {err or out}")
     if code == 0:
-        entry["candidateTree"] = {"head": head, "base": base, "tree": tree.splitlines()[0]}
         return True
     if not allow_update:
         auto_merge_note(thread, "waiting", "waiting for an eligible GitHub merge state before updating main", evidence)
