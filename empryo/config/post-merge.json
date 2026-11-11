@@ -1,6 +1,7 @@
 {
   "shyamsivakumar/mac-ops": {
     "checkout": "mac-ops",
+    "deferEmpryo": true,
     "install": [
       "{python}",
       "scripts/install_if_behind.py",

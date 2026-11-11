@@ -83,8 +83,21 @@ def wait_until_counted(before):
         time.sleep(1)
 
 
+def install_pending():
+    try:
+        with open(os.path.expanduser("~/.empryo-hub/install.json")) as stream:
+            return json.load(stream)["state"] in ("pending", "waiting idle", "installing", "restarting")
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
+
 def drain():
     while True:
+        if install_pending():
+            log("Empryo install pending, nothing started")
+            return
         queue = load()
         ready = sorted((i for i in queue["items"] if i.get("attempts", 0) < MAX_ATTEMPTS), key=lambda i: (-i["priority"], i["id"]))
         if not ready:

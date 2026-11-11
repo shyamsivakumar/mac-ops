@@ -22,6 +22,102 @@ files to the live paths.
 - The Herdr mods `cockpit`, `coordinator`, `ops` and `git-graph` show the hub
   in the Herdr app.
 
+## Deferred installs after mac-ops merges (MO-170)
+
+MO-158 fast-forwards the clean `~/Code/mac-ops` main checkout and records
+`hubInstall` in the merge result. With `deferEmpryo` enabled in
+`post-merge.json`, the installer manifest decides whether changed files
+(including removed mod files) need an Empryo install. The existing mac-ops
+install step remains separate; it does not install or restart the hub.
+
+`~/.empryo-hub/install.json` holds the pending SHA, the original wait start,
+state, and a fixed, configuration-free refusal reason. New managed merges
+coalesce into the pending SHA; unrelated fast-forwards advance that SHA without
+resetting the 30 minute budget. Repeated processing of one SHA never rearms it.
+
+`dev.coordinator.emp-hub-install` runs once per minute. Only this external
+job runs `./install.sh empryo --preserve-routing` and
+`launchctl kickstart -k gui/<uid>/dev.coordinator.emp-hub`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: managed files merged and main fast-forwarded
+    pending --> waiting_idle: worker tick
+    waiting_idle --> waiting_idle: active turn / merge or empq lock held
+    waiting_idle --> installing: verified main SHA, idle hub, routing unchanged
+    waiting_idle --> refused: 30 minute cap or unsafe checkout / config
+    installing --> restarting: install succeeds and hub still idle
+    installing --> refused: install failure / timeout / interrupted worker
+    restarting --> done: kickstart succeeds and replacement PID answers
+    restarting --> refused: restart failure / readiness timeout / interrupted worker
+    done --> pending: later managed merge
+    refused --> pending: later managed merge
+```
+
+The persisted state spells `waiting idle` with a space. The hub gates all
+new turns (including sends, scheduled and delegated starts) through its existing
+pending-turn queue while the marker is active. Running or starting turns and
+merge operations prevent installation. New merges are refused while an install
+is pending, under the same admission lock, so they cannot race the final idle
+check and restart. Pending turns are saved, not counted as
+running, and resume after restart or refusal via the scheduler (within 20 seconds).
+empq retains queued items and does not consume attempts during a deployment.
+
+The worker holds the post-merge/worker lock across deployment and the existing
+empq lock across idle checks, install and restart. The hub checks the marker
+under the same in-process lock that reserves starting turns, and reports idle
+under that lock. Thus an admitted start is visible to the worker, while a later
+start queues behind the marker. The job refuses a dirty, non-main or unexpected
+checkout SHA. An old hub lacking the admission/idle contract cannot trigger an
+install and eventually reaches the wait cap.
+
+Before any copy, the installer compares repo and live hub primary model
+selections (including the reviewer selection), and compares the *actual merged*
+`modelFallback` with live. Missing, malformed or different protected config
+refuses deployment. The automatic installer repeats this guard immediately
+before planning writes. Child output and config values never enter logs,
+markers or notices. Local-only fallback keys which the recursive overlay retains
+are not differences. No routing is changed as part of this feature.
+
+Failures, the 30 minute wait cap and interrupted installing/restarting states
+record `refused` and send a desktop notice; they never automatically retry
+side effects. The wait cap releases queued launches instead of forcing a restart.
+The cap bounds draining; install and replacement-readiness have separate bounded
+timeouts. A successful restart remains gated until a different hub PID responds.
+A corrupt marker fails closed and needs manual inspection.
+
+### Activation and rollback
+
+Nothing in a merge bootstraps launchd jobs. After the review gate, Shyam's next
+manual `./install.sh empryo` copies the worker and renders its plist; the
+hub must be restarted once to load the admission gate. Then Shyam can load the
+new job with:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.coordinator.emp-hub-install.plist
+```
+
+Agents never run the hub or install this job. The installer does not load or
+restart any launchd service itself. Subsequent automatic installs copy changed
+plists but do not reload those jobs; only the hub is kickstarted.
+
+Inspect `install.json` and `install.log` for results. A refused deployment
+requires inspection and either a later managed merge or a manual install and
+restart; do not delete an active marker to bypass its gate. For a corrupt marker,
+unload the worker first, verify no install/restart is in flight, and repair the
+state to `refused` before resuming launches.
+
+Rollback: unload the job below, finish/inspect any deployment already in flight,
+then revert the PR. Reverting alone does not unload an already loaded job.
+
+```sh
+launchctl bootout gui/$(id -u)/dev.coordinator.emp-hub-install
+```
+
+Proof: `python3 -m unittest tests.test_hub_install tests.test_post_merge tests.test_post_merge_wiring`.
+The new proof uses a fake Unix-socket hub and fake installer/launchctl commands;
+it never starts `emp-hub`, installs live files or contacts a model provider.
+
 ## What a rebuild needs first
 
 The installer does not create these: `~/.local/bin/hc`, `~/.local/bin/herdr-app`,

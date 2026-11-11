@@ -24,7 +24,7 @@ BIN_FILES = (
     "coordstart",
     "ticket",
 )
-LIB_FILES = ("emp_post_merge.py",)
+LIB_FILES = ("emp_post_merge.py", "emp_hub_install.py")
 CONFIG_FILES = ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md", "tickets.json", "post-merge.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels")
 
@@ -54,6 +54,41 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
             if f.is_file()
         ]
     return items
+
+
+def managed_changes(checkout: Path, home: Path, paths) -> bool:
+    """The install manifest owns change detection, including removed mod files."""
+    sources = {str(src.relative_to(checkout)) for src, _, _ in plan(checkout, home)}
+    sources.update(("install.sh", "install_empryo.py", "empryo/config/routing-config.json"))
+    return any(path in sources or path.startswith("empryo/launchd/")
+               or any(path.startswith(f"empryo/mods/{mod}/") for mod in MODS)
+               for path in paths)
+
+
+def guard_live_routing(checkout: Path, home: Path) -> None:
+    """Refuse unsafe automatic installs without disclosing configuration values."""
+    try:
+        desired = json.loads((checkout / "empryo/hub/routing.json").read_bytes())
+        live = json.loads(read_regular(home / ".empryo-hub/routing.json")[0])
+
+        def primaries(data):
+            types = data["types"]
+            if not isinstance(types, dict) or not types:
+                raise ValueError()
+            selected = {key: value["modelSelection"] for key, value in types.items()}
+            if any(not isinstance(value, dict) or not value.get("instanceId") or not value.get("model") for value in selected.values()):
+                raise ValueError()
+            return selected, data.get("autoMergeReviewerModels")
+
+        if primaries(desired) != primaries(live):
+            raise ValueError()
+        current = json.loads(read_regular(home / ".empryo/config.json")[0])
+        proposed, _ = merged_config(checkout, home)
+        after = json.loads(proposed) if proposed is not None else current
+        if not isinstance(current.get("modelFallback"), dict) or after.get("modelFallback") != current["modelFallback"]:
+            raise ValueError()
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        raise RuntimeError("Routing safety check refused automatic install") from None
 
 
 def render_plists(checkout: Path, home: Path) -> list[tuple[bytes, Path]]:
@@ -197,8 +232,10 @@ def changes(checkout: Path, home: Path) -> list[tuple[Path, bytes, int]]:
     return pending
 
 
-def install(checkout: Path, dry_run: bool) -> None:
+def install(checkout: Path, dry_run: bool, preserve_routing: bool = False) -> None:
     home = Path.home()
+    if preserve_routing:
+        guard_live_routing(checkout, home)
     pending = changes(checkout, home)
     state = home / ".local/state/mac-ops"
     receipt_target = state / RECEIPT_NAME
@@ -251,6 +288,7 @@ def main() -> None:
         "action", choices=("install", "status"), nargs="?", default="install"
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--preserve-routing", action="store_true")
     args = parser.parse_args()
     checkout = Path(__file__).resolve().parent
     if args.action == "status":
@@ -258,7 +296,7 @@ def main() -> None:
         return
     if not args.dry_run and sys.platform != "darwin":
         raise RuntimeError("Empryo install requires macOS")
-    install(checkout, args.dry_run)
+    install(checkout, args.dry_run, args.preserve_routing)
 
 
 if __name__ == "__main__":
