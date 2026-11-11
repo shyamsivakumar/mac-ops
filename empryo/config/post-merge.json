@@ -1,0 +1,19 @@
+{
+  "shyamsivakumar/mac-ops": {
+    "checkout": "mac-ops",
+    "install": [
+      "{python}",
+      "scripts/install_if_behind.py",
+      "--strict-defer-exit"
+    ],
+    "timeout": 600,
+    "configSync": [
+      "EMPRYO.md",
+      "hooks.json",
+      "agents/code-reviewer.md"
+    ]
+  },
+  "shyamsivakumar/sams-llm-wiki": {
+    "checkout": "llmwiki"
+  }
+}

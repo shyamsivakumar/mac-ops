@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import contextlib, fcntl, hashlib, json, os, re, shutil, socket, socketserver, sqlite3, subprocess, sys, threading, time, uuid
+import contextlib, fcntl, hashlib, importlib.util, json, os, re, shutil, socket, socketserver, sqlite3, subprocess, sys, threading, time, uuid
 from datetime import datetime, timedelta, timezone
 
 HOME = os.path.expanduser("~")
@@ -1980,6 +1980,56 @@ def write_merge_record(thread, evidence, merged, dry_run):
         log(f"merge evidence not written to {MERGE_RECORD}: {type(e).__name__}: {e}")
 
 
+POST_MERGE_MODULE = "emp_post_merge"
+
+
+def load_post_merge():
+    """Load the post-merge helper that sits next to this hub, when it is installed."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (os.path.join(here, POST_MERGE_MODULE + ".py"),
+                      os.path.join(HOME, ".local", "lib", "empryo", POST_MERGE_MODULE + ".py")):
+        if not os.path.exists(candidate):
+            continue
+        spec = importlib.util.spec_from_file_location(POST_MERGE_MODULE, candidate)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    return None
+
+
+def run_post_merge(repo, base, number):
+    """Fast-forward the live checkout of a merged repository and run its install step."""
+    try:
+        module = load_post_merge()
+        if module is None:
+            raise RuntimeError("the post-merge helper is not installed")
+        code, out, err = sh(["gh", "api", "--paginate", f"repos/{repo}/pulls/{number}/files", "--jq", ".[ ].filename".replace(" ", "")])
+        changed_files = out.splitlines() if code == 0 else None
+        return module.post_merge(repo, base, HOME, changed_files=changed_files)
+    except Exception as e:
+        reason = f"post-merge step failed: {type(e).__name__}: {e}"
+        return {"status": "failed", "fastForward": {"status": "skipped", "reason": reason}, "install": {"status": "skipped", "reason": reason}, "configSync": []}
+
+
+def write_post_merge_record(thread, plan, result):
+    """Append the post-merge outcome of a merged pull request to the merge record.
+
+    The merge-gate record is written first, so a hub that restarts during a long
+    install keeps the evidence that the pull request merged. A write that fails
+    must not fail the merge, so it is logged and the merge continues.
+    """
+    record = {"time": now_iso(), "kind": "postMerge", "threadId": thread["threadId"],
+              "pullRequest": plan.get("number"), "repo": plan.get("repo"),
+              "fastForward": result.get("fastForward"), "install": result.get("install"),
+              "configSync": result.get("configSync")}
+    try:
+        with MERGE_LOCK:
+            with open(MERGE_RECORD, "a") as f:
+                f.write(json.dumps(record, sort_keys=True) + "\n")
+    except Exception as e:
+        log(f"post-merge evidence not written to {MERGE_RECORD}: {type(e).__name__}: {e}")
+
+
 MERGEABLE_STATES = ("CLEAN", "HAS_HOOKS", "UNSTABLE")
 
 
@@ -2049,7 +2099,11 @@ def tool_thread_merge(a):
             write_merge_record(thread, evidence, merged=True, dry_run=False)
             tool_thread_organize({"threadId": thread["threadId"], "action": "settle"})
             cleanup = tool_thread_cleanup({"threadId": thread["threadId"]})
-            return {"threadId": thread["threadId"], "merged": True, "pullRequest": plan["number"], "method": plan["method"], "evidence": evidence, "cleanup": cleanup}
+            post_result = run_post_merge(plan["repo"], evidence["pullRequest"]["baseRefName"], plan["number"])
+            write_post_merge_record(thread, plan, post_result)
+            if post_result["fastForward"]["status"] != "ok" or post_result["install"]["status"] == "failed":
+                log(f"post-merge warning for {plan['repo']}: {post_result}")
+            return {"threadId": thread["threadId"], "merged": True, "pullRequest": plan["number"], "method": plan["method"], "evidence": evidence, "cleanup": cleanup, "postMerge": post_result}
     write_merge_record(thread, evidence, merged=False, dry_run=bool(a.get("dryRun")))
     return result
 
