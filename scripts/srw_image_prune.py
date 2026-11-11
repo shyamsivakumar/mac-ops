@@ -19,7 +19,10 @@ import sys
 BOOT_IMAGE_TAGS = {'srw-bot1-boot': 40, 'srw-boot-eval': 12}
 DEFAULT_MAX_AGE_HOURS = 24.0
 DEFAULT_SRW_REPO = Path.home() / 'Code' / 'strategy-replay-workbench'
-MAIN_REFS = ('origin/main', 'main')
+
+
+class PruneError(Exception):
+    """Raised when the prune cannot prove that removing an image is safe."""
 
 
 def run(*args, check=True):
@@ -37,21 +40,18 @@ def parse_created(value):
 
 
 def main_sha(srw_repo):
-    """Return the commit SHA the SRW main branch points at."""
+    """Return the commit SHA the current SRW main branch points at.
+
+    The remote is the only source that names the current main. A local ref can
+    be behind it, so the prune stops instead of protecting a stale commit.
+    """
     try:
         remote = run('git', '-C', str(srw_repo), 'ls-remote', 'origin', 'refs/heads/main').split()
-        if remote:
-            return remote[0]
-    except (OSError, subprocess.CalledProcessError):
-        pass
-    for ref in MAIN_REFS:
-        try:
-            sha = run('git', '-C', str(srw_repo), 'rev-parse', '--verify', '--quiet', ref).strip()
-        except subprocess.CalledProcessError:
-            continue
-        if sha:
-            return sha
-    raise SystemExit(f'cannot resolve the current SRW main commit in {srw_repo}')
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise PruneError(f'cannot read the current SRW main commit from {srw_repo}: {error}') from error
+    if not remote:
+        raise PruneError(f'{srw_repo} has no origin main branch')
+    return remote[0]
 
 
 def protected_tags(srw_repo):
@@ -100,7 +100,10 @@ def images_in_use(docker_bin='docker', context=None):
         return set()
     inspected = docker('inspect', '--format', '{{.Image}}', *containers, docker_bin=docker_bin, context=context,
                        check=False)
-    return {line.strip() for line in inspected.splitlines() if line.strip()}
+    lines = [line.strip() for line in inspected.splitlines() if line.strip()]
+    if len(lines) != len(containers):
+        raise PruneError('container inspection was incomplete; refusing to prune')
+    return set(lines)
 
 
 def plan(images, times, in_use, protected, cutoff, now):
@@ -153,7 +156,7 @@ def main():
         images = collect_images(args.docker, args.context)
         times = creation_times(images, args.docker, args.context)
         in_use = images_in_use(args.docker, args.context)
-    except (OSError, subprocess.CalledProcessError) as error:
+    except (OSError, subprocess.CalledProcessError, PruneError) as error:
         print(json.dumps({'ok': False, 'error': str(error)}), file=sys.stderr)
         return 2
     now = datetime.now(timezone.utc)

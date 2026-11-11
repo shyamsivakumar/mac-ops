@@ -15,9 +15,14 @@ tag is ignored and is never removed.
 
 An image is kept when a container still uses it, when its tag names the
 current SRW `main` commit in either form, or when it is younger than the
-cutoff. The current `main` commit is read from `origin/main`; a local `main`
-ref is the fallback when the remote cannot be reached. The cutoff is 24 hours
-by default.
+cutoff. The current `main` commit is read from `origin/main` over the
+network. A local ref can be behind the remote, so the script stops and
+removes nothing when the remote cannot be reached. The cutoff is 24 hours by
+default.
+
+The script also stops and removes nothing when it cannot inspect every
+container, because an incomplete list of containers in use would hide an
+image that must be kept.
 
 ## Run a scan
 
@@ -43,5 +48,6 @@ Docker context for a VM-based engine.
 The script never removes an image a container uses, never removes the image of
 the current `main`, and never removes a tag that does not name a commit. It
 does not touch any other image, and it leaves the boot images of the last 24
-hours alone. The daily disk hygiene job for the CI host keeps its own rule of
-pruning dangling images only, so it is not the owner of these tags.
+hours alone. When it cannot prove that a removal is safe, it removes nothing
+and exits non-zero. The daily disk hygiene job for the CI host keeps its own
+rule of pruning dangling images only, so it is not the owner of these tags.
