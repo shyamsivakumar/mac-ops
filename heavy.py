@@ -1777,6 +1777,25 @@ def _host_reason(
     return None
 
 
+def _role_slot_available(
+    role: str,
+    active: List[Dict[str, Any]],
+    queues: List[Dict[str, Any]],
+    slot_limit: int,
+    legacy_count: int = 0,
+) -> bool:
+    """Keep one slot for review/deploy demand without changing global capacity."""
+    if role in ("review", "deploy"):
+        return True
+    priority_demand = any(
+        row.get("role") in ("review", "deploy") for row in active + queues
+    )
+    ordinary_count = legacy_count + sum(
+        row.get("role", "ordinary") not in ("review", "deploy") for row in active
+    )
+    return not priority_demand or ordinary_count < max(0, slot_limit - 1)
+
+
 def _reserve_job(
     registry: Registry,
     task_key: str,
@@ -1838,12 +1857,23 @@ def _reserve_job(
         active = [
             row for row in records if row.get("state") not in ("complete", "removed")
         ]
+        try:
+            slot_limit = _effective_slot_limit(
+                registry, sample, now=deps.wall_clock(), boot_id=boot_id
+            )
+        except TelemetryError:
+            if ephemeral_queue:
+                registry.remove_queue(queue_id)
+            return None, "capacity-unavailable"
         busy_tasks = {row.get("task_key") for row in active}
         deploy_active = any(row.get("role") == "deploy" for row in active)
         eligible_queues = [
             row for row in queues
             if row.get("task_key") not in busy_tasks
             and not (deploy_active and row.get("role") == "deploy")
+            and _role_slot_available(
+                row.get("role", "ordinary"), active, queues, slot_limit, legacy_count
+            )
         ]
         if task_key in busy_tasks:
             if ephemeral_queue:
@@ -1855,14 +1885,6 @@ def _reserve_job(
             return None, "reviewer-priority" if eligible_queues and eligible_queues[
                 0
             ].get("role") == "review" else "queue-order"
-        try:
-            slot_limit = _effective_slot_limit(
-                registry, sample, now=deps.wall_clock(), boot_id=boot_id
-            )
-        except TelemetryError:
-            if ephemeral_queue:
-                registry.remove_queue(queue_id)
-            return None, "capacity-unavailable"
         active = [
             row for row in records if row.get("state") not in ("complete", "removed")
         ]
@@ -2465,6 +2487,7 @@ def _resume_current(
         try:
             table = deps.process_table_reader()
             active_count = 0
+            active_records = []
             for row in registry.records():
                 if row.get("state") in ("paused", "complete", "removed"):
                     continue
@@ -2477,7 +2500,15 @@ def _resume_current(
                 active, supervisor_active = _record_live(row, table)
                 if active or supervisor_active:
                     active_count += 1
-            active_count += deps.legacy_slots(table)
+                    active_records.append(row)
+            legacy_count = deps.legacy_slots(table)
+            active_count += legacy_count
+            queues = _prune_queue_records_locked(registry, table, boot_id)
+            if not _role_slot_available(
+                current.get("role", "ordinary"), active_records, queues,
+                slot_limit, legacy_count,
+            ):
+                return False
         except Exception:
             return False
         if active_count >= slot_limit or not _signal_owned_group(
