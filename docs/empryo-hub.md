@@ -201,7 +201,10 @@ Neither case can merge automatically without a subsequent review completion.
 Red/cancelled checks and requested changes also return the item to the builder,
 without updating its branch. An update with no new head times out after five
 minutes; other stalled items return after one hour so they cannot hold the repo
-queue forever. Only a GitHub BEHIND state authorizes an update-branch call.
+queue forever. Local ancestry determines whether an update is needed; GitHub
+must report CLEAN, UNSTABLE, HAS_HOOKS or BEHIND to authorize update-branch.
+This also handles repositories without an up-to-date branch-protection rule,
+where a behind branch can still report CLEAN.
 
 Every changed wait/skip reason, clean-update receipt, and successful automatic
 merge is recorded in `merges.jsonl` and as a hub transcript notice. Unchanged

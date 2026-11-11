@@ -415,18 +415,19 @@ class AutoMergeProof(unittest.TestCase):
         self.assertEqual(self.sent[0]["threadId"], "review")
 
     def test_red_checks_and_requested_changes_release_head_without_update(self):
-        for changes_requested in (False, True):
-            with self.subTest(changes_requested=changes_requested):
-                self.setUp()
-                self.behind, self.failed = True, not changes_requested
-                self.detail["mergeStateStatus"] = "BEHIND"
-                self.detail["reviewDecision"] = "CHANGES_REQUESTED" if changes_requested else ""
-                self.enqueue()
-                self.tick()
-                self.assertEqual(self.merges(), [])
-                self.assertFalse(any("update-branch" in " ".join(c) for c in self.commands))
-                self.assertEqual(self.task["autoMerge"]["state"], "blocked")
-                self.assertEqual(self.sent[0]["threadId"], "task")
+        for state in ("CLEAN", "UNSTABLE", "HAS_HOOKS", "BEHIND"):
+            for changes_requested in (False, True):
+                with self.subTest(state=state, changes_requested=changes_requested):
+                    self.setUp()
+                    self.behind, self.failed = True, not changes_requested
+                    self.detail["mergeStateStatus"] = state
+                    self.detail["reviewDecision"] = "CHANGES_REQUESTED" if changes_requested else ""
+                    self.enqueue()
+                    self.tick()
+                    self.assertEqual(self.merges(), [])
+                    self.assertFalse(any("update-branch" in " ".join(c) for c in self.commands))
+                    self.assertEqual(self.task["autoMerge"]["state"], "blocked")
+                    self.assertEqual(self.sent[0]["threadId"], "task")
 
     def test_pending_update_and_waiting_head_have_bounded_wait(self):
         for update in (False, True):
@@ -447,15 +448,37 @@ class AutoMergeProof(unittest.TestCase):
                 self.assertEqual(self.task["autoMerge"]["state"], "blocked")
                 self.assertEqual(self.sent[0]["threadId"], "task")
 
-    def test_update_requires_github_behind_state(self):
-        self.behind = True
-        self.enqueue()
-        self.tick()
-        self.assertFalse(any("update-branch" in " ".join(c) for c in self.commands))
-        self.detail["mergeStateStatus"] = "BEHIND"
-        self.tick()
-        self.assertTrue(any("update-branch" in " ".join(c) for c in self.commands))
-        self.assertEqual(self.merges(), [])
+    def test_local_ancestry_updates_all_safe_github_states(self):
+        for state in ("CLEAN", "UNSTABLE", "HAS_HOOKS", "BEHIND"):
+            with self.subTest(state=state):
+                self.setUp()
+                self.behind = True
+                self.detail["mergeStateStatus"] = state
+                self.enqueue()
+                self.tick()
+                updates = [c for c in self.commands if "update-branch" in " ".join(c)]
+                self.assertEqual(len(updates), 1)
+                self.assertIn(f"expected_head_sha={OLD}", updates[0])
+                self.assertEqual(self.merges(), [])
+                self.tick()
+                self.assertEqual(self.merges(), [])
+                self.green = True
+                self.tick()
+                self.enqueue()
+                self.tick()
+                self.assertEqual(len(self.merges()), 1)
+                self.assertEqual(self.merges()[0][-1], NEW)
+
+    def test_local_ancestry_does_not_override_unsafe_github_states(self):
+        for state in ("BLOCKED", "DIRTY", "UNKNOWN"):
+            with self.subTest(state=state):
+                self.setUp()
+                self.behind = True
+                self.detail["mergeStateStatus"] = state
+                self.enqueue()
+                self.tick()
+                self.assertFalse(any("update-branch" in " ".join(c) for c in self.commands))
+                self.assertEqual(self.merges(), [])
 
     def test_polling_does_not_duplicate_audit_events(self):
         self.green = False

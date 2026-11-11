@@ -2286,7 +2286,7 @@ def train_prepare(thread, entry, evidence, allow_update=False):
         entry["candidateTree"] = {"head": head, "base": base, "tree": tree.splitlines()[0]}
         return True
     if not allow_update:
-        auto_merge_note(thread, "waiting", "waiting for GitHub to report BEHIND before updating main", evidence)
+        auto_merge_note(thread, "waiting", "waiting for an eligible GitHub merge state before updating main", evidence)
         return False
     patch_id = train_patch_id(thread, base, head)
     original = gh_json(["api", f"repos/{repo}/commits/{head}"])
@@ -2345,14 +2345,14 @@ def auto_merge_tick():
                 if pr["reviewDecision"] == "CHANGES_REQUESTED" or pr["mergeable"] == "CONFLICTING":
                     train_return(thread, thread["threadId"], dry.get("refused", "requested changes or merge conflict"))
                     continue
-                behind = pr["mergeStateStatus"] == "BEHIND"
+                update_allowed = pr["mergeStateStatus"] in (*MERGEABLE_STATES, "BEHIND")
                 checks = evidence.get("checks", {})
-                if behind:
+                if update_allowed and not checks:
                     _, _, checks = merge_checks(repo, pr["number"], pr["headRefOid"])
                 if checks.get("failed"):
                     train_return(thread, thread["threadId"], f"checks failed: {checks['state']}")
                     continue
-                if not train_prepare(thread, entry, evidence, allow_update=behind):
+                if not train_prepare(thread, entry, evidence, allow_update=update_allowed):
                     continue
                 if not dry.get("dryRun"):
                     auto_merge_note(thread, "waiting", dry.get("refused", "merge gate refused"), evidence)
