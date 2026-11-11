@@ -797,13 +797,24 @@ def resume_turn(thread):
         log(f"{thread['threadId']} queued turn could not start ({e})" if still_queued else f"{thread['threadId']} queued turn skipped ({e})")
 
 
+def install_pending():
+    try:
+        with open(f"{HUB_DIR}/install.json") as stream:
+            return json.load(stream)["state"] in ("pending", "waiting idle", "installing", "restarting")
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
+
 def tool_hub_status(a):
     now = time.time()
     circuits = {p: {"state": circuit_state(p), "recentFailures": len([t for t in breaker_of(p)["failures"] if now - t < FAILURE_WINDOW_SECONDS]),
                     "openUntil": iso(datetime.fromtimestamp(breaker_of(p)["openUntil"], timezone.utc)) if breaker_of(p)["openUntil"] else None,
                     "probing": breaker_of(p)["probing"],
                     "lastError": breaker_of(p)["lastError"], "lastErrorAt": breaker_of(p)["lastErrorAt"]} for p in sorted(set(PROVIDERS) | set(BREAKERS))}
-    return {"circuits": circuits, "engines": len(ENGINES), "routing": ROUTING_PATH, "pid": os.getpid(), "draining": DRAINING["requested"]}
+    with LOCK:
+        return {"installPending": install_pending(), "installIdle": not running_turns() and not any(rt.get("merging") for rt in RUNTIME.values()) and not DRAINING["requested"], "circuits": circuits, "engines": len(ENGINES), "routing": ROUTING_PATH, "pid": os.getpid(), "draining": DRAINING["requested"]}
 
 
 STOP_STATUS = {"end_turn": "completed", "max_tokens": "completed", "max_turn_requests": "completed", "cancelled": "interrupted", "refusal": "failed"}
@@ -820,10 +831,10 @@ def start_turn(thread, message, steered_from=None, from_pending=False):
             raise HubError("thread is being evaluated by the merge train; retry after it finishes")
         if (thread["status"] in LIVE and not from_pending) or rt.get("starting"):
             raise HubError("thread already has an active run")
-        if DRAINING["requested"]:
+        if DRAINING["requested"] or install_pending():
             thread["pendingTurn"] = {"message": message, "steeredFrom": steered_from}
             set_status(thread, "queued")
-            log(f"{thread['threadId']} turn queued until the hub restarts (draining)")
+            log(f"{thread['threadId']} turn queued while the hub drains or an install is pending")
             return f"run:{thread['threadId']}:ordinal:{thread['runCount'] + 1}"
         rt["starting"] = True
     model, probe = choose_model(thread)
@@ -1551,6 +1562,8 @@ def tool_run_scheduled_task_now(a):
 
 
 def scheduler_tick():
+    if not DRAINING["requested"] and not install_pending():
+        resume_pending_turns()
     current = datetime.now(timezone.utc)
     for task in list(SCHEDULES.data.values()):
         if task["enabled"] and task["nextRunAt"] and task["nextRunAt"] <= iso(current):
@@ -2231,6 +2244,8 @@ def merge_guard(thread, automatic=None):
     guarded = [thread] + ([thread_of(automatic["reviewThread"])] if automatic else [])
     owner = threading.get_ident()
     with LOCK:
+        if install_pending():
+            raise HubError("Empryo install pending; retry merge after deployment completes")
         if any(t["status"] in LIVE or runtime_of(t["threadId"]).get("starting")
                or runtime_of(t["threadId"]).get("merging") not in (None, owner) for t in guarded):
             raise HubError("the task or review has a live, starting or merging run")
