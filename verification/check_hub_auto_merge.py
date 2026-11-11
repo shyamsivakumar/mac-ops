@@ -140,6 +140,51 @@ class AutoMergeProof(unittest.TestCase):
         p = Path(self.h.MERGE_RECORD)
         return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
 
+    def test_reviewed_head_is_pinned_and_external_push_is_refused(self):
+        self.enqueue()
+        self.assertEqual(self.task["autoMerge"]["reviewedHead"], OLD)
+        self.detail["headRefOid"] = NEW
+        self.enqueue()  # A duplicate PASS must not bless the new head.
+        self.tick()
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.task["autoMerge"]["reviewedHead"], OLD)
+        self.assertEqual(self.sent[0]["threadId"], "review")
+        self.assertFalse(any("update-branch" in " ".join(c) for c in self.commands))
+
+    def test_external_push_after_carried_update_is_refused(self):
+        self.behind = True
+        self.detail["mergeStateStatus"] = "BEHIND"
+        self.enqueue()
+        self.tick()
+        self.tick()
+        self.assertEqual(self.task["autoMerge"]["carry"]["head"], NEW)
+        self.detail["headRefOid"] = "e" * 40
+        self.green = True
+        self.tick()
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.sent[0]["threadId"], "review")
+
+    def test_legacy_queue_without_reviewed_head_is_refused(self):
+        self.enqueue()
+        del self.task["autoMerge"]["reviewedHead"]
+        self.tick()
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(self.sent[0]["threadId"], "review")
+
+    def test_disabled_review_writes_no_queue_record_or_notice(self):
+        self.set_enabled(False)
+        self.enqueue()
+        self.assertNotIn("autoMerge", self.task)
+        self.assertEqual(self.records(), [])
+        self.assertFalse(any(i["type"] == "notice" for i in self.h.read_items(self.task)))
+        self.task["title"] = "unmatched task"
+        self.enqueue()
+        self.assertEqual(self.records(), [])
+        self.assertFalse(any(i["type"] == "notice" for i in self.h.read_items(self.review)))
+        self.set_enabled(True)
+        self.tick()
+        self.assertEqual(self.merges(), [])
+
     def test_pass_green_once_even_after_repeat_event_and_reload(self):
         self.enqueue()
         self.tick()
@@ -216,7 +261,10 @@ class AutoMergeProof(unittest.TestCase):
                 self.tick()
                 self.assertEqual(self.merges(), [])
                 self.assertFalse(any("update-branch" in " ".join(c) for c in self.commands))
-                self.assertTrue(any(r.get("reason") for r in self.records()))
+                if disabled:
+                    self.assertEqual(self.records(), [])
+                else:
+                    self.assertTrue(any(r.get("reason") for r in self.records()))
 
     def test_serial_queue_does_not_overtake_pending_head(self):
         self.green = False
@@ -276,7 +324,7 @@ class AutoMergeProof(unittest.TestCase):
         self.tick()
         self.set_enabled(True)
         self.tick()
-        self.assertEqual(len(self.merges()), 1)
+        self.assertEqual(len(self.merges()), 0)
 
     def test_task_rerun_and_new_review_fail_are_not_bypassed(self):
         self.enqueue()
