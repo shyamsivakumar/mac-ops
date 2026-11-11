@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .scrub import scrub_path
 from .store import (
     day_key,
     export_posthog,
@@ -47,7 +46,6 @@ DEFAULT_HUB = Path.home() / ".empryo-hub"
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
 TASK_KEY_RE = re.compile(r"\b([A-Z]{2,5}-\d+)\b")
-LEGACY_REVIEW_TITLE_RE = re.compile(r"^[A-Z]{2,5}-\d+ (gate )?review\b", re.I)
 TOOL_TYPES = frozenset(
     {
         "dynamic_tool",
@@ -58,10 +56,6 @@ TOOL_TYPES = frozenset(
         "subagent",
     }
 )
-PREVIEW_RE = re.compile(
-    r"(?i)(preview_|playwright|html_preview|html_render|device_screenshot|"
-    r"cursor.?model.?panel|Browser\.|mcp__.*preview)"
-)
 BLOCKER_RE = re.compile(r"(?i)\b(blocked|blocker|named blocker|waiting on shyam)\b")
 NONTERMINAL = frozenset({"queued", "preparing", "starting", "running", "waiting"})
 
@@ -71,7 +65,6 @@ HUB_MERGE_RE = re.compile(
     r"^merged (?P<repo>[^#\s]+)#(?P<number>\d+) \((?P<method>[^)]*)\) for (?P<thread>\S+)$"
 )
 TOOL_KIND_RE = re.compile(r"^[a-z_]{1,20}$")
-MAX_TITLE_CHARS = 200
 
 
 # --------------------------------------------------------------------------
@@ -79,14 +72,6 @@ MAX_TITLE_CHARS = 200
 # --------------------------------------------------------------------------
 
 
-def _parse_json(raw: str | None) -> dict[str, Any]:
-    if not raw:
-        return {}
-    try:
-        val = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return val if isinstance(val, dict) else {}
 
 
 def _ms_between(start: str | None, end: str | None) -> int | None:
@@ -116,130 +101,8 @@ def _task_key(title: str | None) -> str | None:
     return m.group(1) if m else None
 
 
-def _tokens_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key in (
-        "inputTokens",
-        "outputTokens",
-        "totalTokens",
-        "cachedInputTokens",
-        "input_tokens",
-        "output_tokens",
-        "total_tokens",
-        "costUsd",
-        "totalCostUsd",
-        "cost_usd",
-    ):
-        if key in payload and payload[key] is not None:
-            out[key] = payload[key]
-    usage = payload.get("usage")
-    if isinstance(usage, dict):
-        for key, val in usage.items():
-            if any(x in key.lower() for x in ("token", "cost")) and val is not None:
-                out[key] = val
-    return out
 
 
-def _tool_name(item_type: str, payload: dict[str, Any]) -> str:
-    """Stable tool names only — never persist command text or free-form titles."""
-    if item_type == "dynamic_tool":
-        name = payload.get("toolName")
-        if isinstance(name, str) and name.strip():
-            return name.strip()
-        return "dynamic_tool"
-    if item_type == "command_execution":
-        return "command_execution"
-    if item_type == "file_change":
-        return "file_change"
-    if item_type == "file_search":
-        return "file_search"
-    if item_type == "web_search":
-        return "web_search"
-    if item_type == "subagent":
-        return "subagent"
-    return item_type
-
-
-def _pr_outcomes_for_run(
-    thread_payload: dict[str, Any], *, completed_at: str | None, status: str
-) -> tuple[list[dict[str, Any]], str]:
-    """PR/CI evidence as of the run's end.
-
-    Thread snapshots are current; when merge/check timing cannot be tied to the
-    run ending, mark evidence unknown and do not credit a post-run merge.
-    """
-    prs = thread_payload.get("pullRequests") or []
-    out: list[dict[str, Any]] = []
-    evidence = "known"
-    run_end = _parse_ts(completed_at)
-    terminal = status not in NONTERMINAL
-
-    for pr in prs:
-        if not isinstance(pr, dict):
-            continue
-        snap = pr.get("snapshot") if isinstance(pr.get("snapshot"), dict) else {}
-        merged_at_raw = snap.get("mergedAt")
-        merged_at = _parse_ts(merged_at_raw)
-        state = (snap.get("state") or pr.get("state") or "").lower()
-        run_merged = False
-        timing = "known"
-
-        if merged_at and run_end:
-            if merged_at <= run_end:
-                run_merged = True
-            else:
-                # Merged after this run ended — not attributable to the run.
-                run_merged = False
-                state = "open"
-                timing = "post_run_merge"
-        elif state == "merged":
-            if terminal and run_end is None:
-                timing = "unknown"
-                evidence = "unknown"
-            elif terminal and merged_at is None:
-                # State says merged but no timestamp — cannot prove it was merged by run end.
-                timing = "unknown"
-                evidence = "unknown"
-                run_merged = False
-                state = "merged_unknown_timing"
-            else:
-                run_merged = True
-
-        # Merge timing can be known from mergedAt. Checks/review on the thread
-        # snapshot are current, not historical — only attach them when the
-        # snapshot itself is timestamped at or before run end. Otherwise leave
-        # them unknown so a later failing snapshot cannot rewrite earlier runs.
-        merge_by_end = run_merged and timing == "known"
-        snap_at = _parse_ts(
-            snap.get("syncedAt") or snap.get("updatedAt") or snap.get("closedAt")
-        )
-        ci_by_end = bool(merge_by_end and snap_at and run_end and snap_at <= run_end)
-        out.append(
-            {
-                "url": pr.get("url"),
-                "repository": pr.get("repository"),
-                "number": pr.get("number"),
-                "state": "merged" if run_merged else state,
-                "merged_at": merged_at_raw if run_merged else None,
-                "merge_sha": (
-                    snap.get("mergeCommitOid")
-                    or snap.get("mergeCommit")
-                    or snap.get("headSha")
-                )
-                if run_merged
-                else None,
-                "checks_state": snap.get("checksState") if ci_by_end else None,
-                "review_decision": snap.get("reviewDecision") if ci_by_end else None,
-                "head_branch": snap.get("headBranch"),
-                "title": snap.get("title"),
-                "timing": timing,
-                "evidence_by_end": ci_by_end,
-                "merge_by_end": merge_by_end,
-            }
-        )
-    if not out and terminal:
-        evidence = "known"
-    return out, evidence
 
 
 def _named_blocker(
@@ -254,33 +117,10 @@ def _named_blocker(
     return None
 
 
-def _normalize_path(path: str) -> str:
-    return os.path.normpath(path)
 
 
-def _allowed_roots(worktree: str | None, workspace: str | None) -> list[str]:
-    """Only the assigned worktree and the project checkout — never sibling dirs."""
-    roots: list[str] = []
-    for p in (worktree, workspace):
-        if p:
-            roots.append(_normalize_path(str(p)))
-    seen: set[str] = set()
-    out: list[str] = []
-    for r in roots:
-        if r not in seen:
-            seen.add(r)
-            out.append(r)
-    return out
 
 
-def _path_under(path: str, root: str) -> bool:
-    p = Path(_normalize_path(path))
-    r = Path(_normalize_path(root))
-    try:
-        return p.is_relative_to(r)
-    except (ValueError, TypeError, AttributeError):
-        ps, rs = str(p), str(r)
-        return ps == rs or ps.startswith(rs.rstrip("/") + "/")
 
 
 # --------------------------------------------------------------------------

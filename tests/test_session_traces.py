@@ -18,16 +18,12 @@ from zoneinfo import ZoneInfo
 
 from session_traces.__main__ import _parse_day
 from session_traces.collect import (
-    _allowed_roots,
-    _path_under,
-    _tool_name,
     collect_runs,
 )
 from session_traces.eval_day import _merged_pr_metrics, evaluate_day, score_trace
 from session_traces.scrub import scrub_path, scrub_string, scrub_trace
 from session_traces.store import export_posthog, write_trace
 
-from session_traces.collect import _pr_outcomes_for_run
 
 
 # Synthetic sentinels: fake strings that must never reach a stored trace.
@@ -438,60 +434,6 @@ class ScrubTests(unittest.TestCase):
         )
 
 
-class PathAndToolTests(unittest.TestCase):
-    def test_tool_name_never_command_text(self):
-        name = _tool_name(
-            "command_execution",
-            {"title": "curl -u demo:synthetic-password https://x", "input": "secret"},
-        )
-        self.assertEqual(name, "command_execution")
-
-    def test_path_traversal_rejected(self):
-        root = "/repo/wt"
-        self.assertFalse(_path_under("/repo/wt/../../other/file.py", root))
-        self.assertTrue(_path_under("/repo/wt/src/a.py", root))
-
-    def test_sibling_worktree_not_auto_allowed(self):
-        roots = _allowed_roots(
-            "/Users/x/.t3/worktrees/mac-ops/t3-abc",
-            "/Users/x/Code/mac-ops",
-        )
-        self.assertEqual(
-            roots,
-            [
-                "/Users/x/.t3/worktrees/mac-ops/t3-abc",
-                "/Users/x/Code/mac-ops",
-            ],
-        )
-        self.assertFalse(
-            any(
-                _path_under("/Users/x/.t3/worktrees/mac-ops/t3-other/file.py", r)
-                for r in roots
-            )
-        )
-
-
-    def test_post_run_merge_not_credited(self):
-        payload = {
-            "pullRequests": [
-                {
-                    "url": "https://github.com/o/r/pull/1",
-                    "repository": "o/r",
-                    "number": 1,
-                    "snapshot": {
-                        "state": "merged",
-                        "mergedAt": "2026-11-03T16:30:00Z",
-                        "checksState": "passing",
-                    },
-                }
-            ]
-        }
-        prs, evidence = _pr_outcomes_for_run(
-            payload, completed_at="2026-11-03T16:20:00Z", status="completed"
-        )
-        self.assertEqual(evidence, "known")
-        self.assertEqual(prs[0]["state"], "open")
-        self.assertEqual(prs[0]["timing"], "post_run_merge")
 
 
 class CollectEvalTests(unittest.TestCase):
@@ -592,15 +534,6 @@ class CollectEvalTests(unittest.TestCase):
         self.assertEqual(summary["claimed_done_with_proof"], 0)
 
     def test_later_snapshot_ci_does_not_disprove(self):
-        prs, _ = _pr_outcomes_for_run(
-            {"pullRequests": [{"repository": "o/r", "number": 1, "snapshot": {
-                "state": "merged", "mergedAt": "2026-11-03T16:15:00Z",
-                "syncedAt": "2026-11-03T18:00:00Z", "checksState": "failing",
-                "reviewDecision": "CHANGES_REQUESTED"}}]},
-            completed_at="2026-11-03T16:20:00Z", status="completed",
-        )
-        self.assertIsNone(prs[0]["checks_state"])
-        self.assertIsNone(prs[0]["review_decision"])
         pr = _pull_request()
         pr["snapshot"] = {"state": "merged", "mergedAt": "2026-11-03T16:15:00Z", "syncedAt": "2026-11-03T18:00:00Z", "checksState": "failing", "reviewDecision": "CHANGES_REQUESTED"}
         hub = _build_hub(self.root / "late", pull_requests=[pr])
@@ -724,23 +657,13 @@ class CollectEvalTests(unittest.TestCase):
         self.assertEqual((end - start).total_seconds(), 25 * 3600)
 
     def test_post_run_merge_strips_ci_for_scoring(self):
-        prs, _ = _pr_outcomes_for_run(
-            {"pullRequests": [{"url": "https://github.com/o/r/pull/1", "repository": "o/r", "number": 1,
-              "snapshot": {"state": "merged", "mergedAt": "2026-11-03T16:30:00Z", "checksState": "failing", "reviewDecision": "CHANGES_REQUESTED"}}]},
-            completed_at="2026-11-03T16:20:00Z", status="interrupted",
-        )
-        self.assertIsNone(prs[0]["checks_state"])
-        self.assertIsNone(prs[0]["review_decision"])
-        scored = score_trace(
-            {
-                "status": "interrupted",
-                "outcome_evidence": "known",
-                "named_blocker": None,
-                "files_outside_worktree": [],
-                "preview_or_playwright": [],
-                "pull_requests": prs,
-            }
-        )
+        pr = _pull_request()
+        pr["snapshot"] = {"state": "merged", "mergedAt": "2026-11-03T16:30:00Z", "checksState": "failing", "reviewDecision": "CHANGES_REQUESTED"}
+        hub = _build_hub(self.root / "post", runs=[_run(TASK_RUN_1, status="interrupted", stop_reason="cancelled")], pull_requests=[pr], merge_at="2026-11-03T16:30:00Z")
+        trace = self._task_trace(self._collect(hub))
+        self.assertIsNone(trace["pull_requests"][0]["checks_state"])
+        self.assertIsNone(trace["pull_requests"][0]["review_decision"])
+        scored = score_trace(trace)
         self.assertNotIn("stopped_while_green", scored["flags"])
         self.assertNotIn("claimed_done_without_proof", scored["flags"])
 
