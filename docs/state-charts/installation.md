@@ -15,7 +15,7 @@ stateDiagram-v2
     Compared --> Observing: source_commit is behind and the gate is clear
     Observing --> Observing: agent process exits during census
     Observing --> Installed: required controller ticks arrive within the bound
-    Observing --> RolledBack: controller error or slots hit 0 without a veto
+    Observing --> RolledBack: controller error or board slots drop to 0 without a veto
     Observing --> RolledBack: bound ends before the required ticks
     Observing --> Unverified: firing killed after the receipt names the new commit
     Unverified --> Observing: next firing finds observation-pending marker
@@ -36,7 +36,9 @@ required ticks arrive or the bound ends. The bound is three minutes from the
 start of observation (twelve ticks at one per fifteen seconds). An agent whose
 foreground process exits during the census is normal churn and stays in
 observation. A controller error, a heavy error, any other census error, or
-board slots at 0 without a veto reactivates the previous release. The same
+board slots dropping to 0 without a veto reactivates the previous release. A
+board that was already parked at zero slots before the install dropped
+nothing and keeps the install. The same
 rollback happens when the bound ends without enough ticks or the controller
 status is stale.
 
