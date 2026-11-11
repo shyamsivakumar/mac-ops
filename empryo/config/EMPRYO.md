@@ -41,6 +41,25 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
   `Refs owner/repo#<n>` from another repo). Never use `Fixes`, `Closes` or
   `Resolves`: only the coordinator closes a ticket, after the review gate
   passes. Don't edit the issue or its labels.
+- Personal-repo tasks close with a decisions ledger. Before you report done,
+  write `evidence/<KEY>/decisions.md` in the repo and commit it with the
+  change. `<KEY>` is the ticket key: the repo key lowercased plus the issue
+  number (`mo-155` for shyamsivakumar/mac-ops#155). One entry per decision
+  the ticket did not cover, and each entry carries:
+  - **When**: the pass or commit it landed in.
+  - **The decision**: a one-line headline, then the scenario in plain words:
+    what triggered it, what the work does today, what the unbuilt
+    alternative would have done.
+  - **Gap**: what the ticket left unspecified that forced the decision.
+  - **Reach**: what this decision constrains or enables for future work.
+  - **Verdict**: `sound`, `unsound` or `needs-user`, with one line of why.
+  - **Confidence**: `low`, `medium` or `high`.
+  Order the groups needs-user, then unsound, then sound, and rank each group
+  least confident first. An empty ledger on non-trivial work is a red flag,
+  not a pass. Link the ledger from the done report. Ascend repos (AUH,
+  ascend-mcp, data-ops, dbt, omni) keep their tickets in Linear and are out
+  of scope; a docs-only or config-only task may write `No undecided choices`
+  with a one-line reason instead.
 - End with a short report: what changed, what you ran and its result, the
   review verdict, and what is left.
 
