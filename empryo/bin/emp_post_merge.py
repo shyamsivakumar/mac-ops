@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 GIT_TIMEOUT = 60
 INSTALL_TIMEOUT = 300
@@ -96,11 +97,21 @@ def _install(checkout, command, timeout):
     return {"status": "failed", "reason": reason or "the install step exited " + str(run.returncode)}
 
 
+def _remove(path):
+    """Delete a file, ignoring the reason it could not be deleted."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def _sync_config(checkout, home, names, sha, changed):
     """Copy the declared config files the merge changed into ~/.empryo.
 
     A file the merge did not change is left alone, and the file it replaces is
-    kept next to it as <name>.before-<shortsha>.
+    kept next to it as <name>.before-<shortsha>. The copy is written to a fresh
+    exclusive temporary file in the destination directory and then moved into
+    place, so no existing file and no link is ever written through.
     """
     synced = []
     for name in names or []:
@@ -120,19 +131,37 @@ def _sync_config(checkout, home, names, sha, changed):
             synced.append(record)
             continue
         try:
+            if target.is_symlink():
+                record.update({"status": "skipped", "reason": "the file is a link; the sync leaves it alone"})
+                synced.append(record)
+                continue
             if target.exists() and target.read_bytes() == source.read_bytes():
                 record.update({"status": "unchanged", "reason": "already current"})
                 synced.append(record)
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.parent.is_dir():
+                record.update({"status": "skipped", "reason": "the destination is not a directory"})
+                synced.append(record)
+                continue
             if target.exists():
                 backup = target.parent / (target.name + ".before-" + str(sha or "")[:7])
+                index = 0
+                while backup.exists():
+                    index += 1
+                    backup = target.parent / (target.name + ".before-" + str(sha or "")[:7] + "." + str(index))
                 with open(backup, "xb") as out, open(target, "rb") as source_file:
                     shutil.copyfileobj(source_file, out)
                 record["backup"] = str(backup)
-            temporary = target.parent / (target.name + ".tmp")
-            shutil.copyfile(source, temporary)
-            os.replace(temporary, target)
+            handle, temporary = tempfile.mkstemp(dir=str(target.parent), prefix=target.name + ".", suffix=".tmp")
+            try:
+                with os.fdopen(handle, "wb") as out, open(source, "rb") as source_file:
+                    shutil.copyfileobj(source_file, out)
+                os.chmod(temporary, source.stat().st_mode & 0o777)
+                os.replace(temporary, target)
+            except OSError:
+                _remove(temporary)
+                raise
             record["status"] = "copied"
         except OSError as e:
             record.update({"status": "failed", "reason": _reason(e)})
@@ -200,7 +229,7 @@ def post_merge(repo, base, home, config_path=None, changed_files=None):
     fetch = _git(checkout, "fetch", "origin", "main")
     if fetch.returncode != 0:
         return skip("fetch failed: " + _reason(fetch.stderr))
-    merge = _git(checkout, "merge", "--ff-only", "origin/main")
+    merge = _git(checkout, "merge", "--ff-only", "--no-overwrite-ignore", "origin/main")
     if merge.returncode != 0:
         return skip("fast-forward failed: " + _reason(merge.stderr))
     head = _git(checkout, "rev-parse", "HEAD").stdout.strip()

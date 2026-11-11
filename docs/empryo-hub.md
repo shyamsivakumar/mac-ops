@@ -232,8 +232,15 @@ The steps are declared per repository in `~/.empryo/post-merge.json`, installed
 from `empryo/config/post-merge.json`: the checkout name, the install command,
 its timeout, and the config files a merge may copy into `~/.empryo`. A file
 the merge did not change is left alone, and the file it replaces is kept next
-to it as `<name>.before-<shortsha>`. The hub installer itself is never run
-from here.
+to it as `<name>.before-<shortsha>`. The copy lands on a fresh exclusive
+temporary file in the destination directory and is then moved into place, and
+a config file that is a link is left alone, so nothing is ever written
+through. The hub installer itself is never run from here.
+
+The fast-forward runs `git merge --ff-only --no-overwrite-ignore`, so git
+refuses a merge that would overwrite an ignored local file the incoming commit
+starts tracking. The checkout then stays behind and the skip is reported; the
+local file is never lost.
 
 Each outcome (the fast-forward done or skipped with its reason, the install
 ok, deferred or failed, the config files copied) is written to the same merge
