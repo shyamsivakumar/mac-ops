@@ -215,6 +215,61 @@ class InstallObservationTests(unittest.TestCase):
         self.assertFalse(summary["passed"])
         self.assertIn("board_slots_dropped_to_zero_without_veto", summary["reasons"])
 
+    def test_zero_slot_board_before_install_keeps_the_install(self):
+        started = 9_000.0
+
+        # The board was already parked at zero slots before the install: the
+        # admission limit was 0 before the tick, so nothing dropped.
+        parked_rows = [_tick(started + i * 5, self.release) for i in range(12)]
+        for row in parked_rows:
+            row["board"]["current"] = 0
+            row["board"]["decision"]["target"] = 0
+            row["board"]["decision"]["active"] = 0
+        parked = install_if_behind.evaluate_controller_ticks(
+            parked_rows,
+            target_release=self.release,
+            install_started_at=started,
+            min_ticks=12,
+        )
+        self.assertEqual(parked["unexplained_zero_board_slots"], [])
+        self.assertTrue(parked["passed"], parked)
+        self.assertNotIn(
+            "board_slots_dropped_to_zero_without_veto", parked["reasons"]
+        )
+
+        clock = {"t": started + 1.0}
+        _write(self.state, [parked_rows[0]])
+        sleeps = []
+        install_if_behind.time.time = lambda: clock["t"]
+        install_if_behind.time.sleep = lambda seconds: sleeps.append(seconds)
+        summary = install_if_behind.observe_controller(
+            self.state,
+            target_release=self.release,
+            install_started_at=started,
+            observe_seconds=0.0,
+        )
+        self.assertEqual(sleeps, [])
+        self.assertTrue(summary["passed"], summary)
+        self.assertNotIn(
+            "board_slots_dropped_to_zero_without_veto", summary["reasons"]
+        )
+
+        # A drop to zero caused by the install still rolls the install back.
+        dropped_rows = [_tick(started + i * 5, self.release) for i in range(12)]
+        for row in dropped_rows:
+            row["board"]["decision"]["target"] = 0
+        dropped = install_if_behind.evaluate_controller_ticks(
+            dropped_rows,
+            target_release=self.release,
+            install_started_at=started,
+            min_ticks=12,
+        )
+        self.assertTrue(dropped["unexplained_zero_board_slots"])
+        self.assertFalse(dropped["passed"])
+        self.assertIn(
+            "board_slots_dropped_to_zero_without_veto", dropped["reasons"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

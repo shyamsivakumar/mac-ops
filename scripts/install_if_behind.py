@@ -457,7 +457,10 @@ def evaluate_controller_ticks(
                 board_targets.append(target)
             if isinstance(current, int) and not isinstance(current, bool):
                 board_currents.append(current)
-            if target == 0 and host_veto is None:
+            # `current` is the board limit before this tick, so a non-zero value
+            # means the board dropped to zero here. A board already parked at
+            # zero slots dropped nothing and keeps the install.
+            if target == 0 and host_veto is None and current:
                 unexplained_zero_board_slots.append(
                     {
                         "updated_at": row.get("updated_at"),
