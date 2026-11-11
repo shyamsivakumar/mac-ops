@@ -140,10 +140,11 @@ not report.
 Every manual merge-gate evaluation appends one JSON line to
 `~/.empryo-hub/merges.jsonl`: the time, the task thread, the pull request
 number, the head commit, the checks state, the review thread, the verdict
-word, the review model and run, whether the merge happened, and whether the
-call was a dry run. The record never holds message text. A write that fails
-is logged and the merge continues. A refusal before the gate (a review thread,
-a live run) is not a merge-gate evaluation and writes no record.
+word, the review model and run, whether the merge happened, whether the call
+was a dry run, and the id of the record. The record never holds message text.
+A write that fails is logged and the merge continues. A refusal before the
+gate (a review thread, a live run) is not a merge-gate evaluation and writes
+no record.
 
 Run `python3 verification/check_hub_single_instance.py` for isolated startup
 proofs and `python3 verification/check_hub_turn_budget.py` for the slot-free
@@ -216,6 +217,43 @@ one-record-per-evaluation behavior.
 Run `python3 verification/check_hub_auto_merge.py` for fake-gh/git acceptance
 proofs. It extracts selected function definitions with AST, not the hub module,
 and never starts the hub, engines, sockets, or providers.
+
+## Merged is live: post-merge fast-forward and install (MO-158)
+
+After `emp_thread_merge` merges a pull request, the hub syncs the repository's
+live checkout, so a merge is live on this machine: it fast-forwards the local
+main checkout under `~/Code` (`git fetch` then `git merge --ff-only
+origin/main`) and runs the repository's declared install step. The checkout is
+only fast-forwarded when it is on `main`, clean, and its `origin` remote is the
+merged repository; otherwise the step is skipped and the reason is named. The
+hub never forces, resets or stashes a checkout, so local work is never lost.
+
+The steps are declared per repository in `~/.empryo/post-merge.json`, installed
+from `empryo/config/post-merge.json`: the checkout name, the install command,
+its timeout, and the config files a merge may copy into `~/.empryo`. A file
+the merge did not change is left alone, and the file it replaces is kept next
+to it as `<name>.before-<shortsha>`. The copy lands on a fresh exclusive
+temporary file in the destination directory and is then moved into place, and
+a config file that is a link is left alone, so nothing is ever written
+through. The hub installer itself is never run from here.
+
+The fast-forward runs `git merge --ff-only --no-overwrite-ignore`, so git
+refuses a merge that would overwrite an ignored local file the incoming commit
+starts tracking. The checkout then stays behind and the skip is reported; the
+local file is never lost.
+
+Each outcome (the fast-forward done or skipped with its reason, the install
+ok, deferred or failed, the config files copied) is written to the same merge
+record the merge gate wrote, under `postMerge`, and is returned in the merge
+reply. One merge-gate evaluation still leaves exactly one record: the record
+is written before the post-merge step runs, so a hub that restarts during a
+long install keeps the evidence that the pull request merged, and the
+post-merge outcome completes that same line afterwards. A failed fast-forward
+or install never fails or undoes the merge.
+
+`empryo/bin/emp_post_merge.py` holds the step, `tests/test_post_merge.py`
+covers it with temporary checkouts, and `tests/test_post_merge_wiring.py`
+proves that one merge leaves one record.
 
 ## Model order and merge rules (2026-11-04)
 
