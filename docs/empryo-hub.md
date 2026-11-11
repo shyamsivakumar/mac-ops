@@ -137,7 +137,7 @@ fallback), not launch `modelSelection`; it is evidence, not model approval or
 part of `revision_inputs`. It cannot prove a model switch that the engine did
 not report.
 
-Every merge-gate evaluation appends one JSON line to
+Every manual merge-gate evaluation appends one JSON line to
 `~/.empryo-hub/merges.jsonl`: the time, the task thread, the pull request
 number, the head commit, the checks state, the review thread, the verdict
 word, the review model and run, whether the merge happened, and whether the
@@ -156,6 +156,63 @@ written does not fail the merge. None installs or restarts production or
 calls a paid provider. The ticket-approved proof migration preserves the
 other MO-147 assertions and checks drain queueing separately from uncapped
 provider turns. See `evidence/mo-149-hub-proof.md`.
+
+## Personal-repository merge train (MO-159)
+
+A completed review enqueues its task in a durable, FIFO queue in the task's
+`autoMerge` field. One head item per repository is evaluated per tick (20 seconds),
+with an immediate wake on review completion. Repository locks also serialize
+manual `emp_thread_merge` calls. Tasks and their selected reviews cannot start
+new runs during evaluation. Repeat completion events and hub restarts do not
+repeat a merge; GitHub's open-PR state remains authoritative after a crash.
+
+Only `shyamsivakumar/*` repositories qualify. Ascend task keys AUH, MCP, OPS,
+DBT and OMN are denied as well. The selected, independent review must pass the
+existing provenance and verdict gates, be strictly newer than the task's latest
+run, and use an allowed persisted run model. `routing.json` defaults to Opus;
+`autoMergeReviewerModels` is the explicit allowlist. The operator must enable
+the train with `{"autoMerge": true}` in `~/.empryo-hub/config.json`; absent,
+malformed or false means disabled. Set `autoMerge: false` in that same file to
+pause queued work without reinstalling or restarting. This state file is not
+managed by the installer, so an install cannot undo a pause. The flag is reread
+before updates and merges.
+
+The train calls the same merge tool with `dryRun`, then `expectedRevision`.
+It fetches main and the PR head without changing a worktree or force-pushing,
+and computes `git merge-tree --write-tree` for the queue head. Current checks
+are still PR-head checks (CI or a status such as `srw/agent-check`), read through
+`merge_checks`, with a head-SHA race check. That function is the seam for future
+tree-keyed receipts (SRW-854); no tree receipt is accepted today.
+
+When main is not an ancestor of the PR head, GitHub's update-branch API is
+called with `expected_head_sha`. The update intent is persisted before the call.
+The train waits for a new head, verifies it is a two-parent merge of the recorded
+old head, verifies the second parent is an ancestor of freshly fetched main,
+and compares `git patch-id --stable` of the PR's own diff against each
+head's merge base. A clean update carries the review only when the patch-id is
+unchanged (Shyam approved, 2026-11-11 02:50 PT); new task/review runs or unrelated
+head changes invalidate that carry. The original head/date remain the review
+and CHECK target for no-check PRs, while the five-minute registration wait is
+still applied to the new head. Green checks must belong to the new head.
+An unchanged local worktree at the original reviewed head is allowed only for
+this recorded carry. Changed patch-id requests a new review through
+`emp_thread_send`; conflicts go back to the builder through that same path.
+Neither case can merge automatically without a subsequent review completion.
+Red/cancelled checks and requested changes also return the item to the builder,
+without updating its branch. An update with no new head times out after five
+minutes; other stalled items return after one hour so they cannot hold the repo
+queue forever. Only a GitHub BEHIND state authorizes an update-branch call.
+
+Every changed wait/skip reason, clean-update receipt, and successful automatic
+merge is recorded in `merges.jsonl` and as a hub transcript notice. Unchanged
+polling reasons are deduplicated. The queue state and update receipt survive a
+restart; no batching or GitHub merge-queue service is used. Automatic dry-run
+polls do not append duplicate gate records; manual dry runs retain their existing
+one-record-per-evaluation behavior.
+
+Run `python3 verification/check_hub_auto_merge.py` for fake-gh/git acceptance
+proofs. It extracts selected function definitions with AST, not the hub module,
+and never starts the hub, engines, sockets, or providers.
 
 ## Model order and merge rules (2026-11-04)
 
