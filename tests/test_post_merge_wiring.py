@@ -26,7 +26,7 @@ def load_hub_functions(names, **extra):
     if missing:
         raise AssertionError("the hub has no " + ", ".join(sorted(missing)))
     module = ast.Module(body=wanted, type_ignores=[])
-    namespace = {"json": json, "os": os, "uuid": uuid, "threading": threading,
+    namespace = {"json": json, "os": os, "uuid": uuid, "threading": threading, "tempfile": tempfile,
                  "now_iso": lambda: "2026-01-01T00:00:00.000Z", "log": lambda message: None, **extra}
     exec(compile(ast.fix_missing_locations(module), str(HUB), "exec"), namespace)
     return namespace
@@ -84,6 +84,27 @@ class MergeRecordTests(unittest.TestCase):
         self.assertFalse(complete(None, postMerge={"install": {"status": "ok"}}))
         self.assertEqual(len(self.records()), 1)
         self.assertNotIn("postMerge", self.records()[0])
+
+    def test_completing_a_record_leaves_an_existing_temporary_file_alone(self):
+        write = self.namespace["write_merge_record"]
+        complete = self.namespace["complete_merge_record"]
+        record_id = write(self.thread, self.evidence, True, False)
+        temporary = self.record_path.with_name(self.record_path.name + ".tmp")
+        temporary.write_text("precious")
+        complete(record_id, postMerge={"install": {"status": "ok"}})
+        self.assertEqual(temporary.read_text(), "precious", "an existing temporary file is never written through")
+        self.assertEqual(len(self.records()), 1)
+
+    def test_completing_a_record_never_writes_through_a_linked_temporary_file(self):
+        write = self.namespace["write_merge_record"]
+        complete = self.namespace["complete_merge_record"]
+        record_id = write(self.thread, self.evidence, True, False)
+        other = Path(self.tmp.name) / "other.txt"
+        other.write_text("keep")
+        os.symlink(other, self.record_path.with_name(self.record_path.name + ".tmp"))
+        complete(record_id, postMerge={"install": {"status": "ok"}})
+        self.assertEqual(other.read_text(), "keep", "a linked file is never written through")
+        self.assertEqual(len(self.records()), 1)
 
 
 class WiringTests(unittest.TestCase):
