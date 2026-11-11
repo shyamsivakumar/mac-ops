@@ -24,7 +24,8 @@ BIN_FILES = (
     "coordstart",
     "ticket",
 )
-CONFIG_FILES = ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
+LIB_FILES = ("emp_post_merge.py",)
+CONFIG_FILES = ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md", "tickets.json", "post-merge.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels")
 
 
@@ -32,6 +33,9 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     root = checkout / "empryo"
     items = [
         (root / "bin" / name, home / ".local/bin" / name, 0o755) for name in BIN_FILES
+    ]
+    items += [
+        (root / "bin" / name, home / ".local/lib/empryo" / name, 0o644) for name in LIB_FILES
     ]
     items += [(root / "hub/routing.json", home / ".empryo-hub/routing.json", 0o644)]
     items += [
