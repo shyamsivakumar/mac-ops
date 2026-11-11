@@ -6,7 +6,7 @@ and the transcripts, so the hub is the only place this collector reads.
 What is read
 ------------
 * ``threads.json``  — thread and run metadata (ids, model, status, times, PRs).
-* ``hub.log``      — the actual run model, routing fallbacks and merge events.
+* ``hub.log``      — merge events.
 * ``transcripts/`` — the per-thread item log, used for tool counts only.
 
 What is stored
@@ -69,13 +69,6 @@ VERDICT_LINE_RE = re.compile(r"VERDICT: (PASS|FAIL)")
 HUB_LOG_TS_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(?P<rest>.*)$")
 HUB_MERGE_RE = re.compile(
     r"^merged (?P<repo>[^#\s]+)#(?P<number>\d+) \((?P<method>[^)]*)\) for (?P<thread>\S+)$"
-)
-HUB_RUN_RE = re.compile(
-    r"^(?P<thread>\S+) run (?P<run>run:\S+) (?P<status>[a-z]+)"
-    r"(?: on (?P<model>\S+))? \((?P<reason>[^)]*)\)$"
-)
-HUB_ROUTED_RE = re.compile(
-    r"^(?P<thread>\S+) routed to (?P<model>\S+) instead of (?P<base>\S+)"
 )
 TOOL_KIND_RE = re.compile(r"^[a-z_]{1,20}$")
 MAX_TITLE_CHARS = 200
@@ -339,14 +332,12 @@ def _hub_log_ts(raw: str) -> str | None:
 
 
 def _parse_hub_log(path: Path) -> dict[str, Any]:
-    """Pull run models, routing fallbacks and merges out of hub.log."""
+    """Pull merge events out of hub.log (run models come from threads.json)."""
     merges: list[dict[str, Any]] = []
-    runs: dict[str, dict[str, Any]] = {}
-    routed: dict[str, list[dict[str, Any]]] = {}
     try:
         handle = path.open("r", encoding="utf-8", errors="replace")
     except OSError:
-        return {"merges": merges, "runs": runs, "routed": routed}
+        return {"merges": merges}
     with handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n")
@@ -367,26 +358,7 @@ def _parse_hub_log(path: Path) -> dict[str, Any]:
                     }
                 )
                 continue
-            run_ev = HUB_RUN_RE.match(rest)
-            if run_ev:
-                runs[run_ev.group("run")] = {
-                    "at": ts,
-                    "status": run_ev.group("status"),
-                    "model": run_ev.group("model"),
-                    "reason": run_ev.group("reason"),
-                    "thread_id": run_ev.group("thread"),
-                }
-                continue
-            routed_ev = HUB_ROUTED_RE.match(rest)
-            if routed_ev:
-                routed.setdefault(routed_ev.group("thread"), []).append(
-                    {
-                        "at": ts,
-                        "model": routed_ev.group("model"),
-                        "base_model": routed_ev.group("base"),
-                    }
-                )
-    return {"merges": merges, "runs": runs, "routed": routed}
+    return {"merges": merges}
 
 
 def _slugify(text: str) -> str:
@@ -500,17 +472,22 @@ def _review_origin_ok(thread: dict[str, Any], items: list[dict[str, Any]]) -> bo
 # --------------------------------------------------------------------------
 
 
-def _run_model(
-    thread: dict[str, Any], run: dict[str, Any], log_runs: dict[str, dict[str, Any]]
-) -> str | None:
-    """The model the run actually used (persisted run, then hub log)."""
+def _run_model(run: dict[str, Any]) -> str | None:
+    """The model the run actually used, from the run record itself."""
     model = run.get("model")
-    if isinstance(model, str) and model.strip():
-        return model.strip()
-    event = log_runs.get(str(run.get("runId") or ""))
-    if event and event.get("model"):
-        return str(event["model"])
-    return None
+    return model.strip() if isinstance(model, str) and model.strip() else None
+
+
+def _model_family(model: str | None) -> str | None:
+    """Provider-neutral model name: ``subscriptions/gpt-6.1-terra`` -> ``gpt-6.1-terra``."""
+    return model.rsplit("/", 1)[-1] if model else None
+
+
+def _requested_model(thread: dict[str, Any]) -> str | None:
+    selection = thread.get("modelSelection")
+    model = selection.get("model") if isinstance(selection, dict) else None
+    model = model or thread.get("model")
+    return model.strip() if isinstance(model, str) and model.strip() else None
 
 
 def _usage_fields(run: dict[str, Any]) -> tuple[dict[str, Any], float | None]:
@@ -696,7 +673,6 @@ def _review_evidence(
     thread: dict[str, Any],
     threads: dict[str, dict[str, Any]],
     items_of,
-    log_runs: dict[str, dict[str, Any]],
     current_run: dict[str, Any],
 ) -> dict[str, Any]:
     """Verdict word plus the review's model, thread id and time — nothing else."""
@@ -732,36 +708,11 @@ def _review_evidence(
                 verdict = only
 
     out["review_verdict"] = verdict
-    out["review_model"] = _run_model(review, run, log_runs)
+    out["review_model"] = _run_model(run)
     out["review_thread_id"] = review.get("threadId")
     out["review_run_id"] = run.get("runId")
     out["review_completed_at"] = run.get("completedAt")
     return out
-
-
-def _routing_for(
-    thread_id: str, routed: dict[str, list[dict[str, Any]]], run_start: datetime | None, run_end: datetime | None, previous_end: datetime | None
-) -> dict[str, Any]:
-    """Routing fallback the hub logged for this thread, if any."""
-    entries = routed.get(thread_id) or []
-    chosen = None
-    for entry in entries:
-        stamp = _parse_ts(entry.get("at"))
-        if stamp is None or run_start is None:
-            continue
-        if stamp < run_start - timedelta(seconds=5) or (previous_end is not None and stamp <= previous_end):
-            continue
-        if run_end is not None and stamp > run_end:
-            continue
-        if chosen is None or stamp >= (_parse_ts(chosen.get("at")) or stamp):
-            chosen = entry
-    if chosen is None:
-        return {"model_fallback": False, "fallback_model": None, "base_model": None}
-    return {
-        "model_fallback": True,
-        "fallback_model": chosen.get("model"),
-        "base_model": chosen.get("base_model"),
-    }
 
 
 def collect_runs(
@@ -782,9 +733,7 @@ def collect_runs(
     threads = _load_threads(hub_root)
     projects = _load_projects(hub_root)
     log = _parse_hub_log(hub_root / "hub.log")
-    log_runs = log["runs"]
     merges = log["merges"]
-    routed = log["routed"]
 
     items_cache: dict[str, list[dict[str, Any]]] = {}
 
@@ -839,10 +788,11 @@ def collect_runs(
                 status=status,
                 merges=merges,
             )
-            review = _review_evidence(thread, threads, items_of, log_runs, run)
+            review = _review_evidence(thread, threads, items_of, run)
             run_end = _parse_ts(completed_at)
-            previous_end = _parse_ts(runs[index - 1].get("completedAt")) if index and isinstance(runs[index - 1], dict) else None
-            routing = _routing_for(tid, routed, _parse_ts(started_at), run_end, previous_end)
+            actual = _run_model(run)
+            requested = _requested_model(thread)
+            fell_back = bool(actual and requested and _model_family(actual) != _model_family(requested))
             review_completed = _parse_ts(review.get("review_completed_at"))
 
             trace = {
@@ -857,8 +807,8 @@ def collect_runs(
                 "task_type": thread.get("taskType") if thread.get("taskType") in {"standard", "review", "risky", "chore", "design", "rca", "large", "research", "ui", "panel"} else None,
                 "title": None,
                 "provider": provider,
-                "model": _run_model(thread, run, log_runs),
-                "requested_model": routing.get("base_model") or (thread.get("model") if run_id == thread.get("latestRunId") else None),
+                "model": actual,
+                "requested_model": requested,
                 "status": status,
                 "stop_reason": run.get("stopReason") if run.get("stopReason") in {"end_turn", "cancelled", "error", "max_turns", "interrupted", "turn_budget"} else None,
                 "requested_at": started_at,
@@ -888,7 +838,9 @@ def collect_runs(
                     and run_end is not None
                     and review_completed <= run_end
                 ),
-                **routing,
+                "model_fallback": fell_back,
+                "fallback_model": actual if fell_back else None,
+                "base_model": requested if fell_back else None,
             }
             traces.append(trace)
     return traces
