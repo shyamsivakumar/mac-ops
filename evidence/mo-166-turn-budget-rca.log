@@ -1,0 +1,197 @@
+MO-166 RCA raw output
+Base: mac-ops main 8bbce09d7702360362e29966cc969cc26ea7ef97 (== origin/main).
+Every command below runs the existing proof verification/check_hub_turn_budget.py from this
+tree. No hub service, no install, no production store, no pull request.
+Local absolute paths are shortened to <worktree> and <worktree git dir>.
+
+==============================================================================
+[A] The failing run in a plain shell (no GIT_* in the environment)
+==============================================================================
+$ python3 verification/check_hub_turn_budget.py TurnBudgetProof.test_merge_dry_run_provenance_after_fallback
+test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof) ... SECOND HUB socket=/tmp/hb-3eu4nd1m/.empryo-hub/hub.sock; synthetic clock; no production access
+2026-11-11 07:56:37 emp:f1d371fd-81e9-4239-8f63-69b9763963c7 run run:emp:f1d371fd-81e9-4239-8f63-69b9763963c7:ordinal:1 completed on subscriptions/claude-opus-5-5 (end_turn)
+2026-11-11 07:56:37 emp:17c15958-2be1-4630-adce-8978032593e9 run run:emp:17c15958-2be1-4630-adce-8978032593e9:ordinal:1 completed on subscriptions/gpt-6.1-terra (end_turn)
+ERROR
+
+======================================================================
+ERROR: test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree>/verification/check_hub_turn_budget.py", line 348, in test_merge_dry_run_provenance_after_fallback
+    self.assertTrue(result["dryRun"])
+KeyError: 'dryRun'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.588s
+
+FAILED (errors=1)
+DRY RUN {"merged": false, "refused": "cannot tell which GitHub repo this task belongs to: failed to run git: fatal: not a git repository (or any of the parent directories): .git", "threadId": "emp:f1d371fd-81e9-4239-8f63-69b9763963c7"}
+exit=1
+
+==============================================================================
+[B] The same commit and the same tree with GIT_DIR/GIT_WORK_TREE exported (what `git bisect run` does to its child)
+==============================================================================
+$ GIT_DIR=<worktree git dir> GIT_WORK_TREE=<worktree> python3 verification/check_hub_turn_budget.py TurnBudgetProof.test_merge_dry_run_provenance_after_fallback
+exit=0
+Ran 1 test in 1.366s
+OK
+NORMAL DRY RUN {"dryRun": true, "evidence": {"checks": {"count": 1, "state": "green"}, "method": {"source": "disposable proof"}, "pullRequest": {"baseRefName":
+
+==============================================================================
+[C] Naive bisect: `git bisect run python3 verification/check_hub_turn_budget.py ...` (environment not cleaned)
+==============================================================================
+$ git bisect start 8bbce09 2f91640   # 8bbce09 = main (bad, marked by hand), 2f91640 = last known good
+$ git bisect run python3 verification/check_hub_turn_budget.py TurnBudgetProof.test_merge_dry_run_provenance_after_fallback
+Bisecting: 15 revisions left to test after this (roughly 4 steps)
+[6b1be7006df5c762eb0b62a1f451df16eac555c8] fix(heavy): reserve a slot for review and deploy
+running 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+Bisecting: 8 revisions left to test after this (roughly 3 steps)
+[a216db224377742a22f51ab652008a68bacc6f90] fix(prune): fail closed when the current main or the container list is unknown
+running 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+Bisecting: 5 revisions left to test after this (roughly 2 steps)
+[ca5eb8366293c65da9b9a014167ca25c1f149eb4] Merge pull request #88 from shyamsivakumar/empryo/mo-160-srw-in-shared-npm-installer-prune-srw-wor-c0d49c
+running 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+Bisecting: 2 revisions left to test after this (roughly 2 steps)
+[f74f6acfc9cfaf821decac38d3d31ed5f0f2dba7] Merge pull request #87 from shyamsivakumar/empryo/mo-159-hub-auto-merges-personal-repo-prs-on-pass-be00ba
+running 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+Bisecting: 0 revisions left to test after this (roughly 1 step)
+[333f989a38795a6ed16e40f83cd8e522433a1fee] test(hub): align disabled train assertions with no enqueue
+running 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+8bbce09d7702360362e29966cc969cc26ea7ef97 is the first bad commit
+--- bisect log ---
+# bad: [8bbce09d7702360362e29966cc969cc26ea7ef97] Merge pull request #92 from shyamsivakumar/empryo/mo-165-merge-train-pin-reviewed-head-sha-no-reco-394158
+# good: [2f91640933902cd2566971baab83689573943195] feat(hub): guard startup and remove provider limits
+git bisect start '8bbce09' '2f91640'
+# good: [6b1be7006df5c762eb0b62a1f451df16eac555c8] fix(heavy): reserve a slot for review and deploy
+git bisect good 6b1be7006df5c762eb0b62a1f451df16eac555c8
+# good: [a216db224377742a22f51ab652008a68bacc6f90] fix(prune): fail closed when the current main or the container list is unknown
+git bisect good a216db224377742a22f51ab652008a68bacc6f90
+# good: [ca5eb8366293c65da9b9a014167ca25c1f149eb4] Merge pull request #88 from shyamsivakumar/empryo/mo-160-srw-in-shared-npm-installer-prune-srw-wor-c0d49c
+git bisect good ca5eb8366293c65da9b9a014167ca25c1f149eb4
+# good: [f74f6acfc9cfaf821decac38d3d31ed5f0f2dba7] Merge pull request #87 from shyamsivakumar/empryo/mo-159-hub-auto-merges-personal-repo-prs-on-pass-be00ba
+git bisect good f74f6acfc9cfaf821decac38d3d31ed5f0f2dba7
+# good: [333f989a38795a6ed16e40f83cd8e522433a1fee] test(hub): align disabled train assertions with no enqueue
+git bisect good 333f989a38795a6ed16e40f83cd8e522433a1fee
+# first bad commit: [8bbce09d7702360362e29966cc969cc26ea7ef97] Merge pull request #92 from shyamsivakumar/empryo/mo-165-merge-train-pin-reviewed-head-sha-no-reco-394158
+
+==============================================================================
+[D] Clean bisect: `git bisect run env -u GIT_DIR -u GIT_WORK_TREE -u GIT_PREFIX python3 verification/check_hub_turn_budget.py ...`
+==============================================================================
+$ git bisect start 8bbce09 2f91640
+$ git bisect run env -u GIT_DIR -u GIT_WORK_TREE -u GIT_PREFIX python3 verification/check_hub_turn_budget.py TurnBudgetProof.test_merge_dry_run_provenance_after_fallback
+Bisecting: 15 revisions left to test after this (roughly 4 steps)
+[6b1be7006df5c762eb0b62a1f451df16eac555c8] fix(heavy): reserve a slot for review and deploy
+running 'env' '-u' 'GIT_DIR' '-u' 'GIT_WORK_TREE' '-u' 'GIT_PREFIX' 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+Bisecting: 8 revisions left to test after this (roughly 3 steps)
+[a216db224377742a22f51ab652008a68bacc6f90] fix(prune): fail closed when the current main or the container list is unknown
+running 'env' '-u' 'GIT_DIR' '-u' 'GIT_WORK_TREE' '-u' 'GIT_PREFIX' 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+Bisecting: 5 revisions left to test after this (roughly 2 steps)
+[ca5eb8366293c65da9b9a014167ca25c1f149eb4] Merge pull request #88 from shyamsivakumar/empryo/mo-160-srw-in-shared-npm-installer-prune-srw-wor-c0d49c
+running 'env' '-u' 'GIT_DIR' '-u' 'GIT_WORK_TREE' '-u' 'GIT_PREFIX' 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+Bisecting: 2 revisions left to test after this (roughly 2 steps)
+[f74f6acfc9cfaf821decac38d3d31ed5f0f2dba7] Merge pull request #87 from shyamsivakumar/empryo/mo-159-hub-auto-merges-personal-repo-prs-on-pass-be00ba
+running 'env' '-u' 'GIT_DIR' '-u' 'GIT_WORK_TREE' '-u' 'GIT_PREFIX' 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+    self.assertTrue(result["dryRun"])
+Bisecting: 0 revisions left to test after this (roughly 1 step)
+[236a5987a9fac77e434fef23809f4f8af8af8c70] fix(hub): update behind branches in all safe merge states
+running 'env' '-u' 'GIT_DIR' '-u' 'GIT_WORK_TREE' '-u' 'GIT_PREFIX' 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+    self.assertTrue(result["dryRun"])
+Bisecting: 0 revisions left to test after this (roughly 0 steps)
+[277741fb7f09e9c28a9b9399d31f415e41f2de2c] feat(hub): automate personal-repo merge train
+running 'env' '-u' 'GIT_DIR' '-u' 'GIT_WORK_TREE' '-u' 'GIT_PREFIX' 'python3' 'verification/check_hub_turn_budget.py' 'TurnBudgetProof.test_merge_dry_run_provenance_after_fallback'
+    self.assertTrue(result["dryRun"])
+277741fb7f09e9c28a9b9399d31f415e41f2de2c is the first bad commit
+commit 277741fb7f09e9c28a9b9399d31f415e41f2de2c
+Author: Shyam Sivakumar <67933591+67933591@users.noreply.github.com>
+Date:   Tue Nov 10 21:27:40 2026 -0800
+    feat(hub): automate personal-repo merge train
+    
+    - Serialize personal-repo merges through existing gates and checked revisions.
+    - Verify main ancestry and stable patch IDs before carrying reviews across updates.
+    - Add durable pause control, audit notices and isolated acceptance proofs.
+    
+    Refs #80
+--- bisect log ---
+# bad: [8bbce09d7702360362e29966cc969cc26ea7ef97] Merge pull request #92 from shyamsivakumar/empryo/mo-165-merge-train-pin-reviewed-head-sha-no-reco-394158
+# good: [2f91640933902cd2566971baab83689573943195] feat(hub): guard startup and remove provider limits
+git bisect start '8bbce09' '2f91640'
+# good: [6b1be7006df5c762eb0b62a1f451df16eac555c8] fix(heavy): reserve a slot for review and deploy
+git bisect good 6b1be7006df5c762eb0b62a1f451df16eac555c8
+# good: [a216db224377742a22f51ab652008a68bacc6f90] fix(prune): fail closed when the current main or the container list is unknown
+git bisect good a216db224377742a22f51ab652008a68bacc6f90
+# good: [ca5eb8366293c65da9b9a014167ca25c1f149eb4] Merge pull request #88 from shyamsivakumar/empryo/mo-160-srw-in-shared-npm-installer-prune-srw-wor-c0d49c
+git bisect good ca5eb8366293c65da9b9a014167ca25c1f149eb4
+# bad: [f74f6acfc9cfaf821decac38d3d31ed5f0f2dba7] Merge pull request #87 from shyamsivakumar/empryo/mo-159-hub-auto-merges-personal-repo-prs-on-pass-be00ba
+git bisect bad f74f6acfc9cfaf821decac38d3d31ed5f0f2dba7
+# bad: [236a5987a9fac77e434fef23809f4f8af8af8c70] fix(hub): update behind branches in all safe merge states
+git bisect bad 236a5987a9fac77e434fef23809f4f8af8af8c70
+# bad: [277741fb7f09e9c28a9b9399d31f415e41f2de2c] feat(hub): automate personal-repo merge train
+git bisect bad 277741fb7f09e9c28a9b9399d31f415e41f2de2c
+# first bad commit: [277741fb7f09e9c28a9b9399d31f415e41f2de2c] feat(hub): automate personal-repo merge train
+
+==============================================================================
+[E] Before and after the first bad commit
+==============================================================================
+=== E1: parent of the first bad commit (277741f^ = b5b6ff3) ===
+$ git checkout --detach 277741f^ ; python3 verification/check_hub_turn_budget.py TurnBudgetProof.test_merge_dry_run_provenance_after_fallback
+exit=0
+Ran 1 test in 0.619s
+OK
+
+=== E2: the first bad commit itself (277741f) ===
+$ git checkout --detach 277741f ; python3 verification/check_hub_turn_budget.py TurnBudgetProof.test_merge_dry_run_provenance_after_fallback
+exit=1
+ERROR: test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof)
+KeyError: 'dryRun'
+Ran 1 test in 0.618s
+FAILED (errors=1)
+
+=== E3: the whole proof file at 277741f^ (all 7 tests) ===
+exit=0
+Ran 7 tests in 4.863s
+OK
+
+=== E4: the whole proof file at 277741f (all 7 tests) ===
+exit=1
+ERROR: test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof)
+KeyError: 'dryRun'
+Ran 7 tests in 4.779s
+FAILED (errors=1)
+
+==============================================================================
+[F] Probe on the main tree: the proof as-is, then the proof with hub.thread_repo stubbed
+==============================================================================
+=== F: probe on the current main tree (8bbce09) ===
+$ python3 mo166_probe.py <worktree>   # loads verification/check_hub_turn_budget.py, runs the one failing test twice
+SECOND HUB socket=/tmp/hb-1cmjtmox/.empryo-hub/hub.sock; synthetic clock; no production access
+===== PROBE A proof as-is =====
+passed=False errors=1 failures=0
+ERROR: KeyError: 'dryRun'
+SUBPROCESS: gh repo view --json nameWithOwner --jq .nameWithOwner  cwd=/tmp/hb-1cmjtmox
+
+SECOND HUB socket=/tmp/hb-6xy8djxc/.empryo-hub/hub.sock; synthetic clock; no production access
+===== PROBE B proof + hub.thread_repo stubbed =====
+passed=True errors=0 failures=0
+
+==============================================================================
+[G] The other hub proofs on main
+==============================================================================
+=== G: the other hub proofs on main (clean env) ===
+$ python3 verification/check_hub_auto_merge.py
+exit=0
+Ran 29 tests in 2.172s
+OK
+$ python3 verification/check_hub_merge_evidence.py
+exit=0
+Ran 7 tests in 0.028s
+OK
+$ python3 verification/check_hub_single_instance.py
+exit=0
+Ran 5 tests in 1.305s
+OK
+$ python3 verification/check_hub_turn_budget.py   # the whole file on main
+exit=1
+ERROR: test_merge_dry_run_provenance_after_fallback (__main__.TurnBudgetProof)
+KeyError: 'dryRun'
+Ran 7 tests in 4.769s
+FAILED (errors=1)
