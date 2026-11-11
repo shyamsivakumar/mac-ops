@@ -210,6 +210,62 @@ class PostMergeTests(unittest.TestCase):
         for record in result["configSync"]:
             self.assertEqual(record["status"], "skipped")
 
+    def test_an_ignored_local_file_is_never_overwritten_by_the_fast_forward(self):
+        self.write_config()
+        self.git(self.checkout, "fetch", "origin", "main")
+        self.git(self.checkout, "merge", "--ff-only", "origin/main")
+        (self.checkout / ".gitignore").write_text("local.txt\n")
+        self.git(self.checkout, "add", ".gitignore")
+        self.git(self.checkout, "commit", "-m", "ignore")
+        self.git(self.checkout, "push", str(self.remote), "main")
+        self.git(self.other, "fetch", "origin", "main")
+        self.git(self.other, "merge", "--ff-only", "origin/main")
+        (self.other / "local.txt").write_text("tracked now")
+        self.git(self.other, "add", "-f", "local.txt")
+        self.git(self.other, "commit", "-m", "track")
+        self.git(self.other, "push", str(self.remote), "main")
+        (self.checkout / "local.txt").write_text("local secret")
+        result = self.run_post()
+        self.assertEqual(result["fastForward"]["status"], "skipped")
+        self.assertIn("fast-forward failed", result["reason"])
+        self.assertEqual((self.checkout / "local.txt").read_text(), "local secret")
+
+    def test_the_config_sync_never_writes_through_an_existing_temporary_file(self):
+        source = self.other / "empryo" / "config"
+        source.mkdir(parents=True)
+        (source / "EMPRYO.md").write_text("new rules")
+        self.git(self.other, "add", "-A")
+        self.git(self.other, "commit", "-m", "config")
+        self.git(self.other, "push", str(self.remote), "main")
+        live = self.home / ".empryo"
+        live.mkdir(parents=True, exist_ok=True)
+        (live / "EMPRYO.md").write_text("old rules")
+        (live / "EMPRYO.md.tmp").write_text("precious")
+        self.write_config(configSync=["EMPRYO.md"])
+        result = self.run_post(changed_files=["empryo/config/EMPRYO.md"])
+        self.assertEqual(result["configSync"][0]["status"], "copied")
+        self.assertEqual((live / "EMPRYO.md").read_text(), "new rules")
+        self.assertEqual((live / "EMPRYO.md.tmp").read_text(), "precious",
+                         "an existing temporary file is never written through")
+
+    def test_the_config_sync_leaves_a_linked_file_alone(self):
+        source = self.other / "empryo" / "config"
+        source.mkdir(parents=True)
+        (source / "EMPRYO.md").write_text("new rules")
+        self.git(self.other, "add", "-A")
+        self.git(self.other, "commit", "-m", "config")
+        self.git(self.other, "push", str(self.remote), "main")
+        live = self.home / ".empryo"
+        live.mkdir(parents=True, exist_ok=True)
+        (live / "elsewhere.md").write_text("keep")
+        (live / "EMPRYO.md").symlink_to(live / "elsewhere.md")
+        self.write_config(configSync=["EMPRYO.md"])
+        result = self.run_post(changed_files=["empryo/config/EMPRYO.md"])
+        self.assertEqual(result["configSync"][0]["status"], "skipped")
+        self.assertIn("link", result["configSync"][0]["reason"])
+        self.assertTrue((live / "EMPRYO.md").is_symlink())
+        self.assertEqual((live / "elsewhere.md").read_text(), "keep")
+
 
 if __name__ == "__main__":
     unittest.main()
