@@ -1,3 +1,3 @@
-exit: 1
-stdout:
-stderr:
+grep -rn 'emp_\|/bin/emp' empryo/mods/cockpit
+Output: empty
+Exit: 1 (no matches)

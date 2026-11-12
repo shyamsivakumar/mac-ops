@@ -289,8 +289,11 @@ function vendorGate(verdict, reviewModel, authorModel) {
   return reviewer === author ? { state: "fail", label: "rev ✗ same vendor" } : verdict;
 }
 
+const newestRun = (read) => (read?.recentRuns ?? []).reduce((latest, run) =>
+  !latest || run.ordinal > latest.ordinal ? run : latest, null);
+
 const actualModel = (read, fallback) => {
-  const run = read?.recentRuns?.at(-1)?.model;
+  const run = newestRun(read)?.model;
   return vendorOf(run) ? run : fallback || "";
 };
 
@@ -303,8 +306,9 @@ export async function loadVerdict(thread, author) {
       readAll({ threadId: thread.key }),
       author ? call("t3_thread_read", { threadId: author.key, limit: 1 }) : null,
     ]);
-    const last = [...read.items].reverse().find((i) => i.type === "assistant_message");
-    const runModel = read.recentRuns?.at(-1)?.model ?? "";
+    const run = newestRun(read);
+    const last = [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
+    const runModel = run?.model ?? "";
     const verdict = vendorGate(judge(last?.text ?? ""), actualModel(read, thread.model), author ? actualModel(authorRead, author.model) : "");
     verdicts.set(thread.key, { stamp, verdict, runModel });
   } catch {
@@ -345,7 +349,7 @@ export async function mergePlan(card) {
     const pr = card.info?.pr;
     if (!pr || !/^[\w.-]+\/[\w.-]+$/.test(pr.repo) || !Number.isInteger(pr.number) || pr.number <= 0) return { refused: "No valid PR on this card" };
     if (ASCEND.has(pr.repo.split("/").at(-1).toLowerCase())) return { refused: "Ascend repos cannot merge from Cockpit" };
-    const r = await exec("gh", ["pr", "view", String(pr.number), "-R", pr.repo, "--json", "state,isDraft,mergeable,headRefOid,statusCheckRollup"]);
+    const r = await exec("gh", ["pr", "view", String(pr.number), "-R", pr.repo, "--json", "state,isDraft,mergeable,headRefOid"]);
     if (r.code !== 0) throw new Error(r.stderr.trim() || "PR lookup failed");
     const head = JSON.parse(r.stdout);
     if (head.state !== "OPEN" || head.isDraft || head.mergeable !== "MERGEABLE") return { refused: "PR must be open, ready and mergeable" };
@@ -353,7 +357,8 @@ export async function mergePlan(card) {
     const review = card.threads.filter((t) => t.review && t.kind === "done").sort((a, b) => b.at - a.at)[0];
     if (!review || !card.threads.some((t) => !t.review && t.key !== review.key)) return { refused: "No separate review thread found" };
     const read = await readAll({ threadId: review.key, maxCharsPerItem: 50000 });
-    const run = read.recentRuns?.at(-1);
+    const run = newestRun(read);
+    if (read.thread?.activeRunId || (run && run.status !== "completed")) return { refused: "Review still running" };
     const last = [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
     const lines = (last?.text ?? "").trim().split("\n").map((l) => l.trim());
     if (run?.status !== "completed" || lines.at(-1) !== "VERDICT: PASS" || last?.textTruncated) return { refused: "Review must end with VERDICT: PASS" };

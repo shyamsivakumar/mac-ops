@@ -1242,11 +1242,14 @@ export default class Board extends View {
   approve(e, cx) {
     if (e?.col !== "ready" || this.guard(true)) return;
     const g = e.group;
+    const refusal = this.refusalOf(g);
+    const block = this.reviewBlock(g) || (refusal && !refusal.planned ? refusal.text : null);
+    if (block) return say("info", "Merge blocked", block);
     this.confirm("approve", e.key, (seen) => this.merge([g], cx, seen), cx, [g.info.gh]);
   }
 
   approveAll(cx) {
-    if (this.guard(true)) return;
+    if (this.guard(false)) return;
     const groups = this.layout.approvable.map((x) => x.group);
     if (!groups.length) return say("info", this.layout.nothing);
     this.confirm("approve-all", "all", (seen) => this.merge(groups, cx, seen), cx, groups.map((g) => g.info.gh));

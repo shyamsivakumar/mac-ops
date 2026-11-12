@@ -12,7 +12,9 @@ for cap, live and queued counts. Provider health and run timing are not
 available on T3. Approve merge queues a relay only after fresh PR and exact-head Opus review
 checks. The review must end with `VERDICT: PASS` and include exactly one
 `CHECK: PASS <40-character SHA>` line. The separate Opus review
-remains required before a relay merge.
+remains required before a relay merge. Only the highest-ordinal run and its
+last assistant message count. A newest run that is not completed refuses with
+"Review still running"; an older PASS cannot override a later FAIL.
 
 After checks pass, back up the installed directory to
 `~/.config/herdr-app/mods/cockpit.empryo-bak`, then copy the source mod into

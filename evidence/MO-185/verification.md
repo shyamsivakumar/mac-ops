@@ -81,3 +81,32 @@ No gate, merge, send, reply or settle was launched. The exact-head review remain
 pending for the new commit. Bounded deslop and no-comments diff review found no
 new comments or further cleanup needed; pre-existing generated untracked files
 were left untouched.
+
+## Gate 3 follow-up
+
+Gate 3 at 6a4df284 found that recentRuns.at(-1) selected the oldest run.
+The merge reader, displayed model and vendor check now select the highest
+ordinal. The merge reader only accepts that run's last assistant message.
+A newest run that is not completed refuses with "Review still running";
+an activeRunId also blocks approval. An older PASS cannot override a newer FAIL.
+
+Removed the unused statusCheckRollup field from the PR lookup. Approve no
+longer arms a card with a review block or stored queue refusal. A preflight
+refusal can still retry. Approve all checks board freshness without binding
+its action to the selected card. Deduplication still lasts until module reload.
+
+The stub harness passes 28 cases, including older PASS/newer FAIL, newest
+PASS with matching CHECK, newest running, stale newest CHECK, last-message
+FAIL, and unordered run arrays with unrelated messages. It also verifies
+blocked-card confirmation and the Approve all guard. No live relay was queued.
+
+The fast check passed its selected checks. Node syntax passed on all eight
+Cockpit, ops-panels and evidence JavaScript files. The retired-call grep was
+empty (exit 1). Source and installed herdr-app checks passed, and installed
+JavaScript matches source. gate3-install.json records the complete installation
+backup made before copying. No new browser or live merge proof was attempted.
+
+Bounded deslop removed the unused GitHub response field. No-comments diff
+review found no added or touched comments. Pre-existing generated untracked
+files remain untouched. Gate 3 remains FAIL on its reviewed head; no new gate
+was launched. A separate exact-head review remains required for the new head.
