@@ -20,8 +20,8 @@ function checkCommit(commit) {
   }
 }
 
-export function logArgs({ all, remotes, limit }) {
-  const scope = all ? [...(remotes ? [] : ["--exclude=refs/remotes/*"]), "--exclude=refs/stash", "--exclude=refs/t3/*", "--all"] : ["HEAD"];
+export function logArgs({ all, remotes, limit, range }) {
+  const scope = range ? [range] : all ? [...(remotes ? [] : ["--exclude=refs/remotes/*"]), "--exclude=refs/stash", "--exclude=refs/t3/*", "--all"] : ["HEAD"];
   return ["log", "-z", ...scope, "--date-order", "--decorate=full", `-n${limit}`, `--format=${FORMAT}`];
 }
 

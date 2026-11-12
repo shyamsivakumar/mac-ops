@@ -11,23 +11,30 @@ import { perform, openDialog, showChanges } from "./act.js";
 import { icon } from "./menu.js";
 import { available, check, openUpdate } from "./update.js";
 import { loadRepos } from "./repos.js";
+import { branchData, readBranches, branchesStale } from "./branches.js";
 
 const PIN = "git-graph.repo";
 const folderOf = (v) => (typeof v === "string" && v ? v : null);
+
+const HERE_RECHECK = 60000;
+const localDirs = new Map();
+const isHere = (path) => localDirs.get(path)?.ok !== false;
+const taskFolders = () => { const task = shared("task"); return [task?.worktree, task?.repo].map(folderOf).filter(Boolean); };
 
 function location(folder) {
   if (folder) return { cwd: folder, on: null, via: "folder" };
   const space = spaces().find((s) => s.active), f = focused();
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
+  let missing = null;
   if (!on) {
-    const task = shared("task");
-    const followed = folderOf(task?.worktree) ?? folderOf(task?.repo);
+    const followed = taskFolders().find(isHere);
     if (followed) return { cwd: followed, on, via: "task" };
+    missing = taskFolders()[0] ?? null;
     const pinned = folderOf(shared(PIN)?.[space?.id]);
-    if (pinned) return { cwd: pinned, on, via: "pin" };
+    if (pinned) return { cwd: pinned, on, via: "pin", missing };
   }
-  return { cwd: pane?.cwd || f?.cwd || space?.folder, on, via: "focus" };
+  return { cwd: pane?.cwd || f?.cwd || space?.folder, on, via: "focus", missing };
 }
 
 const STUCK = 20000;
@@ -63,7 +70,7 @@ const tilde = (path, on) => (!on && path?.startsWith(home()) ? "~" + path.slice(
 const brief = (c) => ({ hash: c.hash, subject: c.subject, parents: c.parents });
 const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const sameFiles = (a, b) => a.length === b.length && a.every((f, i) => f.path === b[i].path && f.status === b[i].status);
-const scopeOf = ({ all, remotes }) => `${all} ${remotes}`;
+const scopeOf = ({ all, remotes, range }) => `${all} ${remotes} ${range ?? ""}`;
 // Folders kept as they were last read, and commits' details (a commit never changes).
 const SEEN = 24, DETAILS = 200;
 const keep = (map, key, value, max) => { map.delete(key); map.set(key, value); if (map.size > max) map.delete(map.keys().next().value); };
@@ -72,17 +79,17 @@ const keep = (map, key, value, max) => { map.delete(key); map.set(key, value); i
 const folderState = () => ({
   state: "loading", root: null, on: null, cwd: null, error: null,
   base: [], commits: [], rows: [], lanes: 1, labels: new Map(), index: new Map(), hasMore: false, limit: PAGE, files: [], ctx: null,
-  head: null, current: null, branches: [], remoteNames: [], signature: null, scope: null, moreAsked: null,
+  head: null, current: null, branches: [], remoteNames: [], signature: null, scope: null, moreAsked: null, range: null,
   selected: null, details: null, diff: null,
 });
 
 // Everything the table shows for a folder, in one round of git calls: each
 // answers from any subfolder, and status names paths from the repository root.
-async function readFolder(cwd, on, { all, remotes, limit }) {
+async function readFolder(cwd, on, { all, remotes, limit, range }) {
   const git = (args) => exec("git", [...READ, ...args], { cwd, on });
   const [top, log, head, current, branches, remoteNames, status] = await Promise.all([
     // One commit past the page says whether there are more, as Git Graph asks.
-    exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }), git(logArgs({ all, remotes, limit: limit + 1 })),
+    exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }), git(logArgs({ all, remotes, limit: limit + 1, range })),
     git(["rev-parse", "--verify", "-q", "HEAD"]), git(["symbolic-ref", "-q", "--short", "HEAD"]),
     git(["for-each-ref", "--format=%(refname)", "refs/heads"]), git(["remote"]), git(STATUS)]);
   if (top.code !== 0) return { state: "norepo", cwd, on };
@@ -95,7 +102,7 @@ async function readFolder(cwd, on, { all, remotes, limit }) {
     branches: branches.stdout.split("\n").filter(Boolean).map((r) => r.replace(/^refs\/heads\//, "")),
     remoteNames: remoteNames.stdout.split("\n").filter(Boolean),
     files: status.code === 0 ? parseStatus(status.stdout) : [],
-    signature: [log.stdout, head.stdout, current.stdout, branches.stdout, remoteNames.stdout].join("\0"), scope: scopeOf({ all, remotes }),
+    signature: [log.stdout, head.stdout, current.stdout, branches.stdout, remoteNames.stdout].join("\0"), scope: scopeOf({ all, remotes, range }),
   };
 }
 
@@ -116,6 +123,7 @@ export class Graph {
     cx.timer.after(1500, (cx) => this.warm(cx));
     // Remote spaces can't be watched: poll them gently. New folders get read ahead.
     cx.timer.every(15000, (cx) => { if (!this.watching || this.key() !== this.context) this.refresh(cx); this.warm(cx); check(); });
+    cx.timer.every(60000, (cx) => this.loadBranches(cx));
     check();
   }
 
@@ -178,17 +186,18 @@ export class Graph {
     if (this.loading === context && !this.stuck()) { this.again = this.again === "full" || full ? "full" : "status"; return; }
     const token = ++this.token;
     this.loading = context; this.loadingSince = Date.now(); this.again = null;
-    const { all, remotes, limit } = this, stale = () => this.token !== token || this.key() !== context;
+    const { all, remotes, limit, range } = this, stale = () => this.token !== token || this.key() !== context;
+    const wasRead = Boolean(this.root);
     cx.spawn(async (cx) => {
       try {
         if (full || !this.root) {
-          const read = await readFolder(cwd, on, { all, remotes, limit });
+          const read = await readFolder(cwd, on, { all, remotes, limit, range });
           if (stale()) return;
           if (read.state === "norepo") { this.reset(); Object.assign(this, read); return; }
           if (!on) this.watch(read.root, context, cx);
           // A second look that finds nothing new leaves the table as it is.
           const shown = this.state === "ready" || this.state === "empty";
-          if (shown && read.signature === this.signature && read.scope === this.scope && sameFiles(read.files, this.files)) return;
+          if (shown && read.signature === this.signature && read.scope === this.scope && sameFiles(read.files, this.files)) { this.loadBranches(cx); return; }
           Object.assign(this, read);
         } else {
           const status = await exec("git", [...READ, ...STATUS], { cwd: this.root, on: this.on });
@@ -198,6 +207,7 @@ export class Graph {
           this.files = files;
         }
         this.build();
+        this.loadBranches(cx, full || !wasRead);
         if (this.selected === UNCOMMITTED && this.details) this.loadDetails(this.commits[0], cx);
       } catch (e) {
         if (!stale()) { this.state = "error"; this.error = String(e?.message ?? e); }
@@ -211,13 +221,13 @@ export class Graph {
   }
 
   build() {
-    const commits = withUncommitted(this.base, this.files.length, this.head);
+    const commits = withUncommitted(this.base, this.range ? 0 : this.files.length, this.head);
     const { rows, width } = layoutLanes(commits);
     this.commits = commits; this.rows = rows; this.lanes = width;
     this.labels = new Map(commits.map((c) => [c.hash, labelsOf(c, this.remotes)]));
     this.index = new Map(commits.map((c, i) => [c.hash, i]));
     this.ctx = { root: this.root, on: this.on, current: this.current, head: this.head, branches: this.branches, remotes: this.remoteNames };
-    this.state = commits.length ? "ready" : "empty"; this.error = null;
+    this.state = commits.length || this.range ? "ready" : "empty"; this.error = null;
     if (this.selected && !this.index.has(this.selected)) { this.selected = null; this.details = null; this.diff = null; }
   }
 
@@ -269,6 +279,32 @@ export class Graph {
     cx.notify();
   }
 
+  loadBranches(cx, force = false) {
+    const { root, on } = this;
+    if (!root || (!force && !branchesStale(root, on))) return;
+    cx.spawn(async (cx) => { await readBranches(root, on); cx.notify(); });
+  }
+
+  filterBranch(branch, base, cx) {
+    if (!base) return;
+    this.range = branch.isBase || this.range === `${base}..${branch.name}` ? null : `${base}..${branch.name}`;
+    this.limit = PAGE; this.selected = null; this.details = null; this.diff = null;
+    this.refresh(cx); cx.notify();
+  }
+
+  probeTaskFolders(cx) {
+    for (const path of taskFolders()) {
+      const seen = localDirs.get(path);
+      if (seen?.checking || (seen && Date.now() - seen.at < HERE_RECHECK)) continue;
+      localDirs.set(path, { ...seen, checking: true });
+      cx.spawn(async (cx) => {
+        const r = await exec("test", ["-d", path]).catch(() => ({ code: 1 }));
+        localDirs.set(path, { ok: r.code === 0, at: Date.now() });
+        cx.notify();
+      });
+    }
+  }
+
   findRepos(cx) {
     if (this.findingRepos) return;
     this.findingRepos = true;
@@ -317,7 +353,7 @@ export class Graph {
           (_e, cx) => this.pick(r.path, cx)))]
       : [];
     return v_flex().id("graph-picker").flex_1().min_h(0).overflow_y_scrollbar()
-      .when(Boolean(folderOf(task?.worktree) ?? folderOf(task?.repo)), (e) => e.child(div().px(14).py(8).text_size(11.5).text_color(t.accent)
+      .when(loc.via === "task", (e) => e.child(div().px(14).py(8).text_size(11.5).text_color(t.accent)
         .child(`Following task${task?.title ? `: ${task.title}` : ""}. A pinned repository applies once the task is cleared.`)))
       .child(row("graph-pick-follow", "Follow focused terminal", "Use the repository of the focused pane", loc.via === "focus", (_e, cx) => this.pick(null, cx)))
       .children(group("space", "In this space"))
@@ -540,7 +576,50 @@ export class Graph {
         .cursor_pointer().text_color(t.accent).hover((s) => s.bg(t.hover)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click(() => openUpdate()).child(div().size(6).rounded(3).bg(t.accent)).child("Update Graph")))
       .when(ready && this.remoteNames?.length > 0, (e) => e.child(this.iconButton("graph-fetch", "fetch", this.fetching ? "Fetching…" : null, false, (_e, cx) => this.fetch(cx), t)))
-      .when(this.state !== "nofolder", (e) => e.child(this.iconButton("graph-refresh", "refresh", null, false, (_e, cx) => this.refresh(cx), t)));
+      .when(this.state !== "nofolder", (e) => e.child(this.iconButton("graph-refresh", "refresh", null, false, (_e, cx) => { this.refresh(cx); this.loadBranches(cx, true); }, t)));
+  }
+
+  taskNotice(t) {
+    const { via, missing } = location(this.folder);
+    if (!missing || via === "task") return div();
+    return div().h(20).flex_none().px(10).flex().items_center().text_size(11).text_color(t.dim).truncate()
+      .child(`Task folder ${tilde(missing)} isn't on this Mac. Showing the ${via === "pin" ? "pinned" : "focused terminal's"} repository.`);
+  }
+
+  branchRow(b, i, base, t, mono) {
+    const on = this.range === `${base}..${b.name}`, current = b.name === this.current;
+    const fg = b.done ? t.dim : t.foreground, pr = b.pr, prColor = b.done ? t.dim : t.ansi2;
+    const tally = b.isBase ? "default" : b.ahead === null ? "?" : b.ahead || b.behind ? [b.ahead ? `↑${b.ahead}` : "", b.behind ? `↓${b.behind}` : ""].filter(Boolean).join(" ") : "even";
+    const ciColor = { fail: t.ansi1, pending: t.ansi3, pass: t.ansi2 }[pr?.ci];
+    return h_flex().id(`gb-${i}`).h(ROW).flex_none().px(10).gap(8).items_center().cursor_pointer()
+      .when(on, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => this.filterBranch(b, base, cx))
+      .child(svg(icon(current ? "check" : "branch")).size(11).flex_none().text_color(on ? t.accent : b.done ? t.dim : t.muted))
+      .child(div().w(150).flex_none().truncate().font_family(mono).text_size(11.5).text_color(fg).when(current, (e) => e.font_semibold()).child(b.name))
+      .child(div().w(60).flex_none().truncate().font_family(mono).text_size(11).text_color(t.dim).child(tally))
+      .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(b.done ? t.dim : t.muted).child(b.subject))
+      .child(div().w(34).flex_none().text_right().text_size(11).text_color(t.dim).child(ago(b.time)))
+      .when(Boolean(pr), (e) => e.child(h_flex().id(`gb-pr-${i}`).h(18).px(5).gap(4).flex_none().items_center().rounded(4).cursor_pointer().text_size(11).text_color(prColor)
+        .hover((s) => s.bg(t.raised))
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); cx.open_url(pr.url); })
+        .when(Boolean(ciColor) && !b.done, (el) => el.child(div().size(6).rounded(3).bg(ciColor)))
+        .child(`#${pr.number}`)
+        .when(b.done, (el) => el.child(pr.state.toLowerCase()))));
+  }
+
+  branchesSection(t, mono) {
+    const data = branchData(this.root, this.on);
+    if (!data?.rows.length) return div();
+    const filtered = this.range?.split("..")[1];
+    return v_flex().flex_none().border_b(1).border_color(t.border)
+      .child(h_flex().h(24).flex_none().px(10).gap(8).items_center().text_size(11).text_color(t.dim)
+        .child(div().child(`Branches (${data.rows.length})`))
+        .when(data.ghFailed, (e) => e.child(div().child("PR data unavailable")))
+        .when(Boolean(filtered), (e) => e.child(div().id("graph-branch-clear").px(6).rounded(4).text_color(t.accent).cursor_pointer().hover((s) => s.bg(t.hover))
+          .on_click((_e, cx) => { this.range = null; this.limit = PAGE; this.refresh(cx); cx.notify(); }).child(`Only ${filtered} ×`))))
+      .child(v_flex().id("graph-branches").max_h(ROW * 7).overflow_y_scrollbar()
+        .children(data.rows.map((b, i) => this.branchRow(b, i, data.baseRef, t, mono))));
   }
 
   toolbar(t) {
@@ -681,6 +760,7 @@ export class Graph {
     if (changed !== this.seenChange) { this.seenChange = changed; if (this.root) this.refresh(cx); }
     const t = theme(), mono = settings().font_family ?? "JetBrains Mono", ready = this.state === "ready", picker = this.showsPicker();
     if (picker && !this.repos) this.findRepos(cx);
+    if (!this.folder) this.probeTaskFolders(cx);
     return v_flex().id("git-graph").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border)
       .text_color(t.foreground).text_size(12.5).track_focus(this.handle)
       .on_mouse_move((e, cx) => this.moveDrag(e, cx))
@@ -697,8 +777,9 @@ export class Graph {
         if (wide !== this.wide || graphMax !== this.graphMax) { this.wide = wide; this.graphMax = graphMax; cx.notify(); }
       })
       .child(this.header(t))
+      .when(!picker && !ready, (e) => e.child(this.taskNotice(t)))
       .when(picker, (e) => e.child(this.picker(t)))
-      .when(ready && !picker, (e) => e.child(this.toolbar(t)).child(this.columns(t, this.graphWidth())).child(this.list(t, mono))
+      .when(ready && !picker, (e) => e.child(this.taskNotice(t)).child(this.toolbar(t)).child(this.branchesSection(t, mono)).child(this.columns(t, this.graphWidth())).child(this.list(t, mono))
         .when(Boolean(this.selected), (el) => el.child(this.detailsPane(t, mono))))
       .when(!ready && !picker, (e) => e.child(this.empty(t)));
   }
