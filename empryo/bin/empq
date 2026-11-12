@@ -9,15 +9,19 @@ WORKER_MODEL = {"instanceId": "minimax", "model": "claude-sonnet-5-5"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 OPUS_MODEL = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
 TASK_MODELS = {
+    "standard": WORKER_MODEL,
+    "large": WORKER_MODEL,
+    "ui": WORKER_MODEL,
+    "research": WORKER_MODEL,
+    "rca": WORKER_MODEL,
+    "chore": WORKER_MODEL,
+    "worker": WORKER_MODEL,
+    "panel": WORKER_MODEL,
     "risky": SOL_MODEL,
     "design": SOL_MODEL,
     "review": OPUS_MODEL,
 }
-TOOLS = {
-    "emp_thread_launch": "t3_thread_launch",
-    "emp_thread_send": "t3_thread_send",
-    "emp_thread_list": "t3_thread_list",
-}
+DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 
 
 def path(name):
@@ -54,23 +58,38 @@ def save(queue):
 
 
 def with_model(args):
+    task_type = args.get("taskType")
+    if task_type and task_type not in TASK_MODELS:
+        return None, f"refused: unknown taskType {task_type!r}. Accepted taskTypes: {', '.join(sorted(TASK_MODELS))}"
     resolved = dict(args)
     resolved.pop("taskType", None)
     if not resolved.get("modelSelection"):
-        task_type = args.get("taskType")
         if not task_type:
             return None, "refused: a launch needs a taskType or a modelSelection"
-        resolved["modelSelection"] = TASK_MODELS.get(task_type, WORKER_MODEL)
+        resolved["modelSelection"] = TASK_MODELS[task_type]
+    elif task_type == "review" and not is_gate_model(resolved["modelSelection"]):
+        return None, (f"refused: taskType 'review' runs on the gate model "
+                      f"{{'instanceId': 'claudeAgent', 'model': 'claude-opus-5-5'}}, "
+                      f"but the payload names {resolved['modelSelection']!r}")
     return resolved, None
 
 
+def is_gate_model(selection):
+    return (isinstance(selection, dict)
+            and selection.get("instanceId") == OPUS_MODEL["instanceId"]
+            and selection.get("model") == OPUS_MODEL["model"])
+
+
+def tool_refusal(tool):
+    return f"tool {tool!r} is not dispatchable. Accepted tools: {', '.join(DISPATCHABLE_TOOLS)}"
+
+
 def call(tool, args):
-    t3_tool = TOOLS.get(tool, tool)
-    if t3_tool == "t3_thread_launch":
+    if tool == "t3_thread_launch":
         args, refusal = with_model(args)
         if refusal:
             return 1, refusal
-    run = subprocess.run([T3MCP, "call", t3_tool, "-"], input=json.dumps(args), capture_output=True, text=True)
+    run = subprocess.run([T3MCP, "call", tool, "-"], input=json.dumps(args), capture_output=True, text=True)
     return run.returncode, (run.stdout if run.returncode == 0 else run.stderr).strip()
 
 
@@ -127,13 +146,32 @@ def install_pending():
         return True
 
 
+def undispatchable_tool(item):
+    for tool in [item.get("tool")] + [step.get("tool") for step in item.get("pre", [])]:
+        if tool not in DISPATCHABLE_TOOLS:
+            return tool
+    return None
+
+
 def drain():
     while True:
         if install_pending():
             log("install pending, nothing started")
             return
         queue = load()
-        ready = sorted((i for i in queue["items"] if i.get("attempts", 0) < MAX_ATTEMPTS), key=lambda i: (-i["priority"], i["id"]))
+        dispatchable = []
+        dropped = set()
+        for item in queue["items"]:
+            tool = undispatchable_tool(item)
+            if tool is None:
+                dispatchable.append(item)
+                continue
+            dropped.add(item["id"])
+            log(f"REFUSED #{item['id']}: {tool_refusal(tool)}")
+        if dropped:
+            queue["items"] = [i for i in queue["items"] if i["id"] not in dropped]
+            save(queue)
+        ready = sorted((i for i in dispatchable if i.get("attempts", 0) < MAX_ATTEMPTS), key=lambda i: (-i["priority"], i["id"]))
         if not ready:
             return
         n = live()
@@ -181,6 +219,8 @@ def drain():
 def cmd_start(a):
     args = json.loads(a.args)
     tool = a.tool or tool_for(args)
+    if tool not in DISPATCHABLE_TOOLS:
+        die(f"refused: {tool_refusal(tool)}")
     if a.title and tool == "t3_thread_launch":
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
@@ -251,7 +291,7 @@ def main():
     s.add_argument("args")
     s.add_argument("--title")
     s.add_argument("--priority", type=int, default=0)
-    s.add_argument("--tool", choices=["t3_thread_send", "t3_thread_launch"])
+    s.add_argument("--tool")
     s.set_defaults(fn=cmd_start)
     c = sub.add_parser("create")
     c.add_argument("args")
