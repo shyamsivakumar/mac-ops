@@ -275,3 +275,5 @@ blocks, and loop percentiles. Shadow replay uses live `reviewer.instructions`
 [docs/reviewer-audit.md](docs/reviewer-audit.md); weekly command:
 `./scripts/weekly-reviewer-scorecard.sh` (or `python3 mo10 scorecard --heavy
 --review-policy board --out <report-dir>`).
+
+The [automatic ticket gate](docs/coordq-gatekeep.md) queues checked PR heads through coordq.
