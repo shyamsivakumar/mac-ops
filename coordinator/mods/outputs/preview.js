@@ -37,9 +37,9 @@ export class Preview {
   }
 
   fitted(img) {
-    if (!img.w || !img.h) return image(img.path).size_full();
+    if (!img.w || !img.h) return image(img.src).size_full();
     const scale = Math.min(this.box.w / img.w, this.box.h / img.h, 1);
-    return image(img.path).w(Math.round(img.w * scale)).h(Math.round(img.h * scale));
+    return image(img.src).w(Math.round(img.w * scale)).h(Math.round(img.h * scale));
   }
 
   button(id, label, onClick, t) {
