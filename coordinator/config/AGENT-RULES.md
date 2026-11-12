@@ -1,60 +1,11 @@
-# Rules for every agent task
+These standing rules come first; the ticket brief that follows overrides them where they differ.
 
-You run unattended. A coordinator agent reads your result and reports to Shyam.
-
-- Work in the folder you were started in. Never commit to main or push to main directly.
-- Pushing a task branch and opening its PR never need confirmation.
-- Builders run only targeted proofs, never a repo's full check script.
-  Only gate threads and publishers use `heavy --review`.
-- Never edit or weaken an existing test, check, fixture or proof script to
-  make it pass. If one is wrong, say so in your report and leave it, unless
-  your brief quotes Shyam approving that exact edit; then change only what
-  he approved and show each changed line. New checks go in new files only
-  when the task asks for them.
-- Exception (Shyam, 2026-11-09): tests, checks, fixtures and proof
-  scripts that this task's own branch created (absent from the base
-  branch, per `git diff --diff-filter=A <base>`) may be edited without
-  a per-edit quote, as long as no check gets weaker and every changed
-  line is listed in the PR. Anything on the base branch still needs
-  Shyam's quoted approval of the exact edit.
-- Build each change in the module that owns it, with clean separation of
-  concerns (Shyam, 2026-11-09). Do not bolt a feature on: no parallel
-  paths, special cases in the wrong layer, or shims. If the change can't be
-  built naturally in the existing structure, stop before coding and report
-  the refactor you recommend instead.
-- Prove your work by running it: the repo's own tests, typecheck, build, or
-  the real command. Say what you ran and what it printed.
-- Never use computer use or host-script tools in a task.
-- Before you report a coding task done, dispatch the `code-reviewer` agent
-  with the task text and the base branch. Fix every critical and major
-  finding. Run one review round and report what is still open. Include the
-  last `VERDICT:` line in your report. Skip
-  this for docs-only or config-only changes and say that you skipped it.
-- Skip that in-session round when the branch changes about 200 lines or
-  fewer against the base branch (count insertions plus deletions). Push the
-  branch, open the PR and report; the separate review gate still reads the
-  diff. Over about 200 lines keep one review round, always for money or
-  trade execution, state machines, auth, secrets, migrations and deploy or
-  CI code. Say that you skipped the round and why.
-- Never instruct a read-only reviewer or subagent to run proofs or
-  commands. Reviewers verify the builder's proof output and say
-  'not independently rerun' when they cannot execute.
-- Never reference the root checkout or another repo's paths in dispatch
-  texts or commands; worktrees are self-contained (install dependencies
-  in the worktree first).
-- Merges, deploys, secrets, paid actions and product decisions follow the
-  repo's rules and the coordinator's instructions in your task. When unsure,
-  stop and say what you need.
-- When your task text starts with `Ticket: <GitHub issue URL>`, that issue
-  is your ticket. Reference it in PRs and commits as `Refs #<n>` (or
-  `Refs owner/repo#<n>` from another repo). Never use `Fixes`, `Closes` or
-  `Resolves`: only the coordinator closes a ticket, after the review gate
-  passes. Don't edit the issue or its labels.
-- End with a short report: what changed, what you ran and its result, the
-  review verdict (only when a review round ran), and what is left.
-
-Dev servers and previews use the port block in your task text
-("Your port block: A-B"): those ten ports are yours. Type the number; it is not exported to your shell. Before trusting a page on any
-port, check which process owns the port and which directory it runs from
-(`lsof -nP -iTCP:<port> -sTCP:LISTEN`, then `lsof -p <pid> | grep cwd`).
-Never run `git stash` or switch branches in a checkout another task uses.
+- T3 Code only. Never call `emp`; it is retired.
+- Work in the folder you were started in. Never push to main, force push, or use `--no-verify`.
+- CI is agent checks only: no Woodpecker, no GitHub Actions.
+- The Coordinator runs the Opus gate. You run one in-session reviewer round, then report.
+- A turn lasts at most 10 minutes. Never end a turn with only a plan; do the work or name the blocker.
+- Never read, print or commit secrets or `.env` files.
+- Never edit or weaken an existing test or check to make it pass; say so in your report instead.
+- Reference tickets as `Refs #<n>`, never `Fixes`, `Closes` or `Resolves`.
+- When you must ask Shyam, give a short summary plus a kpane diagram.
