@@ -1,0 +1,9 @@
+{
+  "backup": "/Users/shyamsivakumar/.config/herdr-app/mods/cockpit.pre-mo185-gate3-20261112-114651",
+  "installed": "/Users/shyamsivakumar/.config/herdr-app/mods/cockpit",
+  "javascriptMatchesSource": true,
+  "sourceCheck": "passed",
+  "installedCheck": "passed",
+  "stubCases": 28,
+  "liveQueueWrites": 0
+}

@@ -1,28 +1,28 @@
 fast-check: base=92987983c69dffeed9930993003aa4e3b6bce56b
-fast-check: changed=['README.md', 'docs/cockpit-t3.md', 'empryo/mods/cockpit/gpui-kit.d.ts', 'empryo/mods/cockpit/hub.js', 'empryo/mods/cockpit/jsconfig.json', 'empryo/mods/cockpit/main.js', 'empryo/mods/cockpit/ui.js', 'empryo/mods/ops-panels/gpui-kit.d.ts', 'empryo/mods/ops-panels/jsconfig.json', 'empryo/mods/ops-panels/main.js', 'evidence/MO-185/app-status.json', 'evidence/MO-185/board.png', 'evidence/MO-185/fast-check.txt', 'evidence/MO-185/herdr-check.txt', 'evidence/MO-185/live-probe.mjs', 'evidence/MO-185/live-proof.json', 'evidence/MO-185/live-summary.json', 'evidence/MO-185/relay-probe.mjs', 'evidence/MO-185/relay-proof.json', 'evidence/MO-185/retired-grep.txt', 'evidence/MO-185/verification.md']
+fast-check: changed=['README.md', 'docs/cockpit-t3.md', 'empryo/mods/cockpit/gpui-kit.d.ts', 'empryo/mods/cockpit/hub.js', 'empryo/mods/cockpit/jsconfig.json', 'empryo/mods/cockpit/main.js', 'empryo/mods/cockpit/ui.js', 'empryo/mods/ops-panels/gpui-kit.d.ts', 'empryo/mods/ops-panels/jsconfig.json', 'empryo/mods/ops-panels/main.js', 'evidence/MO-185/app-status.json', 'evidence/MO-185/fast-check.txt', 'evidence/MO-185/herdr-check.txt', 'evidence/MO-185/installed-check.txt', 'evidence/MO-185/live-probe.mjs', 'evidence/MO-185/live-proof.json', 'evidence/MO-185/live-summary.json', 'evidence/MO-185/relay-probe.mjs', 'evidence/MO-185/relay-proof.json', 'evidence/MO-185/retired-grep.txt', 'evidence/MO-185/verification.md']
 fast-check: Python syntax=[]; shell syntax=[]; tests=[]
 TLC2 Version 2026.10.20.183001 (rev: d2e1472)
 Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 90 and seed 8438202938263601023 with 1 worker on 14 cores with 128MB heap and 64MB offheap memory [pid: 63133] (Mac OS X 27.2.1 aarch64, Homebrew 17.0.20.1 64bit, MSBDiskFPSet, DiskStateQueue).
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-streemy6/HeavyQueue.tla
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-streemy6/tlc-1784957318001560036/Naturals.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-streemy6/tlc-1784957318001560036/FiniteSets.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-streemy6/tlc-1784957318001560036/TLC.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-streemy6/tlc-1784957318001560036/Sequences.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Running breadth-first search Model-Checking with fp 16 and seed 5656179920675748129 with 1 worker on 14 cores with 128MB heap and 64MB offheap memory [pid: 87409] (Mac OS X 27.2.1 aarch64, Homebrew 17.0.20.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-yedy4558/HeavyQueue.tla
+Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-yedy4558/tlc-17358393416658220447/Naturals.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-yedy4558/tlc-17358393416658220447/FiniteSets.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-yedy4558/tlc-17358393416658220447/TLC.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-yedy4558/tlc-17358393416658220447/Sequences.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
 Semantic processing of module Naturals
 Semantic processing of module Sequences
 Semantic processing of module FiniteSets
 Semantic processing of module TLC
 Semantic processing of module HeavyQueue
 Linting of module HeavyQueue
-Starting... (2026-11-12 11:05:20)
+Starting... (2026-11-12 11:46:07)
 Implied-temporal checking--satisfiability problem has 3 branches.
 Computing initial states...
-Finished computing initial states: 2 distinct states generated at 2026-11-12 11:05:21.
-Progress(11) at 2026-11-12 11:05:21: 3,380 states generated, 888 distinct states found, 0 states left on queue.
-Checking 3 branches of temporal properties for the complete state space with 2664 total distinct states at (2026-11-12 11:05:21)
-Finished checking temporal properties in 00s at 2026-11-12 11:05:21
+Finished computing initial states: 2 distinct states generated at 2026-11-12 11:46:07.
+Progress(11) at 2026-11-12 11:46:08: 3,380 states generated, 888 distinct states found, 0 states left on queue.
+Checking 3 branches of temporal properties for the complete state space with 2664 total distinct states at (2026-11-12 11:46:08)
+Finished checking temporal properties in 00s at 2026-11-12 11:46:08
 Model checking completed. No error has been found.
   Estimates of the probability that TLC did not check all reachable states
   because two distinct states had the same fingerprint:
@@ -30,7 +30,7 @@ Model checking completed. No error has been found.
 3380 states generated, 888 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 11.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 6 and the 95th percentile is 4).
-Finished in 00s at (2026-11-12 11:05:21)
+Finished in 00s at (2026-11-12 11:46:08)
 Usage: heavy [--review|--deploy] <command...> | status | request-curtail
 Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.
 Admission requires stable swap, CPU and memory below 95%, and at least max(6 GiB, 15% RAM) headroom to start or resume (a running job pauses only below max(6 GiB, 12.5% RAM)); level 2 is allowed above 30% free memory, level 4 is blocked.
