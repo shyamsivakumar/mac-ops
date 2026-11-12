@@ -8,4 +8,6 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - Never read, print or commit secrets or `.env` files.
 - Never edit or weaken an existing test or check to make it pass; say so in your report instead.
 - Reference tickets as `Refs #<n>`, never `Fixes`, `Closes` or `Resolves`.
+- Open pull requests as READY, never as draft, unless the brief says draft.
+- In strategy-replay-workbench, do not run the heavy `scripts/check.sh` script; the Mac check publisher posts `srw/agent-check` on ready PRs. In other repos, run the repo's full local check and put `Builder check: PASS|FAIL <full sha>` in the PR body.
 - When you must ask Shyam, give a short summary plus a kpane diagram.
