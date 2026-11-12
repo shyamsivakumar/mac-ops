@@ -132,35 +132,35 @@
     },
     "pi-standard": {
       "selection": {
-        "instanceId": "pi",
+        "instanceId": "router",
         "model": "task/standard"
       },
       "vendor": "pi-route"
     },
     "pi-ui": {
       "selection": {
-        "instanceId": "pi",
+        "instanceId": "router",
         "model": "task/ui"
       },
       "vendor": "pi-route"
     },
     "pi-research": {
       "selection": {
-        "instanceId": "pi",
+        "instanceId": "router",
         "model": "task/research"
       },
       "vendor": "pi-route"
     },
     "pi-rca": {
       "selection": {
-        "instanceId": "pi",
+        "instanceId": "router",
         "model": "task/rca"
       },
       "vendor": "pi-route"
     },
     "pi-chore": {
       "selection": {
-        "instanceId": "pi",
+        "instanceId": "router",
         "model": "task/chore"
       },
       "vendor": "pi-route"

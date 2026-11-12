@@ -9,13 +9,13 @@ WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 OPUS_MODEL = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
 TASK_MODELS = {
-    "standard": {"instanceId": "pi", "model": "task/standard"},
-    "large": {"instanceId": "pi", "model": "task/standard"},
-    "ui": {"instanceId": "pi", "model": "task/ui"},
-    "research": {"instanceId": "pi", "model": "task/research"},
-    "rca": {"instanceId": "pi", "model": "task/rca"},
-    "chore": {"instanceId": "pi", "model": "task/chore"},
-    "worker": {"instanceId": "pi", "model": "task/standard"},
+    "standard": {"instanceId": "router", "model": "task/standard"},
+    "large": {"instanceId": "router", "model": "task/standard"},
+    "ui": {"instanceId": "router", "model": "task/ui"},
+    "research": {"instanceId": "router", "model": "task/research"},
+    "rca": {"instanceId": "router", "model": "task/rca"},
+    "chore": {"instanceId": "router", "model": "task/chore"},
+    "worker": {"instanceId": "router", "model": "task/standard"},
     "panel": WORKER_MODEL,
     "risky": SOL_MODEL,
     "design": SOL_MODEL,
