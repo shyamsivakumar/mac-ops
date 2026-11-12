@@ -13,6 +13,11 @@ const HTML_EXT = /\.html?$/i;
 const TICKET = /(?<![a-z0-9])([a-z]{2,4})-(\d{1,5})(?![a-z0-9])/gi;
 const SIDE_THREAD = /\b(review|critique|merge relay|fix gate|staging)\b/i;
 const AGENT_TAG = /\s*\((?:[^()]*,\s*)?(?:Sol|Terra|Fable[^()]*|Claude Opus|Opus|Sonnet)\)$/i;
+const CACHE_REL = "mods/outputs/cache";
+const THUMB_MAX = 320;
+const PREVIEW_MAX = 1800;
+const SIPS_CONCURRENCY = 4;
+const CACHE_NAME = /^[0-9a-f]{14}-[tp]\.png$/;
 const SEED_PREFIXES = ["srw", "mo", "auh", "crn"];
 export const OTHER = "Other";
 const COORDINATOR = { key: "coordinator", label: "Coordinator", title: "" };
@@ -285,8 +290,61 @@ async function imageSizes(host, cache, images) {
   for (const i of images) { const d = cache.dims.get(i.path); i.w = d.w; i.h = d.h; }
 }
 
+function hashOf(text) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, "0");
+}
+
+async function mapLimit(list, limit, fn) {
+  let next = 0;
+  const worker = async () => { while (next < list.length) await fn(list[next++]); };
+  await Promise.all(Array.from({ length: Math.min(limit, list.length) }, worker));
+}
+
+async function imageCache(host, cache, images) {
+  const dir = `${host.home()}/.config/herdr-app/${CACHE_REL}`;
+  const made = await host.exec("mkdir", ["-p", dir], { timeout: TIMEOUT });
+  if (made.code !== 0) throw new Error(`cannot create ${dir}: ${made.stderr.trim()}`);
+  const listing = await host.exec("ls", ["-1", dir], { timeout: TIMEOUT });
+  const existing = new Set(listing.stdout.split("\n").filter(Boolean));
+  const jobs = [];
+  for (const img of images) {
+    img.hash = hashOf(`${img.path}|${img.t}|${img.size}`);
+    for (const [suffix, max] of [["t", THUMB_MAX], ["p", PREVIEW_MAX]]) {
+      const name = `${img.hash}-${suffix}.png`;
+      if (img.w && !existing.has(name) && !cache.unreadable.has(name)) {
+        jobs.push({ name, src: img.path, dst: `${dir}/${name}`, shrink: Math.max(img.w, img.h) > max ? max : null });
+      }
+    }
+  }
+  await mapLimit(jobs, SIPS_CONCURRENCY, async (job) => {
+    const args = [...(job.shrink ? ["-Z", String(job.shrink)] : []), "-s", "format", "png", job.src, "--out", job.dst];
+    const r = await host.exec("sips", args, { timeout: TIMEOUT });
+    if (r.code === 0) existing.add(job.name);
+    else cache.unreadable.add(job.name);
+  });
+  for (const img of images) {
+    const ready = existing.has(`${img.hash}-t.png`) && existing.has(`${img.hash}-p.png`);
+    img.thumb = ready ? `${CACHE_REL}/${img.hash}-t.png` : null;
+    img.preview = ready ? `${CACHE_REL}/${img.hash}-p.png` : null;
+    const scale = img.w ? Math.min(1, PREVIEW_MAX / Math.max(img.w, img.h)) : 1;
+    img.pw = Math.round((img.w ?? 0) * scale);
+    img.ph = Math.round((img.h ?? 0) * scale);
+  }
+  const live = new Set(images.flatMap((img) => [`${img.hash}-t.png`, `${img.hash}-p.png`]));
+  const stale = [...existing].filter((name) => CACHE_NAME.test(name) && !live.has(name));
+  if (stale.length) await host.exec("rm", ["-f", ...stale.map((name) => `${dir}/${name}`)], { timeout: TIMEOUT });
+}
+
 export function newCache() {
-  return { transcripts: new Map(), dims: new Map(), pageTitles: new Map(), t3: null };
+  return { transcripts: new Map(), dims: new Map(), pageTitles: new Map(), unreadable: new Set(), t3: null };
 }
 
 export async function collect(host, cache) {
@@ -343,7 +401,7 @@ export async function collect(host, cache) {
   const images = files_.filter((r) => r.kind === "image");
   const pages = files_.filter((r) => r.kind === "page");
   await Promise.all([
-    timed("sizes", imageSizes(host, cache, images)),
+    timed("sizes", imageSizes(host, cache, images)).then(() => timed("cache", imageCache(host, cache, images))),
     timed("titles", fileTitles(host, cache, pages)),
   ]);
   for (const p of pages) if (p.title) p.name = p.title;

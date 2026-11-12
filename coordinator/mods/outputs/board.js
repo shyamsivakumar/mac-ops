@@ -97,12 +97,14 @@ export class Board {
     }).catch((e) => this.fail("Cannot open", e, cx));
   }
 
-  preview(images, index, cx) {
-    this.remember(images[index]);
+  preview(images, pic, cx) {
+    if (!pic.preview) return this.open(pic, cx);
+    const shown = images.filter((i) => i.preview);
+    this.remember(pic);
     cx.notify();
     openOverlay({
       mod: "outputs", kind: "dialog", width: 0.8, height: 0.85,
-      props: { role: "preview", index, images: images.map(({ path, name, w, h }) => ({ path, name, w, h })) },
+      props: { role: "preview", index: shown.indexOf(pic), images: shown.map((i) => ({ path: i.path, src: i.preview, name: i.name, w: i.pw, h: i.ph })) },
     });
   }
 
@@ -125,14 +127,23 @@ export class Board {
       .child(div().w(28).flex_none().text_right().text_size(11).text_color(t.dim).child(ago(item.t, now)));
   }
 
+  placeholder(pic, index, images, key, t) {
+    return v_flex().id(`outputs-thumb-${key}-${index}`).flex_none().w(THUMB_BOX.h).gap(3).cursor_pointer()
+      .on_click((_e, cx) => this.open(pic, cx))
+      .child(div().w(THUMB_BOX.h).h(THUMB_BOX.h).flex().items_center().justify_center().rounded(5).bg(t.raised).border_1().border_color(t.border)
+        .child(svg(ICON("image")).size(24).text_color(t.muted)))
+      .child(div().text_size(10).text_color(t.dim).truncate().child(pic.name));
+  }
+
   thumb(pic, index, images, key, t) {
+    if (!pic.thumb) return this.placeholder(pic, index, images, key, t);
     const scale = pic.w && pic.h ? Math.min(THUMB_BOX.w / pic.w, THUMB_BOX.h / pic.h) : null;
     const w = scale ? Math.max(24, Math.round(pic.w * scale)) : THUMB_BOX.h;
     const h = scale ? Math.max(24, Math.round(pic.h * scale)) : THUMB_BOX.h;
     return v_flex().id(`outputs-thumb-${key}-${index}`).flex_none().w(w).gap(3).cursor_pointer()
-      .on_click((_e, cx) => this.preview(images, index, cx))
+      .on_click((_e, cx) => this.preview(images, pic, cx))
       .child(div().relative().w(w).h(h).rounded(5).overflow_hidden().border_1().border_color(t.border)
-        .child(image(pic.path).w(w).h(h))
+        .child(image(pic.thumb).w(w).h(h))
         .when(this.isNew(pic), (e) => e.child(this.dot(t).absolute().top(4).right(4))))
       .child(div().text_size(10).text_color(t.dim).truncate().child(pic.name));
   }
@@ -144,7 +155,7 @@ export class Board {
       .when(images.length > THUMB_CAP, (e) => e.child(
         div().id(`outputs-more-${key}`).flex_none().w(56).h(THUMB_BOX.h).flex().items_center().justify_center().rounded(5).bg(t.raised)
           .text_size(12).text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => this.preview(images, THUMB_CAP, cx)).child(`+${images.length - THUMB_CAP}`)));
+          .on_click((_e, cx) => this.preview(images, images[THUMB_CAP], cx)).child(`+${images.length - THUMB_CAP}`)));
   }
 
   group(g, gi, t, now) {
