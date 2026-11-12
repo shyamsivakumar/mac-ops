@@ -1,0 +1,31 @@
+import {readFile,writeFile} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+const run=promisify(execFile);
+const calls=[];
+globalThis.mo185={home:()=>process.env.HOME,readTextFile:async p=>readFile(p,'utf8'),exec:async(file,args)=>{
+ if (!(file.endsWith('/t3mcp') && ['t3_thread_list','t3_project_list','t3_pending_request'].includes(args[1])) && !(file === 'gh' && args[0]==='pr' && args[1]==='view') && !(file === 'empq' && args.join(' ')==='status')) throw Error('Forbidden probe call');
+ calls.push([file.split('/').at(-1),...args]);
+ try { const r=await run(file,args,{maxBuffer:8*1024*1024});return {code:0,...r}; } catch(e){return {code:e.code,stdout:e.stdout,stderr:e.stderr};}
+}};
+const source=(await readFile('empryo/mods/cockpit/hub.js','utf8')).replace(/import \{[^}]+\} from "herdr";/,'const {exec,home,readTextFile}=globalThis.mo185;');
+const hub=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const before=await hub.call('t3_thread_list',{allProjects:true,statuses:['running']});
+const board=await hub.load();
+const status=await hub.hubStatus();
+const after=await hub.call('t3_thread_list',{allProjects:true,statuses:['running']});
+const ids=x=>x.sort();
+const shown=ids(board.groups.flatMap(g=>g.threads).filter(t=>t.status==='running').map(t=>t.key));
+const expected=ids(after.threads.map(t=>t.threadId));
+if(JSON.stringify(before.threads.map(t=>t.threadId).sort())!==JSON.stringify(expected)) throw Error('Live set changed during probe');
+if(JSON.stringify(shown)!==JSON.stringify(expected)) throw Error('Running mismatch');
+if(!status.reachable) throw Error('T3 unreachable');
+const queue=JSON.parse((await run(process.env.HOME+'/.local/bin/empq',['status'])).stdout);
+if(JSON.stringify(queue)!==JSON.stringify(status.queue)) throw Error('Queue mismatch');
+const ready=board.groups.filter(g=>g.prs.some(p=>p.state==='open') && !g.threads.some(t=>['run','wait','fail','stop'].includes(t.kind)));
+const plans=[];
+for(const g of ready.slice(0,3)) plans.push({task:g.task,plan:await hub.mergePlan({...g,info:{pr:g.prs.find(p=>p.state==='open')}})});
+if(!plans.length) throw Error('No Ready card for plan proof');
+const receipt={plans,at:new Date().toISOString(),running:expected,shown,status,queue,callCount:calls.length};
+await writeFile('evidence/MO-185/live-proof.json',JSON.stringify(receipt,null,2),{mode:0o600});
+console.log(JSON.stringify({pass:true,running:shown,needs:board.groups.filter(g=>['wait','fail','stop'].includes(g.kind)).length,status,calls:calls.length,receipt:'evidence/MO-185/live-proof.json'}));

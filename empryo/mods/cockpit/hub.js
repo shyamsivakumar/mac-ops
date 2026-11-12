@@ -52,9 +52,10 @@ function questionOf(read) {
 }
 
 async function askOf(thread) {
+  if (thread.pendingUnknown) return "pending request unknown";
   const cached = asks.get(thread.threadId);
   if (cached?.stamp === thread.updatedAt) return cached.text;
-  const { requestIds } = await call("t3_pending_request", { action: "list", threadId: thread.threadId });
+  const requestIds = thread.requestIds ?? [];
   const text = requestIds.length
     ? questionOf(await call("t3_pending_request", { action: "read", threadId: thread.threadId, requestId: requestIds[0] })) || "Waiting for your answer"
     : "Waiting for an approval";
@@ -109,7 +110,7 @@ function card(thread, names) {
     created: Date.parse(thread.createdAt),
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
     status: thread.status,
-    context: kind === "fail" && thread.lastError ? plainError(thread.lastError) : CONTEXT[kind] ?? "",
+    context: thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : CONTEXT[kind] ?? "",
     error: kind === "fail" ? thread.lastError ?? CONTEXT.fail : undefined,
     prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state })),
   };
@@ -156,8 +157,13 @@ export async function load() {
   ]);
   for (let offset = 0; offset < live.length; offset += 8) {
     await Promise.all(live.slice(offset, offset + 8).map(async (thread) => {
-      const pending = await call("t3_pending_request", { action: "list", threadId: thread.threadId });
-      if (pending.requestIds.length) thread.status = "waiting";
+      try {
+        const pending = await call("t3_pending_request", { action: "list", threadId: thread.threadId });
+        thread.requestIds = pending.requestIds;
+        if (pending.requestIds.length) thread.status = "waiting";
+      } catch {
+        thread.pendingUnknown = true;
+      }
     }));
   }
   const cards = [...live, ...finished].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
@@ -177,14 +183,10 @@ export async function load() {
   };
 }
 
-export async function oldShells() {
-  return { changed: 0, cwds: [] };
-}
-
 export async function hubStatus() {
   const [reachable, queue] = await Promise.all([
     call("t3_project_list", { limit: 1 }).then(() => true).catch(() => false),
-    exec(`${home()}/.local/bin/empq`, ["status"]).then((r) => {
+    exec("empq", ["status"]).then((r) => {
       if (r.code !== 0) return null;
       const q = JSON.parse(r.stdout);
       return [q.cap, q.live, q.queued].every(Number.isFinite) ? q : null;
@@ -275,10 +277,6 @@ export async function queueCap() {
   return Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_CAP;
 }
 
-export const showName = (key) => `show-${key.slice(4, 12)}`;
-export const empryoWindows = () => [];
-export async function closeWindow() {}
-
 export async function openThread(thread) {
   if (!thread.link?.startsWith("https://app.t3.codes/threads/")) throw new Error("T3 thread link not available");
   const result = await exec("/usr/bin/open", [thread.link]);
@@ -288,17 +286,63 @@ export async function openThread(thread) {
 export const sendArgs = (key, message) => ({ threadId: key, message, mode: "auto" });
 export const sendReply = (key, message) => call("t3_thread_send", sendArgs(key, message));
 export const settle = (key) => call("t3_thread_organize", { threadId: key, action: "settle" });
-export const mergeThread = async () => ({ merged: false, refused: "merged by relay after the Opus gate" });
-export const mergePlan = async () => ({ dryRun: false, refused: "merged by relay after the Opus gate" });
+const ASCEND = new Set(["action-underwriting-hub", "ascend-mcp", "data-ops", "dbt", "omni"]);
+const relays = new Map();
+
+export async function mergePlan(card) {
+  try {
+    const pr = card.info?.pr;
+    if (!pr || !/^[\w.-]+\/[\w.-]+$/.test(pr.repo) || !Number.isInteger(pr.number) || pr.number <= 0) return { refused: "No valid PR on this card" };
+    if (ASCEND.has(pr.repo.split("/").at(-1).toLowerCase())) return { refused: "Ascend repos cannot merge from Cockpit" };
+    const r = await exec("gh", ["pr", "view", String(pr.number), "-R", pr.repo, "--json", "state,isDraft,mergeable,headRefOid,statusCheckRollup"]);
+    if (r.code !== 0) throw new Error(r.stderr.trim() || "PR lookup failed");
+    const head = JSON.parse(r.stdout);
+    if (head.state !== "OPEN" || head.isDraft || head.mergeable !== "MERGEABLE") return { refused: "PR must be open, ready and mergeable" };
+    if (!/^[a-f0-9]{40}$/.test(head.headRefOid)) return { refused: "PR head SHA unknown" };
+    const review = card.threads.filter((t) => t.review && t.kind === "done").sort((a, b) => b.at - a.at)[0];
+    if (!review || !card.threads.some((t) => !t.review && t.key !== review.key)) return { refused: "No separate review thread found" };
+    const read = await call("t3_thread_read", { threadId: review.key, limit: 20, maxCharsPerItem: 50000 });
+    const run = read.recentRuns?.at(-1);
+    const last = [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
+    const lines = (last?.text ?? "").trim().split("\n").map((l) => l.trim());
+    if (run?.status !== "completed" || lines.at(-1) !== "VERDICT: PASS" || last?.textTruncated) return { refused: "Review must end with VERDICT: PASS" };
+    if ((run.executedModel ?? run.model).replace(/^subscriptions\//, "") !== "claude-opus-5-5") return { refused: "Reviewer run must use claude-opus-5-5" };
+    const checks = lines.filter((l) => /^CHECK:/.test(l));
+    if (checks.length !== 1 || !checks[0].split(/[^a-zA-Z0-9]+/).includes(head.headRefOid) || !checks[0].includes(pr.repo) || !new RegExp(`#${pr.number}(?![0-9])`).test(checks[0])) return { refused: "Review CHECK must name this PR and current head SHA" };
+    if (pr.repo.split("/").at(-1) === "strategy-replay-workbench" && !(head.statusCheckRollup ?? []).some((c) => (c.name === "srw/agent-check" && c.status === "COMPLETED" && c.conclusion === "SUCCESS") || (c.context === "srw/agent-check" && c.state === "SUCCESS"))) return { refused: "Head needs srw/agent-check success" };
+    return { sha: head.headRefOid, repo: pr.repo, number: pr.number };
+  } catch (error) {
+    return { refused: `Merge preflight failed: ${error.message}` };
+  }
+}
+
+export async function mergeThread(card, plan) {
+  const fresh = await mergePlan(card);
+  if (fresh.refused) return fresh;
+  if (!plan || fresh.sha !== plan.sha || fresh.repo !== plan.repo || fresh.number !== plan.number) return { refused: "Merge plan changed; approve again" };
+  const key = `${fresh.repo}#${fresh.number}@${fresh.sha}`;
+  if (relays.has(key)) return relays.get(key);
+  const queue = (async () => {
+    const names = await call("t3_project_list", { limit: 100 });
+    const repoName = fresh.repo.split("/").at(-1);
+    const matches = names.projects.filter((p) => p.workspaceRoot?.replace(/\/$/, "").split("/").at(-1) === repoName);
+    if (matches.length !== 1) return { refused: "PR repository project is unknown or ambiguous" };
+    const title = `${card.task || card.key} merge relay #${fresh.number} ${fresh.sha.slice(0, 8)}`;
+    const command = `gh pr merge ${fresh.number} -R ${fresh.repo} --squash --match-head-commit ${fresh.sha}`;
+    const message = `Run exactly: ${command}\nStop on any refusal. Report the merge commit. Do not retry or change the command.`;
+    const r = await exec("empq", ["start", JSON.stringify({ projectId: matches[0].id, taskType: "worker", title, message })]);
+    if (r.code !== 0) throw new Error(r.stderr.trim() || "Relay queue failed; check queue before retrying");
+    const id = /^(?:queued|started) #(\d+)\s*$/.exec(r.stdout.trim())?.[1];
+    if (!id) throw new Error("Relay response unknown; check queue before retrying");
+    return { queued: true, text: `queued #${id}` };
+  })().catch((error) => ({ refused: error.message }));
+  relays.set(key, queue);
+  return queue;
+}
+
 export function mergeNotice(results) {
-  const merged = results.filter((r) => r.merged).length;
-  const refused = results.length - merged;
-  const items = results.map((r) => ({ name: r.name, ok: r.merged, text: r.text || "Merged" }));
-  const [only] = results;
-  const text = only && results.length === 1
-    ? only.merged ? `Merged ${only.name}${only.text ? `: ${only.text}` : ""}` : `Not merged · ${only.name}: ${only.text}`
-    : [merged && `Merged ${merged}`, refused && `${refused} not merged`].filter(Boolean).join(", ");
-  return { level: refused ? "error" : "success", text, items };
+  const refused = results.some((r) => !r.queued);
+  return { level: refused ? "error" : "success", text: results.map((r) => `${r.name}: ${r.text}`).join(", "), items: results.map((r) => ({ name: r.name, ok: r.queued, text: r.text })) };
 }
 
 export async function readTask(thread) {

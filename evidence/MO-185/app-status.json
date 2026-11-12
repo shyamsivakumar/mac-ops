@@ -1,0 +1,27 @@
+{
+  "zoom": 1.0,
+  "font_size": 13.0,
+  "ui_font_size": 13.0,
+  "space": "sp63a3ef7d3bf034fd50dfac32afcbfbd2",
+  "tab": "tbdd800e48769fa17524ec26736bb091db",
+  "focused_pane": "p8b3b9ef15dde53dd36d8e6e415df540f",
+  "layout": "shyam",
+  "agent": "t1g",
+  "floats": {
+    "claude-resume-float": {
+      "edge": "bottom",
+      "align": "center",
+      "vertical": false,
+      "dragging": false,
+      "hovered": false,
+      "bounds": [
+        1474.0,
+        753.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "overlays": [],
+  "errors": []
+}
