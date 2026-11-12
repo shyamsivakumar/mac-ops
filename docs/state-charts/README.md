@@ -15,8 +15,6 @@
 - [Controller tick order (restart watcher and idle-agent pause)](controller.md).
 - [Shadow review verdict](shadow-verdict.md).
 - [Load-tool reference update and backups](update-references.md).
-- [Woodpecker runner job and install lifecycle](woodpecker-runner.md).
-- [M1 Woodpecker memory budget (MO-116)](../m1-ci-memory.md).
 
 The [restart latch](../../.agents/skills/verify-restart-latch/SKILL.md) skill
 checks that one agent exit is restarted once when the watcher finishes its
