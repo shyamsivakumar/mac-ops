@@ -806,7 +806,14 @@ def resume_turn(thread):
 def install_pending():
     try:
         with open(f"{HUB_DIR}/install.json") as stream:
-            return json.load(stream)["state"] in ("pending", "waiting idle", "installing", "restarting")
+            state = json.load(stream)
+        if state["state"] in ("pending", "waiting idle"):
+            since = state["since"]
+            if type(since) not in (int, float):
+                return True
+            # Invalid/future timestamps fail closed, as does unreadable state.
+            return not 0 <= time.time() - since < 1800
+        return state["state"] in ("installing", "restarting")
     except FileNotFoundError:
         return False
     except (OSError, ValueError, KeyError, TypeError):
