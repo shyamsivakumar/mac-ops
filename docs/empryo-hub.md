@@ -64,12 +64,17 @@ stateDiagram-v2
 The persisted state spells `waiting idle` with a space. The hub gates all
 new turns (including sends, scheduled and delegated starts) through its existing
 pending-turn queue after the batching window, and immediately during installing
-or restarting. Invalid wait timestamps fail closed. Running or starting turns
+or restarting. Invalid wait timestamps fail closed; a future timestamp (including
+a backward clock adjustment) makes the worker refuse rather than install.
+Running or starting turns
 and merge operations prevent installation. New merges are refused after the
 batching window, under the same admission lock, so they cannot race the final idle
 check and restart. Pending turns are saved, not counted as
 running, and resume after restart or refusal via the scheduler (within 20 seconds).
 empq retains queued items and does not consume attempts during a deployment.
+The new admission policy takes effect only once the hub itself runs this version;
+an old hub still holds turns immediately even if empq has already been updated.
+The coordinator handles installation/restart separately from this change.
 
 The worker holds the post-merge/worker lock across deployment and the existing
 empq lock across idle checks, install and restart. The hub checks the marker
