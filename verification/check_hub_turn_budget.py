@@ -170,7 +170,16 @@ class TurnBudgetProof(unittest.TestCase):
         return self.hub.THREADS.data[result["threadId"]]
 
     def wait_started(self, thread):
-        proc = self.hub.runtime_of(thread["threadId"])["proc"]
+        # A resumed turn is started by a background thread, so the engine can
+        # still be missing a moment after the call that queued it returns.
+        deadline = time.monotonic() + 5
+        while True:
+            proc = self.hub.runtime_of(thread["threadId"])["proc"]
+            if proc is not None:
+                break
+            if time.monotonic() > deadline:
+                self.fail("the turn did not start")
+            threading.Event().wait(0.005)
         self.assertTrue(proc.started.wait(5))
         return proc
 
@@ -187,17 +196,19 @@ class TurnBudgetProof(unittest.TestCase):
         rt.update(turnStartedAt=1000, progressAt=1600, tools={"sleep": {"since": 1000}})
         limits = {"turnSeconds": 600, "toolSeconds": 10800, "noProgressSeconds": 1200}
         self.assertEqual(h.stall_reason(rt, limits, 1600), None)
-        self.assertEqual(h.stall_reason(rt, limits, 1601), "turn ran over 10 min")
+        self.assertEqual(h.stall_reason(rt, limits, 1601), "turn budget exceeded: 10 min")
         rt["pending"]["question"] = {}
         self.assertIsNone(h.stall_reason(rt, limits, 2000))
         rt["pending"].clear()
-        self.assertEqual(h.stall_reason(rt, limits, 2000), "turn ran over 10 min")
+        self.assertEqual(h.stall_reason(rt, limits, 2000), "turn budget exceeded: 10 min")
 
     def test_concurrent_provider_turns_and_resumed_clock(self):
         h = self.hub
         routing = json.loads(Path(h.ROUTING_PATH).read_text())
         self.assertNotIn("limits", routing)
-        self.assertEqual(routing["turnLimits"], {"turnSeconds": 7200, "noProgressSeconds": 1200, "toolSeconds": 10800})
+        self.assertEqual(routing["turnLimits"], {"turnSeconds": 900, "noProgressSeconds": 1200, "toolSeconds": 10800, "taskTypeSeconds": {"standard": 900, "chore": 900, "ui": 900, "research": 900, "rca": 900, "risky": 900, "large": 900, "design": 900, "review": 1200}})
+        self.assertEqual(h.turn_seconds_for(routing, "standard"), 900)
+        self.assertEqual(h.turn_seconds_for(routing, "review"), 1200)
         first = self.launch(turnSeconds=600)
         first_proc = self.wait_started(first)
         second = self.launch(title="same provider, no queue", turnSeconds=600)
@@ -211,7 +222,7 @@ class TurnBudgetProof(unittest.TestCase):
         self.clock.offset += 601
         for thread, proc in ((first, first_proc), (second, second_proc)):
             record = self.expire(thread)
-            self.assertEqual((record["status"], record["error"]), ("failed", "turn ran over 10 min"))
+            self.assertEqual((record["status"], record["error"]), ("failed", "turn budget exceeded: 10 min"))
             self.assertEqual(proc.cancels, 1)
             self.assertEqual(self.releases.count(thread["threadId"]), 1)
         old_start = h.runtime_of(first["threadId"])["turnStartedAt"]
@@ -244,7 +255,7 @@ class TurnBudgetProof(unittest.TestCase):
         self.assertGreaterEqual(rt["turnStartedAt"], h.time.time() - 2)
         self.assertIsNone(rt["stalled"])
         self.clock.offset += 601
-        self.assertEqual(self.expire(thread)["error"], "turn ran over 10 min")
+        self.assertEqual(self.expire(thread)["error"], "turn budget exceeded: 10 min")
         self.assertEqual(self.releases.count(thread["threadId"]), 1)
 
     def test_permission_answer_not_cut(self):
@@ -296,7 +307,7 @@ class TurnBudgetProof(unittest.TestCase):
         self.assertIsNone(rt["stalled"])
         self.clock.offset += 1001
         record = self.expire(thread)
-        self.assertEqual(record["error"], "turn ran over 150 min")
+        self.assertEqual(record["error"], "turn budget exceeded: 150 min")
         print("DRAIN/RESTART: persisted 9000-second override; resume_turn applied it")
 
     def test_defaults_validation_and_extended_tool(self):
@@ -307,20 +318,20 @@ class TurnBudgetProof(unittest.TestCase):
         self.assertEqual(len(h.THREADS.data), 0)
         thread = self.launch()
         self.wait_started(thread)
-        self.assertEqual(thread["turnSeconds"], 7200)
+        self.assertEqual(thread["turnSeconds"], 900)
         rt = h.runtime_of(thread["threadId"])
         rt["tools"]["sleep"] = {"since": h.time.time(), "status": "in_progress", "kind": "execute", "title": "sleep 3600"}
-        self.clock.offset += 7201
-        self.assertEqual(self.expire(thread)["error"], "turn ran over 120 min")
+        self.clock.offset += 901
+        self.assertEqual(self.expire(thread)["error"], "turn budget exceeded: 15 min")
         routing = json.loads(Path(h.ROUTING_PATH).read_text())
         routing["turnLimits"].pop("turnSeconds", None)
         Path(h.ROUTING_PATH).write_text(json.dumps(routing))
         legacy = self.launch()
         self.wait_started(legacy)
-        self.assertEqual(legacy["turnSeconds"], 7200)
+        self.assertEqual(legacy["turnSeconds"], 900)
         legacy.pop("turnSeconds")
-        self.clock.offset += 7201
-        self.assertEqual(self.expire(legacy)["error"], "turn ran over 120 min")
+        self.clock.offset += 901
+        self.assertEqual(self.expire(legacy)["error"], "turn budget exceeded: 15 min")
 
     def test_merge_dry_run_provenance_after_fallback(self):
         h = self.hub
@@ -330,6 +341,7 @@ class TurnBudgetProof(unittest.TestCase):
         self.until(lambda: not task["activeRunId"])
         review = self.launch(title="MO-147 review", taskType="review")
         proc = self.wait_started(review)
+        self.assertEqual(review["turnSeconds"], 1200)
         fallback = "subscriptions/gpt-6.1-terra"
         h.handle_update(review["sessionId"], {"sessionUpdate": "agent_message_chunk", "content": {"text": "Falling back to " + fallback}, "_meta": {"empryo": {"notice": True}}})
         h.handle_update(review["sessionId"], {"sessionUpdate": "agent_message_chunk", "content": {"text": "Checked all changes and the builder proof.\nVERDICT: PASS"}})
@@ -380,7 +392,7 @@ def wall_clock_proof():
         proof.assertEqual(proof.clock.offset, 0)
         for thread, proc in ((first, first_proc), (second, second_proc)):
             record = proof.expire(thread)
-            proof.assertEqual((record["status"], record["error"]), ("failed", "turn ran over 10 min"))
+            proof.assertEqual((record["status"], record["error"]), ("failed", "turn budget exceeded: 10 min"))
             proof.assertEqual(proc.cancels, 1)
             proof.assertEqual(proof.releases.count(thread["threadId"]), 1)
             persisted = json.loads(Path(h.THREADS.path).read_text())[thread["threadId"]]
