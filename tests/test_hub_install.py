@@ -62,6 +62,9 @@ class IdleInstallTests(unittest.TestCase):
         self.git("commit", "-qm", "fixture")
         self.sha = self.git("rev-parse", "HEAD")
         self.git("update-ref", "refs/remotes/origin/main", self.sha)
+        # The worker installs from the persistent checkout; the live checkout only fast-forwards.
+        self.install = self.home / ".local/share/mac-ops-install"
+        subprocess.run(["git", "clone", str(self.checkout), str(self.install)], check=True, capture_output=True)
         self.notices = []
         self.calls = []
         self.idle = True
@@ -212,7 +215,7 @@ class IdleInstallTests(unittest.TestCase):
         self.assertFalse(self.calls)
 
     def test_dirty_checkout_refuses(self):
-        (self.checkout / "unexpected").write_text("dirty")
+        (self.install / "unexpected").write_text("dirty")
         self.assertEqual(self.tick()["state"], "refused")
         self.assertFalse(self.calls)
 
