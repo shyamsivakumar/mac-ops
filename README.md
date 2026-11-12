@@ -17,6 +17,8 @@ dependencies. Apple Command Line Tools supply Python 3; macOS supplies launchd
 and taskpolicy. The repository is the source; installed runtime files are
 private copies with a content digest.
 
+[Cockpit on T3 Code](docs/cockpit-t3.md) covers the board transport, checks and rollback.
+
 ## Install on a Mac
 
 Install Apple Command Line Tools first if needed (`xcode-select --install`).
