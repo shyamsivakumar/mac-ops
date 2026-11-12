@@ -222,7 +222,7 @@ def categorize(row: dict[str, Any]) -> str:
 class T3State:
     PAGE_LIMIT = 100
     MAX_PAGES = 1000
-    LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
+    worktree_cache: dict[str, tuple[str, str | None]] = {}
 
     def __init__(self):
         self._read_threads()
@@ -248,11 +248,11 @@ class T3State:
         self.paths: list[tuple[Path, str]] = []
         self.thread_count = 0
         self.page_count = 0
-        listed: list[str] = []
+        listed: list[tuple[str, str]] = []
         cursor = 0
         total: int | None = None
         while self.page_count < self.MAX_PAGES:
-            page = self._call("t3_thread_list", {"allProjects": True, "statuses": self.LIVE_STATUSES, "limit": self.PAGE_LIMIT, "cursor": cursor})
+            page = self._call("t3_thread_list", {"allProjects": True, "settled": False, "limit": self.PAGE_LIMIT, "cursor": cursor})
             rows = page.get("threads") if isinstance(page, dict) else None
             page_total = page.get("total") if isinstance(page, dict) else None
             if not isinstance(rows, list) or len(rows) > self.PAGE_LIMIT or type(page_total) is not int or page_total < 0:
@@ -263,11 +263,12 @@ class T3State:
             self.page_count += 1
             for thread in rows:
                 thread_id = thread.get("threadId") if isinstance(thread, dict) else None
-                if not isinstance(thread_id, str) or not thread_id or thread_id in listed:
+                if not isinstance(thread_id, str) or not thread_id or thread_id in {seen for seen, _ in listed}:
                     raise SafetyError("t3_list_duplicate_or_invalid_thread")
-                if thread.get("status") not in self.LIVE_STATUSES:
+                updated_at = thread.get("updatedAt")
+                if thread.get("settled") is not False or not isinstance(updated_at, str) or not updated_at:
                     raise SafetyError("t3_thread_invalid")
-                listed.append(thread_id)
+                listed.append((thread_id, updated_at))
             next_cursor = page.get("nextCursor")
             if next_cursor is None:
                 if len(listed) != total:
@@ -278,17 +279,20 @@ class T3State:
             cursor = next_cursor
         else:
             raise SafetyError("t3_list_incomplete")
-        for thread_id in listed:
-            read = self._call("t3_thread_read", {"threadId": thread_id, "limit": 1})
-            thread = read.get("thread") if isinstance(read, dict) else None
-            if not isinstance(thread, dict) or thread.get("threadId") != thread_id or "worktreePath" not in thread:
-                raise SafetyError("t3_thread_path_unverified")
-            worktree = thread["worktreePath"]
-            if worktree is not None and (not isinstance(worktree, str) or not worktree or "\0" in worktree or not Path(worktree).is_absolute()):
-                raise SafetyError("t3_thread_path_invalid")
-            self.records[thread_id] = (thread.get("status"), worktree and canonical(worktree))
-            if worktree:
-                self.paths.append((Path(canonical(worktree)), thread_id))
+        for thread_id, updated_at in listed:
+            cached = self.worktree_cache.get(thread_id)
+            if cached is None or cached[0] != updated_at:
+                read = self._call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+                thread = read.get("thread") if isinstance(read, dict) else None
+                if not isinstance(thread, dict) or thread.get("threadId") != thread_id or "worktreePath" not in thread:
+                    raise SafetyError("t3_thread_path_unverified")
+                worktree = thread["worktreePath"]
+                if worktree is not None and (not isinstance(worktree, str) or not worktree or "\0" in worktree or not Path(worktree).is_absolute()):
+                    raise SafetyError("t3_thread_path_invalid")
+                cached = self.worktree_cache[thread_id] = (updated_at, worktree and canonical(worktree))
+            self.records[thread_id] = cached
+            if cached[1]:
+                self.paths.append((Path(cached[1]), thread_id))
         self.thread_count = len(listed)
 
     def users(self, path: Path) -> list[str]:
