@@ -83,18 +83,18 @@
     }
   },
   "turnLimits": {
-    "turnSeconds": 900,
+    "turnSeconds": 600,
     "noProgressSeconds": 1200,
     "toolSeconds": 10800,
     "taskTypeSeconds": {
-      "standard": 900,
-      "chore": 900,
-      "ui": 900,
-      "research": 900,
-      "rca": 900,
-      "risky": 900,
-      "large": 900,
-      "design": 900,
+      "standard": 600,
+      "chore": 600,
+      "ui": 600,
+      "research": 600,
+      "rca": 600,
+      "risky": 600,
+      "large": 600,
+      "design": 600,
       "review": 1200
     }
   }
