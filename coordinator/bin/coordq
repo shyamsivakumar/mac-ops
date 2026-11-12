@@ -9,13 +9,13 @@ WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 OPUS_MODEL = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
 TASK_MODELS = {
-    "standard": WORKER_MODEL,
-    "large": WORKER_MODEL,
-    "ui": WORKER_MODEL,
-    "research": WORKER_MODEL,
-    "rca": WORKER_MODEL,
-    "chore": WORKER_MODEL,
-    "worker": WORKER_MODEL,
+    "standard": {"instanceId": "pi", "model": "task/standard"},
+    "large": {"instanceId": "pi", "model": "task/standard"},
+    "ui": {"instanceId": "pi", "model": "task/ui"},
+    "research": {"instanceId": "pi", "model": "task/research"},
+    "rca": {"instanceId": "pi", "model": "task/rca"},
+    "chore": {"instanceId": "pi", "model": "task/chore"},
+    "worker": {"instanceId": "pi", "model": "task/standard"},
     "panel": WORKER_MODEL,
     "risky": SOL_MODEL,
     "design": SOL_MODEL,
