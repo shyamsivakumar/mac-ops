@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import json
 import os
+import plistlib
 import stat
 import sys
 import time
@@ -62,6 +63,32 @@ def render_plists(checkout: Path, home: Path) -> list[tuple[bytes, Path]]:
         )
         for src in sorted(folder.glob("*.plist"))
     ]
+
+
+def log_dirs(rendered: list[tuple[bytes, Path]]) -> set[Path]:
+    """Return the directories the rendered jobs write their logs into."""
+    dirs = set()
+    for data, _ in rendered:
+        try:
+            parsed = plistlib.loads(data)
+        except (plistlib.InvalidFileException, ValueError):
+            continue
+        for key in ("StandardOutPath", "StandardErrorPath"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value:
+                dirs.add(Path(value).parent)
+    return dirs
+
+
+def ensure_log_dirs(dirs: set[Path]) -> list[Path]:
+    """Create the log directories. launchd does not create them, and a job
+    whose log path is missing does not start."""
+    created = []
+    for directory in sorted(dirs):
+        if not directory.is_dir():
+            directory.mkdir(parents=True, exist_ok=True)
+            created.append(directory)
+    return created
 
 
 @contextlib.contextmanager
@@ -180,6 +207,9 @@ def install(checkout: Path, dry_run: bool) -> None:
             indent=2,
         ))
         return
+    created = ensure_log_dirs(log_dirs(render_plists(checkout, home)))
+    for directory in created:
+        print(f"Created log directory: {directory}")
     if not pending:
         print("Wrote 0 coordinator files. Already in sync.")
         return
