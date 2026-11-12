@@ -26,7 +26,7 @@ BIN_FILES = (
 )
 LIB_FILES = ("emp_post_merge.py", "emp_hub_install.py")
 CONFIG_FILES = ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md", "tickets.json", "post-merge.json")
-MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels")
+MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
 
 
