@@ -365,6 +365,103 @@ file.
   merge tool, so this is either a `gh pr merge` wrapper in the coordinator or
   a wait for T3 to expose one.
 
+## Slice 1: empq speaks T3 (done)
+
+**When:** MO-184 slice 1, 2026-11-12.
+
+*`empryo/bin/empq` now calls `t3mcp call <t3 tool>` instead of
+`emp call <emp tool>`. The Emp-hub is unloaded for good, so empq never calls
+`emp` again. The queue file, the cap in `queue/config.json`, the priorities,
+the `clientRequestId` dedupe and the `install_pending` admission gate are
+unchanged.*
+
+### What changed
+
+- The transport in `empq.call()` is `t3mcp call <tool> -` with the JSON
+  payload on stdin, in place of `emp call <tool> -`. The binary is
+  `EMPQ_T3MCP` (default `t3mcp`).
+- A `TOOLS` map translates the old Emp tool names to the T3 names
+  (`emp_thread_launch` → `t3_thread_launch`, and the same for send and list),
+  so queue items written by the old code still dispatch.
+- `with_model()` resolves the task type to a concrete `modelSelection` before
+  every launch, because `t3_thread_launch` has no `taskType` property. The
+  table lives in empq: `risky` and `design` → `{"instanceId": "codex",
+  "model": "gpt-6.1-sol"}`, `review` → `{"instanceId": "claudeAgent", "model":
+  "claude-opus-5-5"}`, every other task type → the worker default
+  `{"instanceId": "minimax", "model": "claude-sonnet-5-5"}`. An explicit
+  `modelSelection` in the payload wins over the task type. A launch with
+  neither is refused.
+- `empq create` sends `scratch: true` when the payload names no project and
+  no worktree, so an idle thread lands in the T3 scratch project rather than
+  needing a project id.
+- The `origin` field and the `EMP_HUB_THREAD` environment variable are gone
+  from the queue item and the call. They were Emp-hub concepts and T3 has no
+  equivalent that empq can fill from the queue file alone.
+- `empq start --tool` takes `t3_thread_send` and `t3_thread_launch`. The
+  `delegate_task` option is dropped for now: mapping it to
+  `t3_thread_launch` plus `delegatedFrom` needs an `environmentId` that only
+  the coordinator can supply, and that is coordinator work outside this repo.
+
+### The table lives in empq, not in `tickets.json`
+
+**Decision:** the task-type table is a constant in `empryo/bin/empq`.
+
+**Reason:** the decision above put the table in `empryo/config/tickets.json`
+so that empq and the ticket CLI read one file. Slice 1 moved it into empq
+instead, because empq is now the only component that resolves a task type:
+the ticket CLI (slice 2) resolves its own `modelSelection` from the
+`models` aliases in `tickets.json` and passes the result to empq as an
+explicit `modelSelection`, so the ticket CLI never needs the task-type table
+at all. One owner, and it is the component that speaks to T3.
+
+**Precedence:** an explicit `modelSelection` in the payload wins over the
+task type, so a caller that names a model gets that model. The task type is
+the fallback, and it is the only thing that resolves a worker launch.
+
+**Gap:** `tickets.json` still carries the Emp-era `models` alias selections
+(`instanceId: "empryo"`, `minimax/MiniMax-M3.1-Flash`). Those do not exist in
+T3 and are retargeted in slice 2, which is the slice that owns
+`tickets.json`.
+
+### Proof
+
+All against the live T3 server. The temporary queue lived under `$TMPDIR`,
+so the live queue file at `~/Code/coordinator/queue/queue.json` was never
+read or written by the proof.
+
+| Check | Result |
+| --- | --- |
+| `empq create` with a task type | Idle thread, `minimax`/`claude-sonnet-5-5` |
+| `empq start` with a message | Thread `mcp:launch:498a18a7...` launched |
+| Repeated `clientRequestId` | Same id as `mo184-proof-start-1`; one thread |
+| Cap queues the next item | `queued #8` at cap 6, `queued #3` at cap 1 |
+| No task type and no model | Refused: needs taskType or modelSelection |
+| Existing tests | `test_hub_install.py`, `test_hub_install_batch.py` pass |
+| Cleanup | The 7 proof threads were interrupted and settled |
+
+### What is left for slices 2 and 3
+
+**Slice 2, the ticket CLI.** `empryo/bin/ticket` still calls
+`emp_thread_launch`, `emp_thread_send` and `emp_thread_list` through
+`emp_call`, and it still puts `taskType` in the launch payload. It needs to
+call T3, drop `taskType`, and send the resolved `modelSelection`.
+`empryo/config/tickets.json` needs its `models` aliases retargeted to T3
+provider and model ids: `minimax` → `{"instanceId": "minimax", "model":
+"claude-sonnet-5-5"}`, `sonnet` → the same, `glm-5.3` → a live T3 selection,
+and `empryo` retired as an instance id. The builder brief also needs the CI
+and review prefix, and `empryo/config/agents/code-reviewer.md` needs a
+`.github/workflows` or `.woodpecker` file in the diff to be a major finding.
+
+**Slice 3, the coordinator watcher.** `~/Code/coordinator/loop/watch.py` and
+`~/Code/coordinator/loop/board_sweep.py` live outside this repo. The exact
+call sites and their replacements are in the handoff section above. Two items
+there need the coordinator: `t3_thread_list` has no `pendingRequestCount` and
+no `archived` field, so the watcher must ask `t3_pending_request` per thread
+and the board sweep must give up its `archived` filter. `board_sweep.vendor()`
+must read `providerInstanceId` rather than matching the model string, because
+the T3 `minimax` provider runs `claude-sonnet-5-5` and a string match reads it
+as Anthropic and would skip the gate.
+
 ## Method
 
 No secrets were read or printed. `.env` was never opened. emp-hub was never
