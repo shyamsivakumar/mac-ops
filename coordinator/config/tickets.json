@@ -76,14 +76,14 @@
     "glm-5.3": {
       "selection": {
         "instanceId": "glm",
-        "model": "glm-5.3"
+        "model": "zai/glm-5.3"
       },
       "vendor": "zhipu"
     },
     "minimax": {
       "selection": {
         "instanceId": "minimax",
-        "model": "claude-sonnet-5-5"
+        "model": "minimax/MiniMax-M3.1-Flash"
       },
       "vendor": "minimax"
     },
