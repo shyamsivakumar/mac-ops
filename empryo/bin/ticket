@@ -472,7 +472,7 @@ def assert_not_active(cfg, t, ledger):
     for attempt in prior:
         thread = thread_for_attempt(cfg, t, [attempt] + [e for e in ledger if e.get("kind") == "receipt"])
         if thread is None:
-            raise Refuse(f"already started: attempt {attempt['attempt']} is queued")
+            continue
         if thread["status"] in LIVE_STATUSES:
             raise Refuse(f"already started: thread {thread['threadId']} is {thread['status']}")
 
@@ -640,6 +640,7 @@ def cmd_show(a):
         t = parse_ticket(cfg, repo, issue)
         ledger = ledger_of(issue, authed_login())
         thread = thread_for_attempt(cfg, t, ledger) if t["key"] and intents(ledger) else None
+        queued = queue_items(repo, n)
         out = {
             "repo": repo,
             "number": n,
@@ -659,11 +660,12 @@ def cmd_show(a):
             "template": template_status(cfg, t["body"]),
             "blockers": blockers_of(issue),
             "ledger": ledger,
-            "queued": [{"id": i["id"], "title": i["title"]} for i in queue_items(repo, n)],
+            "queued": [{"id": i["id"], "title": i["title"]} for i in queued],
             "latestAttempt": {
                 "attempt": max((e["attempt"] for e in intents(ledger)), default=None),
                 "threadId": thread["threadId"] if thread else None,
-                "status": thread["status"] if thread else ("queued" if intents(ledger) else None),
+                "status": thread["status"] if thread else ("queued" if queued else
+                          ("not running (no thread recorded)" if intents(ledger) else None)),
             },
         }
     except Refuse as e:
