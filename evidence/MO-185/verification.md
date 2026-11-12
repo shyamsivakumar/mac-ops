@@ -1,35 +1,56 @@
-# MO-185 verification — 2026-11-12
+# MO-185/186 verification, 2026-11-12
 
-Scope: move Cockpit's existing transport to T3, retain columns, disable board
-merging and drop cleanup. No dependencies or automated CI workflows added.
+Cockpit reads T3 and Approve queues a gated relay merge. The board never runs
+GitHub's merge command itself. No dependencies or CI workflows were added.
 
-- `python3 scripts/mac_ops_fast_check.py`: passed (selected checks, not full suite).
-- Node syntax checks for hub.js, main.js and ui.js: passed.
+## Findings and fixes
+
+- The retired-call grep previously matched the absolute empq path. Both queue
+  calls now resolve `empq` from PATH. `retired-grep.txt` records the actual empty
+  output and exit 1 from `grep -rn 'emp_\|/bin/emp' empryo/mods/cockpit`.
+- Deleted oldShells, window discovery/close and their callers, shell badges,
+  the unreachable ops-panels path, and the obsolete Empryo session guard.
+- Replaced merge stubs with fresh PR and separate review preflight. A completed
+  claude-opus-5-5 run must end in VERDICT: PASS and CHECK the current full SHA
+  and PR. Ascend repos refuse; SRW requires successful srw/agent-check.
+- Approve and Approve all retain press-twice confirmation. The relay is queued
+  with taskType worker (empq's MiniMax worker mapping), the PR repo's project,
+  and exactly the squash merge command pinned by --match-head-commit.
+  Same-head requests are deduplicated for the lifetime of the loaded module.
+- Ready uses "Approve merge" and shows the relay plan in its action tooltip,
+  or the refusal on the card. A fresh preflight runs again before queueing.
+- Pending requests are listed once per live thread per load. A failed lookup
+  labels that card "pending request unknown" without blanking the board.
+
+## Repeatable proofs
+
+Run `node evidence/MO-185/relay-probe.mjs`. It creates executable empq, gh and
+T3 stubs in a temporary directory. It performs no live queue writes, merges
+or sends. `relay-proof.json` records passing refusal cases, exact relay payload,
+press-twice confirmation, same-head deduplication, and pending lookup isolation.
+
+- `python3 scripts/mac_ops_fast_check.py`: passed; selected checks, not full suite.
+  Output is `fast-check.txt`.
+- `node --check` on every cockpit JavaScript file: passed.
+- `herdr-app check empryo/mods/cockpit`: passed (`herdr-check.txt`).
 - `git diff --check`: passed.
-- Required retired-call grep: no matches.
-- Existing cockpit-specific tests: none found; existing tests unchanged.
-- Read-only loader probe: exact running ID equality before/after the load,
-  six threads; twelve Needs groups; Hub reachable; Queue matched the same
-  `empq status` sample at cap 6, live 6, queued 6. The probe allowlisted only
-  thread/project/pending reads and `empq status`.
-- Probe and full private receipt: `/tmp/mo185-probe.mjs` and
-  `/tmp/mo185-read-proof.json`. No tokens or .env read or printed.
-- Herdr mod check passed; installed directory backed up before copying;
-  native hot reload observed; app status reported no errors.
-- One Luna Max in-session read-only reviewer round found the legacy automatic
-  preflight incorrectly stored the relay notice as a refusal. Fixed by disabling
-  automatic preflight and ignoring obsolete refusal records. No second round.
-- Diff comment review and bounded deslop pass: no added comments, dependencies,
-  compatibility transport or unrelated cleanup. Removed retired terminal and
-  shell probes as part of eliminating Empryo support.
+- One Luna Max read-only in-session reviewer round. Recognized the documented
+  subscriptions/ Opus model prefix and added a stub probe. The suggested
+  absolute empq path was not adopted: the task explicitly permits PATH and
+  the installed live empq status probe passed. No Opus gate launched.
+- Bounded deslop and no-comments diff review removed obsolete compatibility
+  paths; no comments or dependencies added.
 
-Reply, Settle and pending responses were not executed. No emp, send, settle or
-interrupt call was made during acceptance. Exact-head Claude Opus gate is
-pending and was deliberately not launched. No merge authorized here.
+## Installed read-only proof and rollback
 
-Final native frame: `/tmp/mo185-final-board.png`; matching live listing:
-`/tmp/mo185-final-running.json`; queue sample:
-`/tmp/mo185-final-queue.json` (cap 6, live 6, queued 7); app status:
-`/tmp/mo185-final-app-status.json` (errors empty). Frame shows Running 6/6,
-Needs you 12, Hub T3 reachable and Queue 6/6 with 7 queued. Running cards
-retain the existing task grouping (SRW-1036 includes its separate review).
+The previous installation was copied to
+`~/.config/herdr-app/mods/cockpit.pre-mo186` before replacing its JavaScript.
+`live-probe.mjs` allowlists T3 reads, gh pr view and empq status only.
+`live-summary.json` and `live-proof.json` record exact equality of Running IDs
+against stable before/after T3 listings and Ready preflight refusals.
+`board.png` shows the native loaded board and Ready refusals. `app-status.json`
+records no app errors. No real Approve, Reply, Settle or send was executed.
+
+Restore the backup directory to roll back the local installation; revert the
+PR to roll back source. The separate exact-head Opus gate remains required.
+Stub proof does not prove a real relay merge, which was deliberately not run.

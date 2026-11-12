@@ -3,7 +3,7 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, oldShells, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
+import { hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
@@ -33,14 +33,10 @@ const CONFIRM_GAP = 400;
 const DEC_FRESH = 60000;
 const STALE_RUN = 1800000;
 const NO_REVIEW_REFUSAL = /no review thread found/i;
-const RECHECK_AFTER = 300000;
 const PLAN_STALE = 60000;
-const OPEN_IN_EMPRYO = /session is open in Empryo/;
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
-const SHELL_EVERY = 60000;
-const PANEL_SIZE = { models: [520, 470], queue: [520, 340], hub: [520, 400] };
 
 const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/^Still checking/, "still checking"], [/^The review found/, "review failed"], [/^Review unreadable/, "review unreadable"]];
 const HUB_BUCKET = "refused by the hub";
@@ -55,7 +51,6 @@ const say = (level, title, body, items = [], explicit = false) => {
 };
 const dismiss = () => setShared("cockpit.notice", null);
 
-const failureText = (message) => (OPEN_IN_EMPRYO.test(message) ? "An Empryo window is open on this task. Close it, then send again." : message);
 
 const readState = async (name) => {
   const text = await readTextFile(`${WT_STATE}/${name}`);
@@ -104,7 +99,6 @@ export default class Board extends View {
     this.stamps = {};
     this.asked = new Map();
     this.planning = 0;
-    this.windows = [];
     this.cursor = props()?.cursor ?? null;
     this.published = null;
     this.opening = null;
@@ -129,9 +123,7 @@ export default class Board extends View {
     this.colW = MIN_COL;
     this.wt = null;
     this.hub = null;
-    this.shells = { changed: 0, cwds: [] };
     this.hubBusy = false;
-    this.shellsBusy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["backlog"]'));
     this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["backlog","done"]'));
     this.compact = false;
@@ -174,9 +166,7 @@ export default class Board extends View {
     if (shared("cockpit.notice")) dismiss();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
-    cx.timer.every(SHELL_EVERY, (cx) => this.watching() && this.watchShells(cx));
     this.watchWorktrees(cx);
-    this.watchShells(cx);
     this.restore();
     shepherdrStates().then((states) => {
       this.shepherdr = states;
@@ -211,9 +201,7 @@ export default class Board extends View {
         if (token !== this.token) return;
         const stuck = this.loading && Date.now() - this.loadingSince > STUCK_AFTER;
         const fresh = !this.unchanged("board", { ...board, at: 0 });
-        this.windows = empryoWindows();
-        const moved = !this.unchanged("windows", this.windows);
-        const changed = fresh || moved || Boolean(this.error) || this.stale || this.restored || stuck;
+        const changed = fresh || Boolean(this.error) || this.stale || this.restored || stuck;
         this.board = board;
         this.error = "";
         this.stale = false;
@@ -255,16 +243,6 @@ export default class Board extends View {
     });
   }
 
-  watchShells(cx) {
-    if (this.shellsBusy) return;
-    this.shellsBusy = true;
-    cx.spawn(async (cx) => {
-      this.shells = await oldShells();
-      this.shellsBusy = false;
-      if (!this.unchanged("shells", this.shells)) cx.notify();
-    });
-  }
-
   watchHub(cx) {
     if (this.hubBusy) return;
     this.hubBusy = true;
@@ -283,9 +261,7 @@ export default class Board extends View {
     this.deciding = `panel:${id}`;
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
     if (id === "wt") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
-    const ops = shared("ops");
-    const seed = { hub: this.hub, health: ops?.health ?? null, running: this.board?.running ?? 0, cap: this.cap };
-    openOverlay({ mod: "ops-panels", kind: "dialog", width: PANEL_SIZE[id][0], height: PANEL_SIZE[id][1], props: { panel: id, seed } });
+
   }
 
   readSaved() {
@@ -345,8 +321,6 @@ export default class Board extends View {
     this.backlogLoaded = true;
     this.cap = snap.cap;
     this.shepherdr = new Map(snap.shepherdr);
-    this.windows = snap.windows;
-    this.shells = snap.shells;
     this.stale = snap.unsure;
     seedPrs(snap.prs);
     seedVerdicts(snap.verdicts);
@@ -368,8 +342,6 @@ export default class Board extends View {
       verdicts: verdictEntries(threads),
       origins: originEntries(threads),
       shepherdr: [...this.shepherdr].filter(([thread]) => keys.has(thread)),
-      windows: this.windows,
-      shells: this.shells,
     };
   }
 
@@ -548,7 +520,6 @@ export default class Board extends View {
       approveAll: (cx) => this.approveAll(cx),
       queue: (cx) => this.queue(this.current(), cx),
       openPr: () => this.openPr(this.current()),
-      closeWindow: (key, cx) => this.closeEmpryo(this.entryOf(key), cx),
       fold: (key, cx) => {
         this.toggleFold(key);
         cx.notify();
@@ -573,7 +544,7 @@ export default class Board extends View {
         const block = variant === "ready" && g.info.status === "open" ? this.reviewBlock(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
-        const view = (extra) => ({ origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: block ?? refusal?.text, blocked: Boolean(block || refusal?.planned), window: g.threads.some((x) => this.windows.includes(showName(x.key))), state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), oldShell: this.shells.cwds.includes(c.cwd), shells: this.shells, since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text ?? block, blocked: Boolean(block || refusal?.planned), plan: this.asked.get(g.key)?.plan, state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -815,7 +786,7 @@ export default class Board extends View {
 
   decisionSnap(e) {
     const g = { ...e.group, info: undefined };
-    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads), shepherdr: [], shells: this.shells };
+    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads), shepherdr: [] };
   }
 
   openDecision(e, cx) {
@@ -1025,7 +996,6 @@ export default class Board extends View {
     if (!e || this.opening === e.key) return;
     if (e.group.issue) return exec("open", [e.group.issue.url]);
     const thread = this.threadOf(e);
-    if (!thread.session && !thread.runs) return say("info", "No Empryo session yet", "Send a message first.");
     this.opening = e.key;
     cx.notify();
     cx.spawn(async (cx) => {
@@ -1116,15 +1086,14 @@ export default class Board extends View {
   }
 
   async verifyMerge(g, shown) {
-    const pr = g.info.pr;
-    const [fresh, plan] = await Promise.all([fetchPr(pr), mergePlan(this.taskThread(g).key)]);
-    storePr(pr, fresh);
+    const fresh = await fetchPr(g.info.pr);
+    storePr(g.info.pr, fresh);
     const changes = prChanges(shown, fresh);
-    if (changes.length) return `Changed since this was shown: ${changes.join("; ")}. Review it, then press again.`;
-    if (!plan.dryRun) return plan.refused;
-    if (plan.wouldMerge.number !== pr.number) return `The hub would merge #${plan.wouldMerge.number}, but this card shows #${pr.number}.`;
-    if (plan.wouldMerge.sha !== fresh.sha) return `The hub's head commit ${plan.wouldMerge.sha.slice(0, 7)} differs from GitHub's ${fresh.sha.slice(0, 7)}.`;
-    this.planned = plan.revision;
+    if (changes.length) return `Changed since shown: ${changes.join("; ")}. Approve again.`;
+    const plan = await mergePlan(g);
+    if (plan.refused) return plan.refused;
+    if (plan.sha !== fresh.sha) return "PR head changed; approve again";
+    this.planned = plan;
     return null;
   }
 
@@ -1134,8 +1103,9 @@ export default class Board extends View {
     return [pr?.number, gh?.sha, gh?.ci, gh?.mergeState, gh?.mergeable, review?.key, review?.at].join(":");
   }
 
-  refusalOf() {
-    return null;
+  refusalOf(g) {
+    const refusal = shared("cockpit.refused")?.[g.key];
+    return refusal?.stamp === this.stamp(g) ? refusal : null;
   }
 
   pruneRefused() {
@@ -1162,19 +1132,20 @@ export default class Board extends View {
 
   async askHub(g) {
     const stamp = this.stamp(g);
-    this.asked.set(g.key, stamp);
+    this.asked.set(g.key, { stamp, at: Date.now() });
     this.planning = Date.now();
-    const plan = await mergePlan(this.taskThread(g).key).finally(() => (this.planning = 0));
+    const plan = await mergePlan({ ...g, info: this.prInfo(g) }).finally(() => (this.planning = 0));
     const live = this.groups().find((x) => x.key === g.key);
     if (!live || this.stamp(live) !== stamp) return undefined;
     const existing = this.refusalOf(live);
     if (existing && !existing.planned) return { refused: existing.text };
-    if (!plan.dryRun) return { refused: this.refuse(live, g.task || g.title, plan.refused, true).text };
+    if (plan.refused) return { refused: this.refuse(live, g.task || g.title, plan.refused, true).text };
     if (existing) {
       const kept = { ...shared("cockpit.refused") };
       delete kept[live.key];
       setShared("cockpit.refused", kept);
     }
+    this.asked.set(g.key, { stamp, at: Date.now(), plan });
     return { refused: null };
   }
 
@@ -1183,25 +1154,14 @@ export default class Board extends View {
   }
 
   async planNext() {
-    return false;
-  }
-
-  recheckBlocked(e, cx) {
-    if (this.checking()) return say("info", "Checking with the hub", "Try again in a moment.");
-    say("info", "Checking with the hub", "Asking whether it can merge now.");
-    cx.spawn(async (cx) => {
-      try {
-        const answer = await this.askHub(e.group);
-        if (!answer) say("info", "The board changed", "Select the card again.");
-        else if (answer.refused) say("info", "Not approved", answer.refused, [], true);
-        else {
-          this.approve(this.entryOf(e.key) ?? e, cx);
-        }
-      } catch (error) {
-        say("error", "Check failed", error.message);
-      }
-      cx.notify();
+    if (this.checking()) return false;
+    const next = this.readyCandidates().find((g) => {
+      const asked = this.asked.get(g.key);
+      return asked?.stamp !== this.stamp(g) || Date.now() - asked.at > PLAN_STALE;
     });
+    if (!next) return false;
+    await this.askHub(next);
+    return true;
   }
 
   async mergeOne(g, shown) {
@@ -1214,13 +1174,11 @@ export default class Board extends View {
     }
     if (problem) return this.refuse(g, name, problem);
     try {
-      const r = await mergeThread(this.taskThread(g).key, this.planned);
-      if (r.merged) return { name, merged: true, text: "" };
+      const r = await mergeThread(g, this.planned);
+      if (r.queued) return { name, queued: true, text: r.text };
       return this.refuse(g, name, r.refused);
     } catch (error) {
-      const state = await fetchPr(g.info.pr).then((x) => x.state, () => null);
-      if (state === "MERGED") return { name, merged: true, text: "The hub took too long to answer, but GitHub shows it merged." };
-      return this.refuse(g, name, `${error.message}. It may still merge, so check GitHub before trying again.`);
+      return this.refuse(g, name, `${error.message}. Check the relay queue before trying again.`);
     }
   }
 
@@ -1241,7 +1199,7 @@ export default class Board extends View {
         }
         const notice = mergeNotice(results);
         say(notice.level, notice.text, null, notice.items);
-        const first = results.find((r) => !r.merged);
+        const first = results.find((r) => !r.queued);
         if (this.dec && first) this.outcome = { text: `Not merged: ${first.text}` };
         await this.refresh(cx, true);
       } finally {
@@ -1292,24 +1250,22 @@ export default class Board extends View {
   }
 
   approve(e, cx) {
-    return say("info", "merged by relay after the Opus gate");
+    if (e?.col !== "ready" || this.guard(true)) return;
+    const g = e.group;
+    this.confirm("approve", e.key, (seen) => this.merge([g], cx, seen), cx, [g.info.gh]);
   }
 
   approveAll(cx) {
-    return say("info", "merged by relay after the Opus gate");
+    if (this.guard(true)) return;
+    const groups = this.layout.approvable.map((x) => x.group);
+    if (!groups.length) return say("info", this.layout.nothing);
+    this.confirm("approve-all", "all", (seen) => this.merge(groups, cx, seen), cx, groups.map((g) => g.info.gh));
   }
 
   queue(e, cx) {
     if (e?.group.issue) return say("info", "Open the ticket to start it", "Press Enter on the card.");
     if (e?.col !== "backlog" || this.guard(true)) return;
     this.confirm("queue", e.key, () => this.tell(this.ask("Queue", e.group, "start it when a slot frees"), `Queued ${e.group.task || e.group.title}`, cx), cx);
-  }
-
-  closeEmpryo(e, cx) {
-    if (!e) return;
-    const name = e.group.task || e.group.title;
-    const open = e.group.threads.filter((x) => this.windows.includes(showName(x.key)));
-    this.confirm("close-window", e.key, () => this.attempt(`Closed the Empryo window for ${name}`, () => Promise.all(open.map((x) => closeWindow(x.key))), cx), cx);
   }
 
   openPr(e) {
@@ -1326,7 +1282,7 @@ export default class Board extends View {
       } catch (error) {
         ok = false;
         undo?.();
-        say("error", `${label.split(" ")[0]} failed`, failureText(error.message));
+        say("error", `${label.split(" ")[0]} failed`, error.message);
       }
       await this.refresh(cx, true);
       if (this.dec && ok) closeOverlay(this.overlay);

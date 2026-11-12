@@ -1,0 +1,45 @@
+{
+  "plans": [
+    {
+      "task": "SRW-1037",
+      "plan": {
+        "refused": "PR must be open, ready and mergeable"
+      }
+    },
+    {
+      "task": "SRW-1038",
+      "plan": {
+        "refused": "PR must be open, ready and mergeable"
+      }
+    },
+    {
+      "task": "SRW-1029",
+      "plan": {
+        "refused": "No separate review thread found"
+      }
+    }
+  ],
+  "at": "2026-11-12T18:35:38.569Z",
+  "running": [
+    "mcp:0d231a14-e917-43bb-80f6-6b6773a2ee31",
+    "mcp:e7b91723-cc86-48b1-879e-b407d63ff79e"
+  ],
+  "shown": [
+    "mcp:0d231a14-e917-43bb-80f6-6b6773a2ee31",
+    "mcp:e7b91723-cc86-48b1-879e-b407d63ff79e"
+  ],
+  "status": {
+    "reachable": true,
+    "queue": {
+      "cap": 6,
+      "live": 2,
+      "queued": 0
+    }
+  },
+  "queue": {
+    "cap": 6,
+    "live": 2,
+    "queued": 0
+  },
+  "callCount": 70
+}
