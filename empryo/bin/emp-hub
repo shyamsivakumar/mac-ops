@@ -811,6 +811,7 @@ def install_pending():
             since = state["since"]
             if type(since) not in (int, float):
                 return True
+            # Keep 1800 in sync with emp_hub_install.CAP_SECONDS.
             # Invalid/future timestamps fail closed, as does unreadable state.
             return not 0 <= time.time() - since < 1800
         return state["state"] in ("installing", "restarting")

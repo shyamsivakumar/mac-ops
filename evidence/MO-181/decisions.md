@@ -91,17 +91,26 @@ After implementation:
 
 ```text
 python3 -m unittest discover -s tests -p 'test_hub_install*.py' -v
-Ran 33 tests in 8.158s
+Ran 34 tests in 10.998s
 
 OK
 ```
 
 The 26 existing tests retain every assertion (only the seven authorized clock
-lines above changed); seven new tests live in `tests/test_hub_install_batch.py`.
+lines above changed); eight new tests live in `tests/test_hub_install_batch.py`.
 No full repo check, heavy command, live install/restart/drain/kickstart or real
 hub command ran. `git diff --check` passed.
 
 ## In-session review
 
-A fresh read-only Claude Opus 5.5 review of the implementation is required;
-the earlier documentation-only PASS is not the implementation gate verdict.
+Claude Opus 5.5 reviewed implementation head `2f00825` against `origin/main`,
+read-only. No critical or major findings; no safety refusal was removed. Proofs
+were not independently rerun. Minor findings addressed after that one round:
+added invalid-worker-timestamp coverage and direct post-window hub-queue
+coverage; linked the gate constants to CAP_SECONDS; documented backward-clock
+refusal and the old-hub rollout limitation. The existing missing-timestamp test
+needs no change: new acceptance coverage tests the valid-timestamp path.
+No findings remain open. Post-review additions were builder-verified with the
+34-test result above, not independently re-reviewed. No real hub was run.
+
+VERDICT: PASS

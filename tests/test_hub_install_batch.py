@@ -58,6 +58,21 @@ class BatchInstallTests(unittest.TestCase):
                 drain()
                 self.assertEqual(queue["items"][0]["id"], 2)
                 self.assertEqual(len(started), 1)
+                thread["status"] = "completed"
+                start(thread, "held after window")
+                self.assertEqual(thread["status"], "queued")
+                self.assertEqual(thread["pendingTurn"]["message"], "held after window")
+                self.assertEqual(len(started), 1)
+
+    def test_worker_invalid_wait_start_refuses_once_without_side_effects(self):
+        for since in (float("nan"), 500):
+            f = self.fixture
+            base.WORKER.save(self.home, {"state": "pending", "sha": f.sha, "since": since})
+            before = len(f.notices)
+            self.assertEqual(f.tick(now=400)["state"], "refused")
+            self.assertEqual(f.tick(now=401)["state"], "refused")
+            self.assertEqual(len(f.notices), before + 1)
+            self.assertFalse(f.calls)
 
     def test_gates_agree_at_boundary_and_fail_closed_on_invalid_time(self):
         for source in ("empq", "emp-hub"):
