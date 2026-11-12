@@ -133,7 +133,7 @@ def export_posthog(
                 "distinct_id": str(distinct),
                 "properties": {
                     **{k: v for k, v in scrubbed.items() if k not in ("tool_calls",)},
-                    "tool_call_count": len(scrubbed.get("tool_calls") or []),
+                    "tool_call_count": scrubbed.get("tool_call_count"),
                     "tool_calls_summary": [
                         {
                             "name": t.get("name"),

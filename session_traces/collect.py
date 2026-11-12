@@ -1,38 +1,39 @@
-"""Read-only collector over the Empryo hub state directory (``~/.empryo-hub``).
+"""Read-only collector over T3 Code threads, read through ``t3mcp``.
 
-MO-152 replaces the old T3 SQLite source.  The hub owns the threads, the runs
-and the transcripts, so the hub is the only place this collector reads.
+The T3 server owns the threads and the runs, so ``t3_thread_list`` and
+``t3_thread_read`` are the only sources this collector reads. It never calls a
+T3 write tool.
 
 What is read
 ------------
-* ``threads.json``  — thread and run metadata (ids, model, status, times, PRs).
-* ``hub.log``      — merge events and per-run routing evidence.
-* ``transcripts/`` — the per-thread item log, used for tool counts only.
+* ``t3_thread_list`` (``includeSubagents`` false) — thread rows: ids, title,
+  project, status, update time, linked pull requests.
+* ``t3_thread_read`` — ``recentRuns``: run id, ordinal, status, requested and
+  executed model, start and end times; and, for review threads only, the
+  assistant messages that carry the final ``VERDICT: PASS``/``VERDICT: FAIL``.
 
 What is stored
 --------------
-Whitelisted metadata only: ids, task key, model/provider, timings, tool
-counts, token and cost numbers, PR state the hub logged as merged, and the
-final ``VERDICT: PASS``/``VERDICT: FAIL`` word of a review's last report
-together with the review's model, thread id and time.  No prompt, command
-text, tool output, diff, secret or e-mail is ever copied into a trace.
+Whitelisted metadata only: ids, task key, model/provider, timings, PR state as
+T3 reports it, and the final verdict word of a review's last report together
+with the review's model, thread id and time. No prompt, command text, tool
+output, diff, secret or e-mail is ever copied into a trace.
 
-Where there is no evidence the field stays empty or ``None`` — an unknown
-review verdict is never guessed and a merge is never credited to a run that
-ended before it happened.
-
-The hub is never executed: no socket call, no ``emp-hub`` invocation.
+Fields T3 does not supply (tool calls, token and cost numbers, stop reason,
+task type, worktree, merge times, check state) stay ``None``: they are not
+collected. An unknown review verdict is never guessed and a merge is never
+credited to a run when its timing cannot be shown.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+from collections.abc import Callable
 
 from .store import (
     day_key,
@@ -42,37 +43,32 @@ from .store import (
     write_trace,
 )
 
-DEFAULT_HUB = Path.home() / ".empryo-hub"
-LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+T3MCP = "t3mcp"
+T3_TIMEOUT_SECONDS = 120
+LIST_PAGE_LIMIT = 100
+MESSAGE_PAGE_LIMIT = 100
+MAX_PAGES = 200
+RECONCILE_LOOKBACK = timedelta(days=7)
 
 TASK_KEY_RE = re.compile(r"\b([A-Z]{2,5}-\d+)\b")
-TOOL_TYPES = frozenset(
-    {
-        "dynamic_tool",
-        "command_execution",
-        "file_change",
-        "file_search",
-        "web_search",
-        "subagent",
-    }
-)
 BLOCKER_RE = re.compile(r"(?i)\b(blocked|blocker|named blocker|waiting on shyam)\b")
 NONTERMINAL = frozenset({"queued", "preparing", "starting", "running", "waiting"})
-
 VERDICT_LINE_RE = re.compile(r"VERDICT: (PASS|FAIL)")
-HUB_LOG_TS_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(?P<rest>.*)$")
-HUB_MERGE_RE = re.compile(
-    r"^merged (?P<repo>[^#\s]+)#(?P<number>\d+) \((?P<method>[^)]*)\) for (?P<thread>\S+)$"
-)
-HUB_ROUTED_RE = re.compile(
-    r"^(?P<thread>\S+) routed to (?P<model>\S+) instead of (?P<base>\S+)"
-)
-TOOL_KIND_RE = re.compile(r"^[a-z_]{1,20}$")
+
+T3Call = Callable[[str, dict[str, Any]], Any]
 
 
-# --------------------------------------------------------------------------
-# Shared helpers
-# --------------------------------------------------------------------------
+def _t3_call(tool: str, args: dict[str, Any]) -> Any:
+    result = subprocess.run(
+        [T3MCP, "call", tool, json.dumps(args)],
+        capture_output=True,
+        text=True,
+        timeout=T3_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"t3mcp {tool} failed: {result.stderr.strip()[:200]}")
+    return json.loads(result.stdout)
 
 
 def _ms_between(start: str | None, end: str | None) -> int | None:
@@ -102,183 +98,21 @@ def _task_key(title: str | None) -> str | None:
     return m.group(1) if m else None
 
 
-def _named_blocker(
-    title: str | None, notifications: list[dict[str, Any]]
-) -> str | None:
-    if title and BLOCKER_RE.search(title):
-        return "title"
-    for note in notifications:
-        summary = str(note.get("summary") or note.get("title") or "")
-        if BLOCKER_RE.search(summary):
-            return summary[:120]
-    return None
+def _named_blocker(title: str | None) -> str | None:
+    return "title" if title and BLOCKER_RE.search(title) else None
 
 
-# --------------------------------------------------------------------------
-# hub readers (read-only; the hub itself is never executed)
-# --------------------------------------------------------------------------
+def _model_family(model: str | None) -> str | None:
+    """Provider-neutral model name: ``subscriptions/gpt-6.1-terra`` -> ``gpt-6.1-terra``."""
+    return model.rsplit("/", 1)[-1] if model else None
 
 
-def _hub_root(hub_path: Path | None = None) -> Path:
-    if hub_path:
-        return Path(hub_path).expanduser()
-    env = os.environ.get("EMPRYO_HUB_DIR", "").strip()
-    if env:
-        return Path(env).expanduser()
-    return DEFAULT_HUB
-
-
-def _load_json_file(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _load_threads(hub_root: Path) -> dict[str, dict[str, Any]]:
-    data = _load_json_file(hub_root / "threads.json")
-    if not isinstance(data, dict):
-        return {}
-    out: dict[str, dict[str, Any]] = {}
-    for key, val in data.items():
-        if isinstance(val, dict):
-            out[str(key)] = val
-    return out
-
-
-def _load_projects(hub_root: Path) -> dict[str, dict[str, Any]]:
-    data = _load_json_file(hub_root / "projects.json")
-    if not isinstance(data, dict):
-        return {}
-    return {str(k): v for k, v in data.items() if isinstance(v, dict)}
-
-
-def _hub_log_ts(raw: str) -> str | None:
-    """Hub log stamps are local wall-clock; normalize them to UTC ISO."""
-    try:
-        local = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
-    except ValueError:
-        return None
-    return local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _parse_hub_log(path: Path) -> dict[str, Any]:
-    """Read merge and routing metadata; run models come from threads.json."""
-    merges: list[dict[str, Any]] = []
-    routes: dict[str, list[dict[str, str]]] = {}
-    try:
-        handle = path.open("r", encoding="utf-8", errors="replace")
-    except OSError:
-        return {"merges": merges, "routes": routes}
-    with handle:
-        for raw_line in handle:
-            line = raw_line.rstrip("\n")
-            m = HUB_LOG_TS_RE.match(line)
-            if not m:
-                continue
-            ts = _hub_log_ts(m.group("ts"))
-            rest = m.group("rest").strip()
-            merge = HUB_MERGE_RE.match(rest)
-            if merge:
-                merges.append(
-                    {
-                        "merged_at": ts,
-                        "repository": merge.group("repo"),
-                        "number": int(merge.group("number")),
-                        "method": merge.group("method"),
-                        "thread_id": merge.group("thread"),
-                    }
-                )
-                continue
-            route = HUB_ROUTED_RE.match(rest)
-            if route and ts:
-                routes.setdefault(route.group("thread"), []).append({
-                    "at": ts, "model": route.group("model"), "base": route.group("base")
-                })
-    return {"merges": merges, "routes": routes}
-
-
-def _slugify(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:48] or "thread"
-
-
-def _transcript_path(hub_root: Path, thread_id: str) -> Path:
-    return (
-        hub_root
-        / "transcripts"
-        / f"{_slugify(thread_id)}-{thread_id.split(':')[-1][:8]}.jsonl"
-    )
-
-
-def _read_items(path: Path) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    try:
-        handle = path.open("r", encoding="utf-8", errors="replace")
-    except OSError:
-        return items
-    with handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict):
-                items.append(obj)
-    return items
-
-
-def _split_run_items(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Split a transcript into per-run segments (a run ends at run_finished)."""
-    segments: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-    for item in items:
-        current.append(item)
-        if item.get("type") == "run_finished":
-            segments.append(current)
-            current = []
-    if current:
-        segments.append(current)
-    return segments
-
-
-def _tool_calls_from_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Tool counts and timings only — never the tool title or its output."""
-    calls: list[dict[str, Any]] = []
-    for item in items:
-        item_type = item.get("type")
-        if item_type not in TOOL_TYPES:
-            continue
-        entry: dict[str, Any] = {
-            "type": item_type,
-            "name": item_type,
-            "status": item.get("status"),
-            "started_at": item.get("createdAt"),
-            "completed_at": None,
-            "duration_ms": None,
-        }
-        kind = item.get("toolKind")
-        if isinstance(kind, str) and TOOL_KIND_RE.match(kind):
-            entry["tool_kind"] = kind
-        calls.append(entry)
-    return calls
-
-
-def _trailing_reports(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Assistant reports that trail the last run (hub's own gate rule)."""
-    reports: list[dict[str, Any]] = []
-    for item in reversed(items):
-        if item.get("type") == "assistant_message":
-            reports.append(item)
-        elif item.get("type") not in ("run_finished", "notice", "error"):
-            break
-    return list(reversed(reports))
+def _clean_model(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _verdict_word(text: str | None) -> str | None:
-    """The final ``VERDICT: PASS``/``VERDICT: FAIL`` line — the word only."""
+    """The final ``VERDICT: PASS``/``VERDICT: FAIL`` line: the word only."""
     if not text:
         return None
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
@@ -292,101 +126,66 @@ def _is_review_thread(thread: dict[str, Any]) -> bool:
     return "review" in str(thread.get("title") or "").lower()
 
 
-def _review_origin_ok(thread: dict[str, Any], items: list[dict[str, Any]]) -> bool:
+def _review_origin_ok(thread: dict[str, Any]) -> bool:
     """A review counts only when the coordinator launched it on its own."""
-    if thread.get("launchedByThread"):
-        return False
-    if thread.get("parentThreadId") or thread.get("relationshipToParent"):
-        return False
-    for item in items:
-        if item.get("type") == "user_message" and item.get("senderThreadId"):
-            return False
-    return True
+    return not (thread.get("parentThreadId") or thread.get("relationshipToParent"))
 
 
-# --------------------------------------------------------------------------
-# collection
-# --------------------------------------------------------------------------
-
-
-def _run_model(run: dict[str, Any]) -> str | None:
-    """The model the run actually used, from the run record itself."""
-    model = run.get("model")
-    return model.strip() if isinstance(model, str) and model.strip() else None
-
-
-def _model_family(model: str | None) -> str | None:
-    """Provider-neutral model name: ``subscriptions/gpt-6.1-terra`` -> ``gpt-6.1-terra``."""
-    return model.rsplit("/", 1)[-1] if model else None
-
-
-def _requested_model(run: dict[str, Any]) -> str | None:
-    """Only immutable run-scoped evidence can establish the requested model."""
-    model = run.get("requestedModel") or run.get("requested_model")
-    return model.strip() if isinstance(model, str) and model.strip() else None
-
-
-def _routes_for_runs(runs: list[dict[str, Any]], routes: list[dict[str, str]]) -> dict[str, dict[str, str]]:
-    """Match routes near run starts; leave second-resolution ambiguity unknown.
-
-    Routing can be logged just before or after a start. Require the route's
-    destination to match the run record and a unique start within ten seconds;
-    never use thread-current model settings to resolve an ambiguous log line.
-    """
-    matched: dict[str, dict[str, str]] = {}
-    ambiguous: set[str] = set()
-    for route in routes:
-        stamp = _parse_ts(route.get("at"))
-        if stamp is None:
-            continue
-        candidates = []
-        for run in runs:
-            if not isinstance(run, dict) or not run.get("runId"):
+def _list_threads(call: T3Call, since: datetime) -> list[dict[str, Any]]:
+    """Thread rows updated at or after ``since``; the list is newest-updated first."""
+    rows: list[dict[str, Any]] = []
+    cursor = 0
+    for _ in range(MAX_PAGES):
+        page = call(
+            "t3_thread_list",
+            {
+                "allProjects": True,
+                "includeSubagents": False,
+                "limit": LIST_PAGE_LIMIT,
+                "cursor": cursor,
+            },
+        )
+        page_rows = page.get("threads") or []
+        stale = False
+        for row in page_rows:
+            updated = _parse_ts(row.get("updatedAt"))
+            if updated is not None and updated < since:
+                stale = True
                 continue
-            start = _parse_ts(run.get("startedAt"))
-            end = _parse_ts(run.get("completedAt"))
-            if start is None or abs((start - stamp).total_seconds()) > 10:
-                continue
-            if end is not None and stamp >= end:
-                continue
-            if _model_family(_run_model(run)) == _model_family(route.get("model")):
-                candidates.append(run)
-        if len(candidates) != 1:
-            continue
-        run_id = str(candidates[0]["runId"])
-        if run_id in matched and matched[run_id]["base"] != route["base"]:
-            ambiguous.add(run_id)
-        matched[run_id] = route
-    return {key: value for key, value in matched.items() if key not in ambiguous}
+            rows.append(row)
+        next_cursor = page.get("nextCursor")
+        if stale or next_cursor is None or not page_rows:
+            break
+        cursor = next_cursor
+    return rows
 
 
-def _usage_fields(run: dict[str, Any]) -> tuple[dict[str, Any], float | None]:
-    usage = run.get("usage")
-    tokens: dict[str, Any] = {}
-    cost: float | None = None
-    if not isinstance(usage, dict):
-        return tokens, cost
-    raw = usage.get("tokens")
-    if isinstance(raw, dict):
-        mapping = {
-            "input": "inputTokens",
-            "output": "outputTokens",
-            "cachedRead": "cachedInputTokens",
-            "cachedWrite": "cachedWriteTokens",
-        }
-        for src, dst in mapping.items():
-            val = raw.get(src)
-            if isinstance(val, (int, float)) and not isinstance(val, bool):
-                tokens[dst] = val
-        if "inputTokens" in tokens and "outputTokens" in tokens:
-            tokens["totalTokens"] = tokens["inputTokens"] + tokens["outputTokens"]
-    steps = usage.get("steps")
-    if isinstance(steps, int) and not isinstance(steps, bool):
-        tokens["steps"] = steps
-    val = usage.get("costUsd")
-    if isinstance(val, (int, float)) and not isinstance(val, bool):
-        cost = float(val)
-    return tokens, cost
+def _messages(
+    call: T3Call, thread_id: str, cache: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The thread record, its recent runs and its user and assistant messages."""
+    if thread_id in cache:
+        return cache[thread_id]
+    items: list[dict[str, Any]] = []
+    read: dict[str, Any] = {}
+    after = 0
+    for _ in range(MAX_PAGES):
+        read = call(
+            "t3_thread_read",
+            {
+                "threadId": thread_id,
+                "view": "messages",
+                "limit": MESSAGE_PAGE_LIMIT,
+                "runLimit": 50,
+                "afterPosition": after,
+            },
+        )
+        items.extend(read.get("items") or [])
+        if not read.get("hasMore"):
+            break
+        after = read["nextPosition"]
+    cache[thread_id] = (read, items)
+    return read, items
 
 
 def _thread_prs(thread: dict[str, Any]) -> list[dict[str, Any]]:
@@ -416,136 +215,90 @@ def _thread_prs(thread: dict[str, Any]) -> list[dict[str, Any]]:
     return prs
 
 
-def _merge_events_for(
-    pr: dict[str, Any], merges: list[dict[str, Any]], thread_id: str
-) -> list[dict[str, Any]]:
-    repo = pr.get("repository")
-    number = pr.get("number")
-    out = []
-    for merge in merges:
-        if merge.get("thread_id") != thread_id:
-            continue
-        if repo and merge.get("repository") != repo:
-            continue
-        if number is not None and merge.get("number") != number:
-            continue
-        out.append(merge)
-    return out
-
-
 def _pr_evidence(
-    thread: dict[str, Any],
-    *,
-    completed_at: str | None,
-    status: str,
-    merges: list[dict[str, Any]],
+    thread: dict[str, Any], *, status: str
 ) -> tuple[list[dict[str, Any]], str]:
-    """PR state the hub actually logged.
-
-    Only a merge the hub logged, for this thread, at or before the run ended
-    is credited.  Check and review state are not available locally, so they
-    stay ``None`` rather than being guessed from a current snapshot.
-    """
-    run_end = _parse_ts(completed_at)
+    """PR state T3 reports. T3 gives no merge time, so a merged PR has unknown timing."""
     terminal = status not in NONTERMINAL
     out: list[dict[str, Any]] = []
     evidence = "known"
-
     for pr in _thread_prs(thread):
-        events = _merge_events_for(pr, merges, str(thread.get("threadId") or ""))
-        merged_at_raw: str | None = None
-        merged_at: datetime | None = None
-        for event in events:
-            stamp = event.get("merged_at")
-            parsed = _parse_ts(stamp)
-            if parsed is None:
-                continue
-            if merged_at is None or parsed < merged_at:
-                merged_at = parsed
-                merged_at_raw = stamp
-
         state = pr.get("state")
         timing = "known"
-        merge_by_end = False
-        if merged_at is not None and run_end is not None:
-            if merged_at <= run_end:
-                merge_by_end = True
-                state = "merged"
-            else:
-                # Merged after this run ended — not attributable to the run.
-                state = "open"
-                timing = "post_run_merge"
-                merged_at_raw = None
-        elif state == "merged":
-            # The hub says merged but there is no logged merge time for this
-            # thread, so the timing cannot be proven.
+        if state == "merged":
             state = "merged_unknown_timing"
             timing = "unknown"
             if terminal:
                 evidence = "unknown"
-
         out.append(
             {
                 "url": pr.get("url"),
                 "repository": pr.get("repository"),
                 "number": pr.get("number"),
                 "state": state,
-                "merged_at": merged_at_raw if merge_by_end else None,
+                "merged_at": None,
                 "merge_sha": None,
                 "checks_state": None,
                 "review_decision": None,
                 "head_branch": None,
                 "timing": timing,
                 "evidence_by_end": False,
-                "merge_by_end": merge_by_end,
+                "merge_by_end": False,
             }
         )
     return out, evidence
 
 
+def _final_report_verdict(
+    run: dict[str, Any], items: list[dict[str, Any]]
+) -> str | None:
+    """PASS or FAIL when every assistant report after the run's last user message agrees."""
+    if str(run.get("status") or "").lower() != "completed":
+        return None
+    run_items = [i for i in items if i.get("runId") == run.get("runId")]
+    last_user = max(
+        (n for n, i in enumerate(run_items) if i.get("type") == "user_message"),
+        default=-1,
+    )
+    reports = [
+        i for i in run_items[last_user + 1 :] if i.get("type") == "assistant_message"
+    ]
+    words = {_verdict_word(r.get("text")) for r in reports}
+    only = words.pop() if len(words) == 1 else None
+    return only if only in ("PASS", "FAIL") else None
+
+
 def _find_review(
-    thread: dict[str, Any],
-    threads: dict[str, dict[str, Any]],
-    items_of,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    thread: dict[str, Any], rows: list[dict[str, Any]]
+) -> dict[str, Any] | None:
     """The review thread that gates this task: same project, same ticket."""
     task_key = _task_key(thread.get("title"))
     if not task_key:
-        return None, []
+        return None
     key_re = re.compile(rf"\b{re.escape(task_key)}\b")
-    candidates = []
-    for other in threads.values():
-        if other.get("threadId") == thread.get("threadId"):
-            continue
-        if other.get("projectId") != thread.get("projectId"):
-            continue
-        if other.get("archived"):
-            continue
-        title = str(other.get("title") or "")
-        if not key_re.search(title):
-            continue
-        if not _is_review_thread(other):
-            continue
-        candidates.append(other)
-    ok = []
-    for cand in candidates:
-        items = items_of(cand)
-        if _review_origin_ok(cand, items):
-            ok.append((cand, items))
-    if not ok:
-        return None, []
-    ok.sort(key=lambda pair: str(pair[0].get("updatedAt") or ""))
-    cand, items = ok[-1]
-    return cand, items
+    candidates = [
+        other
+        for other in rows
+        if other.get("threadId") != thread.get("threadId")
+        and other.get("projectId") == thread.get("projectId")
+        and not other.get("archived")
+        and key_re.search(str(other.get("title") or ""))
+        and _is_review_thread(other)
+        and _review_origin_ok(other)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda row: str(row.get("updatedAt") or ""))
 
 
 def _review_evidence(
+    call: T3Call,
     thread: dict[str, Any],
-    threads: dict[str, dict[str, Any]],
-    items_of,
+    rows: list[dict[str, Any]],
     current_run: dict[str, Any],
+    cache: dict[str, Any],
 ) -> dict[str, Any]:
-    """Verdict word plus the review's model, thread id and time — nothing else."""
+    """Verdict word plus the review's model, thread id and time: nothing else."""
     out: dict[str, Any] = {
         "review_verdict": None,
         "review_model": None,
@@ -554,31 +307,23 @@ def _review_evidence(
         "review_completed_at": None,
     }
     if _is_review_thread(thread):
-        review, items = thread, items_of(thread)
+        review = thread
     else:
-        review, items = _find_review(thread, threads, items_of)
+        review = _find_review(thread, rows)
     if review is None:
         return out
-
-    runs = review.get("runs") or []
-    run = current_run if _is_review_thread(thread) else (runs[-1] if runs else None)
+    read, items = _messages(call, str(review["threadId"]), cache)
+    if _is_review_thread(thread):
+        run = current_run
+    else:
+        runs = read.get("recentRuns") or []
+        run = runs[-1] if runs else None
     if not isinstance(run, dict):
         return out
-
-    verdict: str | None = None
-    if str(run.get("status") or "").lower() == "completed":
-        segments = _split_run_items(items)
-        ordinal = run.get("ordinal")
-        segment = segments[ordinal - 1] if isinstance(ordinal, int) and 1 <= ordinal <= len(segments) and segments[ordinal - 1][-1].get("type") == "run_finished" else []
-        reports = _trailing_reports(segment)
-        words = {_verdict_word(r.get("text")) for r in reports}
-        if len(words) == 1:
-            only = words.pop()
-            if only in ("PASS", "FAIL"):
-                verdict = only
-
-    out["review_verdict"] = verdict
-    out["review_model"] = _run_model(run)
+    out["review_verdict"] = _final_report_verdict(run, items)
+    out["review_model"] = _clean_model(run.get("executedModel")) or _clean_model(
+        run.get("model")
+    )
     out["review_thread_id"] = review.get("threadId")
     out["review_run_id"] = run.get("runId")
     out["review_completed_at"] = run.get("completedAt")
@@ -589,138 +334,119 @@ def collect_runs(
     *,
     since: datetime | None = None,
     until: datetime | None = None,
-    hub_path: Path | None = None,
+    t3_call: T3Call | None = None,
     thread_id: str | None = None,
     run_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build one scrubbed-ready trace dict per hub run in the window."""
-    hub_root = _hub_root(hub_path)
-    since = since or (datetime.now(timezone.utc) - timedelta(days=1))
-    until = until or datetime.now(timezone.utc)
+    """Build one scrubbed-ready trace dict per T3 run in the window."""
+    call = t3_call or _t3_call
+    now = datetime.now(timezone.utc)
+    since = since or (now - timedelta(days=1))
+    until = until or now
     since_dt = since.astimezone(timezone.utc)
     until_dt = until.astimezone(timezone.utc)
-
-    threads = _load_threads(hub_root)
-    projects = _load_projects(hub_root)
-    log = _parse_hub_log(hub_root / "hub.log")
-    merges = log["merges"]
-    routes = log["routes"]
-
-    items_cache: dict[str, list[dict[str, Any]]] = {}
-
-    def items_of(thread: dict[str, Any]) -> list[dict[str, Any]]:
-        tid = str(thread.get("threadId") or "")
-        if tid not in items_cache:
-            items_cache[tid] = _read_items(_transcript_path(hub_root, tid))
-        return items_cache[tid]
-
     wanted = set(run_ids) if run_ids else None
+    list_since = now - RECONCILE_LOOKBACK if wanted is not None else since_dt
 
+    rows = _list_threads(call, list_since)
+    message_cache: dict[str, Any] = {}
     traces: list[dict[str, Any]] = []
-    for tid, thread in sorted(threads.items(), key=lambda kv: str(kv[1].get("createdAt") or "")):
+    for row in sorted(rows, key=lambda r: str(r.get("createdAt") or "")):
+        tid = str(row.get("threadId") or "")
         if thread_id and tid != thread_id:
             continue
-        runs = thread.get("runs") or []
-        if not isinstance(runs, list):
-            continue
-        segments = _split_run_items(items_of(thread))
-        run_routes = _routes_for_runs(runs, routes.get(tid, []))
-        project_id = thread.get("projectId")
-        project = projects.get(str(project_id)) or {}
+        read = call("t3_thread_read", {"threadId": tid, "limit": 1, "runLimit": 50})
+        thread = {**row, **(read.get("thread") or {})}
+        runs = read.get("recentRuns") or []
         title = str(thread.get("title") or "")
-        task_key = _task_key(title)
-        worktree = thread.get("worktreePath")
-        workspace = project.get("workspaceRoot")
-        provider = thread.get("providerInstanceId")
-        blocker = _named_blocker(title, [])
+        project_id = thread.get("projectId")
 
-        for index, run in enumerate(runs):
+        for run in runs:
             if not isinstance(run, dict):
                 continue
             run_id = str(run.get("runId") or "")
-            started_at = run.get("startedAt") or thread.get("createdAt")
+            started_at = (
+                run.get("startedAt")
+                or run.get("requestedAt")
+                or thread.get("createdAt")
+            )
             completed_at = run.get("completedAt")
             if wanted is not None:
                 if run_id not in wanted:
                     continue
             else:
                 start_dt = _parse_ts(started_at)
-                if start_dt is None:
-                    continue
-                if start_dt < since_dt or start_dt >= until_dt:
+                if start_dt is None or start_dt < since_dt or start_dt >= until_dt:
                     continue
 
             status = str(run.get("status") or "")
-            items = segments[index] if index < len(segments) else []
-            tool_calls = _tool_calls_from_items(items)
-            tokens, cost = _usage_fields(run)
-            prs, outcome_evidence = _pr_evidence(
-                thread,
-                completed_at=completed_at,
-                status=status,
-                merges=merges,
+            requested = _clean_model(run.get("model"))
+            actual = _clean_model(run.get("executedModel")) or requested
+            fell_back = bool(
+                actual
+                and requested
+                and _model_family(actual) != _model_family(requested)
             )
-            review = _review_evidence(thread, threads, items_of, run)
+            prs, outcome_evidence = _pr_evidence(thread, status=status)
+            review = _review_evidence(call, thread, rows, run, message_cache)
             run_end = _parse_ts(completed_at)
-            actual = _run_model(run)
-            route = run_routes.get(run_id)
-            requested = _requested_model(run) or (route["base"] if route else None)
-            fell_back = bool(actual and requested and _model_family(actual) != _model_family(requested))
             review_completed = _parse_ts(review.get("review_completed_at"))
 
-            trace = {
-                "schema": "mac-ops.session_trace.v1",
-                "source": "empryo-hub",
-                "run_id": run_id,
-                "thread_id": tid,
-                "ordinal": run.get("ordinal"),
-                "project_id": project_id,
-                "project": project_id,
-                "task_key": task_key,
-                "task_type": thread.get("taskType") if thread.get("taskType") in {"standard", "review", "risky", "chore", "design", "rca", "large", "research", "ui", "panel"} else None,
-                "title": None,
-                "provider": provider,
-                "model": actual,
-                "requested_model": requested,
-                "status": status,
-                "stop_reason": run.get("stopReason") if run.get("stopReason") in {"end_turn", "cancelled", "error", "max_turns", "interrupted", "turn_budget"} else None,
-                "requested_at": started_at,
-                "started_at": started_at,
-                "completed_at": completed_at,
-                "duration_ms": _ms_between(started_at, completed_at),
-                "worktree_path": None,
-                "workspace_root": None,
-                "branch": None,
-                "tool_calls": tool_calls,
-                "tool_call_count": len(tool_calls),
-                "tokens": tokens or None,
-                "cost_usd": cost,
-                "pull_requests": prs,
-                "outcome_evidence": outcome_evidence,
-                "named_blocker": blocker,
-                "files_outside_worktree": [],
-                "preview_or_playwright": [],
-                "final_state": status,
-                "review_verdict": review.get("review_verdict"),
-                "review_model": review.get("review_model"),
-                "review_thread_id": review.get("review_thread_id"),
-                "review_run_id": review.get("review_run_id"),
-                "review_completed_at": review.get("review_completed_at"),
-                "review_evidence_by_end": bool(
-                    review_completed is not None
-                    and run_end is not None
-                    and review_completed <= run_end
-                ),
-                "model_fallback": fell_back,
-                "fallback_model": actual if fell_back else None,
-                "base_model": requested if fell_back else None,
-            }
-            traces.append(trace)
+            traces.append(
+                {
+                    "schema": "mac-ops.session_trace.v1",
+                    "source": "t3",
+                    "run_id": run_id,
+                    "thread_id": tid,
+                    "ordinal": run.get("ordinal"),
+                    "project_id": project_id,
+                    "project": project_id,
+                    "task_key": _task_key(title),
+                    "task_type": None,
+                    "title": None,
+                    "provider": run.get("providerInstanceId")
+                    or thread.get("providerInstanceId"),
+                    "model": actual,
+                    "requested_model": requested,
+                    "status": status,
+                    "stop_reason": None,
+                    "requested_at": run.get("requestedAt") or started_at,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "duration_ms": _ms_between(started_at, completed_at),
+                    "worktree_path": None,
+                    "workspace_root": None,
+                    "branch": None,
+                    "tool_calls": None,
+                    "tool_call_count": None,
+                    "tokens": None,
+                    "cost_usd": None,
+                    "pull_requests": prs,
+                    "outcome_evidence": outcome_evidence,
+                    "named_blocker": _named_blocker(title),
+                    "files_outside_worktree": [],
+                    "preview_or_playwright": [],
+                    "final_state": status,
+                    "review_verdict": review.get("review_verdict"),
+                    "review_model": review.get("review_model"),
+                    "review_thread_id": review.get("review_thread_id"),
+                    "review_run_id": review.get("review_run_id"),
+                    "review_completed_at": review.get("review_completed_at"),
+                    "review_evidence_by_end": bool(
+                        review_completed is not None
+                        and run_end is not None
+                        and review_completed <= run_end
+                    ),
+                    "model_fallback": fell_back,
+                    "fallback_model": actual if fell_back else None,
+                    "base_model": requested if fell_back else None,
+                }
+            )
     return traces
 
 
 def _unfinished_run_ids(root: Path | None, lookback_days: int = 3) -> list[str]:
-    """Stored traces still non-terminal — refresh on the next daily pass."""
+    """Stored traces still non-terminal: refresh on the next daily pass."""
     ids: list[str] = []
     today = datetime.now().astimezone().date()
     for i in range(lookback_days + 1):
@@ -736,21 +462,20 @@ def collect_and_store(
     *,
     since: datetime | None = None,
     until: datetime | None = None,
-    hub_path: Path | None = None,
+    t3_call: T3Call | None = None,
     state_root: Path | None = None,
     export: bool = True,
     dry_run_export: bool = False,
     reconcile_unfinished: bool = True,
 ) -> dict[str, Any]:
-    traces = collect_runs(since=since, until=until, hub_path=hub_path)
+    traces = collect_runs(since=since, until=until, t3_call=t3_call)
     refreshed = 0
     if reconcile_unfinished:
         unfinished = _unfinished_run_ids(state_root)
-        # Avoid double-collecting runs already in this window.
         have = {t["run_id"] for t in traces}
         missing = [rid for rid in unfinished if rid not in have]
         if missing:
-            extra = collect_runs(hub_path=hub_path, run_ids=missing)
+            extra = collect_runs(t3_call=t3_call, run_ids=missing)
             traces.extend(extra)
             refreshed = len(extra)
     paths = []

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Daily collect + eval of Empryo hub agent build sessions on this Mac.
+# Daily collect + eval of T3 agent build sessions on this Mac.
 #
 # Default day is the *previous* local calendar day so the 17:30 LaunchAgent
 # covers a finished day. Unfinished runs from recent days are reconciled, and
