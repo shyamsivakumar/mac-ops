@@ -683,101 +683,86 @@ each call. The live queue file was never read or written.
 
 No test file changed.
 
-## Slice 2c: the ticket CLI's last emp calls move to t3mcp
+## Slice 2c: ticket thread identity and retries through t3mcp
 
-**When:** MO-184 slice 2c, 2026-11-12.
+Updated 2026-11-12 after the Opus gate on `0fc1dcff`.
 
-*Slice 2a left `empryo/bin/ticket` calling the Emp hub for the thread list and
-the thread interrupt. The hub is gone, so a ticket with a prior attempt in its
-ledger could not be started: the CLI looked for the earlier thread through a
-binary that no longer answers. The CLI now calls T3 Code through `t3mcp` at
-both call sites, and a ticket with no type label is refused with a message
-that names the missing label.*
+`ticket` reads and interrupts threads through `t3mcp`. A missing type label
+now says `missing type label`, and a type without a configured builder says
+`no builder alias for type <type>`. The model and vendor checks are unchanged.
 
-### The transport swap
+### Thread identity comes from receipts
 
-`emp_call` became `t3_call`. The shape is the same as the function it
-replaced: the payload goes on stdin as JSON, a timeout raises `Refuse`, a
-non-zero exit raises `Refuse` with the stderr text, and a success returns the
-parsed stdout. Only the binary and the tool names changed.
+`thread_for_attempt` first looks for a ledger receipt with a `threadId` for
+the attempt. Otherwise, it reads `EMPQ_DIR/dispatch-receipts.json`, using the
+exact key `ticket:<repo>#<number>:a<attempt>`. It calls `t3_thread_read` for
+that ID and verifies the returned identity. It never searches by title,
+so another thread with the same ticket key cannot be mistaken for the attempt.
+`cmd_abandon` interrupts the recorded thread through `t3_thread_interrupt`.
 
-| Before | After |
+In `empryo/bin/empq`, the successful launch branch of `drain` reads the
+returned `threadId`. It accepts a direct result, a `structuredContent`
+wrapper, and a nested `thread` object. A successful launch without an ID
+raises an error. The drain writes the request ID to thread ID mapping through
+a temporary file and `os.replace` before removing the queue item. A dropped
+item or a REFUSED tool produces no dispatch receipt.
+
+`TICKET_T3MCP` and `EMPQ_T3MCP` select the transport binaries. The JSON
+payload goes on stdin. Ticket transport errors and timeouts raise `Refuse`.
+`CALL_TIMEOUT` remains 30 seconds for ticket T3 calls and queue drops.
+
+### A missing thread ID does not prove an attempt is queued
+
+`assert_not_active` refuses when `queue_items` finds a matching queue item.
+It also refuses when any recorded attempt resolves to a live thread. If an
+attempt has neither a queued item nor a recorded thread ID, it is not live
+and does not prevent another start. The next attempt number still advances
+from the ledger, so a retry uses a new request ID.
+
+`cmd_show` uses the same queue lookup. Without a recorded thread, it reports
+`queued` only while a matching queue item exists. An intent without either
+record reports `not running (no thread recorded)`. A recorded thread keeps
+its resolved status.
+
+### Fresh proof for slice 2c
+
+Run `python3 evidence/MO-184/prove-ticket-retry.py` from the repository root.
+The proof invokes the ticket and empq CLIs as subprocesses. It uses temporary
+`EMPQ_DIR`, `TICKET_CACHE`, and `HOME` directories, with stub `gh` and `t3mcp`
+binaries. Successful retry cases execute `ticket start`, rather than only a
+dry run. All comments, queue entries, and launches stay in the fixture.
+
+| Case | Observed result |
 | --- | --- |
-| `emp call emp_thread_list -` | `t3mcp call t3_thread_list -` |
-| `emp call emp_thread_interrupt -` | `t3mcp call t3_thread_interrupt -` |
+| `empq start` fails after the intent comment | Show reports not running; retry enqueues attempt 2 |
+| Empryo-era intent has no dispatch receipt | Show reports not running; retry enqueues attempt 2 |
+| `empq drop` removes a queued item | Show reports not running; retry enqueues attempt 2 |
+| Drain removes an unsupported tool through REFUSED | Show reports not running; retry enqueues attempt 2 |
+| Matching item remains queued | Show reports queued; start refuses with the queue item ID |
+| Drain launches a thread which later finishes | Receipt maps the request to the returned ID; queue is empty; show resolves completed; start dry run passes |
+| Recorded thread is running | Start refuses with its ID and status |
+| `python3 scripts/mac_ops_fast_check.py` | Passed |
+| `python3 -m unittest tests.test_hub_install` | Passed, 26 tests |
 
-The `TICKET_EMP` environment variable is gone and `TICKET_T3MCP` replaces it,
-so the binary can still be pointed elsewhere for a test. The timeout constant
-was renamed from `EMP_TIMEOUT` to `CALL_TIMEOUT`, because the same 30 seconds
-now covers the `t3mcp` call and the `empq drop` call.
+The proof checks the receipt after drain and the empty queue after completion.
+The write-before-removal ordering is also verified by reading the drain code.
+The T3 service itself is stubbed, so this proof establishes local CLI behavior,
+not current live service behavior. Running the same proof against the original
+`0fc1dcff` ticket script fails because show reports queued after the injected
+start failure. No gate was launched.
 
-The properties on each call did not change. `ticket_threads` sends
-`projectId` from the repo's entry in `tickets.json`, `titleContains` with the
-ticket key, and `limit` of 100. `cmd_abandon` sends `threadId`. Both were
-checked against the live T3 server: `t3_thread_list` returns
-`{projectId, currentThreadId, threads[], nextCursor, total}`, and each thread
-item carries `threadId`, `title`, `status` and `createdAt`, which is what
-`ticket_threads` reads and sorts on.
+### Remaining scope
 
-### A missing type label now says so
-
-Before this change a ticket with no `type:` label was refused with `unknown
-builder alias None`. The builder alias is looked up from the type, so a
-missing type produced a complaint about the builder, which pointed at the
-wrong label.
-
-The refusal now reads `missing type label`. It is raised in two places. In
-`validate_start` the check runs before the label count loop, so it fires
-whether or not the stage label is present. In `resolve_models` it guards the
-type lookup itself, so the message cannot be bypassed by a caller that reaches
-the model resolution without going through `validate_start`.
-
-A ticket that carries a type label which is valid but has no alias in
-`cfg["types"]` gets its own message, `no builder alias for type <type>`. That
-case is different from a missing label: the label is there and it says
-something the config does not know.
-
-### Proof for slice 2c
-
-| Check | Result |
-| --- | --- |
-| `grep -n 'emp_call\|"emp"\|emp call' empryo/bin/ticket` | no matches |
-| Dry run, prior ledger attempt | reached T3 lookup, printed payload |
-| Live ledger thread | refused `already started: thread ... is running` |
-| No type label | refused `missing type label` |
-| `scripts/mac_ops_fast_check.py` | passed |
-| The repo's test suite | passed, 143 tests, no test file changed |
-
-The dry run used a temporary `EMPQ_DIR` and a temporary `TICKET_CACHE`, so
-the live queue file at `~/Code/coordinator/queue/queue.json` was never read
-and no lock was taken on the live cache. The `gh` calls were answered from a
-fixture file so that no comment was posted and no issue was closed. The T3
-calls were real and read-only.
-
-The ledger fixture held a prior intent for a test issue whose key matched a
-real finished T3 thread, so the thread lookup ran against the live server and
-found that thread. A second fixture pointed the same lookup at a live thread
-in the `mac-ops` project, and the CLI refused the start by name and status,
-which shows the lookup reads the real status field rather than an empty
-result.
-
-### What is left for the next slice
-
-`empryo/bin/ticket` no longer calls `emp` at all. The remaining Emp-era
-calls live elsewhere and are not part of this slice: `empryo/bin/emp-health`
-and `scripts/worktree-cleaner/cleaner.py` both call `emp call emp_thread_list`,
-and the coordinator's own loop scripts call the hub directly. The next slice
-should move those three to `t3mcp` the same way.
-
-`empryo/bin/empq` keeps its own task type table, as slice 2a noted. The
-values agree with the `types` map in `tickets.json` today. Slice 2b should
-make empq read `tickets.json` so the two cannot drift.
+Other Emp-era callers and empq model configuration remain outside this fix.
+The change does not migrate old attempts to T3 thread IDs. An old attempt with
+no recorded ID and no queue item is startable, as required by the retry rule.
 
 ## Method
 
 No secrets were read or printed. `.env` was never opened. emp-hub was never
-run, restarted or unloaded; the hub socket refused connections for the whole
-session, so no Empryo launch was possible or attempted. Every T3 call in this
-file ran against the live server through `t3mcp`, and every thread created for
-proof was settled and archived afterwards. `t3mcp credentials` were never
-displayed.
+run, restarted or unloaded. Earlier sessions recorded refused hub socket
+connections, with no Empryo launch possible or attempted there.
+Earlier slice proofs used the live T3 server through `t3mcp`, and their
+proof threads were settled and archived afterwards. The slice 2c retry proof
+above uses stub transports and creates no live thread.
+`t3mcp credentials` were never displayed.
