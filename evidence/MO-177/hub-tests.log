@@ -1,0 +1,95 @@
+heavy: queued role=ordinary position=1
+heavy: waiting (first swap sample; normal wait, a few seconds)
+test_ascend_and_disabled_never_merge_or_update (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_behind_clean_update_waits_and_carries_unchanged_patch (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:44:59 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:44:59 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_changed_patch_requests_review_and_conflict_returns_to_builder (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_checks_or_head_change_between_dry_run_and_merge (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_config_missing_or_bad_is_disabled_and_installs_cannot_enable (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_disabled_pause_can_resume_without_new_review (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_disabled_review_writes_no_queue_record_or_notice (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_draft_fork_closed_and_ascend_key_do_not_update (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_existing_merge_evidence_assertions_without_importing_hub (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:45:00 merged disposable/proof#1 (squash) for emp:3d1c2768-1553-4c81-a06e-9673daff6694
+2026-11-11 16:45:00 post-merge warning for disposable/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_external_push_after_carried_update_is_refused (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_fail_stale_and_disallowed_reviewer (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_foreign_merge_parent_never_carries_review (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_legacy_queue_without_reviewed_head_is_refused (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_local_ancestry_does_not_override_unsafe_github_states (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_local_ancestry_updates_all_safe_github_states (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:45:01 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:01 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+2026-11-11 16:45:01 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:01 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+2026-11-11 16:45:01 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:01 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+2026-11-11 16:45:01 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:01 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_no_check_receipt_carries_only_across_verified_update (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:45:01 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:01 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_no_checks_fresh_head_does_not_merge (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_no_checks_requires_exact_check_line_and_age (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:45:01 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:01 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_pass_green_once_even_after_repeat_event_and_reload (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:45:01 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:01 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_pending_then_green (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:45:01 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:01 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_pending_update_and_waiting_head_have_bounded_wait (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_polling_does_not_duplicate_audit_events (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_real_git_clean_update_patch_id_and_conflict (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_red_checks_and_requested_changes_release_head_without_update (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_repo_lock_and_run_lease_serialize_manual_and_auto (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_restart_recovers_waiting_update_and_post_merge_crash (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:45:02 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:02 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_reviewed_head_is_pinned_and_external_push_is_refused (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_serial_queue_does_not_overtake_pending_head (verification.check_hub_auto_merge.AutoMergeProof) ... 2026-11-11 16:45:02 merged shyamsivakumar/proof#1 (squash) for task
+2026-11-11 16:45:02 post-merge warning for shyamsivakumar/proof: {'status': 'skipped', 'fastForward': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'install': {'status': 'skipped', 'reason': 'the hub has no home directory'}, 'configSync': []}
+ok
+test_task_rerun_and_new_review_fail_are_not_bypassed (verification.check_hub_auto_merge.AutoMergeProof) ... ok
+test_a_failed_review_gate_records_the_verdict (verification.check_hub_merge_evidence.MergeEvidenceProof) ... ok
+test_a_failed_write_does_not_fail_the_merge (verification.check_hub_merge_evidence.MergeEvidenceProof) ... ok
+test_a_live_run_refusal_writes_no_record (verification.check_hub_merge_evidence.MergeEvidenceProof) ... ok
+test_a_refused_merge_still_records_the_gate_evidence (verification.check_hub_merge_evidence.MergeEvidenceProof) ... ok
+test_a_review_thread_refusal_writes_no_record (verification.check_hub_merge_evidence.MergeEvidenceProof) ... ok
+test_a_stale_revision_records_the_current_gate (verification.check_hub_merge_evidence.MergeEvidenceProof) ... ok
+test_dry_run_and_merge_each_write_one_record (verification.check_hub_merge_evidence.MergeEvidenceProof) ... 2026-11-11 16:45:02 merged disposable/proof#1 (squash) for emp:fb4ea358-5121-40df-8d73-91392cb40164
+2026-11-11 16:45:02 post-merge warning for disposable/proof: {'status': 'skipped', 'configured': False, 'base': 'main', 'fastForward': {'status': 'skipped', 'reason': 'there is no post-merge configuration at /tmp/hm-80zfxmn6/.empryo/post-merge.json'}, 'install': {'status': 'skipped', 'reason': 'there is no post-merge configuration at /tmp/hm-80zfxmn6/.empryo/post-merge.json'}, 'configSync': [], 'reason': 'there is no post-merge configuration at /tmp/hm-80zfxmn6/.empryo/post-merge.json'}
+ok
+test_dirty_checkout_refuses (tests.test_hub_install.IdleInstallTests) ... ok
+test_failed_install_never_restarts_or_retries (tests.test_hub_install.IdleInstallTests) ... ok
+test_fallback_difference_refuses (tests.test_hub_install.IdleInstallTests) ... ok
+test_fallback_guard_compares_actual_recursive_overlay (tests.test_hub_install.IdleInstallTests) ... ok
+test_idle_installs_and_restarts_exactly_once (tests.test_hub_install.IdleInstallTests) ... ok
+test_install_timeout_does_not_restart (tests.test_hub_install.IdleInstallTests) ... ok
+test_interrupted_side_effect_is_never_retried (tests.test_hub_install.IdleInstallTests) ... ok
+test_mark_detects_managed_files_and_coalesces_without_resetting_cap (tests.test_hub_install.IdleInstallTests) ... ok
+test_merge_admission_after_final_idle_check_is_refused (tests.test_hub_install.IdleInstallTests) ... ok
+test_new_running_turn_after_install_prevents_restart (tests.test_hub_install.IdleInstallTests) ... ok
+test_old_hub_without_idle_contract_cannot_trigger_install (tests.test_hub_install.IdleInstallTests) ... ok
+test_post_merge_fast_forward_marks_under_worker_lock (tests.test_hub_install.IdleInstallTests) ... ok
+test_primary_difference_refuses_once_without_values (tests.test_hub_install.IdleInstallTests) ... ok
+test_queue_start_lock_delays_install (tests.test_hub_install.IdleInstallTests) ... ok
+test_restart_failure_never_retries (tests.test_hub_install.IdleInstallTests) ... ok
+test_restart_readiness_failure_is_terminal (tests.test_hub_install.IdleInstallTests) ... ok
+test_running_thread_delays_install (tests.test_hub_install.IdleInstallTests) ... ok
+test_thirty_minute_cap_notifies_once_and_never_restarts (tests.test_hub_install.IdleInstallTests) ... ok
+test_unmanaged_merge_does_not_arm_terminal_state (tests.test_hub_install.IdleInstallTests) ... ok
+test_worker_lock_prevents_duplicate_work (tests.test_hub_install.IdleInstallTests) ... ok
+test_wrong_head_refuses (tests.test_hub_install.IdleInstallTests) ... ok
+test_hub_and_queue_gate_fail_closed_and_release_terminal_states (tests.test_hub_install.WiringTests) ... ok
+test_installer_owns_detection_and_job_rendering (tests.test_hub_install.WiringTests) ... ok
+test_queue_drain_does_not_consume_attempts_while_pending (tests.test_hub_install.WiringTests) ... ok
+test_running_turn_contract_counts_starting_and_waiting_not_pending (tests.test_hub_install.WiringTests) ... ok
+test_start_turn_persists_pending_instead_of_starting_an_engine (tests.test_hub_install.WiringTests) ... ok
+
+----------------------------------------------------------------------
+Ran 62 tests in 11.267s
+
+OK
