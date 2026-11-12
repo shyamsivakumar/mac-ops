@@ -62,14 +62,14 @@
     }
   },
   "types": {
-    "standard": "minimax",
+    "standard": "pi-standard",
     "risky": "sol",
     "design": "sol",
-    "large": "minimax",
-    "ui": "minimax",
-    "research": "minimax",
-    "rca": "minimax",
-    "chore": "minimax",
+    "large": "pi-standard",
+    "ui": "pi-ui",
+    "research": "pi-research",
+    "rca": "pi-rca",
+    "chore": "pi-chore",
     "review": "opus"
   },
   "models": {
@@ -129,6 +129,41 @@
       },
       "vendor": "cursor",
       "noGate": true
+    },
+    "pi-standard": {
+      "selection": {
+        "instanceId": "pi",
+        "model": "task/standard"
+      },
+      "vendor": "pi-route"
+    },
+    "pi-ui": {
+      "selection": {
+        "instanceId": "pi",
+        "model": "task/ui"
+      },
+      "vendor": "pi-route"
+    },
+    "pi-research": {
+      "selection": {
+        "instanceId": "pi",
+        "model": "task/research"
+      },
+      "vendor": "pi-route"
+    },
+    "pi-rca": {
+      "selection": {
+        "instanceId": "pi",
+        "model": "task/rca"
+      },
+      "vendor": "pi-route"
+    },
+    "pi-chore": {
+      "selection": {
+        "instanceId": "pi",
+        "model": "task/chore"
+      },
+      "vendor": "pi-route"
     }
   },
   "labels": {
