@@ -6,7 +6,7 @@
     <string>dev.coordinator.dispatch</string>
     <key>ProgramArguments</key>
     <array>
-        <string>@HOME@/.local/bin/empq</string>
+        <string>@HOME@/.local/bin/coordq</string>
         <string>dispatch</string>
     </array>
     <key>StartInterval</key>

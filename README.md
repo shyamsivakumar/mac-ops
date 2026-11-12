@@ -235,11 +235,13 @@ the exercised stalled-stream watchdog cases.
 Its [state chart](docs/state-charts/cursor-retry.md) records retry, veto and
 durable-launcher publication paths.
 
-## Empryo task hub
+## Coordinator
 
-The Empryo hub, queue, launchd jobs, routing config and Herdr mods live under
-`empryo/` and install with `./install.sh empryo`. See
-[docs/empryo-hub.md](docs/empryo-hub.md).
+The `coordq` queue and dispatcher, the `ticket` CLI, `coordinator-refresh`,
+`coordstart`, launchd jobs, config and Herdr mods live under `coordinator/` and
+install with `./install.sh coordinator`. Config installs to `~/.coordinator`.
+Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
+See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 
 ## Agent session traces (MO-124)
 

@@ -1,4 +1,4 @@
-"""MO-125 safety regression: isolated Git repositories and a paginated emp CLI."""
+"""MO-125 safety regression: isolated Git repositories and a paginated t3mcp CLI."""
 from __future__ import annotations
 
 import json
@@ -44,21 +44,12 @@ def age_reflog(path: Path) -> None:
     log.write_text("\n".join(aged) + "\n", encoding="utf-8")
 
 
-def thread(thread_id: str, path: Path, *, status: str = "running", settled: bool = False, cwd_only: bool = False) -> dict:
-    return {
-        "threadId": thread_id,
-        "projectId": "another-project",
-        "status": status,
-        "settled": settled,
-        "activeRunId": "run" if status == "running" else None,
-        "pendingRequestCount": 0,
-        "worktreePath": None if cwd_only else str(path),
-        "cwd": str(path),
-    }
+def thread(thread_id: str, path: Path | None, *, status: str = "running") -> dict:
+    return {"threadId": thread_id, "status": status, "worktreePath": None if path is None else str(path)}
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="mo125-empryo-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="mo125-t3-") as tmp:
         base = Path(tmp)
         code = base / "Code"
         repo = code / "fixture-repo"
@@ -89,22 +80,21 @@ def main() -> int:
         (paths["dirty"] / "dirty.txt").write_text("uncommitted\n")
         for path in (code / "strategy-replay-workbench", code / "slash-eureka" / "dbt", code / "slash-eureka" / "omni"):
             command(["git", "init", str(path)])
-        threads = [thread(f"finished-{i}", repo, status="completed", settled=True) for i in range(100)]
+        threads = [thread(f"scratch-{i}", None) for i in range(100)]
         threads.extend([
             thread("other-project-active", paths["active"]),
-            thread("cwd-only", paths["cwd-only"] / "subdir", cwd_only=True),
-            thread("idle-unsettled", paths["idle"], status="idle"),
+            thread("subdir-only", paths["cwd-only"] / "subdir", status="starting"),
             thread("waiting", paths["waiting"], status="waiting"),
-            thread("completed-unsettled", paths["completed"], status="completed"),
-            thread("future-status", paths["unknown"], status="new-state", settled=True),
+            thread("queued", paths["completed"], status="queued"),
+            thread("finished", paths["idle"], status="completed"),
+            thread("idle", paths["unknown"], status="idle"),
         ])
-        threads[-6]["cwd"] = str(repo)
         fixture = base / "fixture.json"
         calls = base / "calls.jsonl"
         counter = base / "counter"
         payload = {
             "threads": threads,
-            "lateThreads": threads + [thread("late-merged", paths["merged"]), thread("late-detached", detached)],
+            "lateThreads": threads + [thread("late-merged", paths["merged"]), thread("late-detached", detached), thread("late-idle", paths["idle"]), thread("late-unknown", paths["unknown"])],
             "present": [base_sha] + [sha for name, sha in shas.items() if name != "unpublished"],
             "prs": {name: [{"number": i + 1, "state": "MERGED", "headRefName": name, "headRefOid": sha}] for i, (name, sha) in enumerate(shas.items())},
         }
@@ -130,33 +120,46 @@ else:
     sys.exit(2)
 ''')
         gh.chmod(0o755)
-        emp = bin_dir / "emp"
-        emp.write_text('''#!/usr/bin/env python3
+        t3mcp = bin_dir / "t3mcp"
+        t3mcp.write_text("""#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
-assert sys.argv[1:3] == ['call', 'emp_thread_list']
+tool = sys.argv[2]
 a = json.loads(sys.argv[3])
-assert a['allProjects'] is True and 1 <= a['limit'] <= 100
-assert set(a) == {'allProjects', 'limit', 'cursor'}
-cursor = a['cursor']
+assert sys.argv[1] == 'call' and tool in ('t3_thread_list', 't3_thread_read')
 counter = Path(os.environ['MO125_COUNTER'])
 scan = int(counter.read_text()) if counter.exists() else 0
-if cursor == 0:
-    scan += 1
-    counter.write_text(str(scan))
+if tool == 't3_thread_list':
+    assert a['allProjects'] is True and 1 <= a['limit'] <= 100
+    assert set(a) == {'allProjects', 'statuses', 'limit', 'cursor'}
+    assert a['statuses'] == ['preparing', 'queued', 'starting', 'running', 'waiting']
+    cursor = a['cursor']
+    if cursor == 0:
+        scan += 1
+        counter.write_text(str(scan))
 with Path(os.environ['MO125_CALLS']).open('a') as f:
-    f.write(json.dumps({'scan': scan, **a}) + '\\n')
+    f.write(json.dumps({'scan': scan, 'tool': tool, **a}) + '\\n')
 mode = os.environ.get('MO125_MODE', 'normal')
-if mode == 'unavailable' or (mode == 'hub-final' and scan >= 3) or (mode == 'hub-immediate' and scan >= 5):
+if mode == 'unavailable' or (mode == 't3-final' and scan >= 3) or (mode == 't3-immediate' and scan >= 5):
     sys.exit(1)
 if mode == 'invalid-json':
     print('not json')
     sys.exit(0)
 d = json.loads(Path(os.environ['MO125_FIXTURE']).read_text())
-threads = d['lateThreads'] if mode == 'late' and scan >= 5 else d['threads']
+all_threads = d['lateThreads'] if mode == 'late' and scan >= 5 else d['threads']
+if tool == 't3_thread_read':
+    if mode == 'read-unavailable':
+        sys.exit(1)
+    row = next(t for t in all_threads if t['threadId'] == a['threadId'])
+    if mode == 'missing-path':
+        row = {k: v for k, v in row.items() if k != 'worktreePath'}
+    print(json.dumps({'thread': row}))
+    sys.exit(0)
+threads = [t for t in all_threads if t['status'] in a['statuses']]
+cursor = a['cursor']
 rows = threads[cursor:cursor + a['limit']]
 next_cursor = cursor + len(rows) if cursor + len(rows) < len(threads) else None
-page = {'projectId': None, 'threads': rows, 'total': len(threads), 'nextCursor': next_cursor}
+page = {'threads': rows, 'total': len(threads), 'nextCursor': next_cursor}
 if mode == 'truncated' and cursor:
     page['threads'] = rows[:-1]
 if mode == 'duplicate' and cursor:
@@ -167,55 +170,49 @@ if mode == 'loop':
     page['nextCursor'] = cursor
 if mode == 'missing-cursor':
     del page['nextCursor']
-if mode == 'wrong-project':
-    page['projectId'] = 'one-project-only'
-if mode == 'pathless':
-    page['threads'][0] = {**threads[0], 'settled': False, 'cwd': None, 'worktreePath': None}
-if mode == 'missing-path':
-    del page['threads'][0]['cwd']
 if mode == 'snapshot-change' and scan >= 2 and cursor == 0:
-    page['threads'][0]['threadId'] = 'new-thread-same-total'
+    page['threads'][0] = {**page['threads'][0], 'threadId': 'new-thread-same-total'}
 print(json.dumps(page))
-''')
-        emp.chmod(0o755)
+""")
+        t3mcp.chmod(0o755)
         env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", MO125_FIXTURE=str(fixture), MO125_CALLS=str(calls), MO125_COUNTER=str(counter))
         args = [sys.executable, str(SCRIPT), "--code-root", str(code), "--state-root", str(base / "state")]
         refs_before = git(remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads")
         dry = json.loads(command(args + ["--dry-run"], env=env))
-        assert dry["eligible"] == 2 and dry["removed"] == 0, dry
-        assert dry["empryo_threads_scanned"] == 106 and dry["empryo_pages_scanned"] == 4
-        assert dry["held_reasons"]["empryo_thread_unfinished"] == 7
-        held_linked = [row for row in dry["rows"] if not row["main_checkout"] and row["empryo_threads"]]
-        assert len(held_linked) == 6
-        assert next(row for row in held_linked if Path(row["path"]).resolve() == paths["active"].resolve())["empryo_threads"] == ["other-project-active"]
-        assert not any("t3" in key or "unknown" in key for key in dry["held_reasons"])
+        assert dry["eligible"] == 4 and dry["removed"] == 0, dry
+        assert dry["t3_threads_scanned"] == 104 and dry["t3_pages_scanned"] == 4
+        assert dry["held_reasons"]["t3_thread_unfinished"] == 4
+        held_linked = [row for row in dry["rows"] if not row["main_checkout"] and row["t3_threads"]]
+        assert len(held_linked) == 4
+        assert next(row for row in held_linked if Path(row["path"]).resolve() == paths["active"].resolve())["t3_threads"] == ["other-project-active"]
+        assert not any(row["eligible"] for row in held_linked)
         assert dry["held_reasons"]["worktree_dirty"] == 1
         assert dry["held_reasons"]["remote_commit_unverified"] == 1
         assert dry["excluded_repositories"] == 3
-        for mode in ("unavailable", "invalid-json", "truncated", "duplicate", "changed-total", "loop", "missing-cursor", "wrong-project", "pathless", "missing-path", "snapshot-change"):
+        for mode in ("unavailable", "invalid-json", "truncated", "duplicate", "changed-total", "loop", "missing-cursor", "missing-path", "read-unavailable", "snapshot-change"):
             counter.write_text("0")
             result = subprocess.run(args + ["--apply"], env=dict(env, MO125_MODE=mode), capture_output=True, text=True)
             assert result.returncode == 2, (mode, result.stdout, result.stderr)
             assert all(path.is_dir() for path in paths.values()) and detached.is_dir(), mode
-        for mode in ("hub-final", "hub-immediate", "late"):
+        for mode in ("t3-final", "t3-immediate", "late"):
             counter.write_text("0")
             applied = json.loads(command(args + ["--apply"], env=dict(env, MO125_MODE=mode)))
             assert applied["removed"] == 0 and paths["merged"].is_dir() and detached.is_dir(), (mode, applied)
             if mode == "late":
-                assert applied["held_reasons"]["empryo_thread_unfinished"] == 9
+                assert applied["held_reasons"]["t3_thread_unfinished"] == 8
         counter.write_text("0")
         applied = json.loads(command(args + ["--apply"], env=env))
-        assert applied["removed"] == 2 and not paths["merged"].exists() and not detached.exists(), applied
-        assert all(path.is_dir() for name, path in paths.items() if name != "merged")
+        assert applied["removed"] == 4 and not any(paths[name].exists() for name in ("merged", "idle", "unknown")) and not detached.exists(), applied
+        assert all(path.is_dir() for name, path in paths.items() if name not in ("merged", "idle", "unknown"))
         assert git(remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads") == refs_before
         assert git(repo, "show-ref", "--verify", "refs/heads/merged")
         report = Path(applied["daily_report"]).read_text()
         assert str(paths["dirty"]) in report and str(paths["unpublished"]) in report
         assert "cwd-only" in report and "other-project-active" in report
         requests = [json.loads(line) for line in calls.read_text().splitlines()]
-        assert any(request["cursor"] == 100 for request in requests)
-        assert all(request["allProjects"] and request["limit"] <= 100 for request in requests)
-        print(json.dumps({"ok": True, "empryo_held": 6, "pages_per_pass": 2, "passes": 2, "fixture_removed": applied["removed"], "failure_modes_blocked": 14, "remote_refs_preserved": True}))
+        assert any(request.get("cursor") == 100 for request in requests)
+        assert all(request["tool"] == "t3_thread_read" or (request["allProjects"] and request["limit"] <= 100) for request in requests)
+        print(json.dumps({"ok": True, "t3_held": 4, "pages_per_pass": 2, "passes": 2, "fixture_removed": applied["removed"], "failure_modes_blocked": 13, "remote_refs_preserved": True}))
     return 0
 
 

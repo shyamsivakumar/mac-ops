@@ -12,7 +12,7 @@ const PORT_POLL_MS = 5000;
 const HANG_MS = 660000;
 
 const REASONS = {
-  empryo_thread_unfinished: "A T3 thread is still using it",
+  t3_thread_unfinished: "A T3 thread is still using it",
   process_cwd_inside: "A running program has its working folder inside it",
   worktree_outside_scope: "Lives outside the folders the cleaner manages",
   worktree_locked: "Locked in Git",

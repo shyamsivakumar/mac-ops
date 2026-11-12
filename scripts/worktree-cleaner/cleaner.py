@@ -155,7 +155,7 @@ def detached_idle_seconds(path: Path) -> int | None:
     return int(time.time()) - max(stamps) if stamps else None
 
 
-PROTECTED_REASONS = {"main_checkout", "worktree_outside_scope", "empryo_thread_unfinished", "process_cwd_inside", "worktree_locked"}
+PROTECTED_REASONS = {"main_checkout", "worktree_outside_scope", "t3_thread_unfinished", "process_cwd_inside", "worktree_locked"}
 process_cwd_cache: list[Path] = []
 
 
@@ -184,7 +184,7 @@ def prunable(row: dict[str, Any], github: GitHub) -> bool:
     reasons = set(row["reasons"])
     return (
         row["gone"] and not row["locked"] and not row["main_checkout"]
-        and not reasons & {"worktree_outside_scope", "empryo_thread_unfinished", "repository_outside_code_root", "process_cwd_inside", "worktree_status_unknown"}
+        and not reasons & {"worktree_outside_scope", "t3_thread_unfinished", "repository_outside_code_root", "process_cwd_inside", "worktree_status_unknown"}
         and Path(row["path"]).parent.is_dir()
         and github.repo(repo) is not None
         and (row["remote_commit_present"] is True or branch_exists(repo, row["branch"]))
@@ -219,96 +219,83 @@ def categorize(row: dict[str, Any]) -> str:
     return "look"
 
 
-class EmpryoState:
+class T3State:
     PAGE_LIMIT = 100
     MAX_PAGES = 1000
-    FINISHED_STATUSES = {"completed", "interrupted", "failed", "cancelled", "rolled_back"}
+    LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
 
     def __init__(self):
-        self._read_pages()
+        self._read_threads()
         first_records = self.records
         first_pages = self.page_count
-        self._read_pages()
+        self._read_threads()
         if self.records != first_records:
-            raise SafetyError("empryo_list_changed")
+            raise SafetyError("t3_list_changed")
         self.page_count += first_pages
 
-    def _read_pages(self) -> None:
-        self.records: dict[str, tuple[Any, ...]] = {}
+    @staticmethod
+    def _call(tool: str, args: dict[str, Any]) -> Any:
+        result = run(["t3mcp", "call", tool, json.dumps(args)])
+        if result.returncode != 0:
+            raise SafetyError("t3_unavailable")
+        try:
+            return json.loads(result.stdout)
+        except (ValueError, TypeError) as exc:
+            raise SafetyError("t3_response_invalid") from exc
+
+    def _read_threads(self) -> None:
+        self.records: dict[str, tuple[str, str | None]] = {}
         self.paths: list[tuple[Path, str]] = []
         self.thread_count = 0
-        self.unfinished_count = 0
         self.page_count = 0
-        seen: set[str] = set()
+        listed: list[str] = []
         cursor = 0
         total: int | None = None
         while self.page_count < self.MAX_PAGES:
-            args = {"allProjects": True, "limit": self.PAGE_LIMIT, "cursor": cursor}
-            result = run(["emp", "call", "emp_thread_list", json.dumps(args)])
-            if result.returncode != 0:
-                raise SafetyError("empryo_hub_unavailable")
-            try:
-                page = json.loads(result.stdout)
-            except (ValueError, TypeError) as exc:
-                raise SafetyError("empryo_list_invalid") from exc
-            if not isinstance(page, dict) or "projectId" not in page or page["projectId"] is not None:
-                raise SafetyError("empryo_all_projects_unverified")
-            rows = page.get("threads")
-            page_total = page.get("total")
+            page = self._call("t3_thread_list", {"allProjects": True, "statuses": self.LIVE_STATUSES, "limit": self.PAGE_LIMIT, "cursor": cursor})
+            rows = page.get("threads") if isinstance(page, dict) else None
+            page_total = page.get("total") if isinstance(page, dict) else None
             if not isinstance(rows, list) or len(rows) > self.PAGE_LIMIT or type(page_total) is not int or page_total < 0:
-                raise SafetyError("empryo_list_invalid")
+                raise SafetyError("t3_list_invalid")
             if total is not None and page_total != total:
-                raise SafetyError("empryo_list_changed")
+                raise SafetyError("t3_list_changed")
             total = page_total
             self.page_count += 1
             for thread in rows:
-                if not isinstance(thread, dict):
-                    raise SafetyError("empryo_thread_invalid")
-                thread_id = thread.get("threadId")
-                status = thread.get("status")
-                settled = thread.get("settled")
-                pending = thread.get("pendingRequestCount")
-                if not isinstance(thread_id, str) or not thread_id or thread_id in seen:
-                    raise SafetyError("empryo_list_duplicate_or_invalid_thread")
-                if not isinstance(status, str) or not status or type(settled) is not bool or type(pending) is not int or pending < 0:
-                    raise SafetyError("empryo_thread_invalid")
-                if "activeRunId" not in thread or (thread["activeRunId"] is not None and not isinstance(thread["activeRunId"], str)):
-                    raise SafetyError("empryo_thread_invalid")
-                seen.add(thread_id)
-                finished = settled and status in self.FINISHED_STATUSES and thread["activeRunId"] is None and pending == 0
-                thread_paths = []
-                for key in ("worktreePath", "cwd"):
-                    if key not in thread:
-                        raise SafetyError("empryo_thread_path_unverified")
-                    value = thread[key]
-                    if value is not None:
-                        if not isinstance(value, str) or not value or "\0" in value or not Path(value).is_absolute():
-                            raise SafetyError("empryo_thread_path_invalid")
-                        thread_paths.append(Path(canonical(value)))
-                self.records[thread_id] = (status, settled, thread["activeRunId"], pending, tuple(sorted(str(path) for path in set(thread_paths))))
-                if not finished:
-                    if not thread_paths:
-                        raise SafetyError("empryo_thread_path_unverified")
-                    self.unfinished_count += 1
-                    self.paths.extend((path, thread_id) for path in set(thread_paths))
-            self.thread_count = len(seen)
-            if "nextCursor" not in page or self.thread_count > total:
-                raise SafetyError("empryo_list_incomplete")
-            next_cursor = page["nextCursor"]
+                thread_id = thread.get("threadId") if isinstance(thread, dict) else None
+                if not isinstance(thread_id, str) or not thread_id or thread_id in listed:
+                    raise SafetyError("t3_list_duplicate_or_invalid_thread")
+                if thread.get("status") not in self.LIVE_STATUSES:
+                    raise SafetyError("t3_thread_invalid")
+                listed.append(thread_id)
+            next_cursor = page.get("nextCursor")
             if next_cursor is None:
-                if self.thread_count != total:
-                    raise SafetyError("empryo_list_incomplete")
-                return
-            if not rows or type(next_cursor) is not int or next_cursor != cursor + len(rows) or self.thread_count >= total:
-                raise SafetyError("empryo_list_incomplete")
+                if len(listed) != total:
+                    raise SafetyError("t3_list_incomplete")
+                break
+            if not rows or type(next_cursor) is not int or next_cursor != cursor + len(rows) or len(listed) >= total:
+                raise SafetyError("t3_list_incomplete")
             cursor = next_cursor
-        raise SafetyError("empryo_list_incomplete")
+        else:
+            raise SafetyError("t3_list_incomplete")
+        for thread_id in listed:
+            read = self._call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+            thread = read.get("thread") if isinstance(read, dict) else None
+            if not isinstance(thread, dict) or thread.get("threadId") != thread_id or "worktreePath" not in thread:
+                raise SafetyError("t3_thread_path_unverified")
+            worktree = thread["worktreePath"]
+            if worktree is not None and (not isinstance(worktree, str) or not worktree or "\0" in worktree or not Path(worktree).is_absolute()):
+                raise SafetyError("t3_thread_path_invalid")
+            self.records[thread_id] = (thread.get("status"), worktree and canonical(worktree))
+            if worktree:
+                self.paths.append((Path(canonical(worktree)), thread_id))
+        self.thread_count = len(listed)
 
     def users(self, path: Path) -> list[str]:
         return sorted({thread_id for thread_path, thread_id in self.paths if inside(thread_path, path)})
 
     def blockers(self, path: Path) -> list[str]:
-        return ["empryo_thread_unfinished"] if self.users(path) else []
+        return ["t3_thread_unfinished"] if self.users(path) else []
 
 
 class GitHub:
@@ -387,7 +374,7 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
-def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, emp_state: EmpryoState, *, refresh: bool = False) -> dict[str, Any]:
+def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False) -> dict[str, Any]:
     path = Path(record["path"])
     result: dict[str, Any] = {
         "repo": str(repo_root), "path": str(path), "branch": record.get("branch"),
@@ -397,15 +384,15 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         "gone": not path.is_dir(), "locked": bool(record.get("locked")), "prunable": False,
         "remote_commit_present": None, "pull_request": None, "eligible": False, "reasons": [],
     }
-    reasons = emp_state.blockers(path)
-    result["empryo_threads"] = emp_state.users(path)
+    reasons = t3_state.blockers(path)
+    result["t3_threads"] = t3_state.users(path)
     if not inside(repo_root, code_root):
         reasons.append("repository_outside_code_root")
     if result["main_checkout"] or record.get("bare"):
         reasons.append("main_checkout")
     if not any(inside(path, root) for root in (code_root / ".worktrees", Path("/private/tmp"), Path("/tmp"))):
         reasons.append("worktree_outside_scope")
-    if any(reason != "empryo_thread_unfinished" for reason in reasons):
+    if any(reason != "t3_thread_unfinished" for reason in reasons):
         result["reasons"] = reasons
         return result
     if any(inside(holder, path) for holder in process_cwds(refresh=refresh)):
@@ -456,12 +443,12 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
     return result
 
 
-def excluded_row(repo_root: Path, record: dict[str, Any], reason: str, emp_state: EmpryoState) -> dict[str, Any]:
+def excluded_row(repo_root: Path, record: dict[str, Any], reason: str, t3_state: T3State) -> dict[str, Any]:
     path = Path(record["path"])
     row: dict[str, Any] = {
         "repo": str(repo_root), "path": str(path), "branch": record.get("branch"), "reason": reason,
         "gone": not path.is_dir(), "age_seconds": created_seconds_ago(path), "dirty": None,
-        "uncommitted": None, "empryo_threads": emp_state.users(path),
+        "uncommitted": None, "t3_threads": t3_state.users(path),
     }
     if not row["gone"]:
         try:
@@ -472,7 +459,7 @@ def excluded_row(repo_root: Path, record: dict[str, Any], reason: str, emp_state
     return row
 
 
-def inventory(code_root: Path, github: GitHub, emp_state: EmpryoState) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+def inventory(code_root: Path, github: GitHub, t3_state: T3State) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
     rows: list[dict[str, Any]] = []
     excluded = 0
     excluded_rows: list[dict[str, Any]] = []
@@ -481,11 +468,11 @@ def inventory(code_root: Path, github: GitHub, emp_state: EmpryoState) -> tuple[
         if excluded_repo(repo_root, repo_slug):
             excluded += 1
             reason = "SRW repository" if srw_repo(repo_root, repo_slug) else "Slash dbt or omni repository"
-            excluded_rows.extend(excluded_row(repo_root, record, reason, emp_state) for record in worktrees(repo_root) if canonical(record["path"]) != canonical(repo_root))
+            excluded_rows.extend(excluded_row(repo_root, record, reason, t3_state) for record in worktrees(repo_root) if canonical(record["path"]) != canonical(repo_root))
             continue
         records = worktrees(repo_root)
         for record in records:
-            row = evaluate(repo_root, record, code_root, github, emp_state)
+            row = evaluate(repo_root, record, code_root, github, t3_state)
             rows.append(row)
     return rows, excluded, excluded_rows
 
@@ -545,10 +532,10 @@ def write_daily_report(code_root: Path, rows: list[dict[str, Any]], summary: dic
         lines.append(f"- `{row['path']}` ({row['branch'] or 'detached'}, {state})")
         if row.get("reasons"):
             lines.append(f"  Reasons: {', '.join(row['reasons'])}")
-    lines.extend(["", "## Empryo-held worktrees", ""])
+    lines.extend(["", "## T3-held worktrees", ""])
     for row in rows:
-        if row.get("empryo_threads"):
-            lines.append(f"- `{row['path']}`: {', '.join(row['empryo_threads'])}")
+        if row.get("t3_threads"):
+            lines.append(f"- `{row['path']}`: {', '.join(row['t3_threads'])}")
     report_dir = code_root / "coordinator" / "evidence"
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"worktrees-kept-{day}.md"
@@ -565,7 +552,7 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str) -> None:
         "removed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "repo": row["repo"], "path": row["path"], "branch": row["branch"],
         "head": row["head"], "pull_request": row["pull_request"],
-        "reason": "clean, remote commit verified, no unfinished Empryo thread, and closed PR or detached idle for 24 hours",
+        "reason": "clean, remote commit verified, no live T3 thread, and closed PR or detached idle for 24 hours",
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
@@ -587,7 +574,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise SafetyError("cleaner_already_running") from exc
-        initial_state = EmpryoState()
+        initial_state = T3State()
         github = GitHub()
         rows, excluded, excluded_rows = inventory(code_root, github, initial_state)
         eligible = [row for row in rows if row["eligible"]]
@@ -601,7 +588,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_registration_changed"]
                     continue
                 try:
-                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), refresh=True)
+                    final = evaluate(repo_root, current, code_root, github, T3State(), refresh=True)
                 except SafetyError as exc:
                     candidate["eligible"] = False
                     candidate["reasons"] = [str(exc)]
@@ -624,8 +611,8 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 append_removal(state_root, candidate, "removal_attempted")
                 try:
-                    latest_state = EmpryoState()
-                    candidate["empryo_threads"] = latest_state.users(Path(candidate["path"]))
+                    latest_state = T3State()
+                    candidate["t3_threads"] = latest_state.users(Path(candidate["path"]))
                     blockers = latest_state.blockers(Path(candidate["path"]))
                 except SafetyError as exc:
                     blockers = [str(exc)]
@@ -676,7 +663,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 if current is None:
                     continue
                 try:
-                    final = evaluate(repo_root, current, code_root, github, EmpryoState(), refresh=True)
+                    final = evaluate(repo_root, current, code_root, github, T3State(), refresh=True)
                 except SafetyError:
                     continue
                 if not final["prunable"] or current.get("head") != row.get("head"):
@@ -701,9 +688,8 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
             "held": sum(1 for row in rows if not row["eligible"] and not row.get("removed")),
             "excluded_repositories": excluded,
             "held_reasons": {},
-            "empryo_threads_scanned": initial_state.thread_count,
-            "empryo_unfinished_threads": initial_state.unfinished_count,
-            "empryo_pages_scanned": initial_state.page_count,
+            "t3_threads_scanned": initial_state.thread_count,
+            "t3_pages_scanned": initial_state.page_count,
         }
         summary["per_repo"] = {}
         for row in rows:
@@ -712,7 +698,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 counts["would_remove"] += int(row["eligible"])
                 counts["kept_dirty"] += int(row["dirty"] is True)
                 counts["kept_unpushed"] += int(row["remote_commit_present"] is False)
-                counts["in_use"] += int(any(reason in row["reasons"] for reason in ("empryo_thread_unfinished",)))
+                counts["in_use"] += int(any(reason in row["reasons"] for reason in ("t3_thread_unfinished",)))
             for reason in row.get("reasons", []):
                 summary["held_reasons"][reason] = summary["held_reasons"].get(reason, 0) + 1
         if report:
