@@ -17,6 +17,20 @@ recorded evidence. Missing evidence stays unknown. Only a review thread’s
 final verdict word, run model, thread ID and time are retained from its report.
 Prompts, outputs, diffs, secrets and emails are never retained.
 
+## Evidence limitations (approved MO-152 scope)
+
+Outside-worktree and preview detection are unavailable from the permitted hub
+metadata. The collector does not inspect tool arguments, command titles, paths,
+or output to reconstruct them. The legacy flag lists remain empty and path /
+branch fields remain null; these mean **not collected**, not a clean audit.
+Equivalent scorer behavior is tested using synthetic inputs only.
+
+Requested models come only from a run's explicit requested-model field or an
+unambiguous routing event near its start. Thread-current model selection is
+never historical evidence, even for a single run. Without run-scoped evidence,
+`requested_model` is null and the legacy false fallback flag means unknown;
+it does not establish that the run used its requested model.
+
 ## Commands
 
 ```sh

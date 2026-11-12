@@ -320,19 +320,18 @@ def _model_family(model: str | None) -> str | None:
     return model.rsplit("/", 1)[-1] if model else None
 
 
-def _requested_model(thread: dict[str, Any]) -> str | None:
-    selection = thread.get("modelSelection")
-    model = selection.get("model") if isinstance(selection, dict) else None
-    model = model or thread.get("model")
+def _requested_model(run: dict[str, Any]) -> str | None:
+    """Only immutable run-scoped evidence can establish the requested model."""
+    model = run.get("requestedModel") or run.get("requested_model")
     return model.strip() if isinstance(model, str) and model.strip() else None
 
 
 def _routes_for_runs(runs: list[dict[str, Any]], routes: list[dict[str, str]]) -> dict[str, dict[str, str]]:
-    """Associate second-resolution route lines with the next matching run start.
+    """Match routes near run starts; leave second-resolution ambiguity unknown.
 
-    A log second covers [timestamp, timestamp + 1s), so a route in the same
-    second as a preceding run's end belongs to the following start. Ignore
-    ambiguous matches rather than inferring an earlier run's requested model.
+    Routing can be logged just before or after a start. Require the route's
+    destination to match the run record and a unique start within ten seconds;
+    never use thread-current model settings to resolve an ambiguous log line.
     """
     matched: dict[str, dict[str, str]] = {}
     ambiguous: set[str] = set()
@@ -345,18 +344,16 @@ def _routes_for_runs(runs: list[dict[str, Any]], routes: list[dict[str, str]]) -
             if not isinstance(run, dict) or not run.get("runId"):
                 continue
             start = _parse_ts(run.get("startedAt"))
-            if start is not None and 0 <= (start - stamp).total_seconds() <= 10:
-                candidates.append((start, run))
-        if not candidates:
+            end = _parse_ts(run.get("completedAt"))
+            if start is None or abs((start - stamp).total_seconds()) > 10:
+                continue
+            if end is not None and stamp >= end:
+                continue
+            if _model_family(_run_model(run)) == _model_family(route.get("model")):
+                candidates.append(run)
+        if len(candidates) != 1:
             continue
-        earliest = min(start for start, _ in candidates)
-        nearest = [run for start, run in candidates if start == earliest]
-        if len(nearest) != 1:
-            continue
-        run = nearest[0]
-        if _model_family(_run_model(run)) != _model_family(route.get("model")):
-            continue
-        run_id = str(run["runId"])
+        run_id = str(candidates[0]["runId"])
         if run_id in matched and matched[run_id]["base"] != route["base"]:
             ambiguous.add(run_id)
         matched[run_id] = route
@@ -667,9 +664,7 @@ def collect_runs(
             run_end = _parse_ts(completed_at)
             actual = _run_model(run)
             route = run_routes.get(run_id)
-            requested = route["base"] if route else (
-                _requested_model(thread) if len(runs) == 1 and run_id == thread.get("latestRunId") else None
-            )
+            requested = _requested_model(run) or (route["base"] if route else None)
             fell_back = bool(actual and requested and _model_family(actual) != _model_family(requested))
             review_completed = _parse_ts(review.get("review_completed_at"))
 

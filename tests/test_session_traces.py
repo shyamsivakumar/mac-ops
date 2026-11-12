@@ -25,7 +25,6 @@ from session_traces.scrub import scrub_path, scrub_string, scrub_trace
 from session_traces.store import export_posthog, write_trace
 
 
-
 # Synthetic sentinels: fake strings that must never reach a stored trace.
 USER_SENTINEL = "SYNTHETIC-USER-SENTINEL"
 COMMAND_SENTINEL = "SYNTHETIC-COMMAND-SENTINEL"
@@ -324,6 +323,7 @@ def _build_hub(
     """Write a synthetic hub tree (threads.json + hub.log + transcripts)."""
     if runs is None:
         runs = [_run(TASK_RUN_1)]
+        extra_log += (f"{_hub_stamp(runs[0]['startedAt'])} {TASK_THREAD_ID} routed to {task_model} instead of anthropic/claude-opus-5-5",)
     if pull_requests is None:
         pull_requests = [_pull_request()]
     task_thread = {
@@ -434,8 +434,6 @@ class ScrubTests(unittest.TestCase):
         )
 
 
-
-
 class CollectEvalTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -496,6 +494,7 @@ class CollectEvalTests(unittest.TestCase):
                     model=TASK_MODEL,
                 ),
             ],
+            extra_log=(f"{_hub_stamp('2026-11-03T16:20:00Z')} {TASK_THREAD_ID} routed to {TASK_MODEL} instead of anthropic/claude-opus-5-5",),
         )
         by_run = {t["run_id"]: t for t in self._collect(hub) if t["thread_id"] == TASK_THREAD_ID}
         same_family = by_run[TASK_RUN_1]

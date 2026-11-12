@@ -50,6 +50,38 @@ class FallbackAttributionTests(unittest.TestCase):
             self.assertTrue(traces[TASK_RUN_2]['model_fallback'])
             self.assertEqual(traces[TASK_RUN_2]['base_model'], 'anthropic/claude-opus-5-5')
 
+    def test_singleton_model_change_does_not_prove_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = _build_hub(Path(tmp), runs=[_run(TASK_RUN_1)], review=False)
+            trace = self.collect(hub)[TASK_RUN_1]
+            self.assertFalse(trace['model_fallback'])
+            self.assertIsNone(trace['requested_model'])
+
+    def test_route_logged_after_start_is_retained(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = _run(TASK_RUN_1, started_at='2026-11-03T16:00:01.900Z')
+            line = f"{_hub_stamp('2026-11-03T16:00:03Z')} {TASK_THREAD_ID} routed to subscriptions/gpt-6.1-terra instead of anthropic/claude-opus-5-5"
+            hub = _build_hub(Path(tmp), runs=[run], review=False, extra_log=(line,))
+            self.assertTrue(self.collect(hub)[TASK_RUN_1]['model_fallback'])
+
+    def test_two_matching_starts_in_one_second_are_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = [_run(TASK_RUN_1, started_at='2026-11-03T16:00:01.100Z', completed_at='2026-11-03T16:00:01.500Z'), _run(TASK_RUN_2, ordinal=2, started_at='2026-11-03T16:00:01.900Z')]
+            line = f"{_hub_stamp('2026-11-03T16:00:01Z')} {TASK_THREAD_ID} routed to subscriptions/gpt-6.1-terra instead of anthropic/claude-opus-5-5"
+            hub = _build_hub(Path(tmp), runs=runs, review=False, extra_log=(line,))
+            for trace in self.collect(hub).values():
+                self.assertFalse(trace['model_fallback'])
+                self.assertIsNone(trace['requested_model'])
+
+    def test_run_requested_model_overrides_current_thread_setting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = _run(TASK_RUN_1)
+            run['requestedModel'] = 'anthropic/claude-opus-5-5'
+            hub = _build_hub(Path(tmp), runs=[run], review=False)
+            trace = self.collect(hub)[TASK_RUN_1]
+            self.assertTrue(trace['model_fallback'])
+            self.assertEqual(trace['requested_model'], run['requestedModel'])
+
 
 if __name__ == '__main__':
     unittest.main()
