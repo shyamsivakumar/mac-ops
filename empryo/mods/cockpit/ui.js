@@ -105,24 +105,16 @@ const HINT_ROOM = 64;
 const NOTICE_TONE = { success: "done", error: "blocked", info: "muted" };
 const barCost = (item) => (item.label.length + (item.more?.length ?? 0)) * 6.2 + 12;
 function barItems(v) {
-  const { worktrees: w, hub, ops, running, cap } = v;
-  const modelsLabel = "Models · not available on T3";
-  const modelsTone = "dim";
-  const modelsTip = "Provider health is not available on T3";
-  const hubLabel = hub ? hub.reachable ? "Hub · T3 reachable" : "Hub · T3 unreachable" : "Hub · checking T3";
-  const hubTone = hub && !hub.reachable ? "blocked" : undefined;
+  const { worktrees: w, slots } = v;
   const asks = shared("co.asks")?.items ?? [];
   const decided = shared("co.decided") ?? {};
   const waiting = asks.filter((a) => !decided[a.id]);
   const sent = asks.length - waiting.length;
-  const decisionsLabel = `Decisions · ${waiting.length ? `${waiting.length} waiting` : "none"}${sent ? ` · ${sent} sent` : ""}`;
-  const decisionsTip = waiting.length ? `${waiting.slice(0, 3).map((a) => a.text).join(" · ")}${waiting.length > 3 ? ` · and ${waiting.length - 3} more` : ""}. Click to answer.` : "Nothing is waiting on you. Click to open the decisions pop-up.";
+  const decisions = asks.length ? [{ id: "decisions", prio: -1, command: "coordinator.asks", label: `Decisions · ${waiting.length} waiting${sent ? ` · ${sent} sent` : ""}`, tone: waiting.length ? "blocked" : undefined, tip: `${waiting.slice(0, 3).map((a) => a.text).join(" · ")}${waiting.length > 3 ? ` · and ${waiting.length - 3} more` : ""}. Click to answer.` }] : [];
   return [
-    { id: "decisions", prio: -1, command: "coordinator.asks", label: decisionsLabel, tone: waiting.length ? "blocked" : undefined, tip: decisionsTip },
+    ...decisions,
     { id: "wt", prio: 0, label: w ? `Worktrees · ${w.stale} stale` : "Worktrees", more: w?.look ? ` · ${w.look} need a look` : "", tone: w?.stale ? "working" : undefined, tip: w ? `${w.stale} safe to clean or prune · ${w.look} need a look. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
-    { id: "models", prio: 2, label: modelsLabel, tone: modelsTone, tip: modelsTip },
-    { id: "queue", prio: 4, label: hub?.queue ? `Queue · ${hub.queue.live}/${hub.queue.cap} · ${hub.queue.queued} queued` : "Queue · unavailable", tone: hub?.queue && hub.queue.live >= hub.queue.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
-    { id: "hub", prio: 1, label: hubLabel, tone: hubTone, tip: "T3 project-list reachability" },
+    { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
 }
 
@@ -265,7 +257,7 @@ function statusLine(v) {
     const age = ago(c.created, now);
     return `${c.issue ? "Updated" : "Created"} ${age === "now" ? "just now" : `${age} ago`}`;
   }
-  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}` : "Running · timing not available on T3";
+  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}` : "Running";
   if (c.kind === "done") return v.reviewed ? "Ready to settle" : "Not reviewed yet";
   return c.context;
 }

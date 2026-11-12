@@ -3,7 +3,7 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, verdictEntries, verdictOf } from "./hub.js";
+import { load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
@@ -39,7 +39,7 @@ const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
 
 const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/^Still checking/, "still checking"], [/^The review found/, "review failed"], [/^Review unreadable/, "review unreadable"]];
-const HUB_BUCKET = "refused by the hub";
+const PLAN_BUCKET = "failed the merge check";
 
 const NOTICE_FOR = 8000;
 let noticeSeq = 0;
@@ -50,7 +50,6 @@ const say = (level, title, body, items = [], explicit = false) => {
   setShared("cockpit.notice", { id: `${Date.now()}.${++noticeSeq}`, level, text: body ? `${title}: ${body}` : title, items, sticky: explicit });
 };
 const dismiss = () => setShared("cockpit.notice", null);
-
 
 const readState = async (name) => {
   const text = await readTextFile(`${WT_STATE}/${name}`);
@@ -122,8 +121,8 @@ export default class Board extends View {
     this.armed = null;
     this.colW = MIN_COL;
     this.wt = null;
-    this.hub = null;
-    this.hubBusy = false;
+    this.slots = null;
+    this.queueBusy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["backlog"]'));
     this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["backlog","done"]'));
     this.compact = false;
@@ -212,7 +211,7 @@ export default class Board extends View {
         if (changed) cx.notify();
         if (fresh) this.persist();
         this.enrich(board, cx, force);
-        this.watchHub(cx);
+        this.watchQueue(cx);
       } catch (error) {
         if (token !== this.token) return;
         this.error = String(error.message);
@@ -243,25 +242,22 @@ export default class Board extends View {
     });
   }
 
-  watchHub(cx) {
-    if (this.hubBusy) return;
-    this.hubBusy = true;
+  watchQueue(cx) {
+    if (this.queueBusy) return;
+    this.queueBusy = true;
     cx.spawn(async (cx) => {
-      this.hub = await hubStatus();
-      this.hubBusy = false;
-      if (!this.unchanged("hub", this.hub)) cx.notify();
+      this.slots = await queueStatus().catch(() => null);
+      this.queueBusy = false;
+      if (!this.unchanged("slots", this.slots)) cx.notify();
     });
   }
 
   openPanel(id, cx) {
-    if (id === "hub") return say("info", this.hub?.reachable ? "T3 reachable" : "T3 unreachable");
-    if (id === "models") return say("info", "Provider health is not available on T3");
-    if (id === "queue") return say("info", this.hub?.queue ? `Queue · ${this.hub.queue.live}/${this.hub.queue.cap} · ${this.hub.queue.queued} queued` : "Queue unavailable");
     if (this.deciding === `panel:${id}`) return;
     this.deciding = `panel:${id}`;
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
     if (id === "wt") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
-
+    openOverlay({ mod: "ops-panels", kind: "dialog", width: 520, height: 340, props: { panel: "queue", seed: { running: this.board?.running ?? 0, cap: this.cap } } });
   }
 
   readSaved() {
@@ -561,11 +557,11 @@ export default class Board extends View {
     const blocked = new Map();
     for (const g of open) {
       const block = this.reviewBlock(g);
-      const bucket = block ? BLOCK_BUCKETS.find(([pattern]) => pattern.test(block))[1] : this.refusalOf(g)?.planned ? HUB_BUCKET : null;
+      const bucket = block ? BLOCK_BUCKETS.find(([pattern]) => pattern.test(block))[1] : this.refusalOf(g)?.planned ? PLAN_BUCKET : null;
       if (bucket) blocked.set(bucket, (blocked.get(bucket) ?? 0) + 1);
       else approvable.push({ name: g.task || g.title, number: g.info.pr.number, group: g });
     }
-    const why = [...BLOCK_BUCKETS.map(([, name]) => name), HUB_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
+    const why = [...BLOCK_BUCKETS.map(([, name]) => name), PLAN_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing };
     return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
@@ -1116,11 +1112,11 @@ export default class Board extends View {
     if (kept.length !== Object.keys(refused).length) setShared("cockpit.refused", Object.fromEntries(kept));
   }
 
-  refuse(g, name, hubText, planned) {
-    const text = NO_REVIEW_REFUSAL.test(hubText) ? "No review yet, so this can't merge. Start a review for this task first." : hubText;
+  refuse(g, name, reason, planned) {
+    const text = NO_REVIEW_REFUSAL.test(reason) ? "No review yet, so this can't merge. Start a review for this task first." : reason;
     const live = this.groups().find((x) => x.key === g.key) ?? g;
     setShared("cockpit.refused", { ...shared("cockpit.refused"), [g.key]: { text, stamp: this.stamp(live), planned, at: Date.now() } });
-    return { name, merged: false, text };
+    return { name, text };
   }
 
   readyCandidates() {
@@ -1130,7 +1126,7 @@ export default class Board extends View {
     });
   }
 
-  async askHub(g) {
+  async planMerge(g) {
     const stamp = this.stamp(g);
     this.asked.set(g.key, { stamp, at: Date.now() });
     this.planning = Date.now();
@@ -1160,7 +1156,7 @@ export default class Board extends View {
       return asked?.stamp !== this.stamp(g) || Date.now() - asked.at > PLAN_STALE;
     });
     if (!next) return false;
-    await this.askHub(next);
+    await this.planMerge(next);
     return true;
   }
 
@@ -1409,7 +1405,7 @@ export default class Board extends View {
   column(t, key, col, state, cb) {
     return v_flex().id(`col-${key}`).w(this.colW).flex_none().h_full().border_r(key === "done" ? 0 : 1).border_color(t.border)
       .child(columnHead(t, key, col, state, cb))
-      .child(this.list(t, key, col.rows, !this.board || (key === "backlog" && !this.backlogLoaded) ? (this.error ? "Hub unreachable. R to retry" : "Loading…") : key === "backlog" && this.failedSlots.has("backlog") ? "Backlog could not be loaded" : EMPTY[key]));
+      .child(this.list(t, key, col.rows, !this.board || (key === "backlog" && !this.backlogLoaded) ? (this.error ? "T3 unreachable. R to retry" : "Loading…") : key === "backlog" && this.failedSlots.has("backlog") ? "Backlog could not be loaded" : EMPTY[key]));
   }
 
   lane(t, cols, state, cb) {
@@ -1417,7 +1413,7 @@ export default class Board extends View {
       { key: `s:${key}`, h: H.head, el: () => columnHead(t, key, cols[key], { ...state, collapsed: this.isFolded(key) }, cb) },
       ...cols[key].rows,
     ]);
-    if (!this.board) rows.push({ key: "s:empty", h: H.empty, el: () => emptyRow(t, this.error ? "Hub unreachable. R to retry" : "Loading…") });
+    if (!this.board) rows.push({ key: "s:empty", h: H.empty, el: () => emptyRow(t, this.error ? "T3 unreachable. R to retry" : "Loading…") });
     return v_flex().id("ck-lane").size_full().child(this.list(t, "compact", rows));
   }
 
@@ -1499,7 +1495,7 @@ export default class Board extends View {
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, hub: this.hub, ops: shared("ops"), hasBoard: Boolean(this.board), running: this.board?.running ?? 0, cap: this.cap }, cb))
+      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots }, cb))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()
           .on_size_change((size, cx) => {
