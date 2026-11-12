@@ -110,6 +110,15 @@ def t3_call(tool, args):
     except subprocess.TimeoutExpired:
         raise Refuse(f"t3 call {tool} timed out after {CALL_TIMEOUT}s")
     if result.returncode != 0:
+        if tool == "t3_thread_read":
+            try:
+                errors = json.loads(result.stderr)
+                missing = any(json.loads(e["text"]).get("code") == "thread_not_found"
+                              for e in errors if e.get("type") == "text")
+            except (ValueError, TypeError, KeyError, AttributeError):
+                missing = False
+            if missing:
+                return {"thread": {"threadId": args["threadId"], "status": "not running (thread not found)"}}
         raise Refuse(f"t3 call {tool} failed: {result.stderr.strip()}")
     return json.loads(result.stdout)
 
@@ -359,13 +368,9 @@ def blockers_of(issue):
 
 
 def resolve_models(cfg, ticket):
-    if not ticket["type"]:
-        raise Refuse("missing type label")
     builder = ticket["builder"] or cfg["types"].get(ticket["type"])
     reviewer = ticket["reviewer"] or cfg["types"]["review"]
     for role, alias in (("builder", builder), ("reviewer", reviewer)):
-        if alias is None:
-            raise Refuse(f"no {role} alias for type {ticket['type']}")
         if alias not in cfg["models"]:
             raise Refuse(f"unknown {role} alias {alias}")
     if cfg["models"][reviewer].get("noGate"):
@@ -459,7 +464,6 @@ def queue_items(repo, n):
     return [i for i in items if str(i["args"].get("clientRequestId", "")).startswith(prefix)]
 
 
-
 def intents(ledger):
     return [e for e in ledger if e.get("kind") == "intent"]
 
@@ -470,7 +474,7 @@ def assert_not_active(cfg, t, ledger):
     if queued:
         raise Refuse(f"already started: queued as empq #{queued[0]['id']}")
     for attempt in prior:
-        thread = thread_for_attempt(cfg, t, [attempt] + [e for e in ledger if e.get("kind") == "receipt"])
+        thread = thread_for_attempt(cfg, t, [attempt])
         if thread is None:
             continue
         if thread["status"] in LIVE_STATUSES:
@@ -580,16 +584,12 @@ def thread_for_attempt(cfg, t, ledger):
     if not prior:
         return None
     latest = prior[-1]
-    thread_id = next((e["threadId"] for e in ledger
-                      if e.get("kind") == "receipt" and e.get("attempt") == latest["attempt"]
-                      and e.get("threadId")), None)
-    if not thread_id:
-        try:
-            with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
-                receipts = json.load(f)
-        except FileNotFoundError:
-            receipts = {}
-        thread_id = receipts.get(f"ticket:{t['repo']}#{t['number']}:a{latest['attempt']}")
+    try:
+        with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except FileNotFoundError:
+        receipts = {}
+    thread_id = receipts.get(f"ticket:{t['repo']}#{t['number']}:a{latest['attempt']}")
     if not thread_id:
         return None
     result = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 1})
@@ -609,7 +609,9 @@ def cmd_abandon(a):
         if t["state"] != "OPEN":
             raise Refuse(f"issue is {t['state'].lower()}")
         ledger = ledger_of(issue, authed_login())
-        thread = thread_for_attempt(cfg, t, ledger) if t["key"] and intents(ledger) else None
+        threads = [thread_for_attempt(cfg, t, [attempt]) for attempt in intents(ledger)] if t["key"] else []
+        live_threads = {thread["threadId"]: thread for thread in threads
+                        if thread and thread["status"] in LIVE_STATUSES}
         queued = queue_items(repo, n)
         entry = {"kind": "abandon", "reason": a.reason, "at": now()}
         gh(["issue", "close", str(n), "-R", repo, "--reason", "not planned",
@@ -619,15 +621,15 @@ def cmd_abandon(a):
     except GhError as e:
         die(f"gh failed ({e.kind}): {e}")
     print(f"closed {repo}#{n} as not planned")
-    if thread and thread["status"] in LIVE_STATUSES:
-        t3_call("t3_thread_interrupt", {"threadId": thread["threadId"]})
+    for thread in live_threads.values():
+        t3_call("t3_thread_interrupt", {"threadId": thread["threadId"], "stop": True})
         print(f"interrupted thread {thread['threadId']} (was {thread['status']})")
     for item in queued:
         result = run([EMPQ, "drop", str(item["id"])], CALL_TIMEOUT)
         if result.returncode != 0:
             die(f"empq drop #{item['id']} failed: {result.stderr.strip()}")
         print(result.stdout.strip())
-    if not queued and not (thread and thread["status"] in LIVE_STATUSES):
+    if not queued and not live_threads:
         print("no live thread or queued item to stop")
 
 

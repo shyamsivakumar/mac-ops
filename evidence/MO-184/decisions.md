@@ -685,30 +685,37 @@ No test file changed.
 
 ## Slice 2c: ticket thread identity and retries through t3mcp
 
-Updated 2026-11-12 after the Opus gate on `0fc1dcff`.
+Updated 2026-11-12 after reading all three Opus gates, including `29934432`.
 
-`ticket` reads and interrupts threads through `t3mcp`. A missing type label
-now says `missing type label`, and a type without a configured builder says
-`no builder alias for type <type>`. The model and vendor checks are unchanged.
+`ticket` reads and interrupts threads through `t3mcp`. Start validation reports
+`missing type label` once, as required by the original slice brief. The duplicate
+model-resolution check and unrelated alias message have been removed.
 
 ### Thread identity comes from receipts
 
-`thread_for_attempt` first looks for a ledger receipt with a `threadId` for
-the attempt. Otherwise, it reads `EMPQ_DIR/dispatch-receipts.json`, using the
+`thread_for_attempt` reads `EMPQ_DIR/dispatch-receipts.json`, using the
 exact key `ticket:<repo>#<number>:a<attempt>`. It calls `t3_thread_read` for
 that ID and verifies the returned identity. It never searches by title,
 so another thread with the same ticket key cannot be mistaken for the attempt.
-`cmd_abandon` interrupts the recorded thread through `t3_thread_interrupt`.
+`cmd_abandon` checks every recorded attempt and interrupts each distinct live
+thread through `t3_thread_interrupt` with `stop: true`. Completed and missing
+threads are not interrupted.
 
 In `empryo/bin/empq`, the successful launch branch of `drain` reads the
-returned `threadId`. It accepts a direct result, a `structuredContent`
-wrapper, and a nested `thread` object. A successful launch without an ID
-raises an error. The drain writes the request ID to thread ID mapping through
+returned `threadId`. It accepts a direct result or a nested `thread` object;
+`t3mcp` already unwraps `structuredContent`. A successful launch without a
+valid ID, including invalid JSON, retains the queue item at `MAX_ATTEMPTS`.
+Later dispatches do not relaunch that uncertain attempt, and other ready items
+can run. The retained item blocks a new ticket start until an operator resolves
+it. The drain writes the request ID to thread ID mapping through
 a temporary file and `os.replace` before removing the queue item. A dropped
 item or a REFUSED tool produces no dispatch receipt.
 
 `TICKET_T3MCP` and `EMPQ_T3MCP` select the transport binaries. The JSON
-payload goes on stdin. Ticket transport errors and timeouts raise `Refuse`.
+payload goes on stdin. Ticket transport errors and timeouts raise `Refuse`, except an explicit
+`thread_not_found` code in the transport's JSON error content. That attempt
+reports `not running (thread not found)` and permits retry or abandonment.
+Other errors and identity mismatches still refuse.
 `CALL_TIMEOUT` remains 30 seconds for ticket T3 calls and queue drops.
 
 ### A missing thread ID does not prove an attempt is queued
@@ -750,6 +757,31 @@ The T3 service itself is stubbed, so this proof establishes local CLI behavior,
 not current live service behavior. Running the same proof against the original
 `0fc1dcff` ticket script fails because show reports queued after the injected
 start failure. No gate was launched.
+
+### Last repair attempt finding ledger
+
+The full thread IDs were recovered from the project thread list. Abbreviated
+IDs return `thread_not_found` even when the full thread still exists.
+
+- Gate `mcp:65ba7bd2-53d0-4910-8111-d81281be8f9d`: title matching and
+  pagination findings remain fixed by exact receipt lookup. The stub returns no
+  title list and checks every read and interrupt identity. Missing-type validation
+  now runs once. Abandon explicitly sends `stop: true`.
+- Gate `mcp:c82c23fd-e729-4c9d-8143-c5db6aa672ea`: absent-receipt retries
+  remain covered by the failed start, legacy, drop, and REFUSED cases. The evidence
+  now describes receipt writes. The dead ledger lookup and transport wrapper
+  fallback are removed. Invalid replies no longer crash or relaunch indefinitely.
+- Gate `mcp:b256e57c-7090-4cd4-9628-ba9497c589fa`: deleted-thread show,
+  start, and abandon cases pass. Unknown transport errors and identity mismatches
+  refuse. Abandon interrupts an older live attempt while leaving the completed
+  latest attempt alone. The unrelated alias message and extra blank line are gone.
+
+The expanded stub proof also checks direct and nested launch replies, missing IDs,
+invalid JSON, and a second dispatch. An uncertain launch is called once, remains
+queued at the retry limit, and does not prevent the next item from dispatching.
+All 14 reported proof groups passed, as did the fast check and 26 hub install tests.
+The deslop pass removed the proven dead lookup. The no-comments diff pass found
+no added explanatory code comments to remove. No new unit tests were created.
 
 ### Remaining scope
 
