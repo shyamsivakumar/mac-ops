@@ -20,7 +20,8 @@ files to the live paths.
   `modelFallback` and watchdog keys in Empryo's `config.json` set the engine's
   own routing and timeouts.
 - The Herdr mods `cockpit`, `coordinator`, `ops` and `git-graph` show the hub
-  in the Herdr app.
+  in the Herdr app. The installer also manages Herdr's `keys.json` and the
+  `shyam` layout.
 
 ## Deferred installs after mac-ops merges (MO-170)
 
