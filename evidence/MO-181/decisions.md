@@ -1,7 +1,9 @@
 # Decisions ledger — MO-181
 
-Run: `ticket:shyamsivakumar/mac-ops#119:a1`  
-Ticket: https://github.com/shyamsivakumar/mac-ops/issues/119  
+Run: `ticket:shyamsivakumar/mac-ops#119:a1`
+
+Ticket: https://github.com/shyamsivakumar/mac-ops/issues/119
+
 Base: `origin/main` at `b33dbf28bb08575a212a8c64db12bc8622152711`.
 MO-179 merged as PR #118 (`10027e3f2579955ebac0cb46424fac1d66d47b38`),
 an ancestor of this base.
@@ -61,7 +63,7 @@ all exact-SHA, checkout, identity, interrupted-install and routing refusals.
 This stays within the existing state file and worker, but necessarily widens
 the named-function scope and the hub contract; it is not implemented here.
 
-**Confidence:** high — both independent barriers were reproduced directly.
+**Confidence:** high — both independent barriers were reproduced via extracted functions.
 
 **Owner:** `empryo/bin/emp-hub:806`; `empryo/bin/emp_hub_install.py:69`.
 
@@ -125,3 +127,17 @@ on the two scope decisions above.
 **Confidence:** high — all 26 targeted tests passed unchanged.
 
 **Owner:** `tests/test_hub_install.py`.
+
+## In-session review
+
+Claude Opus 5.5, read-only, reviewed the scope-stop evidence and owning
+admission/installer code. Proofs were not independently rerun. No critical or
+major findings; both minor documentation findings were corrected (metadata
+paragraph separation and qualification of extracted-function evidence).
+The reviewer confirmed there is no sound two-function implementation under
+the stated scope. Its verdict passes the documented stop, **not** the requested
+batching acceptance gate; the feature remains unimplemented and #119 stays open.
+The initial Anthropic API dispatch failed for insufficient credits; the
+completed review used the signed-in subscription route.
+
+VERDICT: PASS
