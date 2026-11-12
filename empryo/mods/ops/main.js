@@ -1,10 +1,10 @@
 // Status bar for the work: US market clock and the live SRW paper trader's /health, this Mac's load and the
-// `heavy` queue, the Empryo hub (socket and launchd job) and the mod error count.
+// `heavy` queue and the mod error count.
 // Read-only; each source polls on its own cadence.
 
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { appHome, exec, home, nextCommand, notify, openOverlay, setShared, shared, theme } from "herdr";
+import { appHome, exec, home, nextCommand, openOverlay, theme } from "herdr";
 import { readFile } from "fs/promises";
 
 const SRW_HEALTH = "https://srw-telegram-paper-production.up.railway.app/health";
@@ -14,10 +14,6 @@ const HOLIDAYS = new Set([
 ]);
 const EARLY_CLOSE = new Set(["2026-11-27", "2026-12-24"]);
 const OPEN = 570;
-const HUB_LIVE = ["preparing", "queued", "starting", "running", "waiting"];
-const HUB_CAP = 6;
-const HEALTH_FILE = `${home()}/Code/coordinator/queue/health.json`;
-const HEALTH_STALE_MS = 300000;
 const POLL_LIMIT = 60000;
 const WT_DIR = `${home()}/.local/state/herdr-worktrees`;
 const WT_SCAN = `${appHome()}/mods/worktrees/scan.sh`;
@@ -37,14 +33,7 @@ const MEM_PANEL = [560, 520];
 const HERDR_APP = `${home()}/.local/bin/herdr-app`;
 const ERRORS_EVERY = 30000;
 const ERRORS_PANEL = [640, 440];
-const HUB_JOB = "dev.coordinator.emp-hub";
-const HUB_PROBE = `test -S "$1" && echo socket=up || echo socket=missing; launchctl print gui/$(id -u)/${HUB_JOB} 2>&1`;
-const HUB_RESTART = `launchctl kickstart -k gui/$(id -u)/${HUB_JOB}`;
-const HUB_HEALTH_EVERY = 15000;
-const HUB_STALE_MS = 120000;
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-const healthStale = (hl) => !hl || Date.now() - hl.checked_at * 1000 > HEALTH_STALE_MS;
 
 const sunday = (year, month, nth) => 1 + ((7 - new Date(Date.UTC(year, month, 1)).getUTCDay()) % 7) + 7 * (nth - 1);
 
@@ -94,17 +83,13 @@ export default class Ops extends View {
     this.clock = Date.now();
     this.srw = null;
     this.heavy = null;
-    this.hub = null;
-    this.health = undefined;
     this.wt = undefined;
     this.load = null;
     this.mem = null;
     this.claude = null;
     this.minimax = null;
     this.modErrors = null;
-    this.hubHealth = null;
     this.at = {};
-    this.published = "";
     this.busy = new Set();
     this.width = 1200;
     cx.timer.every(5000, (cx) => this.tick(cx));
@@ -144,20 +129,8 @@ export default class Ops extends View {
         limit.cancel();
         this.busy.delete(name);
       }
-      if (name === "health") this.publish();
       cx.notify();
     });
-  }
-
-  publish() {
-    const hl = this.health;
-    const payload = {
-      health: hl === undefined ? undefined : { stale: healthStale(hl), problems: hl?.problems ?? [], warnings: hl?.warnings ?? [] },
-    };
-    const stamp = JSON.stringify(payload);
-    if (stamp === this.published) return;
-    this.published = stamp;
-    setShared("ops", payload);
   }
 
   async readWorktrees() {
@@ -188,19 +161,6 @@ export default class Ops extends View {
       const r = await exec("sysctl", ["-n", "vm.loadavg"]).catch(() => null);
       return r && r.code === 0 ? Number(r.stdout.replace(/[{}]/g, "").trim().split(/\s+/)[0]) : null;
     });
-    const board = shared("hub");
-    if (board && Date.now() - board.at < 30000) this.hub = board;
-    else {
-      this.poll(cx, "hub", 15000, async () => {
-        const r = await exec(`${home()}/.local/bin/emp`, ["call", "emp_thread_list", JSON.stringify({ allProjects: true, limit: 100, statuses: HUB_LIVE })]).catch(() => null);
-        const threads = r && r.code === 0 ? JSON.parse(r.stdout).threads : null;
-        return threads && {
-          running: threads.filter((t) => t.status !== "waiting").length,
-          waiting: threads.filter((t) => t.status === "waiting").length,
-          at: Date.now(),
-        };
-      });
-    }
     this.poll(cx, "mem", MEM_EVERY, async () => {
       const r = await exec("memory_pressure", [], { timeout: 10000 }).catch(() => null);
       const free = r && r.code === 0 ? /free percentage: (\d+)%/.exec(r.stdout) : null;
@@ -209,16 +169,6 @@ export default class Ops extends View {
     this.poll(cx, "modErrors", ERRORS_EVERY, async () => {
       const r = await exec(HERDR_APP, ["status"]).catch(() => null);
       return r && r.code === 0 ? JSON.parse(r.stdout).errors : null;
-    });
-    this.poll(cx, "hubHealth", HUB_HEALTH_EVERY, async () => {
-      const r = await exec("sh", ["-c", HUB_PROBE, "sh", `${home()}/.empryo-hub/hub.sock`]).catch(() => null);
-      const board = shared("hub");
-      return r && {
-        socket: r.stdout.startsWith("socket=up"),
-        state: /^\tstate = (\S+)/m.exec(r.stdout)?.[1] ?? "not loaded",
-        pid: /^\tpid = (\d+)/m.exec(r.stdout)?.[1],
-        board: board && { at: board.at, running: board.running },
-      };
     });
     this.poll(cx, "claude", USAGE_EVERY, async () => {
       const cache = await readJson(CLAUDE_USAGE);
@@ -244,7 +194,6 @@ export default class Ops extends View {
       };
     });
     this.poll(cx, "wt", this.wt?.scanning ? 4000 : 30000, () => this.readWorktrees());
-    this.poll(cx, "health", 30000, () => readFile(HEALTH_FILE, "utf8").then(JSON.parse, () => null));
     cx.notify();
   }
 
@@ -295,17 +244,6 @@ export default class Ops extends View {
       .child(div().text_color(t.blocked).font_medium().child(`${errors.length} mod error${errors.length === 1 ? "" : "s"}`))
       .child(div().text_color(t.muted).child(/^mod (\S+?):/.exec(errors[0])?.[1] ?? "app"));
 
-    const hh = this.hubHealth;
-    const readAge = hh?.board ? Date.now() - hh.board.at : null;
-    const hubDown = hh && (hh.state !== "running" || !hh.socket);
-    const hubStale = hh && !hubDown && readAge !== null && readAge > HUB_STALE_MS;
-    const hubReasons = hh ? [hh.state !== "running" && `the launchd job is ${hh.state}`, !hh.socket && "hub.sock is missing"].filter(Boolean) : [];
-    const hubEl = !hh ? null : hubDown
-      ? item(t.blocked, "hub down", hh.state !== "running" ? hh.state : "no socket", `Hub down: ${hubReasons.join(" and ")}. Restart with: ${HUB_RESTART}`)
-      : hubStale
-        ? item(t.working, "hub stale", `read ${span(Math.round(readAge / 60000))} ago`, `The cockpit's last hub read was ${span(Math.round(readAge / 60000))} ago (limit 2m). The launchd job is running (pid ${hh.pid}) and hub.sock exists, so the hub may be hung or the cockpit stopped polling. Restart with: ${HUB_RESTART}`)
-        : item(t.done, "hub", "", `The launchd job is running (pid ${hh.pid}) and hub.sock exists${readAge === null ? "" : `. The cockpit read the hub ${Math.round(readAge / 1000)}s ago`}.`);
-
     const srw = this.srw;
     const poll = srw?.telegram?.pollHealth;
     const srwOk = srw?.ok && srw.ready && poll?.state === "ok";
@@ -319,19 +257,6 @@ export default class Ops extends View {
     const queued = h?.queue.length ?? 0;
     const heavyColor = paused > 0 ? t.working : t.muted;
 
-    const b = this.hub;
-    const hubColor = !b ? t.dim : b.waiting ? t.blocked : b.running ? t.working : t.muted;
-
-    const hl = this.health;
-    const stale = healthStale(hl);
-    const issues = stale ? ["health check not running"] : [...hl.problems, ...hl.warnings];
-    const healthColor = stale || hl.problems.length ? t.blocked : hl.warnings.length ? t.working : t.done;
-    const healthEl = h_flex().id("health").gap(6).items_center().flex_none().cursor_pointer()
-      .on_click(() => notify({ title: issues.length ? "Hub health" : "Hub health: all clear", body: issues.join("\n"), level: healthColor === t.blocked ? "error" : issues.length ? "warning" : "success" }))
-      .tooltip(issues.length ? issues.join(" · ") : "Empryo hub, Coordinator, dispatcher: all ok")
-      .child(div().size(6).rounded(3).bg(healthColor))
-      .child(div().text_color(issues.length ? healthColor : t.foreground).font_medium().child(issues[0] ?? "health"));
-
     const roomy = this.width >= 1280;
     const tight = this.width >= 980;
     return h_flex().size_full().px(10).gap(roomy ? 12 : 9).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11).overflow_hidden()
@@ -342,9 +267,6 @@ export default class Ops extends View {
       })
       .child(item(now.open ? t.done : t.dim, "NYSE", now.text))
       .when(errorEl !== null, (el) => el.child(errorEl))
-      .child(plain("Tasks", b ? `${b.running}/${HUB_CAP} run${b.waiting ? ` · ${b.waiting} waiting` : ""}` : "n/a", hubColor, "Empryo tasks running (cap 6) and waiting for you"))
-      .child(healthEl)
-      .when(hubEl !== null && (roomy || hubDown || hubStale), (el) => el.child(hubEl))
       .child(item(srwColor, "SRW", srwDetail, srwTip))
       .when(this.load !== null && roomy, (el) => el.child(plain("M4", `load ${this.load.toFixed(2)}`, t.muted, "load average, 1 minute")))
       .when(tight, (el) => el.child(plain("heavy", h ? ([running && `${running} run`, paused && `${paused} paused`, queued && `${queued} queued`].filter(Boolean).join(" · ") || "idle") : "n/a", heavyColor, "mac-ops heavy status")))
