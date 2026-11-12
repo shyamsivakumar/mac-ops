@@ -243,6 +243,13 @@ install with `./install.sh coordinator`. Config installs to `~/.coordinator`.
 Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 
+The `dev.coordinator.turncap` job runs the coordinator's turn-cap monitor
+(`~/Code/coordinator/loop/turn_cap.py`) from login and after every exit, so the
+ten-minute turn cap holds across reboots. It logs to
+`~/Library/Logs/coordinator/turncap.log`; the installer creates that directory
+because launchd does not. The job replaces the hand-started monitor, so stop
+that process before loading the job.
+
 ## Agent session traces (MO-124)
 
 Read-only traces of every T3 build-session run on this Mac, scrubbed and stored
