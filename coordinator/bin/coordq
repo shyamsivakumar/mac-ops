@@ -22,6 +22,8 @@ TASK_MODELS = {
     "review": OPUS_MODEL,
 }
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
+RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
+RULES_SKIP_TITLES = ("review", "critique", "merge relay")
 
 
 def path(name):
@@ -84,11 +86,34 @@ def tool_refusal(tool):
     return f"tool {tool!r} is not dispatchable. Accepted tools: {', '.join(DISPATCHABLE_TOOLS)}"
 
 
+def read_rules():
+    try:
+        with open(RULES_PATH) as f:
+            return f.read().strip()
+    except OSError as e:
+        raise RuntimeError(f"cannot read agent rules {RULES_PATH}: {e.strerror}") from e
+
+
+def wants_rules(args):
+    title = str(args.get("title") or "").lower()
+    return bool(args.get("message")) and not any(word in title for word in RULES_SKIP_TITLES)
+
+
+def with_rules(args):
+    if not wants_rules(args):
+        return args
+    return {**args, "message": f"## Agent rules\n\n{read_rules()}\n\n## Brief\n\n{args['message']}"}
+
+
 def call(tool, args):
     if tool == "t3_thread_launch":
         args, refusal = with_model(args)
         if refusal:
             return 1, refusal
+        try:
+            args = with_rules(args)
+        except RuntimeError as e:
+            return 1, str(e)
     run = subprocess.run([T3MCP, "call", tool, "-"], input=json.dumps(args), capture_output=True, text=True)
     return run.returncode, (run.stdout if run.returncode == 0 else run.stderr).strip()
 
@@ -208,6 +233,10 @@ def cmd_start(a):
         args, refusal = with_model(args)
         if refusal:
             die(refusal)
+        try:
+            with_rules(args)
+        except RuntimeError as e:
+            die(f"refused: {e}")
     with Lock(True):
         queue = load()
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
