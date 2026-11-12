@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("emp_post_merge", ROOT / "empryo/bin/emp_post_merge.py")
+spec = importlib.util.spec_from_file_location("post_merge", ROOT / "coordinator/bin/post_merge.py")
 post = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(post)
 
@@ -37,7 +37,7 @@ class PostMergeTests(unittest.TestCase):
         (self.other / "file").write_text("remote")
         self.git(self.other, "commit", "-am", "remote")
         self.git(self.other, "push", str(self.remote), "main")
-        self.config = self.home / ".empryo" / "post-merge.json"
+        self.config = self.home / ".coordinator" / "post-merge.json"
         self.config.parent.mkdir(parents=True, exist_ok=True)
 
     def git(self, cwd, *args):
@@ -142,8 +142,8 @@ class PostMergeTests(unittest.TestCase):
         self.assertEqual(result["install"]["reason"], "busy")
 
     def test_deferred_install_does_not_copy_config(self):
-        self.write_config(install=["/bin/sh", "-c", "exit 75"], configSync=["EMPRYO.md"])
-        result = self.run_post(changed_files=["empryo/config/EMPRYO.md"])
+        self.write_config(install=["/bin/sh", "-c", "exit 75"], configSync=["AGENT-RULES.md"])
+        result = self.run_post(changed_files=["coordinator/config/AGENT-RULES.md"])
         self.assertEqual(result["install"]["status"], "deferred")
         self.assertEqual(result["configSync"][0]["reason"], "install did not complete")
 
@@ -167,30 +167,30 @@ class PostMergeTests(unittest.TestCase):
         self.assertIn("timed out", result["install"]["reason"])
 
     def test_config_files_changed_by_the_merge_are_synced(self):
-        source = self.other / "empryo" / "config"
+        source = self.other / "coordinator" / "config"
         (source / "agents").mkdir(parents=True)
-        (source / "EMPRYO.md").write_text("new rules")
+        (source / "AGENT-RULES.md").write_text("new rules")
         (source / "hooks.json").write_text("{}")
         (source / "agents" / "code-reviewer.md").write_text("reviewer")
         self.git(self.other, "add", "-A")
         self.git(self.other, "commit", "-m", "config")
         self.git(self.other, "push", str(self.remote), "main")
-        live = self.home / ".empryo"
+        live = self.home / ".coordinator"
         (live / "agents").mkdir(parents=True, exist_ok=True)
-        (live / "EMPRYO.md").write_text("old rules")
+        (live / "AGENT-RULES.md").write_text("old rules")
         (live / "agents" / "code-reviewer.md").write_text("old reviewer")
-        self.write_config(configSync=["EMPRYO.md", "hooks.json", "agents/code-reviewer.md"])
-        result = self.run_post(changed_files=["empryo/config/EMPRYO.md", "empryo/config/hooks.json", "empryo/config/agents/code-reviewer.md"])
-        self.assertEqual((live / "EMPRYO.md").read_text(), "new rules")
+        self.write_config(configSync=["AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md"])
+        result = self.run_post(changed_files=["coordinator/config/AGENT-RULES.md", "coordinator/config/hooks.json", "coordinator/config/agents/code-reviewer.md"])
+        self.assertEqual((live / "AGENT-RULES.md").read_text(), "new rules")
         self.assertEqual((live / "agents" / "code-reviewer.md").read_text(), "reviewer")
         self.assertEqual((live / "hooks.json").read_text(), "{}")
-        backups = sorted(p.name for p in live.glob("EMPRYO.md.before-*"))
+        backups = sorted(p.name for p in live.glob("AGENT-RULES.md.before-*"))
         self.assertEqual(len(backups), 1)
         self.assertEqual((live / backups[0]).read_text(), "old rules")
         self.assertTrue(next((live / "agents").glob("code-reviewer.md.before-*")))
 
     def test_protected_config_files_are_never_synced(self):
-        source = self.other / "empryo" / "config"
+        source = self.other / "coordinator" / "config"
         source.mkdir(parents=True)
         (source / "tickets.json").write_text("{}")
         (source / "config.json").write_text("{}")
@@ -198,12 +198,12 @@ class PostMergeTests(unittest.TestCase):
         self.git(self.other, "add", "-A")
         self.git(self.other, "commit", "-m", "config")
         self.git(self.other, "push", str(self.remote), "main")
-        live = self.home / ".empryo"
+        live = self.home / ".coordinator"
         live.mkdir(parents=True, exist_ok=True)
         (live / "tickets.json").write_text("keep")
         (live / "config.json").write_text("keep")
         self.write_config(configSync=["tickets.json", "config.json", "routing.json"])
-        result = self.run_post(changed_files=["empryo/config/tickets.json", "empryo/config/config.json", "empryo/config/routing.json"])
+        result = self.run_post(changed_files=["coordinator/config/tickets.json", "coordinator/config/config.json", "coordinator/config/routing.json"])
         self.assertEqual((live / "tickets.json").read_text(), "keep")
         self.assertEqual((live / "config.json").read_text(), "keep")
         self.assertFalse((live / "routing.json").exists())
@@ -231,39 +231,39 @@ class PostMergeTests(unittest.TestCase):
         self.assertEqual((self.checkout / "local.txt").read_text(), "local secret")
 
     def test_the_config_sync_never_writes_through_an_existing_temporary_file(self):
-        source = self.other / "empryo" / "config"
+        source = self.other / "coordinator" / "config"
         source.mkdir(parents=True)
-        (source / "EMPRYO.md").write_text("new rules")
+        (source / "AGENT-RULES.md").write_text("new rules")
         self.git(self.other, "add", "-A")
         self.git(self.other, "commit", "-m", "config")
         self.git(self.other, "push", str(self.remote), "main")
-        live = self.home / ".empryo"
+        live = self.home / ".coordinator"
         live.mkdir(parents=True, exist_ok=True)
-        (live / "EMPRYO.md").write_text("old rules")
-        (live / "EMPRYO.md.tmp").write_text("precious")
-        self.write_config(configSync=["EMPRYO.md"])
-        result = self.run_post(changed_files=["empryo/config/EMPRYO.md"])
+        (live / "AGENT-RULES.md").write_text("old rules")
+        (live / "AGENT-RULES.md.tmp").write_text("precious")
+        self.write_config(configSync=["AGENT-RULES.md"])
+        result = self.run_post(changed_files=["coordinator/config/AGENT-RULES.md"])
         self.assertEqual(result["configSync"][0]["status"], "copied")
-        self.assertEqual((live / "EMPRYO.md").read_text(), "new rules")
-        self.assertEqual((live / "EMPRYO.md.tmp").read_text(), "precious",
+        self.assertEqual((live / "AGENT-RULES.md").read_text(), "new rules")
+        self.assertEqual((live / "AGENT-RULES.md.tmp").read_text(), "precious",
                          "an existing temporary file is never written through")
 
     def test_the_config_sync_leaves_a_linked_file_alone(self):
-        source = self.other / "empryo" / "config"
+        source = self.other / "coordinator" / "config"
         source.mkdir(parents=True)
-        (source / "EMPRYO.md").write_text("new rules")
+        (source / "AGENT-RULES.md").write_text("new rules")
         self.git(self.other, "add", "-A")
         self.git(self.other, "commit", "-m", "config")
         self.git(self.other, "push", str(self.remote), "main")
-        live = self.home / ".empryo"
+        live = self.home / ".coordinator"
         live.mkdir(parents=True, exist_ok=True)
         (live / "elsewhere.md").write_text("keep")
-        (live / "EMPRYO.md").symlink_to(live / "elsewhere.md")
-        self.write_config(configSync=["EMPRYO.md"])
-        result = self.run_post(changed_files=["empryo/config/EMPRYO.md"])
+        (live / "AGENT-RULES.md").symlink_to(live / "elsewhere.md")
+        self.write_config(configSync=["AGENT-RULES.md"])
+        result = self.run_post(changed_files=["coordinator/config/AGENT-RULES.md"])
         self.assertEqual(result["configSync"][0]["status"], "skipped")
         self.assertIn("link", result["configSync"][0]["reason"])
-        self.assertTrue((live / "EMPRYO.md").is_symlink())
+        self.assertTrue((live / "AGENT-RULES.md").is_symlink())
         self.assertEqual((live / "elsewhere.md").read_text(), "keep")
 
 

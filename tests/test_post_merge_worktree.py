@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("emp_post_merge", ROOT / "empryo/bin/emp_post_merge.py")
+spec = importlib.util.spec_from_file_location("post_merge", ROOT / "coordinator/bin/post_merge.py")
 post = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(post)
 
@@ -43,7 +43,7 @@ class PostMergeWorktreeTests(unittest.TestCase):
         (self.clone / "local").write_text("local")
         self.worktree = self.home / "Code" / "example-main"
         self.git(self.clone, "worktree", "add", str(self.worktree), "main")
-        self.config = self.home / ".empryo" / "post-merge.json"
+        self.config = self.home / ".coordinator" / "post-merge.json"
         self.config.parent.mkdir(parents=True, exist_ok=True)
 
     def git(self, cwd, *args):

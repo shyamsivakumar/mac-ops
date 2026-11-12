@@ -2,11 +2,9 @@
 
 Fast-forwards the repository's live main checkout under ~/Code, runs the
 repository's declared install step, and copies the declared config files that
-the merge changed into ~/.empryo. Every step is best effort: a skipped or
+the merge changed into ~/.coordinator. Every step is best effort: a skipped or
 failed step is reported, never raised, so a merge is never undone by it.
 """
-import fcntl
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -21,7 +19,7 @@ INSTALL_TIMEOUT = 300
 REASON_LIMIT = 300
 REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 CHECKOUT_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
-CONFIG_DIR = "empryo/config"
+CONFIG_DIR = "coordinator/config"
 NEVER_SYNCED = ("routing.json", "config.json", "tickets.json")
 
 
@@ -119,7 +117,7 @@ def _is_checkout(path):
 
 
 def _sync_config(checkout, home, names, sha, changed):
-    """Copy the declared config files the merge changed into ~/.empryo.
+    """Copy the declared config files the merge changed into ~/.coordinator.
 
     A file the merge did not change is left alone, and the file it replaces is
     kept next to it as <name>.before-<shortsha>. The copy is written to a fresh
@@ -129,7 +127,7 @@ def _sync_config(checkout, home, names, sha, changed):
     synced = []
     for name in names or []:
         record = {"file": name}
-        if name not in ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md"):
+        if name not in ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md"):
             record.update({"status": "skipped", "reason": "a merge never syncs this file"})
             synced.append(record)
             continue
@@ -138,7 +136,7 @@ def _sync_config(checkout, home, names, sha, changed):
             synced.append(record)
             continue
         source = Path(checkout) / CONFIG_DIR / name
-        target = Path(home) / ".empryo" / name
+        target = Path(home) / ".coordinator" / name
         if not source.is_file():
             record.update({"status": "skipped", "reason": "the checkout does not have it"})
             synced.append(record)
@@ -183,17 +181,7 @@ def _sync_config(checkout, home, names, sha, changed):
 
 
 def post_merge(repo, base, home, config_path=None, changed_files=None):
-    # Serialize the checkout fast-forward with the external deployment worker.
-    if repo.lower() != "shyamsivakumar/mac-ops":
-        return _post_merge(repo, base, home, config_path, changed_files)
-    folder = Path(home) / ".empryo-hub"
-    folder.mkdir(parents=True, exist_ok=True)
-    fd = os.open(folder / "install.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        return _post_merge(repo, base, home, config_path, changed_files)
-    finally:
-        os.close(fd)
+    return _post_merge(repo, base, home, config_path, changed_files)
 
 
 def _post_merge(repo, base, home, config_path=None, changed_files=None):
@@ -215,7 +203,7 @@ def _post_merge(repo, base, home, config_path=None, changed_files=None):
         return skip("the pull request did not target main")
     if not REPO_PATTERN.fullmatch(repo):
         return skip("the repository identity is not usable")
-    path = Path(config_path or Path(home) / ".empryo" / "post-merge.json")
+    path = Path(config_path or Path(home) / ".coordinator" / "post-merge.json")
     try:
         with open(path) as handle:
             config = json.load(handle)
@@ -264,14 +252,6 @@ def _post_merge(repo, base, home, config_path=None, changed_files=None):
     if head != remote:
         return skip("the local main is ahead of origin/main")
     result["fastForward"] = {"status": "ok", "from": old_head[:7], "to": head[:7]}
-    if entry.get("deferEmpryo") and repo.lower() == "shyamsivakumar/mac-ops":
-        try:
-            spec = importlib.util.spec_from_file_location("emp_hub_install", checkout / "empryo/bin/emp_hub_install.py")
-            worker = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(worker)
-            result["hubInstall"] = worker.mark(checkout, home, old_head, head)
-        except (OSError, ValueError, RuntimeError, ImportError):
-            result["hubInstall"] = {"status": "failed", "reason": "could not mark Empryo install pending"}
     command = entry.get("install")
     if command:
         result["install"] = _install(checkout, command, entry.get("timeout", INSTALL_TIMEOUT))
@@ -283,5 +263,5 @@ def _post_merge(repo, base, home, config_path=None, changed_files=None):
         result["configSync"] = [{"status": "skipped", "reason": "cannot determine pull request files"}]
     else:
         result["configSync"] = _sync_config(checkout, home, entry.get("configSync"), head, changed_files or [])
-    result["status"] = "failed" if result["install"]["status"] == "failed" or result.get("hubInstall", {}).get("status") == "failed" else "ok"
+    result["status"] = "failed" if result["install"]["status"] == "failed" else "ok"
     return result

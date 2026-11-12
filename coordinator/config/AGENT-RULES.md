@@ -1,4 +1,4 @@
-# Rules for every Empryo task
+# Rules for every agent task
 
 You run unattended. A coordinator agent reads your result and reports to Shyam.
 
@@ -54,8 +54,7 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
   review verdict (only when a review round ran), and what is left.
 
 Dev servers and previews use the port block in your task text
-("Your port block: A-B"): those ten ports are yours. The shell does not
-export `EMP_PORT_BASE`, so type the number. Before trusting a page on any
+("Your port block: A-B"): those ten ports are yours. Type the number; it is not exported to your shell. Before trusting a page on any
 port, check which process owns the port and which directory it runs from
 (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, then `lsof -p <pid> | grep cwd`).
 Never run `git stash` or switch branches in a checkout another task uses.

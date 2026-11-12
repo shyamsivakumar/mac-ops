@@ -46,8 +46,8 @@ let config = null;
 
 export async function loadConfig() {
   if (config) return config;
-  const text = await readTextFile(`${home()}/.empryo/tickets.json`);
-  if (text === null) throw new Error("tickets.json not found in ~/.empryo");
+  const text = await readTextFile(`${home()}/.coordinator/tickets.json`);
+  if (text === null) throw new Error("tickets.json not found in ~/.coordinator");
   config = JSON.parse(text);
   return config;
 }

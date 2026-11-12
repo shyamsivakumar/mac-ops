@@ -10,7 +10,7 @@ Decisions so far (Shyam):
 
 - Linear-like, not a new Linear workspace (no webhook, no tunnel).
 - A ticket's own builder or reviewer overrides routing for that ticket; routing stays the default.
-- Ascend work (the `slash-eureka` repos: AUH, ascend-mcp, data-ops, dbt, omni) keeps its tickets in Ascend's Linear. Empryo threads for that work carry a link to the Linear issue; nothing about them moves.
+- Ascend work (the `slash-eureka` repos: AUH, ascend-mcp, data-ops, dbt, omni) keeps its tickets in Ascend's Linear. T3 threads for that work carry a link to the Linear issue; nothing about them moves.
 - Personal projects need the new structure. Revision 1's local markdown files are not the right home.
 
 ## Where personal tickets live
@@ -47,8 +47,8 @@ Revision 1 was critiqued by GPT-6.1 Sol (MO-137) and GLM 5.3 (MO-138): `~/Code/c
 | --- | --- | --- |
 | Key, title, body (ticket template), type label, blockers, parent | Issue | Coordinator creates; Shyam edits anywhere |
 | Priority, Builder, Reviewer, Stage (Backlog, Todo) | Labels | Shyam; Coordinator on create; Coordinator on escalation |
-| Thread ids, dispatched body hash, request id | One issue comment written at launch, with a machine-readable line (`<!-- empryo {"thread":…,"hash":…,"requestId":…} -->`) | The dispatcher only |
-| Status, runs, actual models, PRs, verdict | Empryo thread | Hub |
+| Thread ids, dispatched body hash, request id | One issue comment written at launch, with a machine-readable line (`<!-- empryo-ticket {"thread":…,"hash":…,"requestId":…} -->`) | The dispatcher only |
+| Status, runs, actual models, PRs, verdict | T3 thread | T3 |
 | Closed (done or cancelled) | Issue state | Coordinator after the gate passes; Shyam |
 
 A fact lives in one place. The board reads both sides and shows disagreement (for example a closed issue with a running thread) as a red chip. Nothing syncs by last writer.
@@ -60,25 +60,25 @@ A fact lives in one place. The board reads both sides and shows disagreement (fo
 
 ## Dispatch (one path)
 
-Start, from the board or the Coordinator, runs one command: `empq start` with
+Start, from the board or the Coordinator, runs one command: `coordq start` with
 `{projectId, taskType, message, clientRequestId: "ticket-<repo>#<n>-<bodyhash>", modelSelection?}`.
 
 - `message` is the issue body at that moment plus a first line naming the issue URL.
 - `clientRequestId` makes a retry find the existing thread (`tool_thread_launch` returns it for a known request id) instead of starting a second agent.
 - The dispatcher refuses to start, with the reason on the card, when a blocker is open, a required template section is empty, the key is missing, or the model check fails.
-- Queue and cap (6) stay in `empq`. The board never calls `emp_thread_launch`.
+- Queue and cap (6) stay in `coordq`. The board never calls `t3_thread_launch`.
 
 ## Model choice per ticket
 
-- Each role resolves to the ticket field, else routing (`routing.json` by taskType). `taskType` is always passed too, so the hub keeps the mode (`large` opens Orchestrate).
+- Each role resolves to the ticket field, else the model `coordq` maps from taskType. `taskType` is always passed too.
 - Field values map through one table to `{instanceId, model}`; an unknown value refuses the start.
 - Vendor rule: the gate reviewer's vendor differs from the builder's actual vendor. Checked at start against the requested models, and again before the gate launches against the actual author models from the run records, including fallbacks. Same-vendor pairs and Cursor gates are refused. Panels keep "no fallback; a seat that fell back does not count".
-- A pinned builder whose circuit is open waits in the queue with a red chip; it does not quietly use routing. Once running, the hub's normal in-run fallback still applies, and the card shows the actual model with a "fell back" chip.
+- A pinned builder whose provider is out waits in the queue with a red chip; it does not quietly use routing. The card shows the actual model once the thread runs.
 - Escalation wins over a pin: after two failed gates the Coordinator swaps the `builder:` label and comments why.
 
 ## Edits after start
 
-The agent saw the body at launch. When the body's hash no longer matches the launch comment, the card shows "changed since launch". Applying it sends the diff as a follow-up through `empq start` with the thread id. A change to the acceptance section invalidates an earlier gate verdict.
+The agent saw the body at launch. When the body's hash no longer matches the launch comment, the card shows "changed since launch". Applying it sends the diff as a follow-up through `coordq start` with the thread id. A change to the acceptance section invalidates an earlier gate verdict.
 
 ## Board changes (v1)
 
@@ -116,9 +116,9 @@ Existing idle personal-project threads with no issue stay on the board as today.
 Round two (MO-139 Sol: conditional go; MO-140 GLM: go with conditions), full text in `~/Code/coordinator/evidence/local-tickets-design-critiques-round2-2026-11-09.md`. Shyam approved building v1 with these conditions:
 
 - **Default routing:** build task types default to GLM 5.3 and chores to MiniMax M3.1 Flash (`routing.json`, commit 078cc91). Review stays on Opus.
-- **One command owns GitHub:** `empryo/bin/ticket` (labels, list, start, abandon, show). The board calls it; nothing else talks to GitHub.
-- **Durable dispatch:** the start writes an intent comment before `empq start` and a receipt after; the request id is `ticket:<repo>#<n>:a<attempt>`, not tied to the body, so an edit cannot start a second agent. A start is refused while the latest attempt's thread is live or queued. A failed receipt retries the comment, never the start. Machine lines are trusted only from the authenticated gh user.
-- **Hub:** `emp_thread_send` dedupes on `clientRequestId` like launch does, so follow-ups cannot be sent twice.
+- **One command owns GitHub:** `coordinator/bin/ticket` (labels, list, start, abandon, show). The board calls it; nothing else talks to GitHub.
+- **Durable dispatch:** the start writes an intent comment before `coordq start` and a receipt after; the request id is `ticket:<repo>#<n>:a<attempt>`, not tied to the body, so an edit cannot start a second agent. A start is refused while the latest attempt's thread is live or queued. A failed receipt retries the comment, never the start. Machine lines are trusted only from the authenticated gh user.
+- **T3:** `t3_thread_send` dedupes on `clientRequestId` like launch does, so follow-ups cannot be sent twice.
 - **Fresh checks at start:** the issue, labels and blockers are re-read from GitHub before every start, never from the cache.
 - **Identity:** tickets join on `repo#number` and the request id; the title key is for people and review titles.
 - **Vendor rule on every fallback:** checked at start, again before the gate, and at verdict-read against the gate's actual model; a same-vendor or unknown-author verdict is discarded. A pass counts only for the reviewed commit.

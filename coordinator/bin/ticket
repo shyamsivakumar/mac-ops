@@ -3,18 +3,18 @@ import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
-EMPQ = os.environ.get("TICKET_EMPQ", "empq")
-QUEUE_DIR = os.environ.get("EMPQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+COORDQ = os.environ.get("TICKET_COORDQ", "coordq")
+QUEUE_DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 CACHE_DIR = os.environ.get("TICKET_CACHE", os.path.expanduser("~/.cache/tickets"))
 CACHE_TTL = 60
 GH_TIMEOUT = 40
 CALL_TIMEOUT = 30
-EMPQ_TIMEOUT = 120
+COORDQ_TIMEOUT = 120
 LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
 STAGES = ("stage:backlog", "stage:todo")
 FAMILIES = ("stage", "priority", "type", "builder", "reviewer")
 FAMILY_COLORS = {"stage": "1d76db", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
-EMPQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
+COORDQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
 NO_PRIORITY = 0
 LEDGER_LINE = re.compile(r"<!-- empryo-ticket (\{.*\}) -->")
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
@@ -48,10 +48,10 @@ def parse_time(text):
 
 def config_path():
     here = os.path.dirname(os.path.realpath(__file__))
-    for candidate in (os.path.join(here, "..", "config", "tickets.json"), os.path.expanduser("~/.empryo/tickets.json")):
+    for candidate in (os.path.join(here, "..", "config", "tickets.json"), os.path.expanduser("~/.coordinator/tickets.json")):
         if os.path.exists(candidate):
             return candidate
-    die("tickets.json not found next to the script or in ~/.empryo")
+    die("tickets.json not found next to the script or in ~/.coordinator")
 
 
 def load_config():
@@ -472,7 +472,7 @@ def assert_not_active(cfg, t, ledger):
     prior = intents(ledger)
     queued = queue_items(t["repo"], t["number"])
     if queued:
-        raise Refuse(f"already started: queued as empq #{queued[0]['id']}")
+        raise Refuse(f"already started: queued as coordq #{queued[0]['id']}")
     for attempt in prior:
         thread = thread_for_attempt(cfg, t, [attempt])
         if thread is None:
@@ -505,8 +505,8 @@ def build_start(cfg, t, attempt):
     }
     title_rest = t["title"][len(t["key"]):].lstrip(" ·-:·").strip()
     title = f"{t['key']} · {title_rest}"
-    priority = EMPQ_PRIORITY[int(t["priority"])] if t["priority"] else NO_PRIORITY
-    command = [EMPQ, "start", json.dumps(payload), "--title", title, "--priority", str(priority)]
+    priority = COORDQ_PRIORITY[int(t["priority"])] if t["priority"] else NO_PRIORITY
+    command = [COORDQ, "start", json.dumps(payload), "--title", title, "--priority", str(priority)]
     return request_id, command, payload
 
 
@@ -551,20 +551,20 @@ def cmd_start(a):
         strategy = payload["workspaceStrategy"]
         print(f"workspace: {strategy['type']} from {strategy['baseRef']}")
         print("command:\n" + shlex.join(command) + "\n")
-        print(f"receipt comment (after empq):\n<!-- empryo-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"empq\":\"<empq output>\"}} -->\n")
+        print(f"receipt comment (after coordq):\n<!-- empryo-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"empq\":\"<coordq output>\"}} -->\n")
         print(f"then remove label stage:{t['stage']}")
         return
     post_comment(repo, n, intent_text)
     try:
-        result = run(command, EMPQ_TIMEOUT)
+        result = run(command, COORDQ_TIMEOUT)
     except subprocess.TimeoutExpired:
-        die(f"empq start timed out after {EMPQ_TIMEOUT}s; intent attempt {attempt} is on the issue, check empq list before retrying")
+        die(f"coordq start timed out after {COORDQ_TIMEOUT}s; intent attempt {attempt} is on the issue, check coordq list before retrying")
     if result.returncode != 0:
-        die(f"empq start failed: {result.stderr.strip()}; intent attempt {attempt} is on the issue, stage label kept")
+        die(f"coordq start failed: {result.stderr.strip()}; intent attempt {attempt} is on the issue, stage label kept")
     output = result.stdout.strip()
     print(output)
     receipt = {"kind": "receipt", "attempt": attempt, "requestId": request_id, "empq": output}
-    receipt_text = f"{t['key']} attempt {attempt}: empq says \"{output}\".\n\n{machine_line(receipt)}"
+    receipt_text = f"{t['key']} attempt {attempt}: coordq says \"{output}\".\n\n{machine_line(receipt)}"
     posted = False
     for tries in range(3):
         try:
@@ -576,7 +576,7 @@ def cmd_start(a):
             time.sleep(2)
     gh(["issue", "edit", str(n), "-R", repo, "--remove-label", f"stage:{t['stage']}"])
     if not posted:
-        die(f"started, but the receipt comment could not be posted after 3 tries; empq output was: {output}")
+        die(f"started, but the receipt comment could not be posted after 3 tries; coordq output was: {output}")
 
 
 def thread_for_attempt(cfg, t, ledger):
@@ -625,9 +625,9 @@ def cmd_abandon(a):
         t3_call("t3_thread_interrupt", {"threadId": thread["threadId"], "stop": True})
         print(f"interrupted thread {thread['threadId']} (was {thread['status']})")
     for item in queued:
-        result = run([EMPQ, "drop", str(item["id"])], CALL_TIMEOUT)
+        result = run([COORDQ, "drop", str(item["id"])], CALL_TIMEOUT)
         if result.returncode != 0:
-            die(f"empq drop #{item['id']} failed: {result.stderr.strip()}")
+            die(f"coordq drop #{item['id']} failed: {result.stderr.strip()}")
         print(result.stdout.strip())
     if not queued and not live_threads:
         print("no live thread or queued item to stop")
