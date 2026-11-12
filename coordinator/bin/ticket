@@ -16,7 +16,7 @@ FAMILIES = ("stage", "priority", "type", "builder", "reviewer")
 FAMILY_COLORS = {"stage": "1d76db", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
 COORDQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
 NO_PRIORITY = 0
-LEDGER_LINE = re.compile(r"<!-- empryo-ticket (\{.*\}) -->")
+LEDGER_LINE = re.compile(r"<!-- (?:empryo|coordinator)-ticket (\{.*\}) -->")
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 BLOCKER_URL = re.compile(r"^https?://[^/]+/([^/\s#]+/[^/\s#]+)/issues/\d+")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
@@ -482,7 +482,7 @@ def assert_not_active(cfg, t, ledger):
 
 
 def machine_line(entry):
-    return f"<!-- empryo-ticket {json.dumps(entry, separators=(',', ':'))} -->"
+    return f"<!-- coordinator-ticket {json.dumps(entry, separators=(',', ':'))} -->"
 
 
 def post_comment(repo, n, text):
@@ -551,7 +551,7 @@ def cmd_start(a):
         strategy = payload["workspaceStrategy"]
         print(f"workspace: {strategy['type']} from {strategy['baseRef']}")
         print("command:\n" + shlex.join(command) + "\n")
-        print(f"receipt comment (after coordq):\n<!-- empryo-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"empq\":\"<coordq output>\"}} -->\n")
+        print(f"receipt comment (after coordq):\n<!-- coordinator-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"coordq\":\"<coordq output>\"}} -->\n")
         print(f"then remove label stage:{t['stage']}")
         return
     post_comment(repo, n, intent_text)
@@ -563,7 +563,7 @@ def cmd_start(a):
         die(f"coordq start failed: {result.stderr.strip()}; intent attempt {attempt} is on the issue, stage label kept")
     output = result.stdout.strip()
     print(output)
-    receipt = {"kind": "receipt", "attempt": attempt, "requestId": request_id, "empq": output}
+    receipt = {"kind": "receipt", "attempt": attempt, "requestId": request_id, "coordq": output}
     receipt_text = f"{t['key']} attempt {attempt}: coordq says \"{output}\".\n\n{machine_line(receipt)}"
     posted = False
     for tries in range(3):

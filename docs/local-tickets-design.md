@@ -47,7 +47,7 @@ Revision 1 was critiqued by GPT-6.1 Sol (MO-137) and GLM 5.3 (MO-138): `~/Code/c
 | --- | --- | --- |
 | Key, title, body (ticket template), type label, blockers, parent | Issue | Coordinator creates; Shyam edits anywhere |
 | Priority, Builder, Reviewer, Stage (Backlog, Todo) | Labels | Shyam; Coordinator on create; Coordinator on escalation |
-| Thread ids, dispatched body hash, request id | One issue comment written at launch, with a machine-readable line (`<!-- empryo-ticket {"thread":…,"hash":…,"requestId":…} -->`) | The dispatcher only |
+| Thread ids, dispatched body hash, request id | One issue comment written at launch, with a machine-readable line (`<!-- coordinator-ticket {"thread":…,"hash":…,"requestId":…} -->`) | The dispatcher only |
 | Status, runs, actual models, PRs, verdict | T3 thread | T3 |
 | Closed (done or cancelled) | Issue state | Coordinator after the gate passes; Shyam |
 
