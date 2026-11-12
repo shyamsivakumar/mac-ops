@@ -1,3 +1,8 @@
+Baseline before source edit (two separate invocations of replay.py, each exit 1):
+mo177-srw846.json: emp:ad767a88-f2b8-437f-a7eb-707815acba22 original run: (False, 'the latest run left no report'); AssertionError
+mo177-srw790.json: emp:f1a2acb1-ef83-41cc-a2df-ca424d93de0e original run: (False, 'the latest run left no report'); AssertionError
+
+After source edit:
 emp:ad767a88-f2b8-437f-a7eb-707815acba22 original run: (True, 'VERDICT: PASS')
 emp:f1a2acb1-ef83-41cc-a2df-ca424d93de0e original run: (True, 'VERDICT: PASS')
 tool after PASS: PASS (VERDICT: PASS)
