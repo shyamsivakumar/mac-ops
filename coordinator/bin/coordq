@@ -322,6 +322,7 @@ def gate_candidates(config):
     login = login_run.stdout.strip()
     with open(path("dispatch-receipts.json")) as f:
         receipts = json.load(f)
+    skipped = set()
     for repo, settings in config["repos"].items():
         for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100"):
             if pr["draft"]:
@@ -354,8 +355,33 @@ def gate_candidates(config):
                 runs = result.get("recentRuns", [])
                 models = executed_models(runs[0]) if runs else []
                 if not models:
-                    print(f"skip {repo}#{number}: executedModel unavailable", file=sys.stderr)
-                    continue
+                    thread = result.get("thread", {})
+                    instance, stored = thread.get("providerInstanceId"), thread.get("model")
+                    reason = None
+                    if not isinstance(stored, str) or not stored or not instance:
+                        reason = "stored builder model unavailable"
+                    elif instance == "router":
+                        try:
+                            with open(os.path.expanduser("~/.pi/agent/extensions/task-router.ts")) as f:
+                                source = f.read()
+                            routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
+                            chain = re.search(r"^\s*" + re.escape(stored.removeprefix("task/")) + r":\s*\[([^\]]*)\]", routes[1], re.M) if routes and stored.startswith("task/") else None
+                            entries = json.loads("[" + chain[1].rstrip().rstrip(",") + "]") if chain else []
+                            if not entries or not all(isinstance(m, str) and "/" in m for m in entries):
+                                reason = "router chain unavailable"
+                            elif any("claude" in m.lower() or "anthropic" in m.lower() for m in entries):
+                                reason = "router chain includes Claude"
+                            else:
+                                models = entries
+                        except (OSError, ValueError):
+                            reason = "router chain unavailable"
+                    else:
+                        models = ["claude" if instance == "claudeAgent" else stored]
+                    if reason:
+                        if (repo, number) not in skipped:
+                            print(f"skip {repo}#{number}: {reason}", file=sys.stderr)
+                            skipped.add((repo, number))
+                        continue
                 statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
                 checks = [x for x in statuses if x["context"] == "srw/agent-check"]
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
