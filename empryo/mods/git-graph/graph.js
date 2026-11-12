@@ -360,7 +360,7 @@ export class Graph {
         .child(`Following task${task?.title ? `: ${task.title}` : ""}. A pinned repository applies once the task is cleared.`)))
       .child(row("graph-pick-follow", "Follow focused terminal", "Use the repository of the focused pane", loc.via === "focus", (_e, cx) => this.pick(null, cx)))
       .children(group("space", "In this space"))
-      .children(group("hub", "Empryo projects"))
+      .children(group("hub", "T3 projects"))
       .when(!this.repos, (e) => e.child(div().px(14).py(8).text_size(11.5).text_color(t.dim).child("Finding repositories…")));
   }
 

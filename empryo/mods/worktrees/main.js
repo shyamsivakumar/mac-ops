@@ -12,7 +12,7 @@ const PORT_POLL_MS = 5000;
 const HANG_MS = 660000;
 
 const REASONS = {
-  empryo_thread_unfinished: "A hub thread is still using it",
+  empryo_thread_unfinished: "A T3 thread is still using it",
   process_cwd_inside: "A running program has its working folder inside it",
   worktree_outside_scope: "Lives outside the folders the cleaner manages",
   worktree_locked: "Locked in Git",
@@ -36,6 +36,32 @@ const GROUPS = [
   ["look", "Needs a look", "working"],
   ["protected", "In use or protected", "dim"],
 ];
+
+const T3 = `${home()}/.local/bin/t3mcp`;
+const LIVE_THREAD = new Set(["preparing", "queued", "starting", "running", "waiting"]);
+const THREAD_POLL_MS = 30000;
+const worktreeOf = new Map();
+
+const t3 = async (tool, args) => {
+  const r = await exec(T3, ["call", tool, JSON.stringify(args)]);
+  if (r.code !== 0) throw new Error(JSON.parse(JSON.parse(r.stderr)[0].text).message);
+  return JSON.parse(r.stdout);
+};
+
+async function liveThreadUsers() {
+  const users = new Map();
+  for (let cursor = 0; cursor !== null;) {
+    const page = await t3("t3_thread_list", { allProjects: true, settled: false, limit: 100, cursor });
+    for (const thread of page.threads.filter((t) => LIVE_THREAD.has(t.status))) {
+      const known = worktreeOf.get(thread.threadId);
+      const path = known?.updatedAt === thread.updatedAt ? known.path : (await t3("t3_thread_read", { threadId: thread.threadId, limit: 1, runLimit: 1 })).thread.worktreePath;
+      worktreeOf.set(thread.threadId, { updatedAt: thread.updatedAt, path });
+      if (path) users.set(path, [...(users.get(path) ?? []), thread.threadId]);
+    }
+    cursor = page.nextCursor ?? null;
+  }
+  return users;
+}
 
 const read = (name) => readTextFile(`${STATE}/${name}`).then((text) => (text ? JSON.parse(text) : null), () => null);
 const base = (path) => path.slice(path.lastIndexOf("/") + 1);
@@ -121,11 +147,15 @@ export default class Worktrees extends View {
     this.polling = false;
     this.ports = new Map();
     this.scanningPorts = false;
+    this.threadUsers = null;
+    this.scanningThreads = false;
     this.handle = cx.focus_handle();
     cx.timer.after(60, () => this.handle.focus());
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
     cx.timer.every(PORT_POLL_MS, (cx) => this.pollPorts(cx));
     this.pollPorts(cx);
+    cx.timer.every(THREAD_POLL_MS, (cx) => this.pollThreads(cx));
+    this.pollThreads(cx);
     cx.spawn(async (cx) => {
       this.data = await read("last.json");
       const status = await read("status.json");
@@ -208,6 +238,21 @@ export default class Worktrees extends View {
       } finally {
         this.scanningPorts = false;
       }
+    });
+  }
+
+  pollThreads(cx) {
+    if (this.scanningThreads) return;
+    this.scanningThreads = true;
+    cx.spawn(async (cx) => {
+      try {
+        this.threadUsers = await liveThreadUsers();
+      } catch {
+        this.threadUsers = null;
+      } finally {
+        this.scanningThreads = false;
+      }
+      cx.notify();
     });
   }
 
@@ -313,7 +358,9 @@ export default class Worktrees extends View {
 
   exclusionDetail(r) {
     const state = r.gone ? "folder is gone" : r.dirty === null ? "status unknown" : r.dirty ? plural(r.uncommitted, "uncommitted file") : "clean";
-    return r.empryo_threads.length ? `${state}. Used by ${plural(r.empryo_threads.length, "hub thread")}` : `${state}. No hub thread uses it`;
+    if (!this.threadUsers) return `${state}. T3 thread use unknown`;
+    const users = this.threadUsers.get(r.path) ?? [];
+    return users.length ? `${state}. Used by ${plural(users.length, "T3 thread")}` : `${state}. No T3 thread uses it`;
   }
 
   body(t) {
