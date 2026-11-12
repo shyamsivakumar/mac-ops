@@ -3,7 +3,7 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { cleanupNote, cleanupThread, closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, oldShells, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
+import { closeWindow, empryoWindows, hubStatus, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, oldShells, openThread, queueCap, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, showName, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prFresh, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
@@ -17,7 +17,7 @@ const IDLE_AFTER = 90000;
 const TICK = 60000;
 const POP_FOLLOW = 600000;
 const SAVED = "board";
-const SAVED_VERSION = 3;
+const SAVED_VERSION = 4;
 const ACT_GRACE = 20000;
 const ARM_FOR = 4000;
 const LOAD_STALE = 300000;
@@ -276,6 +276,9 @@ export default class Board extends View {
   }
 
   openPanel(id, cx) {
+    if (id === "hub") return say("info", this.hub?.reachable ? "T3 reachable" : "T3 unreachable");
+    if (id === "models") return say("info", "Provider health is not available on T3");
+    if (id === "queue") return say("info", this.hub?.queue ? `Queue · ${this.hub.queue.live}/${this.hub.queue.cap} · ${this.hub.queue.queued} queued` : "Queue unavailable");
     if (this.deciding === `panel:${id}`) return;
     this.deciding = `panel:${id}`;
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
@@ -493,7 +496,7 @@ export default class Board extends View {
   }
 
   mergeCandidate(g) {
-    return g.info.status === "open" && !g.threads.some((c) => c.kind === "run");
+    return g.info.status === "open" && !g.threads.some((c) => ["run", "wait", "fail", "stop"].includes(c.kind));
   }
 
   reviewOf(g) {
@@ -1097,24 +1100,10 @@ export default class Board extends View {
     const label = threads.length === 1 ? `Settled ${threads[0].task || threads[0].title}` : `Settled ${threads.length} threads`;
     const undo = () => threads.forEach((c) => this.settled.delete(c.key));
     this.attempt(label, async () => {
-      const notes = [];
-      for (const c of threads) {
-        await settle(c.key);
-        notes.push(await this.cleanup(c));
-      }
-      return { note: notes.map((n) => n.text).filter(Boolean).join("; "), level: notes.some((n) => n.failed) ? "error" : "success" };
+      for (const c of threads) await settle(c.key);
+      return { note: "", level: "success" };
     }, cx, undo);
     cx.notify();
-  }
-
-  async cleanup(c) {
-    const name = c.task || c.title;
-    try {
-      const note = cleanupNote(await cleanupThread(c.key));
-      return { text: note && `${name}: ${note}` };
-    } catch (error) {
-      return { text: `Cleanup failed · ${name}: ${error.message}`, failed: true };
-    }
   }
 
   authorOf(group) {
@@ -1145,9 +1134,8 @@ export default class Board extends View {
     return [pr?.number, gh?.sha, gh?.ci, gh?.mergeState, gh?.mergeable, review?.key, review?.at].join(":");
   }
 
-  refusalOf(g) {
-    const refusal = shared("cockpit.refused")?.[g.key];
-    return refusal?.stamp === this.stamp(g) ? refusal : null;
+  refusalOf() {
+    return null;
   }
 
   pruneRefused() {
@@ -1195,16 +1183,7 @@ export default class Board extends View {
   }
 
   async planNext() {
-    if (this.checking()) return false;
-    const ready = this.readyCandidates();
-    const old = (x) => {
-      const refusal = this.refusalOf(x);
-      return refusal?.planned && Date.now() - refusal.at > RECHECK_AFTER;
-    };
-    const g = ready.find((x) => this.asked.get(x.key) !== this.stamp(x)) ?? ready.find(old);
-    if (!g) return false;
-    await this.askHub(g);
-    return true;
+    return false;
   }
 
   recheckBlocked(e, cx) {
@@ -1236,7 +1215,7 @@ export default class Board extends View {
     if (problem) return this.refuse(g, name, problem);
     try {
       const r = await mergeThread(this.taskThread(g).key, this.planned);
-      if (r.merged) return { name, merged: true, text: cleanupNote(r.cleanup) ?? "" };
+      if (r.merged) return { name, merged: true, text: "" };
       return this.refuse(g, name, r.refused);
     } catch (error) {
       const state = await fetchPr(g.info.pr).then((x) => x.state, () => null);
@@ -1313,22 +1292,11 @@ export default class Board extends View {
   }
 
   approve(e, cx) {
-    const pr = e?.col === "ready" && e.group.info?.status === "open" ? e.group.info.pr : null;
-    if (!pr || this.merging || !this.owns("ready") || this.guard(true) || this.prBlocked([pr])) return;
-    const block = this.reviewBlock(e.group);
-    if (block) return say("info", "Not approved", block, [], true);
-    const refusal = this.refusalOf(e.group);
-    if (refusal?.planned) return this.recheckBlocked(e, cx);
-    this.confirm("approve", e.key, (seen) => this.merge([e.group], cx, [seen]), cx, prState(pr));
+    return say("info", "merged by relay after the Opus gate");
   }
 
   approveAll(cx) {
-    if (this.merging || !this.owns("ready")) return;
-    const { approvable: prs, skipped, nothing } = this.layout;
-    if (!prs.length) return say("info", nothing, "", [], true);
-    if (skipped && this.armed?.kind !== "approve-all") say("info", `${skipped} skipped`, "No passing review yet, or the hub says they can't merge.");
-    if (this.guard(false) || this.prBlocked(prs.map((p) => p.group.info.pr))) return;
-    this.confirm("approve-all", "all", (seen) => this.merge(prs.map((p) => p.group), cx, seen), cx, prs.map((p) => prState(p.group.info.pr)));
+    return say("info", "merged by relay after the Opus gate");
   }
 
   queue(e, cx) {
