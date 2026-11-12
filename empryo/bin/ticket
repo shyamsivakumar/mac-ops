@@ -6,7 +6,6 @@ EMP = os.environ.get("TICKET_EMP", "emp")
 EMPQ = os.environ.get("TICKET_EMPQ", "empq")
 QUEUE_DIR = os.environ.get("EMPQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 CACHE_DIR = os.environ.get("TICKET_CACHE", os.path.expanduser("~/.cache/tickets"))
-ROUTING = os.environ.get("TICKET_ROUTING", os.path.expanduser("~/.empryo-hub/routing.json"))
 CACHE_TTL = 60
 GH_TIMEOUT = 40
 EMP_TIMEOUT = 30
@@ -359,23 +358,11 @@ def blockers_of(issue):
     return [{"repo": blocker_repo(n), "number": n["number"], "title": n["title"], "url": n["url"], "state": n["state"]} for n in blocked["nodes"]]
 
 
-def load_routing():
-    with open(ROUTING) as f:
-        return json.load(f)["types"]
-
-
-def alias_for_selection(cfg, selection):
-    for alias, model in cfg["models"].items():
-        if model["selection"] == selection:
-            return alias
-    raise Refuse(f"routing model {selection['instanceId']}/{selection['model']} has no alias in tickets.json")
-
-
-def resolve_models(cfg, ticket, routing):
-    builder = ticket["builder"] or alias_for_selection(cfg, routing[ticket["type"]]["modelSelection"])
-    reviewer = ticket["reviewer"] or alias_for_selection(cfg, routing["review"]["modelSelection"])
-    for role, alias in (("builder", ticket["builder"]), ("reviewer", ticket["reviewer"])):
-        if alias and alias not in cfg["models"]:
+def resolve_models(cfg, ticket):
+    builder = ticket["builder"] or cfg["types"].get(ticket["type"])
+    reviewer = ticket["reviewer"] or cfg["types"]["review"]
+    for role, alias in (("builder", builder), ("reviewer", reviewer)):
+        if alias not in cfg["models"]:
             raise Refuse(f"unknown {role} alias {alias}")
     if cfg["models"][reviewer].get("noGate"):
         raise Refuse(f"reviewer {reviewer} cannot gate (noGate)")
@@ -452,7 +439,7 @@ def validate_start(cfg, repo, issue):
     open_blockers = [b for b in blockers_of(issue) if b["state"] == "OPEN"]
     if open_blockers:
         raise Refuse("blocked by open " + ", ".join(f"{b['repo']}#{b['number']}" for b in open_blockers))
-    t["builderAlias"], t["reviewerAlias"] = resolve_models(cfg, t, load_routing())
+    t["builderAlias"], t["reviewerAlias"] = resolve_models(cfg, t)
     return t
 
 
@@ -507,13 +494,11 @@ def build_start(cfg, t, attempt):
     request_id = f"ticket:{t['repo']}#{t['number']}:a{attempt}"
     payload = {
         "projectId": rcfg["projectId"],
-        "taskType": t["type"],
         "message": f"Ticket: {t['url']}\nReviewer for the gate: {t['reviewerAlias']}\n\n{t['body']}",
         "clientRequestId": request_id,
         "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}"},
+        "modelSelection": cfg["models"][t["builderAlias"]]["selection"],
     }
-    if t["builder"]:
-        payload["modelSelection"] = cfg["models"][t["builder"]]["selection"]
     title_rest = t["title"][len(t["key"]):].lstrip(" ·-:·").strip()
     title = f"{t['key']} · {title_rest}"
     priority = EMPQ_PRIORITY[int(t["priority"])] if t["priority"] else NO_PRIORITY
@@ -704,9 +689,8 @@ def cmd_set(a):
         pair = {f: targets[f] if f in targets else one(groups[f]) for f in ("builder", "reviewer")}
         type_ = one(groups["type"])
         if type_ and (pair["builder"] is None or pair["reviewer"] is None):
-            routing = load_routing()
-            pair["builder"] = pair["builder"] or alias_for_selection(cfg, routing[type_]["modelSelection"])
-            pair["reviewer"] = pair["reviewer"] or alias_for_selection(cfg, routing["review"]["modelSelection"])
+            pair["builder"] = pair["builder"] or cfg["types"].get(type_)
+            pair["reviewer"] = pair["reviewer"] or cfg["types"]["review"]
         if pair["builder"] and pair["reviewer"]:
             if cfg["models"][pair["reviewer"]].get("noGate"):
                 raise Refuse(f"reviewer {pair['reviewer']} cannot gate (noGate)")
