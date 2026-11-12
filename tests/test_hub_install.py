@@ -119,7 +119,7 @@ class IdleInstallTests(unittest.TestCase):
             self.pid += 1
         return subprocess.run([sys.executable, str(self.proof), str(self.log), str(code), *argv], capture_output=True, check=False)
 
-    def tick(self, now=101, **kwargs):
+    def tick(self, now=1900, **kwargs):
         return WORKER.tick(self.home, execute=self.execute, notice=self.notices.append, now=now, **kwargs)
 
     def test_idle_installs_and_restarts_exactly_once(self):
@@ -192,15 +192,15 @@ class IdleInstallTests(unittest.TestCase):
     def test_install_timeout_does_not_restart(self):
         def timeout(*args, **kwargs):
             raise subprocess.TimeoutExpired("fake install", 600)
-        result = WORKER.tick(self.home, execute=timeout, notice=self.notices.append, now=101)
+        result = WORKER.tick(self.home, execute=timeout, notice=self.notices.append, now=1900)
         self.assertEqual(result["state"], "refused")
         self.assertFalse(self.calls)
 
     def test_thirty_minute_cap_notifies_once_and_never_restarts(self):
         self.idle = False
-        self.assertEqual(self.tick(now=1899)["state"], "waiting idle")
-        self.assertEqual(self.tick(now=1900)["state"], "refused")
-        self.tick(now=1901)
+        self.assertEqual(self.tick(now=3699)["state"], "waiting idle")
+        self.assertEqual(self.tick(now=3700)["state"], "refused")
+        self.tick(now=3701)
         self.assertEqual(len(self.notices), 1)
         self.assertFalse(self.calls)
 
@@ -224,7 +224,7 @@ class IdleInstallTests(unittest.TestCase):
             result = self.execute(argv, **kwargs)
             self.idle = False
             return result
-        result = WORKER.tick(self.home, execute=execute, notice=self.notices.append, now=101)
+        result = WORKER.tick(self.home, execute=execute, notice=self.notices.append, now=1900)
         self.assertEqual(result["state"], "refused")
         self.assertEqual(len(self.calls), 1)
 
@@ -283,7 +283,7 @@ class IdleInstallTests(unittest.TestCase):
                         self.fail("merge admitted between final idle check and kickstart")
                 self.assertFalse(runtime.get("merging"))
             return self.execute(argv, **kwargs)
-        result = WORKER.tick(self.home, execute=execute, notice=self.notices.append, now=101)
+        result = WORKER.tick(self.home, execute=execute, notice=self.notices.append, now=1900)
         self.assertEqual(result["state"], "done")
         self.assertEqual(attempted, [True])
         with admit(thread):
