@@ -1,10 +1,9 @@
 # M1 CI box hygiene (MO-122)
 
-Shyam approved (2026-11-02) making the M1 Woodpecker-only. This note
-covers disk floor, Spotlight, non-CI agents, and the quit ledger for
-services turned off after that call. Memory/lane topology stays in
-[`m1-ci-memory.md`](m1-ci-memory.md) and [`m1-ci-lanes.md`](m1-ci-lanes.md).
-Host-folder caches: [`ci-cache.md`](ci-cache.md).
+Historical MO-122 disk, Spotlight and quit ledger from 2026-11-02.
+Woodpecker and its maintenance jobs were disabled on 2026-11-11 (MO-183);
+see [shutdown and rollback evidence](../evidence/MO-183/decisions.md).
+The measurements and retained-data inventory below are historical, not current.
 
 Reach the box with `ssh m1` (`Host m1` → `shyams-m1`).
 
@@ -29,34 +28,10 @@ Evidence on the M1:
 - `~/Library/Logs/woodpecker/mo122-quit.log`
 - `~/Library/Logs/woodpecker/mo122-undo.txt`
 
-## Disk hygiene (daily LaunchAgent)
+## Retired disk hygiene
 
-Script: [`disk-hygiene.sh`](../scripts/woodpecker-ci/disk-hygiene.sh)
-Plist: `com.shyamsivakumar.woodpecker-disk-hygiene` (04:45 local)
-
-- Prunes `~/Library/Developer/Xcode/DerivedData` older than **2 days**, then
-  enforces a **20 GiB** cap (oldest first). Skips cap deletes while any
-  Woodpecker workflow is `running` (native jobs may be using it).
-- **Never** deletes `/var/lib/woodpecker-cache/**` (MO-120 shared CI cache,
-  including `DerivedData` kinds).
-- Deletes simulator devices except **`CI-iPhone`**; keeps its runtime.
-- When workflows are idle: Docker `container`/`image`/`builder` prune and
-  **dangling** volumes only — keeps `woodpecker-ci-*` volumes and tagged
-  CI images.
-- Skips entirely while an SRW `deploy` workflow is running.
-- Exit 1 + notification/log when free **&lt; 15%**.
-
-Bootstrap after `install-to-m1.sh`:
-
-```sh
-ssh m1 'DOMAIN=gui/$(id -u); L=com.shyamsivakumar.woodpecker-disk-hygiene
-  launchctl bootout "$DOMAIN/$L" 2>/dev/null || true
-  launchctl bootstrap "$DOMAIN" ~/Code/woodpecker-ci/$L.plist
-  launchctl enable "$DOMAIN/$L"'
-```
-
-MO-120 cache tree cleanup (20 GiB per host/Colima tree) remains
-`com.shyamsivakumar.woodpecker-cache-cleanup` — see [`ci-cache.md`](ci-cache.md).
+The Woodpecker disk-hygiene and cache-cleanup jobs are disabled (MO-183).
+Their scripts and bootstrap instructions have been removed from this repo.
 
 ## What was deleted (rebuildable) — summary
 
@@ -214,14 +189,6 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.logi.optionsplus.upda
 - `ios-studio-migration-20261018` (12 GiB) — confirm delete to free space
 - `scrapers.stale-20260626`
 - `.strategy-paper-stage-direct-20261019T051500Z`
-
-## Proof: next 10 CI runs
-
-After merge, confirm ten consecutive pipelines across personal repos with
-**zero** `no space` / infra failures (use MO-118 SLO classifier /
-Woodpecker UI). Do not drain or restart agents during an SRW deploy;
-use `drain-agent.sh` first when a restart is required
-([`m1-ci-lanes.md`](m1-ci-lanes.md)).
 
 ## Do not
 

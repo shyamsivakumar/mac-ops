@@ -89,11 +89,7 @@ the selected files and tests without running them. Dynamic imports and code
 without an associated test need separate review. This repository does not
 currently configure a Python linter or type checker.
 
-Woodpecker also runs the fast check as a shadow on Linux ARM64 for pushes and
-pull requests. The board's Mac check remains authoritative. The Linux run
-checks the committed tree only; it cannot include uncommitted or untracked
-files, and it does not verify macOS telemetry, launchd, or native process
-management.
+CI uses agent checks only; there are no GitHub Actions or Woodpecker workflows.
 
 ## Use heavy
 
