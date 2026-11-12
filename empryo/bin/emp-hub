@@ -119,6 +119,12 @@ def load_routing():
         return json.load(f)
 
 
+def turn_seconds_for(routing, task_type):
+    """The routing file owns turn budgets: the task type's budget, else the global default."""
+    limits = routing["turnLimits"]
+    return limits.get("taskTypeSeconds", {}).get(task_type, limits.get("turnSeconds", 900))
+
+
 def resolve_launch(args):
     selection, task_type = args.get("modelSelection"), args.get("taskType")
     if selection is None and task_type is None:
@@ -1055,7 +1061,7 @@ def new_thread(args, created_by="agent", creation_source="mcp"):
         "runCount": 0, "itemCount": 0, "archived": False, "settled": False, "settledAt": None, "snoozed": False, "snoozedUntil": None,
         "pinned": False, "createdAt": now_iso(), "updatedAt": now_iso(), "sessionId": None, "runs": [], "lastError": None,
         "clientRequestId": args.get("clientRequestId"), "taskType": task_type, "mode": mode,
-        "turnSeconds": args.get("turnSeconds", load_routing()["turnLimits"].get("turnSeconds", 7200)),
+        "turnSeconds": args.get("turnSeconds", turn_seconds_for(load_routing(), task_type)),
     }
     with LOCK:
         THREADS.data[thread_id] = thread
@@ -1586,9 +1592,9 @@ def stall_reason(rt, limits, now):
         return None
     # Answers are sent before pending is cleared under LOCK. Defer expiry
     # until then; elapsed permission wait still counts toward the budget.
-    turn_seconds = limits.get("turnSeconds", 7200)
+    turn_seconds = limits.get("turnSeconds", 900)
     if now - rt["turnStartedAt"] > turn_seconds:
-        return f"turn ran over {turn_seconds / 60:g} min"
+        return f"turn budget exceeded: {format_seconds(turn_seconds)}"
     if rt["tools"]:
         running_since = min(tool["since"] for tool in rt["tools"].values())
         if now - running_since > limits["toolSeconds"]:
@@ -1607,12 +1613,14 @@ def kill_if_still_active(rt, proc, turn_started_at):
 
 
 def stall_check():
-    limits = load_routing()["turnLimits"]
+    routing = load_routing()
+    limits = routing["turnLimits"]
     now = time.time()
     with LOCK:
         for thread in THREADS.data.values():
             rt = RUNTIME.get(thread["threadId"])
-            reason = rt and rt["active"] and not rt["stalled"] and stall_reason(rt, {**limits, "turnSeconds": thread.get("turnSeconds", limits.get("turnSeconds", 7200))}, now)
+            budget = thread.get("turnSeconds", turn_seconds_for(routing, thread.get("taskType")))
+            reason = rt and rt["active"] and not rt["stalled"] and stall_reason(rt, {**limits, "turnSeconds": budget}, now)
             if not reason:
                 continue
             rt["stalled"] = reason
