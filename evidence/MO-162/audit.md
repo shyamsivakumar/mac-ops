@@ -2,7 +2,8 @@
 
 - Ticket: https://github.com/shyamsivakumar/mac-ops/issues/83 (Refs #83).
 - Type: research (audit, read only). Builder route: `task/research` (pi router).
-- Base: `origin/main` at `5590c3b`. Audit date: 2026-11-12 PT.
+- Base: `origin/main` at `7a3f29c` (rebase base for the final commit). Audit date:
+  2026-11-12 PT.
 - Scope: every repo in `coordinator/config/tickets.json` (15 repos), read only.
 - Nothing was installed, no repo checkout other than this mac-ops worktree was
   written, no `.env` file was read, no secret was printed. The only git writes
@@ -50,16 +51,19 @@ For each repo in `coordinator/config/tickets.json` I read, at `origin/main`:
 - The repo's own README gate instructions.
 - `git config core.hooksPath` in the local checkout (is a pre-push hook
   installed here) and the committed `.githooks/pre-push` body.
-- `git rev-list --count HEAD..origin/main` (how far the local `main` is behind).
+- `git rev-list --count main..origin/main` (how far the local `main` is behind,
+  measured against the `main` branch rather than whatever branch the checkout
+  happens to have checked out).
 - `gh pr list` (open PRs) and `gh api .../commits/<sha>/status` and
   `.../check-runs` for every open ready PR head (does a ready PR get a status).
 
-Runtime numbers come from three sources, and each row says which:
+Runtime numbers come from four sources, and each row says which:
 
 - **MEASURED** here, in this session.
-- **MEASURED** by the coordinator's CI SLO collector
-  (`coordinator/evidence/ci-slo-2026-11-11.json`, `...-2026-11-10.json`),
-  which is historical Woodpecker data and does not describe the local checks.
+- **MEASURED** by the coordinator's CI SLO collector, in the separate
+  coordinator checkout at `~/Code/coordinator/evidence/ci-slo-2026-11-11.json`
+  and `...-2026-11-10.json`. That is historical Woodpecker data and does not
+  describe the local checks.
 - **REPORTED** in the repo's own open PR body (the builder's own timing).
 - **ESTIMATED** by reading the script, when no run exists. Marked as such.
 
@@ -79,7 +83,7 @@ came from a check, as opposed to nothing?
 | LMW | sams-llm-wiki | `python3 scripts/ci_acceptance.py` (and the other `scripts/verify_*.py`) | HISTORICAL CI p50 16 s to 18 s run, 20 s to 22 s total. No local measurement | No | No |
 | STS | scripture-scroll | `npm run check` via `heavy` | UNKNOWN | No | No. No open PRs |
 | JAR | CineJar | `npm run check` (lint, type-check, jest, smoke web) via `heavy npm ci && npm run check` | UNKNOWN | No | No. PR #20 shows only Woodpecker statuses from 2026-10-17, before the M1 shutdown |
-| FFBT | fantasy-football-toolkit | `npm run check`, added by open PR #412 (not on main) | REPORTED 456.86 s including queue on one head, 237 s for the final clean-clone push | No | No. PR #412 shows only a Vercel check |
+| FFBT | fantasy-football-toolkit | `npm run check`, added by open PR #412 (not on main) | REPORTED 456.86 s including queue on one head, 237 s for the final clean-clone push | No | No. PR #412 shows only a Vercel check run and a failing Vercel commit status |
 | OPN | openscan | `make check` to `./scripts/check.sh` | UNKNOWN | No | No. No open PRs |
 | RCP | recoup | `make check` to `bash scripts/check.sh` | UNKNOWN | No | No. No open PRs |
 | CTL | catalogue | `scripts/fast_check.py`, diff scoped, via `heavy` | UNKNOWN, but the script prints its own elapsed time and queue time | No | No. No open PRs |
@@ -105,10 +109,11 @@ came from a check, as opposed to nothing?
   the survive eval. The 180 second watch is nearly all of the main lane time.
 - Ready PR status: yes. The publisher's pull lane posts the commit status
   context `srw/agent-check` on the exact head SHA of every open, non-draft
-  PR. Verified: PR #922 head `2c232457` carries `srw/agent-check=success`.
-  PR #929 head `5fb0a91` had no status at audit time, because the publisher
-  runs one PR head per cycle and prefers `main`; the queue is short but not
-  instant.
+  PR. Verified at audit time: PR #922 head `2c232457` carried
+  `srw/agent-check=success`, and PR #929 head `5fb0a91` had no status yet,
+  because the publisher runs one PR head per cycle and prefers `main`; the
+  queue is short but not instant. Both PRs have since merged, and PR #929's
+  head now carries `srw/agent-check=success`.
 - Smallest change to the five minute pipeline: none on the SRW side. The
   PR tier at about 110 s plus queue is already inside the budget. The change
   belongs in mac-ops: move this publisher onto a generic runner so the other
@@ -121,11 +126,13 @@ came from a check, as opposed to nothing?
   board's `check.command` to that exact command.
 - Runtime: MEASURED here. 1.08 s plain, 7.48 s under `heavy` (the delta is
   heavy admission and the TLC model check in the script). The coordinator's
-  CI SLO file records a historical p50 of 19 s run and 21 s total for the
-  retired Woodpecker `fast-check` lane.
+  CI SLO file, `~/Code/coordinator/evidence/ci-slo-2026-11-11.json`, records
+  a historical p50 of 19 s run and 21 s total for the retired Woodpecker
+  `fast-check` lane.
 - Docker: no.
-- Ready PR status: no. The last five merged mac-ops PRs (#136, #141, #142 and
-  two others) carry no check runs and no commit statuses. The evidence is the
+- Ready PR status: no. The six most recent merged mac-ops PRs (#136, #141,
+  #142, #144, #145, #146) carry no check runs and no commit statuses on their
+  head SHAs. The evidence is the
   `Builder check: PASS <sha>` line in the PR body. `AGENT-RULES.md` requires
   exactly that line for repos other than SRW.
 - Smallest change: point the generic runner at mac-ops with
@@ -158,9 +165,10 @@ came from a check, as opposed to nothing?
   audit, eval-spec check, executable allowlist and the pinned governor
   snapshot.
 - Runtime: HISTORICAL CI p50 16 s to 18 s run and 20 s to 22 s total across the
-  acceptance, docs-check and verify lanes in `ci-slo-2026-11-11.json`. Those
-  are Woodpecker numbers from before the M1 shutdown, and the local command
-  has not been measured.
+  acceptance, docs-check and verify lanes in
+  `~/Code/coordinator/evidence/ci-slo-2026-11-11.json`. Those are Woodpecker
+  numbers from before the M1 shutdown, and the local command has not been
+  measured.
 - Docker: no.
 - Ready PR status: no. No open PRs, and no publisher.
 - CI still present on `origin/main`: yes. `.woodpecker/acceptance.yaml`,
@@ -207,8 +215,9 @@ came from a check, as opposed to nothing?
   install and queue took 237 s. So the check is roughly four to eight minutes.
   That does not fit the five minute pipeline.
 - Docker: no.
-- Ready PR status: no. PR #412's head `6bd621d` shows only
-  `Vercel Preview Comments`.
+- Ready PR status: no. PR #412's head `6bd621d` shows one check run,
+  `Vercel Preview Comments`, and one commit status, `Vercel=failure`. Nothing
+  from an agent check.
 - CI still present on `origin/main`: yes. Four `.woodpecker/` files, including
   `deploy-convex.yaml` which deploys production on `main`. Those are dead
   files now that the server is off.
@@ -353,10 +362,11 @@ came from a check, as opposed to nothing?
 
 ## Cross cutting findings
 
-1. **No repo outside SRW posts a check status on a ready PR.** Of the fifteen,
-   one (SRW) has a publisher, one (NING) has live GitHub Actions, and the
-   other thirteen have nothing. mac-ops records its result as a PR body line
-   instead. This is the single largest gap against the fast pipeline.
+1. **No repo outside SRW posts an agent check status on a ready PR.** Of the
+   fifteen, one (SRW) has an agent publisher, one (NING) has live GitHub
+   Actions posting GitHub's own statuses, and the other thirteen have nothing.
+   mac-ops records its result as a PR body line instead. This is the single
+   largest gap against the fast pipeline.
 2. **Four repos still carry eleven `.woodpecker/` files on `origin/main`:**
    LMW (3), FFBT (4), TNR (2), QBT (2). They are dead since the MO-183
    shutdown and will never produce a status. Deleting them is bookkeeping,
@@ -364,20 +374,31 @@ came from a check, as opposed to nothing?
 3. **Two repos are one merge away from a usable check:** TNR through PR #20
    and QBT through PR #80. FFBT through PR #412, but that check is too slow
    as written.
-4. **Two repos need a check written, not wired:** STR and NING.
-5. **Docker is required by two repos only:** CRN (build plus run) and NING
-   (Postgres). SRW builds images but its five minute tier is already sized
-   around that.
-6. **Local `main` is behind `origin/main` in twelve of fifteen checkouts.**
-   Measured behind counts: STR 180, SRW 858, NING 66, JAR 61, FFBT 64, CRN 55,
-   CTL 31, STS 28, SCR 26, OPN 11, TNR 6, RCP 3. Current in LMW and QBT, and
-   in mac-ops itself. A local check that diffs against `origin/main` will
-   misjudge the change set in the stale checkouts until they are fast
-   forwarded.
-7. **Runtime is unknown for nine of the fifteen checks.** No repo records its
+4. **One repo needs a check that does not exist yet:** STR has nothing but a
+   lefthook pre-push. NING has a live GitHub Actions workflow that also
+   deploys production, so moving it to a local agent check is a policy
+   migration with a rollout, not a wiring job.
+5. **Docker is required by three repos:** SRW (build plus boot containers),
+   CRN (build plus run) and NING (Postgres). Every other check is
+   Docker-free.
+6. **Local `main` is behind `origin/main` in thirteen of fifteen checkouts.**
+   Measured with `git rev-list --count main..origin/main`: STR 181, JAR 79,
+   FFBT 64, CRN 55, SRW 50, CTL 31, STS 28, SCR 26, QBT 19, NING 17, OPN 11,
+   TNR 4, RCP 1. Current in LMW and in mac-ops itself. Seven checkouts are
+   not even sitting on `main` (SRW on `work/607-boot-eval-handoff`, JAR and
+   TNR detached, RCP on `work/lmw18-live-checkout-cleanup`, QBT on
+   `work/3-qabot-state-charts-tla`, STR on
+   `codex/strata-harness-m1-control-plane`, NING on
+   `codex/ter-4-incident-index-migration`), which is why the count has to be
+   taken against `main` and not against `HEAD`. A local check that diffs
+   against `origin/main` will misjudge the change set in the stale checkouts
+   until they are fast forwarded.
+7. **Runtime is unknown for eight of the fifteen checks.** No repo records its
    own check duration, and the coordinator's CI SLO files only cover the
-   retired Woodpecker lanes for mac-ops, LMW and SRW. The single highest
-   value next action is to measure the nine.
+   retired Woodpecker lanes for mac-ops, LMW and SRW. LMW is a ninth case of
+   no local measurement, but it has a historical number, so the table marks
+   it HISTORICAL rather than UNKNOWN. The single highest value next action is
+   to measure the eight.
 
 ## Recommendation for the generic runner
 
@@ -418,7 +439,7 @@ Order of work, smallest first:
 5. CRN: split the Docker tail off, then wire it.
 6. STR: write the check, then wire it.
 7. NING: its own ticket. Moving off GitHub Actions is a policy change with a
-   production deploy attached.
+   production deploy attached, so it is a port, not a configuration entry.
 
 ## Uncertainty
 
