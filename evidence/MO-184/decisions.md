@@ -583,6 +583,106 @@ Both go through `emp`, so a ticket with a prior attempt in its ledger cannot
 be started while the hub is unloaded. That transport swap is not part of this
 slice.
 
+## Slice 2b: empq refuses the task types and the tools it cannot run
+
+**When:** MO-184 slice 2b, 2026-11-12.
+
+*The gate on the first 2b commit returned FAIL with five findings. The queue
+accepted any task type and any tool name, a payload that named both a task
+type and a model selection ran on the model the payload named, and a refused
+item stayed in the queue file and was refused again on every drain.*
+
+### A review task type runs on the gate model or it does not run
+
+*A payload that carried `taskType: "review"` and a `modelSelection` kept the
+`modelSelection` and dropped the task type, so a review could launch on the
+worker model and the gate would read a MiniMax Sonnet verdict instead of an
+Opus one. empq now refuses a `review` payload whose `modelSelection` is not
+the gate selection, and the refusal names both selections.*
+
+**Choice:** refuse, do not force. A forced selection would run the gate on
+Opus and hide the fact that the caller asked for another model. A refusal
+tells the caller that the two fields disagree, and the caller picks one. The
+gate model is the only selection a `review` accepts.
+
+**Gap:** a payload with no task type and a model selection still runs on that
+selection. The check fires on the `review` task type only, because that is
+the task type whose whole meaning is which model reads the work.
+
+**Reach:** every `review` launch runs on `{"instanceId": "claudeAgent",
+"model": "claude-opus-5-5"}`, and a payload that asks for anything else is
+refused before any queue write.
+
+**Confidence:** high. The refusal and the accepted payload were both run
+against a stub t3mcp.
+
+**Owner:** `empryo/bin/empq`.
+
+### The panel task type runs on the worker model
+
+*The table in empq mapped `panel` to a Terra selection. The slice 1 table says
+that every task type other than `risky`, `design` and `review` runs on the
+worker default, and no Emp-era Terra selection exists on T3 anyway. `panel`
+now maps to the worker selection, and the Terra constant is gone.*
+
+**Owner:** `empryo/bin/empq`.
+
+### A queue item is refused when any of its steps names a tool that is not dispatchable
+
+*`drain()` checked only the item's own tool, so a `pre` step naming
+`emp_thread_merge` was handed to t3mcp as a merge request. Every step of an
+item now has to name a dispatchable tool, and the item is refused otherwise.*
+
+**Reach:** the pre steps of a queue item reach t3mcp only when each of them
+names `t3_thread_launch` or `t3_thread_send`.
+
+**Owner:** `empryo/bin/empq`.
+
+### A refused item leaves the queue file
+
+*Refused items stayed in `queue.json`, were logged again on every drain and
+counted as queued work. A refused item is now dropped from the queue file
+once the refusal is logged, so it is logged once and stops counting as
+queued.*
+
+**Choice:** drop the item, rather than keep it with its attempts spent. A
+kept item needs a second marker to say it was refused, and a kept item still
+reads as queued work. The refusal stays in `dispatch.log`, which is where the
+operator reads it.
+
+**Gap:** the item is gone from `empq list` as well, so the operator who wants
+to see it reads the dispatch log rather than the queue.
+
+**Owner:** `empryo/bin/empq`.
+
+### The start payload is a required argument
+
+*`empq start` took the payload as an optional argument and refused an empty
+one by hand. The argument is required now, so argparse reports the missing
+payload.*
+
+**Owner:** `empryo/bin/empq`.
+
+### Proof for slice 2b
+
+Every check ran against a temporary `EMPQ_DIR` with a stub t3mcp that logged
+each call. The live queue file was never read or written.
+
+| Check | Result |
+| --- | --- |
+| Review with a MiniMax selection | refused, no queue write, nothing sent |
+| Review with no selection | launched with the Opus selection |
+| Panel | launched with the worker selection |
+| Item with a `emp_thread_merge` pre step | refused, nothing sent, dequeued |
+| Second drain | the refusal was not logged again, queued count 0 |
+| Item with a non-dispatchable tool | refused, nothing sent, dequeued |
+| `empq start` with no payload | argparse reported the missing argument |
+| Unknown task type | refused, no queue write |
+| `python3 -m unittest tests.test_hub_install` | passed, 26 tests |
+| `python3 scripts/mac_ops_fast_check.py` | passed |
+
+No test file changed.
+
 ## Method
 
 No secrets were read or printed. `.env` was never opened. emp-hub was never
