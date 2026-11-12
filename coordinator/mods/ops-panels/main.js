@@ -170,7 +170,7 @@ export default class Panels extends View {
     const d = this.data;
     if (!d) return [this.line(t, "Running", `${this.seed.running} of ${this.seed.cap}`), this.note(t, "Loading the queue…")];
     const full = d.live >= d.cap;
-    const why = (i) => (i.attempts ? `Failed ${plural(i.attempts, "time")}. The dispatcher retries it, up to 3 attempts.` : full ? `Waiting for a free slot. ${d.live} of ${d.cap} are running.` : `Waiting for the next dispatcher run${d.dispatched ? `, last ran ${since(d.dispatched)}` : ""}.`);
+    const why = (i) => (i.attempts >= 3 ? `Failed ${i.attempts} times and will not be retried.` : i.attempts ? `Failed ${plural(i.attempts, "time")}. The dispatcher retries it, up to 3 attempts.` : full ? `Waiting for a free slot. ${d.live} of ${d.cap} are running.` : `Waiting for the next dispatcher run${d.dispatched ? `, last ran ${since(d.dispatched)}` : ""}.`);
     return [
       this.section(t, "Slots"),
       this.line(t, "Running", `${d.live} of ${d.cap}`, full ? "working" : undefined),

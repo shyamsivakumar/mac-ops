@@ -105,29 +105,16 @@ const HINT_ROOM = 64;
 const NOTICE_TONE = { success: "done", error: "blocked", info: "muted" };
 const barCost = (item) => (item.label.length + (item.more?.length ?? 0)) * 6.2 + 12;
 function barItems(v) {
-  const { worktrees: w, hub, ops, running, cap } = v;
-  const circuits = hub?.circuits ? Object.entries(hub.circuits) : null;
-  const out = circuits?.filter(([, c]) => c.state === "open").map(([name]) => name);
-  const retrying = circuits?.filter(([, c]) => c.state === "half-open").map(([name]) => name);
-  const modelsLabel = !circuits ? "Models" : out.length ? `Models · ${out.length} out` : retrying.length ? `Models · ${retrying.length} retrying` : "Models · all up";
-  const modelsTone = out?.length ? "blocked" : retrying?.length ? "muted" : undefined;
-  const modelsTip = out?.length ? `Out: ${out.join(", ")}. Click for the retry times and fallback order.` : retrying?.length ? `Waiting to retry: ${retrying.join(", ")}. The next task will try ${retrying.length === 1 ? "it" : "them"}. Click for details.` : "Model providers and the fallback order. Click to open.";
-  const health = ops?.health;
-  const issues = health && !health.stale ? health.problems.length + health.warnings.length : 0;
-  const hubLabel = !health ? "Hub" : hub?.draining ? "Hub · draining" : health.stale ? "Hub · no check" : health.problems.length ? `Hub · ${plural(health.problems.length, "problem")}` : health.warnings.length ? `Hub · ${plural(health.warnings.length, "warning")}` : "Hub · ok";
-  const hubTone = !health ? undefined : health.problems.length ? "blocked" : hub?.draining || health.stale || issues ? "working" : undefined;
+  const { worktrees: w, slots } = v;
   const asks = shared("co.asks")?.items ?? [];
   const decided = shared("co.decided") ?? {};
   const waiting = asks.filter((a) => !decided[a.id]);
   const sent = asks.length - waiting.length;
-  const decisionsLabel = `Decisions · ${waiting.length ? `${waiting.length} waiting` : "none"}${sent ? ` · ${sent} sent` : ""}`;
-  const decisionsTip = waiting.length ? `${waiting.slice(0, 3).map((a) => a.text).join(" · ")}${waiting.length > 3 ? ` · and ${waiting.length - 3} more` : ""}. Click to answer.` : "Nothing is waiting on you. Click to open the decisions pop-up.";
+  const decisions = asks.length ? [{ id: "decisions", prio: -1, command: "coordinator.asks", label: `Decisions · ${waiting.length} waiting${sent ? ` · ${sent} sent` : ""}`, tone: waiting.length ? "blocked" : undefined, tip: `${waiting.slice(0, 3).map((a) => a.text).join(" · ")}${waiting.length > 3 ? ` · and ${waiting.length - 3} more` : ""}. Click to answer.` }] : [];
   return [
-    { id: "decisions", prio: -1, command: "coordinator.asks", label: decisionsLabel, tone: waiting.length ? "blocked" : undefined, tip: decisionsTip },
+    ...decisions,
     { id: "wt", prio: 0, label: w ? `Worktrees · ${w.stale} stale` : "Worktrees", more: w?.look ? ` · ${w.look} need a look` : "", tone: w?.stale ? "working" : undefined, tip: w ? `${w.stale} safe to clean or prune · ${w.look} need a look. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
-    { id: "models", prio: 2, label: modelsLabel, tone: modelsTone, tip: modelsTip },
-    { id: "queue", prio: 4, label: v.hasBoard ? `Queue · ${running}/${cap}` : "Queue", tone: v.hasBoard && running >= cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
-    { id: "hub", prio: 1, label: hubLabel, tone: hubTone, tip: "Hub health, Coordinator context, uptime. Click to open." },
+    { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
 }
 
@@ -229,11 +216,6 @@ function modelChips(t, c, runModel) {
 }
 
 const COLD_AFTER = 300000;
-const OLD_SHELL_STATES = new Set(["run", "wait"]);
-const stamp = (ms) => {
-  const d = new Date(ms);
-  return `${d.toDateString().slice(4, 10)} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-};
 const CLAUDE_MODEL = /claude|opus|sonnet|haiku/i;
 const NEEDS_KINDS = new Set(["wait", "fail", "stop"]);
 
@@ -275,7 +257,7 @@ function statusLine(v) {
     const age = ago(c.created, now);
     return `${c.issue ? "Updated" : "Created"} ${age === "now" ? "just now" : `${age} ago`}`;
   }
-  if (c.kind === "run") return c.status === "queued" ? "Queued" : `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}`;
+  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}` : "Running";
   if (c.kind === "done") return v.reviewed ? "Ready to settle" : "Not reviewed yet";
   return c.context;
 }
@@ -291,7 +273,7 @@ export function card(t, e, v, input, cb) {
   const refused = ready && Boolean(v.refusal);
   const armedHere = v.armed?.key === e.key ? v.armed.kind : null;
   const readyActions = h_flex().gap(4).h(H.foot).min_w(0).when(!refused, (el) => el.flex_1()).items_center().overflow_hidden()
-    .child(action(t, `ap-${e.key}`, "a", armedHere === "approve" ? "Confirm" : "Approve", (cx) => cb.approve(cx), armedHere === "approve" ? "Press again to send the merge approval" : v.blocked ? v.refusal : "Approve merge (a)", narrow).when(v.blocked, (el) => el.opacity(0.5)))
+    .child(action(t, `ap-${e.key}`, "a", armedHere === "approve" ? "Confirm" : "Approve merge", (cx) => cb.approve(cx), armedHere === "approve" ? "Press again to queue the merge relay" : v.blocked ? v.refusal : v.plan?.sha ? `Queue relay #${v.plan.number} ${v.plan.sha.slice(0, 8)}` : "Checking merge plan", narrow).when(v.blocked, (el) => el.opacity(0.5)))
     .child(action(t, `pr-${e.key}`, "p", "PR", () => cb.openPr(), "Open the PR (p)", narrow))
     .child(action(t, `op-${e.key}`, "o", narrow ? "Open" : "Thread", (cx) => cb.open(cx), "Open the thread (o)", narrow))
     .when(canSettle && !narrow, (el) => el.child(action(t, `se-${e.key}`, "s", "Settle", (cx) => cb.settle(cx))));
@@ -304,7 +286,6 @@ export function card(t, e, v, input, cb) {
     .when(count > 1, (el) => el.child(fold(t, e.key, count, expanded, cb)))
     .when(variant === "backlog" && v.state, (el) => el.child(chip(t, v.state, "idle")))
     .when(v.merged, (el) => el.child(chip(t, "merged", "done")))
-    .when(OLD_SHELL_STATES.has(c.kind) && v.oldShell, (el) => el.child(chip(t, "old shell", "working", `This task's engine started before ~/.zshrc changed (${stamp(v.shells.changed)}), so its commands use the old PATH. Restart the task to pick up the change.`)))
     .when(isCold(v), (el) => el.child(chip(t, "cold", "dim", "Prompt cache expired: the next message re-reads the whole context")))
     .when(!refused && (!ready || fit.model), (el) => el.child(modelChips(t, c, v.runModel)));
   const status = refused
@@ -312,7 +293,7 @@ export function card(t, e, v, input, cb) {
       .child(div().size(6).flex_none().rounded(3).bg(t.blocked))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).child(v.refusal))
     : ready
-    ? prChips(t, v, fit).on_mouse_down("left", selectOnly(e.key, cb))
+    ? prChips(t, v, fit).tooltip(v.plan?.sha ? `Relay #${v.plan.number} ${v.plan.sha.slice(0, 8)}` : "Checking merge plan").on_mouse_down("left", selectOnly(e.key, cb))
     : h_flex().flex_1().min_w(0).gap(5).items_center()
       .child(div().size(6).flex_none().rounded(3).bg(v.quiet ? t.muted : t[TONE[c.kind]]))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
@@ -331,7 +312,6 @@ export function card(t, e, v, input, cb) {
       .when(!c.task, (el) => el.child(div().min_w(0).truncate().text_size(11).font_medium().text_color(t.muted).child(c.project ?? "thread")))
       .child(originChips(t, e, v, cb))
       .child(div().flex_1())
-      .when(v.window, (el) => el.child(action(t, `win-${e.key}`, "", armedHere === "close-window" ? "Close it?" : narrow ? "Empryo" : "open in Empryo", (cx) => cb.closeWindow(e.key, cx), armedHere === "close-window" ? "Press again to close the Empryo window" : "An Empryo window is open on this task, so the hub can't send to it. Click to close it.", true, "working")))
       .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now))))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
     .when(Boolean(issue), (el) => el.child(issueChips(t, issue)))
@@ -434,7 +414,7 @@ export function decisionOf(col, g, info, verdict, now) {
     if (!verdict) return { headline: `Review PR #${pr.number}`, primary: { id: "review", key: "t", label: "Start review", armed: "Confirm review" }, why: [title, "No review yet, so this can't merge."], other, checks };
     if (verdict.state === "loading") return { headline: `PR #${pr.number}`, primary: { id: "wait", key: "", label: "Checking review…" }, why: [title, checkWords(info.gh, verdict)], other, checks };
     if (sendBack) return { headline: `Fix PR #${pr.number}`, primary: { id: "answer", key: "r", label: "Send back" }, why: [title, `Review failed: ${verdict.label.replace(/^rev /, "")}.`], other, checks };
-    return { headline: `Merge PR #${pr.number}`, primary: { id: "merge", key: "a", label: "Merge", armed: "Confirm merge" }, why: [title, checkWords(info.gh, verdict)], other, checks };
+    return { headline: `Merge PR #${pr.number}`, primary: { id: "merge", key: "a", label: "Approve merge", armed: "Confirm relay" }, why: [title, checkWords(info.gh, verdict)], other, checks };
   }
   if (c.kind === "wait") {
     return { headline: `Answer ${name}'s question`, primary: { id: "answer", key: "r", label: "Reply" }, why: [c.context, `${g.project} · waiting ${age}`], other, checks };
@@ -624,7 +604,7 @@ function ticketPanel(t, v, cb) {
 export function decisionView(t, v, input, cb) {
   const { col, d, armed, armedKind, outdated, replying, outcome } = v;
   const [, label, tone] = COLUMNS.find((c) => c[0] === col);
-  const hint = d.hint ?? (outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "open" ? "Opens the thread in Empryo." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`);
+  const hint = d.hint ?? (outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "open" ? "Opens the thread in T3 Code." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`);
   return v_flex().size_full().min_h(0)
     .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))

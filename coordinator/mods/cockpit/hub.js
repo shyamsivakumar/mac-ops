@@ -1,10 +1,9 @@
 // The hub as the cockpit sees it: threads that need Shyam, grouped by project, and the calls that act on them.
 
-import { exec, hc, home, readTextFile, run, terminals } from "herdr";
+import { exec, home, readTextFile } from "herdr";
 
 const LIVE = ["preparing", "queued", "starting", "running", "waiting", "failed", "interrupted"];
 const RUNNING = new Set(["preparing", "queued", "starting", "running"]);
-const RUNNING_OR_WAITING = new Set([...RUNNING, "waiting"]);
 const KIND = { waiting: "wait", failed: "fail", interrupted: "stop", completed: "done", idle: "idle" };
 const IDLE_PAGES = 4;
 const DEFAULT_CAP = 6;
@@ -18,17 +17,47 @@ const IDLE_EVERY = 60000;
 let projects = { at: 0, names: new Map(), roots: new Map() };
 const asks = new Map();
 
+function failureMessage(stdout) {
+  let text;
+  try {
+    text = JSON.parse(stdout)[0].text;
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(text).message ?? text;
+  } catch {
+    return text;
+  }
+}
+
 export async function call(tool, args) {
-  const r = await exec(`${home()}/.local/bin/emp`, ["call", tool, JSON.stringify(args)]);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || `${tool} failed`);
-  return JSON.parse(r.stdout);
+  const r = await exec(`${home()}/.local/bin/t3mcp`, ["call", tool, JSON.stringify(args)]);
+  if (r.code !== 0) throw new Error(failureMessage(r.stdout) ?? (r.stderr.trim() || `${tool} failed`));
+  const value = JSON.parse(r.stdout);
+  if (Array.isArray(value)) throw new Error(failureMessage(r.stdout) ?? `${tool} returned an error response`);
+  return value;
+}
+
+async function readAll(args) {
+  const items = [];
+  let read;
+  let after;
+  do {
+    read = await call("t3_thread_read", { ...args, limit: 100, ...(after === undefined ? {} : { afterPosition: after }) });
+    items.push(...read.items);
+    const advanced = read.items.length > 0 && (after === undefined || read.nextPosition > after);
+    after = read.nextPosition;
+    if (!advanced) break;
+  } while (read.hasMore);
+  return { ...read, items };
 }
 
 async function threads(filter, pages = PAGES) {
   const all = [];
   let cursor;
   for (let page = 0; page < pages; page++) {
-    const r = await call("emp_thread_list", { allProjects: true, limit: 100, ...filter, ...(cursor === undefined ? {} : { cursor }) });
+    const r = await call("t3_thread_list", { allProjects: true, includeSubagents: false, limit: 100, ...filter, ...(cursor === undefined ? {} : { cursor }) });
     all.push(...r.threads);
     cursor = r.nextCursor;
     if (cursor === null || cursor === undefined) break;
@@ -38,7 +67,7 @@ async function threads(filter, pages = PAGES) {
 
 async function projectNames() {
   if (Date.now() - projects.at < 60000) return projects.names;
-  const r = await call("emp_project_list", { limit: 100 });
+  const r = await call("t3_project_list", { limit: 100 });
   projects = { at: Date.now(), names: new Map(r.projects.map((p) => [p.id, p.title])), roots: new Map(r.projects.map((p) => [p.id, p.workspaceRoot])) };
   return projects.names;
 }
@@ -51,11 +80,12 @@ function questionOf(read) {
 }
 
 async function askOf(thread) {
+  if (thread.pendingUnknown) return "pending request unknown";
   const cached = asks.get(thread.threadId);
   if (cached?.stamp === thread.updatedAt) return cached.text;
-  const { requestIds } = await call("emp_pending_request", { action: "list", threadId: thread.threadId });
+  const requestIds = thread.requestIds ?? [];
   const text = requestIds.length
-    ? questionOf(await call("emp_pending_request", { action: "read", threadId: thread.threadId, requestId: requestIds[0] })) || "Waiting for your answer"
+    ? questionOf(await call("t3_pending_request", { action: "read", threadId: thread.threadId, requestId: requestIds[0] })) || "Waiting for your answer"
     : "Waiting for an approval";
   asks.set(thread.threadId, { stamp: thread.updatedAt, text });
   return text;
@@ -96,19 +126,15 @@ function card(thread, names) {
     project: names.get(thread.projectId) ?? "No project",
     projectId: thread.projectId,
     link: thread.link,
-    session: thread.journalSessionId,
-    cwd: thread.cwd,
     kind,
-    provider: thread.providerInstanceId,
     model: thread.model ?? "",
     taskType: thread.taskType ?? "",
     review: thread.taskType ? thread.taskType === "review" : REVIEW_TITLE.test(thread.title),
-    runs: thread.runCount ?? 0,
     at: Date.parse(thread.updatedAt),
     created: Date.parse(thread.createdAt),
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
     status: thread.status,
-    context: kind === "fail" && thread.lastError ? plainError(thread.lastError) : CONTEXT[kind] ?? "",
+    context: thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : CONTEXT[kind] ?? "",
     error: kind === "fail" ? thread.lastError ?? CONTEXT.fail : undefined,
     prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state })),
   };
@@ -128,7 +154,7 @@ export function group(cards) {
     const lead = threads.find((c) => c.led) ?? threads[0];
     const running = threads.filter((c) => c.kind === "run" && c.status !== "queued");
     const prs = new Map(threads.flatMap((c) => c.prs).map((p) => [`${p.repo}#${p.number}`, p]));
-    return { key, task: threads[0].task, title: lead.title, project: lead.project, threads, primary: threads[0], kind: threads[0].kind, at: Math.max(...threads.map((c) => c.at)), runSince: running.length ? Math.min(...running.map((c) => c.runStarted)) : null, prs: [...prs.values()] };
+    return { key, task: threads[0].task, title: lead.title, project: lead.project, threads, primary: threads[0], kind: threads[0].kind, at: Math.max(...threads.map((c) => c.at)), runSince: running.some((c) => c.runStarted) ? Math.min(...running.map((c) => c.runStarted).filter(Boolean)) : null, prs: [...prs.values()] };
   });
 }
 
@@ -147,12 +173,55 @@ async function idleList() {
   return idleThreads.list;
 }
 
+const runStarts = new Map();
+const failures = new Map();
+
+async function runStartOf(thread) {
+  const known = runStarts.get(thread.threadId);
+  if (known && known.run === thread.latestRunId) return known.at;
+  const read = await call("t3_thread_read", { threadId: thread.threadId, limit: 1, runLimit: 1 }).catch(() => null);
+  const run = read?.recentRuns?.at(-1);
+  if (!run || !(run.status === "running" || run.runId === read.thread.activeRunId)) return null;
+  runStarts.set(thread.threadId, { run: thread.latestRunId, at: run.startedAt });
+  return run.startedAt;
+}
+
+const FAILURE_TAIL = 40;
+
+async function failureOf(thread) {
+  const known = failures.get(thread.threadId);
+  if (known?.stamp === thread.updatedAt) return known.text;
+  const from = thread.itemCount - FAILURE_TAIL;
+  try {
+    const read = await call("t3_thread_read", { threadId: thread.threadId, view: "activity", limit: 100, maxCharsPerItem: 2000, ...(from > 0 ? { afterPosition: from } : {}) });
+    const item = [...read.items].reverse().find((i) => i.type === "error");
+    const text = item?.text ?? item?.title ?? "No failure text recorded";
+    failures.set(thread.threadId, { stamp: thread.updatedAt, text });
+    return text;
+  } catch {
+    return CONTEXT.fail;
+  }
+}
+
 export async function load() {
   const [live, finished, names] = await Promise.all([
     threads({ statuses: LIVE }),
     threads({ statuses: ["completed"], settled: false }),
     projectNames(),
   ]);
+  for (let offset = 0; offset < live.length; offset += 8) {
+    await Promise.all(live.slice(offset, offset + 8).map(async (thread) => {
+      try {
+        const pending = await call("t3_pending_request", { action: "list", threadId: thread.threadId });
+        thread.requestIds = pending.requestIds;
+        if (pending.requestIds.length) thread.status = "waiting";
+      } catch {
+        thread.pendingUnknown = true;
+      }
+      if (RUNNING.has(thread.status)) thread.activeRunStartedAt = await runStartOf(thread);
+      if (thread.status === "failed") thread.lastError = await failureOf(thread);
+    }));
+  }
   const cards = [...live, ...finished].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
   await Promise.all(cards.filter((c) => c.kind === "wait").map(async (c) => {
     const thread = live.find((t) => t.threadId === c.key);
@@ -170,34 +239,12 @@ export async function load() {
   };
 }
 
-const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
-
-export async function oldShells() {
-  const [rc, cwds] = await Promise.all([
-    exec("/usr/bin/stat", ["-L", "-f", "%m", `${home()}/.zshrc`]),
-    exec("/usr/sbin/lsof", ["-a", "-d", "cwd", "-c", "empryo", "-Fpn"]),
-  ]);
-  const changed = Number(rc.stdout) * 1000;
-  const dirs = new Map();
-  let pid = "";
-  for (const line of cwds.stdout.split("\n")) {
-    if (line[0] === "p") pid = line.slice(1);
-    else if (line[0] === "n") dirs.set(pid, line.slice(1));
-  }
-  if (!dirs.size) return { changed, cwds: [] };
-  const ps = await exec("/bin/ps", ["-o", "pid=,lstart=", "-p", [...dirs.keys()].join(",")]);
-  const newest = new Map();
-  for (const line of ps.stdout.split("\n")) {
-    const m = /^\s*(\d+)\s+\w+\s+(\w+)\s+(\d+)\s+(\d+):(\d+):(\d+)\s+(\d+)/.exec(line);
-    if (!m) continue;
-    const started = new Date(Number(m[7]), MONTHS[m[2]], Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])).getTime();
-    const dir = dirs.get(m[1]);
-    newest.set(dir, Math.max(newest.get(dir) ?? 0, started));
-  }
-  return { changed, cwds: [...newest].filter(([, started]) => started < changed).map(([dir]) => dir) };
+export async function queueStatus() {
+  const r = await exec("coordq", ["status"]);
+  if (r.code !== 0) return null;
+  const q = JSON.parse(r.stdout);
+  return [q.cap, q.live, q.queued].every(Number.isFinite) ? q : null;
 }
-
-export const hubStatus = () => call("emp_hub_status", {}).then((s) => ({ circuits: s?.circuits, draining: s?.draining, pid: s?.pid })).catch(() => null);
 
 export async function loadBacklog() {
   const [idle, names] = await Promise.all([idleList(), projectNames()]);
@@ -242,8 +289,11 @@ function vendorGate(verdict, reviewModel, authorModel) {
   return reviewer === author ? { state: "fail", label: "rev ✗ same vendor" } : verdict;
 }
 
+const newestRun = (read) => (read?.recentRuns ?? []).reduce((latest, run) =>
+  !latest || run.ordinal > latest.ordinal ? run : latest, null);
+
 const actualModel = (read, fallback) => {
-  const run = read?.recentRuns?.at(-1)?.model;
+  const run = newestRun(read)?.model;
   return vendorOf(run) ? run : fallback || "";
 };
 
@@ -253,11 +303,12 @@ export async function loadVerdict(thread, author) {
   if (known?.stamp === stamp && !(known.retryAt <= Date.now())) return;
   try {
     const [read, authorRead] = await Promise.all([
-      call("emp_thread_read", { threadId: thread.key }),
-      author ? call("emp_thread_read", { threadId: author.key, limit: 1 }) : null,
+      readAll({ threadId: thread.key }),
+      author ? call("t3_thread_read", { threadId: author.key, limit: 1 }) : null,
     ]);
-    const last = [...read.items].reverse().find((i) => i.type === "assistant_message");
-    const runModel = read.recentRuns?.at(-1)?.model ?? "";
+    const run = newestRun(read);
+    const last = [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
+    const runModel = run?.model ?? "";
     const verdict = vendorGate(judge(last?.text ?? ""), actualModel(read, thread.model), author ? actualModel(authorRead, author.model) : "");
     verdicts.set(thread.key, { stamp, verdict, runModel });
   } catch {
@@ -281,85 +332,97 @@ export async function queueCap() {
   return Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_CAP;
 }
 
-const SHOW_POLL = 50;
-const SHOW_LIMIT = 8000;
-
-async function reusableShow(name, thread) {
-  const kinds = RUNNING_OR_WAITING.has(thread.status) ? ["empryo", "follow"] : thread.session ? ["empryo"] : ["history", "empryo"];
-  const lists = await Promise.all(kinds.map((kind) => exec(`${home()}/.local/bin/hc`, ["ls", "--json", "--label", `emp.show=${kind}`])));
-  for (const r of lists) {
-    const found = r.code === 0 ? JSON.parse(r.stdout).terminals.find((t) => t.name === name && t.state === "live") : null;
-    if (found) return found.address;
-  }
-  return null;
-}
-
-export const showName = (key) => `show-${key.slice(4, 12)}`;
-
-export const empryoWindows = () => terminals().filter((t) => t.state === "live" && t.labels?.["emp.show"] === "empryo").map((t) => t.name);
-
-export async function closeWindow(key) {
-  const r = await hc(["kill", showName(key)]);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || `Could not close ${showName(key)}`);
-}
-
-export async function openThread(thread, cx) {
-  const name = showName(thread.key);
-  const reuse = await reusableShow(name, thread);
-  if (reuse) return run("terminal.peek", { terminal: reuse });
-  const before = terminals().find((t) => t.name === name)?.address;
-  let finished = false;
-  const shown = exec(`${home()}/.local/bin/emp`, ["show", thread.key]).finally(() => (finished = true));
-  const until = Date.now() + SHOW_LIMIT;
-  while (!finished) {
-    const fresh = terminals().find((t) => t.name === name && t.state === "live" && t.address !== before);
-    if (fresh) return run("terminal.peek", { terminal: fresh.address });
-    if (Date.now() > until) throw new Error("The terminal did not appear in time.");
-    await cx.sleep(SHOW_POLL);
-  }
-  const r = await shown;
-  if (r.code !== 0) throw new Error(r.stderr.trim());
+export async function openThread(thread) {
+  if (!thread.link?.startsWith("https://app.t3.codes/threads/")) throw new Error("T3 thread link not available");
+  const result = await exec("/usr/bin/open", [thread.link]);
+  if (result.code !== 0) throw new Error("Could not open T3 thread");
 }
 
 export const sendArgs = (key, message) => ({ threadId: key, message, mode: "auto" });
-export const sendReply = (key, message) => call("emp_thread_send", sendArgs(key, message));
-export const settle = (key) => call("emp_thread_organize", { threadId: key, action: "settle" });
-export const mergeThread = (key, expectedRevision) => call("emp_thread_merge", { threadId: key, expectedRevision });
-export const mergePlan = (key) => call("emp_thread_merge", { threadId: key, dryRun: true });
-export const cleanupThread = (key) => call("emp_thread_cleanup", { threadId: key });
+export const sendReply = (key, message) => call("t3_thread_send", sendArgs(key, message));
+export const settle = (key) => call("t3_thread_organize", { threadId: key, action: "settle" });
+const ASCEND = new Set(["action-underwriting-hub", "ascend-mcp", "data-ops", "dbt", "omni"]);
+const relays = new Map();
 
-const QUIET_KEEPS = /no worktree on disk|main checkout/;
+export async function mergePlan(card) {
+  try {
+    const pr = card.info?.pr;
+    if (!pr || !/^[\w.-]+\/[\w.-]+$/.test(pr.repo) || !Number.isInteger(pr.number) || pr.number <= 0) return { refused: "No valid PR on this card" };
+    if (ASCEND.has(pr.repo.split("/").at(-1).toLowerCase())) return { refused: "Ascend repos cannot merge from Cockpit" };
+    const r = await exec("gh", ["pr", "view", String(pr.number), "-R", pr.repo, "--json", "state,isDraft,mergeable,headRefOid"]);
+    if (r.code !== 0) throw new Error(r.stderr.trim() || "PR lookup failed");
+    const head = JSON.parse(r.stdout);
+    if (head.state !== "OPEN" || head.isDraft || head.mergeable !== "MERGEABLE") return { refused: "PR must be open, ready and mergeable" };
+    if (!/^[a-f0-9]{40}$/.test(head.headRefOid)) return { refused: "PR head SHA unknown" };
+    const review = card.threads.filter((t) => t.review && t.kind === "done").sort((a, b) => b.at - a.at)[0];
+    if (!review || !card.threads.some((t) => !t.review && t.key !== review.key)) return { refused: "No separate review thread found" };
+    const read = await readAll({ threadId: review.key, maxCharsPerItem: 50000 });
+    const run = newestRun(read);
+    if (read.thread?.activeRunId || (run && run.status !== "completed")) return { refused: "Review still running" };
+    const last = [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
+    const lines = (last?.text ?? "").trim().split("\n").map((l) => l.trim());
+    if (run?.status !== "completed" || lines.at(-1) !== "VERDICT: PASS" || last?.textTruncated) return { refused: "Review must end with VERDICT: PASS" };
+    if ((run.executedModel ?? run.model).replace(/^subscriptions\//, "") !== "claude-opus-5-5") return { refused: "Reviewer run must use claude-opus-5-5" };
+    const checks = lines.filter((l) => /^CHECK:/.test(l));
+    const checked = checks.length === 1 ? /^CHECK: PASS ([a-f0-9]{40})$/.exec(checks[0]) : null;
+    if (checked?.[1] !== head.headRefOid) return { refused: "Review CHECK must PASS the current head SHA" };
+    return { sha: head.headRefOid, repo: pr.repo, number: pr.number };
+  } catch (error) {
+    return { refused: `Merge preflight failed: ${error.message}` };
+  }
+}
 
-export function cleanupNote(result) {
-  if (result.action === "removed") return result.branchRemoved ? "Worktree and branch removed" : `Worktree removed, branch kept: ${result.branchNote}`;
-  return QUIET_KEEPS.test(result.reason) ? null : `Worktree kept: ${result.reason}`;
+export async function mergeThread(card, plan) {
+  const fresh = await mergePlan(card);
+  if (fresh.refused) return fresh;
+  if (!plan || fresh.sha !== plan.sha || fresh.repo !== plan.repo || fresh.number !== plan.number) return { refused: "Merge plan changed; approve again" };
+  const key = `${fresh.repo}#${fresh.number}@${fresh.sha}`;
+  if (relays.has(key)) return relays.get(key);
+  let retain = false;
+  const queue = (async () => {
+    const names = await call("t3_project_list", { limit: 100 });
+    const repoName = fresh.repo.split("/").at(-1);
+    const matches = names.projects.filter((p) => p.workspaceRoot?.replace(/\/$/, "").split("/").at(-1) === repoName);
+    if (matches.length !== 1) return { refused: "PR repository project is unknown or ambiguous" };
+    const title = `${card.task || card.key} merge relay #${fresh.number} ${fresh.sha.slice(0, 8)}`;
+    const command = `gh pr merge ${fresh.number} -R ${fresh.repo} --squash --match-head-commit ${fresh.sha}`;
+    const message = `Run exactly: ${command}\nStop on any refusal. Report the merge commit. Do not retry or change the command.`;
+    retain = true;
+    const r = await exec("coordq", ["start", JSON.stringify({ projectId: matches[0].id, taskType: "worker", title, message })]);
+    if (r.code !== 0) {
+      retain = false;
+      throw new Error(r.stderr.trim() || "Relay queue failed; retry available");
+    }
+    const id = /^(?:queued|started) #(\d+)\s*$/.exec(r.stdout.trim())?.[1];
+    if (!id) throw new Error("Relay response unknown; check queue before retrying");
+    return { queued: true, text: `queued #${id}` };
+  })().catch((error) => ({ refused: error.message })).then((result) => {
+    if (!retain) relays.delete(key);
+    return result;
+  });
+  relays.set(key, queue);
+  return queue;
 }
 
 export function mergeNotice(results) {
-  const merged = results.filter((r) => r.merged).length;
-  const refused = results.length - merged;
-  const items = results.map((r) => ({ name: r.name, ok: r.merged, text: r.text || "Merged" }));
-  const [only] = results;
-  const text = only && results.length === 1
-    ? only.merged ? `Merged ${only.name}${only.text ? `: ${only.text}` : ""}` : `Not merged · ${only.name}: ${only.text}`
-    : [merged && `Merged ${merged}`, refused && `${refused} not merged`].filter(Boolean).join(", ");
-  return { level: refused ? "error" : "success", text, items };
+  const refused = results.some((r) => !r.queued);
+  return { level: refused ? "error" : "success", text: results.map((r) => `${r.name}: ${r.text}`).join(", "), items: results.map((r) => ({ name: r.name, ok: r.queued, text: r.text })) };
 }
 
 export async function readTask(thread) {
-  const { thread: read } = await call("emp_thread_read", { threadId: thread.key, limit: 1 });
+  const { thread: read } = await call("t3_thread_read", { threadId: thread.key, limit: 1 });
   return { worktree: read.worktreePath ?? null, branch: read.branch ?? null, repo: projects.roots.get(thread.projectId) ?? null };
 }
 
 export async function firstMessage(key) {
-  const read = await call("emp_thread_read", { threadId: key, afterPosition: 0, limit: 3 });
+  const read = await call("t3_thread_read", { threadId: key, limit: 1 });
   return read.items.find((i) => i.type === "user_message")?.text ?? null;
 }
 
 export async function readTicket(thread) {
   const [opening, latest] = await Promise.all([
-    call("emp_thread_read", { threadId: thread.key, afterPosition: 0, limit: 10 }),
-    call("emp_thread_read", { threadId: thread.key, limit: 20, maxCharsPerItem: 20000 }),
+    call("t3_thread_read", { threadId: thread.key, limit: 1 }),
+    readAll({ threadId: thread.key, maxCharsPerItem: 20000 }),
   ]);
   const report = [...latest.items].reverse().find((i) => i.type === "assistant_message");
   return { record: latest.thread, text: opening.items.find((i) => i.type === "user_message")?.text ?? null, report: report?.text ?? null };
