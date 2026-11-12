@@ -2,13 +2,13 @@
 import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 
-EMP = os.environ.get("TICKET_EMP", "emp")
+T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
 EMPQ = os.environ.get("TICKET_EMPQ", "empq")
 QUEUE_DIR = os.environ.get("EMPQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 CACHE_DIR = os.environ.get("TICKET_CACHE", os.path.expanduser("~/.cache/tickets"))
 CACHE_TTL = 60
 GH_TIMEOUT = 40
-EMP_TIMEOUT = 30
+CALL_TIMEOUT = 30
 EMPQ_TIMEOUT = 120
 LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
 STAGES = ("stage:backlog", "stage:todo")
@@ -104,13 +104,22 @@ def gh_json(args):
     return json.loads(gh(args))
 
 
-def emp_call(tool, args):
+def t3_call(tool, args):
     try:
-        result = run([EMP, "call", tool, "-"], EMP_TIMEOUT, json.dumps(args))
+        result = run([T3MCP, "call", tool, "-"], CALL_TIMEOUT, json.dumps(args))
     except subprocess.TimeoutExpired:
-        raise Refuse(f"emp call {tool} timed out after {EMP_TIMEOUT}s")
+        raise Refuse(f"t3 call {tool} timed out after {CALL_TIMEOUT}s")
     if result.returncode != 0:
-        raise Refuse(f"emp call {tool} failed: {result.stderr.strip()}")
+        if tool == "t3_thread_read":
+            try:
+                errors = json.loads(result.stderr)
+                missing = any(json.loads(e["text"]).get("code") == "thread_not_found"
+                              for e in errors if e.get("type") == "text")
+            except (ValueError, TypeError, KeyError, AttributeError):
+                missing = False
+            if missing:
+                return {"thread": {"threadId": args["threadId"], "status": "not running (thread not found)"}}
+        raise Refuse(f"t3 call {tool} failed: {result.stderr.strip()}")
     return json.loads(result.stdout)
 
 
@@ -418,6 +427,8 @@ def validate_start(cfg, repo, issue):
     if t["keyProblems"]:
         raise Refuse(t["keyProblems"][0])
     groups = t["groups"]
+    if not groups["type"]:
+        raise Refuse("missing type label")
     for family in ("stage", "type"):
         if len(groups[family]) != 1:
             raise Refuse(f"needs exactly one {family} label, found {len(groups[family])}")
@@ -453,15 +464,6 @@ def queue_items(repo, n):
     return [i for i in items if str(i["args"].get("clientRequestId", "")).startswith(prefix)]
 
 
-def ticket_threads(cfg, t, since):
-    rcfg = cfg["repos"][t["repo"]]
-    result = emp_call("emp_thread_list", {"projectId": rcfg["projectId"], "titleContains": t["key"], "limit": 100})
-    prefix = f"{t['key']} "
-    floor = parse_time(since)
-    threads = [x for x in result["threads"] if x["title"].startswith(prefix) and parse_time(x["createdAt"]) >= floor]
-    return sorted(threads, key=lambda x: x["createdAt"])
-
-
 def intents(ledger):
     return [e for e in ledger if e.get("kind") == "intent"]
 
@@ -471,10 +473,12 @@ def assert_not_active(cfg, t, ledger):
     queued = queue_items(t["repo"], t["number"])
     if queued:
         raise Refuse(f"already started: queued as empq #{queued[0]['id']}")
-    if prior:
-        live = [x for x in ticket_threads(cfg, t, min(e["at"] for e in prior)) if x["status"] in LIVE_STATUSES]
-        if live:
-            raise Refuse(f"already started: thread {live[-1]['threadId']} is {live[-1]['status']}")
+    for attempt in prior:
+        thread = thread_for_attempt(cfg, t, [attempt])
+        if thread is None:
+            continue
+        if thread["status"] in LIVE_STATUSES:
+            raise Refuse(f"already started: thread {thread['threadId']} is {thread['status']}")
 
 
 def machine_line(entry):
@@ -580,8 +584,19 @@ def thread_for_attempt(cfg, t, ledger):
     if not prior:
         return None
     latest = prior[-1]
-    threads = [x for x in ticket_threads(cfg, t, latest["at"])]
-    return threads[-1] if threads else None
+    try:
+        with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except FileNotFoundError:
+        receipts = {}
+    thread_id = receipts.get(f"ticket:{t['repo']}#{t['number']}:a{latest['attempt']}")
+    if not thread_id:
+        return None
+    result = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+    thread = result["thread"]
+    if thread["threadId"] != thread_id:
+        raise Refuse("thread identity mismatch")
+    return thread
 
 
 def cmd_abandon(a):
@@ -594,7 +609,9 @@ def cmd_abandon(a):
         if t["state"] != "OPEN":
             raise Refuse(f"issue is {t['state'].lower()}")
         ledger = ledger_of(issue, authed_login())
-        thread = thread_for_attempt(cfg, t, ledger) if t["key"] and intents(ledger) else None
+        threads = [thread_for_attempt(cfg, t, [attempt]) for attempt in intents(ledger)] if t["key"] else []
+        live_threads = {thread["threadId"]: thread for thread in threads
+                        if thread and thread["status"] in LIVE_STATUSES}
         queued = queue_items(repo, n)
         entry = {"kind": "abandon", "reason": a.reason, "at": now()}
         gh(["issue", "close", str(n), "-R", repo, "--reason", "not planned",
@@ -604,15 +621,15 @@ def cmd_abandon(a):
     except GhError as e:
         die(f"gh failed ({e.kind}): {e}")
     print(f"closed {repo}#{n} as not planned")
-    if thread and thread["status"] in LIVE_STATUSES:
-        emp_call("emp_thread_interrupt", {"threadId": thread["threadId"]})
+    for thread in live_threads.values():
+        t3_call("t3_thread_interrupt", {"threadId": thread["threadId"], "stop": True})
         print(f"interrupted thread {thread['threadId']} (was {thread['status']})")
     for item in queued:
-        result = run([EMPQ, "drop", str(item["id"])], EMP_TIMEOUT)
+        result = run([EMPQ, "drop", str(item["id"])], CALL_TIMEOUT)
         if result.returncode != 0:
             die(f"empq drop #{item['id']} failed: {result.stderr.strip()}")
         print(result.stdout.strip())
-    if not queued and not (thread and thread["status"] in LIVE_STATUSES):
+    if not queued and not live_threads:
         print("no live thread or queued item to stop")
 
 
@@ -625,6 +642,7 @@ def cmd_show(a):
         t = parse_ticket(cfg, repo, issue)
         ledger = ledger_of(issue, authed_login())
         thread = thread_for_attempt(cfg, t, ledger) if t["key"] and intents(ledger) else None
+        queued = queue_items(repo, n)
         out = {
             "repo": repo,
             "number": n,
@@ -644,11 +662,12 @@ def cmd_show(a):
             "template": template_status(cfg, t["body"]),
             "blockers": blockers_of(issue),
             "ledger": ledger,
-            "queued": [{"id": i["id"], "title": i["title"]} for i in queue_items(repo, n)],
+            "queued": [{"id": i["id"], "title": i["title"]} for i in queued],
             "latestAttempt": {
                 "attempt": max((e["attempt"] for e in intents(ledger)), default=None),
                 "threadId": thread["threadId"] if thread else None,
-                "status": thread["status"] if thread else None,
+                "status": thread["status"] if thread else ("queued" if queued else
+                          ("not running (no thread recorded)" if intents(ledger) else None)),
             },
         }
     except Refuse as e:
