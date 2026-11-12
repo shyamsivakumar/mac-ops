@@ -33,7 +33,11 @@ install step remains separate; it does not install or restart the hub.
 `~/.empryo-hub/install.json` holds the pending SHA, the original wait start,
 state, and a fixed, configuration-free refusal reason. New managed merges
 coalesce into the pending SHA; unrelated fast-forwards advance that SHA without
-resetting the 30 minute budget. Repeated processing of one SHA never rearms it.
+resetting the 30-minute batching window. During that window empq and the hub
+continue admitting work and merges; the worker performs no install or restart.
+After 30 minutes, admission stops so existing work can finish. The worker has
+a further 30 minutes to observe idle before refusing, without restarting.
+Repeated processing of one SHA never rearms it.
 
 `dev.coordinator.emp-hub-install` runs once per minute. Only this external
 job runs `./install.sh empryo --preserve-routing` and
@@ -45,10 +49,10 @@ persistent source.
 ```mermaid
 stateDiagram-v2
     [*] --> pending: managed files merged and main fast-forwarded
-    pending --> waiting_idle: worker tick
+    pending --> waiting_idle: worker tick after 30-minute batch window
     waiting_idle --> waiting_idle: active turn / merge or empq lock held
     waiting_idle --> installing: verified main SHA, idle hub, routing unchanged
-    waiting_idle --> refused: 30 minute cap or unsafe checkout / config
+    waiting_idle --> refused: 30-minute idle-wait cap or unsafe checkout / config
     installing --> restarting: install succeeds and hub still idle
     installing --> refused: install failure / timeout / interrupted worker
     restarting --> done: kickstart succeeds and replacement PID answers
@@ -59,12 +63,18 @@ stateDiagram-v2
 
 The persisted state spells `waiting idle` with a space. The hub gates all
 new turns (including sends, scheduled and delegated starts) through its existing
-pending-turn queue while the marker is active. Running or starting turns and
-merge operations prevent installation. New merges are refused while an install
-is pending, under the same admission lock, so they cannot race the final idle
+pending-turn queue after the batching window, and immediately during installing
+or restarting. Invalid wait timestamps fail closed; a future timestamp (including
+a backward clock adjustment) makes the worker refuse rather than install.
+Running or starting turns
+and merge operations prevent installation. New merges are refused after the
+batching window, under the same admission lock, so they cannot race the final idle
 check and restart. Pending turns are saved, not counted as
 running, and resume after restart or refusal via the scheduler (within 20 seconds).
 empq retains queued items and does not consume attempts during a deployment.
+The new admission policy takes effect only once the hub itself runs this version;
+an old hub still holds turns immediately even if empq has already been updated.
+The coordinator handles installation/restart separately from this change.
 
 The worker holds the post-merge/worker lock across deployment and the existing
 empq lock across idle checks, install and restart. The hub checks the marker

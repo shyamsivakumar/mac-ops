@@ -142,8 +142,13 @@ def tick(home=None, status=None, execute=None, notice=None, now=None):
 
             if state["state"] in ("installing", "restarting"):
                 return transition("refused", "Interrupted deployment; manual inspection required")
-            if now - state["since"] >= CAP_SECONDS:
-                return transition("refused", "Install waited 30 minutes; no restart performed")
+            since = state["since"]
+            if type(since) not in (int, float) or not 0 <= now - since < float("inf"):
+                return transition("refused", "Invalid install wait start; no restart performed")
+            if now - since < CAP_SECONDS:
+                return state
+            if now - since >= 2 * CAP_SECONDS:
+                return transition("refused", "Install waited 30 minutes for idle after batching; no restart performed")
             transition("waiting idle")
             try:
                 # empq holds this lock through pre-steps, launch and counting.
