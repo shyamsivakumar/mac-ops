@@ -32,6 +32,7 @@ def main():
         data = json.loads(Path(filename).read_text())
         assert not data["hasMore"], "activity capture must be complete"
         run = data["recentRuns"][0]
+        assert run["ordinal"] == 1, "capture must include the original run (increase runLimit)"
         items = [i for i in data["items"] if i["createdAt"] <= run["completedAt"]]
         sha = "628bd504077dae985466f696bdf7408136c6d9b4" if "SRW-790" in data["thread"]["title"] else None
         result = evaluate(items, run, sha)
