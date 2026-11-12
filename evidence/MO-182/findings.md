@@ -1,0 +1,9 @@
+# MO-182 · Findings
+
+Full report with sources: [report.md](report.md). This file is the short answer form required by issue #121.
+
+- **Does omp load pi packages?** No, not automatically. omp's config and extension roots are its own (`~/.omp/agent`; `src/sdk.ts:552`, `src/config.ts:81`), and a grep of omp's source finds no `pi-package` handling, so pi's `pi install` result is invisible to omp. omp *can* load a pi package's declared entry point, because it reads the `pi` manifest key (`src/extensibility/plugins/manager.ts:300`, `src/extensibility/extensions/directory-resolution.ts:69`, `src/discovery/helpers.ts:842`) and ships a legacy pi extension loader (`src/extensibility/plugins/legacy-pi-compat.ts:2724`).
+- **Versions found vs required.** Node v22.23.1 (needs 22.18+, `package.json` `engines.node`) and Claude Code 2.1.323 (needs 2.1.265+, `src/cli-requirements.ts` `MIN_SUPPORTED_CLI_VERSION`; structured import needs 2.1.292). Both satisfied.
+- **Memory cost.** ~500 MB per parked Claude process, one per session, at most four parked (`README.md` "Processes and memory"; `src/provider-config.ts:65` `MAX_PARKED = 4`): ~0.5 GB per live session, ~2 GB ceiling.
+- **Usage-credit guard default.** Blocked. `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS` is unset by default; a call charged to usage credits ends with a "billing" error that pi does not retry, and the charged call is already paid for (`README.md` "Usage-credit guard"; `src/usage-credits.ts`).
+- **Recommendation.** Do not install into omp under this ticket. pi already has the package installed on this Mac and is the supported path. A separate approved ticket should install the package as an omp plugin and prove one real subscription call; provider-registration compatibility with the omp fork is the real unknown and cannot be settled without an install.
