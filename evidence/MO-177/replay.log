@@ -1,0 +1,18 @@
+Baseline before source edit (two separate invocations of replay.py, each exit 1):
+mo177-srw846.json: emp:ad767a88-f2b8-437f-a7eb-707815acba22 original run: (False, 'the latest run left no report'); AssertionError
+mo177-srw790.json: emp:f1a2acb1-ef83-41cc-a2df-ca424d93de0e original run: (False, 'the latest run left no report'); AssertionError
+
+After source edit:
+emp:ad767a88-f2b8-437f-a7eb-707815acba22 original run: (True, 'VERDICT: PASS')
+emp:f1a2acb1-ef83-41cc-a2df-ca424d93de0e original run: (True, 'VERDICT: PASS')
+tool after PASS: PASS (VERDICT: PASS)
+progress before final report: PASS (VERDICT: PASS)
+last message lacks verdict: REFUSED (the review does not end with a VERDICT: PASS or VERDICT: FAIL line)
+FAIL: REFUSED (VERDICT: FAIL)
+wrong CHECK SHA: REFUSED (the pull request has no checks, so the review must end with the two lines 'CHECK: PASS bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' and 'VERDICT: PASS')
+missing CHECK: REFUSED (the pull request has no checks, so the review must end with the two lines 'CHECK: PASS aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' and 'VERDICT: PASS')
+text after verdict: REFUSED (the review does not end with a VERDICT: PASS or VERDICT: FAIL line)
+disagreeing adjacent reports: REFUSED (the latest run left 2 reports that disagree)
+latest run has no report: REFUSED (the latest run left no report)
+user after report: REFUSED (the latest run left no report)
+unfinished run: REFUSED

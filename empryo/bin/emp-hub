@@ -1828,7 +1828,11 @@ def gate_report(thread, accepts):
     run = thread["runs"][-1] if thread["runs"] else None
     if run is None or run["status"] != "completed":
         return None, "the latest run did not complete"
-    reports = trailing_reports(read_items(thread))
+    items = [item for item in read_items(thread) if item["createdAt"] >= run["startedAt"]]
+    # Tool activity after the final message is not another report.
+    while items and items[-1]["type"] not in ("assistant_message", "user_message"):
+        items.pop()
+    reports = trailing_reports(items)
     if not reports:
         return None, "the latest run left no report"
     if len({accepts(report["text"]) for report in reports}) > 1:
