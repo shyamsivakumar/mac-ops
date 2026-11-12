@@ -187,16 +187,18 @@ def drain():
             code, out = call(step["tool"], step["args"])
             if code != 0:
                 break
-        if code == 0:
-            request_id = item["args"].get("clientRequestId")
-            if request_id and item["tool"] == "t3_thread_launch":
+        request_id = item["args"].get("clientRequestId")
+        if code == 0 and request_id and item["tool"] == "t3_thread_launch":
+            try:
                 result = json.loads(out)
-                result = result.get("structuredContent", result)
-                if "thread" in result:
-                    result = result["thread"]
-                thread_id = result.get("threadId")
-                if not thread_id:
+                thread_id = result.get("thread", result).get("threadId")
+                if not isinstance(thread_id, str) or not thread_id:
                     raise ValueError("successful launch has no threadId")
+            except (ValueError, TypeError, AttributeError) as e:
+                item["attempts"] = MAX_ATTEMPTS - 1
+                code, out = 1, f"invalid launch reply: {e}"
+        if code == 0:
+            if request_id and item["tool"] == "t3_thread_launch":
                 receipts_path = path("dispatch-receipts.json")
                 receipts = {}
                 if os.path.exists(receipts_path):

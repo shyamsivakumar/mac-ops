@@ -32,6 +32,7 @@ if Path(sys.argv[0]).name == 'gh':
         issue = read('issue.json')
         issue['comments'].append({'id': str(len(issue['comments']) + 1), 'author': {'login': 'proof-user'}, 'body': a[a.index('--body') + 1]})
         write('issue.json', issue)
+    elif a[:2] == ['issue', 'close']: (p / 'closed').touch()
     elif a[:2] != ['issue', 'edit']: raise SystemExit('unexpected gh call: ' + repr(a))
 elif Path(sys.argv[0]).name == 'fail-empq':
     raise SystemExit('injected empq start failure')
@@ -39,13 +40,25 @@ else:
     assert a[0] == 'call' and a[2] == '-', a
     args = json.load(sys.stdin)
     with (p / 'calls.jsonl').open('a') as f: f.write(json.dumps([a[1], args]) + '\\n')
-    if a[1] == 't3_thread_list': print(json.dumps({'total': int((p / 'launched').exists())}))
+    if a[1] == 't3_thread_list': print(json.dumps({'total': int((p / 'launched').exists() and not (p / 'launch-mode').exists())}))
     elif a[1] == 't3_thread_launch':
         (p / 'launched').touch()
-        print(json.dumps({'structuredContent': {'thread': {'threadId': 'proof-finished'}}}))
+        mode = (p / 'launch-mode').read_text() if (p / 'launch-mode').exists() else 'nested'
+        if mode == 'invalid': print('not json')
+        elif mode == 'missing': print('{}')
+        elif mode == 'direct': print(json.dumps({'threadId': 'proof-finished'}))
+        else: print(json.dumps({'thread': {'threadId': 'proof-finished'}}))
     elif a[1] == 't3_thread_read':
-        assert args['threadId'] == 'proof-finished', args
-        print(json.dumps({'thread': {'threadId': 'proof-finished', 'status': read('status.json')}}))
+        mode = read('status.json')
+        if mode in ('thread_not_found', 'offline'):
+            print(json.dumps([{'type': 'text', 'text': json.dumps({'code': mode})}]), file=sys.stderr)
+            raise SystemExit(1)
+        if mode == 'mismatch': args['threadId'] = 'unrelated-review'
+        status = 'running' if args['threadId'] == 'older-attempt' else mode
+        print(json.dumps({'thread': {'threadId': args['threadId'], 'status': status}}))
+    elif a[1] == 't3_thread_interrupt':
+        assert args == {'threadId': 'older-attempt', 'stop': True}, args
+        print('{}')
     else: raise SystemExit('unexpected t3 call: ' + repr(a))
 '''
     for name in ('gh', 't3mcp', 'fail-empq'):
@@ -78,7 +91,8 @@ else:
         write(queue / 'config.json', {'cap': 0})
         write(queue / 'dispatch-receipts.json', {})
         write(base / 'status.json', 'completed')
-        (base / 'launched').unlink(missing_ok=True)
+        for name in ('launched', 'closed', 'launch-mode'):
+            (base / name).unlink(missing_ok=True)
     def item(tool='t3_thread_launch'):
         return {'id': 1, 'tool': tool, 'args': {'clientRequestId': request, 'message': 'fixture',
                 'modelSelection': cfg['models']['minimax']['selection']}, 'title': 'MO-999 Retry proof', 'priority': 0}
@@ -126,6 +140,70 @@ else:
     write(base / 'status.json', 'running')
     assert 'thread proof-finished is running' in run(ticket, 'start', ref, code=2)
     print('PASS recorded live thread: start refused')
+    reset()
+    write(queue / 'dispatch-receipts.json', {request: 'deleted-attempt'})
+    write(base / 'status.json', 'thread_not_found')
+    assert show()['latestAttempt']['status'] == 'not running (thread not found)'
+    assert 'queued #' in run(ticket, 'start', ref)
+    reset()
+    write(queue / 'dispatch-receipts.json', {request: 'deleted-attempt'})
+    write(base / 'status.json', 'thread_not_found')
+    assert 'no live thread' in run(ticket, 'abandon', ref, '--reason', 'fixture')
+    assert (base / 'closed').exists()
+    print('PASS deleted thread: show not running; start retries; abandon closes')
+    for status in ('offline', 'mismatch'):
+        reset()
+        write(queue / 'dispatch-receipts.json', {request: 'proof-finished'})
+        write(base / 'status.json', status)
+        for command in (('show', ref), ('start', ref), ('abandon', ref, '--reason', 'fixture')):
+            assert 'refused:' in run(ticket, *command, code=2)
+        assert not (base / 'closed').exists()
+    print('PASS other transport failures and identity mismatch refuse without closing')
+    reset()
+    issue = json.loads((base / 'issue.json').read_text())
+    issue['comments'].append({'id': '2', 'author': {'login': 'proof-user'},
+                              'body': '<!-- empryo-ticket ' + json.dumps({'kind': 'intent', 'attempt': 2}) + ' -->'})
+    write(base / 'issue.json', issue)
+    write(queue / 'dispatch-receipts.json', {request: 'older-attempt', request[:-1] + '2': 'proof-finished'})
+    assert 'older-attempt is running' in run(ticket, 'start', ref, code=2)
+    assert 'interrupted thread older-attempt' in run(ticket, 'abandon', ref, '--reason', 'fixture')
+    print('PASS abandon interrupts older live attempt only; completed latest attempt is untouched')
+    for mode in ('missing', 'invalid'):
+        reset()
+        enqueue()
+        q = json.loads((queue / 'queue.json').read_text())
+        second = item()
+        second.update(id=2, args={'message': 'fixture', 'modelSelection': cfg['models']['minimax']['selection']})
+        q['items'].append(second)
+        write(queue / 'config.json', {'cap': 1})
+        (base / 'launch-mode').write_text(mode)
+        write(queue / 'queue.json', q)
+        before = (base / 'calls.jsonl').read_text().splitlines()
+        run(empq, 'dispatch')
+        run(empq, 'dispatch')
+        after = (base / 'calls.jsonl').read_text().splitlines()[len(before):]
+        launches = [json.loads(line) for line in after if json.loads(line)[0] == 't3_thread_launch']
+        assert len(launches) == 2, launches
+        remaining = json.loads((queue / 'queue.json').read_text())['items']
+        assert len(remaining) == 1 and remaining[0]['id'] == 1 and remaining[0]['attempts'] == 3, remaining
+        assert json.loads((queue / 'dispatch-receipts.json').read_text()) == {}
+        assert 'started #2' in (queue / 'dispatch.log').read_text()
+        assert 'queued' == show()['latestAttempt']['status']
+        assert 'already started' in run(ticket, 'start', ref, code=2)
+    print('PASS missing ID and invalid JSON: held at retry limit without relaunch; next item dispatched; uncertain attempt stays blocked')
+    reset()
+    enqueue()
+    write(queue / 'config.json', {'cap': 1})
+    (base / 'launch-mode').write_text('direct')
+    run(empq, 'dispatch')
+    assert show()['latestAttempt']['threadId'] == 'proof-finished'
+    print('PASS direct thread ID reply persists receipt')
+    reset(intent=False)
+    issue = json.loads((base / 'issue.json').read_text())
+    issue['labels'] = [{'name': 'stage:todo'}]
+    write(base / 'issue.json', issue)
+    assert 'missing type label' in run(ticket, 'start', ref, code=2)
+    print('PASS original missing type requirement preserved once in start validation')
     calls = [json.loads(line)[0] for line in (base / 'calls.jsonl').read_text().splitlines()]
-    assert set(calls) <= {'t3_thread_list', 't3_thread_launch', 't3_thread_read'}, calls
+    assert set(calls) <= {'t3_thread_list', 't3_thread_launch', 't3_thread_read', 't3_thread_interrupt'}, calls
     print('PASS all gh/t3mcp calls stubbed; temporary queue, cache and HOME only; no emp or gate called')
