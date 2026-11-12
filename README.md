@@ -244,11 +244,18 @@ Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 
 The `dev.coordinator.turncap` job runs the coordinator's turn-cap monitor
-(`~/Code/coordinator/loop/turn_cap.py`) from login and after every exit, so the
-ten-minute turn cap holds across reboots. It logs to
-`~/Library/Logs/coordinator/turncap.log`; the installer creates that directory
-because launchd does not. The job replaces the hand-started monitor, so stop
-that process before loading the job.
+(`~/Code/coordinator/loop/turn_cap.py`) and keeps it running, so the
+ten-minute turn cap holds across reboots instead of only while someone starts
+the script by hand. The installer writes the job and creates
+`~/Library/Logs/coordinator`, because launchd does not create the directory a
+job logs into. Load the job once with
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.coordinator.turncap.plist`;
+it then starts by itself at every later login. The monitor has no lock, so a
+second copy would double-interrupt threads: the installer warns when it finds
+a hand-started monitor, and that copy is stopped before the job is loaded. The
+coordinator runbook still says to restart the monitor by hand after a reboot;
+this job now covers that step. The job appends one line per poll pass to
+`~/Library/Logs/coordinator/turncap.log`.
 
 ## Agent session traces (MO-124)
 
