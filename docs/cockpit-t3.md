@@ -9,8 +9,9 @@ read-only acceptance.
 
 The Hub chip checks T3 project-list reachability. Queue reads `empq status`
 for cap, live and queued counts. Provider health and run timing are not
-available on T3. Merge only reports “merged by relay after the Opus gate”;
-merge preflight and cleanup do not call any service. The separate Opus review
+available on T3. Approve merge queues a relay only after fresh PR and exact-head Opus review
+checks. The review must end with `VERDICT: PASS` and include exactly one
+`CHECK: PASS <40-character SHA>` line. The separate Opus review
 remains required before a relay merge.
 
 After checks pass, back up the installed directory to
