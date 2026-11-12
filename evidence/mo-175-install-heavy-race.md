@@ -272,11 +272,18 @@ Why this is the smallest sufficient change:
   (`test_controller_failure_stops_observation_for_rollback`) pins a `board_error` as fatal
   and is untouched; the churn test at `:70-81` still passes. A new test is needed for the
   transient heavy error and for the every-tick rule.
-- It would have kept this install. The three ticks in the window were clean, clean, raced;
-  the next twelve ticks (`16:11:24.015365` .. `16:12:20.533846`) are clean, and the
-  `16:12:27.706630` race would itself be churn. The observation would have passed, the
-  release `842a196` would have stayed installed, and `configSync` would have shipped
-  MO-167, MO-170 and MO-174.
+- It needs one companion edit in the chart: `docs/state-charts/installation.md:18` ("Observing
+  --> RolledBack: controller error or slots hit 0 without a veto") and the prose at `:36-43`
+  have to say that a failed host reading is churn, next to the agent census churn they
+  already describe at `:16`.
+- It would have kept this install, and the proposal was exercised against the recorded
+  rows to prove it. Running the real `evaluate_controller_ticks()` over
+  `controller.jsonl` from `16:10:57` with the proposed change in place: the current guard
+  decides at the third tick (`16:11:21.040216`, rollback), the proposed guard turns that
+  tick into churn and **passes at the twelfth tick, `16:12:04.611404`**. The teeth also
+  hold: twelve ticks that all carry the census race are rejected with "heavy_error on every
+  observed tick", a heavy error that is not a failed host reading ("heavy registry records
+  are unavailable or corrupt") is still fatal, and a `board_error` is still fatal.
 
 The same diff with `"RuntimeError: heavy RSS snapshot timed out"` added to
 `TRANSIENT_HEAVY_ERRORS` covers the remaining 4 heavy ticks. It is left out of the smallest
@@ -301,6 +308,12 @@ windows contain one. That class is pinned by an existing test
 (`tests/test_install_if_behind.py:170-196` expects a `board_error` to stop the observation
 and roll the install back), so changing it needs the owner's approval of that exact edit. It
 is the next false guard in the same family and it is the largest remaining one.
+
+The residual is not theoretical for this install: the next `board_error` in the recorded
+rows is at `16:12:57.248166` (`RuntimeError: board admission snapshot timed out`), inside
+the 180 s observation bound but after the twelfth tick at which the proposed guard passes.
+A `board_error` that had landed a little earlier would have rolled this install back with
+the proposed fix in place.
 
 ## Sources
 
@@ -330,13 +343,89 @@ is the next false guard in the same family and it is the largest remaining one.
 - `docs/state-charts/installation.md:16-19`, `:36-43` (documented intent).
 - `tests/test_install_if_behind.py:70-81` (churn), `:170-196` (board error is fatal),
   `:198-271` (the zero-slot rules).
-- Probes (read-only, in this worktree's scratch directory):
-  `.empryo/tmp/tabs/00740b4a-8a19-4b90-b828-5306b28e4e60/probe_census.py` and
-  `probe_churn.py`. Both patch `board_resources._active_group_rss`,
-  `heavy._parse_process_table`, `heavy._native_process_info` and `heavy.process_table` to
-  record the two listings' pid sets, the pids libproc dropped, the elapsed time of
-  `process_table()` and the members of the tracked workload groups, then call the real
-  `board_resources.active_heavy_census()`. Nothing is written outside the scratch directory.
+- Verification of the proposal: a copy of `scripts/install_if_behind.py` with the three
+  edits above was run against the recorded rows and against synthetic rows (a race on every
+  tick, a non-transient heavy error, a `board_error`). The repository file is unchanged;
+  the copy lived in the scratch directory.
+- Probes (read-only, reproduced in the appendix below). Both patch
+  `board_resources._active_group_rss`, `heavy._parse_process_table`,
+  `heavy._native_process_info` and `heavy.process_table` to record the two listings' pid
+  sets, the pids libproc dropped, the elapsed time of `process_table()` and the members of
+  the tracked workload groups, then call the real `board_resources.active_heavy_census()`.
+  Nothing is written outside the scratch directory they ran in.
+
+## Appendix: the probe
+
+The probe runs the real census path and classifies every race; only the RSS accounting is
+replaced by the classifier. It patches four call sites, reads nothing but the process table,
+`ps` and the heavy registry, and prints one summary.
+
+```python
+import re, sys, time
+sys.path.insert(0, "<checkout>")
+import board_resources as br
+import heavy
+
+state = {"t1_pids": set(), "dropped": [], "table_ms": [], "races": []}
+
+# listing #1: the pid set that heavy.process_table() saw
+orig_parse = heavy._parse_process_table
+def parse(output):
+    state["t1_pids"] = {int(p) for p in re.findall(r"^\s*(\d+)\s", output, re.M)}
+    return orig_parse(output)
+heavy._parse_process_table = parse
+
+# the pids libproc could not confirm (process_table() drops them)
+orig_native = heavy._native_process_info
+def native(pid):
+    info = orig_native(pid)
+    if info is None:
+        state["dropped"].append(pid)
+    return info
+heavy._native_process_info = native
+
+orig_table = heavy.process_table
+def table(**kw):
+    start = time.time()
+    rows = orig_table(**kw)
+    state["table_ms"].append((time.time() - start) * 1000.0)
+    return rows
+heavy.process_table = table
+
+# the census's own comparison, with the offending pid classified
+def group(h, processes, pgids):
+    out, err = br._command([br.PS_CMD, "-axo", "pid=,pgid=,rss=,lstart="], "heavy RSS snapshot")
+    if err:
+        raise RuntimeError(err)
+    offenders = []
+    for line in out.splitlines():
+        m = re.match(r"^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$", line)
+        if not m:
+            continue
+        pid, pgid = int(m.group(1)), int(m.group(2))
+        if pid not in processes and pgid in pgids:
+            offenders.append({
+                "pid": pid, "pgid": pgid,
+                "in_t1_ps": pid in state["t1_pids"],
+                "dropped_by_libproc_none": pid in state["dropped"],
+            })
+    if offenders:
+        state["races"].append({"offenders": offenders, "pgids": sorted(pgids)})
+        raise br._HeavyCensusRace("heavy RSS process identity is unavailable")
+    return []
+br._active_group_rss = group
+
+deadline = time.time() + 240
+while time.time() < deadline:
+    try:
+        br.active_heavy_census()
+    except br._HeavyCensusRace:
+        pass
+print(state["races"], state["table_ms"])
+```
+
+`in_t1_ps = false` for every offender is the finding: the offending process was never in
+listing #1, so it was forked inside the gap between the two listings.
 
 ## Uncertainty
 
