@@ -44,12 +44,6 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override ~/.local/state/mac-ops",
     )
-    parser.add_argument(
-        "--hub-root",
-        type=Path,
-        default=None,
-        help="Override ~/.empryo-hub",
-    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     collect_p = sub.add_parser("collect", help="Collect scrubbed traces for a day")
@@ -95,9 +89,6 @@ def main(argv: list[str] | None = None) -> int:
             "state_root": str(args.state_root)
             if args.state_root
             else str(Path.home() / ".local/state/mac-ops"),
-            "hub_root": str(args.hub_root)
-            if args.hub_root
-            else str(Path.home() / ".empryo-hub"),
             "local_tz": str(LOCAL_TZ),
         }
         print(json.dumps(info, indent=2))
@@ -108,7 +99,6 @@ def main(argv: list[str] | None = None) -> int:
         result = collect_and_store(
             since=start,
             until=end,
-            hub_path=args.hub_root,
             state_root=args.state_root,
             export=not args.no_export,
             dry_run_export=args.dry_run_export,
@@ -135,7 +125,6 @@ def main(argv: list[str] | None = None) -> int:
         collect_result = collect_and_store(
             since=start,
             until=end,
-            hub_path=args.hub_root,
             state_root=args.state_root,
             export=not args.no_export,
             reconcile_unfinished=True,
