@@ -27,6 +27,7 @@ BIN_FILES = (
 LIB_FILES = ("emp_post_merge.py", "emp_hub_install.py")
 CONFIG_FILES = ("EMPRYO.md", "hooks.json", "agents/code-reviewer.md", "tickets.json", "post-merge.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels")
+HERDR_FILES = ("keys.json", "layouts/shyam.json")
 
 
 def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
@@ -41,6 +42,10 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     items += [
         (root / "config" / name, home / ".empryo" / name, 0o644)
         for name in CONFIG_FILES
+    ]
+    items += [
+        (root / "herdr" / name, home / ".config/herdr-app" / name, 0o644)
+        for name in HERDR_FILES
     ]
     for mod in MODS:
         base = root / "mods" / mod
