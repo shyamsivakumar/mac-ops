@@ -1,45 +1,55 @@
 {
   "plans": [
     {
+      "task": "SRW-1030",
+      "plan": {
+        "sha": "0085d47cdee8725f28b842e238201dc2bd5f6973",
+        "repo": "shyamsivakumar/strategy-replay-workbench",
+        "number": 859
+      }
+    },
+    {
+      "task": "SRW-1031",
+      "plan": {
+        "sha": "f20e054009581c0267d8a6fafaedd768d95db190",
+        "repo": "shyamsivakumar/strategy-replay-workbench",
+        "number": 849
+      }
+    },
+    {
       "task": "SRW-1037",
       "plan": {
         "refused": "PR must be open, ready and mergeable"
       }
-    },
-    {
-      "task": "SRW-1038",
-      "plan": {
-        "refused": "PR must be open, ready and mergeable"
-      }
-    },
-    {
-      "task": "SRW-1029",
-      "plan": {
-        "refused": "No separate review thread found"
-      }
     }
   ],
-  "at": "2026-11-12T18:35:38.569Z",
+  "at": "2026-11-12T19:06:46.151Z",
   "running": [
-    "mcp:0d231a14-e917-43bb-80f6-6b6773a2ee31",
-    "mcp:e7b91723-cc86-48b1-879e-b407d63ff79e"
+    "mcp:264d52d5-5581-40e2-82e6-89c6aa1e40f8",
+    "mcp:2e12b5fb-f486-4c82-8140-4d86e22e202a",
+    "mcp:3376ab71-8606-45df-b2d2-7a7b37428ccd",
+    "mcp:798b5b69-128d-4301-933b-65d586875217",
+    "mcp:9b23a628-8614-4a0b-851e-7d735725ca44"
   ],
   "shown": [
-    "mcp:0d231a14-e917-43bb-80f6-6b6773a2ee31",
-    "mcp:e7b91723-cc86-48b1-879e-b407d63ff79e"
+    "mcp:264d52d5-5581-40e2-82e6-89c6aa1e40f8",
+    "mcp:2e12b5fb-f486-4c82-8140-4d86e22e202a",
+    "mcp:3376ab71-8606-45df-b2d2-7a7b37428ccd",
+    "mcp:798b5b69-128d-4301-933b-65d586875217",
+    "mcp:9b23a628-8614-4a0b-851e-7d735725ca44"
   ],
   "status": {
     "reachable": true,
     "queue": {
       "cap": 6,
-      "live": 2,
-      "queued": 0
+      "live": 5,
+      "queued": 1
     }
   },
   "queue": {
     "cap": 6,
-    "live": 2,
-    "queued": 0
+    "live": 5,
+    "queued": 1
   },
-  "callCount": 70
+  "callCount": 71
 }

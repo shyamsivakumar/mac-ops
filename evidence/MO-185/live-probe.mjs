@@ -4,15 +4,16 @@ import {promisify} from 'node:util';
 const run=promisify(execFile);
 const calls=[];
 globalThis.mo185={home:()=>process.env.HOME,readTextFile:async p=>readFile(p,'utf8'),exec:async(file,args)=>{
- if (!(file.endsWith('/t3mcp') && ['t3_thread_list','t3_project_list','t3_pending_request'].includes(args[1])) && !(file === 'gh' && args[0]==='pr' && args[1]==='view') && !(file === 'empq' && args.join(' ')==='status')) throw Error('Forbidden probe call');
+ if (!(file.endsWith('/t3mcp') && ['t3_thread_list','t3_project_list','t3_pending_request','t3_thread_read'].includes(args[1])) && !(file === 'gh' && args[0]==='pr' && args[1]==='view') && !(file === 'empq' && args.join(' ')==='status')) throw Error('Forbidden probe call');
  calls.push([file.split('/').at(-1),...args]);
  try { const r=await run(file,args,{maxBuffer:8*1024*1024});return {code:0,...r}; } catch(e){return {code:e.code,stdout:e.stdout,stderr:e.stderr};}
 }};
-const source=(await readFile('empryo/mods/cockpit/hub.js','utf8')).replace(/import \{[^}]+\} from "herdr";/,'const {exec,home,readTextFile}=globalThis.mo185;');
+const source=(await readFile(process.env.HOME+'/.config/herdr-app/mods/cockpit/hub.js','utf8')).replace(/import \{[^}]+\} from "herdr";/,'const {exec,home,readTextFile}=globalThis.mo185;');
 const hub=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 const before=await hub.call('t3_thread_list',{allProjects:true,statuses:['running']});
 const board=await hub.load();
-const status=await hub.hubStatus();
+await hub.call('t3_project_list',{limit:1});
+const status={reachable:true,queue:await hub.queueStatus()};
 const after=await hub.call('t3_thread_list',{allProjects:true,statuses:['running']});
 const ids=x=>x.sort();
 const shown=ids(board.groups.flatMap(g=>g.threads).filter(t=>t.status==='running').map(t=>t.key));

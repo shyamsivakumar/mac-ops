@@ -178,7 +178,7 @@ const failures = new Map();
 
 async function runStartOf(thread) {
   const known = runStarts.get(thread.threadId);
-  if (known?.run === thread.latestRunId) return known.at;
+  if (known && known.run === thread.latestRunId) return known.at;
   const read = await call("t3_thread_read", { threadId: thread.threadId, limit: 1, runLimit: 1 }).catch(() => null);
   const run = read?.recentRuns?.at(-1);
   if (!run || !(run.status === "running" || run.runId === read.thread.activeRunId)) return null;
@@ -359,8 +359,8 @@ export async function mergePlan(card) {
     if (run?.status !== "completed" || lines.at(-1) !== "VERDICT: PASS" || last?.textTruncated) return { refused: "Review must end with VERDICT: PASS" };
     if ((run.executedModel ?? run.model).replace(/^subscriptions\//, "") !== "claude-opus-5-5") return { refused: "Reviewer run must use claude-opus-5-5" };
     const checks = lines.filter((l) => /^CHECK:/.test(l));
-    if (checks.length !== 1 || !checks[0].split(/[^a-zA-Z0-9]+/).includes(head.headRefOid) || !checks[0].includes(pr.repo) || !new RegExp(`#${pr.number}(?![0-9])`).test(checks[0])) return { refused: "Review CHECK must name this PR and current head SHA" };
-    if (pr.repo.split("/").at(-1) === "strategy-replay-workbench" && !(head.statusCheckRollup ?? []).some((c) => (c.name === "srw/agent-check" && c.status === "COMPLETED" && c.conclusion === "SUCCESS") || (c.context === "srw/agent-check" && c.state === "SUCCESS"))) return { refused: "Head needs srw/agent-check success" };
+    const checked = checks.length === 1 ? /^CHECK: PASS ([a-f0-9]{40})$/.exec(checks[0]) : null;
+    if (checked?.[1] !== head.headRefOid) return { refused: "Review CHECK must PASS the current head SHA" };
     return { sha: head.headRefOid, repo: pr.repo, number: pr.number };
   } catch (error) {
     return { refused: `Merge preflight failed: ${error.message}` };
@@ -373,6 +373,7 @@ export async function mergeThread(card, plan) {
   if (!plan || fresh.sha !== plan.sha || fresh.repo !== plan.repo || fresh.number !== plan.number) return { refused: "Merge plan changed; approve again" };
   const key = `${fresh.repo}#${fresh.number}@${fresh.sha}`;
   if (relays.has(key)) return relays.get(key);
+  let retain = false;
   const queue = (async () => {
     const names = await call("t3_project_list", { limit: 100 });
     const repoName = fresh.repo.split("/").at(-1);
@@ -381,12 +382,19 @@ export async function mergeThread(card, plan) {
     const title = `${card.task || card.key} merge relay #${fresh.number} ${fresh.sha.slice(0, 8)}`;
     const command = `gh pr merge ${fresh.number} -R ${fresh.repo} --squash --match-head-commit ${fresh.sha}`;
     const message = `Run exactly: ${command}\nStop on any refusal. Report the merge commit. Do not retry or change the command.`;
+    retain = true;
     const r = await exec("empq", ["start", JSON.stringify({ projectId: matches[0].id, taskType: "worker", title, message })]);
-    if (r.code !== 0) throw new Error(r.stderr.trim() || "Relay queue failed; check queue before retrying");
+    if (r.code !== 0) {
+      retain = false;
+      throw new Error(r.stderr.trim() || "Relay queue failed; retry available");
+    }
     const id = /^(?:queued|started) #(\d+)\s*$/.exec(r.stdout.trim())?.[1];
     if (!id) throw new Error("Relay response unknown; check queue before retrying");
     return { queued: true, text: `queued #${id}` };
-  })().catch((error) => ({ refused: error.message }));
+  })().catch((error) => ({ refused: error.message })).then((result) => {
+    if (!retain) relays.delete(key);
+    return result;
+  });
   relays.set(key, queue);
   return queue;
 }

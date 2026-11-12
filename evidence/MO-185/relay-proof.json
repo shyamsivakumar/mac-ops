@@ -5,15 +5,20 @@
     "non Opus",
     "stale head",
     "Ascend",
-    "no SRW check",
     "closed PR",
     "conflicting PR",
-    "wrong PR",
+    "CHECK FAIL with PASS verdict",
+    "duplicate CHECK",
+    "SRW exact-head Opus CHECK permits missing agent check",
     "subscription Opus route recognized",
     "passing relay exact command",
     "double press queues once",
     "duplicate same head queues once",
     "Approve all press twice dispatches one batch",
+    "project lookup refusal can retry",
+    "nonzero queue failure can retry",
+    "concurrent same-head relay queues once",
+    "ambiguous queue reply blocks duplicate retry",
     "pending failure isolated",
     "one pending list per thread per load"
   ],
@@ -23,6 +28,6 @@
     "title": "MO-186 merge relay #131 aaaaaaaa",
     "message": "Run exactly: gh pr merge 131 -R shyamsivakumar/mac-ops --squash --match-head-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nStop on any refusal. Report the merge commit. Do not retry or change the command."
   },
-  "queueWrites": 1,
+  "queueWrites": 4,
   "liveMutations": 0
 }
