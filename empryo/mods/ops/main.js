@@ -1,5 +1,5 @@
 // Status bar for the work: US market clock and the live SRW paper trader's /health, this Mac's load and the
-// `heavy` queue, the M1 Woodpecker runners, the Empryo hub (socket and launchd job) and the mod error count.
+// `heavy` queue, the Empryo hub (socket and launchd job) and the mod error count.
 // Read-only; each source polls on its own cadence.
 
 import { View, div } from "gpui-kit";
@@ -8,12 +8,6 @@ import { appHome, exec, home, nextCommand, notify, openOverlay, setShared, share
 import { readFile } from "fs/promises";
 
 const SRW_HEALTH = "https://srw-telegram-paper-production.up.railway.app/health";
-const M1_PROBE = [
-  'export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"',
-  'n=$(pgrep -fl "woodpecker-local-[0-9]+/workspace" | grep -o "woodpecker-local-[0-9]*" | sort -u | wc -l)',
-  'd=$(docker --context colima-woodpecker ps --format "{{.Image}}" 2>/dev/null | grep -vc "^local/woodpecker")',
-  'echo $n $d $(sysctl -n vm.loadavg | tr -d "{}")',
-].join("; ");
 const HOLIDAYS = new Set([
   "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18",
   "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
@@ -100,7 +94,6 @@ export default class Ops extends View {
     this.clock = Date.now();
     this.srw = null;
     this.heavy = null;
-    this.m1 = null;
     this.hub = null;
     this.health = undefined;
     this.wt = undefined;
@@ -252,11 +245,6 @@ export default class Ops extends View {
     });
     this.poll(cx, "wt", this.wt?.scanning ? 4000 : 30000, () => this.readWorktrees());
     this.poll(cx, "health", 30000, () => readFile(HEALTH_FILE, "utf8").then(JSON.parse, () => null));
-    this.poll(cx, "m1", 20000, async () => {
-      const r = await exec("sh", ["-c", M1_PROBE], { on: "m1" }).catch(() => null);
-      const [native, docker, load] = r ? r.stdout.trim().split(/\s+/) : [];
-      return r && r.code === 0 ? { native: Number(native), docker: Number(docker), load: Number(load) } : null;
-    });
     cx.notify();
   }
 
@@ -331,9 +319,6 @@ export default class Ops extends View {
     const queued = h?.queue.length ?? 0;
     const heavyColor = paused > 0 ? t.working : t.muted;
 
-    const ci = this.m1;
-    const busy = ci ? ci.native + ci.docker : 0;
-
     const b = this.hub;
     const hubColor = !b ? t.dim : b.waiting ? t.blocked : b.running ? t.working : t.muted;
 
@@ -366,7 +351,6 @@ export default class Ops extends View {
       .when(memEl !== null, (el) => el.child(memEl))
       .when(tight && this.claude !== null, (el) => el.child(usage("Claude", this.claude)))
       .when(roomy && this.minimax !== null, (el) => el.child(usage("MiniMax", this.minimax)))
-      .child(plain("M1 CI", ci ? (busy ? `${busy} busy` : "idle") : "n/a", busy ? t.working : t.muted, ci ? `${ci.native} native · ${ci.docker} docker · load ${ci.load}` : "M1 not reachable"))
       .child(div().flex_1());
   }
 }
