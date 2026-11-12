@@ -459,14 +459,6 @@ def queue_items(repo, n):
     return [i for i in items if str(i["args"].get("clientRequestId", "")).startswith(prefix)]
 
 
-def ticket_threads(cfg, t, since):
-    rcfg = cfg["repos"][t["repo"]]
-    result = t3_call("t3_thread_list", {"projectId": rcfg["projectId"], "titleContains": t["key"], "limit": 100})
-    prefix = f"{t['key']} "
-    floor = parse_time(since)
-    threads = [x for x in result["threads"] if x["title"].startswith(prefix) and parse_time(x["createdAt"]) >= floor]
-    return sorted(threads, key=lambda x: x["createdAt"])
-
 
 def intents(ledger):
     return [e for e in ledger if e.get("kind") == "intent"]
@@ -477,10 +469,12 @@ def assert_not_active(cfg, t, ledger):
     queued = queue_items(t["repo"], t["number"])
     if queued:
         raise Refuse(f"already started: queued as empq #{queued[0]['id']}")
-    if prior:
-        live = [x for x in ticket_threads(cfg, t, min(e["at"] for e in prior)) if x["status"] in LIVE_STATUSES]
-        if live:
-            raise Refuse(f"already started: thread {live[-1]['threadId']} is {live[-1]['status']}")
+    for attempt in prior:
+        thread = thread_for_attempt(cfg, t, [attempt] + [e for e in ledger if e.get("kind") == "receipt"])
+        if thread is None:
+            raise Refuse(f"already started: attempt {attempt['attempt']} is queued")
+        if thread["status"] in LIVE_STATUSES:
+            raise Refuse(f"already started: thread {thread['threadId']} is {thread['status']}")
 
 
 def machine_line(entry):
@@ -586,8 +580,23 @@ def thread_for_attempt(cfg, t, ledger):
     if not prior:
         return None
     latest = prior[-1]
-    threads = [x for x in ticket_threads(cfg, t, latest["at"])]
-    return threads[-1] if threads else None
+    thread_id = next((e["threadId"] for e in ledger
+                      if e.get("kind") == "receipt" and e.get("attempt") == latest["attempt"]
+                      and e.get("threadId")), None)
+    if not thread_id:
+        try:
+            with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
+                receipts = json.load(f)
+        except FileNotFoundError:
+            receipts = {}
+        thread_id = receipts.get(f"ticket:{t['repo']}#{t['number']}:a{latest['attempt']}")
+    if not thread_id:
+        return None
+    result = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+    thread = result["thread"]
+    if thread["threadId"] != thread_id:
+        raise Refuse("thread identity mismatch")
+    return thread
 
 
 def cmd_abandon(a):
@@ -654,7 +663,7 @@ def cmd_show(a):
             "latestAttempt": {
                 "attempt": max((e["attempt"] for e in intents(ledger)), default=None),
                 "threadId": thread["threadId"] if thread else None,
-                "status": thread["status"] if thread else None,
+                "status": thread["status"] if thread else ("queued" if intents(ledger) else None),
             },
         }
     except Refuse as e:

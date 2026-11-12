@@ -150,6 +150,24 @@ def drain():
             if code != 0:
                 break
         if code == 0:
+            request_id = item["args"].get("clientRequestId")
+            if request_id and item["tool"] == "t3_thread_launch":
+                result = json.loads(out)
+                result = result.get("structuredContent", result)
+                if "thread" in result:
+                    result = result["thread"]
+                thread_id = result.get("threadId")
+                if not thread_id:
+                    raise ValueError("successful launch has no threadId")
+                receipts_path = path("dispatch-receipts.json")
+                receipts = {}
+                if os.path.exists(receipts_path):
+                    with open(receipts_path) as f:
+                        receipts = json.load(f)
+                receipts[request_id] = thread_id
+                with open(receipts_path + ".tmp", "w") as f:
+                    json.dump(receipts, f)
+                os.replace(receipts_path + ".tmp", receipts_path)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
             save(queue)
             log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})")
