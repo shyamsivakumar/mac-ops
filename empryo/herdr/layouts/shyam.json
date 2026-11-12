@@ -267,6 +267,32 @@
               "max": 1100,
               "hidden": true,
               "padding": 4
+            },
+            {
+              "id": "outputs-col",
+              "type": "column",
+              "children": [
+                {
+                  "id": "outputs",
+                  "type": "block",
+                  "content": {
+                    "mod": "outputs"
+                  },
+                  "background": "chrome",
+                  "border": {
+                    "width": 1,
+                    "color": "border"
+                  },
+                  "radius": 6
+                }
+              ],
+              "size": {
+                "px": 520
+              },
+              "min": 380,
+              "max": 1100,
+              "hidden": true,
+              "padding": 4
             }
           ],
           "padding": 0
