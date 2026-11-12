@@ -209,18 +209,24 @@ To install an earlier source version, check out that commit and run
 
 ## Turn budgets and review provenance
 
-`routing.json` sets `turnLimits.turnSeconds` (default 7200). A launch may
-set integer `turnSeconds` >= 600; the effective value is stored on the thread
+`routing.json` owns the turn budget: `turnLimits.turnSeconds` is the default
+(900) and `turnLimits.taskTypeSeconds` is the per-task-type budget (900 for
+the builder types, 1200 for `review`). A launch may
+set integer `turnSeconds` >= 600, which is how a promotion thread asks for a
+longer budget; the effective value is stored on the thread
 and retained on sends, resumed turns, and drain/restart. Each turn gets a fresh
 execution clock when its prompt starts. The hub has no per-provider concurrency
 gate; the coordinator's `empq` cap is enforced in `empryo/bin/empq:96-98`.
 Drain queue time is excluded;
 tool-internal queues and tool execution count. Threads created
-before this field existed use the routing default (7200 if absent).
+before this field existed use the routing default (900 if absent).
 
 The reaper checks the budget on its existing 60-second tick. Expiry uses the
 existing stalled cancellation and 20-second kill grace: the run finishes
-`failed` with `turn ran over N min`, with normal run recording and engine release.
+`failed` with `turn budget exceeded: N min`, with normal run recording and
+engine release, so the coordinator can re-cut the work. With the 900-second
+budget the no-progress (1200) and tool (10800) limits sit above it, so a stuck
+turn fails on the budget.
 Pending permission questions defer all stall cancellation, including while an
 answer is being sent. The permission wait still counts: after the answer is
 sent and removed from pending, an expired turn is cancelled on the next check.
