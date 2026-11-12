@@ -21,8 +21,7 @@ BIN_FILES = (
     "coordstart",
     "ticket",
 )
-LIB_FILES = ("post_merge.py",)
-CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json", "post-merge.json")
+CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
 
@@ -31,9 +30,6 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     root = checkout / "coordinator"
     items = [
         (root / "bin" / name, home / ".local/bin" / name, 0o755) for name in BIN_FILES
-    ]
-    items += [
-        (root / "bin" / name, home / ".local/lib/coordinator" / name, 0o644) for name in LIB_FILES
     ]
     items += [
         (root / "config" / name, home / ".coordinator" / name, 0o644)
