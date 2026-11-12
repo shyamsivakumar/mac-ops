@@ -6,7 +6,7 @@ and the transcripts, so the hub is the only place this collector reads.
 What is read
 ------------
 * ``threads.json``  — thread and run metadata (ids, model, status, times, PRs).
-* ``hub.log``      — merge events.
+* ``hub.log``      — merge events and per-run routing evidence.
 * ``transcripts/`` — the per-thread item log, used for tool counts only.
 
 What is stored
@@ -64,14 +64,15 @@ HUB_LOG_TS_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(?P<
 HUB_MERGE_RE = re.compile(
     r"^merged (?P<repo>[^#\s]+)#(?P<number>\d+) \((?P<method>[^)]*)\) for (?P<thread>\S+)$"
 )
+HUB_ROUTED_RE = re.compile(
+    r"^(?P<thread>\S+) routed to (?P<model>\S+) instead of (?P<base>\S+)"
+)
 TOOL_KIND_RE = re.compile(r"^[a-z_]{1,20}$")
 
 
 # --------------------------------------------------------------------------
-# small shared helpers (kept import-stable for the legacy eval tests)
+# Shared helpers
 # --------------------------------------------------------------------------
-
-
 
 
 def _ms_between(start: str | None, end: str | None) -> int | None:
@@ -101,10 +102,6 @@ def _task_key(title: str | None) -> str | None:
     return m.group(1) if m else None
 
 
-
-
-
-
 def _named_blocker(
     title: str | None, notifications: list[dict[str, Any]]
 ) -> str | None:
@@ -115,12 +112,6 @@ def _named_blocker(
         if BLOCKER_RE.search(summary):
             return summary[:120]
     return None
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------
@@ -172,12 +163,13 @@ def _hub_log_ts(raw: str) -> str | None:
 
 
 def _parse_hub_log(path: Path) -> dict[str, Any]:
-    """Pull merge events out of hub.log (run models come from threads.json)."""
+    """Read merge and routing metadata; run models come from threads.json."""
     merges: list[dict[str, Any]] = []
+    routes: dict[str, list[dict[str, str]]] = {}
     try:
         handle = path.open("r", encoding="utf-8", errors="replace")
     except OSError:
-        return {"merges": merges}
+        return {"merges": merges, "routes": routes}
     with handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n")
@@ -198,7 +190,12 @@ def _parse_hub_log(path: Path) -> dict[str, Any]:
                     }
                 )
                 continue
-    return {"merges": merges}
+            route = HUB_ROUTED_RE.match(rest)
+            if route and ts:
+                routes.setdefault(route.group("thread"), []).append({
+                    "at": ts, "model": route.group("model"), "base": route.group("base")
+                })
+    return {"merges": merges, "routes": routes}
 
 
 def _slugify(text: str) -> str:
@@ -328,6 +325,42 @@ def _requested_model(thread: dict[str, Any]) -> str | None:
     model = selection.get("model") if isinstance(selection, dict) else None
     model = model or thread.get("model")
     return model.strip() if isinstance(model, str) and model.strip() else None
+
+
+def _routes_for_runs(runs: list[dict[str, Any]], routes: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    """Associate second-resolution route lines with the next matching run start.
+
+    A log second covers [timestamp, timestamp + 1s), so a route in the same
+    second as a preceding run's end belongs to the following start. Ignore
+    ambiguous matches rather than inferring an earlier run's requested model.
+    """
+    matched: dict[str, dict[str, str]] = {}
+    ambiguous: set[str] = set()
+    for route in routes:
+        stamp = _parse_ts(route.get("at"))
+        if stamp is None:
+            continue
+        candidates = []
+        for run in runs:
+            if not isinstance(run, dict) or not run.get("runId"):
+                continue
+            start = _parse_ts(run.get("startedAt"))
+            if start is not None and 0 <= (start - stamp).total_seconds() <= 10:
+                candidates.append((start, run))
+        if not candidates:
+            continue
+        earliest = min(start for start, _ in candidates)
+        nearest = [run for start, run in candidates if start == earliest]
+        if len(nearest) != 1:
+            continue
+        run = nearest[0]
+        if _model_family(_run_model(run)) != _model_family(route.get("model")):
+            continue
+        run_id = str(run["runId"])
+        if run_id in matched and matched[run_id]["base"] != route["base"]:
+            ambiguous.add(run_id)
+        matched[run_id] = route
+    return {key: value for key, value in matched.items() if key not in ambiguous}
 
 
 def _usage_fields(run: dict[str, Any]) -> tuple[dict[str, Any], float | None]:
@@ -574,6 +607,7 @@ def collect_runs(
     projects = _load_projects(hub_root)
     log = _parse_hub_log(hub_root / "hub.log")
     merges = log["merges"]
+    routes = log["routes"]
 
     items_cache: dict[str, list[dict[str, Any]]] = {}
 
@@ -593,6 +627,7 @@ def collect_runs(
         if not isinstance(runs, list):
             continue
         segments = _split_run_items(items_of(thread))
+        run_routes = _routes_for_runs(runs, routes.get(tid, []))
         project_id = thread.get("projectId")
         project = projects.get(str(project_id)) or {}
         title = str(thread.get("title") or "")
@@ -631,7 +666,10 @@ def collect_runs(
             review = _review_evidence(thread, threads, items_of, run)
             run_end = _parse_ts(completed_at)
             actual = _run_model(run)
-            requested = _requested_model(thread)
+            route = run_routes.get(run_id)
+            requested = route["base"] if route else (
+                _requested_model(thread) if len(runs) == 1 and run_id == thread.get("latestRunId") else None
+            )
             fell_back = bool(actual and requested and _model_family(actual) != _model_family(requested))
             review_completed = _parse_ts(review.get("review_completed_at"))
 
