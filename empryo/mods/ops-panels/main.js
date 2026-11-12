@@ -1,17 +1,13 @@
-// Read-only pop-ups: model providers, the task queue and hub health (cockpit toolbar), memory (status bar).
+// Read-only pop-ups: the task queue (cockpit toolbar), memory and mod errors (status bar).
 
 import { View, div } from "gpui-kit";
 import { TextView, h_flex, v_flex } from "gpui-base";
-import { closeOverlay, exec, home, notify, props, readTextFile, theme } from "herdr";
+import { closeOverlay, exec, home, props, readTextFile, theme } from "herdr";
 
-const EMP = `${home()}/.local/bin/emp`;
 const HERDR_APP = `${home()}/.local/bin/herdr-app`;
 const EMPQ = `${home()}/.local/bin/empq`;
 const HEALTH_FILE = `${home()}/Code/coordinator/queue/health.json`;
-const EMPRYO_CONFIG = `${home()}/.empryo/config.json`;
-const HOLD_MS = 15 * 60000;
-const PROVIDERS = [["zai-coding-plan", "GLM"], ["minimax", "MiniMax"], ["subscriptions/gpt", "GPT"], ["subscriptions/cursor", "Cursor"], ["subscriptions/claude", "Claude"]];
-const TITLES = { models: "Models", queue: "Queue", hub: "Hub", memory: "Memory", errors: "Mod errors" };
+const TITLES = { queue: "Queue", memory: "Memory", errors: "Mod errors" };
 const MEM_REFRESH = 10000;
 const MEM_ROWS = 14;
 const PS_LINE = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/;
@@ -19,16 +15,7 @@ const AGENT_KINDS = [["Claude", /(^|\/)claude(\s|$)/], ["Codex", /(^|\/)codex(\s
 const RUNTIME_KINDS = [["node", /(^|\/)node(\s|$)/], ["python", /(^|\/)[Pp]ython[\d.]*(\s|$)/]];
 const QUEUE_LINE = /^#(\d+) p(\d+) (\S+) (.*?)(?: \(failed (\d+)x\))?$/;
 
-const stamp = (ms) => (ms ? `${new Date(ms).toTimeString().slice(0, 5)}` : "");
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-const providerName = (key) => PROVIDERS.find(([id]) => id === key)?.[1] ?? key;
-const short = (model) => model.replace(/^(zai-coding-plan|subscriptions)\//, "");
-
-function providerOf(model) {
-  const known = PROVIDERS.find(([id]) => model.startsWith(`${id}/`) || model.startsWith(`${id}-`));
-  return known?.[0] ?? null;
-}
-
 function span(ms) {
   const m = Math.max(0, Math.floor(ms / 60000));
   return m < 1 ? "under a minute" : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
@@ -38,33 +25,15 @@ const gigabytes = (kb) => `${(kb / 1048576).toFixed(1)} GB`;
 const megabytes = (kb) => (kb >= 1048576 ? gigabytes(kb) : `${Math.round(kb / 1024)} MB`);
 const kindOf = (kinds, command) => kinds.find(([, pattern]) => pattern.test(command))?.[0] ?? null;
 const since = (ms) => `${span(Date.now() - ms)} ago`;
-const until = (ms) => (ms > Date.now() ? `in ${span(ms - Date.now())}` : "now");
-const epoch = (value) => (typeof value === "number" ? value : Date.parse(value));
-
-function circuitLine(c) {
-  if (c.state === "closed") return { text: "up", tone: "done" };
-  const failures = c.recentFailures ? ` · ${plural(c.recentFailures, "recent failure")}` : "";
-  const failedAt = c.openUntil ? epoch(c.openUntil) - HOLD_MS : null;
-  if (c.state === "open") return { text: `out · ${c.openUntil ? `retries ${until(epoch(c.openUntil))}` : "retry time unknown"}${failures}`, tone: "blocked" };
-  if (c.probing) return { text: "trying now", tone: "working" };
-  return { text: `waiting to retry${failedAt ? ` · last failed ${since(failedAt)}` : ""} · next task will try it`, tone: "muted" };
-}
-
-function reasonNote(c) {
-  if (c.lastError === undefined) return "Restart the hub to see provider errors (emp drain --restart).";
-  if (c.lastError === null) return "The hub saw a fallback switch but no provider error text.";
-  return `Last error: ${c.lastError} (${since(Date.parse(c.lastErrorAt))})`;
-}
 
 export default class Panels extends View {
   init(_props, cx) {
     const p = props() ?? {};
     this.overlay = p.overlay ?? null;
-    this.panel = p.panel ?? "models";
+    this.panel = p.panel ?? "queue";
     this.seed = p.seed ?? {};
     this.data = null;
     this.error = null;
-    this.busy = false;
     this.handle = cx.focus_handle();
     cx.timer.after(60, () => this.handle.focus());
     this.load(cx);
@@ -97,15 +66,6 @@ export default class Panels extends View {
     return text && JSON.parse(text);
   }
 
-  hubStatus() {
-    return this.json(EMP, ["call", "emp_hub_status", "{}"]);
-  }
-
-  async read_models() {
-    const [status, config] = await Promise.all([this.hubStatus(), this.readFile(EMPRYO_CONFIG)]);
-    return { circuits: status.circuits, fallback: config.modelFallback };
-  }
-
   async read_queue() {
     const [status, list, health] = await Promise.all([this.json(EMPQ, ["status"]), exec(EMPQ, ["list"]), this.readFile(HEALTH_FILE)]);
     if (list.code !== 0) throw new Error(list.stderr.trim() || "empq list failed");
@@ -114,12 +74,6 @@ export default class Panels extends View {
       return m ? { id: m[1], priority: m[2], tool: m[3], title: m[4], attempts: Number(m[5] ?? 0) } : { id: "?", priority: "?", tool: "", title: line, attempts: 0 };
     });
     return { ...status, items, dispatched: health?.dispatcher_last_run };
-  }
-
-  async read_hub() {
-    const [health, status] = await Promise.all([this.readFile(HEALTH_FILE), this.hubStatus()]);
-    const ps = await exec("ps", ["-o", "lstart=", "-p", String(status.pid)]);
-    return { health, draining: status.draining, pid: status.pid, started: ps.code === 0 ? Date.parse(ps.stdout.trim()) : null };
   }
 
   async read_errors() {
@@ -153,27 +107,6 @@ export default class Panels extends View {
     return { free: Number(free[1]), totalKb, rows: rows.slice(0, MEM_ROWS), agentKb: [...sessions.values()].reduce((sum, s) => sum + s.rss, 0) };
   }
 
-  cancelDrain(cx) {
-    if (this.busy) return;
-    this.busy = true;
-    cx.notify();
-    cx.spawn(async (cx) => {
-      let cancelled = false;
-      try {
-        const r = await exec(EMP, ["drain", "--cancel"]);
-        if (r.code !== 0) throw new Error(r.stderr.trim() || "emp drain --cancel failed");
-        cancelled = true;
-        this.data = await this.read_hub();
-        notify({ title: "Drain cancelled", level: "success", timeout: 2500 });
-      } catch (error) {
-        if (cancelled) notify({ title: "Drain cancelled, but the panel could not refresh", body: error.message, level: "warning" });
-        else notify({ title: "Could not cancel the drain", body: error.message, level: "error" });
-      }
-      this.busy = false;
-      cx.notify();
-    });
-  }
-
   key(e, cx) {
     if (e.is_held || e.key !== "escape") return;
     closeOverlay(this.overlay);
@@ -192,24 +125,6 @@ export default class Panels extends View {
 
   note(t, text, tone) {
     return div().w_full().px(14).py(2).text_size(12.5).line_height("17px").text_color(tone ? t[tone] : t.muted).child(text);
-  }
-
-  models(t) {
-    const circuits = this.data?.circuits ?? this.seed.hub?.circuits;
-    if (!circuits) return [this.note(t, "Provider status is not available yet.")];
-    const out = new Set(Object.entries(circuits).filter(([, c]) => c.state === "open").map(([key]) => key));
-    const rows = [...PROVIDERS.map(([id]) => id), ...Object.keys(circuits).filter((id) => !PROVIDERS.some(([known]) => known === id))].filter((id) => circuits[id]).flatMap((id) => {
-      const c = circuits[id];
-      const { text, tone } = circuitLine(c);
-      const row = this.line(t, providerName(id), text, tone);
-      return c.state !== "closed" ? [row, this.note(t, reasonNote(c))] : [row];
-    });
-    const fallback = Object.entries(this.data?.fallback ?? {}).map(([primary, chain]) => h_flex().w_full().px(14).py(3).gap(6).flex_wrap().items_baseline()
-      .children([primary, ...chain].flatMap((model, i) => [
-        ...(i ? [div().text_size(11).text_color(t.dim).child("→")] : []),
-        div().text_size(12).font_medium().text_color(out.has(providerOf(model)) ? t.blocked : i ? t.muted : t.foreground).child(short(model)),
-      ])));
-    return [this.section(t, "Providers"), ...rows, this.section(t, "Fallback order, first choice then what it falls back to"), ...(this.data ? fallback : [this.note(t, "Loading the fallback order…")])];
   }
 
   errors(t) {
@@ -254,7 +169,7 @@ export default class Panels extends View {
     const d = this.data;
     if (!d) return [this.line(t, "Running", `${this.seed.running} of ${this.seed.cap}`), this.note(t, "Loading the queue…")];
     const full = d.live >= d.cap;
-    const why = (i) => (i.attempts ? `Failed ${plural(i.attempts, "time")}. The dispatcher retries it, up to 3 attempts.` : full ? `Waiting for a free slot. ${d.live} of ${d.cap} are running.` : `Waiting for the next dispatcher run${d.dispatched ? `, last ran ${since(Date.parse(d.dispatched))}` : ""}.`);
+    const why = (i) => (i.attempts >= 3 ? `Failed ${i.attempts} times and will not be retried.` : i.attempts ? `Failed ${plural(i.attempts, "time")}. The dispatcher retries it, up to 3 attempts.` : full ? `Waiting for a free slot. ${d.live} of ${d.cap} are running.` : `Waiting for the next dispatcher run${d.dispatched ? `, last ran ${since(Date.parse(d.dispatched))}` : ""}.`);
     return [
       this.section(t, "Slots"),
       this.line(t, "Running", `${d.live} of ${d.cap}`, full ? "working" : undefined),
@@ -267,34 +182,6 @@ export default class Panels extends View {
         this.note(t, why(i)),
       ]) : [this.note(t, "Nothing is waiting.")]),
     ];
-  }
-
-  hub(t) {
-    const d = this.data;
-    const health = d?.health;
-    const problems = health?.problems ?? this.seed.health?.problems ?? [];
-    const warnings = health?.warnings ?? this.seed.health?.warnings ?? [];
-    const tokens = health?.coordinator?.context_tokens;
-    const draining = d ? d.draining : this.seed.hub?.draining;
-    const lines = [
-      this.section(t, "Health"),
-      ...(health ? [this.line(t, "Last check", since(health.checked_at * 1000), Date.now() - health.checked_at * 1000 > 300000 ? "working" : undefined)] : []),
-      ...problems.map((p) => this.note(t, p, "blocked")),
-      ...warnings.map((w) => this.note(t, w, "working")),
-      ...(problems.length + warnings.length ? [] : [this.note(t, "No problems or warnings.", "done")]),
-      this.section(t, "Coordinator"),
-      this.line(t, "Context", tokens ? `Coordinator ${Math.round(tokens / 1000)}k tokens` : "unknown"),
-      ...(health?.coordinator ? [this.line(t, "State", `${health.coordinator.status} · terminal ${health.coordinator.terminal}`)] : []),
-      this.section(t, "Hub"),
-      ...(d?.started ? [this.line(t, "Uptime", span(Date.now() - d.started)), this.line(t, "Last restart", `${stamp(d.started)}, ${since(d.started)}`)] : [this.note(t, d ? "Start time not available." : "Loading…")]),
-      ...(health ? [this.line(t, "Running", `${health.running} of ${health.cap}`), this.line(t, "Waiting in queue", String(health.queue)), this.line(t, "Dispatcher", `last ran ${since(Date.parse(health.dispatcher_last_run))}`)] : []),
-      this.line(t, "Drain", draining ? "Draining. New work is held until it ends." : "Not draining", draining ? "working" : undefined),
-    ];
-    if (draining && d) {
-      lines.push(h_flex().w_full().px(14).pt(8).child(h_flex().id("cancel-drain").h(28).px(12).items_center().rounded(6).bg(t.solid).text_color(t.solid_foreground).text_size(12).font_semibold()
-        .opacity(this.busy ? 0.5 : 1).cursor_pointer().on_click((e, cx) => e.click_count > 1 || this.cancelDrain(cx)).child(this.busy ? "Cancelling…" : "Cancel drain")));
-    }
-    return lines;
   }
 
   render() {

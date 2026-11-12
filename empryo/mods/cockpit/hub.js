@@ -17,19 +17,47 @@ const IDLE_EVERY = 60000;
 let projects = { at: 0, names: new Map(), roots: new Map() };
 const asks = new Map();
 
+function failureMessage(stdout) {
+  let text;
+  try {
+    text = JSON.parse(stdout)[0].text;
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(text).message ?? text;
+  } catch {
+    return text;
+  }
+}
+
 export async function call(tool, args) {
   const r = await exec(`${home()}/.local/bin/t3mcp`, ["call", tool, JSON.stringify(args)]);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || `${tool} failed`);
+  if (r.code !== 0) throw new Error(failureMessage(r.stdout) ?? (r.stderr.trim() || `${tool} failed`));
   const value = JSON.parse(r.stdout);
-  if (Array.isArray(value)) throw new Error(`${tool} returned an error response`);
+  if (Array.isArray(value)) throw new Error(failureMessage(r.stdout) ?? `${tool} returned an error response`);
   return value;
+}
+
+async function readAll(args) {
+  const items = [];
+  let read;
+  let after;
+  do {
+    read = await call("t3_thread_read", { ...args, limit: 100, ...(after === undefined ? {} : { afterPosition: after }) });
+    items.push(...read.items);
+    const advanced = read.items.length > 0 && (after === undefined || read.nextPosition > after);
+    after = read.nextPosition;
+    if (!advanced) break;
+  } while (read.hasMore);
+  return { ...read, items };
 }
 
 async function threads(filter, pages = PAGES) {
   const all = [];
   let cursor;
   for (let page = 0; page < pages; page++) {
-    const r = await call("t3_thread_list", { allProjects: true, limit: 100, ...filter, ...(cursor === undefined ? {} : { cursor }) });
+    const r = await call("t3_thread_list", { allProjects: true, includeSubagents: false, limit: 100, ...filter, ...(cursor === undefined ? {} : { cursor }) });
     all.push(...r.threads);
     cursor = r.nextCursor;
     if (cursor === null || cursor === undefined) break;
@@ -98,14 +126,10 @@ function card(thread, names) {
     project: names.get(thread.projectId) ?? "No project",
     projectId: thread.projectId,
     link: thread.link,
-    session: thread.journalSessionId,
-    cwd: thread.cwd,
     kind,
-    provider: thread.providerInstanceId,
     model: thread.model ?? "",
     taskType: thread.taskType ?? "",
     review: thread.taskType ? thread.taskType === "review" : REVIEW_TITLE.test(thread.title),
-    runs: thread.runCount ?? 0,
     at: Date.parse(thread.updatedAt),
     created: Date.parse(thread.createdAt),
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
@@ -130,7 +154,7 @@ export function group(cards) {
     const lead = threads.find((c) => c.led) ?? threads[0];
     const running = threads.filter((c) => c.kind === "run" && c.status !== "queued");
     const prs = new Map(threads.flatMap((c) => c.prs).map((p) => [`${p.repo}#${p.number}`, p]));
-    return { key, task: threads[0].task, title: lead.title, project: lead.project, threads, primary: threads[0], kind: threads[0].kind, at: Math.max(...threads.map((c) => c.at)), runSince: running.length ? Math.min(...running.map((c) => c.runStarted)) : null, prs: [...prs.values()] };
+    return { key, task: threads[0].task, title: lead.title, project: lead.project, threads, primary: threads[0], kind: threads[0].kind, at: Math.max(...threads.map((c) => c.at)), runSince: running.some((c) => c.runStarted) ? Math.min(...running.map((c) => c.runStarted).filter(Boolean)) : null, prs: [...prs.values()] };
   });
 }
 
@@ -149,6 +173,36 @@ async function idleList() {
   return idleThreads.list;
 }
 
+const runStarts = new Map();
+const failures = new Map();
+
+async function runStartOf(thread) {
+  const known = runStarts.get(thread.threadId);
+  if (known?.run === thread.latestRunId) return known.at;
+  const read = await call("t3_thread_read", { threadId: thread.threadId, limit: 1, runLimit: 1 }).catch(() => null);
+  const run = read?.recentRuns?.at(-1);
+  if (!run || !(run.status === "running" || run.runId === read.thread.activeRunId)) return null;
+  runStarts.set(thread.threadId, { run: thread.latestRunId, at: run.startedAt });
+  return run.startedAt;
+}
+
+const FAILURE_TAIL = 40;
+
+async function failureOf(thread) {
+  const known = failures.get(thread.threadId);
+  if (known?.stamp === thread.updatedAt) return known.text;
+  const from = thread.itemCount - FAILURE_TAIL;
+  try {
+    const read = await call("t3_thread_read", { threadId: thread.threadId, view: "activity", limit: 100, maxCharsPerItem: 2000, ...(from > 0 ? { afterPosition: from } : {}) });
+    const item = [...read.items].reverse().find((i) => i.type === "error");
+    const text = item?.text ?? item?.title ?? "No failure text recorded";
+    failures.set(thread.threadId, { stamp: thread.updatedAt, text });
+    return text;
+  } catch {
+    return CONTEXT.fail;
+  }
+}
+
 export async function load() {
   const [live, finished, names] = await Promise.all([
     threads({ statuses: LIVE }),
@@ -164,6 +218,8 @@ export async function load() {
       } catch {
         thread.pendingUnknown = true;
       }
+      if (RUNNING.has(thread.status)) thread.activeRunStartedAt = await runStartOf(thread);
+      if (thread.status === "failed") thread.lastError = await failureOf(thread);
     }));
   }
   const cards = [...live, ...finished].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
@@ -183,16 +239,11 @@ export async function load() {
   };
 }
 
-export async function hubStatus() {
-  const [reachable, queue] = await Promise.all([
-    call("t3_project_list", { limit: 1 }).then(() => true).catch(() => false),
-    exec("empq", ["status"]).then((r) => {
-      if (r.code !== 0) return null;
-      const q = JSON.parse(r.stdout);
-      return [q.cap, q.live, q.queued].every(Number.isFinite) ? q : null;
-    }).catch(() => null),
-  ]);
-  return { reachable, queue };
+export async function queueStatus() {
+  const r = await exec("empq", ["status"]);
+  if (r.code !== 0) return null;
+  const q = JSON.parse(r.stdout);
+  return [q.cap, q.live, q.queued].every(Number.isFinite) ? q : null;
 }
 
 export async function loadBacklog() {
@@ -249,7 +300,7 @@ export async function loadVerdict(thread, author) {
   if (known?.stamp === stamp && !(known.retryAt <= Date.now())) return;
   try {
     const [read, authorRead] = await Promise.all([
-      call("t3_thread_read", { threadId: thread.key }),
+      readAll({ threadId: thread.key }),
       author ? call("t3_thread_read", { threadId: author.key, limit: 1 }) : null,
     ]);
     const last = [...read.items].reverse().find((i) => i.type === "assistant_message");
@@ -301,7 +352,7 @@ export async function mergePlan(card) {
     if (!/^[a-f0-9]{40}$/.test(head.headRefOid)) return { refused: "PR head SHA unknown" };
     const review = card.threads.filter((t) => t.review && t.kind === "done").sort((a, b) => b.at - a.at)[0];
     if (!review || !card.threads.some((t) => !t.review && t.key !== review.key)) return { refused: "No separate review thread found" };
-    const read = await call("t3_thread_read", { threadId: review.key, limit: 20, maxCharsPerItem: 50000 });
+    const read = await readAll({ threadId: review.key, maxCharsPerItem: 50000 });
     const run = read.recentRuns?.at(-1);
     const last = [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
     const lines = (last?.text ?? "").trim().split("\n").map((l) => l.trim());
@@ -351,14 +402,14 @@ export async function readTask(thread) {
 }
 
 export async function firstMessage(key) {
-  const read = await call("t3_thread_read", { threadId: key, afterPosition: 0, limit: 3 });
+  const read = await call("t3_thread_read", { threadId: key, limit: 1 });
   return read.items.find((i) => i.type === "user_message")?.text ?? null;
 }
 
 export async function readTicket(thread) {
   const [opening, latest] = await Promise.all([
-    call("t3_thread_read", { threadId: thread.key, afterPosition: 0, limit: 10 }),
-    call("t3_thread_read", { threadId: thread.key, limit: 20, maxCharsPerItem: 20000 }),
+    call("t3_thread_read", { threadId: thread.key, limit: 1 }),
+    readAll({ threadId: thread.key, maxCharsPerItem: 20000 }),
   ]);
   const report = [...latest.items].reverse().find((i) => i.type === "assistant_message");
   return { record: latest.thread, text: opening.items.find((i) => i.type === "user_message")?.text ?? null, report: report?.text ?? null };
