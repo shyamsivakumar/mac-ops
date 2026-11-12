@@ -2,13 +2,13 @@
 import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 
-EMP = os.environ.get("TICKET_EMP", "emp")
+T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
 EMPQ = os.environ.get("TICKET_EMPQ", "empq")
 QUEUE_DIR = os.environ.get("EMPQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 CACHE_DIR = os.environ.get("TICKET_CACHE", os.path.expanduser("~/.cache/tickets"))
 CACHE_TTL = 60
 GH_TIMEOUT = 40
-EMP_TIMEOUT = 30
+CALL_TIMEOUT = 30
 EMPQ_TIMEOUT = 120
 LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
 STAGES = ("stage:backlog", "stage:todo")
@@ -104,13 +104,13 @@ def gh_json(args):
     return json.loads(gh(args))
 
 
-def emp_call(tool, args):
+def t3_call(tool, args):
     try:
-        result = run([EMP, "call", tool, "-"], EMP_TIMEOUT, json.dumps(args))
+        result = run([T3MCP, "call", tool, "-"], CALL_TIMEOUT, json.dumps(args))
     except subprocess.TimeoutExpired:
-        raise Refuse(f"emp call {tool} timed out after {EMP_TIMEOUT}s")
+        raise Refuse(f"t3 call {tool} timed out after {CALL_TIMEOUT}s")
     if result.returncode != 0:
-        raise Refuse(f"emp call {tool} failed: {result.stderr.strip()}")
+        raise Refuse(f"t3 call {tool} failed: {result.stderr.strip()}")
     return json.loads(result.stdout)
 
 
@@ -359,9 +359,13 @@ def blockers_of(issue):
 
 
 def resolve_models(cfg, ticket):
+    if not ticket["type"]:
+        raise Refuse("missing type label")
     builder = ticket["builder"] or cfg["types"].get(ticket["type"])
     reviewer = ticket["reviewer"] or cfg["types"]["review"]
     for role, alias in (("builder", builder), ("reviewer", reviewer)):
+        if alias is None:
+            raise Refuse(f"no {role} alias for type {ticket['type']}")
         if alias not in cfg["models"]:
             raise Refuse(f"unknown {role} alias {alias}")
     if cfg["models"][reviewer].get("noGate"):
@@ -418,6 +422,8 @@ def validate_start(cfg, repo, issue):
     if t["keyProblems"]:
         raise Refuse(t["keyProblems"][0])
     groups = t["groups"]
+    if not groups["type"]:
+        raise Refuse("missing type label")
     for family in ("stage", "type"):
         if len(groups[family]) != 1:
             raise Refuse(f"needs exactly one {family} label, found {len(groups[family])}")
@@ -455,7 +461,7 @@ def queue_items(repo, n):
 
 def ticket_threads(cfg, t, since):
     rcfg = cfg["repos"][t["repo"]]
-    result = emp_call("emp_thread_list", {"projectId": rcfg["projectId"], "titleContains": t["key"], "limit": 100})
+    result = t3_call("t3_thread_list", {"projectId": rcfg["projectId"], "titleContains": t["key"], "limit": 100})
     prefix = f"{t['key']} "
     floor = parse_time(since)
     threads = [x for x in result["threads"] if x["title"].startswith(prefix) and parse_time(x["createdAt"]) >= floor]
@@ -605,10 +611,10 @@ def cmd_abandon(a):
         die(f"gh failed ({e.kind}): {e}")
     print(f"closed {repo}#{n} as not planned")
     if thread and thread["status"] in LIVE_STATUSES:
-        emp_call("emp_thread_interrupt", {"threadId": thread["threadId"]})
+        t3_call("t3_thread_interrupt", {"threadId": thread["threadId"]})
         print(f"interrupted thread {thread['threadId']} (was {thread['status']})")
     for item in queued:
-        result = run([EMPQ, "drop", str(item["id"])], EMP_TIMEOUT)
+        result = run([EMPQ, "drop", str(item["id"])], CALL_TIMEOUT)
         if result.returncode != 0:
             die(f"empq drop #{item['id']} failed: {result.stderr.strip()}")
         print(result.stdout.strip())
