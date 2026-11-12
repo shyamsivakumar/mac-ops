@@ -206,8 +206,8 @@ class TurnBudgetProof(unittest.TestCase):
         h = self.hub
         routing = json.loads(Path(h.ROUTING_PATH).read_text())
         self.assertNotIn("limits", routing)
-        self.assertEqual(routing["turnLimits"], {"turnSeconds": 900, "noProgressSeconds": 1200, "toolSeconds": 10800, "taskTypeSeconds": {"standard": 900, "chore": 900, "ui": 900, "research": 900, "rca": 900, "risky": 900, "large": 900, "design": 900, "review": 1200}})
-        self.assertEqual(h.turn_seconds_for(routing, "standard"), 900)
+        self.assertEqual(routing["turnLimits"], {"turnSeconds": 600, "noProgressSeconds": 1200, "toolSeconds": 10800, "taskTypeSeconds": {"standard": 600, "chore": 600, "ui": 600, "research": 600, "rca": 600, "risky": 600, "large": 600, "design": 600, "review": 1200}})
+        self.assertEqual(h.turn_seconds_for(routing, "standard"), 600)
         self.assertEqual(h.turn_seconds_for(routing, "review"), 1200)
         first = self.launch(turnSeconds=600)
         first_proc = self.wait_started(first)
@@ -318,11 +318,11 @@ class TurnBudgetProof(unittest.TestCase):
         self.assertEqual(len(h.THREADS.data), 0)
         thread = self.launch()
         self.wait_started(thread)
-        self.assertEqual(thread["turnSeconds"], 900)
+        self.assertEqual(thread["turnSeconds"], 600)
         rt = h.runtime_of(thread["threadId"])
         rt["tools"]["sleep"] = {"since": h.time.time(), "status": "in_progress", "kind": "execute", "title": "sleep 3600"}
         self.clock.offset += 901
-        self.assertEqual(self.expire(thread)["error"], "turn budget exceeded: 15 min")
+        self.assertEqual(self.expire(thread)["error"], "turn budget exceeded: 10 min")
         routing = json.loads(Path(h.ROUTING_PATH).read_text())
         routing["turnLimits"].pop("turnSeconds", None)
         Path(h.ROUTING_PATH).write_text(json.dumps(routing))
