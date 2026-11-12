@@ -9,10 +9,13 @@ import json
 import os
 import plistlib
 import stat
+import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
+from xml.parsers.expat import ExpatError
+from xml.sax.saxutils import escape
 
 RECEIPT_NAME = "coordinator-installation.json"
 HOME_TOKEN = "@HOME@"
@@ -25,6 +28,8 @@ BIN_FILES = (
 CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
+TURN_CAP_JOB = "dev.coordinator.turncap"
+MONITOR_PATTERN = r"turn_cap\.py$"
 
 
 def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
@@ -56,9 +61,11 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
 
 def render_plists(checkout: Path, home: Path) -> list[tuple[bytes, Path]]:
     folder = checkout / "coordinator/launchd"
+    # The home path lands in XML text, so it is escaped before substitution.
+    replacement = escape(str(home)).encode()
     return [
         (
-            src.read_bytes().replace(HOME_TOKEN.encode(), str(home).encode()),
+            src.read_bytes().replace(HOME_TOKEN.encode(), replacement),
             home / "Library/LaunchAgents" / src.name,
         )
         for src in sorted(folder.glob("*.plist"))
@@ -68,11 +75,11 @@ def render_plists(checkout: Path, home: Path) -> list[tuple[bytes, Path]]:
 def log_dirs(rendered: list[tuple[bytes, Path]]) -> set[Path]:
     """Return the directories the rendered jobs write their logs into."""
     dirs = set()
-    for data, _ in rendered:
+    for data, target in rendered:
         try:
             parsed = plistlib.loads(data)
-        except (plistlib.InvalidFileException, ValueError):
-            continue
+        except (plistlib.InvalidFileException, ExpatError, ValueError) as exc:
+            raise RuntimeError(f"Unreadable launchd job {target.name}: {exc}") from exc
         for key in ("StandardOutPath", "StandardErrorPath"):
             value = parsed.get(key)
             if isinstance(value, str) and value:
@@ -80,15 +87,74 @@ def log_dirs(rendered: list[tuple[bytes, Path]]) -> set[Path]:
     return dirs
 
 
-def ensure_log_dirs(dirs: set[Path]) -> list[Path]:
-    """Create the log directories. launchd does not create them, and a job
-    whose log path is missing does not start."""
+def ensure_log_dirs(dirs: set[Path], home: Path) -> list[Path]:
+    """Create the log directories this installer owns. launchd does not create
+    them, and a job whose log path is missing does not start. Only directories
+    under ~/Library/Logs belong to the installer; a job that logs into another
+    checkout keeps that directory to itself. Every level below the home
+    directory is created on its own and a symlinked level is refused, so the
+    tree is never written through a planted link."""
+    root = home / "Library/Logs"
     created = []
     for directory in sorted(dirs):
-        if not directory.is_dir():
-            directory.mkdir(parents=True, exist_ok=True)
-            created.append(directory)
+        if not directory.is_relative_to(root) or directory.is_dir():
+            continue
+        create_dir_chain(directory, home)
+        created.append(directory)
     return created
+
+
+def create_dir_chain(directory: Path, home: Path) -> None:
+    """Create directory and its missing parents, one level at a time."""
+    current = home
+    for part in directory.relative_to(home).parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"Refusing to create a directory through a symlink: {current}")
+        if current.exists():
+            continue
+        current.mkdir()
+
+
+def monitor_pids(output: str) -> list[int]:
+    pids = []
+    for line in output.splitlines():
+        head = line.split(" ", 1)[0].strip()
+        if head.isdigit():
+            pids.append(int(head))
+    return pids
+
+
+def launchd_pid(label: str) -> int | None:
+    result = subprocess.run(
+        ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("pid ="):
+            value = stripped.split("=", 1)[1].strip()
+            if value.isdigit():
+                return int(value)
+    return None
+
+
+def manual_monitors(label: str = TURN_CAP_JOB) -> list[int]:
+    """Return the turn-cap monitors that launchd does not own. The monitor has
+    no lock, so a hand-started copy and the job would double-interrupt
+    threads."""
+    result = subprocess.run(
+        ["pgrep", "-fl", MONITOR_PATTERN],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    owned = launchd_pid(label)
+    return [pid for pid in monitor_pids(result.stdout) if pid != owned]
 
 
 @contextlib.contextmanager
@@ -194,8 +260,8 @@ def changes(checkout: Path, home: Path) -> list[tuple[Path, bytes, int]]:
     return pending
 
 
-def install(checkout: Path, dry_run: bool) -> None:
-    home = Path.home()
+def install(checkout: Path, dry_run: bool, home: Path | None = None) -> None:
+    home = home or Path.home()
     pending = changes(checkout, home)
     state = home / ".local/state/mac-ops"
     receipt_target = state / RECEIPT_NAME
@@ -207,9 +273,14 @@ def install(checkout: Path, dry_run: bool) -> None:
             indent=2,
         ))
         return
-    created = ensure_log_dirs(log_dirs(render_plists(checkout, home)))
+    created = ensure_log_dirs(log_dirs(render_plists(checkout, home)), home)
     for directory in created:
         print(f"Created log directory: {directory}")
+    for pid in manual_monitors():
+        print(
+            f"Warning: a hand-started turn-cap monitor is running (pid {pid}). "
+            f"Stop it so only one monitor runs: kill {pid}"
+        )
     if not pending:
         print("Wrote 0 coordinator files. Already in sync.")
         return
@@ -230,7 +301,11 @@ def install(checkout: Path, dry_run: bool) -> None:
     write(receipt_target, json.dumps(receipt).encode(), 0o600, backups)
     print(f"Wrote {len(pending)} coordinator files. Backups: {backups}")
     if any(t.parent.name == "LaunchAgents" for t, _, _ in pending):
-        print("Launchd jobs were not restarted. Reload changed plists with launchctl bootout and bootstrap.")
+        print(
+            "Launchd jobs were not restarted. Load the changed jobs with "
+            "launchctl bootout and bootstrap, for example: launchctl bootstrap "
+            f"gui/$(id -u) ~/{'Library/LaunchAgents'}/{TURN_CAP_JOB}.plist"
+        )
 
 
 def status(checkout: Path) -> None:
