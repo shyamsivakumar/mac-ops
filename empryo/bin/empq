@@ -2,9 +2,22 @@
 import argparse, fcntl, json, os, subprocess, sys, time
 
 DIR = os.environ.get("EMPQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
-EMP = os.environ.get("EMPQ_EMP", "emp")
+T3MCP = os.environ.get("EMPQ_T3MCP", "t3mcp")
 LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
 MAX_ATTEMPTS = 3
+WORKER_MODEL = {"instanceId": "minimax", "model": "claude-sonnet-5-5"}
+SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+OPUS_MODEL = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
+TASK_MODELS = {
+    "risky": SOL_MODEL,
+    "design": SOL_MODEL,
+    "review": OPUS_MODEL,
+}
+TOOLS = {
+    "emp_thread_launch": "t3_thread_launch",
+    "emp_thread_send": "t3_thread_send",
+    "emp_thread_list": "t3_thread_list",
+}
 
 
 def path(name):
@@ -40,21 +53,34 @@ def save(queue):
     os.replace(tmp, path("queue.json"))
 
 
-def call(tool, args, origin=None):
-    env = {k: v for k, v in os.environ.items() if k != "EMP_HUB_THREAD"}
-    if origin:
-        env["EMP_HUB_THREAD"] = origin
-    run = subprocess.run([EMP, "call", tool, "-"], input=json.dumps(args), capture_output=True, text=True, env=env)
+def with_model(args):
+    resolved = dict(args)
+    resolved.pop("taskType", None)
+    if not resolved.get("modelSelection"):
+        task_type = args.get("taskType")
+        if not task_type:
+            return None, "refused: a launch needs a taskType or a modelSelection"
+        resolved["modelSelection"] = TASK_MODELS.get(task_type, WORKER_MODEL)
+    return resolved, None
+
+
+def call(tool, args):
+    t3_tool = TOOLS.get(tool, tool)
+    if t3_tool == "t3_thread_launch":
+        args, refusal = with_model(args)
+        if refusal:
+            return 1, refusal
+    run = subprocess.run([T3MCP, "call", t3_tool, "-"], input=json.dumps(args), capture_output=True, text=True)
     return run.returncode, (run.stdout if run.returncode == 0 else run.stderr).strip()
 
 
 def live():
-    code, out = call("emp_thread_list", {"allProjects": True, "limit": 1, "statuses": LIVE_STATUSES})
+    code, out = call("t3_thread_list", {"allProjects": True, "limit": 1, "statuses": LIVE_STATUSES})
     return json.loads(out)["total"] if code == 0 else None
 
 
 def tool_for(args):
-    return "emp_thread_send" if "threadId" in args else "emp_thread_launch"
+    return "t3_thread_send" if "threadId" in args else "t3_thread_launch"
 
 
 class Lock:
@@ -104,7 +130,7 @@ def install_pending():
 def drain():
     while True:
         if install_pending():
-            log("Empryo install pending, nothing started")
+            log("install pending, nothing started")
             return
         queue = load()
         ready = sorted((i for i in queue["items"] if i.get("attempts", 0) < MAX_ATTEMPTS), key=lambda i: (-i["priority"], i["id"]))
@@ -120,7 +146,7 @@ def drain():
         item = ready[0]
         code, out = 0, ""
         for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]:
-            code, out = call(step["tool"], step["args"], item.get("origin"))
+            code, out = call(step["tool"], step["args"])
             if code != 0:
                 break
         if code == 0:
@@ -137,11 +163,15 @@ def drain():
 def cmd_start(a):
     args = json.loads(a.args)
     tool = a.tool or tool_for(args)
-    if a.title and tool == "emp_thread_launch":
+    if a.title and tool == "t3_thread_launch":
         args.setdefault("title", a.title)
+    if tool == "t3_thread_launch":
+        args, refusal = with_model(args)
+        if refusal:
+            die(refusal)
     with Lock(True):
         queue = load()
-        item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority, "origin": os.environ.get("EMP_HUB_THREAD")}
+        item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
         queue["next"] += 1
         queue["items"].append(item)
         save(queue)
@@ -166,7 +196,12 @@ def cmd_create(a):
     args = json.loads(a.args)
     if args.get("message"):
         die("refused: create is for idle threads, this has a message. Use empq start.")
-    code, out = call("emp_thread_launch", args, os.environ.get("EMP_HUB_THREAD"))
+    args, refusal = with_model(args)
+    if refusal:
+        die(refusal)
+    if "projectId" not in args and not args.get("workspaceStrategy"):
+        args["scratch"] = True
+    code, out = call("t3_thread_launch", args)
     print(out)
     sys.exit(code)
 
@@ -198,7 +233,7 @@ def main():
     s.add_argument("args")
     s.add_argument("--title")
     s.add_argument("--priority", type=int, default=0)
-    s.add_argument("--tool", choices=["emp_thread_send", "emp_thread_launch", "delegate_task"])
+    s.add_argument("--tool", choices=["t3_thread_send", "t3_thread_launch"])
     s.set_defaults(fn=cmd_start)
     c = sub.add_parser("create")
     c.add_argument("args")
