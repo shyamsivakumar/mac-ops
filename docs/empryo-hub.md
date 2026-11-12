@@ -37,7 +37,10 @@ resetting the 30 minute budget. Repeated processing of one SHA never rearms it.
 
 `dev.coordinator.emp-hub-install` runs once per minute. Only this external
 job runs `./install.sh empryo --preserve-routing` and
-`launchctl kickstart -k gui/<uid>/dev.coordinator.emp-hub`.
+`launchctl kickstart -k gui/<uid>/dev.coordinator.emp-hub`. The worker installs
+from the persistent checkout `~/.local/share/mac-ops-install`, never the
+development checkout `~/Code/mac-ops`, so the receipt always names the
+persistent source.
 
 ```mermaid
 stateDiagram-v2
