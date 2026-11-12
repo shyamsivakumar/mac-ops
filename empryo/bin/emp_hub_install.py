@@ -13,6 +13,8 @@ import time
 
 ACTIVE = ("pending", "waiting idle", "installing", "restarting")
 CAP_SECONDS = 1800
+# The worker installs from the persistent checkout, never the development checkout.
+INSTALL_CHECKOUT = ".local/share/mac-ops-install"
 
 
 def state_path(home):
@@ -36,7 +38,7 @@ def installer(checkout):
 def save(home, state):
     # Reuse the installer's no-follow atomic writer in both source and live jobs.
     source = Path(__file__).resolve().parents[2]
-    checkout = source if (source / "install_empryo.py").is_file() else Path(home) / "Code/mac-ops"
+    checkout = source if (source / "install_empryo.py").is_file() else Path(home) / INSTALL_CHECKOUT
     installer(checkout).atomic_write(state_path(home), json.dumps(state).encode(), 0o600)
 
 
@@ -122,7 +124,7 @@ def tick(home=None, status=None, execute=None, notice=None, now=None):
     home = Path(home or Path.home())
     status, execute, notice = status or hub_status, execute or run, notice or notify
     now = time.time() if now is None else now
-    checkout = home / "Code/mac-ops"
+    checkout = home / INSTALL_CHECKOUT
     try:
         with lock(home / ".empryo-hub/install.lock", blocking=False):
             state = read_state(home)
