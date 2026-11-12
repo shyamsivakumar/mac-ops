@@ -1,12 +1,8 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
-import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
+import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, theme } from "herdr";
 import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript } from "./transcript.js";
 import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
-
-const SHOW_POLL = 50;
-const SHOW_LIMIT = 8000;
-const LIVE_STATUSES = new Set(["running", "waiting"]);
 
 async function swapChat() {
   const tree = JSON.parse(JSON.stringify(layout()));
@@ -26,32 +22,15 @@ async function swapChat() {
   if (result.code) notify({ title: "Chat not moved", body: result.stderr.trim(), level: "error" });
 }
 
-async function reusableShow(name, task) {
-  const kinds = LIVE_STATUSES.has(task.status) ? ["empryo", "follow"] : ["empryo"];
-  const lists = await Promise.all(kinds.map((kind) => exec(`${home()}/.local/bin/hc`, ["ls", "--json", "--label", `emp.show=${kind}`])));
-  for (const r of lists) {
-    const found = r.code === 0 ? JSON.parse(r.stdout).terminals.find((t) => t.name === name && t.state === "live") : null;
-    if (found) return found.address;
-  }
-  return null;
-}
+const failureMessage = (stderr) => JSON.parse(JSON.parse(stderr)[0].text).message;
 
-async function openTask(task, cx) {
-  const name = `show-${task.key.slice(4, 12)}`;
-  const reuse = await reusableShow(name, task);
-  if (reuse) return run("terminal.peek", { terminal: reuse });
-  const before = terminals().find((t) => t.name === name)?.address;
-  let finished = false;
-  const shown = exec(`${home()}/.local/bin/emp`, ["show", task.key]).finally(() => (finished = true));
-  const until = Date.now() + SHOW_LIMIT;
-  while (!finished) {
-    const fresh = terminals().find((t) => t.name === name && t.state === "live" && t.address !== before);
-    if (fresh) return run("terminal.peek", { terminal: fresh.address });
-    if (Date.now() > until) return notify({ title: "Could not open the thread", body: "The terminal did not appear in time.", level: "error" });
-    await cx.sleep(SHOW_POLL);
-  }
-  const r = await shown;
-  if (r.code !== 0) notify({ title: "Could not open the thread", body: r.stderr.trim(), level: "error" });
+async function openTask(task) {
+  const r = await exec(`${home()}/.local/bin/t3mcp`, ["call", "t3_thread_read", JSON.stringify({ threadId: task.key, limit: 1, runLimit: 1 })]);
+  if (r.code !== 0) return notify({ title: "Could not open the thread", body: failureMessage(r.stderr), level: "error" });
+  const { link } = JSON.parse(r.stdout).thread;
+  if (!link?.startsWith("https://app.t3.codes/threads/")) return notify({ title: "Could not open the thread", body: "T3 thread link not available", level: "error" });
+  const opened = await exec("/usr/bin/open", [link]);
+  if (opened.code !== 0) notify({ title: "Could not open the thread", body: opened.stderr.trim(), level: "error" });
 }
 
 const EVERY = 3000;
@@ -181,7 +160,7 @@ export default class Coordinator extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        await openTask(task, cx);
+        await openTask(task);
       } finally {
         this.opening = null;
         cx.notify();

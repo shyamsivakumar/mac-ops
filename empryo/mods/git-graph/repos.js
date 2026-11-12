@@ -1,10 +1,7 @@
 import { exec, home } from "herdr";
 
-const EMP = "emp";
-
 async function hubRoots() {
-  const run = (cmd) => exec(cmd, ["call", "emp_project_list", "{}"]);
-  const r = await run(EMP).catch(() => run(`${home()}/.local/bin/${EMP}`));
+  const r = await exec(`${home()}/.local/bin/t3mcp`, ["call", "t3_project_list", JSON.stringify({ limit: 100 })]);
   const projects = JSON.parse(r.stdout).projects ?? [];
   return projects.filter((p) => !p.archivedAt && !p.deletedAt && p.workspaceRoot).map((p) => ({ name: p.title, path: p.workspaceRoot }));
 }
