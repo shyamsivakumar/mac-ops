@@ -462,6 +462,127 @@ must read `providerInstanceId` rather than matching the model string, because
 the T3 `minimax` provider runs `claude-sonnet-5-5` and a string match reads it
 as Anthropic and would skip the gate.
 
+## Slice 2a: the ticket CLI launches on T3 models
+
+**When:** MO-184 slice 2a, 2026-11-12.
+
+*`empryo/bin/ticket` built its launch payload from the Emp-era model
+selections in `tickets.json`, and it sent a `modelSelection` only when the
+issue carried a `builder:` label. T3 refuses a project launch with no
+`modelSelection`, and every Emp-era selection named an `instanceId` that T3
+does not have, so every ticket launch failed at T3. The CLI now resolves the
+builder alias from one table, maps every alias to a live T3 selection, and
+always sends that selection in the payload.*
+
+### The alias map
+
+| Alias | instanceId | model | Vendor |
+| --- | --- | --- | --- |
+| `minimax` | `minimax` | `claude-sonnet-5-5` | minimax |
+| `glm-5.3` | `glm` | `glm-5.3` | zhipu |
+| `terra` | `codex` | `gpt-6.1-terra` | openai |
+| `sol` | `codex` | `gpt-6.1-sol` | openai |
+| `astra` | `codex` | `gpt-6-astra` | openai |
+| `opus` | `claudeAgent` | `claude-opus-5-5` | anthropic |
+| `sonnet` | `claudeAgent` | `claude-sonnet-5-5` | anthropic |
+| `cursor` | `cursor` | `default` | cursor |
+
+Every row was checked against `t3mcp call orchestrator_capabilities '{}'`.
+T3 lists `gpt-6-astra` on the `codex` provider and `default` on the `cursor`
+provider, so `astra` and `cursor` keep their old meaning and `cursor` stays
+`noGate`. The Emp-era ids `empryo`, `zai-coding-plan/glm-5.3`,
+`minimax/MiniMax-M3.1-Flash` and `subscriptions/claude-sonnet-5-5` are gone
+from the file.
+
+### The `glm-5.3` alias is not folded into the worker
+
+The slice ticket asked for `glm-5.3` to map to the worker selection. T3 has a
+live GLM selection on the `glm` provider, so the alias maps there instead, for
+two reasons.
+
+1. Mapping `glm-5.3` to the worker would make it the same selection as
+   `minimax`, so its vendor field would have to become `minimax` as well. The
+   vendor pair check would then refuse a `builder:minimax` and
+   `reviewer:glm-5.3` pair, even though the two labels read as two different
+   vendors.
+2. A `builder:glm-5.3` label asks for GLM. The worker selection runs
+   `claude-sonnet-5-5` on the `minimax` provider, so the label would stop
+   meaning what it says.
+
+Folding `glm-5.3` into the worker is one line in `tickets.json` if Shyam
+prefers the ticket's wording.
+
+### The type table moved into `tickets.json`
+
+`resolve_models` read `~/.empryo-hub/routing.json` for the default builder and
+the default reviewer when the issue had no `builder:` or `reviewer:` label,
+then matched the routing selection against the aliases. That file is the
+frozen hub's config, and its worker selections still name
+`instanceId: "empryo"`, so no alias could match them. Every ticket of type
+`standard`, `large`, `ui`, `research`, `rca` or `chore` would have been
+refused with "routing model empryo/minimax/MiniMax-M3.1-Flash has no alias in
+tickets.json".
+
+`tickets.json` holds a `types` map from task type to alias now, and the CLI
+reads that map. This is the decision recorded at the top of this file, "the
+taskType table moves into `tickets.json`", and the values match the table in
+`empryo/bin/empq`: `risky` and `design` map to `sol`, `review` maps to `opus`,
+and every other type maps to the worker `minimax`. The CLI sends an explicit
+`modelSelection` on every launch, so the table in empq is only the fallback
+for a caller that sends none.
+
+### What else changed in the CLI
+
+- The payload dropped `taskType`. `t3_thread_launch` has no `taskType`
+  property, and the CLI resolves the model itself now.
+- The payload always carries `modelSelection`, taken from the resolved
+  builder alias rather than from the `builder:` label, so a ticket with no
+  builder label still launches on a T3 selection.
+- `load_routing` and `alias_for_selection` are gone, and so is the
+  `TICKET_ROUTING` environment variable. The CLI reads one file for its
+  models now: `tickets.json`.
+- The vendor pair check and the `noGate` check are unchanged.
+
+### Proof for slice 2a
+
+| Check | Result |
+| --- | --- |
+| Dry run | `sol` selection, `opus` reviewer, no `taskType` |
+| Old ids | no `empryo` matches |
+| Type map | most types to `minimax` |
+| Risky types | `risky` and `design` to `sol` |
+| Reviewer | `opus` |
+| Vendor pair | `opus` and `sonnet` refused, both anthropic |
+| Mixed pair | `minimax` and `glm-5.3` allowed, providers differ |
+| `scripts/mac_ops_fast_check.py` | passed |
+| The repo's test suite | passed, no test file changed |
+
+The dry run was `ticket start --dry-run shyamsivakumar/mac-ops#124`, and the
+grep check was `grep -n '"empryo"' empryo/bin/ticket empryo/config/tickets.json`.
+Every type in `labels.type` except `risky` and `design` maps to `minimax`, and
+the reviewer maps to `opus`.
+
+The dry run ran with `EMPQ_DIR` pointing at a temporary directory, so the live
+queue file at `~/Code/coordinator/queue/queue.json` was never read, and the
+CLI read the repo copy of `tickets.json` rather than `~/.empryo/tickets.json`.
+
+### What is left for the next slice
+
+The CLI still calls `emp` for the thread list and the thread interrupt.
+`emp_call` in `empryo/bin/ticket` is the only place it does so, and it has two
+call sites:
+
+- `ticket_threads` calls `emp_thread_list` with `{"projectId", "titleContains",
+  "limit"}`. `t3_thread_list` takes the same three properties, and its items
+  carry `threadId`, `title`, `status` and `createdAt`, which is what
+  `ticket_threads` reads. The call was verified against the live T3 server.
+- `cmd_abandon` calls `emp_thread_interrupt` with `{"threadId"}`.
+  `t3_thread_interrupt` takes the same property.
+
+Both go through `emp`, so a ticket with a prior attempt in its ledger cannot
+be started while the hub is unloaded. That transport swap is not part of this
+slice.
+
 ## Method
 
 No secrets were read or printed. `.env` was never opened. emp-hub was never
