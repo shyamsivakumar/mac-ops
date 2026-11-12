@@ -61,18 +61,29 @@
       "projectId": "mcp:fd6cecd8-8494-41bb-9d42-63dac0ae1a8d"
     }
   },
+  "types": {
+    "standard": "minimax",
+    "risky": "sol",
+    "design": "sol",
+    "large": "minimax",
+    "ui": "minimax",
+    "research": "minimax",
+    "rca": "minimax",
+    "chore": "minimax",
+    "review": "opus"
+  },
   "models": {
     "glm-5.3": {
       "selection": {
-        "instanceId": "empryo",
-        "model": "zai-coding-plan/glm-5.3"
+        "instanceId": "glm",
+        "model": "glm-5.3"
       },
       "vendor": "zhipu"
     },
     "minimax": {
       "selection": {
-        "instanceId": "empryo",
-        "model": "minimax/MiniMax-M3.1-Flash"
+        "instanceId": "minimax",
+        "model": "claude-sonnet-5-5"
       },
       "vendor": "minimax"
     },
@@ -106,8 +117,8 @@
     },
     "sonnet": {
       "selection": {
-        "instanceId": "empryo",
-        "model": "subscriptions/claude-sonnet-5-5"
+        "instanceId": "claudeAgent",
+        "model": "claude-sonnet-5-5"
       },
       "vendor": "anthropic"
     },
