@@ -3,7 +3,7 @@
 Decisions this ticket did not cover, in the dzhng audit-decisions format:
 every entry carries when it landed, the decision in plain words, the gap it
 closes, its reach, a verdict and a confidence. Groups run needs-user, unsound,
-sound; within a group, least confident first. `evidence/mo-155/decisions.md`.
+sound; within a group, least confident first. `evidence/MO-155/decisions.md`.
 
 ## Sound
 
@@ -34,32 +34,35 @@ different format.
 **Confidence:** medium — LMW-58 has not landed, so the vendored wording could
 still differ in detail; reconcile the two when it lands.
 
-**Owner:** `empryo/config/EMPRYO.md:44`
+**Owner:** `empryo/config/EMPRYO.md:53`
 
-### `<KEY>` is the repo key lowercased plus the issue number
+### `<KEY>` is the ticket key from the issue title, not the GitHub issue number
 
 **When:** MO-155 closeout, 2026-11-10 PT.
 
-*The ticket asks for `evidence/<KEY>/decisions.md` without saying what `<KEY>`
-is. This rule defines it as the ticket key: the repo key lowercased plus the
-issue number, `mo-155` for shyamsivakumar/mac-ops#155, which is the shape
-the evidence files in this repo already use (`evidence/mo-154-hub-proof.md`).
-The alternative — the raw issue number, the branch name, or the run id
-`ticket:<repo>#<n>:a<attempt>` — puts a slash or a colon inside a directory
-name, or scatters the same ticket's evidence under two names.*
+*The ticket's brief wrote `evidence/<KEY>/decisions.md` without saying what
+`<KEY>` is. Two readings were possible, the ticket key and the GitHub issue
+number, and they differ for this very ticket, because MO-155 is issue #75. The
+work today writes `evidence/MO-155/decisions.md`, taking the ticket key from
+the issue title in the case the title shows, because six sibling tickets
+already merged on origin/main at `evidence/MO-177/` through
+`evidence/MO-184/` write their ledgers that way. The alternative, the GitHub
+issue number, would put the ledger at `evidence/75/`, a path no sibling uses
+and one a reader cannot guess from the ticket title.*
 
-**Gap:** the ticket left the directory name undefined, so two agents working
-the same ticket could write two ledgers in two places.
+**Gap:** the ticket's brief left `<KEY>` undefined, and the two candidate
+readings differ for this ticket, since MO-155 is issue #75.
 
-**Reach:** the path in the closeout rule and the reviewer's check; a repo with
-no key in `empryo/config/tickets.json` has no obvious form for it.
+**Reach:** the path in the closeout rule and the reviewer's check, and the six
+merged sibling ledgers on origin/main at `evidence/MO-177/` through
+`evidence/MO-184/`, which set the shape every later ledger follows.
 
-**Verdict:** sound — the repo already names evidence this way.
+**Verdict:** sound — the six merged sibling ledgers on origin/main write
+theirs at the ticket key, so the path follows what the repo already does.
 
-**Confidence:** medium — the key-to-repo mapping lives in a config file that
-grows, and a repo without a key needs a fallback.
+**Confidence:** high — the six merged sibling ledgers settle it.
 
-**Owner:** `empryo/config/EMPRYO.md:44`
+**Owner:** `empryo/config/EMPRYO.md:53`
 
 ### Docs-only and config-only tasks may write a one-line "No undecided choices"
 
@@ -84,7 +87,7 @@ claim the ticket used.
 **Confidence:** medium — Shyam may want the one-liner mandatory so a decision
 never goes unrecorded, even on small changes.
 
-**Owner:** `empryo/config/EMPRYO.md:44`
+**Owner:** `empryo/config/EMPRYO.md:53`
 
 ### The reviewer's ledger check applies to every repo except the five Ascend ones
 
@@ -132,7 +135,7 @@ not read them.
 **Confidence:** medium — a smoke check on the installed prompts could catch a
 rule that never reaches `~/.empryo`, which this repo cannot see.
 
-**Owner:** `empryo/config/EMPRYO.md:44`
+**Owner:** `empryo/config/EMPRYO.md:53`
 
 ### The ledger is committed with the change, not merely written
 
@@ -155,7 +158,7 @@ reader.
 
 **Confidence:** high.
 
-**Owner:** `empryo/config/EMPRYO.md:44`
+**Owner:** `empryo/config/EMPRYO.md:53`
 
 ### The Ascend repos are named in full, not as the ticket's abbreviations
 
@@ -178,7 +181,7 @@ in this repo.
 
 **Confidence:** high.
 
-**Owner:** `empryo/config/EMPRYO.md:44`
+**Owner:** `empryo/config/EMPRYO.md:53`
 
 ### One in-session review round ran even though this change is config-only
 

@@ -43,9 +43,11 @@ You run unattended. A coordinator agent reads your result and reports to Shyam.
   passes. Don't edit the issue or its labels.
 - Personal-repo tasks close with a decisions ledger. Before you report done,
   write `evidence/<KEY>/decisions.md` in the repo and commit it with the
-  change. `<KEY>` is the ticket key: the repo key lowercased plus the issue
-  number (`mo-155` for shyamsivakumar/mac-ops#155). One entry per decision
-  the ticket did not cover, and each entry carries:
+  change. `<KEY>` is the ticket key that leads the issue title, in the case
+  the title shows: `MO-155` for a ticket titled `MO-155 · ...`, so the path
+  is `evidence/MO-155/decisions.md`. The GitHub issue number is a different
+  number and never appears in the path. One entry per decision the ticket
+  did not cover, and each entry carries:
   - **When**: the pass or commit it landed in.
   - **The decision**: a one-line headline, then the scenario in plain words:
     what triggered it, what the work does today, what the unbuilt

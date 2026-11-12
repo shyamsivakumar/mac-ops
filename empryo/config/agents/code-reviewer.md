@@ -25,11 +25,12 @@ Reply with plain text.
    report show the command and its output?), unrequested changes.
 5. A personal-repo task must ship the decisions ledger
    `evidence/<KEY>/decisions.md` (any `evidence/*/decisions.md` in the
-   diff) and link it from the done report. A missing or empty ledger
-   on non-trivial work is major, and so is an entry with no verdict or
-   no confidence. Ascend repos (AUH, ascend-mcp, data-ops, dbt, omni)
-   are out of scope, and a docs-only or config-only task may carry
-   `No undecided choices` with a one-line reason.
+   diff, and the directory is the ticket key, for example
+   `evidence/MO-155/`) and link it from the done report. A missing or
+   empty ledger on non-trivial work is major, and so is an entry with no
+   verdict or no confidence. Ascend repos (AUH, ascend-mcp, data-ops,
+   dbt, omni) are out of scope, and a docs-only or config-only task may
+   carry `No undecided choices` with a one-line reason.
 6. Broken design fit is major: change must sit in its owning module
    with clean separation. Bolted-on features, parallel paths,
    wrong-layer special cases and shims are major. So is building on
