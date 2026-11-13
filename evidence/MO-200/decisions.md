@@ -130,13 +130,12 @@ existing behaviour. No existing test or check was weakened.
 - **Verdict**: sound.
 - **Confidence**: high.
 
-### 13. The section read is the one the template check read
+### 13. The section read uses the markers the template check uses
 
 - **When**: revision 2, after the in-session review round.
 - **The decision**: The section reader uses the same markers as
-  `template_status`, so it reads exactly the section the template check
-  accepted. A `Blocked by:` line is read as its own value plus any list under
-  it, and stops at the next line that is not part of the list.
+  `template_status`. A `Blocked by:` line is read as its own value plus any
+  list under it, and stops at the next line that is not part of the list.
 - **The gap**: The reviewer found that a list under a `Blocked by:` line read
   as empty, because only the rest of that line was taken. That was a false
   pass.
@@ -145,6 +144,35 @@ existing behaviour. No existing test or check was weakened.
   swallowed, so the acceptance prose of the next line cannot add a blocker.
 - **Verdict**: sound.
 - **Confidence**: high.
+
+### 14. A blank line between the label and its list does not end the section
+
+- **When**: revision 2, after the gate round on #207.
+- **The decision**: A blank line under a `Blocked by:` label is skipped when
+  a list follows it.
+- **The gap**: The gate found that `Blocked by:\n\n- SRW-1018` still read as
+  empty and passed the check when it should have refused.
+- **The reach**: A blank line ends the section only when the next non-blank
+  line is not a list item, so the acceptance prose of the following section
+  is still not swallowed.
+- **Verdict**: sound.
+- **Confidence**: high.
+
+### 15. The blocker check and the template check differ on `<details>`
+
+- **When**: revision 2, after the gate round on #207.
+- **The decision**: The template check reads a `<details>` block; the blocker
+  check skips it. A body whose only `Blocked by` sits inside `<details>`
+  passes the template check and names no blocker.
+- **The gap**: The gate found that the branch claimed both checks read the
+  same section, which is not true for `<details>`.
+- **The reach**: A preserved contract is not this ticket's own section, so it
+  must not refuse a ticket the coordinator has since approved. The
+  difference is deliberate, and it is now stated in the docstring, in the
+  pull request body and in a test that pins both sides of it.
+- **Verdict**: sound.
+- **Confidence**: medium. A body that keeps its only prerequisite inside a
+  `<details>` block gets no text blocker.
 
 ## Decisions (revision 1)
 
@@ -275,14 +303,18 @@ body.
 3. **catalouge #53 (a preserved contract inside `<details>`).** The section
    read is the ticket's own `## Blocked by` section, the preserved
    `Blocked by: #49, #51, #52` line is not read, and the reasons are empty.
-4. **SRW #890, SRW #899, SRW #490 and `--force-text-blockers`** behave exactly
-   as in revision 1; the outputs are in `evidence/MO-200/proof.txt`.
-5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 36
+4. **SRW #890, SRW #899, SRW #492 and `--force-text-blockers`.** The board
+   moved during the run: `main` gained the check that refuses a start when a
+   pull request already carries the issue (#223), SRW #806 was closed, and
+   stage labels were taken. The live outputs are in
+   `evidence/MO-200/proof.txt`. SRW #492 (`## Blocked by` `None.`) prints
+   `checks passed`.
+5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 64
    tests in the file). The full suite through heavy,
-   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 152
+   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 180
    tests, OK.
 
-### In-session review round
+### In-session review round and the gate round on #207
 
 One reviewer round ran in this session (Opus, Claude Opus 5.5) on
 `git diff origin/main...HEAD`. It returned `VERDICT: FAIL` with one major and
@@ -292,6 +324,14 @@ decision 13), a list-item label was not matched (the template check does not
 match it either, so both read the same section), and a bold `**Blocked by:**`
 value kept its leading `**` (the template check strips it, so the value is
 now read through the template markers).
+
+The gate on #207 then returned `VERDICT: FAIL` on the branch itself, for two
+reasons and two minors. The branch was based on `a780e95` while `main` already
+carried #206 as a squash, so the pull request conflicted and could not land;
+the branch is now rebuilt on `origin/main` and the fix is cherry-picked onto
+it, so the head is a new commit and the builder check line changed with it.
+The minors are fixed by decision 14 (a blank line under the label) and
+decision 15 (the `<details>` difference is stated, not hidden).
 
 ### Revision 1
 

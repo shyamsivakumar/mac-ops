@@ -55,6 +55,14 @@ class BodySectionTest(unittest.TestCase):
         body = "Goal and why: x\nBlocked by:\n- SRW-1018 (#806)\nAcceptance: y\n"
         self.assertEqual(ticket.blocked_by_section(CFG, body), "- SRW-1018 (#806)")
 
+    def test_a_blank_line_before_a_list_is_read(self):
+        body = "Goal and why: x\nBlocked by:\n\n- SRW-1018 (#806)\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "- SRW-1018 (#806)")
+
+    def test_a_blank_line_before_the_next_section_ends_the_list(self):
+        body = "Goal and why: x\nBlocked by: SRW-1018 (#806).\n\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
+
     def test_the_first_marker_wins_like_the_template_check(self):
         body = "Blocked by: SRW-1018 (#806).\n\n## Blocked by\nSRW-789 (#490).\n"
         self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
@@ -69,6 +77,12 @@ class BodySectionTest(unittest.TestCase):
         body = ("## Scope and non-goals\n<details><summary>Preserved original contract</summary>\n\n"
                 "Blocked by: #49, #51, #52\n\n</details>\n")
         self.assertIsNone(ticket.blocked_by_section(CFG, body))
+
+    def test_the_template_check_reads_a_preserved_contract_and_the_blocker_check_does_not(self):
+        body = ("## Goal and why\nx\n\n## Blocked by\n<details><summary>Preserved original contract</summary>\n\n"
+                "Blocked by: #49, #51, #52\n\n</details>\n")
+        self.assertEqual(ticket.template_status(CFG, body)["Blocked by"], "ok")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "")
 
 
 class ApprovalSentenceTest(unittest.TestCase):

@@ -599,10 +599,12 @@ def own_body(body):
 def blocked_by_section(cfg, body):
     """The body text of the ticket's own `Blocked by` section, or None.
 
-    The section is read the way the template check reads it, so the blocker
-    check looks at exactly the section the template check accepted: a
-    `## Blocked by` heading or a `Blocked by:` line. A `<details>` block holds
-    a preserved contract, not this ticket's own section, so it is skipped.
+    The section is read with the same markers the template check uses, so the
+    blocker check looks at the section the template check accepted: a
+    `## Blocked by` heading or a `Blocked by:` line, with any list under the
+    line. The one difference is `<details>`: the template check reads a
+    preserved contract inside one, the blocker check skips it, so a body
+    whose only `Blocked by` sits inside `<details>` passes the blocker check.
     """
     lines = own_body(body).splitlines()
     markers = template_markers(cfg, lines)
@@ -615,10 +617,16 @@ def blocked_by_section(cfg, body):
             end = min(stops, default=len(lines))
             return re.sub(r"<!--.*?-->", "", "\n".join([rest] + lines[start + 1:end]), flags=re.S).strip()
         content = [rest]
+        pending = []
         for follow in lines[start + 1:]:
             text = follow.strip()
-            if not text or not (follow[:1].isspace() or text[0] in "-*+"):
+            if not text:
+                pending.append(follow)
+                continue
+            if not (follow[:1].isspace() or text[0] in "-*+"):
                 break
+            content.extend(pending)
+            pending = []
             content.append(follow)
         return "\n".join(content).strip()
     return None

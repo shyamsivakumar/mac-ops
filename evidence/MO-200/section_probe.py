@@ -33,7 +33,8 @@ def main():
     else:
         section = mod.body_section(issue["body"], "Blocked by")
     print("body section:", repr(section))
-    print("reasons:", mod.section_blocker_reasons(cfg, repo, issue))
+    print("section reasons:", mod.section_blocker_reasons(cfg, repo, issue))
+    print("text blockers:", mod.text_blocker_reasons(cfg, repo, issue))
 
 
 if __name__ == "__main__":
