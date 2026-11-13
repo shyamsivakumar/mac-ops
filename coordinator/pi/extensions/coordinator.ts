@@ -38,19 +38,16 @@ const PROTECTED = new RegExp(
 const MUTATING = /(?:^|[^<0-9&])>>?(?!&)|\btee\b|\b(?:cp|mv|rm|rmdir|ln|touch|mkdir|install|rsync|truncate|patch|chmod|chown)\b|\bsed\s+(?:-\w*\s+)*-i|\bperl\s+-\w*i|\bgit\s+apply\b|\bwrite_text\b|open\([^)]*['"][wa]/;
 const GIT_SUB = "\\bgit(?:\\s+(?:-C\\s+\\S+|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+";
 
-const FORCE_FLAGS = /--no-verify|--admin\b|--force\b|\s-f\s+origin|\+refs\//;
-const FORCE_REASON = "no --no-verify, --admin or force flags";
-
 const DENY: Array<[RegExp, string]> = [
   [new RegExp(GIT_SUB + "(?:commit|push|merge|rebase|reset|revert|cherry-pick|am|clean|restore|switch|checkout|stash|tag|filter-branch|update-ref)\\b"), "git writes belong to T3 threads; send it to the task thread"],
   [new RegExp(GIT_SUB + "(?:branch\\s+-[dDmM]|worktree\\s+(?:remove|prune|move)|gc|prune)\\b"), "git deletions need Shyam's OK"],
-  [FORCE_FLAGS, FORCE_REASON],
+  [/--no-verify|--admin\b|--force\b|\s-f\s+origin|\+refs\//, "no --no-verify, --admin or force flags"],
   [/\bgh\s+pr\s+(?:merge|close|ready|edit|review)\b/, "gates merge PRs themselves; the coordinator never does"],
   [/\bgh\s+(?:repo|release|secret|variable|workflow|ruleset)\s+(?:delete|create|edit|set|remove|archive|rename|run|enable|disable)\b/, "repo-level gh writes need Shyam"],
   [/\bgh\s+api\b(?=[^;&|]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--method\s+(?:POST|PUT|PATCH|DELETE)|\s-[fF]\s|--(?:raw-)?field|--input))/i, "gh api is read-only here (use gh issue for ticket edits)"],
   [/(?:^|[;&|(`'"]\s*|\bnpx\s+|\bbunx\s+|\$\(\s*)(?:vercel|railway|wrangler|flyctl|fly|netlify|heroku|terraform|pulumi|alchemy)\b/, "deploys and infra go through T3 threads under an approval"],
   [/\brm\s+(?:-\w*[rR]|--recursive)|\bfind\b[^|;&]*\s-(?:delete|exec\s+rm)\b|\bsrm\b|\bshred\b|\bunlink\b|\brmdir\b|\bos\.(?:remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\bfs\.(?:rm|unlink)/, "deletion needs Shyam's OK"],
-  [/\btruncate\b|\bcp\s+\/dev\/null\b|:\s*>\s*\S/, "truncating files needs Shyam's OK"],
+  [/\btruncate\b|\bcp\s+\/dev\/null\b/, "truncating files needs Shyam's OK"],
   [/\blaunchctl\s+(?:bootout|unload|remove|disable|kill)\b/, "stopping launchd jobs needs Shyam's OK"],
   [/\bemp-hub\b|\bemp\s+call\b/, "Empryo is gone; use coordq/t3mcp"],
   [/\bsecurity\s+(?:find|dump|export)-|\bprintenv\b|(?:^|[;&|]\s*)env\s*(?:$|[|;&])|\bset\s*\|/, "would print secrets"],
@@ -79,151 +76,25 @@ function checkClobber(cmd: string): string | undefined {
   return undefined;
 }
 
-type ShellToken = { value: string; op?: boolean };
-
-function shellSegments(input: string): ShellToken[][] {
-  const segments: ShellToken[][] = [];
-  let tokens: ShellToken[] = [], word = "", active = false;
-  let i = 0, quote = "";
-  const heredocs: Array<{ end: string; literal: boolean; tabs: boolean }> = [];
-  const flush = () => { if (active) tokens.push({ value: word }); word = ""; active = false; };
-  const end = () => { flush(); if (tokens.length) segments.push(tokens); tokens = []; };
-  function substitution(backtick: boolean) {
-    i += backtick ? 1 : 2;
-    const start = i;
-    let depth = 1, q = "";
-    for (; i < input.length; i++) {
-      const c = input[i];
-      if (c === "\\") { i++; continue; }
-      if (backtick && c === "`") break;
-      if (c === "'" && q !== '"') { q = q ? "" : "'"; continue; }
-      if (c === '"' && q !== "'") { q = q ? "" : '"'; continue; }
-      if (!backtick && q !== "'") {
-        if (c === "(") depth++;
-        if (c === ")") { depth--; if (depth === 0) break; }
-      }
-    }
-    segments.push(...shellSegments(input.slice(start, i)));
-    i++;
+function checkBash(cmd: string): string | undefined {
+  for (const [re, why] of DENY) if (re.test(cmd)) return why;
+  const rmWhy = checkRm(cmd);
+  if (rmWhy) return rmWhy;
+  const clob = checkClobber(cmd);
+  if (clob) return clob;
+  const literal = cmd.match(/^\s*cat\s+(?:>>?\s*(["']?)([^\s"'<>;|&]+)\1\s*<<(["'])([A-Za-z_][A-Za-z0-9_]*)\3|<<(["'])([A-Za-z_][A-Za-z0-9_]*)\5\s*>>?\s*(["']?)([^\s"'<>;|&]+)\7)\s*\n[\s\S]*?\n[A-Za-z_][A-Za-z0-9_]*\s*$/);
+  let secretCmd = cmd;
+  if (literal) {
+    const target = literal[2] || literal[8];
+    const delimiter = literal[4] || literal[6];
+    const lines = cmd.trimEnd().split("\n");
+    const end = lines.findIndex((line, i) => i > 0 && line === delimiter);
+    if (end === lines.length - 1 && (TEMP.test(target) || abs(target, COORD).startsWith(COORD + "/"))) secretCmd = lines[0];
   }
-  while (i < input.length) {
-    const c = input[i];
-    if (c === "\\" && quote !== "'") { active = true; word += input[i + 1] || ""; i += 2; continue; }
-    if (quote !== "'" && (input.startsWith("$(", i) || c === "`")) { active = true; substitution(c === "`"); continue; }
-    if (c === "'" || c === '"') {
-      if (!quote) { quote = c; active = true; i++; continue; }
-      if (quote === c) { quote = ""; i++; continue; }
-    }
-    if (quote) { word += c; i++; continue; }
-    if (c === "#" && !active) { while (i < input.length && input[i] !== "\n") i++; continue; }
-    if (input.startsWith("<<", i) && !input.startsWith("<<<", i)) {
-      flush(); i += 2;
-      const tabs = input[i] === "-"; if (tabs) i++;
-      while (/[ \t]/.test(input[i] || "") && i < input.length) i++;
-      let delimiter = "", q = "", literal = false;
-      while (i < input.length) {
-        const d = input[i];
-        if (!q && /[\s;&|<>]/.test(d)) break;
-        if (d === "\\") { literal = true; delimiter += input[++i] || ""; i++; continue; }
-        if (d === "'" || d === '"') {
-          if (!q) { literal = true; q = d; i++; continue; }
-          if (q === d) { q = ""; i++; continue; }
-        }
-        delimiter += d; i++;
-      }
-      heredocs.push({ end: delimiter, literal, tabs }); continue;
-    }
-    if (/\s/.test(c)) {
-      flush(); i++;
-      if (c === "\n") {
-        end();
-        for (const h of heredocs.splice(0)) {
-          let body = "";
-          while (i < input.length) {
-            const next = input.indexOf("\n", i), stop = next < 0 ? input.length : next;
-            const line = input.slice(i, stop); i = stop + 1;
-            if ((h.tabs ? line.replace(/^\t+/, "") : line) === h.end) break;
-            body += line + "\n";
-          }
-          if (!h.literal) {
-            for (let j = 0; j < body.length; j++) {
-              if (body[j] === "\\") { j++; continue; }
-              if (body.startsWith("$(", j) || body[j] === "`") {
-                const saved = input, savedI = i;
-                input = body; i = j; substitution(body[j] === "`"); j = i - 1;
-                input = saved; i = savedI;
-              }
-            }
-          }
-        }
-      }
-      continue;
-    }
-    if (/[;&|()<>]/.test(c)) {
-      flush();
-      if (c === ">" || c === "<") {
-        let op = c; i++;
-        if (input[i] === c || input[i] === "|") op += input[i++];
-        tokens.push({ value: op, op: true });
-      } else { end(); i++; }
-      continue;
-    }
-    active = true; word += c; i++;
+  for (const m of cmd.matchAll(/:\s*>\s*([^\s;|&]+)/g)) {
+    if (!TEMP.test(m[1])) return "truncating files needs Shyam's OK";
   }
-  end(); return segments;
-}
-
-function checkBash(cmd: string, protectedCwd = false, depth = 0): string | undefined {
-  if (depth > 32) return "shell wrapper nesting exceeds guard limit";
-  for (const segment of shellSegments(cmd)) {
-    const words = segment.filter((t, n) => !t.op && !(n > 0 && segment[n - 1].op)).map(t => t.value);
-    let start = 0;
-    while (start < words.length) {
-      const w = path.basename(words[start]);
-      if (/^[A-Za-z_][\w]*=/.test(words[start])) { start++; continue; }
-      if (/^(env|command|xargs|time|nohup|nice|timeout)$/.test(w)) {
-        start++;
-        while (start < words.length && words[start].startsWith("-")) {
-          const option = words[start++];
-          if (/^(?:-I|-L|-n|-P|-s|-d|-a|-u|--unset|--chdir|-C|--arg-file|--max-args|--max-procs|--replace|-p|--signal|-k|--kill-after|-n|--adjustment)$/.test(option)) start++;
-          if (option === "--") break;
-        }
-        if (w === "timeout") start++;
-        if (w === "env" && words.slice(start).every(a => /^[A-Za-z_][\w]*=/.test(a))) return "would print secrets";
-        continue;
-      }
-      break;
-    }
-    const args = words.slice(start), command = path.basename(args[0] || "");
-    if (args.length) args[0] = command;
-    const text = args.join(" ");
-    if (/^(bash|sh|zsh|eval)$/.test(command)) {
-      const codeIndex = command === "eval" ? 1 : args.findIndex(a => /^-[^-]*c/.test(a)) + 1;
-      if (codeIndex > 0 && codeIndex < args.length) {
-        const why = checkBash(command === "eval" ? args.slice(codeIndex).join(" ") : args[codeIndex], protectedCwd, depth + 1);
-        if (why) return why;
-      }
-    }
-    if (/\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir)|fs\.(?:rm|unlink))\b/.test(text)) return "deletion needs Shyam's OK";
-    for (const [re, why] of DENY) {
-      const match = re.exec(text);
-      if (match && match.index === 0) return why;
-    }
-    if (/^(git|gh)$/.test(command) && FORCE_FLAGS.test(text)) return FORCE_REASON;
-    const rmWhy = checkRm(text); if (rmWhy) return rmWhy;
-    const clob = checkClobber(segment.map(t => t.op ? t.value : JSON.stringify(t.value)).join(" "));
-    if (clob) return clob;
-    if (segment.some((t, n) => n > 0 && segment[n - 1].value === "<" && SECRET_PATH.test(t.value))) return "touches a secret file";
-    if (command === ":" && segment.some(t => t.op && /^>/.test(t.value))) return "truncating files needs Shyam's OK";
-    if (/^(cat|less|head|tail|cp|jq|grep|base64|open|source|sed|awk|more|bat|strings|xxd|od|\.)$/.test(command)
-        && args.slice(1).some(a => SECRET_PATH.test(a))) return "touches a secret file (.env, auth.json, keys, T3 settings)";
-    if (command === "cd") protectedCwd = PROTECTED.test(args[1] || "");
-    const mutation = /^(cp|mv|touch|mkdir|ln|install|rsync|chmod|chown|patch|truncate|tee)$/.test(command)
-      || /^(sed|perl)$/.test(command) && args.some(a => /^-\w*i/.test(a));
-    const targets = segment.filter((t, n) => n > 0 && segment[n - 1].op && /^>/.test(segment[n - 1].value));
-    if (targets.some(t => PROTECTED.test(t.value)) || mutation && (protectedCwd || args.slice(1).some(a => PROTECTED.test(a))))
-      return "writes into a repo, a T3 worktree or the guard; send the change to a T3 thread";
-  }
+  if (SECRET_PATH.test(secretCmd) && !/^\s*ls\b/.test(cmd)) return "touches a secret file (.env, auth.json, keys, T3 settings)";
   return undefined;
 }
 
