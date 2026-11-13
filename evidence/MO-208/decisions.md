@@ -275,21 +275,26 @@ piece of work twice.
 
 **Fixed.** The keyword decides when it names a ticket the board shows.
 When it names one the board does not show, the branch is still read. A
-pull request that names neither is still a record of its own.
+pull request that names neither is still a record of its own. Every
+keyword is read, not only the first, so a body that names an off-board
+issue and then names one on the board still links to the one on the board.
+Every key in the branch name is read too, so a branch that carries more
+than one key (`t3/fix-2-aa-11-thing`) still finds the ticket it names.
 
 **Proof.** A fixture run of the real command, with the ticket and `gh`
 commands replaced by stubs, before and after:
 
 | | linked | records |
 | --- | --- | --- |
-| merged main | 2 | 5 |
+| merged main | 1 | 6 |
 | this attempt | 3 | 4 |
 
 The fixture holds four pull requests: one whose body says `Refs #10` (the
 issue is on the board), one whose body says `Refs #999` (that issue is not
 on the board) and whose branch carries the key of a ticket that is, one
-whose branch carries a key and no keyword, and one that names nothing.
-The first three join their ticket; the last stays a record of its own.
+whose body says `Fixes #999 and #11` and whose branch carries two keys,
+and one that names nothing. The first three join their ticket; the last
+stays a record of its own.
 
 ### 2. The total counted records from repositories outside the allow list
 
@@ -309,11 +314,13 @@ their own count.
 ```
 shyamsivakumar/strategy-replay-workbench            56   n/a     n/a       56  (not allowed)
 
-Total: 80 records across 14 repositories
-56 more records in 1 repository, outside the allow list, counted above and marked 'not allowed'.
+Total: 79 records across 14 repositories
+56 more records in 1 repository outside the allow list, counted above and marked 'not allowed'.
 ```
 
-Before, the same run printed "Total: 136 records across 14 repositories".
+Before, the same run printed "Total: 135 records across 14 repositories",
+which counted the 56 records of the repository outside the allow list and
+still said 14 repositories.
 
 ### 3. A board ticket without a key carried a null key into its record
 
@@ -325,15 +332,37 @@ that reads `record["key"]` had to handle both.
 
 ## The reviewer round
 
-One in-session reviewer round read `git diff origin/main...HEAD` for this
-attempt. What it said and what came of it is in the section below, once
-the round has run.
+One in-session reviewer round (Opus 5.5) read `git diff origin/main...HEAD`
+for this attempt and returned `VERDICT: PASS`. It found no defect that
+breaks the brief. What it found and what came of it:
+
+1. **Minor, fixed.** The closing note still said "a pull request that
+   names a ticket the board does not show stays a record of its own",
+   which the new rule makes false. It now says "a pull request that names
+   no ticket the board shows stays a record of its own".
+2. **Minor, fixed.** The records outside the allow list were reported
+   twice, once in the new line and once in the old note, and the two paths
+   worded it differently. There is one line now, and it is the same on
+   both paths.
+3. **Minor, fixed.** Only the first keyword match and the first key in the
+   branch name were read. A body of `Refs #999 ... Fixes #10` skipped the
+   ticket the board shows, and a branch of `t3/fix-2-mo-208` never reached
+   `MO-208`. Every keyword and every key is read now, and the first one
+   that names a ticket the board shows decides.
+4. **Nit, fixed.** The link signal said `refs #n` whatever the keyword
+   was. It now says the keyword the pull request used (`fixes #10`).
+5. **Nit, fixed.** The linked pull request summary still read a missing
+   field as `None` while the records read it as an empty string. The
+   summary reads it the same way now.
+6. **Nit, fixed.** This section was a placeholder while the round ran. It
+   holds the round's findings now.
 
 ## Checks
 
 `python3 scripts/mac_ops_fast_check.py` passed. The full suite,
 `python3 -m unittest discover -s tests -t .`, through `~/.local/bin/heavy`
-is recorded in the pull request body next to the `Builder check:` line.
+ran 148 tests and passed. The `Builder check:` line in the pull request
+body carries the head sha the checks ran on.
 
 ## Rollback
 
