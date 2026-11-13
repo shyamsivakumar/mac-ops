@@ -37,7 +37,7 @@ PR_LIMIT = 100
 PR_FIELDS = "number,title,url,isDraft,headRefName,baseRefName,updatedAt,body"
 # A ticket reference in a pull request body or title. Only the GitHub
 # keywords count: a bare "#123" is often a pull request, not a ticket.
-TICKET_REF = re.compile(r"\b(?:refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
+TICKET_REF = re.compile(r"\b(refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
 # A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
 # it is a ticket key number, not a GitHub issue number.
 BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
@@ -50,6 +50,11 @@ class RepoError(Exception):
 def die(message: str, code: int = 1) -> NoReturn:
     print(f"overnight: {message}", file=sys.stderr)
     raise SystemExit(code)
+
+
+def plural(count: int, one: str, many: str) -> str:
+    """Return the word that fits the count."""
+    return one if count == 1 else many
 
 
 def config_path() -> Path:
@@ -165,20 +170,33 @@ def read_pull_requests(repo: str, deadline: float) -> tuple[list[dict], bool]:
 
 def linked_ticket(
     row: dict, by_number: dict[int, dict], by_key: dict[str, dict]
-) -> dict | None:
-    """Return the board ticket a pull request names, if it names one.
+) -> tuple[dict | None, str]:
+    """Return the board ticket a pull request names, and how it named it.
 
     A keyword reference names a GitHub issue number. A branch name carries
     a ticket key, whose number is a different counter, so the branch is
-    looked up by key and never by issue number."""
-    text = f"{row.get('title', '')}\n{row.get('body', '')}"
-    match = TICKET_REF.search(text)
-    if match:
-        return by_number.get(int(match.group(1)))
-    match = BRANCH_KEY.search(row.get("headRefName") or "")
-    if match:
-        return by_key.get(f"{match.group(1)}-{match.group(2)}".upper())
-    return None
+    looked up by key and never by issue number.
+
+    The keyword is the stronger signal, so it decides when it names a
+    ticket the board shows. Every keyword is read, so a body that names an
+    issue the board does not show and then names one it does still links
+    to the one it shows. When no keyword names a ticket the board shows,
+    the branch is read: a pull request whose body points at a ticket that
+    has left the board, and whose branch carries the key of a ticket that
+    is on it, is that ticket's work. A pull request that names neither is
+    a record of its own."""
+    text = f"{row.get('title') or ''}\n{row.get('body') or ''}"
+    for match in TICKET_REF.finditer(text):
+        number = int(match.group(2))
+        target = by_number.get(number)
+        if target is not None:
+            return target, f"{match.group(1).lower()} #{number}"
+    for match in BRANCH_KEY.finditer(row.get("headRefName") or ""):
+        key = f"{match.group(1)}-{match.group(2)}".upper()
+        target = by_key.get(key)
+        if target is not None:
+            return target, f"branch {key}"
+    return None, ""
 
 
 def build_records(
@@ -196,10 +214,10 @@ def build_records(
             {
                 "kind": "ticket",
                 "repo": repo,
-                "key": issue.get("key", ""),
+                "key": issue.get("key") or "",
                 "number": issue.get("number"),
-                "title": issue.get("title", ""),
-                "url": issue.get("url", ""),
+                "title": issue.get("title") or "",
+                "url": issue.get("url") or "",
                 "stage": issue.get("stage"),
                 "priority": issue.get("priority"),
                 "type": issue.get("type"),
@@ -223,15 +241,16 @@ def build_records(
         for row in rows:
             summary = {
                 "number": row.get("number"),
-                "title": row.get("title", ""),
-                "url": row.get("url", ""),
+                "title": row.get("title") or "",
+                "url": row.get("url") or "",
                 "isDraft": bool(row.get("isDraft")),
-                "headRefName": row.get("headRefName", ""),
-                "baseRefName": row.get("baseRefName", ""),
+                "headRefName": row.get("headRefName") or "",
+                "baseRefName": row.get("baseRefName") or "",
                 "updatedAt": row.get("updatedAt"),
             }
-            target = linked_ticket(row, by_number, by_key)
+            target, signal = linked_ticket(row, by_number, by_key)
             if target is not None:
+                summary["linkedBy"] = signal
                 target["prs"].append(summary)
                 continue
             bucket.append(
@@ -239,10 +258,10 @@ def build_records(
                     "kind": "pr",
                     "repo": repo,
                     "number": row.get("number"),
-                    "title": row.get("title", ""),
-                    "url": row.get("url", ""),
+                    "title": row.get("title") or "",
+                    "url": row.get("url") or "",
                     "isDraft": bool(row.get("isDraft")),
-                    "headRefName": row.get("headRefName", ""),
+                    "headRefName": row.get("headRefName") or "",
                     "updatedAt": row.get("updatedAt"),
                 }
             )
@@ -289,6 +308,8 @@ def cmd_intake(args: argparse.Namespace) -> int:
     print(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
     total = 0
     clean = 0
+    outside_total = 0
+    outside_repos = 0
     for repo, _key in repos:
         bucket = records.get(repo, [])
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
@@ -305,7 +326,8 @@ def cmd_intake(args: argparse.Namespace) -> int:
     for repo in outside:
         bucket = records[repo]
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
-        total += len(bucket)
+        outside_total += len(bucket)
+        outside_repos += 1
         print(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
     print()
     if unread:
@@ -314,19 +336,20 @@ def cmd_intake(args: argparse.Namespace) -> int:
             f"that read cleanly; {len(unread)} repositories could not be read "
             f"fully: " + ", ".join(sorted(unread))
         )
-        return 1
-    print(f"Total: {total} records across {clean} repositories")
+    else:
+        print(f"Total: {total} records across {clean} repositories")
+    if outside_repos:
+        print(
+            f"{outside_total} more records in {outside_repos} "
+            f"{plural(outside_repos, 'repository', 'repositories')} outside the "
+            f"allow list, counted above and marked 'not allowed'."
+        )
     print(
         "A pull request that a board ticket names is part of that ticket's "
         "record, so it adds no record of its own. A pull request that names "
-        "a ticket the board does not show stays a record of its own."
+        "no ticket the board shows stays a record of its own."
     )
-    if outside:
-        print(
-            "The board holds tickets for repositories that the allow list "
-            "does not name. They are counted above and marked 'not allowed'."
-        )
-    return 0
+    return 1 if unread else 0
 
 
 def main() -> int:

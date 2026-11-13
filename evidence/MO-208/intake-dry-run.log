@@ -24,3 +24,30 @@ shyamsivakumar/tunerise                              0     1       0        1
 
 Total: 262 records across 15 repositories
 A pull request that a board ticket names is part of that ticket's record, so it adds no record of its own. A pull request that names a ticket the board does not show stays a record of its own.
+
+--- attempt 2, 2026-11-13 12:32 PST ---
+command: python3 coordinator/overnight/overnight intake --dry-run
+Overnight intake - dry run (read only)
+Board: 117 tickets
+Allowed repositories: 15
+
+repository                                     tickets   prs  linked  records
+digitized/Concerning                                 6     2       0        8
+shyamsivakumar/CineJar                               0     1       0        1
+shyamsivakumar/cairn                                 0     4       0        4
+shyamsivakumar/catalouge                             4     0       0        4
+shyamsivakumar/fantasy-football-toolkit             31     3       0       34
+shyamsivakumar/mac-ops                              17     2       0       19
+shyamsivakumar/openscan                              0     0       0        0
+shyamsivakumar/qabot                                 0     0       0        0
+shyamsivakumar/recoup                                0     0       0        0
+shyamsivakumar/sams-llm-wiki                         2     4       1        5
+shyamsivakumar/scrapers                              0     1       0        1
+shyamsivakumar/scripture-scroll                      1     1       0        2
+shyamsivakumar/strata                                0     1       0        1
+shyamsivakumar/strategy-replay-workbench            56    14       2       68
+shyamsivakumar/tunerise                              0     1       0        1
+
+Total: 148 records across 15 repositories
+A pull request that a board ticket names is part of that ticket's record, so it adds no record of its own. A pull request that names no ticket the board shows stays a record of its own.
+exit code: 0
