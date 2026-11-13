@@ -176,15 +176,59 @@ Every call the ticket left to the builder, and what it costs.
 - **When**: commit `0076562`.
 - **The decision**: The plist points `StandardOutPath` and
   `StandardErrorPath` at `~/Library/Logs/coordinator/tick.log`, and the
-  launcher appends its own summary lines to the same file. The launchd
-  output holds the pi reply, the launcher's lines hold the run summary, so
-  one file shows both.
+  launcher appends its own summary lines to the same file. The launcher
+  writes the file itself and does not print the summary line as well: under
+  launchd the stdout of the job is that file, so printing it too would put
+  every line in the log twice. The pi reply still goes to stdout, so it
+  lands in the log once.
 - **The gap**: The ticket fixed the log path for the job and asked for a
   tick log line, without saying whether they are one file.
 - **The reach**: A future reader of `tick.log` has to know that the file
   mixes pi output and launcher lines.
 - **Verdict**: sound.
 - **Confidence**: high.
+
+### 11. The reviewer round found two major defects, and both were fixed
+
+- **When**: commit `addf4f1` and the follow-up commit.
+- **The decision**: One in-session reviewer round (Claude Opus 5.5) read the
+  diff against the ticket. It returned two major findings, both real, and
+  both now fixed in the launcher:
+  1. The timeout kill looked the process group up with
+     `os.getpgid(process.pid)`, which can raise `ESRCH` once the child is
+     gone, so a tick whose child died while a background helper held the
+     pipe open would fall through to a `communicate()` with no timeout and
+     block for good, holding the lock. The kill now signals the group by
+     the child pid (the child is its own session leader, so the group id is
+     the pid), and the last `communicate()` has a timeout.
+  2. A launcher stopped by `launchctl bootout` or Ctrl-C left the pi it had
+     started running, with the lock free: two ticks at once. The launcher
+     now handles `SIGTERM` and `SIGINT` by killing the run's process group,
+     kills the group in a `finally` when the run is still alive, and passes
+     the lock file descriptor to the child, so the lock lives as long as the
+     pi does even if the launcher is killed outright.
+- **The gap**: The ticket named the ten-minute cap and the lock but not who
+  cleans up when the launcher itself is stopped.
+- **The reach**: Any future launcher in this set has to do the same two
+  things: kill the group it started, and hold the lock for the life of the
+  child.
+- **Verdict**: sound. The corrected decisions are in the launcher now.
+- **Confidence**: high.
+
+### 12. An alert is an alert after a list marker or markdown emphasis
+
+- **When**: the follow-up commit.
+- **The decision**: A line counts as an alert when it says `ALERT:` after a
+  list marker or a bit of markdown emphasis, so `- ALERT: ...` and
+  `**ALERT:** ...` are delivered. The line that is delivered is the line as
+  it was written. Only lines that start with `ALERT:` count, so prose that
+  mentions an alert in passing is not delivered.
+- **The gap**: The ticket says "one `ALERT:` line per thing Shyam must know
+  now" and does not say how a model formats it.
+- **The reach**: A future tick prompt that asks for another marker has to
+  widen this rule, or the alerts stop arriving.
+- **Verdict**: sound.
+- **Confidence**: medium.
 
 ## Proof
 
@@ -223,10 +267,17 @@ Every acceptance item was run against the installed launcher
    120 seconds → `tick killed after 8s`, exit code 124, and no stray
    `sleep 120` process left behind. The signal goes to the whole process
    group, so the child dies with it.
-7. **Checks.** `python3 scripts/mac_ops_fast_check.py` → `Ran 31 tests ... OK`,
+7. **Checks.** `python3 scripts/mac_ops_fast_check.py` → `Ran 34 tests ... OK`,
    `fast-check: passed; selected checks are not the full suite`. The same
    command through heavy (`~/.local/bin/heavy python3
    scripts/mac_ops_fast_check.py`) → same result.
+
+The proofs above were run again against the launcher as it stands after the
+reviewer round: the NOOP run, the ALERT run (`Steering: Tick alert: ALERT:
+tick test` in `hc read t56`), the lock (a second run exits 0 with
+`skipped: another tick holds the lock`), the guard block, and the cap
+(`COORD_TICK_TIMEOUT=8` → `tick killed after 8s`, exit 124, no stray
+`sleep 120` process).
 
 ## Live state on this Mac
 
@@ -251,3 +302,10 @@ coordinator session.
 
 No rollback has been executed. The PR merge and the Opus gate are
 coordinator-owned.
+
+## Known gap, out of scope here
+
+A manual `/tick` in the coordinator session does not take the launcher's
+lock, and `loop/tick.md` still says "all three loaded" for the
+`dev.coordinator` jobs. Both live in `coordinator.ts` and `tick.md`, which
+this ticket must not touch, so they belong to a follow-up ticket.

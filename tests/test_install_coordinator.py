@@ -7,6 +7,7 @@ import importlib.machinery
 import importlib.util
 import os
 import plistlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -283,6 +284,17 @@ class TestTickLauncher(unittest.TestCase):
             ["ALERT: one thing", "ALERT: two things"],
         )
 
+    def test_an_alert_with_a_list_marker_or_emphasis_is_an_alert(self):
+        module = self.launcher()
+        self.assertEqual(
+            module.alert_lines("- ALERT: one thing"),
+            ["- ALERT: one thing"],
+        )
+        self.assertEqual(
+            module.alert_lines("**ALERT:** one thing"),
+            ["**ALERT:** one thing"],
+        )
+
     def test_prompt_override_replaces_the_default_prompt(self):
         module = self.launcher()
         previous = os.environ.get("COORD_TICK_PROMPT_OVERRIDE")
@@ -317,8 +329,7 @@ class TestTickLauncher(unittest.TestCase):
                 fcntl.flock(held, fcntl.LOCK_UN)
                 held.close()
             self.assertEqual(result.returncode, 0)
-            self.assertIn("lock", result.stdout)
-            self.assertIn("lock", log_path.read_text())
+            self.assertIn("skipped: another tick holds the lock", log_path.read_text())
 
     def test_the_lock_path_is_the_same_for_every_caller(self):
         module = self.launcher()
@@ -332,6 +343,35 @@ class TestTickLauncher(unittest.TestCase):
                 os.environ.pop("COORD_TICK_LOCK", None)
             else:
                 os.environ["COORD_TICK_LOCK"] = previous
+
+    def test_the_process_group_is_killed_by_the_child_pid(self):
+        module = self.launcher()
+        process = subprocess.Popen(
+            ["/bin/sleep", "300"], start_new_session=True
+        )
+        try:
+            module.kill_group(process, signal.SIGTERM)
+            self.assertIsNotNone(process.wait(timeout=10))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+    def test_a_stopped_launcher_kills_the_run_it_started(self):
+        module = self.launcher()
+        process = subprocess.Popen(
+            ["/bin/sleep", "300"], start_new_session=True
+        )
+        module.RUNNING.append(process)
+        try:
+            with self.assertRaises(SystemExit):
+                module.stop_on_signal(signal.SIGTERM, None)
+            self.assertIsNotNone(process.wait(timeout=10))
+        finally:
+            module.RUNNING.clear()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
 
 
 class TestInstallPath(unittest.TestCase):
