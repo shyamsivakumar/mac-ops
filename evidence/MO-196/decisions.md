@@ -25,3 +25,9 @@ Run: `ticket:shyamsivakumar/mac-ops#153:a3`. Refs #153.
 ## Verification
 
 The temporary proof imports both exported checkBash implementations. All 21 must-block cases block on both; all six must-allow cases pass on revision 3. No credential files are read. The sandbox touch probe fails with Operation not permitted. The PR body contains the one-off proof and check results. Installation remains a post-merge action; Shyam must then run /reload.
+
+## Reviewer round
+
+One Luna Max read-only round found that a temp prefix could hide a parent-directory escape. Output paths are now normalized before granting the heredoc exception. Focused regression probes verify that /tmp/../Desktop/out does not qualify, and that an early delimiter followed by a secret read still blocks.
+
+The reviewer also identified deployment wrappers already allowed by main (for example exec railway up). The brief requires the existing deployment DENY rule unchanged, so this pre-existing limitation remains for coordinator review. The reviewer returned FAIL on the pre-fix tree; no second reviewer round was run. The final correction is verified by deterministic probes.
