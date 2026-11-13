@@ -41,8 +41,8 @@ the one case the live tree still misses.
     tree (`a862ac9`, TypeScript), each with a `blob/<sha>` link.
   - The licenses are named: Moonmux is MIT (Fabien Penso, 2026), herdr-core
     is Apache-2.0, herdr-projects at `a862ac9` is MIT (Elias Stravik, 2026).
-  - Six recommendations, ordered by value, each aimed at a named file and
-    line in the live tree.
+  - Six recommendations, ordered by value. Five of them name a file and a
+    line in the live tree; the sixth says what not to copy.
   - After the run-a3 reviewer rounds: two rows that described `reconcile()`
     wrongly were corrected, the "agents started outside the app" idea came
     back as recommendation 1, the error recommendation (now 2) was
@@ -79,8 +79,10 @@ Moonmux's scraper
   compared Moonmux's tmux scraper with our herdr-core path and made our side
   look empty.
 - **The reach**: The table answers the ticket's question (what to copy) on
-  the merits: only the alert discipline and the seen-and-dismissed state are
-  worth anything, and both are presentation, not detection.
+  the merits. This was written for revision 1, when the only ideas left
+  worth copying looked like presentation. Revision 4 found two detection
+  gaps as well (an agent that reports `error`, and the agents the user
+  started by hand), so the list of what is worth copying grew.
 - **Verdict**: sound.
 - **Confidence**: high.
 
@@ -208,7 +210,8 @@ router, read-only) read the merged diff against the ticket and returned
    group (`src/ticker.rs:682-686`), and the alert fires once on the move
    into `WaitingOnYou` (`src/steps.rs:198-225`). Recommendation 1 was
    rewritten as the real gap, and the group-versus-status point moved to
-   recommendation 2.
+   recommendation 2. (In revision 4's numbering the error gap is
+   recommendation 2 and the group-versus-status point is recommendation 4.)
 2. **Wrong commits, fixed.** Rows 5, 7, 11 and 14 named the wrong upstream
    commit. They now name `e8c3f90`, `a571cc5`, `dc3b848` and `a571cc5` /
    `4d06ea0`, and the evidence file says how each was found.
@@ -289,11 +292,25 @@ group-versus-status point, the cockpit check is named as the closing note
 instead of a recommendation, revision 2's correction 6 carries the revision
 4 number, the "both rows say Partly" claim is corrected, the `error` gap is
 narrowed to an agent that is alive and reports `error` before its logged
-turn ends (`tasks.ts:118`, `logs.ts:59-69`), live row 8 is now "Partly"
+turn closes (`tasks.ts:118`, `logs.ts:71-87`), live row 8 is now "Partly"
 (the live tree drops helper events but never turns a helper's error into a
 need), recommendation 4 names the right missed case (a new `blocked`
 arriving while the task is already `need`), and "What we would gain" now
 lists four things instead of three.
+
+### The run-a3 third round
+
+A third in-session Opus 5.5 round verified the cross-references and the
+narrowed code claims, then returned `VERDICT: FAIL` on one wrong
+citation, with four smaller points. All are fixed, and each is listed in
+the evidence file under "The run-a3 third round": the function that
+decides whether a task waits is `waiting()` at `server/core/logs.ts:71-87`,
+not `providerTurn()` at `:59-69` (four citations changed); this file's
+review-round list carries the revision 4 recommendation numbers; the reach
+statement that said only presentation ideas were worth copying now says
+that was true for revision 1 and that revision 4 found two detection gaps
+too; the evidence file's short answer names those gaps; and the claim that
+every recommendation names a file and a line now says five of the six do.
 
 ## Known limits
 
