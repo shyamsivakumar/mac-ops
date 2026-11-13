@@ -30,6 +30,9 @@ REPO_REF = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
 BARE_REF = re.compile(r"(?<![\w/#])#(\d+)\b")
 COMMENT_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/\d+#(issuecomment-\d+)")
 SECTION_NAME = "Blocked by"
+LABELLED_SECTION = re.compile(r"(?im)^[ \t]*\**\s*blocked by\s*\**\s*:[ \t]*(.*)$")
+DETAILS_BLOCK = re.compile(r"(?is)<details\b.*?</details>")
+FENCED_BLOCK = re.compile(r"(?s)```.*?```")
 REF_STATE = {}
 KEY_ISSUE = {}
 COMMENT_TEXT = {}
@@ -449,19 +452,42 @@ def reference_state(repo, number):
     return state
 
 
+def own_body(body):
+    """The body without preserved contracts and code, which name other tickets."""
+    return FENCED_BLOCK.sub(" ", DETAILS_BLOCK.sub(" ", body))
+
+
+def blocked_by_section(body):
+    """The body text of the ticket's own `Blocked by` section, or None.
+
+    The coordinator writes the section as a `## Blocked by` heading or as a
+    `Blocked by:` line, and the template check accepts both, so the blocker
+    check reads both. A `<details>` block holds a preserved contract, not this
+    ticket's own section, so it is skipped.
+    """
+    text = own_body(body)
+    section = body_section(text, SECTION_NAME)
+    if section is not None:
+        return section
+    match = LABELLED_SECTION.search(text)
+    return match.group(1).strip() if match else None
+
+
 def resolve_key_issue(repo, key, number):
-    """The issue whose title starts with `<key>-<number> ·`, or None."""
+    """The issue whose title starts with `<key>-<number>`, or None."""
     cache = (repo, key, number)
     if cache in KEY_ISSUE:
         return KEY_ISSUE[cache]
-    prefix = f"{key}-{number} ·"
+    prefix = f"{key}-{number}"
     found = None
     for page in range(1, 11):
         query = gh_json(["api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} in:title \"{key}-{number}\"",
                          "-f", "per_page=100", "-f", f"page={page}"])
         items = query.get("items", [])
         for item in items:
-            if item["title"].startswith(prefix):
+            title = item["title"]
+            rest = title[len(prefix):]
+            if title.startswith(prefix) and not rest[:1].isdigit():
                 found = item["number"]
                 break
         if found is not None or len(items) < 100:
@@ -500,7 +526,7 @@ def verdict_recorded(repo, issue):
 
 def section_blocker_reasons(cfg, repo, issue):
     """Every reference in the `Blocked by` section that is not met yet."""
-    section = body_section(issue.get("body") or "", SECTION_NAME)
+    section = blocked_by_section(issue.get("body") or "")
     if not section:
         return []
     text = re.sub(r"<!--.*?-->", "", section, flags=re.S).strip()
@@ -538,7 +564,7 @@ def section_blocker_reasons(cfg, repo, issue):
                 if label in seen:
                     continue
                 seen.add(label)
-                reasons.append(f"{label} has no issue in {repo} whose title starts with '{label} ·'")
+                reasons.append(f"{label} has no issue in {repo} whose title starts with '{label}'")
             else:
                 check(repo, number, f"{label} (#{number})")
     for match in BARE_REF.finditer(masked):
