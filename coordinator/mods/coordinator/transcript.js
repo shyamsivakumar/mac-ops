@@ -1,6 +1,11 @@
 import { appHome, exec, home, shared, writeTextFile } from "herdr";
 
-const DIR = `${home()}/.claude/projects/-Users-shyamsivakumar-Code-coordinator`;
+// The coordinator runs as pi; its sessions live in the agent's own session folder.
+const DIR = `${home()}/.pi/agent-coordinator/sessions/--Users-shyamsivakumar-Code-coordinator--`;
+// The pi terminal the panel talks to names its session after its tab.
+export const SESSION_NAME = "Pi - Coordinator";
+// A throwaway pi run in the same folder must not take the panel over.
+const MIN_USERS = 5;
 const TASK_ID = /\b[A-Z]{2,5}-\d{1,4}\b/g;
 const DETAIL_MAX = 200;
 const LINE_MAX = 400;
@@ -8,10 +13,7 @@ const OUTPUT_KEEP = 200;
 const TEXT_MAX = 60000;
 const DIFF_KEEP = 40;
 const CODE_KEEP = 400;
-const EVENT_MAX = 200;
 
-const IMAGE_SOURCE = /\[Image: source: ([^\]]+)\]/g;
-const IMAGE_MARK = /\[Image #\d+\]/g;
 const IMAGE_PATH = /(^|\s)((?:\/|~\/)[^\n]*?\.(?:png|jpe?g|gif|webp|heic))(?=\s|$)/gi;
 const SAMPLES = 8;
 const SAMPLE_LEN = 64;
@@ -61,13 +63,6 @@ export function chipLabel(path) {
   return shot ? `📷 Screenshot ${shot[1]}:${shot[2]} ${shot[3].toUpperCase()}` : `📷 ${path.slice(path.lastIndexOf("/") + 1)}`;
 }
 
-function resultImages(content) {
-  if (!Array.isArray(content)) return [];
-  return content
-    .filter((b) => b.type === "image" && b.source?.type === "base64")
-    .map((b) => ({ key: keyOf(b.source.data), ext: b.source.media_type === "image/jpeg" ? "jpg" : b.source.media_type.replace("image/", ""), path: "", data: b.source.data }));
-}
-
 export async function materialize(ref) {
   const dir = `${appHome()}/${IMAGE_DIR}`;
   const file = `${dir}/${ref.key}.${ref.ext}`;
@@ -94,15 +89,24 @@ export async function materialize(ref) {
 
 const clip = (text, n) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 
-function textOf(content) {
-  if (typeof content === "string") return content;
-  return (content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
-}
+const blocks = (content) => (Array.isArray(content) ? content : typeof content === "string" ? [{ type: "text", text: content }] : []);
 
-function summary(tool) {
-  const i = tool.input ?? {};
-  const detail = i.description ?? i.command ?? i.file_path ?? i.pattern ?? i.prompt ?? i.query ?? "";
-  return clip(`${tool.name} ${String(detail).split("\n")[0]}`.trim(), 90);
+const textOf = (content) => blocks(content).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
+
+const mimeExt = (mime) => (mime === "image/jpeg" ? "jpg" : String(mime ?? "image/png").replace("image/", ""));
+
+const imageRef = (b) => ({ key: keyOf(b.data), ext: mimeExt(b.mimeType), path: "", data: b.data });
+
+const imagesOf = (content) => blocks(content).filter((b) => b.type === "image").map(imageRef);
+
+const DETAIL_KEYS = ["command", "path", "file_path", "pattern", "query", "prompt", "url", "description", "code"];
+
+function detailOf(args) {
+  for (const key of DETAIL_KEYS) {
+    const value = args?.[key];
+    if (typeof value === "string" && value.trim()) return clip(value.split("\n")[0], DETAIL_MAX);
+  }
+  return "";
 }
 
 const lineCount = (text) => (text ? (text.match(/\n/g)?.length ?? 0) + 1 : 0);
@@ -117,13 +121,14 @@ function trimmedDiff(before, after) {
   return { removed: a.slice(head, a.length - tail), added: b.slice(head, b.length - tail) };
 }
 
-function diffOf(name, input) {
-  if (name === "Write") return { removed: [], added: [], hidden: 0, wrote: lineCount(input.content ?? "") };
-  const edits = name === "MultiEdit" ? input.edits ?? [] : [input];
+function diffOf(name, args) {
+  if (name === "write") return { removed: [], added: [], hidden: 0, wrote: lineCount(args?.content ?? "") };
+  if (name !== "edit") return null;
+  const edits = Array.isArray(args?.edits) && args.edits.length ? args.edits : [{ oldText: args?.oldText, newText: args?.newText }];
   const removed = [];
   const added = [];
   for (const e of edits) {
-    const d = trimmedDiff(String(e.old_string ?? ""), String(e.new_string ?? ""));
+    const d = trimmedDiff(String(e?.oldText ?? ""), String(e?.newText ?? ""));
     removed.push(...d.removed);
     added.push(...d.added);
   }
@@ -131,18 +136,28 @@ function diffOf(name, input) {
   return { removed: keep(removed), added: keep(added), hidden: Math.max(0, removed.length - DIFF_KEEP) + Math.max(0, added.length - DIFF_KEEP) };
 }
 
-const DIFF_TOOLS = new Set(["Edit", "MultiEdit", "Write"]);
-
-function toolItem(b, at) {
-  const i = b.input ?? {};
-  const detail = i.command ?? i.file_path ?? i.notebook_path ?? i.pattern ?? i.url ?? i.query ?? i.description ?? i.prompt ?? i.path ?? "";
-  return { k: "tool", id: b.id, name: b.name.replace(/^mcp__/, "").replace(/__/g, "."), at, detail: clip(String(detail).split("\n")[0], DETAIL_MAX), diff: DIFF_TOOLS.has(b.name) ? diffOf(b.name, i) : null, result: null };
+function toolItem(call, at) {
+  const args = call.arguments ?? {};
+  return {
+    k: "tool",
+    id: call.id,
+    name: call.name.replace(/^mcp__/, "").replace(/__/g, "."),
+    at,
+    detail: detailOf(args),
+    diff: diffOf(call.name, args),
+    result: null,
+  };
 }
 
-function resultOf(block) {
-  const text = textOf(block.content);
+function resultOf(result) {
+  const text = textOf(result.content);
   const body = text.slice(0, TEXT_MAX).replace(/\n+$/, "");
-  return { error: Boolean(block.is_error), total: lineCount(text.replace(/\n+$/, "")), lines: body ? body.split("\n").slice(0, OUTPUT_KEEP).map((l) => clip(l, LINE_MAX)) : [] };
+  return { error: Boolean(result.isError), total: lineCount(text.replace(/\n+$/, "")), lines: body ? body.split("\n").slice(0, OUTPUT_KEEP).map((l) => clip(l, LINE_MAX)) : [] };
+}
+
+function summary(tool) {
+  const detail = detailOf(tool.arguments ?? {});
+  return clip(`${tool.name}${detail ? ` ${detail}` : ""}`.trim(), 90);
 }
 
 const FENCE = /^\s*```/;
@@ -214,19 +229,7 @@ export function blocksOf(text) {
   return out;
 }
 
-const ANSWERS = /^Decisions:\n/;
-const squash = (text) => text.replace(/\s+/g, " ").trim();
-
-function composed(text, at) {
-  const sent = shared("co.sent");
-  if (!sent || at < sent.since) return ANSWERS.test(text);
-  const wanted = squash(text);
-  return sent.items.some((item) => squash(item.text) === wanted);
-}
-
 const newParser = () => ({ turns: [], open: new Map(), tools: new Map(), pending: null, tokens: 0 });
-
-const NOTE_SUMMARY = /<summary>([\s\S]*?)<\/summary>/;
 
 function lastTurn(p, at) {
   if (p.turns.at(-1)?.role !== "coordinator") p.turns.push({ role: "coordinator", at, items: [] });
@@ -235,8 +238,69 @@ function lastTurn(p, at) {
   return turn;
 }
 
+function feedAssistant(p, m, at) {
+  const u = m.usage;
+  if (u) p.tokens = (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+  const turn = lastTurn(p, at);
+  for (const b of blocks(m.content)) {
+    if (b.type === "toolCall") {
+      const item = toolItem(b, at);
+      turn.items.push(item);
+      p.tools.set(b.id, item);
+      p.open.set(b.id, { id: b.id, name: b.name, arguments: b.arguments ?? {}, at });
+      p.pending = [...p.open.values()].at(-1);
+    }
+    if (b.type === "text" && b.text.trim()) {
+      turn.items.push({ k: "text", text: b.text.trim() });
+      turn.at = at;
+    }
+  }
+}
+
+const HC_FROM = /^<hc\s+from="([^"]*)"/;
+const ANSWERS = /^Decisions:\n/;
+const squash = (text) => text.replace(/\s+/g, " ").trim();
+
+// A message the panel sent is the human's, even when it came through a session.
+function composed(text, at) {
+  const sent = shared("co.sent");
+  if (!sent || at < sent.since) return ANSWERS.test(text);
+  const wanted = squash(text);
+  return sent.items.some((item) => squash(item.text) === wanted);
+}
+
+function feedUser(p, m, at) {
+  const typed = pathImages(textOf(m.content));
+  const raw = typed.rest.replace(/<\/?pasted_content[^>]*>/g, "").trim();
+  const images = [...typed.images, ...imagesOf(m.content)];
+  const hc = HC_FROM.exec(raw);
+  const text = hc ? raw.replace(/<\/?hc\b[^>]*>/g, "").trim() : raw;
+  if (!text && !images.length) return;
+  if (text.startsWith("<")) return;
+  p.open.clear();
+  p.tools.clear();
+  p.pending = null;
+  p.turns.push({
+    role: hc && !composed(text, at) ? "session" : "you",
+    from: hc?.[1] ?? "",
+    at,
+    items: [...(text ? [{ k: "text", text }] : []), ...(images.length ? [{ k: "images", images }] : [])],
+  });
+}
+
+function feedResult(p, m) {
+  const item = p.tools.get(m.toolCallId);
+  if (item) {
+    item.result = resultOf(m);
+    const images = imagesOf(m.content);
+    if (images.length) item.images = images;
+  }
+  p.open.delete(m.toolCallId);
+  p.tools.delete(m.toolCallId);
+  p.pending = [...p.open.values()].at(-1) ?? null;
+}
+
 function feed(p, text) {
-  const { turns } = p;
   for (const line of text.split("\n")) {
     if (!line) continue;
     let rec;
@@ -245,67 +309,12 @@ function feed(p, text) {
     } catch {
       continue;
     }
-    if (rec.isSidechain || !rec.message) continue;
-    const at = Date.parse(rec.timestamp);
-    const content = rec.message.content;
-    if (rec.type === "assistant") {
-      const u = rec.message.usage;
-      if (u) p.tokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-      const turn = lastTurn(p, at);
-      for (const b of Array.isArray(content) ? content : []) {
-        if (b.type === "tool_use") {
-          const item = toolItem(b, at);
-          turn.items.push(item);
-          p.tools.set(b.id, item);
-          p.open.set(b.id, { ...b, at });
-          p.pending = [...p.open.values()].at(-1);
-        }
-        if (b.type === "text" && b.text.trim()) {
-          turn.items.push({ k: "text", text: b.text.trim() });
-          turn.at = at;
-        }
-      }
-    } else if (rec.type === "user" && rec.isMeta) {
-      const last = turns.at(-1);
-      const attached = [...textOf(content).matchAll(IMAGE_SOURCE)].map((m) => fileImage(m[1].trim()));
-      if (attached.length && last && last.role !== "coordinator") {
-        const strip = last.items.find((i) => i.k === "images");
-        if (strip) strip.images.push(...attached);
-        else last.items.push({ k: "images", images: attached });
-        last.view = null;
-      }
-    } else if (rec.type === "user" && !rec.isMeta) {
-      if (Array.isArray(content) && content.some((b) => b.type === "tool_result")) {
-        for (const b of content) {
-          if (b.type !== "tool_result") continue;
-          const item = p.tools.get(b.tool_use_id);
-          if (item) {
-            item.result = resultOf(b);
-            const images = resultImages(b.content);
-            if (images.length) item.images = images;
-          }
-          p.open.delete(b.tool_use_id);
-          p.tools.delete(b.tool_use_id);
-        }
-        p.pending = [...p.open.values()].at(-1) ?? null;
-        continue;
-      }
-      const typed = pathImages(textOf(content));
-      const whole = typed.rest;
-      const images = [...whole.matchAll(IMAGE_SOURCE)].map((m) => fileImage(m[1].trim()));
-      for (const ref of typed.images) if (!images.some((i) => i.path === ref.path)) images.push(ref);
-      const raw = whole.replace(IMAGE_SOURCE, "").replace(IMAGE_MARK, "").replace(/<\/?pasted_content[^>]*>/g, "").trim();
-      const hc = /^<hc\s+from="([^"]*)"/.exec(raw);
-      const text = hc ? raw.replace(/<\/?hc\b[^>]*>/g, "").trim() : raw;
-      const note = raw.startsWith("<task-notification") ? NOTE_SUMMARY.exec(raw)?.[1].trim() : null;
-      if (note) lastTurn(p, at).items.push({ k: "event", text: clip(note.replace(/\s+/g, " "), EVENT_MAX) });
-      else if ((text || images.length) && !text.startsWith("<")) {
-        p.open.clear();
-        p.tools.clear();
-        p.pending = null;
-        turns.push({ role: hc && !composed(text, at) ? "session" : "you", from: hc?.[1] ?? "", at, items: [...(text ? [{ k: "text", text }] : []), ...(images.length ? [{ k: "images", images }] : [])] });
-      }
-    }
+    if (rec.type !== "message" || !rec.message) continue;
+    const m = rec.message;
+    const at = Date.parse(rec.timestamp) || m.timestamp || 0;
+    if (m.role === "assistant") feedAssistant(p, m, at);
+    else if (m.role === "user") feedUser(p, m, at);
+    else if (m.role === "toolResult") feedResult(p, m);
   }
 }
 
@@ -363,7 +372,27 @@ async function window(file, end) {
   }
 }
 
-const MAIN_SESSIONS = `cd "${DIR}" && for f in $(ls -t *.jsonl); do if [ "$(grep -c '"type":"user"' "$f")" -ge 5 ]; then echo "${DIR}/$f"; fi; done`;
+const MAIN_SESSIONS = `cd "${DIR}" && for f in $(ls -1t *.jsonl 2>/dev/null); do printf '%s\\t%s\\t%s\\n' "$f" "$(grep -m1 '"type":"session_info"' "$f" | grep -o '"name":"[^"]*"' | head -1)" "$(grep -c '"role":"user"' "$f")"; done || true`;
+
+function sessions(rows) {
+  return rows
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [file, name, users] = line.split("\t");
+      return { file: `${DIR}/${file}`, name: (name ?? "").replace(/^"name":"|"$/g, ""), users: Number(users) || 0 };
+    })
+    .filter((row) => row.file);
+}
+
+// The live session is the coordinator's own: it carries the coordinator's name
+// and has enough turns to be a conversation, not a one-off pi run. The size
+// filter alone is the fallback when no session carries that name.
+function pickLive(rows) {
+  return rows.find((r) => r.name === SESSION_NAME && r.users >= MIN_USERS)
+    ?? rows.find((r) => r.users >= MIN_USERS)
+    ?? null;
+}
 
 const FILES_EVERY = 30000;
 let files = [];
@@ -406,8 +435,11 @@ function snapshot() {
 async function readNow() {
   if (!files.length || Date.now() - filesAt >= FILES_EVERY) {
     const r = await exec("sh", ["-c", MAIN_SESSIONS]);
-    if (r.code !== 0) throw new Error(r.stderr.trim() || "no coordinator transcript");
-    files = r.stdout.split("\n").filter(Boolean);
+    if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot list coordinator sessions");
+    const rows = sessions(r.stdout);
+    const chosen = pickLive(rows);
+    if (!chosen) throw new Error("no pi coordinator session");
+    files = [chosen.file, ...rows.filter((row) => row.file !== chosen.file).map((row) => row.file)];
     filesAt = Date.now();
   }
   if (live?.file !== files[0]) {
