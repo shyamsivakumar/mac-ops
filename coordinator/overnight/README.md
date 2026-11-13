@@ -21,8 +21,8 @@ in the mac-ops checkout and is installed by the same installer.
 | Command | What it does |
 | --- | --- |
 | `overnight intake --dry-run` | Reads the board (`ticket list --fresh --json`) and the open pull requests (`gh pr list` for each allowed repository) into intake records, and prints the record count per repository. Read only: it writes no record and keeps no list of its own. The ticket CLI refreshes its own cache when it reads the board; that cache is the ticket CLI's. |
-| `overnight filter --dry-run` | Filters the board and prints every drop with its reason. Read only. |
-| `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. |
+| `overnight filter --dry-run` | Filters the board and prints every drop with its reason. Read only. It fails closed: it exits non-zero and drops what it could not check. |
+| `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. It fails closed: a pull request it cannot read is refused, not passed. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, arming, the tick and the morning report) build on the
@@ -35,12 +35,12 @@ decisions log. It keeps no list of its own and writes nothing.
 
 | Drop | How it is found |
 | --- | --- |
-| Ascend work | A key from the spec's list (AUH, MCP, OPS, DBT, OMN), or a repository the merge gate refuses: the same rule the gate uses in `coordinator/bin/coordq`, so the shift and the gate never disagree about what Ascend is. |
+| Ascend work | A key from the spec's list (AUH, MCP, OPS, DBT, OMN), or a repository the merge gate refuses: the same repository rule and the same per-repository `ascend` flag the gate uses in `coordinator/bin/coordq`, so the shift and the gate agree on what Ascend is. |
 | A repository off the allow list | The allow list is the board config (`coordinator/config/tickets.json`), the same list intake uses. |
 | A ticket marked `hold` | The word `HOLD` in capitals at the start of a line of the ticket's own text. |
 | A ticket marked `needs Shyam` | The phrase `needs Shyam` with its question (`Needs Shyam: ...`, "needs Shyam to ..."), and not "needs Shyam's OK". |
 | A ticket marked `design needed` | The phrase `design needed` with what it waits for (`design needed: ...`, "design needed before ..."). |
-| An open question in the decisions log | The last line of `loop/decisions.md` that is about the ticket holds or parks it, or asks a question that was never answered. |
+| An open question in the decisions log | The last line of `loop/decisions.md` that is about the ticket holds or parks it, opens it, asks it as `Q: ...`, or asks Shyam a question that was never answered. |
 
 A mark is the marked form and it stands at the start of a line or of a
 clause, so a ticket that only talks about holding a position, or about a
@@ -49,9 +49,13 @@ append-only history, so the last line that is about a ticket decides: a
 hold outlives the question it was asked in, and a line that answers the
 question closes it.
 
-The filter prints every drop with its reason, and it fails when an Ascend
-item survives it. The second check, `check-pr`, refuses an Ascend pull
-request by repository or by the ticket key its branch carries.
+The filter prints every drop with its reason, and it fails closed. A
+ticket whose text could not be read, a ticket whose open question could
+not be checked, a stale board and a missing decisions log all end in a
+non-zero exit: the filter never returns a list it could not fully check.
+The second check, `check-pr`, refuses an Ascend pull request by
+repository, by the board config's `ascend` flag, or by any Ascend key its
+branch or its body carries.
 
 ## How a pull request joins a ticket
 
