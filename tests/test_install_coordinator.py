@@ -148,6 +148,63 @@ class TestTurncapPlist(unittest.TestCase):
         )
 
 
+class TestPiCoordinatorFiles(unittest.TestCase):
+    """The pi coordinator files (guard, sandbox profile, settings, phone relay
+    and launchers) are owned by this installer like the Herdr mods are."""
+
+    def setUp(self):
+        self.home = Path("/Users/example")
+        self.plan = {
+            target: (source, mode)
+            for source, target, mode in install_coordinator.plan(CHECKOUT, self.home)
+        }
+
+    def test_guard_profile_and_settings_map_to_the_live_coordinator_paths(self):
+        for relative in (
+            "extensions/coordinator.ts",
+            "coordinator.sb",
+            "settings.json",
+            "phone-relay/CLAUDE.md",
+        ):
+            source, mode = self.plan[self.home / ".pi/agent-coordinator" / relative]
+            self.assertEqual(source, CHECKOUT / "coordinator/pi" / relative)
+            self.assertEqual(mode, 0o644)
+
+    def test_launchers_map_to_the_local_bin_directory(self):
+        for name in ("coord-pi", "coord-ask", "coord-phone"):
+            source, mode = self.plan[self.home / ".local/bin" / name]
+            self.assertEqual(source, CHECKOUT / "coordinator/pi/bin" / name)
+            self.assertEqual(mode, 0o755)
+
+    def test_install_writes_the_pi_files_with_their_modes(self):
+        with temp_home() as td:
+            home = Path(td)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            guard = home / ".pi/agent-coordinator/extensions/coordinator.ts"
+            self.assertEqual(
+                guard.read_bytes(),
+                (CHECKOUT / "coordinator/pi/extensions/coordinator.ts").read_bytes(),
+            )
+            self.assertEqual(guard.stat().st_mode & 0o777, 0o644)
+            launcher = home / ".local/bin/coord-pi"
+            self.assertEqual(
+                launcher.read_bytes(), (CHECKOUT / "coordinator/pi/bin/coord-pi").read_bytes()
+            )
+            self.assertEqual(launcher.stat().st_mode & 0o777, 0o755)
+
+    def test_install_is_idempotent_for_the_pi_files(self):
+        with temp_home() as td:
+            home = Path(td)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+                install_coordinator.install(CHECKOUT, False, home)
+            self.assertEqual(
+                install_coordinator.changes(CHECKOUT, home),
+                [],
+            )
+
+
 class TestInstallPath(unittest.TestCase):
     def test_install_creates_the_log_directory_and_writes_the_job(self):
         with temp_home() as td:

@@ -1,0 +1,10 @@
+#!/bin/zsh
+# Start (or continue with -c) the pi coordinator with its own light config.
+# Sandbox: coordinator.sb blocks writes/deletes to repos, worktrees, configs (kernel-enforced).
+# Guard + wake: ~/.pi/agent-coordinator/extensions/coordinator.ts. Tick: loop/tick.md.
+# --no-skills stops discovery of ~/.agents/skills (260 skills, ~30k tokens); only these load:
+cd ~/Code/coordinator || exit 1
+export PI_CODING_AGENT_DIR=~/.pi/agent-coordinator
+exec /usr/bin/sandbox-exec -f ~/.pi/agent-coordinator/coordinator.sb pi --model pi-claude-cli/claude-opus-5-5 --no-skills \
+  --skill /Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/to-tickets --skill /Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/diagram-design --skill /Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/plain-writing \
+  --skill /Users/shyamsivakumar/Code/llmwiki/runtime/codex/skills/verification-before-completion --skill ~/.pi/agent-coordinator/skills "$@"

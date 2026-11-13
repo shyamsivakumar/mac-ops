@@ -243,6 +243,14 @@ install with `./install.sh coordinator`. Config installs to `~/.coordinator`.
 Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 
+The pi coordinator's own files live under `coordinator/pi/` and install with
+the same command: the guard extension and its sandbox profile, the pi
+settings, the phone relay note and the `coord-pi`, `coord-ask` and
+`coord-phone` launchers. The guard, profile and settings install to
+`~/.pi/agent-coordinator/`, the launchers to `~/.local/bin/`. They are copies
+of the live files, so a change to the guard goes through a pull request like
+every other change in this repository.
+
 The `dev.coordinator.turncap` job runs the coordinator's turn-cap monitor
 (`~/Code/coordinator/loop/turn_cap.py`) and keeps it running, so the
 ten-minute turn cap keeps holding after a reboot, from the next login on,
