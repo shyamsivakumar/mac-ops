@@ -119,7 +119,8 @@ def call(tool, args, rules=None):
 
 
 def live():
-    code, out = call("t3_thread_list", {"allProjects": True, "limit": 1, "statuses": LIVE_STATUSES})
+    code, out = call("t3_thread_list", {"allProjects": True, "limit": 1, "statuses": LIVE_STATUSES,
+                                        "includeSubagents": False})
     return json.loads(out)["total"] if code == 0 else None
 
 
