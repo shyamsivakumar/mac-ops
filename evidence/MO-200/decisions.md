@@ -31,7 +31,12 @@ unmet prerequisite start anyway.
     title starts with 'SRW-1119 ·'`. The prefix now matches `<KEY>-<n>`
     followed by any character that is not a digit, which keeps `SRW-789` from
     matching `SRW-7890`.
-- `tests/test_ticket_text_blockers.py`: 12 new unit tests (32 in the file) and
+  - **A key resolves to an issue, never to a pull request.** The search has
+    no `is:issue` filter, and the looser prefix let a pull request titled
+    `SRW-1018 part 1: ...` answer for the key. A merged pull request then
+    satisfied an open blocker. The query asks for issues and every item with
+    a `pull_request` field is skipped.
+- `tests/test_ticket_text_blockers.py`: 16 new unit tests (36 in the file) and
   a test isolation fix so the section tests restore the functions they patch.
 
 Not touched: the native blocker refusal, labels, intent comments, receipt
@@ -96,7 +101,6 @@ existing behaviour. No existing test or check was weakened.
   check does not parse.
 
 ### 11. A key resolves by prefix `<KEY>-<n>`, not by the ` ·` separator
-
 - **When**: revision 2.
 - **The decision**: A title matches the key when it starts with `<KEY>-<n>`
   and the next character is not a digit.
@@ -107,6 +111,38 @@ existing behaviour. No existing test or check was weakened.
 - **The reach**: `SRW-789` still cannot match `SRW-7890`. Every title that
   matched before still matches. The refusal now names the key and the issue
   number instead of claiming the key has no issue.
+- **Verdict**: sound.
+- **Confidence**: high.
+
+### 12. A key never resolves to a pull request
+
+- **When**: revision 2, after the in-session review round.
+- **The decision**: The key search asks GitHub for issues (`is:issue`) and
+  every result with a `pull_request` field is skipped.
+- **The gap**: The search returns pull requests too. With the old exact
+  prefix `<KEY>-<n> ·` a pull request titled `SRW-1018 part 1: ...` could not
+  match. With the looser prefix it can, and GitHub sorts search results by
+  best match, so the key could resolve to a merged pull request while the
+  issue it names stayed open. The in-session reviewer (Opus) raised this as
+  major.
+- **The reach**: A key names an issue, never a pull request. A pull request
+  that shares a title prefix can no longer satisfy a blocker.
+- **Verdict**: sound.
+- **Confidence**: high.
+
+### 13. The section read is the one the template check read
+
+- **When**: revision 2, after the in-session review round.
+- **The decision**: The section reader uses the same markers as
+  `template_status`, so it reads exactly the section the template check
+  accepted. A `Blocked by:` line is read as its own value plus any list under
+  it, and stops at the next line that is not part of the list.
+- **The gap**: The reviewer found that a list under a `Blocked by:` line read
+  as empty, because only the rest of that line was taken. That was a false
+  pass.
+- **The reach**: A body that writes the section as a labelled line with a
+  list under it now names its blockers. The text after the list is not
+  swallowed, so the acceptance prose of the next line cannot add a blocker.
 - **Verdict**: sound.
 - **Confidence**: high.
 
@@ -241,10 +277,21 @@ body.
    `Blocked by: #49, #51, #52` line is not read, and the reasons are empty.
 4. **SRW #890, SRW #899, SRW #490 and `--force-text-blockers`** behave exactly
    as in revision 1; the outputs are in `evidence/MO-200/proof.txt`.
-5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 32
+5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 36
    tests in the file). The full suite through heavy,
-   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 148
+   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 152
    tests, OK.
+
+### In-session review round
+
+One reviewer round ran in this session (Opus, Claude Opus 5.5) on
+`git diff origin/main...HEAD`. It returned `VERDICT: FAIL` with one major and
+three minor findings: a pull request could satisfy a key blocker (fixed by
+decision 12), a list under a `Blocked by:` line read as empty (fixed by
+decision 13), a list-item label was not matched (the template check does not
+match it either, so both read the same section), and a bold `**Blocked by:**`
+value kept its leading `**` (the template check strips it, so the value is
+now read through the template markers).
 
 ### Revision 1
 
