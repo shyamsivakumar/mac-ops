@@ -1,0 +1,6 @@
+#!/bin/zsh
+# Remote Control relay so the Claude phone app can drive the pi coordinator.
+# Shows in the Claude app as "Pi - Coordinator". Only tool: coord-ask.
+cd /Users/shyamsivakumar/.pi/agent-coordinator/phone-relay || exit 1
+exec claude --remote-control "Pi - Coordinator" --model claude-haiku-5-5 --setting-sources project --strict-mcp-config \
+  --tools Bash --permission-mode dontAsk "$@"
