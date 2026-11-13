@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- One coordinator tick every 30 minutes, as a fresh headless pi on Sonnet
+     5.5 (coord-tick). No RunAtLoad: a tick costs a model call, so the first
+     one lands one interval after the job loads, not at every boot. The
+     launcher takes its own lock, so two ticks never overlap. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.coordinator.tick</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@HOME@/.local/bin/coord-tick</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@HOME@/.local/bin:@HOME@/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@HOME@/Library/Logs/coordinator/tick.log</string>
+    <key>StandardErrorPath</key>
+    <string>@HOME@/Library/Logs/coordinator/tick.log</string>
+</dict>
+</plist>

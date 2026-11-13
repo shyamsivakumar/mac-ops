@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Run one coordinator tick as a fresh headless pi on Sonnet 5.5.
+
+launchd starts this every 30 minutes (dev.coordinator.tick). Each run is one
+short-lived pi process on the coordinator config, inside the coordinator
+sandbox, so a tick can do what the coordinator can and no more. The tick
+follows loop/tick.md and replies with NOOP or ALERT lines: ALERT lines are
+sent to the live pi coordinator terminal, NOOP goes nowhere. Only one tick
+runs at a time (one lock file for every caller) and a run over ten minutes is
+killed.
+
+The run is ephemeral (pi --no-session), so it never becomes the newest
+session that coord-ask, the phone relay or the Herdr panel read.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import signal
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+HOME = Path.home()
+COORD_DIR = HOME / "Code/coordinator"
+PI_DIR = HOME / ".pi/agent-coordinator"
+SANDBOX_PROFILE = PI_DIR / "coordinator.sb"
+LOG_PATH = Path(
+    os.environ.get("COORD_TICK_LOG", HOME / "Library/Logs/coordinator/tick.log")
+)
+MODEL = os.environ.get("COORD_TICK_MODEL", "pi-claude-cli/claude-sonnet-5-5")
+TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "600"))
+DEFAULT_PROMPT = (
+    "Tick (launchd). Run one tick per loop/tick.md. Keep it cheap: filter "
+    "command output, act only on what changed, reply NOOP or ALERT lines only."
+)
+LOCK_NAME = "coord-tick.lock"
+CHILD_PATH = ":".join(
+    [
+        str(HOME / ".local/bin"),
+        str(HOME / ".bun/bin"),
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+    ]
+)
+
+
+def log(message: str) -> None:
+    """Append one line to the tick log and show it on stdout."""
+    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    line = f"{stamp} | tick | {message}"
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(LOG_PATH, "a") as stream:
+            stream.write(line + "\n")
+    except OSError as exc:
+        print(f"tick: cannot write {LOG_PATH}: {exc}", file=sys.stderr)
+    print(line)
+
+
+def prompt() -> str:
+    """The tick prompt. The override exists so the launcher can be proved
+    without running a real tick."""
+    return os.environ.get("COORD_TICK_PROMPT_OVERRIDE") or DEFAULT_PROMPT
+
+
+def child_env() -> dict:
+    env = dict(os.environ)
+    env.update(
+        {
+            "PI_CODING_AGENT_DIR": str(PI_DIR),
+            # One-shot run: the wake timer has nothing to wake.
+            "COORD_WAKE": "0",
+            "HOME": str(HOME),
+            "PATH": CHILD_PATH,
+        }
+    )
+    return env
+
+
+def model_available(env: dict) -> bool:
+    """True when the provider still offers the tick model."""
+    try:
+        result = subprocess.run(
+            ["pi", "--list-models"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True  # Cannot tell; let the run itself report the failure.
+    return MODEL.split("/", 1)[-1] in (result.stdout or "")
+
+
+def coordinator_terminal() -> str | None:
+    """The live pi coordinator terminal, the same lookup coord-ask uses."""
+    try:
+        result = subprocess.run(
+            ["hc", "ls"], capture_output=True, text=True, timeout=30
+        )
+        terminals = json.loads(result.stdout)["terminals"]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+        return None
+    terms = [
+        t
+        for t in terminals
+        if t.get("agent") == "pi"
+        and str(t.get("cwd", "")).endswith("/Code/coordinator")
+        and t.get("state") == "live"
+    ]
+    named = [t for t in terms if "Pi - Coordinator" in (t.get("where") or "")]
+    pick = named or terms
+    return pick[0]["address"] if pick else None
+
+
+def alert_lines(reply: str) -> list[str]:
+    """The ALERT lines of a tick reply, in order."""
+    found = []
+    for line in reply.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("ALERT:"):
+            found.append(stripped)
+    return found
+
+
+def deliver(alerts: list[str]) -> None:
+    """Send the alerts to the live coordinator terminal. No terminal, no
+    message: the alerts stay in the tick log."""
+    if not alerts:
+        return
+    address = coordinator_terminal()
+    if not address:
+        log(f"alert not delivered, no live coordinator terminal: {alerts[0]}")
+        return
+    for alert in alerts:
+        try:
+            subprocess.run(
+                ["hc", "send", address, f"Tick alert: {alert}"],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            log(f"alert sent to {address}: {alert}")
+        except (OSError, subprocess.SubprocessError) as exc:
+            log(f"alert not sent to {address}: {exc}: {alert}")
+
+
+def run_tick(env: dict) -> int:
+    """Run the tick and return the exit code."""
+    command = [
+        "/usr/bin/sandbox-exec",
+        "-f",
+        str(SANDBOX_PROFILE),
+        "pi",
+        "-p",
+        "--no-session",
+        "--no-skills",
+        "--model",
+        MODEL,
+        prompt(),
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=str(COORD_DIR),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        except OSError:
+            pass
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except OSError:
+                pass
+            stdout, stderr = process.communicate()
+        log(f"tick killed after {TIMEOUT_S}s")
+        deliver(alert_lines(stdout or ""))
+        return 124
+    reply = (stdout or "").strip()
+    if reply:
+        print(reply)
+    if stderr and process.returncode != 0:
+        log(f"pi exited {process.returncode}: {stderr.strip()[:500]}")
+    deliver(alert_lines(reply))
+    log(f"exit={process.returncode} reply={reply[:200] or '(empty)'}")
+    return process.returncode
+
+
+def lock_path() -> Path:
+    """The lock file. One path for every caller: launchd jobs and shells see
+    different TMPDIR values, so a TMPDIR lock would not exclude a manual run
+    from the scheduled one."""
+    override = os.environ.get("COORD_TICK_LOCK")
+    if override:
+        return Path(override)
+    return HOME / ".local/state/mac-ops" / LOCK_NAME
+
+
+def take_lock():
+    """Take the tick lock, or return None when another tick holds it."""
+    try:
+        path = lock_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        log(f"cannot open the lock file: {exc}")
+        raise
+    handle = os.fdopen(fd, "r+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def main() -> int:
+    env = child_env()
+    try:
+        lock = take_lock()
+    except OSError:
+        return 1
+    if lock is None:
+        log("skipped: another tick holds the lock")
+        return 0
+    try:
+        if not model_available(env):
+            log(f"WAITING: {MODEL} is not available on the provider")
+            return 75
+        return run_tick(env)
+    except OSError as exc:
+        log(f"tick failed: {exc}")
+        return 1
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
