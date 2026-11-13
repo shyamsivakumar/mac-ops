@@ -125,10 +125,12 @@ used at [src/brief.rs:115](https://github.com/shyamsivakumar/herdr-projects/blob
 and a trust screen on a pane counts as `blocked` for the brief
 ([src/ticker.rs:640-646](https://github.com/shyamsivakumar/herdr-projects/blob/4e4548c3c43888e6be1c96906215998f07dc63f0/src/ticker.rs#L640-L646)).
 
-So: for herdr-core panes our detection is at least as good as Moonmux's on
-every signal Moonmux has, and what we are missing is not the *presentation*
-ideas alone. Two detection gaps are left (an agent that reports `error`, and
-the agents the user started by hand); the rest are presentation. The
+So: on the states an agent reports about itself — blocked, working, done —
+our detection matches Moonmux's or beats it, because we read the agent's own
+report instead of scraping its screen. Two things Moonmux covers and we do
+not: an agent that reports `error` (a helper's error is not a need for us
+either), and the agents the user started by hand. Everything else Moonmux
+does in this area is presentation, and some of that we already have. The
 recommendations are aimed at the live tree, and they say which tree they
 apply to.
 
@@ -379,7 +381,9 @@ true. Fixed above:
    agent hooks set `blocked`, `working` and `idle` in
    `server/core/agents.ts:243-247`.
 2. A new section, "The live tree compared signal by signal", compares all
-   fifteen signals against `a862ac9` with `blob/<sha>` links.
+   fifteen signals against `a862ac9` with `blob/<sha>` links. (The Rust
+   table has sixteen rows: the same fifteen plus row 9a, the trust-screen
+   check Moonmux has no counterpart for.)
 3. Two recommendations from revision 3 changed. The "do not sound for a
    pane the user is already looking at" recommendation is already done in
    the app in the live tree (`shared/alerts.ts:31-36`,
@@ -487,13 +491,16 @@ one wrong citation, plus four smaller points. All are fixed:
 
 1. **A wrong function was cited in four places.** The text said that once
    the agent's logged turn has ended the task becomes `need`, citing
-   `server/core/logs.ts:59-69`. That range is `providerTurn()`, whose only
-   caller is the provider-retry path
-   (`server/core/provider-retries.ts:40`); `waiting()` never calls it, and
-   the "cut" it returns does not feed the task status. The function that
-   decides is `waiting()` at `server/core/logs.ts:71-87`: it is true when
-   the log has caught up, a turn has closed, no turn is open and no
-   background job is running (`activityOf` at `server/activity.ts:42`). All
+   `server/core/logs.ts:59-69`. That range is `providerTurn()`. It does
+   feed the task status, but not through `waiting`: its "cut" becomes the
+   provider-retry row (`server/core/provider-retries.ts:40-56`), and that
+   row reaches the status through `providerRetries.get()`
+   (`server/core/source.ts:238-239`, `server/core/tasks.ts:119-121`). What
+   decides `waiting` is `waiting()` at `server/core/logs.ts:71-87`: it is
+   true when the agent's role is `task` (`:73`), the log has caught up
+   (`:78`), a turn has closed, no turn is open and no background job is
+   running (`activityOf` at `server/activity.ts:42`), and before the log
+   cursor has loaded it falls back to a saved snapshot (`:74-77`). All
    four citations now name `logs.ts:71-87`, and the prose says what
    `waiting()` checks.
 2. **A stale cross-reference in `decisions.md`.** Its review-round list
@@ -505,8 +512,43 @@ one wrong citation, plus four smaller points. All are fixed:
    revision 1 and that revision 4 found two detection gaps as well.
 4. **The short answer overstated the comparison.** It said our detection
    is at least as good as Moonmux's and that only presentation ideas were
-   missing. It now names the two detection gaps and says the
-   recommendations are aimed at the live tree.
+   missing. This round fixed it properly: it now says our detection
+   matches or beats Moonmux's on the states an agent reports about itself,
+   and names the two things Moonmux covers and we do not (an agent that
+   reports `error`, and the agents the user started by hand). The round-3
+   version of this fix only removed the second half of the overclaim and
+   left "at least as good on every signal Moonmux has", which was still
+   false.
 5. **A small overclaim in `decisions.md`.** It said every recommendation
    names a file and a line; recommendation 6 names none, because it says
    what not to copy. It now says five of six do.
+
+### The run-a3 fourth round
+
+A fourth in-session Opus 5.5 round checked the new citation (right) and
+every cross-reference (right), and returned `VERDICT: FAIL` on one
+overstatement that was still standing, one wrong claim about a function,
+and three smaller points. All are fixed:
+
+1. **The short answer still overstated our detection.** It said our
+   detection is "at least as good as Moonmux's on every signal Moonmux
+   has", which is false: Moonmux's hand-started-agents signal (row 14) and
+   its helper-error rule (row 8) are not covered by us in either tree. The
+   round-3 fix had removed only the second half of the overclaim. It now
+   says our detection matches or beats Moonmux's on the states an agent
+   reports about itself, and names the two things Moonmux covers and we do
+   not.
+2. **A wrong claim about `providerTurn()`.** It said the "cut" it returns
+   does not feed the task status. It does, indirectly: the cut becomes the
+   provider-retry row (`server/core/provider-retries.ts:40-56`), which
+   reaches the status through `providerRetries.get()`
+   (`server/core/source.ts:238-239`, `server/core/tasks.ts:119-121`). What
+   `providerTurn()` does not do is decide `waiting`. The text now says
+   that.
+3. **The `waiting()` summary was incomplete.** It now also says the agent's
+   role must be `task` (`server/core/logs.ts:73`) and that, before the log
+   cursor has loaded, `waiting()` falls back to a saved snapshot
+   (`:74-77`).
+4. **A count.** The Rust table has sixteen rows, the fifteen signals plus
+   row 9a, the trust-screen check. The count is now said as such.
+5. The reframe sentence went away with fix 1.
