@@ -1,7 +1,11 @@
-import { appHome, exec, home, writeTextFile } from "herdr";
+import { appHome, exec, home, shared, writeTextFile } from "herdr";
 
 // The coordinator runs as pi (coord-pi), which keeps its sessions here.
 const DIR = `${home()}/.pi/agent-coordinator/sessions/--Users-shyamsivakumar-Code-coordinator--`;
+// The pi terminal the panel talks to names its session after its tab.
+export const SESSION_NAME = "Pi - Coordinator";
+// A throwaway pi run in the same folder must not take the panel over.
+const MIN_USERS = 5;
 const TASK_ID = /\b[A-Z]{2,5}-\d{1,4}\b/g;
 const DETAIL_MAX = 200;
 const LINE_MAX = 400;
@@ -253,15 +257,34 @@ function feedAssistant(p, m, at) {
   }
 }
 
+const HC_FROM = /^<hc\s+from="([^"]*)"/;
+const ANSWERS = /^Decisions:\n/;
+const squash = (text) => text.replace(/\s+/g, " ").trim();
+
+// A message the panel sent is the human's, even when it came through a session.
+function composed(text, at) {
+  const sent = shared("co.sent");
+  if (!sent || at < sent.since) return ANSWERS.test(text);
+  const wanted = squash(text);
+  return sent.items.some((item) => squash(item.text) === wanted);
+}
+
 function feedUser(p, m, at) {
-  const text = textOf(m.content).trim();
+  const raw = textOf(m.content).trim();
   const images = imagesOf(m.content);
+  const hc = HC_FROM.exec(raw);
+  const text = hc ? raw.replace(/<\/?hc\b[^>]*>/g, "").trim() : raw;
   if (!text && !images.length) return;
-  if (text.startsWith("<") && !images.length) return;
+  if (text.startsWith("<")) return;
   p.open.clear();
   p.tools.clear();
   p.pending = null;
-  p.turns.push({ role: "you", from: "", at, items: [...(text ? [{ k: "text", text }] : []), ...(images.length ? [{ k: "images", images }] : [])] });
+  p.turns.push({
+    role: hc && !composed(text, at) ? "session" : "you",
+    from: hc?.[1] ?? "",
+    at,
+    items: [...(text ? [{ k: "text", text }] : []), ...(images.length ? [{ k: "images", images }] : [])],
+  });
 }
 
 function feedResult(p, m) {
@@ -348,7 +371,28 @@ async function window(file, end) {
   }
 }
 
-const MAIN_SESSIONS = `cd "${DIR}" && ls -1t *.jsonl 2>/dev/null || true`;
+const MAIN_SESSIONS = `cd "${DIR}" && for f in $(ls -1t *.jsonl 2>/dev/null); do printf '%s\\t%s\\t%s\\n' "$f" "$(grep -m1 '"type":"session_info"' "$f" | grep -o '"name":"[^"]*"' | head -1)" "$(grep -c '"role":"user"' "$f")"; done || true`;
+
+function sessions(rows) {
+  return rows
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [file, name, users] = line.split("\t");
+      return { file: `${DIR}/${file}`, name: (name ?? "").replace(/^"name":"|"$/g, ""), users: Number(users) || 0 };
+    })
+    .filter((row) => row.file);
+}
+
+// The live session belongs to the coordinator's own terminal; a short pi run in
+// the same folder does not. The size filter is the fallback when no session
+// carries the coordinator's name.
+function pickLive(rows) {
+  return rows.find((r) => r.name === SESSION_NAME && r.users > 0)
+    ?? rows.find((r) => r.users >= MIN_USERS)
+    ?? rows.find((r) => r.users > 0)
+    ?? null;
+}
 
 const FILES_EVERY = 30000;
 let files = [];
@@ -392,9 +436,10 @@ async function readNow() {
   if (!files.length || Date.now() - filesAt >= FILES_EVERY) {
     const r = await exec("sh", ["-c", MAIN_SESSIONS]);
     if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot list coordinator sessions");
-    const listed = r.stdout.split("\n").filter(Boolean);
-    if (!listed.length) throw new Error("no pi coordinator session");
-    files = listed.map((f) => `${DIR}/${f}`);
+    const rows = sessions(r.stdout);
+    const live = pickLive(rows);
+    if (!live) throw new Error("no pi coordinator session");
+    files = [live.file, ...rows.filter((row) => row.file !== live.file).map((row) => row.file)];
     filesAt = Date.now();
   }
   if (live?.file !== files[0]) {
