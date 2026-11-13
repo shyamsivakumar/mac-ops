@@ -28,6 +28,16 @@ BIN_FILES = (
 CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
+# The pi coordinator (guard extension, sandbox profile, settings, phone relay
+# and its launchers) lives outside every repo, so it is owned here the same
+# way the Herdr mods are.
+PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone")
+PI_FILES = (
+    ("extensions/coordinator.ts", ".pi/agent-coordinator/extensions/coordinator.ts"),
+    ("coordinator.sb", ".pi/agent-coordinator/coordinator.sb"),
+    ("settings.json", ".pi/agent-coordinator/settings.json"),
+    ("phone-relay/CLAUDE.md", ".pi/agent-coordinator/phone-relay/CLAUDE.md"),
+)
 TURN_CAP_JOB = "dev.coordinator.turncap"
 # A python interpreter running the monitor script and nothing else. A page of
 # the script, a grep of it, or a build job that mentions it does not match.
@@ -46,6 +56,14 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     items += [
         (root / "herdr" / name, home / ".config/herdr-app" / name, 0o644)
         for name in HERDR_FILES
+    ]
+    pi_root = root / "pi"
+    items += [
+        (pi_root / "bin" / name, home / ".local/bin" / name, 0o755)
+        for name in PI_BIN_FILES
+    ]
+    items += [
+        (pi_root / relative, home / live, 0o644) for relative, live in PI_FILES
     ]
     for mod in MODS:
         base = root / "mods" / mod

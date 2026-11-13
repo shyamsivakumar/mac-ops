@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Send Shyam's message to the pi coordinator's Herdr terminal and print its reply.
+
+Used by the "Pi - Coordinator" Remote Control relay (Claude app on the phone).
+  coord-ask "<message>"   send, wait for the turn to finish (max ~9 min), print the reply
+  coord-ask --last        print the coordinator's latest reply without sending
+"""
+import glob, json, os, subprocess, sys, time
+
+SESSION_DIRS = [os.path.expanduser(p) for p in (
+    "~/.pi/agent-coordinator/sessions/--Users-shyamsivakumar-Code-coordinator--",
+    "~/.pi/agent/sessions/--Users-shyamsivakumar-Code-coordinator--",
+)]
+WAIT_S = 540
+
+
+def terminal():
+    out = subprocess.run(["hc", "ls"], capture_output=True, text=True, timeout=30).stdout
+    terms = [t for t in json.loads(out)["terminals"]
+             if t.get("agent") == "pi" and t.get("cwd", "").endswith("/Code/coordinator") and t.get("state") == "live"]
+    named = [t for t in terms if "Pi - Coordinator" in (t.get("where") or "")]
+    pick = (named or terms)
+    if not pick:
+        sys.exit("No live pi coordinator terminal. Start it in Herdr with `coord-pi -c`.")
+    return pick[0]["address"]
+
+
+def newest_session():
+    files = [f for d in SESSION_DIRS for f in glob.glob(os.path.join(d, "*.jsonl"))]
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def last_reply():
+    f = newest_session()
+    if not f:
+        return None, "(no coordinator session yet)"
+    last_id, text = None, "(no reply yet)"
+    with open(f) as fh:
+        for line in fh:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            m = e.get("message") or {}
+            if e.get("type") == "message" and m.get("role") == "assistant":
+                parts = [c.get("text", "") for c in m.get("content", []) if isinstance(c, dict) and c.get("type") == "text"]
+                if any(p.strip() for p in parts):
+                    last_id, text = e.get("id"), "\n".join(p for p in parts if p.strip())
+    return last_id, text
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        sys.exit(__doc__)
+    if args == ["--last"]:
+        print(last_reply()[1]); return
+    msg = " ".join(args).replace("\n", " ").strip()
+    t = terminal()
+    before, _ = last_reply()
+    subprocess.run(["hc", "send", t, f"From Shyam (phone): {msg}"], check=True, capture_output=True, timeout=30)
+    deadline = time.time() + WAIT_S
+    time.sleep(5)
+    while time.time() < deadline:
+        subprocess.run(["hc", "wait", t], capture_output=True, timeout=max(5, int(deadline - time.time())))
+        rid, text = last_reply()
+        if rid and rid != before:
+            st = json.loads(subprocess.run(["hc", "get", t, "--json"], capture_output=True, text=True).stdout or "{}")
+            if (st.get("status") or {}).get("state") != "working":
+                print(text); return
+        time.sleep(5)
+    rid, text = last_reply()
+    print(("Still working. Latest reply so far:\n" + text) if rid != before else
+          "Still working on it; ask again or send 'last' for the latest reply.")
+
+
+if __name__ == "__main__":
+    main()
