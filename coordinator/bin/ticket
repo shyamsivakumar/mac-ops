@@ -21,6 +21,23 @@ TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 BLOCKER_URL = re.compile(r"^https?://[^/]+/([^/\s#]+/[^/\s#]+)/issues/\d+")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+DECISIONS_HEADING = "## Coordinator decisions (override the body)"
+RUN_ID = re.compile(r"ticket:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+:a\d+")
+RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
+RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
+SHYAM = re.compile(r"\bshyam\b", re.I)
+QUOTE_SPANS = (
+    re.compile(r"\"[^\"\n]+\""),
+    re.compile(r"(?<![A-Za-z0-9])'[^'\n]{3,}'(?![A-Za-z0-9])"),
+    re.compile(r"(?m)^[ \t]*>[ \t]?[^\n]*$"),
+)
+ATTRIBUTED = re.compile(
+    r"\b(said|says|say|wrote|writes|writ|told|tells|tell|asked|asks|ask|confirmed|confirms|confirm|"
+    r"decided|decides|decide|approved|approves|approve|replied|replies|reply|answered|answers|answer|"
+    r"words|word|verbatim|quoted|quotes|quote)\b",
+    re.I,
+)
+QUOTE_WINDOW = 60
 
 
 class Refuse(Exception):
@@ -481,6 +498,103 @@ def assert_not_active(cfg, t, ledger):
             raise Refuse(f"already started: thread {thread['threadId']} is {thread['status']}")
 
 
+def strip_machine_lines(body):
+    return re.sub(r"<!--.*?-->", "", body, flags=re.S).strip()
+
+
+def quotes_shyam(body):
+    """True when a quoted span is attributed to Shyam.
+
+    The name has to sit next to the quote and something has to attribute the
+    quote to it, so "Shyam, the builder reported \\"approval missing\\"" is not
+    a Shyam quote while "Shyam said \\"go\\"" is.
+    """
+    mentions = list(SHYAM.finditer(body))
+    if not mentions:
+        return False
+    quotes = []
+    for pattern in QUOTE_SPANS:
+        quotes.extend(pattern.finditer(body))
+    for mention in mentions:
+        m_start, m_end = mention.start(), mention.end()
+        before = body[max(0, m_start - QUOTE_WINDOW):m_start]
+        after = body[m_end:m_end + QUOTE_WINDOW]
+        for quote in quotes:
+            q_start, q_end = quote.start(), quote.end()
+            if q_start >= m_end and q_start - m_end <= QUOTE_WINDOW:
+                gap = after[:q_start - m_end]
+                if ATTRIBUTED.search(gap) or (":" in gap and len(gap) <= 40):
+                    return True
+            elif q_end <= m_start and m_start - q_end <= QUOTE_WINDOW:
+                gap = before[max(0, q_end - (m_start - QUOTE_WINDOW)):]
+                if ATTRIBUTED.search(gap) or (":" in gap and len(gap) <= 40):
+                    return True
+                if m_start - q_end <= 40 and ATTRIBUTED.search(after[:30]):
+                    return True
+    return False
+
+
+def is_coordinator_decision(comment):
+    body = (comment.get("body") or "").strip()
+    if not body:
+        return False
+    if body.lower().startswith("coordinator"):
+        return True
+    return quotes_shyam(body)
+
+
+def coordinator_decisions(issue):
+    picked = [c for c in (issue.get("comments") or []) if is_coordinator_decision(c)]
+    picked.sort(key=lambda c: (c.get("createdAt") or "", c.get("id") or ""))
+    blocks = []
+    for comment in picked:
+        text = strip_machine_lines(comment.get("body") or "")
+        if not text:
+            continue
+        day = (comment.get("createdAt") or "")[:10]
+        author = (comment.get("author") or {}).get("login") or "unknown"
+        block = f"### {day} · {author}\n\n{text}"
+        if comment.get("url"):
+            block += f"\n\nSource: {comment['url']}"
+        blocks.append(block)
+    return blocks
+
+
+def brief_reviewer(cfg, t):
+    return t.get("reviewerAlias") or t.get("reviewer") or cfg["types"]["review"]
+
+
+def fill_run_ids(body, request_id):
+    """Replace the run id the body asks for with the concrete one.
+
+    Only a run id that the body introduces as the run instruction is filled,
+    so a historical or prerequisite run id stays as written.
+    """
+    def replace(match):
+        start = match.start()
+        gap = body[max(0, start - 40):start]
+        cue = RUN_ID_CUE.search(gap)
+        if cue and RUN_ID_GAP.match(gap[cue.end():]):
+            return request_id
+        return match.group(0)
+    return RUN_ID.sub(replace, body)
+
+
+def assemble_brief(cfg, t, request_id, issue):
+    """The brief the builder receives: the ticket body, the concrete run id and
+    every coordinator decision comment, which override the body."""
+    body = fill_run_ids(t["body"], request_id)
+    filled = request_id in body
+    head = [f"Ticket: {t['url']}", f"Reviewer for the gate: {brief_reviewer(cfg, t)}"]
+    if not filled:
+        head.append(f"Run id: `{request_id}`")
+    parts = ["\n".join(head), body]
+    decisions = coordinator_decisions(issue)
+    if decisions:
+        parts.append(DECISIONS_HEADING + "\n\n" + "\n\n".join(decisions))
+    return "\n\n".join(parts)
+
+
 def machine_line(entry):
     return f"<!-- coordinator-ticket {json.dumps(entry, separators=(',', ':'))} -->"
 
@@ -493,12 +607,12 @@ def default_branch(repo):
     return gh(["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]).strip()
 
 
-def build_start(cfg, t, attempt):
+def build_start(cfg, t, attempt, issue):
     rcfg = cfg["repos"][t["repo"]]
     request_id = f"ticket:{t['repo']}#{t['number']}:a{attempt}"
     payload = {
         "projectId": rcfg["projectId"],
-        "message": f"Ticket: {t['url']}\nReviewer for the gate: {t['reviewerAlias']}\n\n{t['body']}",
+        "message": assemble_brief(cfg, t, request_id, issue),
         "clientRequestId": request_id,
         "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}"},
         "modelSelection": cfg["models"][t["builderAlias"]]["selection"],
@@ -531,11 +645,27 @@ def cmd_start(a):
         repo_config(cfg, repo)
         lock = with_ticket_lock(repo, n)
         issue = fetch_issue(repo, n)
-        t = validate_start(cfg, repo, issue)
+        refusal = None
+        try:
+            t = validate_start(cfg, repo, issue)
+        except Refuse as e:
+            refusal = e
+            t = parse_ticket(cfg, repo, issue)
+        if refusal is not None and not a.print_brief:
+            raise refusal
         ledger = ledger_of(issue, authed_login())
-        assert_not_active(cfg, t, ledger)
         attempt = max([e["attempt"] for e in intents(ledger)], default=0) + 1
-        request_id, command, payload = build_start(cfg, t, attempt)
+        request_id = f"ticket:{repo}#{n}:a{attempt}"
+        brief = assemble_brief(cfg, t, request_id, issue)
+        if a.print_brief and (not a.dry_run or refusal is not None):
+            print(brief)
+            if refusal is not None:
+                print(f"\nnote: a start right now would be refused: {refusal}")
+            return
+        if refusal is not None:
+            raise refusal
+        assert_not_active(cfg, t, ledger)
+        request_id, command, payload = build_start(cfg, t, attempt, issue)
         stamp = now()
         body_hash = hashlib.sha256(t["body"].encode()).hexdigest()[:16]
         intent = {"kind": "intent", "attempt": attempt, "requestId": request_id, "bodyHash": body_hash,
@@ -553,6 +683,8 @@ def cmd_start(a):
         print("command:\n" + shlex.join(command) + "\n")
         print(f"receipt comment (after coordq):\n<!-- coordinator-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"coordq\":\"<coordq output>\"}} -->\n")
         print(f"then remove label stage:{t['stage']}")
+        if a.print_brief:
+            print("brief:\n" + brief)
         return
     post_comment(repo, n, intent_text)
     try:
@@ -747,6 +879,8 @@ def main():
     s = sub.add_parser("start")
     s.add_argument("ref")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--print-brief", action="store_true",
+                   help="print the brief this start would send, then stop without starting")
     s.set_defaults(fn=cmd_start)
     s = sub.add_parser("abandon")
     s.add_argument("ref")
