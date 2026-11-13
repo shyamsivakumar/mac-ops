@@ -9,8 +9,22 @@ shift reads GitHub, coordq and T3 for state and order, so there is no second
 queue and no punch-list file (spec revision 2).
 
 The mac-ops installer (`install_coordinator.py`) creates this folder and its
-four subfolders, installs this README, and keeps the folder out of Git in
-whatever repository contains the coordinator folder.
+four subfolders, installs this README, installs the `overnight` command in
+`~/.local/bin`, and keeps the folder out of Git in whatever repository
+contains the coordinator folder.
+
+## The command
+
+`overnight` is the shift's command line. It lives in `coordinator/overnight/`
+in the mac-ops checkout and is installed by the same installer.
+
+| Command | What it does |
+| --- | --- |
+| `overnight intake --dry-run` | Reads the board (`ticket list --fresh --json`) and the open pull requests (`gh pr list` for each allowed repository) into intake records, and prints the record count per repository. Read only: it writes nothing and keeps no list of its own. |
+
+Intake is the first part of the spec's rollout plan (T3). The later parts
+(filtering, ordering, arming, the tick and the morning report) build on the
+same records, in the same module.
 
 ## Folders
 
