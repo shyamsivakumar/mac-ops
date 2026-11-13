@@ -21,6 +21,7 @@ in the mac-ops checkout and is installed by the same installer.
 | Command | What it does |
 | --- | --- |
 | `overnight intake --dry-run` | Reads the board (`ticket list --fresh --json`) and the open pull requests (`gh pr list` for each allowed repository) into intake records, and prints the record count per repository. Read only: it writes no record and keeps no list of its own. The ticket CLI refreshes its own cache when it reads the board; that cache is the ticket CLI's. |
+| `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, arming, the tick and the morning report) build on the
@@ -80,6 +81,63 @@ receipts sit beside it.
   cookie or `.env` value.
 - The folder is scratch for one shift. Nothing here changes merge, push, the
   slot cap or the Ascend rules.
+
+## What the morning report reads
+
+The report is rendered from the records in this folder and from nothing
+else. It never invents a count and it never upgrades a claim into proof.
+
+| Record | What the report takes from it |
+| --- | --- |
+| `receipts/<item>.md` | The state of one item, its check, its gate verdict, its merge time, its builder time and why it stopped. The merge time is the one the shift wrote after it checked GitHub, so the report does not call GitHub again. |
+| `inbox/parking-lot.md` | The decisions the shift could not make, each with a default and a recommendation. |
+| `run/shift-log.md` | How many items were in scope (`planned N items`), whether the full suite ran and with which exit code, and whether the shift stalled. |
+| `run/policy.json` | The verify level and `allowance_used_percent`, the share of the plan allowance the night used. |
+| `run/armed`, `run/deadline` | The window of the night, in PT. |
+| `run/STOP` | Its presence means the shift was stopped. |
+
+### The receipt fields
+
+A receipt is markdown with one `- Key: value` line per field.
+
+| Field | What it holds |
+| --- | --- |
+| `Item` | One line naming the work. |
+| `Repo`, `Ticket` | Where the work is (`MO-222 (#190)`). |
+| `State` | `done`, `ready`, `stuck` or `parked`. |
+| `PR` | The pull request, when there is one. |
+| `Merged` | The PT time the merge landed on GitHub. |
+| `Checks` | One check, or several separated by semicolons. Each check is a command in backticks and its exit code: `` `cmd` exit 0 ``. |
+| `Gate` | `PASS` or `FAIL`. |
+| `Files` | How many files the item touched. |
+| `Time used` | The builder time, as `N min`. |
+| `Stopped because` | Why the item stopped. |
+| `Next` | The next step. |
+
+### The rules the report holds
+
+- A check counts as run only when the receipt names the command and its
+  exit code. A check that is claimed with neither never appears as passed:
+  the item is stuck, and the check is listed under "Not run, and why".
+- An item counts as done only when its receipt holds a check that ran and
+  passed, and a gate that passed. A check that failed leaves the item
+  stuck, whatever the gate says.
+- `done` counts the items that merged, and `ready` counts the items that
+  hold a passing gate but wait for a merge right the shift does not have.
+  The counts and the lists agree item for item.
+- The report says how the shift ended in one of the four ways the spec
+  allows: `deadline`, `all done`, `STOP` or `stall`. When the records
+  explain none of them, it says `UNVERIFIED`.
+- A count that cannot be checked is written as `UNVERIFIED`: the planned
+  count without a shift-log summary, the model use when the allowance was
+  not readable, the builder time when a receipt records no time or a
+  planned item has no receipt, and the identity of planned items that
+  have no receipt.
+- The full suite counts as run only when the shift log records its command
+  and its exit code.
+- The report never says a check passed if it did not run.
+- The report exits non-zero when the folder that holds the records does
+  not exist, so a wrong folder is not a calm empty report.
 
 ## Source
 
