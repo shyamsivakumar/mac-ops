@@ -43,10 +43,11 @@ the one case the live tree still misses.
     is Apache-2.0, herdr-projects at `a862ac9` is MIT (Elias Stravik, 2026).
   - Six recommendations, ordered by value, each aimed at a named file and
     line in the live tree.
-  - After the run-a3 reviewer round: two rows that described `reconcile()`
+  - After the run-a3 reviewer rounds: two rows that described `reconcile()`
     wrongly were corrected, the "agents started outside the app" idea came
-    back as recommendation 1, recommendation 1 was reworded, and four loose
-    descriptions were tightened.
+    back as recommendation 1, the error recommendation (now 2) was
+    reworded and narrowed, and four loose descriptions were tightened.
+    The stale cross-references the second round found are fixed too.
 - `evidence/MO-202/decisions.md`: this file.
 
 Nothing else changed. No code was copied from Moonmux, Moonmux was not
@@ -135,9 +136,10 @@ kept
   its recommendations pointed at the Rust line only. That is wrong, and a
   reader following them would have changed the wrong code.
 - **The reach**: A reader now sees which of Moonmux's ideas the live tree
-  already has (the in-app on-screen suppression, the helper rule, the alert
-  jump) and which it still lacks (`error` as a need, a "seen" memory,
-  time-in-state per agent, and the agents the user started by hand).
+  already has (the in-app on-screen suppression, the helper rule for the
+  parent's status, the alert jump) and which it still lacks (`error` as a
+  need, a "seen" memory, time-in-state per agent, an alert for a new
+  `blocked` inside `need`, and the agents the user started by hand).
 - **Verdict**: sound.
 - **Confidence**: high.
 
@@ -250,10 +252,11 @@ reviewer round" there.
    recommendation 1.
 2. **Row 1 described the same code wrongly.** Agents come from the app's
    own launch records, not from herdr-core.
-3. **Recommendation 1 overstated its effect.** A crashed process is already
-   a need (dead pid at `source.ts:235`, finished terminal at
+3. **The error recommendation overstated its effect.** A crashed process is
+   already a need (dead pid at `source.ts:235`, finished terminal at
    `tasks.ts:121`); the gap is an agent that is alive and reports
-   `state=error`. Reworded.
+   `state=error` before its logged turn ends. Reworded, and narrowed to
+   that case.
 4. **Row 9 called a filter an order.** `waiting()` filters by status; it
    orders nothing. The row now says so.
 5. **Row 12's shape was off.** `go` is `{ place, task }`; `focus` is added
@@ -262,7 +265,8 @@ reviewer round" there.
    `SessionStart`.
 7. **Rows 7 and 11 overstated `keptTags`.** The in-app rule is per chat
    (`plugins/alerts/client.tsx:45`), the push skip is per device
-   (`server/app.ts:109-110`). Both rows now say "Partly".
+   (`server/app.ts:109-110`). Live row 11 now says "Partly"; live row 7
+   keeps its "No", with the wording corrected.
 8. **A stale cross-reference** in the revision 2 corrections list, which
    still pointed at the old recommendation numbers.
 
@@ -272,6 +276,25 @@ numbers are right, the `error` gap is real, the licences are as named, the
 diff touches only the two evidence files, nothing was installed or copied,
 and the acceptance criteria are met.
 
+### The run-a3 re-check round
+
+A second in-session Opus 5.5 round re-read the fixed branch and returned
+`VERDICT: FAIL` again, on stale cross-references rather than on code
+facts. It verified all eight code fixes, then found six places where the
+text still pointed at the wrong recommendation number, and four smaller
+accuracy points. All are fixed, and each fix is listed in the evidence file
+under "The run-a3 re-check round": live row 15 now names recommendation 2
+for the `error` gap, Rust row 10 names recommendation 4 for the
+group-versus-status point, the cockpit check is named as the closing note
+instead of a recommendation, revision 2's correction 6 carries the revision
+4 number, the "both rows say Partly" claim is corrected, the `error` gap is
+narrowed to an agent that is alive and reports `error` before its logged
+turn ends (`tasks.ts:118`, `logs.ts:59-69`), live row 8 is now "Partly"
+(the live tree drops helper events but never turns a helper's error into a
+need), recommendation 4 names the right missed case (a new `blocked`
+arriving while the task is already `need`), and "What we would gain" now
+lists four things instead of three.
+
 ## Known limits
 
 - The herdr-projects rows describe the released Rust line (0.2.34,
@@ -280,8 +303,8 @@ and the acceptance criteria are met.
 - The live tree's trust-screen equivalent was not looked for, the order the
   live sidebar draws needs-you rows in was not read, and the mac-ops
   cockpit panel was not checked for whether it already reads the live
-  tree's `need` status. Recommendation 5 says to check before changing
-  anything.
+  tree's `need` status. The closing note in the evidence file says to
+  check before changing anything.
 - Moonmux was not run and not installed, per the brief, so the table
   describes the source, not an observed run.
 - The Moonframe upstream (the framework Moonmux draws with) was not read
