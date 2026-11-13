@@ -92,8 +92,9 @@ function checkBash(cmd: string): string | undefined {
     const end = lines.findIndex((line, i) => i > 0 && line === delimiter);
     if (end === lines.length - 1 && (TEMP.test(resolvedTarget) || resolvedTarget.startsWith(COORD + "/"))) secretCmd = lines[0];
   }
-  for (const m of cmd.matchAll(/:\s*>\s*([^\s;|&]+)/g)) {
-    if (!TEMP.test(m[1])) return "truncating files needs Shyam's OK";
+  for (const m of cmd.matchAll(/:\s*>\|?\s*(\S+)/g)) {
+    const target = abs(m[1].replace(/^\$(?:TMPDIR|\{TMPDIR\})\//, (process.env.TMPDIR || "/tmp") + "/"), COORD);
+    if (!TEMP.test(target)) return "truncating files needs Shyam's OK";
   }
   if (SECRET_PATH.test(secretCmd) && !/^\s*ls\b/.test(cmd)) return "touches a secret file (.env, auth.json, keys, T3 settings)";
   return undefined;
