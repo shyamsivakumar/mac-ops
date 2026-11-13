@@ -6,6 +6,11 @@ Spec: the overnight runner spec (issue #172), revision 2.
 Part: T3a of the spec's rollout plan - intake reads the board and the open
 pull requests.
 
+Note on the pull requests: PR #203 merged the first version of this part
+while the reviewer round was still running. The review fixes came after
+that merge, so they ride in a follow-up pull request on the same branch
+line. Both carry `Refs #176`.
+
 ## What landed
 
 - `coordinator/overnight/overnight`: the overnight module's command line, a
@@ -166,9 +171,10 @@ behaviour. No existing test or check was weakened.
 
 ## The reviewer round
 
-One in-session reviewer round (Opus 5.5) read `git diff origin/main...HEAD`
-and returned `VERDICT: PASS` with one major finding, five minor findings
-and six nits. What was done with them:
+One in-session reviewer round (Opus 5.5) read the diff of the first version
+of this part (`git diff origin/main...HEAD` at that point) and returned
+`VERDICT: PASS` with one major finding, five minor findings and six nits.
+What was done with them:
 
 1. **Major, fixed.** The branch fallback took the number from a ticket key
    and looked it up as a GitHub issue number. The board key number and the
