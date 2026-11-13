@@ -2,7 +2,7 @@
 # Start (or continue with -c) the pi coordinator with its own light config.
 # Sandbox: coordinator.sb blocks writes/deletes to repos, worktrees, configs (kernel-enforced).
 # Guard + wake: ~/.pi/agent-coordinator/extensions/coordinator.ts. Tick: loop/tick.md.
-# The 30-minute tick runs from launchd as a headless Sonnet (coord-tick), so the
+# The 30-minute tick runs from launchd as a headless GPT-6.1 Sol (coord-tick), so the
 # in-session wake timer stays off. /tick and /wake on still work by hand.
 # --no-skills stops discovery of ~/.agents/skills (260 skills, ~30k tokens); only these load:
 cd ~/Code/coordinator || exit 1
