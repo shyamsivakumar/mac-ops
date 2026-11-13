@@ -64,14 +64,19 @@ installer. No existing test or check was weakened.
 - **The decision**: `mirrorLabel` returns `phone` for an input that carries
   `From Shyam (phone):`, and the reply is mirrored.
 - **The gap**: MO-198 skipped a phone turn, on the assumption that the relay
-  already shows the reply. It does not: the relay forwards Shyam's message
-  and never sees the coordinator's answer.
+  already shows the reply. The reviewer round found that claim is wrong:
+  `coord-ask` waits for the turn and prints the reply, so the relay usually
+  shows the phone reply once by itself. "Okay so what's left" went missing
+  for another reason (a `coord-ask` timeout, or a stale "last reply"), and
+  the mirror is a second, independent path to the phone.
 - **The reach**: The phone shows the label `phone` and the reply under it.
   The relay answers a `Mirror:` message verbatim, so the label travels with
   the text. Changing that is a relay change and out of scope here.
-- **Verdict**: sound. The old rule is the reason "Okay so what's left" got
-  no answer.
-- **Confidence**: high.
+- **Verdict**: sound, with a known duplication: a phone turn that `coord-ask`
+  reports shows its reply twice on the phone, once from `coord-ask` and once
+  as the mirror. Shyam has to pick which path wins; that is a relay or
+  `coord-ask` change, not this one.
+- **Confidence**: medium.
 
 ### 4. One queue for every send
 
@@ -148,10 +153,47 @@ installer. No existing test or check was weakened.
    stdin reader got the whole block in one read
    (`b'Mirror: phone\nline one\n- bullet one\n- bullet two\n| a | b |\nlast
    line'`) and the Enter as a separate `\r`. The live relay `t59`
-   (`pi-coord-phone`) got the same treatment: `hc read t59` shows one user
-   message with four lines and one reply, so no line was submitted early.
-4. **Checks.** `python3 scripts/mac_ops_fast_check.py` → passed, and the
+   (`pi-coord-phone`) got the production shape, `Mirror: phone` and three
+   body lines, as one user message with one reply: `hc read t59` shows
+   `Mirror: phone`, `line one`, `- bullet one` and `| a | b |` in one block
+   and the relay's verbatim answer under it, so no line was submitted early.
+4. **A dead relay costs one mirror.** The event probe's stub `hc` fails the
+   send that asks for a dead relay. The queue moves on: the mirror after the
+   failure is still sent, and the stub's start and end markers show that no
+   two sends overlap.
+5. **Checks.** `python3 scripts/mac_ops_fast_check.py` → passed, and the
    same command through `heavy` → passed.
+
+## The reviewer round
+
+One in-session reviewer round (Claude Opus 5.5) read the diff against the
+ticket and returned `VERDICT: PASS` with four minor findings and four nits.
+What was done with them:
+
+1. **Minor, fixed.** The stub `hc` now writes a start and an end marker
+   around every send and sleeps between them, and the probe has a case where
+   the send fails. The test proves that two sends never overlap and that a
+   dead relay costs that mirror and nothing else.
+2. **Minor, fixed.** A run that no user message started (a custom message,
+   a continuation) clears the label, so the previous run's input cannot name
+   it.
+3. **Nit, fixed.** `mirrorText` normalises `\r` to `\n`: a carriage return
+   would act as an Enter in the relay's terminal.
+4. **Nit, fixed.** The stale test name and the brittle source check are
+   gone; the behaviour test covers the same ground.
+5. **Minor, corrected here.** Decision 3 claimed the relay never sees the
+   coordinator's answer. It does, through `coord-ask`, so a phone reply can
+   now show twice on the phone. The decision records the duplication and
+   leaves the choice to Shyam.
+6. **Minor, proof made real.** The live-relay proof now sends the
+   production shape, not a prefixed probe.
+7. **Minor, not changed.** The reviewer wants the label of a reply to come
+   from the user message that enters the conversation (`message_end` with
+   `role === "user"`) rather than from the `input` event, because a steer
+   that arrives while a reply is being written renames that reply. The
+   ticket names the `input` event ("labelled with the latest user input seen
+   via the `input` event"), so the mechanism stays as the ticket has it and
+   the trade-off is recorded here. Changing it needs Shyam's OK.
 
 ## After the merge
 
