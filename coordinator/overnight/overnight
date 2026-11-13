@@ -18,12 +18,15 @@ passed unless the records say it ran.
     overnight report --dry-run
 
 `overnight shift` (spec T12) is the command the launchd job fires. One job
-runs at 22:30 PT and again at 06:30 PT, so the command decides which part
-of the night it is: the start reads the board, and the report writes the
+runs at 22:30 and again at 06:30, so the command decides which part of
+the night it is: the start reads the board, and the report writes the
 morning report. In dry-run mode the shift does no work, so the only file
 the night writes is the morning report.
 
     overnight shift --dry-run
+
+The clock is the Mac's local clock, the clock launchd fires on. The
+report and the log say Pacific time.
 
 The board is the list. Intake reads `ticket list --fresh --json` for the
 tickets and `gh pr list` for each allowed repository, and holds the records
@@ -81,10 +84,12 @@ PLANNED = re.compile(r"planned\s+(?P<count>\d+)\s+items?\b", re.I)
 RECEIPT_FILE = re.compile(r"^(?!morning-).+\.md$")
 # The shift log records the end of the shift with the word "stall".
 STALL = re.compile(r"\bstall\b", re.I)
-# The hours the launchd job fires at (spec part T12): the shift starts at
-# 22:30 PT and the morning report is written at 06:30 PT.
-START_HOUR = 22
-REPORT_HOUR = 6
+# The launchd job fires at 22:30 and 06:30 (spec part T12). The clock is
+# the Mac's local clock, the clock launchd itself uses, so a run that
+# fires always matches the part it is for. The windows are wider than one
+# minute, so a Mac that wakes late still writes the report.
+START_WINDOW = (22 * 60, 24 * 60 - 1)
+REPORT_WINDOW = (6 * 60, 7 * 60 + 29)
 # The states a receipt can name.
 STATE_DONE = "done"
 STATE_READY = "ready"
@@ -412,14 +417,15 @@ def cmd_intake(args: argparse.Namespace) -> int:
 
 
 def shift_phase(now: datetime) -> str:
-    """Return the part of the night a PT moment belongs to.
+    """Return the part of the night a moment belongs to.
 
-    The launchd job fires at 22:30 PT to start the shift and at 06:30 PT
-    to write the morning report. The hour of the PT clock decides, so the
-    job needs no second program and no state file."""
-    if now.hour == START_HOUR:
+    The job fires at 22:30 and 06:30, and a Mac that wakes late fires the
+    report after 06:30, so the windows are an hour wide rather than a
+    minute."""
+    minutes = now.hour * 60 + now.minute
+    if START_WINDOW[0] <= minutes <= START_WINDOW[1]:
         return "start"
-    if now.hour == REPORT_HOUR:
+    if REPORT_WINDOW[0] <= minutes <= REPORT_WINDOW[1]:
         return "report"
     return "outside"
 
@@ -429,13 +435,24 @@ def cmd_shift(args: argparse.Namespace) -> int:
 
     The start reads the board and writes nothing. The report writes the
     morning report, which is the only file a dry night writes. Outside the
-    two hours there is nothing to do."""
-    now = datetime.now(PT)
-    phase = args.at if args.at != "auto" else shift_phase(now)
-    stamp = now.strftime("%Y-%m-%d %H:%M %Z")
+    two windows there is nothing to do.
+
+    The clock is the Mac's local clock, the clock launchd fires on. The
+    report and the log still say Pacific time, and a Mac that is not on
+    Pacific time is told so."""
+    now_local = datetime.now().astimezone()
+    now_pt = datetime.now(PT)
+    phase = args.at if args.at != "auto" else shift_phase(now_local)
+    stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
     if phase == "outside":
         print(f"overnight: {stamp} is outside the overnight window; nothing to do")
         return 0
+    if now_local.utcoffset() != now_pt.utcoffset():
+        print(
+            "overnight: the Mac's clock is not on Pacific time, so the job "
+            "fires at the Mac's local 22:30 and 06:30, not Pacific time",
+            file=sys.stderr,
+        )
     if phase == "start":
         if not args.dry_run:
             die(
