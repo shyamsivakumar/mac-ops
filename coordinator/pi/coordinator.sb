@@ -1,0 +1,29 @@
+(version 1)
+; Coordinator sandbox: everything allowed except writes (incl. delete/rename) to
+; the trees below. Enforced by the kernel for pi and every child it starts, so
+; python/node/base64 tricks cannot get around it. T3 threads, launchd jobs and
+; the T3 app are separate processes and are not affected.
+(allow default)
+(deny file-write*
+  (subpath "/Users/shyamsivakumar/Code")
+  (subpath "/Users/shyamsivakumar/.t3/worktrees")
+  (subpath "/Users/shyamsivakumar/Documents")
+  (subpath "/Users/shyamsivakumar/Desktop")
+  (subpath "/Users/shyamsivakumar/dotfiles")
+  (subpath "/Users/shyamsivakumar/.ssh")
+  (subpath "/Users/shyamsivakumar/.pi/agent")
+  (subpath "/Users/shyamsivakumar/.pi/agent-deepseek")
+  (subpath "/Users/shyamsivakumar/.pi/agent-minimax")
+  (subpath "/Users/shyamsivakumar/.pi/agent-glm")
+  (subpath "/Users/shyamsivakumar/.pi/agent-coordinator/extensions")
+  (literal "/Users/shyamsivakumar/.pi/agent-coordinator/settings.json")
+  (literal "/Users/shyamsivakumar/.pi/agent-coordinator/coordinator.sb")
+  (subpath "/Users/shyamsivakumar/.pi/agent-coordinator/phone-relay")
+  (subpath "/Users/shyamsivakumar/.coordinator")
+  (subpath "/Users/shyamsivakumar/.local/bin")
+  (subpath "/Users/shyamsivakumar/Library/LaunchAgents")
+  (subpath "/Users/shyamsivakumar/.claude/hooks")
+  (literal "/Users/shyamsivakumar/.claude/settings.json")
+  (literal "/Users/shyamsivakumar/.claude/CLAUDE.md"))
+(allow file-write*
+  (subpath "/Users/shyamsivakumar/Code/coordinator"))

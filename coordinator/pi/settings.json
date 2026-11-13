@@ -1,0 +1,21 @@
+{
+  "defaultProvider": "pi-claude-cli",
+  "defaultModel": "claude-opus-5-5",
+  "defaultThinkingLevel": "medium",
+  "enabledModels": [
+    "pi-claude-cli/claude-opus-5-5",
+    "pi-claude-cli/claude-sonnet-5-5"
+  ],
+  "skills": [],
+  "quietStartup": true,
+  "theme": "dark",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 800000,
+    "keepRecentTokens": 20000
+  },
+  "packages": [
+    "git:github.com/dmmulroy/pi-claude-cli"
+  ],
+  "lastChangelogVersion": "1.5.2"
+}
