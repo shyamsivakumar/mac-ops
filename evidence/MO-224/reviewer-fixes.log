@@ -1,0 +1,131 @@
+# Reviewer round - findings and fixes
+
+The in-session reviewer (Claude Opus 5.5) read `git diff origin/main...HEAD`
+against MO-224 and returned `VERDICT: FAIL`. Its findings, what each one
+was, and the probe that shows the fix.
+
+## 1. The night ended early but logged `ended: deadline`
+
+**Finding (major).** `time.sleep(min(remaining, 600))` waits at most ten
+minutes, so with the documented `--minutes 60` the night ended about fifty
+minutes early and still logged `ended: deadline`, while `run/deadline` was
+an hour later.
+
+**Fix.** The wait is the whole window and is never cut short: `--wait`
+sleeps until the window closes. The end of the night is then read from the
+records, not written from a guess: the STOP file, else the clock against
+`run/deadline`, else "the items were observed and the window is still
+open".
+
+**Probe.** `python3 coordinator/overnight/overnight attend --items 3
+--minutes 1 --wait --run-by "the agent (rehearsal)" --root
+~/Code/coordinator/.overnight/attended-2026-11-13` ran from 14:29 to
+14:30 PT (the whole window), and the shift log's last line reads `ended:
+deadline` with `run/deadline` behind it
+(`evidence/MO-224/shift-log.md`).
+
+## 2. The report took the shift log's word for how the night ended
+
+**Finding (major).** `how_it_ended` returned the log's `ended:` statement
+before it checked anything, so a log line `ended: all done` made the
+report print "all done" with a stuck receipt, where `origin/main` printed
+`UNVERIFIED`. That is the report upgrading a claim into proof.
+
+**Fix.** The statement is now checked against the records before it is
+repeated: "all done" needs every receipt to be done or parked and the
+planned count to match, "deadline" needs the clock past `run/deadline`,
+"STOP" needs the STOP file, "stall" needs the stall in the log. A claim
+the records do not support is never repeated, and the checks that were
+already there still run when the log says nothing.
+
+**Probe.** On a folder with one stuck receipt and a deadline an hour
+away, the report prints `UNVERIFIED` for a log with no statement and for a
+log that says `ended: all done`, and prints `deadline` only when the
+clock is past the deadline file.
+
+## 3. The receipts claimed builder minutes that no builder used
+
+**Finding (major).** The report's cost line read the receipt's
+`Time used` as builder time, and the receipt rounded an observation up to
+a minute, so the report said "Builder time: 3 min" after no builder ran.
+
+**Fix.** The receipt records `Time used: 0 min` and puts the time the
+shift spent looking in its own field, `Observed`.
+
+**Probe.** The proof report's cost line reads "Builder time: 0 min", and
+each receipt reads `- Time used: 0 min` with `- Observed: N s`
+(`evidence/MO-224/MO-231.md`, `evidence/MO-224/morning-2026-11-13.md`).
+
+## 4. The records claimed a person watched
+
+**Finding (major).** `--attended-by Shyam` is a command-line argument, so
+writing "watched by Shyam" into `run/armed` and the shift log was a claim
+the command could not support. The ticket's done condition is a human
+event.
+
+**Fix.** The flag is now `--run-by`, and the records say who ran the
+night. The rehearsal was run by the agent, so the records say "the agent
+(rehearsal)", and this ticket states plainly that the attended hour with
+Shyam has not happened yet.
+
+**Probe.** `evidence/MO-224/shift-log.md` and `evidence/MO-224/armed` say
+"run by the agent (rehearsal)".
+
+## 5. The rule check used the shell history as proof it could not give
+
+**Finding (major).** The rule check argued from the age of
+`~/.zsh_history` that no rule was broken. A command an agent runs is not
+an interactive shell command, so it never reaches the history and the
+history proves nothing.
+
+**Fix.** The check now says exactly that, and names the proof that does:
+the shift log, which lists every command the night ran, and the module's
+own command list, which holds no merge, no push and no force push.
+
+**Probe.** `evidence/MO-224/rule-check.log`.
+
+## 6. The selection had a second hold rule
+
+**Finding (major).** The real hold is the `stage:hold` label, which the
+ticket CLI keeps out of the board list. The new code instead searched
+titles and problems for the word "hold", a second and parallel rule that
+never sees a held ticket and wrongly skips titles that hold the word
+inside another word.
+
+**Fix.** The word search is gone. The night takes what the board shows
+(`stage` is `todo`), and the board list is the only hold rule. The held
+ticket FFBT-1 (#344) is not in the board list at all, and `ticket list
+--fresh --json` returns 118 tickets without it.
+
+**Probe.** `ticket list --fresh --json | python3 -c ...` shows FFBT-1 is
+absent from the list, and the dry run picks MO-231, MO-234 and MO-237,
+none of which is held.
+
+## 7. The night wrote into the live receipts folder
+
+**Finding (minor).** `attend` without `--root` armed the live runtime
+folder, so the 06:30 launchd report would have mixed rehearsal receipts
+into the real morning report.
+
+**Fix.** Without `--root` the night writes to a dated folder under the
+runtime folder (`attended-YYYY-MM-DD`). `--root` still points it anywhere.
+
+**Probe.** The proof run used `--root`, and the live folder
+`~/Code/coordinator/.overnight/receipts/` holds only the report from the
+T12 dry run.
+
+## 8. Smaller findings, and what was done
+
+- The types `quick` and `light` do not exist on the board. The list is
+  now the board's own small types, `chore` and `standard`.
+- The gate verdict was read from comments only. It is now read from
+  comments and reviews.
+- The `ended:` pattern matched anywhere in a line. It now matches a line
+  that ends with the statement.
+
+## What the reviewer did not find
+
+No path to merge, push, raise the slot cap, touch an Ascend repository,
+write a secret or keep a second queue of work. The scope stayed inside
+this ticket: no T4, T5, T7, T8, T9 or T10 logic was written. The fast
+check passed.

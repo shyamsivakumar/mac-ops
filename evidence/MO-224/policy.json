@@ -21,6 +21,6 @@
   "stall_cap": 3,
   "budget_percent": null,
   "allowance_used_percent": null,
-  "attended_by": "Shyam",
+  "run_by": "the agent (rehearsal)",
   "window_minutes": 1
 }
