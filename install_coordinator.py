@@ -120,14 +120,28 @@ def git_toplevel(path: Path) -> Path | None:
     return Path(top) if top else None
 
 
+def git_ignored(coordinator: Path) -> bool:
+    """Return True when git already ignores the overnight folder."""
+    result = run_status(["git", "-C", str(coordinator), "check-ignore", "-q",
+                         str(overnight_root(coordinator))])
+    return result == 0
+
+
 def gitignore_item(coordinator: Path) -> tuple[Path, bytes] | None:
     """Return the ignore file to write and its new bytes, or None when the
     overnight folder is already ignored or no repository contains it."""
     top = git_toplevel(coordinator)
     if top is None:
         return None
+    if git_ignored(coordinator):
+        return None
     ignore = top / ".gitignore"
-    current = read_regular(ignore)
+    try:
+        current = read_regular(ignore)
+    except OSError as exc:
+        # A symlinked ignore file, or one that cannot be read, is left alone.
+        print(f"Warning: leaving {ignore} alone: {exc}")
+        return None
     text = current[0].decode("utf-8", "replace") if current else ""
     if any(line.strip() == GITIGNORE_ENTRY for line in text.splitlines()):
         return None
@@ -218,6 +232,17 @@ def run_quiet(argv: list[str]) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return result.stdout
+
+
+def run_status(argv: list[str]) -> int | None:
+    """Run a command and return its exit code, or None when it cannot run."""
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=15, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.returncode
 
 
 def parse_launchd_pid(output: str) -> int | None:
@@ -360,7 +385,7 @@ def changes(
     wanted += [(target, data, 0o644) for data, target in render_plists(checkout, home)]
     coordinator = coordinator or coordinator_dir(home)
     readme = checkout.joinpath("coordinator", *OVERNIGHT_README)
-    if readme.is_file():
+    if readme.is_file() and coordinator.is_dir():
         wanted.append(
             (overnight_root(coordinator) / "README.md", readme.read_bytes(), 0o644)
         )
@@ -428,6 +453,12 @@ def install(
         print(f"Created log directory: {directory}")
     for directory in ensure_overnight_dirs(coordinator, home):
         print(f"Created overnight directory: {directory}")
+    if not coordinator.is_dir():
+        print(
+            f"Warning: coordinator folder {coordinator} does not exist. "
+            "The overnight layout was not created. Point the installer at "
+            "one with --coordinator-dir."
+        )
     for pid in manual_monitors():
         print(
             f"Warning: a hand-started turn-cap monitor is running (pid {pid}). "

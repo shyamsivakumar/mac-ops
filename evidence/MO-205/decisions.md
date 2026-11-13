@@ -20,10 +20,15 @@ ignore.
     other installed file.
   - `gitignore_item()` finds the repository that contains the coordinator
     folder with `git rev-parse --show-toplevel` and adds a `.overnight/` rule
-    to that repository's `.gitignore` when the rule is missing. The write goes
-    through the same backup transaction.
+    to that repository's `.gitignore` when git does not already ignore the
+    folder (`git check-ignore` is the test, so a nested or global rule
+    counts). The write goes through the same backup transaction.
   - `status` and `--dry-run` now report the overnight root, the folders that
-    are missing and the files that would be written.
+    are missing and the files that would be written. `status` counts a
+    missing folder as out of sync, so the layout and the files are checked
+    together.
+  - A coordinator folder that does not exist is reported and left alone: the
+    installer creates nothing for it and says how to point at another one.
 
 Not touched: the merge, push and slot-cap rules, the Ascend rules, the launchd
 jobs, the coordq queue, and every existing installer behaviour. No existing
@@ -102,21 +107,23 @@ test or check was weakened.
 
 - **When**: revision 1.
 - **The decision**: The installer runs `git rev-parse --show-toplevel` on the
-  coordinator folder. When a repository contains it, the installer adds
-  `.overnight/` to that repository's `.gitignore` if no such line is there
-  already. When no repository contains it, the installer writes nothing for
-  the ignore.
+  coordinator folder. When a repository contains it, the installer asks git
+  whether the folder is already ignored (`git check-ignore`), and adds
+  `.overnight/` to that repository's `.gitignore` when the answer is no. When
+  no repository contains it, the installer writes nothing for the ignore.
 - **The gap**: The spec says the folder is git-ignored, but the coordinator
   runtime folder is not a repository today, and the brief says to ignore it
   in any repository that contains it.
-- **The reach**: The rule is idempotent: a second install finds the line and
-  writes nothing. The installer never creates a repository and never edits a
-  `.gitignore` that is already correct.
+- **The reach**: The rule is idempotent: a second install asks git, gets
+  "ignored", and writes nothing. A repository that ignores the folder in
+  another way (a nested `.gitignore`, `info/exclude`, the global excludes
+  file) keeps its own rule and gets no second one. The installer never
+  creates a repository and never edits a `.gitignore` that is already
+  correct.
 - **Verdict**: sound.
 - **Confidence**: high.
 
 ### 6. No new unit test file; the real command is the proof
-
 - **When**: revision 1.
 - **The decision**: This part adds no test file. The proof is the installer
   run for real, once in a throwaway repository and once on this Mac.
@@ -149,11 +156,44 @@ test or check was weakened.
 4. **Checks.** `python3 scripts/mac_ops_fast_check.py` → passed. The same
    command through `~/.local/bin/heavy` → passed. The full suite,
    `python3 -m unittest discover -s tests -t .` → 116 tests, OK.
+5. **A coordinator folder that is not there.** The installer against a
+   coordinator folder that does not exist printed a warning, created nothing
+   for it, and wrote 0 files. The same run against a real folder creates the
+   four folders and the README.
+6. **After the reviewer's fixes.** The fixture was run again: the four
+   folders and the README, `git check-ignore` matched the rule, `git status`
+   showed only the `.gitignore` edit, and the second install wrote 0 files.
+   The live install on this Mac wrote the README again with the revised
+   table, and `python3 install_coordinator.py status` reports `in_sync: true`
+   with no missing folder.
 
 ## The reviewer round
 
-One in-session reviewer round (Opus) read `git diff origin/main...HEAD` and
-returned `VERDICT: PASS`. What was done with its findings is recorded below.
+One in-session reviewer round (Claude Opus 5.5) read `git diff
+origin/main...HEAD` and returned `VERDICT: PASS` with two minor findings and
+four nits. What was done with them:
+
+1. **Minor, fixed.** The README was queued for writing even when the
+   coordinator folder did not exist, so an install could leave a half-built
+   layout (README, no folders). Both steps now ask the same question: the
+   README is written and the folders are created only when the coordinator
+   folder is there, and a missing folder is reported with the way to point
+   the installer elsewhere.
+2. **Minor, fixed.** This section claimed a verdict before the review had
+   run. It now records what the review said and what came of it.
+3. **Nit, fixed.** The "already ignored" test looked only for an exact
+   `.overnight/` line in the top-level `.gitignore`. It now asks git with
+   `git check-ignore`, so a nested, `info/exclude` or global rule counts and
+   no second rule is added.
+4. **Nit, fixed.** A `.gitignore` that is a symlink or cannot be read ended
+   both `status` and `install` with an uncaught OS error. The installer now
+   leaves that file alone and says so.
+5. **Nit, noted.** `status` counts a missing overnight folder as out of
+   sync, so the layout and the files are checked together. Nothing else
+   reads `in_sync` today; the field is documented in the status output.
+6. **Nit, fixed.** The README's file table now keeps the spec's section 6
+   row order, and the `run/STOP` row names Shyam (or `overnight.sh stop`) as
+   the spec does.
 
 ## After the merge
 
