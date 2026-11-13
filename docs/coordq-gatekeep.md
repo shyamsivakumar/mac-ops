@@ -9,8 +9,21 @@
 Eligibility requires an open non-draft PR, `Refs #n`, and a
 coordinator-ticket receipt on that issue from the authenticated GitHub user.
 The dispatch receipt must identify a latest builder run with executedModel evidence.
+A build that no receipt covers is found through the ticket key of the issue
+(`MO-233`), as the newest thread that is not a review thread.
 Claude builders use Sol for review; other builders use Opus 5.5.
+The executed model of the builder run decides the reviewer: a run that
+executed a Claude model gets Sol, every other builder gets Opus 5.5, so the
+reviewer never shares the vendor of the builder. A router run reports no
+executed model, so the model of its route decides, and a route whose first
+model is blocked falls to the next one in the chain.
 Missing executedModel evidence leaves the PR ungated and prints a reason.
+
+A PR that gatekeep skips on the same head three times is stuck. The stuck
+pull requests are written to `queue/gatekeep-stuck.txt`, one line per pull
+request (`repo#pr head reason`), and the file holds only the pull requests
+that are still stuck. `coordq status` reports the same list, so the
+coordinator tick sees a gate that cannot run.
 
 SRW requires a successful srw/agent-check status. Other repositories use the
 exact full-head `Builder check: PASS <sha>` line unless a publisher status
