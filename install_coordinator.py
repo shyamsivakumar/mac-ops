@@ -30,7 +30,7 @@ MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels",
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
 # The pi coordinator's own files: guard extension, sandbox profile, settings,
 # phone relay note and launchers.
-PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone")
+PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone", "coord-tick")
 PI_FILES = (
     ("extensions/coordinator.ts", ".pi/agent-coordinator/extensions/coordinator.ts"),
     ("coordinator.sb", ".pi/agent-coordinator/coordinator.sb"),

@@ -245,11 +245,11 @@ See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 
 The pi coordinator's own files live under `coordinator/pi/` and install with
 the same command: the guard extension and its sandbox profile, the pi
-settings, the phone relay note and the `coord-pi`, `coord-ask` and
-`coord-phone` launchers. The guard, profile and settings install to
-`~/.pi/agent-coordinator/`, the launchers to `~/.local/bin/`. They are copies
-of the live files, so a change to the guard goes through a pull request like
-every other change in this repository.
+settings, the phone relay note and the `coord-pi`, `coord-ask`,
+`coord-phone` and `coord-tick` launchers. The guard, profile and settings
+install to `~/.pi/agent-coordinator/`, the launchers to `~/.local/bin/`. They
+are copies of the live files, so a change to the guard goes through a pull
+request like every other change in this repository.
 
 The `dev.coordinator.turncap` job runs the coordinator's turn-cap monitor
 (`~/Code/coordinator/loop/turn_cap.py`) and keeps it running, so the
@@ -265,6 +265,21 @@ coordinator runbook still says to restart the monitor by hand after a reboot;
 this job now covers that step. The job appends one line per poll pass to
 `~/Library/Logs/coordinator/turncap.log`. The dispatch job logs into the
 coordinator checkout's own `queue/` directory, which that repository owns.
+
+The `dev.coordinator.tick` job runs one coordinator tick every 30 minutes as a
+fresh headless pi on Sonnet 5.5 (`~/.local/bin/coord-tick`), inside the same
+sandbox and guard as the coordinator, so a tick costs a short cheap turn
+instead of an Opus turn on the long coordinator session. The tick is
+ephemeral (`pi --no-session`), so it never becomes the newest session that
+`coord-ask`, the phone relay or the Herdr panel read. It takes a lock at
+`~/.local/state/mac-ops/coord-tick.lock`, so two ticks never overlap, and a
+run over ten minutes is killed.
+Only the `ALERT:` lines of a tick reply are sent to the live pi coordinator
+terminal; a `NOOP` reply sends nothing. `coord-pi` exports `COORD_WAKE=0`, so
+the coordinator session's own 30-minute wake stays off and `/tick` and
+`/wake on` remain for manual use. The job has no `RunAtLoad`, because a tick
+costs a model call: the first one lands one interval after the job loads. It
+appends one line per run to `~/Library/Logs/coordinator/tick.log`.
 
 ## Agent session traces (MO-124)
 
