@@ -2,6 +2,11 @@
   "defaultProvider": "pi-claude-cli",
   "defaultModel": "claude-opus-5-5",
   "defaultThinkingLevel": "medium",
+  "enabledModels": [
+    "pi-claude-cli/claude-opus-5-5",
+    "openai/gpt-6.1-sol",
+    "openai/gpt-6-astra"
+  ],
   "skills": [],
   "quietStartup": true,
   "theme": "dark",
