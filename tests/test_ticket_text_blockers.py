@@ -302,6 +302,46 @@ class ValidateStartTest(unittest.TestCase):
         self.assertIn("already merged via #190; close the issue", str(caught.exception))
 
 
+class HoldLabelTest(unittest.TestCase):
+    """A ticket Shyam holds waits for him, whatever else it is missing."""
+
+    def setUp(self):
+        self.saved_pulls = ticket.referencing_pulls
+        ticket.referencing_pulls = lambda repo, number: []
+        self.addCleanup(lambda: setattr(ticket, "referencing_pulls", self.saved_pulls))
+
+    def held_issue(self, labels=("stage:todo",)):
+        issue = start_issue(templated_body())
+        issue["labels"] = [{"name": name} for name in labels]
+        return issue
+
+    def test_a_held_ticket_is_refused(self):
+        issue = self.held_issue(("stage:todo", "type:standard", "priority:1",
+                                  "builder:builder", "reviewer:opus", "stage:hold"))
+        with self.assertRaises(ticket.Refuse) as caught:
+            ticket.validate_start(START_CFG, REPO, issue)
+        self.assertEqual(str(caught.exception), "on hold (stage:hold); only Shyam clears it")
+
+    def test_the_hold_is_reported_before_the_other_rules(self):
+        with self.assertRaises(ticket.Refuse) as caught:
+            ticket.validate_start(START_CFG, REPO, self.held_issue(("stage:hold",)))
+        self.assertEqual(str(caught.exception), "on hold (stage:hold); only Shyam clears it")
+
+    def test_a_hold_is_not_a_stage(self):
+        groups, other = ticket.split_labels(START_CFG, ["stage:todo", "stage:hold"])
+        self.assertEqual(groups["stage"], ["todo"])
+        self.assertEqual(groups["hold"], ["hold"])
+        self.assertEqual(other, [])
+
+    def test_a_hold_is_not_a_label_problem(self):
+        groups, _ = ticket.split_labels(START_CFG, ["stage:todo", "stage:hold"])
+        self.assertEqual(ticket.label_problems(START_CFG, groups), [])
+
+    def test_a_ticket_without_the_hold_starts(self):
+        started = ticket.validate_start(START_CFG, REPO, start_issue(templated_body()))
+        self.assertEqual(started["builderAlias"], "builder")
+
+
 class ReferenceWordTest(unittest.TestCase):
     def test_refs_is_a_reference(self):
         self.assertTrue(ticket.references_issue("Refs #160", 160))

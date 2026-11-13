@@ -12,8 +12,13 @@ CALL_TIMEOUT = 30
 COORDQ_TIMEOUT = 120
 LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
 STAGES = ("stage:backlog", "stage:todo")
-FAMILIES = ("stage", "priority", "type", "builder", "reviewer")
-FAMILY_COLORS = {"stage": "1d76db", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
+# The hold label is named `stage:hold` so it reads as a stage on the board, but
+# it is a family of its own: a hold says the ticket waits for Shyam, and it
+# never counts as the one stage label a ticket needs.
+HOLD_LABEL = "stage:hold"
+HOLD_FAMILY = "hold"
+FAMILIES = ("stage", HOLD_FAMILY, "priority", "type", "builder", "reviewer")
+FAMILY_COLORS = {"stage": "1d76db", HOLD_FAMILY: "b60205", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
 COORDQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
 NO_PRIORITY = 0
 LEDGER_LINE = re.compile(r"<!-- coordinator-ticket (\{.*\}) -->")
@@ -97,6 +102,7 @@ def label_names(cfg):
     names = []
     for stage in cfg["labels"]["stage"]:
         names.append(("stage", f"stage:{stage}"))
+    names.append((HOLD_FAMILY, HOLD_LABEL))
     for p in cfg["labels"]["priority"]:
         names.append(("priority", f"priority:{p}"))
     for t in cfg["labels"]["type"]:
@@ -205,6 +211,9 @@ def split_labels(cfg, names):
     groups = {f: [] for f in FAMILIES}
     other = []
     for name in names:
+        if name.lower() == HOLD_LABEL:
+            groups[HOLD_FAMILY].append(HOLD_FAMILY)
+            continue
         family, _, value = name.partition(":")
         if family in groups and value:
             groups[family].append(value)
@@ -217,6 +226,7 @@ def label_problems(cfg, groups):
     problems = []
     valid = {
         "stage": set(cfg["labels"]["stage"]),
+        HOLD_FAMILY: {HOLD_FAMILY},
         "priority": set(cfg["labels"]["priority"]),
         "type": set(cfg["labels"]["type"]),
         "builder": set(cfg["models"]),
@@ -805,6 +815,10 @@ def validate_start(cfg, repo, issue, check_text=True):
     pull_reasons = pull_guard_reasons(repo, issue)
     if pull_reasons:
         raise Refuse(pull_reasons[0])
+    # A hold is Shyam's own block. It is checked before the other rules so a
+    # held ticket says that it waits for Shyam, whatever else it is missing.
+    if t["groups"][HOLD_FAMILY]:
+        raise Refuse(f"on hold ({HOLD_LABEL}); only Shyam clears it")
     if t["state"] != "OPEN":
         suffix = ""
         if check_text:
