@@ -387,13 +387,13 @@ function acceptButton(t, onClick) {
     .cursor_pointer().hover((s) => s.bg(t.selected)).on_click(onClick).child("Accept recommended");
 }
 
-export function askRow(t, list, answered, error, cb) {
+export function askRow(t, list, answered, error, cb, at, now) {
   const first = list[0];
   const rec = first?.choices.find((c) => c.rec);
   const detail = first ? [first.group, first.action ? "Task for you" : `${first.choices.length} options`, rec ? `Recommended: ${rec.label}` : ""].filter(Boolean).join(" · ") : "";
   return h_flex().id("ask-row").min_h(30).px(10).py(6).gap(8).flex_none().items_start().border_b(1).border_color(t.border)
     .cursor_pointer().hover((s) => s.bg(t.selected)).tooltip("Open the decisions").on_click(() => cb.openAsks())
-    .child(div().flex_none().pt(2).text_size(10).font_semibold().text_color(t.blocked).child(error ? "Decisions" : `Needs you · ${list.length}`))
+    .child(div().flex_none().pt(2).text_size(10).font_semibold().text_color(t.blocked).child(error ? "Decisions" : `Needs you · ${list.length}${at ? ` · updated ${ago(at, now)}` : ""}`))
     .child(v_flex().id("ask-text").flex_1().min_w(0).max_h(96).overflow_y_scrollbar().gap(2)
       .when(Boolean(error), (el) => el.child(div().w_full().text_size(11).line_height("16px").text_color(t.blocked).child(error)))
       .when(!error, (el) => el.child(div().w_full().text_size(11).line_height("16px").text_color(t.muted).child(first.text)))
@@ -402,16 +402,17 @@ export function askRow(t, list, answered, error, cb) {
     .when(!error, (el) => el.child(div().flex_none().pt(2).text_size(10).text_color(t.muted).child(`${answered} of ${list.length} answered`)));
 }
 
-function popupBar(t, title, cb) {
-  return h_flex().h(34).px(12).flex_none().items_center().border_b(1).border_color(t.border)
+function popupBar(t, title, cb, at, now) {
+  return h_flex().h(34).px(12).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
     .child(div().flex_1().text_size(12).font_semibold().text_color(t.foreground).child(title))
+    .when(Boolean(at), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(`updated ${ago(at, now)}`)))
     .child(div().id("ask-pop-close").size(22).flex().items_center().justify_center().rounded(4).text_size(12).text_color(t.dim)
       .cursor_pointer().hover((s) => s.bg(t.selected)).on_click(() => cb.close()).child("✕"));
 }
 
-export function emptyPop(t, error, cb) {
+export function emptyPop(t, error, cb, at, now) {
   return v_flex().size_full().min_h(0)
-    .child(popupBar(t, "No open decisions", cb))
+    .child(popupBar(t, "No open decisions", cb, at, now))
     .when(Boolean(error), (el) => el.child(div().w_full().px(16).py(12).text_size(11.5).line_height("16px").text_color(t.blocked).child(error)));
 }
 
@@ -473,13 +474,13 @@ function footerKey(t, key, label, id, onClick) {
     .child(div().text_size(9.5).text_color(t.dim).child(key)).child(label);
 }
 
-export function questionPop(t, list, view, cb) {
+export function questionPop(t, list, view, cb, at, now) {
   const review = view.step >= list.length;
   const k = view.answers.length;
   const acceptable = list.some((a) => a.choices.some((c) => c.rec) && !view.drafts.has(a.id) && !view.decided[a.id]);
   const ready = k > 0 && !view.sending;
   return v_flex().size_full().min_h(0)
-    .child(popupBar(t, review ? "Review your answers" : `Decision ${view.step + 1} of ${list.length}`, cb))
+    .child(popupBar(t, review ? "Review your answers" : `Decision ${view.step + 1} of ${list.length}`, cb, at, now))
     .child(v_flex().id("ask-body").flex_1().min_h(0).overflow_y_scrollbar().mode("always")
       .child(review ? reviewBody(t, list, view, cb) : questionBody(t, list[view.step], view.step, view, cb)))
     .child(h_flex().h(40).px(12).gap(6).flex_none().items_center().border_t(1).border_color(t.border)

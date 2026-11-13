@@ -3,7 +3,7 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, shepherdrStates, verdictEntries, verdictOf } from "./hub.js";
+import { load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
@@ -127,7 +127,6 @@ export default class Board extends View {
     this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["backlog","done"]'));
     this.compact = false;
     this.cap = 6;
-    this.shepherdr = new Map();
     this.area = { width: 1200, height: 260 };
     this.scrollY = { backlog: 0, needs: 0, run: 0, ready: 0, done: 0, compact: 0 };
     this.reveal = null;
@@ -167,10 +166,6 @@ export default class Board extends View {
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
     this.watchWorktrees(cx);
     this.restore();
-    shepherdrStates().then((states) => {
-      this.shepherdr = states;
-      cx.notify();
-    });
     this.refresh(cx);
     cx.spawn(async (cx) => {
       for (;;) {
@@ -225,11 +220,13 @@ export default class Board extends View {
   async readWorktrees() {
     try {
       const status = await readState("status.json");
-      if (status?.state !== "done" || status.finished === this.wt?.finished) return this.wt;
+      if ((status?.state !== "done" && status?.state !== "failed") || status.finished === this.wt?.finished) return this.wt;
+      const failed = status.state === "failed" ? status.error || "no reason recorded" : null;
       const last = await readState("last.json");
       const c = last?.categories;
-      if (!c) return null;
-      return { finished: status.finished, stale: c.safe + c.prune, look: c.look, rows: c.safe + c.prune + c.look + c.protected + (last.excluded_worktrees ?? 0) };
+      if (!c) return failed && { finished: status.finished, failed };
+      const mtime = await exec("stat", ["-f", "%m", `${WT_STATE}/last.json`]);
+      return { finished: status.finished, failed, scannedAt: Number(mtime.stdout) * 1000, stale: c.safe + c.prune, look: c.look, rows: c.safe + c.prune + c.look + c.protected + (last.excluded_worktrees ?? 0) };
     } catch {
       return null;
     }
@@ -256,7 +253,7 @@ export default class Board extends View {
     if (this.deciding === `panel:${id}`) return;
     this.deciding = `panel:${id}`;
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
-    if (id === "wt") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
+    if (id === "wt" || id === "wtfail") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
     openOverlay({ mod: "ops-panels", kind: "dialog", width: 520, height: 340, props: { panel: "queue", seed: { running: this.board?.running ?? 0, cap: this.cap } } });
   }
 
@@ -310,7 +307,6 @@ export default class Board extends View {
     this.backlog = own ? snap.groups : [];
     this.backlogLoaded = true;
     this.cap = snap.cap;
-    this.shepherdr = new Map(snap.shepherdr);
     this.stale = snap.unsure;
     seedPrs(snap.prs);
     seedVerdicts(snap.verdicts);
@@ -320,7 +316,6 @@ export default class Board extends View {
   snapshot(key) {
     const groups = this.layout.cols[key].groups.map((g) => ({ ...g, info: undefined }));
     const threads = groups.flatMap((g) => g.threads);
-    const keys = new Set(threads.map((c) => c.key));
     return {
       key,
       running: this.board?.running ?? 0,
@@ -331,7 +326,6 @@ export default class Board extends View {
       prs: prEntries(groups.flatMap((g) => g.prs)),
       verdicts: verdictEntries(threads),
       origins: originEntries(threads),
-      shepherdr: [...this.shepherdr].filter(([thread]) => keys.has(thread)),
     };
   }
 
@@ -534,7 +528,7 @@ export default class Board extends View {
         const block = variant === "ready" && g.info.status === "open" ? this.reviewBlock(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
-        const view = (extra) => ({ origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text ?? block, blocked: Boolean(block || refusal?.planned), plan: this.asked.get(g.key)?.plan, state: g.threads.map((x) => this.shepherdr.get(x.key)).find(Boolean), since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text ?? block, blocked: Boolean(block || refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -588,8 +582,7 @@ export default class Board extends View {
       const reviewedCards = groups.filter((g) => g.threads.some((c) => c.review)).length;
       return [...seg(reviewedCards, "reviewed", "done"), ...seg(col.count - reviewedCards, "unreviewed", "dim"), oldest];
     }
-    const queued = groups.filter((g) => g.threads.some((x) => /queued/i.test(this.shepherdr.get(x.key) ?? ""))).length;
-    return [...this.ticketNote(now), ...seg(queued, "queued", "idle"), oldest];
+    return [...this.ticketNote(now), ...seg(this.slots?.queued ?? 0, "queued", "idle"), oldest];
   }
 
   ticketNote(now) {
@@ -776,7 +769,7 @@ export default class Board extends View {
 
   decisionSnap(e) {
     const g = { ...e.group, info: undefined };
-    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads), shepherdr: [] };
+    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads) };
   }
 
   openDecision(e, cx) {

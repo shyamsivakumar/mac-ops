@@ -361,6 +361,7 @@ export class Graph {
       .child(row("graph-pick-follow", "Follow focused terminal", "Use the repository of the focused pane", loc.via === "focus", (_e, cx) => this.pick(null, cx)))
       .children(group("space", "In this space"))
       .children(group("t3", "T3 projects"))
+      .children(rows.filter((r) => r.source === "t3error").map((r) => div().px(14).py(8).text_size(11.5).text_color(t.muted).child(`T3 projects unavailable: ${r.name}`)))
       .when(!this.repos, (e) => e.child(div().px(14).py(8).text_size(11.5).text_color(t.dim).child("Finding repositories…")));
   }
 

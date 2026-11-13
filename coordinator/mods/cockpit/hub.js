@@ -17,12 +17,12 @@ const IDLE_EVERY = 60000;
 let projects = { at: 0, names: new Map(), roots: new Map() };
 const asks = new Map();
 
-function failureMessage(stdout) {
+function failureMessage(output) {
   let text;
   try {
-    text = JSON.parse(stdout)[0].text;
+    text = JSON.parse(output)[0].text;
   } catch {
-    return null;
+    return output.trim() || null;
   }
   try {
     return JSON.parse(text).message ?? text;
@@ -33,7 +33,7 @@ function failureMessage(stdout) {
 
 export async function call(tool, args) {
   const r = await exec(`${home()}/.local/bin/t3mcp`, ["call", tool, JSON.stringify(args)]);
-  if (r.code !== 0) throw new Error(failureMessage(r.stdout) ?? (r.stderr.trim() || `${tool} failed`));
+  if (r.code !== 0) throw new Error(failureMessage(r.stderr) ?? `${tool} failed`);
   const value = JSON.parse(r.stdout);
   if (Array.isArray(value)) throw new Error(failureMessage(r.stdout) ?? `${tool} returned an error response`);
   return value;
@@ -314,16 +314,6 @@ export async function loadVerdict(thread, author) {
   } catch {
     verdicts.set(thread.key, { stamp, verdict: { state: "unverified", label: "rev ? unreadable, retrying" }, runModel: known?.runModel ?? "", retryAt: Date.now() + RETRY_VERDICT });
   }
-}
-
-export async function shepherdrStates() {
-  const text = await readTextFile(`${home()}/Code/coordinator/migration/index.md`);
-  const states = new Map();
-  for (const line of (text ?? "").split("\n")) {
-    const cells = line.split("|").map((c) => c.trim());
-    if (cells.length > 5 && cells[4].startsWith("mcp:")) states.set(cells[4], cells[3]);
-  }
-  return states;
 }
 
 export async function queueCap() {

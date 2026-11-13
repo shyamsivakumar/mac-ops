@@ -1,7 +1,22 @@
 import { exec, home } from "herdr";
 
+function failureMessage(stderr) {
+  let text;
+  try {
+    text = JSON.parse(stderr)[0].text;
+  } catch {
+    return stderr.trim() || null;
+  }
+  try {
+    return JSON.parse(text).message ?? text;
+  } catch {
+    return text;
+  }
+}
+
 async function t3Roots() {
   const r = await exec(`${home()}/.local/bin/t3mcp`, ["call", "t3_project_list", JSON.stringify({ limit: 100 })]);
+  if (r.code !== 0) throw new Error(failureMessage(r.stderr) ?? `t3mcp exited ${r.code}`);
   const projects = JSON.parse(r.stdout).projects ?? [];
   return projects.filter((p) => !p.archivedAt && !p.deletedAt && p.workspaceRoot).map((p) => ({ name: p.title, path: p.workspaceRoot }));
 }
@@ -12,8 +27,8 @@ async function underFolder(folder) {
 }
 
 export async function loadRepos(folder) {
-  const [t3, local] = await Promise.all([t3Roots().catch(() => []), folder ? underFolder(folder).catch(() => []) : []]);
+  const [t3, local] = await Promise.all([t3Roots().catch((e) => [{ source: "t3error", name: String(e.message) }]), folder ? underFolder(folder).catch(() => []) : []]);
   const seen = new Set();
-  return [...local.map((r) => ({ ...r, source: "space" })), ...t3.map((r) => ({ ...r, source: "t3" }))]
+  return [...local.map((r) => ({ ...r, source: "space" })), ...t3.map((r) => ({ source: "t3", ...r }))]
     .filter((r) => !seen.has(r.path) && seen.add(r.path));
 }

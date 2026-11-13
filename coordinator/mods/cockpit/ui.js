@@ -111,9 +111,13 @@ function barItems(v) {
   const waiting = asks.filter((a) => !decided[a.id]);
   const sent = asks.length - waiting.length;
   const decisions = asks.length ? [{ id: "decisions", prio: -1, command: "coordinator.asks", label: `Decisions · ${waiting.length} waiting${sent ? ` · ${sent} sent` : ""}`, tone: waiting.length ? "blocked" : undefined, tip: `${waiting.slice(0, 3).map((a) => a.text).join(" · ")}${waiting.length > 3 ? ` · and ${waiting.length - 3} more` : ""}. Click to answer.` }] : [];
+  const old = w?.failed && w.scannedAt ? ` · ${ago(w.scannedAt, Date.now())} old` : "";
+  const failedScan = w?.failed ? [{ id: "wtfail", prio: 1, label: `worktree scan failed: ${w.failed}`, tone: "muted", tip: `The last worktree scan failed: ${w.failed}. ${w.scannedAt ? "The numbers beside it come from the last good scan." : "There is no earlier result."}` }] : [];
+  const hasCounts = w && w.stale !== undefined;
   return [
     ...decisions,
-    { id: "wt", prio: 0, label: w ? `Worktrees · ${w.stale} stale` : "Worktrees", more: w?.look ? ` · ${w.look} need a look` : "", tone: w?.stale ? "working" : undefined, tip: w ? `${w.stale} safe to clean or prune · ${w.look} need a look. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
+    ...failedScan,
+    { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
 }
@@ -284,7 +288,6 @@ export function card(t, e, v, input, cb) {
     : actions(t, e.key, canSettle, cb, narrow);
   const meta = h_flex().gap(6).flex_none().items_center().on_mouse_down("left", selectOnly(e.key, cb))
     .when(count > 1, (el) => el.child(fold(t, e.key, count, expanded, cb)))
-    .when(variant === "backlog" && v.state, (el) => el.child(chip(t, v.state, "idle")))
     .when(v.merged, (el) => el.child(chip(t, "merged", "done")))
     .when(isCold(v), (el) => el.child(chip(t, "cold", "dim", "Prompt cache expired: the next message re-reads the whole context")))
     .when(!refused && (!ready || fit.model), (el) => el.child(modelChips(t, c, v.runModel)));
