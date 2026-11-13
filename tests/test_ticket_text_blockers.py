@@ -21,7 +21,8 @@ def load_ticket():
 
 ticket = load_ticket()
 
-CFG = {"repos": {"shyamsivakumar/strategy-replay-workbench": {"key": "SRW"}}}
+CFG = {"repos": {"shyamsivakumar/strategy-replay-workbench": {"key": "SRW"}},
+       "template": ["Goal and why", "Blocked by", "Acceptance and proof"]}
 REPO = "shyamsivakumar/strategy-replay-workbench"
 
 
@@ -41,23 +42,47 @@ class BodySectionTest(unittest.TestCase):
         self.assertEqual(ticket.section_blocker_reasons(CFG, REPO, issue("## Blocked by\nNone.\n")), [])
 
     def test_labelled_section_is_read(self):
-        self.assertEqual(ticket.blocked_by_section("Blocked by: SRW-1018 (#806).\n"), "SRW-1018 (#806).")
+        self.assertEqual(ticket.blocked_by_section(CFG, "Blocked by: SRW-1018 (#806).\n"), "SRW-1018 (#806).")
 
     def test_bold_labelled_section_is_read(self):
-        self.assertEqual(ticket.blocked_by_section("**Blocked by**: None.\n"), "None.")
+        self.assertEqual(ticket.blocked_by_section(CFG, "**Blocked by**: None.\n"), "None.")
 
     def test_labelled_section_is_read_when_there_is_no_heading(self):
         body = "Goal and why: x\nBlocked by: SRW-1018 (#806).\nAcceptance: y\n"
-        self.assertEqual(ticket.blocked_by_section(body), "SRW-1018 (#806).")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
 
-    def test_heading_wins_over_a_labelled_line(self):
+    def test_a_list_under_a_labelled_section_is_read(self):
+        body = "Goal and why: x\nBlocked by:\n- SRW-1018 (#806)\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "- SRW-1018 (#806)")
+
+    def test_a_blank_line_before_a_list_is_read(self):
+        body = "Goal and why: x\nBlocked by:\n\n- SRW-1018 (#806)\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "- SRW-1018 (#806)")
+
+    def test_a_blank_line_before_the_next_section_ends_the_list(self):
+        body = "Goal and why: x\nBlocked by: SRW-1018 (#806).\n\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
+
+    def test_the_first_marker_wins_like_the_template_check(self):
         body = "Blocked by: SRW-1018 (#806).\n\n## Blocked by\nSRW-789 (#490).\n"
-        self.assertEqual(ticket.blocked_by_section(body), "SRW-789 (#490).")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
+
+    def test_the_section_is_the_one_the_template_check_reads(self):
+        body = "Goal and why: x\nBlocked by: SRW-1018 (#806).\nAcceptance: y\n"
+        status = ticket.template_status(CFG, body)
+        self.assertEqual(status["Blocked by"], "ok")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
 
     def test_preserved_contract_is_not_the_section(self):
         body = ("## Scope and non-goals\n<details><summary>Preserved original contract</summary>\n\n"
                 "Blocked by: #49, #51, #52\n\n</details>\n")
-        self.assertIsNone(ticket.blocked_by_section(body))
+        self.assertIsNone(ticket.blocked_by_section(CFG, body))
+
+    def test_the_template_check_reads_a_preserved_contract_and_the_blocker_check_does_not(self):
+        body = ("## Goal and why\nx\n\n## Blocked by\n<details><summary>Preserved original contract</summary>\n\n"
+                "Blocked by: #49, #51, #52\n\n</details>\n")
+        self.assertEqual(ticket.template_status(CFG, body)["Blocked by"], "ok")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "")
 
 
 class ApprovalSentenceTest(unittest.TestCase):
@@ -190,6 +215,18 @@ class ResolveKeyIssueTest(unittest.TestCase):
 
     def test_another_ticket_does_not_resolve(self):
         self.assertIsNone(self.resolve(["SRW-1118 · Something else"], 1119))
+
+    def test_a_pull_request_does_not_resolve_a_key(self):
+        self.titles = ["SRW-1119 part 1: a pull request"]
+        ticket.gh_json = lambda args: {"items": [{"number": 905, "title": "SRW-1119 part 1: a pull request",
+                                                    "pull_request": {"url": "https://github.com/o/r/pull/905"}}]}
+        self.assertIsNone(ticket.resolve_key_issue(REPO, "SRW", 1119))
+
+    def test_the_search_asks_for_issues_only(self):
+        seen = []
+        ticket.gh_json = lambda args: seen.append(args) or {"items": []}
+        ticket.resolve_key_issue(REPO, "SRW", 1119)
+        self.assertIn("is:issue", " ".join(seen[0]))
 
 
 TEMPLATE = ["Goal and why", "Context", "Scope and non-goals", "Design fit", "Blocked by",

@@ -26,11 +26,15 @@ def main():
         ["gh", "issue", "view", number, "-R", repo,
          "--json", "number,title,body,state,labels,comments,url,blockedBy"]))
     if hasattr(mod, "blocked_by_section"):
-        section = mod.blocked_by_section(issue["body"])
+        try:
+            section = mod.blocked_by_section(cfg, issue["body"])
+        except TypeError:
+            section = mod.blocked_by_section(issue["body"])
     else:
         section = mod.body_section(issue["body"], "Blocked by")
     print("body section:", repr(section))
-    print("reasons:", mod.section_blocker_reasons(cfg, repo, issue))
+    print("section reasons:", mod.section_blocker_reasons(cfg, repo, issue))
+    print("text blockers:", mod.text_blocker_reasons(cfg, repo, issue))
 
 
 if __name__ == "__main__":
