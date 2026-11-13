@@ -1,7 +1,7 @@
 # MO-202: how Moonmux detects that an agent needs you
 
-Run id: `ticket:shyamsivakumar/mac-ops#167:a2` (run a2 carries run a1's work
-forward). Refs #167.
+Run id: `ticket:shyamsivakumar/mac-ops#167:a3` (run a3 carries runs a1 and a2's
+work forward). Refs #167.
 
 Research only. Nothing was installed, nothing was copied out of Moonmux, no
 code in any repo changed.
@@ -9,6 +9,27 @@ code in any repo changed.
 Revision 2 (2026-11-13): corrected after the in-session Opus 5.5 review of
 the merged PR #194. What changed is listed under "Corrections after the
 review" at the end.
+
+Revision 4 (2026-11-13, run a3): the Moonmux half of the table is unchanged
+and re-checked: `moonframehq/moonmux` `main` is still `ef34516` (read with
+`git ls-remote` on 2026-11-13), so every Moonmux line reference below still
+stands. The **our side** half is new, because revision 3's caveat was wrong.
+It said the live `herdr-projects` tree has "no agent-status detection at
+all". It does have detection, and it is in TypeScript, in
+`server/core/source.ts:228-241` and `server/core/agents.ts:243-247`. The
+table and the recommendations therefore now name the live tree, and a new
+section, "The live tree compared signal by signal", does the comparison
+against the code that actually runs. The old caveat is corrected in place
+rather than left standing next to a new table.
+
+Amendment to revision 4 (run a3): the in-session Opus 5.5 review of this
+revision found that two rows described `reconcile()` wrongly, that
+recommendation 1 overstated its effect, and that four rows were loose about
+what the code does. All of it is fixed in place; the list is under
+"Corrections in revision 4". One finding changed the substance: the live
+tree only knows the agents it launched itself, so Moonmux's "sees agents
+started outside the app" is a live gap, not a thing we already have, and it
+is now recommendation 1.
 
 Revision 3 (2026-11-13, run a2): no research change. The revision 2
 corrections had to be carried onto a branch that was still based on the
@@ -25,6 +46,7 @@ clone at `ef34516` and against the pinned herdr-projects tree
 | Moonmux (the app under study) | `moonframehq/moonmux` | `ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f` | 2026-11-11 | MIT, Copyright (c) 2026 Fabien Penso (`LICENSE`, `NOTICE`) |
 | herdr-core (the backend Moonmux runs on for us) | `herdrdev/herdr-core` | `d9e68262268b25a33bfe79cabb41fe60baf5db07` | 2026-11-13 | Apache-2.0 (`LICENSE`) |
 | herdr-projects (our side, released Rust line) | `shyamsivakumar/herdr-projects` | `4e4548c3c43888e6be1c96906215998f07dc63f0` (0.2.34) | 2026-09-28 | see its own `LICENSE` |
+| herdr-projects (our side, the live tree) | `shyamsivakumar/herdr-projects` | `a862ac947306621bac9e8130db8b3cd6ffead6fe` (`origin/main`, 585 commits past 0.2.34) | 2026-11-01 | MIT, Copyright (c) 2026 Elias Stravik (`LICENSE`) |
 | mac-ops (the coordinator panel) | `shyamsivakumar/mac-ops` | `93a1467360f27d8d9d7b6e105432a419142c46fa` | 2026-11-12 | repo licence |
 
 Every link below is a `blob/<sha>/<path>#L<line>` link at the pinned commit,
@@ -33,15 +55,39 @@ so the line numbers can be checked without a clone.
 The Moonmux checkout was a read-only shallow clone in `$TMPDIR`; nothing was
 installed and no Moonmux file was copied into any of our repos.
 
-**A caveat that matters for the recommendations.** `herdr-projects`
-`origin/main` (`a862ac9`) is 585 commits ahead of the pinned release and has
-been rewritten: there is no `src/thread.rs`, `src/ticker.rs` or any other
-Rust file there any more, and the app is now TypeScript. Its needs-you model
-on `main` is a task status (`need`) plus unanswered chat requests
-(`src/attention.ts`), with no agent-status detection at all. The rows below
-describe the released Rust line (0.2.34), which is the code that talks to
-herdr-core agents; the recommendations are about ideas, so they carry over,
-but the file and line pointers do not.
+**A caveat, corrected in revision 4.** `herdr-projects` `origin/main`
+(`a862ac9`) is 585 commits ahead of the pinned release and has been
+rewritten: there is no `src/thread.rs`, `src/ticker.rs` or any other Rust
+file there any more, and the app is now TypeScript ("Shepherdr"). The
+rows below describe the released Rust line (0.2.34), because that is the
+code the tables were first written against. **The live tree does detect
+agent status**, so "the recommendations are about ideas, so they carry over,
+but the file and line pointers do not" was too weak: the pointers do exist,
+in the live tree, and the new section below points at them.
+
+**What the live tree detects** (`a862ac9`, our own code, no Moonmux
+involved): an agent needs the user when there is an open secret, an open
+question or an open permission
+([server/core/source.ts:232](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L232)),
+when the agent's process is gone but its terminal still lives
+([:235](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L235)),
+when the agent reports `blocked` or holds an open permission
+([:237](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L237)),
+or when a provider retry has run out
+([:239](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L239));
+the agent's own hooks set `blocked` on `PermissionRequest`
+([server/core/agents.ts:247](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L247)),
+`working` on `UserPromptSubmit` and `PreToolUse`
+([:244](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L244))
+and `idle` on `SessionStart`, `Stop` and `SessionEnd`
+([:243](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L243)). A task whose agent finished, or that waits on a log, is `need`
+([server/core/tasks.ts:121](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L121)),
+drawn as "Needs you"
+([:130](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L130)).
+An agent state of `error` is still not a need: `status()` reads the state
+word at [:236](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L236)
+and only `blocked` is a need, so `error` falls through to `idle` at
+[:240](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L240).
 
 ## The short answer
 
@@ -106,52 +152,112 @@ The `Moonmux` column links the file and line at `ef34516`.
 | 14 | **Agents started outside the app are seen too** | On herdr-core, every terminal in the session is listed, not only the ones the app started; a label marks which are ours (`ours`). On tmux, each tick lists the panes of the app's own server **and of every other server this user runs** (the default one, and any `tmux -L name`) | [herdr.rs:396-403](https://github.com/moonframehq/moonmux/blob/ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f/src/core/herdr.rs#L396-L403), [:450](https://github.com/moonframehq/moonmux/blob/ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f/src/core/herdr.rs#L450); tmux [tmux/mod.rs:4-9](https://github.com/moonframehq/moonmux/blob/ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f/src/core/tmux/mod.rs#L4-L9), [:173](https://github.com/moonframehq/moonmux/blob/ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f/src/core/tmux/mod.rs#L173) | `a571cc5` (herdr-core: every terminal listed, the `ours` label), `4d06ea0` (tmux: every server scanned) | **Partly.** The mac-ops cockpit sees every agent in the herdr session ([cockpit/main.js:707](https://github.com/shyamsivakumar/mac-ops/blob/93a1467360f27d8d9d7b6e105432a419142c46fa/coordinator/mods/cockpit/main.js#L707), via the herdr-app `agents()` list). herdr-projects tracks the threads it launched and the ones it **adopted** (`Kind::Adopted`, [src/thread.rs:40](https://github.com/shyamsivakumar/herdr-projects/blob/4e4548c3c43888e6be1c96906215998f07dc63f0/src/thread.rs#L40), `src/adopt.rs`), and it marks a pane holding someone else's agent as not ours ([src/thread.rs:648](https://github.com/shyamsivakumar/herdr-projects/blob/4e4548c3c43888e6be1c96906215998f07dc63f0/src/thread.rs#L648)) | **Copy the idea for herdr-projects.** A needs-you overview that ignores an agent the user started by hand will miss the one that actually matters. Decide which surface Shyam reads before doing anything |
 | 15 | **A failed agent is a need** | An agent that errored counts as needing you | [sidebar/main.luau:78](https://github.com/moonframehq/moonmux/blob/ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f/app/mods/sidebar/main.luau#L78) (a helper's `error` becomes `blocked`) | `8fcf76a` | **Partly, and we are the weaker one.** herdr-projects maps a thread whose own status is `Failed` to `WaitingOnYou` ([src/thread.rs:585](https://github.com/shyamsivakumar/herdr-projects/blob/4e4548c3c43888e6be1c96906215998f07dc63f0/src/thread.rs#L585)), but it does **not** look at an agent reporting `agent_status == "error"`, so such an agent falls through to `Idle` or `Working`. herdr-core does report `error` as a state | **Copy the gap, not the code.** Add `error` to the states that mean needs-you. This is the one detection-side gap we have, and it is not Moonmux's idea (Moonmux only folds a helper's error in) |
 
+## The live tree compared signal by signal
+
+The same fifteen signals, against the code that actually runs today
+(`herdr-projects` `a862ac9`, TypeScript). "Live tree" is the column to read
+before acting on a recommendation: revision 3's recommendations were written
+against the released Rust line and are re-targeted below.
+
+| # | Signal | Live tree (`a862ac9`) | Verdict |
+| --- | --- | --- | --- |
+| 1 | The agent exists | Agents come from the app's own launch records. `reconcile()` walks those records and attaches the herdr-core terminal that carries this launch's labels ([server/core/agents.ts:63-69](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L63-L69), the terminal match at [:56-62](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L56-L62)), and the refresh calls it ([server/core/source.ts:223](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L223)) | **Skip.** No process walking needed |
+| 2 | Needs you (blocked) | `status()` returns `need` for an open secret, question or permission ([server/core/source.ts:232](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L232)), for a dead agent whose terminal lives ([:235](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L235)), for the state word `blocked` or an open permission ([:237](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L237)), and for an exhausted provider retry ([:239](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L239)). The agent's own `PermissionRequest` hook sets `blocked` ([server/core/agents.ts:247](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L247)) | **Skip.** Ours, and by better routes than a screen scraper |
+| 3 | Working | `working` and `starting` are `work` ([server/core/source.ts:240](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L240)); the hooks set `working` on `UserPromptSubmit` and `PreToolUse` ([server/core/agents.ts:244](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L244)) | **Skip.** Same reason |
+| 4 | Only the foot of the screen counts | No screen is read for needs-you in the live tree | **Skip.** Only meaningful for a scraper |
+| 5 | Still printing | A finished terminal is `idle` ([server/core/source.ts:234](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L234)), and a task whose agent finished is `need` ([server/core/tasks.ts:121](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L121)) | **Skip.** The finished agent is the news, which is the point |
+| 6 | The state set | `need`, `ready`, `merging`, `work`, `idle`, `queued`, `todo`, `done`, `off` ([shared/types.ts:7](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/types.ts#L7)) | **Skip.** Richer than Moonmux's four states, but with no `error` of its own: see row 15 |
+| 7 | Done collapses to idle once you looked at it | **No.** `keptTags` drops the chats open in the app right now ([shared/alerts.ts:31-36](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L31-L36), used at [plugins/alerts/client.tsx:45](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/plugins/alerts/client.tsx#L45) with the visible chats from [src/kernel.ts:1141](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/src/kernel.ts#L1141)), but it keeps no memory of a needs-you the user looked at and then closed | **Copy the idea.** The memory is the missing half |
+| 8 | A helper's result belongs to its parent | **Yes.** A helper's lifecycle event does not replace its parent's status or session ([server/core/agents.ts:237](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L237)) | **Skip.** Moonmux's idea is already ours, in our own words |
+| 9 | One urgency order, one place | What waits on you is filtered, not ordered: `waiting()` keeps the tasks whose status is `need` or `ready` and the coordinator's open questions ([shared/alerts.ts:24-29](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L24-L29)), and the app icon counts exactly those. The order the sidebar draws them in was not checked in this pass | **Skip.** The filter is ours; the ordering itself was not read |
+| 10 | A sound and a notification, on a change only | Alerts go out as push when an `alert` event fires ([server/app.ts:103-111](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/app.ts#L103-L111)), and a task that turns `need` raises a `needs-you` event on that change ([server/core/automations.ts:146](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/automations.ts#L146), checked at [server/core/news.ts:63](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/news.ts#L63)) | **Mostly skip.** It is change-based already; the gap is a `blocked` that clears inside `need`, which no status change reports |
+| 11 | No alert for what is already on screen | **Partly.** In the app, `keptTags` keeps an alert only when its chat is not among the chats visible in the window ([shared/alerts.ts:31-36](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L31-L36), [plugins/alerts/client.tsx:45](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/plugins/alerts/client.tsx#L45), [src/kernel.ts:1141](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/src/kernel.ts#L1141)). The push path is coarser: it skips a whole device whose app is visible, not the one agent whose chat is visible ([server/app.ts:109-111](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/app.ts#L109-L111), [server/push.ts:53-58](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/push.ts#L53-L58)) | **Partly done.** The in-app rule is Moonmux's; the push rule is per device. Revision 3's recommendation 4 therefore no longer holds for the live tree |
+| 12 | Click the alert, land on the agent | The alert carries `go: { place, task }` ([shared/alerts.ts:97](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L97)) and the `focus` of the message to open, for a done task or an open card ([:101](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L101), [:108](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L108)) | **Skip.** Already ours |
+| 13 | Time in the current state | **Partly.** A task carries an age ([server/core/tasks.ts:123-128](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L123-L128)); an agent has no time-in-state next to its status | **Copy the idea.** Display only, on the agent row |
+| 14 | Agents started outside the app are seen too | **No.** The live tree knows only the agents it launched itself: `reconcile()` walks its own `agent` records ([server/core/agents.ts:63-69](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L63-L69)), and `terminal()` matches only a herdr-core terminal labelled with this installation and this launch ([:56-62](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L56-L62)). An agent the user started by hand has no record and no label match, so it is never seen, and the live tree has no adopt path for a foreign agent (its `adopt` is about moving a task's worktree, [server/core/task-relocation.ts:12](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/task-relocation.ts#L12)). The Rust line does adopt such panes (`Kind::Adopted`) | **Copy the idea.** The gap is in the live tree too. It is recommendation 1 |
+| 15 | A failed agent is a need | **No.** The state word is read at [server/core/source.ts:236](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L236) and only `blocked` is a need, so herdr-core's `error` state falls through to `idle` at [:240](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L240) | **The gap, in the live tree.** Recommendation 1 |
+
+Not checked in the live tree in this pass: the Rust line's trust-screen
+check (`src/trust_screen.rs`), which has no counterpart in the TypeScript
+tree that this pass read. The live tree handles permissions through its own
+permission records rather than by reading a pane's screen
+([server/core/source.ts:232](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L232)),
+which is the better route, but this file does not claim the trust-screen
+check has a live-tree equivalent.
+
 ## What we would gain, honestly
 
-Three things.
+Against the live tree, three things.
 
-- **The alert discipline** (#10): alert on a witnessed transition, never on
-  a first look, never for a pane already on screen. We already do the first
-  two; we do not do the third.
-- **The seen-and-dismissed state** (#7): a `blocked` the user has already
-  looked at should stop being the loudest thing in the overview.
-- **`error` means needs you** (#15): the one detection-side gap we have.
+- **The agents the user started by hand** (#14): the live tree only knows
+  the agents it launched, so a hand-started agent that blocks never shows
+  up.
+- **The seen-and-dismissed state** (#7): the live tree silences what is on
+  screen right now, but a `blocked` the user looked at and then closed comes
+  back at full volume.
+- **`error` means needs you** (#15): the one detection-side gap, in the
+  live tree as in the Rust line.
+
+The alert discipline of #10 is already ours (a change raises an event, a
+first look does not), and #11 is ours in the app but only per device for
+push, so both recommendations from revision 3 that pointed at them are now
+narrower or gone.
 
 Everything else Moonmux does in this area is either a screen scraper we
-should not copy (we have the agent's own report), or a presentation choice
-we already made, in our own words.
+should not copy (we have the agent's own report and its own hooks), or a
+presentation choice we already made, in our own words.
 
 ## Recommendations, ordered by value
 
-1. **Treat an agent in `error` as needing you.** herdr-core reports `error`
-   as one of its five states, and our `group()` never looks at it, so a
-   crashed agent sits in `Idle` until someone opens it. Add `error` beside
-   `blocked` in the needs-you test. Source: herdr-core `status.rs:14-30`;
-   our gap in `src/thread.rs:565-600`. This is the only detection change the
-   comparison turns up.
-2. **Diff the agent status, not only the group, before alerting.** We alert
-   on a move into `WaitingOnYou` and never on a first look, which is right,
-   but the trigger is the group. An agent that goes `blocked` and back to
-   `idle` without changing group is silent, and an agent that stays
-   `blocked` alerts once, however long it waits. Key the alert on
-   `agent_status` plus `state_change_seq` (herdr-core hands both out).
-   Source: Moonmux `app/mods/alerts/main.luau:62-110` (`dc3b848`); our
-   current trigger at `src/ticker.rs:682-686` and `src/steps.rs:198-225`.
-3. **Add a "seen" memory for needs-you.** Remember the turn or
-   `state_change_seq` of each terminal the user has already looked at, and
-   draw a `blocked` the user has seen as a quieter "waiting" row instead of
-   the top needs-you entry. Source: Moonmux `app/mods/sidebar/main.luau:63-72`
-   (`a571cc5`). This is the one place where Moonmux is ahead of us, because
-   herdr-core gives us `state_change_seq` to key the memory on.
-4. **Do not sound for a pane the user is already looking at.** Suppress the
-   request sound when the pane holding the blocked agent is the focused pane
-   of the active workspace. Source: Moonmux `app/mods/alerts/main.luau:84-92`
-   (`dc3b848`). Cheap, and it makes the remaining alerts trustworthy.
-5. **Show the time in state next to a needs-you row.** `state_secs` already
-   gives "waiting 4 min", which tells the user whether to look now or later.
-   Source: Moonmux `src/core/tmux/mod.rs:362`, `src/core/herdr.rs:158-180`.
-   We already keep `state_secs` ([src/thread.rs:651-654](https://github.com/shyamsivakumar/herdr-projects/blob/4e4548c3c43888e6be1c96906215998f07dc63f0/src/thread.rs#L651-L654)),
-   so this is a display change only.
+1. **See the agents the user started by hand.** The live tree knows only
+   the agents it launched: `reconcile()` walks its own records and
+   `terminal()` matches only a terminal carrying this launch's labels
+   ([server/core/agents.ts:63-69](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L63-L69),
+   [:56-62](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L56-L62)).
+   An agent started outside the app never appears, so the one the user
+   started by hand and that now waits on them is invisible. Moonmux lists
+   every terminal in the session and marks which ones are "ours"
+   ([src/core/herdr.rs:396-403](https://github.com/moonframehq/moonmux/blob/ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f/src/core/herdr.rs#L396-L403),
+   [:450](https://github.com/moonframehq/moonmux/blob/ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f/src/core/herdr.rs#L450)).
+   Source: Moonmux `a571cc5`; the Rust line's adopt path (`Kind::Adopted`)
+   shows we had this once and lost it in the rewrite.
+2. **Treat an agent whose state is `error` as needing you.** The state word
+   is read at
+   [server/core/source.ts:236](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L236)
+   and only `blocked` is a need, so an agent that is alive and reports
+   `error` falls through to `idle` at
+   [:240](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L240).
+   A crashed process is already caught (a dead pid is a need at
+   [:235](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L235),
+   a finished terminal makes the task `need` at
+   [server/core/tasks.ts:121](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L121)),
+   and provider failures have their own path
+   ([:238-239](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L238-L239)).
+   The gap is exactly the agent that is alive and reports an error. Add
+   `error` beside `blocked` at
+   [:237](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L237)
+   (and, in the Rust line, beside `blocked_long` at `src/thread.rs:590`).
+3. **Keep a "seen" memory for needs-you.** The live tree silences what is
+   visible in the window right now
+   ([shared/alerts.ts:31-36](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L31-L36))
+   but forgets it when the chat closes. Remember the state-change sequence
+   of each terminal the user has already looked at, and draw a `blocked`
+   the user has seen as a quieter "waiting" row instead of the top
+   needs-you entry. Source: Moonmux
+   `app/mods/sidebar/main.luau:63-72` (`a571cc5`); herdr-core hands out
+   the sequence to key the memory on.
+4. **Alert on the agent state change, not only on the task status change.**
+   A task that turns `need` raises a `needs-you` event on that change
+   ([server/core/automations.ts:146](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/automations.ts#L146)),
+   which is right. What no status change reports is a `blocked` that clears
+   again while the task stays `need`. Key the alert on the agent's state
+   change sequence as well. Source: Moonmux `app/mods/alerts/main.luau:62-110`
+   (`dc3b848`).
+5. **Show the time in the state next to a needs-you row.** The live tree
+   has a task age ([server/core/tasks.ts:123-128](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L123-L128))
+   but no time-in-state for an agent, and "waiting 4 min" is what tells the
+   user whether to look now or later. Source: Moonmux
+   `src/core/tmux/mod.rs:362`, `src/core/herdr.rs:158-180`. Display only.
 6. **Skip the tmux screen scraper entirely.** It exists because a tmux pane
    has no OSC 7501 report to read. If we ever need tmux panes on the board,
    the honest options are to read the agent's own report through tmux
@@ -161,12 +267,21 @@ we already made, in our own words.
    (Fabien Penso, 2026) and copying it would require keeping the notice, and
    there is nothing here worth the notice.
 
+One more thing to check, not a recommendation: the mac-ops coordinator panel
+reads herdr-app's agent list
+([coordinator/mods/cockpit/main.js:707](https://github.com/shyamsivakumar/mac-ops/blob/93a1467360f27d8d9d7b6e105432a419142c46fa/coordinator/mods/cockpit/main.js#L707))
+and works out its own grouping, while the live tree now owns the detection
+([server/core/source.ts:228-241](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L228-L241)).
+Two detectors will drift. Check first whether the panel already reads that
+status; this file does not claim it does or does not.
+
 ## License
 
 Moonmux is MIT (Copyright (c) 2026 Fabien Penso). `NOTICE` also credits
-`herdr-app` (Apache-2.0) for the Pi icon. herdr-core is Apache-2.0. So
-copying is legally allowed with the notice kept, and nothing here needs it:
-this ticket copies no code, and the recommendation is not to.
+`herdr-app` (Apache-2.0) for the Pi icon. herdr-core is Apache-2.0.
+herdr-projects (the live tree, `a862ac9`) is MIT (Copyright (c) 2026 Elias
+Stravik). So copying is legally allowed with the notice kept, and nothing
+here needs it: this ticket copies no code, and the recommendation is not to.
 
 ## Method and limits
 
@@ -189,7 +304,17 @@ this ticket copies no code, and the recommendation is not to.
   agent list is described from its call site only); the tmux OSC pass-through
   claim in recommendation 6, which is stated as something to prove, not as a
   fact.
+- Read for revision 4: `herdr-projects` `origin/main` (`a862ac9`),
+  `server/core/source.ts`, `server/core/agents.ts`, `server/core/tasks.ts`,
+  `server/core/automations.ts`, `server/core/news.ts`, `server/app.ts`,
+  `server/push.ts`, `shared/alerts.ts`, `shared/attention.ts`,
+  `shared/types.ts`, `src/attention.ts`, `LICENSE`; and
+  `moonframehq/moonmux` `main` re-read with `git ls-remote` (still
+  `ef34516`).
 - Not run: Moonmux itself. No install, per the brief.
+- Not checked in the live tree: the trust-screen check from the Rust line,
+  and whether the mac-ops cockpit panel already reads the live tree's `need`
+  status. Recommendation 5 says to check before changing anything.
 
 ## Corrections after the review
 
@@ -201,6 +326,9 @@ PR #194) found these wrong, and they are fixed above:
    group changed and there was a previous group, and the alert fires once on
    the move into `WaitingOnYou`. Recommendation 1 is now the real gap
    (the `error` state), and the group-versus-status point is recommendation 2.
+   (In revision 4's numbering, with the outside-agents idea put first, the
+   `error` gap is recommendation 2 and the group-versus-status point is
+   recommendation 4.)
 2. Row 5 credited the screen-hash mechanism to `4d06ea0`; it arrived in
    `e8c3f90`, which replaced tmux's per-window `window_activity`.
 3. Row 7 credited `shown_status` to `8fcf76a`; it came with the first
@@ -221,3 +349,75 @@ PR #194) found these wrong, and they are fixed above:
 10. The caveat that herdr-projects `main` has moved 585 commits past the
     pinned release and is now a TypeScript app is new, and the recommendations
     say which tree they apply to.
+
+## Corrections in revision 4 (run a3)
+
+Revision 3's caveat said the live tree has "no agent-status detection at
+all". That was wrong, and the recommendations were written as if it were
+true. Fixed above:
+
+1. The live tree does detect: `status()` in
+   `server/core/source.ts:228-241` returns `need` for an open secret,
+   question or permission, a dead agent with a live terminal, the state
+   word `blocked`, an open permission, or an exhausted provider retry; the
+   agent hooks set `blocked`, `working` and `idle` in
+   `server/core/agents.ts:243-247`.
+2. A new section, "The live tree compared signal by signal", compares all
+   fifteen signals against `a862ac9` with `blob/<sha>` links.
+3. Two recommendations from revision 3 changed. The "do not sound for a
+   pane the user is already looking at" recommendation is already done in
+   the live tree (`shared/alerts.ts:31-36`, `server/app.ts:109-111`), so it
+   no longer applies there. The "diff the agent status, not only the group"
+   recommendation became narrower: the live tree already raises a
+   `needs-you` event on a status change, and what is left is a `blocked`
+   that clears inside `need`.
+4. The Moonmux half of the file is unchanged and re-verified: `main` is
+   still `ef34516`.
+5. `herdr-projects` at `a862ac9` is MIT (Copyright (c) 2026 Elias Stravik),
+   now named in the licence section next to the other two.
+
+### The run-a3 reviewer round
+
+The in-session Opus 5.5 review of revision 4 returned `VERDICT: FAIL` with
+eight findings. All eight are fixed above:
+
+1. **Row 14 was wrong and it hid a recommendation.** It said the live tree
+   "reconciles every agent herdr-core reports". It does not: `reconcile()`
+   walks the app's own `agent` records
+   (`server/core/agents.ts:63-69`) and `terminal()` matches only a
+   herdr-core terminal carrying this installation's and this launch's
+   labels (`:56-62`). The row now says "No", and the idea is
+   recommendation 1.
+2. **Row 1 described the same code wrongly.** It said agents come from
+   herdr-core and are reconciled on every refresh. They come from the app's
+   own launch records; the refresh only attaches terminals to them. Fixed.
+3. **Recommendation 1 overstated its effect.** "A crashed agent reads as
+   idle" was wrong: a crashed process leaves a dead pid (a need at
+   `source.ts:235`) or a finished terminal (the task becomes `need` at
+   `tasks.ts:121`), and provider failures have their own path
+   (`source.ts:238-239`). The gap is an agent that is alive and reports
+   `state=error`. Reworded.
+4. **Row 9 called a filter an order.** `waiting()`
+   (`shared/alerts.ts:24-29`) filters tasks by status; it orders nothing.
+   The row now says so and says that the sidebar's own order was not read.
+5. **Row 12's shape was off.** `go` is `{ place, task }`
+   (`shared/alerts.ts:97`); `focus` is added at `:101` and `:108`. Fixed.
+6. **A hook event was missing.** `agents.ts:243` sets `idle` on
+   `SessionStart` as well as `Stop` and `SessionEnd`. Added.
+7. **Rows 7 and 11 overstated `keptTags`.** The in-app rule is per chat
+   (`plugins/alerts/client.tsx:45` with `visibleChats` from
+   `src/kernel.ts:1141`); the push skip is per device
+   (`server/app.ts:109-110` skips any device whose app is visible). Both
+   rows now say "Partly", and revision 3's recommendation 4 is gone.
+8. **A stale cross-reference.** The revision 2 corrections list pointed at
+   "recommendation 2" for the group-versus-status point; in revision 4's
+   numbering it is recommendation 4. The list now says so.
+
+The reviewer also confirmed, by reading the code at the pinned commits: the
+Moonmux upstream pin (`ef34516`) is still `main`; the herdr-projects line
+numbers cited in the new table are right; the `error` gap is real
+(`CoreTerminal.status.state` is a plain `string` at
+`server/core/protocol.ts:15`, and `status()` treats only `blocked` as a
+need); the licences are as named; the diff touches only the two evidence
+files, copies no Moonmux code and installs nothing; and the acceptance
+criteria are met.

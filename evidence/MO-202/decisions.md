@@ -1,7 +1,7 @@
 # MO-202 decisions
 
-Run id: `ticket:shyamsivakumar/mac-ops#167:a2` (run a2 continues run a1's
-work). Refs #167.
+Run id: `ticket:shyamsivakumar/mac-ops#167:a3` (run a3 continues runs a1 and
+a2's work). Refs #167.
 
 Revision 2 (2026-11-13): the first version of the evidence file went up as
 PR #194 and was merged before the in-session Opus 5.5 review came back. The
@@ -16,6 +16,19 @@ content onto `main` as it stands, re-checks the references against a fresh
 read-only clone, and runs one more reviewer round. No new research, no new
 claims, no code.
 
+Revision 4 (2026-11-13, run a3): the Moonmux half of the evidence is
+unchanged and re-verified (`moonframehq/moonmux` `main` is still
+`ef34516`). The **our side** half was wrong and is now corrected. Revision
+3's caveat said the live `herdr-projects` tree has "no agent-status
+detection at all". It does have detection, in TypeScript, in
+`server/core/source.ts:228-241` and `server/core/agents.ts:243-247`. The
+evidence file now carries a signal-by-signal comparison against the live
+tree (`a862ac9`) with `blob/<sha>` links, and the recommendations are
+re-targeted at the code that actually runs. Two of revision 3's six
+recommendations changed as a result: the on-screen suppression is already
+done in the live tree, and the alert-discipline recommendation narrowed to
+the one case the live tree still misses.
+
 ## What landed
 
 - `evidence/MO-202/moonmux-needs-you.md`: how Moonmux detects that an agent
@@ -24,9 +37,16 @@ claims, no code.
   - 15 signals, each with how it is detected, the Moonmux file and line at
     the pinned commit `ef34516`, the upstream commit that introduced it,
     what herdr-projects has today, and a copy-or-skip with a reason.
+  - Revision 4 adds the same 15 signals against the live `herdr-projects`
+    tree (`a862ac9`, TypeScript), each with a `blob/<sha>` link.
   - The licenses are named: Moonmux is MIT (Fabien Penso, 2026), herdr-core
-    is Apache-2.0.
-  - Six recommendations, ordered by value.
+    is Apache-2.0, herdr-projects at `a862ac9` is MIT (Elias Stravik, 2026).
+  - Six recommendations, ordered by value, each aimed at a named file and
+    line in the live tree.
+  - After the run-a3 reviewer round: two rows that described `reconcile()`
+    wrongly were corrected, the "agents started outside the app" idea came
+    back as recommendation 1, recommendation 1 was reworded, and four loose
+    descriptions were tightened.
 - `evidence/MO-202/decisions.md`: this file.
 
 Nothing else changed. No code was copied from Moonmux, Moonmux was not
@@ -102,8 +122,53 @@ the mechanism
 - **Verdict**: sound.
 - **Confidence**: high.
 
+## Decisions (revision 4)
+
+### 6. The comparison is redone against the live tree, and the old table is
+kept
+
+- **When**: revision 4.
+- **The decision**: The file keeps the fifteen-signal table read at the
+  released Rust line `4e4548c`, and adds the same fifteen signals read at
+  the live tree `a862ac9`, with a verdict column for each.
+- **The gap**: Revision 3 said the live tree has no detection at all, so
+  its recommendations pointed at the Rust line only. That is wrong, and a
+  reader following them would have changed the wrong code.
+- **The reach**: A reader now sees which of Moonmux's ideas the live tree
+  already has (the in-app on-screen suppression, the helper rule, the alert
+  jump) and which it still lacks (`error` as a need, a "seen" memory,
+  time-in-state per agent, and the agents the user started by hand).
+- **Verdict**: sound.
+- **Confidence**: high.
+
+### 7. The wrong caveat is corrected in place, not deleted
+
+- **When**: revision 4.
+- **The decision**: The revision 3 caveat paragraph is kept and marked
+  corrected, with the correction spelled out in the same place.
+- **The gap**: Deleting it would hide the fact that the file was wrong for
+  a whole revision.
+- **The reach**: The corrections list at the end of the evidence file names
+  each wrong claim and its fix, so a reader can audit the change.
+- **Verdict**: sound.
+- **Confidence**: high.
+
 ## Proof
 
+0. **The live tree, read in place.** `herdr-projects` `origin/main` was
+   fetched and read at `a862ac947306621bac9e8130db8b3cd6ffead6fe`:
+   `server/core/source.ts`, `server/core/agents.ts`, `server/core/tasks.ts`,
+   `server/core/automations.ts`, `server/core/news.ts`, `server/app.ts`,
+   `server/push.ts`, `shared/alerts.ts`, `shared/attention.ts`,
+   `shared/types.ts`, `src/attention.ts`, `LICENSE`. Every line number the
+   new table cites was printed and checked against the file at that
+   commit; one was wrong on the first pass (`source.ts:222` is a closing
+   brace, the reconcile call is `:223`) and was corrected before the
+   commit.
+1. **Moonmux did not move.** `git ls-remote origin refs/heads/main` on
+   `moonframehq/moonmux` returned `ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f`,
+   the same commit the revision 1 and 2 tables were read at, so the
+   Moonmux half of the file needed no change.
 1. **The clone and the pins.** `git clone --depth 50
    https://github.com/moonframehq/moonmux.git` into `$TMPDIR`; `git rev-parse
    HEAD` gave `ef345161a9adcd5e5f1ea0e9b8e0466607f3d24f`, and every file and
@@ -170,10 +235,53 @@ router, read-only) read the merged diff against the ticket and returned
 Nothing in the review was left unaddressed, and no existing test or check
 was touched.
 
+### The run-a3 reviewer round
+
+One in-session reviewer round (Claude Opus 5.5, read-only) read the
+revision 4 diff against the ticket and returned `VERDICT: FAIL` with eight
+findings. All eight are fixed in the evidence file, under "The run-a3
+reviewer round" there.
+
+1. **Row 14 was wrong, and it hid a recommendation.** The live tree does
+   not see every agent herdr-core reports: `reconcile()` walks the app's
+   own records and `terminal()` matches only terminals carrying this
+   launch's labels (`server/core/agents.ts:63-69`, `:56-62`). The row now
+   says "No", and Moonmux's "sees agents started outside the app" is
+   recommendation 1.
+2. **Row 1 described the same code wrongly.** Agents come from the app's
+   own launch records, not from herdr-core.
+3. **Recommendation 1 overstated its effect.** A crashed process is already
+   a need (dead pid at `source.ts:235`, finished terminal at
+   `tasks.ts:121`); the gap is an agent that is alive and reports
+   `state=error`. Reworded.
+4. **Row 9 called a filter an order.** `waiting()` filters by status; it
+   orders nothing. The row now says so.
+5. **Row 12's shape was off.** `go` is `{ place, task }`; `focus` is added
+   later.
+6. **A hook event was missing.** `agents.ts:243` also sets `idle` on
+   `SessionStart`.
+7. **Rows 7 and 11 overstated `keptTags`.** The in-app rule is per chat
+   (`plugins/alerts/client.tsx:45`), the push skip is per device
+   (`server/app.ts:109-110`). Both rows now say "Partly".
+8. **A stale cross-reference** in the revision 2 corrections list, which
+   still pointed at the old recommendation numbers.
+
+The reviewer confirmed the rest by reading the code at the pinned commits:
+the Moonmux pin is still upstream `main`, the cited herdr-projects line
+numbers are right, the `error` gap is real, the licences are as named, the
+diff touches only the two evidence files, nothing was installed or copied,
+and the acceptance criteria are met.
+
 ## Known limits
 
 - The herdr-projects rows describe the released Rust line (0.2.34,
-  `4e4548c`). `origin/main` has moved on and is now a TypeScript app.
+  `4e4548c`); revision 4 adds the live tree (`a862ac9`) beside them.
+  Neither tree is a run of the product: both were read as source.
+- The live tree's trust-screen equivalent was not looked for, the order the
+  live sidebar draws needs-you rows in was not read, and the mac-ops
+  cockpit panel was not checked for whether it already reads the live
+  tree's `need` status. Recommendation 5 says to check before changing
+  anything.
 - Moonmux was not run and not installed, per the brief, so the table
   describes the source, not an observed run.
 - The Moonframe upstream (the framework Moonmux draws with) was not read
