@@ -28,9 +28,8 @@ BIN_FILES = (
 CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
-# The pi coordinator (guard extension, sandbox profile, settings, phone relay
-# and its launchers) lives outside every repo, so it is owned here the same
-# way the Herdr mods are.
+# The pi coordinator's own files: guard extension, sandbox profile, settings,
+# phone relay note and launchers.
 PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone")
 PI_FILES = (
     ("extensions/coordinator.ts", ".pi/agent-coordinator/extensions/coordinator.ts"),

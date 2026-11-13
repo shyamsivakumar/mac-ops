@@ -149,9 +149,6 @@ class TestTurncapPlist(unittest.TestCase):
 
 
 class TestPiCoordinatorFiles(unittest.TestCase):
-    """The pi coordinator files (guard, sandbox profile, settings, phone relay
-    and launchers) are owned by this installer like the Herdr mods are."""
-
     def setUp(self):
         self.home = Path("/Users/example")
         self.plan = {
