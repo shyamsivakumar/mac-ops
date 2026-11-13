@@ -1,8 +1,8 @@
 Revision 2 (run ticket:shyamsivakumar/mac-ops#163:a3). The text blocker check
-itself landed in attempt 2 (b43b4e4, PR #204). This attempt closes two gaps
-between the landed check and the brief: the `Blocked by` section was read only
-as a `## Blocked by` heading, and a key resolved only by the `<KEY>-<n> ·`
-title prefix.
+itself landed in attempt 2 (b43b4e4, PR #204). This attempt closes three
+gaps between the landed check and the brief: the `Blocked by` section was read
+only as a `## Blocked by` heading, a key resolved only by the `<KEY>-<n> ·`
+title prefix, and a key could resolve to a pull request.
 
 $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#890 --dry-run
 refused: issue is closed; text blockers: SRW-789 (#490) is still open; the body requires an approval before building: "Build only after the separate Opus design review the design document requires; if no such verdict is recorded, stop with `WAITING:` and name the missing approval."
@@ -24,12 +24,12 @@ $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#
 text blocker checks skipped (--force-text-blockers)
 refused: issue is closed
 
-The `Blocked by` section of the same real bodies, read with the landed code
+The `Blocked by` section of the same real bodies, read with the landed check
 and with this change. The probe calls the function the CLI calls, because the
 CLI stops on SRW #1018 earlier, at the label check ("missing type label"), and
 the label check runs before the text check.
 
-$ git show HEAD:coordinator/bin/ticket > /tmp/old_ticket.py
+$ git show origin/main:coordinator/bin/ticket > /tmp/old_ticket.py   # the landed check
 $ python3 evidence/MO-200/section_probe.py /tmp/old_ticket.py 1018 shyamsivakumar/strategy-replay-workbench
 body section: None
 reasons: []
@@ -51,9 +51,9 @@ body section: 'None.'
 reasons: []
 
 $ python3 -m unittest tests.test_ticket_text_blockers
-................................
+....................................
 ----------------------------------------------------------------------
-Ran 32 tests in 0.003s
+Ran 36 tests in 0.003s
 
 OK
 
@@ -61,6 +61,6 @@ $ python3 scripts/mac_ops_fast_check.py
 fast-check: passed; selected checks are not the full suite
 
 $ ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
-Ran 148 tests in 2.801s
+Ran 152 tests in 3.022s
 
 OK
