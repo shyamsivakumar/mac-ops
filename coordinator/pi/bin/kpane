@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Show a diagram in a big popup over the coordinator.
+
+usage: kpane <image.svg|image.png> [title]
+
+The picture opens as a Herdr overlay: a near full window popup over the
+layout, drawn by the kpane mod (coordinator/mods/kpane). Esc closes it. The
+earlier version split a narrow pane beside the coordinator tab, which was
+easy to miss and could not be enlarged.
+
+An SVG is converted with rsvg-convert and drawn at the size of the popup, so
+it stays sharp. The picture and a small pointer file are written under
+~/.config/herdr-app/kpane/; the file that was named is never changed. When
+Herdr is not there to draw the popup, the picture opens in Preview instead.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+USAGE = """usage: kpane <image.svg|image.png> [title] [zoom]
+
+Show a diagram in a big popup over the coordinator (a Herdr overlay; Esc
+closes it). The zoom is a number: 1 fits the popup, 2 is twice as big.
+
+  kpane queue.svg "Queue map"
+  kpane queue.svg "Queue map" 2
+"""
+
+MOD = "kpane"
+APP_HOME = Path.home() / ".config/herdr-app"
+OUT_DIR = APP_HOME / MOD
+# The overlay's picture box, in points: the overlay is 1500x950, the header
+# takes 40 and the padding 12 on each side. The picture is drawn twice this
+# size, so it stays sharp on a Retina screen.
+BOX = (1476, 886)
+SCALE = 2
+KEEP = 10
+
+
+def fail(message: str) -> int:
+    """Report the problem with the arguments and return the exit code."""
+    print(f"kpane: {message}", file=sys.stderr)
+    print(USAGE, file=sys.stderr, end="")
+    return 1
+
+
+def slug(title: str, fallback: str) -> str:
+    """A safe file name for the picture."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", title).strip("-.")
+    return cleaned[:80] or fallback
+
+
+def run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, **kwargs)
+
+
+def picture_size(path: Path) -> tuple[int, int] | None:
+    """The picture's pixel size, or None when it cannot be read."""
+    try:
+        out = run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)], timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    width = height = None
+    for line in out.splitlines():
+        match = re.search(r"pixelWidth:\s*(\d+)", line)
+        if match:
+            width = int(match.group(1))
+        match = re.search(r"pixelHeight:\s*(\d+)", line)
+        if match:
+            height = int(match.group(1))
+    if width and height:
+        return (width, height)
+    return None
+
+
+def render_svg(source: Path, target: Path) -> bool:
+    """Draw the SVG at the size of the popup, so it stays sharp."""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", dir=str(target.parent), delete=False) as handle:
+            probe = Path(handle.name)
+    except OSError as exc:
+        print(f"kpane: cannot write to {target.parent}: {exc}", file=sys.stderr)
+        return False
+    try:
+        result = run(["rsvg-convert", str(source), "-o", str(probe)], timeout=120)
+        if result.returncode != 0:
+            lines = (result.stderr or "").strip().splitlines()
+            print(
+                "kpane: rsvg-convert failed: "
+                + (lines[-1] if lines else "unknown error"),
+                file=sys.stderr,
+            )
+            return False
+        size = picture_size(probe)
+        if not size:
+            return False
+        width, height = size
+        scale = min((BOX[0] * SCALE) / width, (BOX[1] * SCALE) / height)
+        draw_width = max(1, round(width * scale))
+        result = run(
+            ["rsvg-convert", str(source), "-w", str(draw_width), "-o", str(target)],
+            timeout=120,
+        )
+        if result.returncode != 0:
+            lines = (result.stderr or "").strip().splitlines()
+            print(
+                "kpane: rsvg-convert failed: "
+                + (lines[-1] if lines else "unknown error"),
+                file=sys.stderr,
+            )
+            return False
+        return True
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"kpane: rsvg-convert could not run: {exc}", file=sys.stderr)
+        return False
+    finally:
+        probe.unlink(missing_ok=True)
+
+
+def copy_picture(source: Path, target: Path) -> bool:
+    """Copy the picture into the app home as a PNG, which the mod can read."""
+    if source.suffix.lower() == ".png":
+        shutil.copyfile(source, target)
+        return True
+    try:
+        result = run(
+            ["sips", "-s", "format", "png", str(source), "--out", str(target)], timeout=120
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"kpane: sips could not run: {exc}", file=sys.stderr)
+        return False
+    if result.returncode != 0:
+        lines = (result.stderr or "").strip().splitlines()
+        print(
+            "kpane: cannot read the picture: " + (lines[-1] if lines else "unknown error"),
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def overlay_open() -> bool:
+    """True when the kpane overlay is already showing."""
+    try:
+        result = run(["herdr-app", "status"], timeout=30)
+        overlays = json.loads(result.stdout).get("overlays") or []
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return MOD in overlays
+
+
+def prune(directory: Path) -> None:
+    """Keep the newest few pictures; the rest are ours to remove."""
+    files = [p for p in directory.glob("*") if p.is_file() and p.name != "current.json"]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in files[KEEP:]:
+        old.unlink(missing_ok=True)
+
+
+def main() -> int:
+    # A closed pipe (the output piped into head) is not an error.
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help"):
+        print(USAGE, end="")
+        return 1
+    if not args:
+        print(USAGE, file=sys.stderr, end="")
+        return 1
+    if len(args) > 3:
+        return fail("too many arguments")
+
+    source = Path(args[0]).expanduser()
+    if not source.is_file():
+        return fail(f"no such file: {args[0]}")
+    title = args[1] if len(args) > 1 else source.stem
+    zoom = 1.0
+    if len(args) > 2:
+        try:
+            zoom = float(args[2])
+        except ValueError:
+            return fail(f"the zoom has to be a number: {args[2]}")
+        if zoom < 1 or zoom > 8:
+            return fail("the zoom has to be between 1 and 8")
+
+    try:
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"kpane: cannot write to {OUT_DIR}: {exc}", file=sys.stderr)
+        return 1
+
+    name = slug(title, source.stem)
+    target = OUT_DIR / f"{name}.png"
+    if source.suffix.lower() == ".svg":
+        if not render_svg(source, target):
+            return 1
+    elif not copy_picture(source, target):
+        return 1
+
+    size = picture_size(target) or (0, 0)
+    pointer = OUT_DIR / "current.json"
+    pointer.write_text(
+        json.dumps(
+            {
+                "title": title,
+                "image": f"{MOD}/{target.name}",
+                "width": size[0],
+                "height": size[1],
+                "zoom": zoom,
+            }
+        )
+    )
+    prune(OUT_DIR)
+
+    if overlay_open():
+        # mod.open toggles, so the old popup has to go before the new one.
+        run(["herdr-app", "do", "overlay.close"], timeout=30)
+        time.sleep(0.5)
+    try:
+        result = run(["herdr-app", "do", "mod.open", "--name", MOD], timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        result = None
+        print(f"kpane: herdr-app could not run: {exc}", file=sys.stderr)
+    if result is None or result.returncode != 0:
+        # No Herdr to draw it: Preview shows the picture in a real window.
+        try:
+            subprocess.run(["open", "-a", "Preview", str(target)], check=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"kpane: cannot open the picture: {exc}", file=sys.stderr)
+            return 1
+        print(f"kpane: opened {target} in Preview")
+        return 0
+    print(f"kpane: showing {title} in the Herdr popup")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
