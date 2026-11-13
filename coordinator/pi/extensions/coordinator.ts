@@ -225,13 +225,14 @@ export default function (pi: any) {
 
   pi.on("agent_settled", async (event: any, ctx: any) => {
     touch(event, ctx);
+    // The turn is over: its prompt is not reused by the next one.
+    const prompt = turnPrompt;
+    turnPrompt = "";
     // Only the interactive coordinator session mirrors. A headless tick run
     // (pi -p) is not a coordinator turn Shyam is watching.
     if (ctx?.mode && ctx.mode !== "tui") return;
     // An aborted turn has no reply to mirror.
     if (event?.aborted) return;
-    const prompt = turnPrompt;
-    turnPrompt = "";
     const reply = assistantTextSeen;
     const text = mirrorText(prompt, reply);
     if (!text) return;
