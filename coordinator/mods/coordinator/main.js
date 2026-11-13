@@ -1,7 +1,7 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
 import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, theme } from "herdr";
-import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript } from "./transcript.js";
+import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript, SESSION_NAME } from "./transcript.js";
 import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
 
 async function swapChat() {
@@ -173,9 +173,8 @@ export default class Coordinator extends View {
   }
 
   info() {
-    const inSpace = agents().filter((a) => a.space_name === "Coordinator");
-    const pi = inSpace.filter((a) => a.app === "pi");
-    return pi.find((a) => a.tab_name === "Pi - Coordinator") ?? pi[0] ?? inSpace.find((a) => a.tab_name === "Pi - Coordinator") ?? null;
+    const pi = agents().filter((a) => a.space_name === "Coordinator" && a.app === "pi");
+    return pi.find((a) => a.tab_name === SESSION_NAME) ?? pi[0] ?? null;
   }
 
   wantImage(ref, cx) {
