@@ -1,10 +1,44 @@
 # MO-200 decisions
 
 Refs #163. Ticket: https://github.com/shyamsivakumar/mac-ops/issues/163
-Run id: `ticket:shyamsivakumar/mac-ops#163:a2` (attempt 1 of this ticket ran
-earlier and produced no PR; the coordinator's brief names attempt 2).
+Run id: `ticket:shyamsivakumar/mac-ops#163:a3` (attempt 1 ran and produced no
+PR; attempt 2 landed the check in PR #204; this attempt fixes two gaps the
+landed check still had against the same brief).
 
-## What landed
+## Revision 2: what changed
+
+Attempt 2 landed the text blocker check (`b43b4e4`, PR #204). This attempt
+keeps that behaviour and closes two gaps between the landed check and the
+brief's stated behaviour change. Both gaps let a ticket whose body names an
+unmet prerequisite start anyway.
+
+- `coordinator/bin/ticket`:
+  - **The `Blocked by` section is read in both forms the body uses.** The
+    landed check read only a `## Blocked by` heading. The coordinator also
+    writes the section as a `Blocked by:` line, and its own template check
+    accepts both forms, so a body written as a line was read as having no
+    section at all: no blocker was ever named. `blocked_by_section` now reads
+    the heading form first and the labelled line second.
+  - **A `<details>` block is not the ticket's own section.** Several repos
+    keep a preserved original contract inside `<details>`, and that contract
+    carries the old `Blocked by:` line. The section reader skips `<details>`
+    blocks and fenced code, so a preserved contract cannot refuse a ticket
+    the coordinator has since approved.
+  - **A key resolves by the title prefix `<KEY>-<n>`, whatever separator
+    follows.** The landed check matched the exact prefix `<KEY>-<n> ·`. The
+    newest SRW tickets are titled `SRW-1119: Hash-route tabs`, so their keys
+    resolved to nothing and the refusal read `SRW-1119 has no issue ... whose
+    title starts with 'SRW-1119 ·'`. The prefix now matches `<KEY>-<n>`
+    followed by any character that is not a digit, which keeps `SRW-789` from
+    matching `SRW-7890`.
+- `tests/test_ticket_text_blockers.py`: 12 new unit tests (32 in the file) and
+  a test isolation fix so the section tests restore the functions they patch.
+
+Not touched: the native blocker refusal, labels, intent comments, receipt
+comments, the queue, the launch path, every other subcommand and every other
+existing behaviour. No existing test or check was weakened.
+
+## Revision 1 (attempt 2): what landed
 
 - `coordinator/bin/ticket`: two text blocker checks in the `ticket start` path,
   next to the existing native blocker check, both raising the same `Refuse`.
@@ -25,7 +59,58 @@ Not touched: the native blocker refusal, labels, intent comments, receipt
 comments, the queue, the launch path, every other subcommand and every other
 existing behaviour. No existing test or check was weakened.
 
-## Decisions
+## Decisions (revision 2)
+
+### 9. The `Blocked by` section is read as a heading or as a labelled line
+
+- **When**: revision 2.
+- **The decision**: `blocked_by_section` reads the `## Blocked by` section
+  first and the `Blocked by:` line second, exactly the two forms the
+  template check (`template_status`) accepts.
+- **The gap**: The brief says the check reads the `## Blocked by` section.
+  The landed code read only that. The coordinator's bodies carry both forms:
+  SRW #1015 to #1019 write `Blocked by: SRW-1119, SRW-1120.`, and the
+  template check calls that section `ok`. A section written as a line was
+  read as no section at all, so its blockers were never named.
+- **The reach**: Every body written as a labelled line now has its blockers
+  read. The heading form is unchanged, and a body that has both takes the
+  heading.
+- **Verdict**: sound.
+- **Confidence**: high. The proof shows the same real body reading `None`
+  before the change and `SRW-1119, SRW-1120.` after it.
+
+### 10. A preserved contract is not the ticket's own section
+
+- **When**: revision 2.
+- **The decision**: The section reader strips `<details>` blocks and fenced
+  code before it looks for the section.
+- **The gap**: `shyamsivakumar/catalouge#53` keeps its original contract in a
+  `<details>` block, and that contract carries `Blocked by: #49, #51, #52`.
+  The coordinator's decision in the same body approves the build and names
+  the native blocked-by relationships as authoritative.
+- **The reach**: A preserved contract cannot refuse a ticket. The ticket's
+  own `## Blocked by` section still decides, and its refs are still read.
+- **Verdict**: sound.
+- **Confidence**: medium. A reviewer may prefer preserved contracts to be
+  read as well; the coordinator decision that overrides them is prose the
+  check does not parse.
+
+### 11. A key resolves by prefix `<KEY>-<n>`, not by the ` ·` separator
+
+- **When**: revision 2.
+- **The decision**: A title matches the key when it starts with `<KEY>-<n>`
+  and the next character is not a digit.
+- **The gap**: The brief says the key is resolved by the exact title prefix
+  `<KEY>-<n> ·`. The newest SRW tickets are titled `SRW-1119: ...`, so that
+  prefix matched nothing and the key was refused as unresolvable, even when
+  the blocker it names was closed.
+- **The reach**: `SRW-789` still cannot match `SRW-7890`. Every title that
+  matched before still matches. The refusal now names the key and the issue
+  number instead of claiming the key has no issue.
+- **Verdict**: sound.
+- **Confidence**: high.
+
+## Decisions (revision 1)
 
 ### 1. The text check sits after the native blocker check and its reasons join the native refusal
 
@@ -140,6 +225,28 @@ existing behaviour. No existing test or check was weakened.
 
 The proof outputs are in `evidence/MO-200/proof.txt` and in the pull request
 body.
+
+### Revision 2
+
+1. **SRW #1018 (the compact `Blocked by` line).** The same real body read as
+   no section before this change and reads `SRW-1119, SRW-1120.` after it,
+   so the check now refuses with `SRW-1119 (#1016) is still open` and
+   `SRW-1120 (#1017) is still open`. The CLI itself stops earlier on that
+   ticket (`missing type label`), because the label check runs before the
+   text check, so the probe calls the same function the CLI calls.
+2. **SRW #1015 (`Blocked by: none.`).** The section reads `none.` and the
+   reasons are empty.
+3. **catalouge #53 (a preserved contract inside `<details>`).** The section
+   read is the ticket's own `## Blocked by` section, the preserved
+   `Blocked by: #49, #51, #52` line is not read, and the reasons are empty.
+4. **SRW #890, SRW #899, SRW #490 and `--force-text-blockers`** behave exactly
+   as in revision 1; the outputs are in `evidence/MO-200/proof.txt`.
+5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 32
+   tests in the file). The full suite through heavy,
+   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 148
+   tests, OK.
+
+### Revision 1
 
 1. **SRW #890 (the ticket from the brief).**
    `python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#890 --dry-run`
