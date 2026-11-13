@@ -31,7 +31,12 @@ unmet prerequisite start anyway.
     title starts with 'SRW-1119 ·'`. The prefix now matches `<KEY>-<n>`
     followed by any character that is not a digit, which keeps `SRW-789` from
     matching `SRW-7890`.
-- `tests/test_ticket_text_blockers.py`: 12 new unit tests (32 in the file) and
+  - **A key resolves to an issue, never to a pull request.** The search has
+    no `is:issue` filter, and the looser prefix let a pull request titled
+    `SRW-1018 part 1: ...` answer for the key. A merged pull request then
+    satisfied an open blocker. The query asks for issues and every item with
+    a `pull_request` field is skipped.
+- `tests/test_ticket_text_blockers.py`: 16 new unit tests (36 in the file) and
   a test isolation fix so the section tests restore the functions they patch.
 
 Not touched: the native blocker refusal, labels, intent comments, receipt
@@ -96,7 +101,6 @@ existing behaviour. No existing test or check was weakened.
   check does not parse.
 
 ### 11. A key resolves by prefix `<KEY>-<n>`, not by the ` ·` separator
-
 - **When**: revision 2.
 - **The decision**: A title matches the key when it starts with `<KEY>-<n>`
   and the next character is not a digit.
@@ -109,6 +113,66 @@ existing behaviour. No existing test or check was weakened.
   number instead of claiming the key has no issue.
 - **Verdict**: sound.
 - **Confidence**: high.
+
+### 12. A key never resolves to a pull request
+
+- **When**: revision 2, after the in-session review round.
+- **The decision**: The key search asks GitHub for issues (`is:issue`) and
+  every result with a `pull_request` field is skipped.
+- **The gap**: The search returns pull requests too. With the old exact
+  prefix `<KEY>-<n> ·` a pull request titled `SRW-1018 part 1: ...` could not
+  match. With the looser prefix it can, and GitHub sorts search results by
+  best match, so the key could resolve to a merged pull request while the
+  issue it names stayed open. The in-session reviewer (Opus) raised this as
+  major.
+- **The reach**: A key names an issue, never a pull request. A pull request
+  that shares a title prefix can no longer satisfy a blocker.
+- **Verdict**: sound.
+- **Confidence**: high.
+
+### 13. The section read uses the markers the template check uses
+
+- **When**: revision 2, after the in-session review round.
+- **The decision**: The section reader uses the same markers as
+  `template_status`. A `Blocked by:` line is read as its own value plus any
+  list under it, and stops at the next line that is not part of the list.
+- **The gap**: The reviewer found that a list under a `Blocked by:` line read
+  as empty, because only the rest of that line was taken. That was a false
+  pass.
+- **The reach**: A body that writes the section as a labelled line with a
+  list under it now names its blockers. The text after the list is not
+  swallowed, so the acceptance prose of the next line cannot add a blocker.
+- **Verdict**: sound.
+- **Confidence**: high.
+
+### 14. A blank line between the label and its list does not end the section
+
+- **When**: revision 2, after the gate round on #207.
+- **The decision**: A blank line under a `Blocked by:` label is skipped when
+  a list follows it.
+- **The gap**: The gate found that `Blocked by:\n\n- SRW-1018` still read as
+  empty and passed the check when it should have refused.
+- **The reach**: A blank line ends the section only when the next non-blank
+  line is not a list item, so the acceptance prose of the following section
+  is still not swallowed.
+- **Verdict**: sound.
+- **Confidence**: high.
+
+### 15. The blocker check and the template check differ on `<details>`
+
+- **When**: revision 2, after the gate round on #207.
+- **The decision**: The template check reads a `<details>` block; the blocker
+  check skips it. A body whose only `Blocked by` sits inside `<details>`
+  passes the template check and names no blocker.
+- **The gap**: The gate found that the branch claimed both checks read the
+  same section, which is not true for `<details>`.
+- **The reach**: A preserved contract is not this ticket's own section, so it
+  must not refuse a ticket the coordinator has since approved. The
+  difference is deliberate, and it is now stated in the docstring, in the
+  pull request body and in a test that pins both sides of it.
+- **Verdict**: sound.
+- **Confidence**: medium. A body that keeps its only prerequisite inside a
+  `<details>` block gets no text blocker.
 
 ## Decisions (revision 1)
 
@@ -239,12 +303,35 @@ body.
 3. **catalouge #53 (a preserved contract inside `<details>`).** The section
    read is the ticket's own `## Blocked by` section, the preserved
    `Blocked by: #49, #51, #52` line is not read, and the reasons are empty.
-4. **SRW #890, SRW #899, SRW #490 and `--force-text-blockers`** behave exactly
-   as in revision 1; the outputs are in `evidence/MO-200/proof.txt`.
-5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 32
+4. **SRW #890, SRW #899, SRW #492 and `--force-text-blockers`.** The board
+   moved during the run: `main` gained the check that refuses a start when a
+   pull request already carries the issue (#223), SRW #806 was closed, and
+   stage labels were taken. The live outputs are in
+   `evidence/MO-200/proof.txt`. SRW #492 (`## Blocked by` `None.`) prints
+   `checks passed`.
+5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed (it ran the 64
    tests in the file). The full suite through heavy,
-   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 148
+   `~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, ran 180
    tests, OK.
+
+### In-session review round and the gate round on #207
+
+One reviewer round ran in this session (Opus, Claude Opus 5.5) on
+`git diff origin/main...HEAD`. It returned `VERDICT: FAIL` with one major and
+three minor findings: a pull request could satisfy a key blocker (fixed by
+decision 12), a list under a `Blocked by:` line read as empty (fixed by
+decision 13), a list-item label was not matched (the template check does not
+match it either, so both read the same section), and a bold `**Blocked by:**`
+value kept its leading `**` (the template check strips it, so the value is
+now read through the template markers).
+
+The gate on #207 then returned `VERDICT: FAIL` on the branch itself, for two
+reasons and two minors. The branch was based on `a780e95` while `main` already
+carried #206 as a squash, so the pull request conflicted and could not land;
+the branch is now rebuilt on `origin/main` and the fix is cherry-picked onto
+it, so the head is a new commit and the builder check line changed with it.
+The minors are fixed by decision 14 (a blank line under the label) and
+decision 15 (the `<details>` difference is stated, not hidden).
 
 ### Revision 1
 

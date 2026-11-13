@@ -12,8 +12,13 @@ CALL_TIMEOUT = 30
 COORDQ_TIMEOUT = 120
 LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
 STAGES = ("stage:backlog", "stage:todo")
-FAMILIES = ("stage", "priority", "type", "builder", "reviewer")
-FAMILY_COLORS = {"stage": "1d76db", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
+# The hold label is named `stage:hold` so it reads as a stage on the board, but
+# it is a family of its own: a hold says the ticket waits for Shyam, and it
+# never counts as the one stage label a ticket needs.
+HOLD_LABEL = "stage:hold"
+HOLD_FAMILY = "hold"
+FAMILIES = ("stage", HOLD_FAMILY, "priority", "type", "builder", "reviewer")
+FAMILY_COLORS = {"stage": "1d76db", HOLD_FAMILY: "b60205", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
 COORDQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
 NO_PRIORITY = 0
 LEDGER_LINE = re.compile(r"<!-- coordinator-ticket (\{.*\}) -->")
@@ -29,13 +34,18 @@ VERDICT_PASS = "VERDICT: PASS"
 REPO_REF = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
 BARE_REF = re.compile(r"(?<![\w/#])#(\d+)\b")
 COMMENT_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/\d+#(issuecomment-\d+)")
-SECTION_NAME = "Blocked by"
-LABELLED_SECTION = re.compile(r"(?im)^[ \t]*\**\s*blocked by\s*\**\s*:[ \t]*(.*)$")
 DETAILS_BLOCK = re.compile(r"(?is)<details\b.*?</details>")
 FENCED_BLOCK = re.compile(r"(?s)```.*?```")
+SECTION_NAME = "Blocked by"
 REF_STATE = {}
 KEY_ISSUE = {}
 COMMENT_TEXT = {}
+PR_REF_WORDS = ("refs", "ref", "fixes", "fix", "fixed", "closes", "close", "closed",
+                "resolves", "resolve", "resolved")
+PR_REF_WORD = re.compile(r"(?i)\b(?:" + "|".join(PR_REF_WORDS) + r")\b")
+PR_REF_NUMBER = re.compile(r"(?:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(\d+)")
+REFS_ISSUE = re.compile(r"(?i)\brefs?\s+#(\d+)")
+RESTART_PATTERN = re.compile(r"(?i)\b(restart|redo|again|reopen|rework|retry|fix|start over|another pass|not done|incomplete)\b")
 RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
 RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
 SHYAM = re.compile(r"\bshyam\b", re.I)
@@ -51,6 +61,14 @@ ATTRIBUTED = re.compile(
     re.I,
 )
 QUOTE_WINDOW = 60
+# The review gate: the rules live in the coordinator CLAUDE.md sections
+# "Review gate" and "Ten minutes start to finish".
+GATE_OPUS = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
+GATE_SOL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+GATE_PRIORITY = 400
+GATE_CHECK_CONTEXT = "srw/agent-check"
+GATE_PUBLISHER_REPO = "shyamsivakumar/strategy-replay-workbench"
+ASCEND_MARKERS = ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni")
 
 
 class Refuse(Exception):
@@ -93,6 +111,7 @@ def label_names(cfg):
     names = []
     for stage in cfg["labels"]["stage"]:
         names.append(("stage", f"stage:{stage}"))
+    names.append((HOLD_FAMILY, HOLD_LABEL))
     for p in cfg["labels"]["priority"]:
         names.append(("priority", f"priority:{p}"))
     for t in cfg["labels"]["type"]:
@@ -201,6 +220,9 @@ def split_labels(cfg, names):
     groups = {f: [] for f in FAMILIES}
     other = []
     for name in names:
+        if name.lower() == HOLD_LABEL:
+            groups[HOLD_FAMILY].append(HOLD_FAMILY)
+            continue
         family, _, value = name.partition(":")
         if family in groups and value:
             groups[family].append(value)
@@ -213,6 +235,7 @@ def label_problems(cfg, groups):
     problems = []
     valid = {
         "stage": set(cfg["labels"]["stage"]),
+        HOLD_FAMILY: {HOLD_FAMILY},
         "priority": set(cfg["labels"]["priority"]),
         "type": set(cfg["labels"]["type"]),
         "builder": set(cfg["models"]),
@@ -452,25 +475,180 @@ def reference_state(repo, number):
     return state
 
 
+def iso_time(text):
+    """A GitHub timestamp as a comparable UTC datetime, or None."""
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def time_key(text):
+    """A sort key for a GitHub timestamp; a missing timestamp sorts first."""
+    return iso_time(text) or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def same_repo(named, repo):
+    """True when two `owner/name` names point at the same repository."""
+    if not named or not repo:
+        return False
+    return named.lower().split("/")[-2:] == repo.lower().split("/")[-2:]
+
+
+def references_issue(body, number, repo=None):
+    """True when the body references issue `number` with a reference keyword.
+
+    The keyword carries the numbers that follow it on the same line, so
+    `Refs #160, #161` names both, and `owner/name#160` names the issue only
+    when the repository is the one in play.
+    """
+    for line in (body or "").splitlines():
+        match = PR_REF_WORD.search(line)
+        if not match:
+            continue
+        for token in PR_REF_NUMBER.finditer(line[match.end():]):
+            named_repo, token_number = token.group(1), int(token.group(2))
+            if token_number != number:
+                continue
+            if named_repo and repo and not same_repo(named_repo, repo):
+                continue
+            return True
+    return False
+
+
+def referencing_pulls(repo, number):
+    """The pull requests in `repo` whose body references issue `number`.
+
+    The issue timeline names every pull request that mentions the issue, and
+    the pull request itself says whether the mention is a reference. A pull
+    request in another repository never counts.
+    """
+    events = gh_json(["api", "--paginate", f"repos/{repo}/issues/{number}/timeline?per_page=100"])
+    found = {}
+    for event in events:
+        if event.get("event") != "cross-referenced":
+            continue
+        source = (event.get("source") or {}).get("issue") or {}
+        if "pull_request" not in source:
+            continue
+        if not same_repo((source.get("repository") or {}).get("full_name"), repo):
+            continue
+        pull_number = source.get("number")
+        if pull_number in found:
+            continue
+        if not references_issue(source.get("body") or "", number, repo):
+            continue
+        pull = gh_json(["api", f"repos/{repo}/pulls/{pull_number}"])
+        if not references_issue(pull.get("body") or "", number, repo):
+            continue
+        found[pull_number] = {
+            "number": pull_number,
+            "state": pull.get("state"),
+            "merged": bool(pull.get("merged")),
+            "mergedAt": pull.get("merged_at"),
+            "createdAt": pull.get("created_at"),
+        }
+    return sorted(found.values(), key=lambda pull: pull["number"])
+
+
+def is_restart_comment(body):
+    """True when a coordinator comment says the work starts again.
+
+    A restart is the coordinator's own decision, the comment that opens with
+    `Coordinator` and says the work is not done. The intent comment
+    `ticket start` posts is not a restart: it is the start itself, and
+    counting it would let a relaunch past the guard that stops it.
+    """
+    text = (body or "").strip()
+    if not text.lower().startswith("coordinator"):
+        return False
+    low = text.lower()
+    return bool(RESTART_PATTERN.search(low))
+
+
+def coordinator_restart_time(issue):
+    """When the coordinator last restarted the work on the issue."""
+    newest = None
+    for comment in issue.get("comments") or []:
+        if not is_restart_comment(comment.get("body") or ""):
+            continue
+        created = comment.get("createdAt") or ""
+        if newest is None or created > newest:
+            newest = created
+    return newest
+
+
+def pull_guard_reasons(repo, issue):
+    """Why a start must be refused because a pull request already carries the issue.
+
+    An open pull request means the work is already in flight. A merged one
+    means the work landed, unless the coordinator restarted the issue after
+    that merge.
+    """
+    pulls = referencing_pulls(repo, issue["number"])
+    if not pulls:
+        return []
+    open_pulls = [pull for pull in pulls if pull["state"] == "open"]
+    if open_pulls:
+        newest = max(open_pulls, key=lambda pull: time_key(pull["createdAt"]))
+        return [f"open pull request #{newest['number']} already references this issue"]
+    restart = iso_time(coordinator_restart_time(issue))
+    blocking = []
+    for pull in pulls:
+        if not pull["merged"]:
+            continue
+        merged_at = iso_time(pull["mergedAt"])
+        if restart is None or merged_at is None or merged_at > restart:
+            blocking.append(pull)
+    if blocking:
+        newest = max(blocking, key=lambda pull: time_key(pull["mergedAt"]))
+        return [f"already merged via #{newest['number']}; close the issue"]
+    return []
+
+
 def own_body(body):
     """The body without preserved contracts and code, which name other tickets."""
     return FENCED_BLOCK.sub(" ", DETAILS_BLOCK.sub(" ", body))
 
 
-def blocked_by_section(body):
+def blocked_by_section(cfg, body):
     """The body text of the ticket's own `Blocked by` section, or None.
 
-    The coordinator writes the section as a `## Blocked by` heading or as a
-    `Blocked by:` line, and the template check accepts both, so the blocker
-    check reads both. A `<details>` block holds a preserved contract, not this
-    ticket's own section, so it is skipped.
+    The section is read with the same markers the template check uses, so the
+    blocker check looks at the section the template check accepted: a
+    `## Blocked by` heading or a `Blocked by:` line, with any list under the
+    line. The one difference is `<details>`: the template check reads a
+    preserved contract inside one, the blocker check skips it, so a body
+    whose only `Blocked by` sits inside `<details>` passes the blocker check.
     """
-    text = own_body(body)
-    section = body_section(text, SECTION_NAME)
-    if section is not None:
-        return section
-    match = LABELLED_SECTION.search(text)
-    return match.group(1).strip() if match else None
+    lines = own_body(body).splitlines()
+    markers = template_markers(cfg, lines)
+    for start, section, level, rest in markers:
+        if section != SECTION_NAME:
+            continue
+        if level:
+            stops = [m[0] for m in markers if m[0] > start]
+            stops += [j for j in range(start + 1, len(lines)) if (h := HEADING.match(lines[j])) and len(h.group(1)) <= level]
+            end = min(stops, default=len(lines))
+            return re.sub(r"<!--.*?-->", "", "\n".join([rest] + lines[start + 1:end]), flags=re.S).strip()
+        content = [rest]
+        pending = []
+        for follow in lines[start + 1:]:
+            text = follow.strip()
+            if not text:
+                pending.append(follow)
+                continue
+            if not (follow[:1].isspace() or text[0] in "-*+"):
+                break
+            content.extend(pending)
+            pending = []
+            content.append(follow)
+        return "\n".join(content).strip()
+    return None
 
 
 def resolve_key_issue(repo, key, number):
@@ -481,12 +659,14 @@ def resolve_key_issue(repo, key, number):
     prefix = f"{key}-{number}"
     found = None
     for page in range(1, 11):
-        query = gh_json(["api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} in:title \"{key}-{number}\"",
+        query = gh_json(["api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} is:issue in:title \"{key}-{number}\"",
                          "-f", "per_page=100", "-f", f"page={page}"])
         items = query.get("items", [])
         for item in items:
             title = item["title"]
             rest = title[len(prefix):]
+            if item.get("pull_request"):
+                continue
             if title.startswith(prefix) and not rest[:1].isdigit():
                 found = item["number"]
                 break
@@ -526,7 +706,7 @@ def verdict_recorded(repo, issue):
 
 def section_blocker_reasons(cfg, repo, issue):
     """Every reference in the `Blocked by` section that is not met yet."""
-    section = blocked_by_section(issue.get("body") or "")
+    section = blocked_by_section(cfg, issue.get("body") or "")
     if not section:
         return []
     text = re.sub(r"<!--.*?-->", "", section, flags=re.S).strip()
@@ -639,6 +819,16 @@ def ledger_of(issue, login):
 def validate_start(cfg, repo, issue, check_text=True):
     rcfg = repo_config(cfg, repo)
     t = parse_ticket(cfg, repo, issue)
+    # The pull request guard comes before the other checks so the refusal
+    # names the pull request that already carries the issue.
+    pull_reasons = pull_guard_reasons(repo, issue)
+    if pull_reasons:
+        raise Refuse(pull_reasons[0])
+    # A hold is Shyam's own block. It is checked before the state, key and
+    # label rules, so a held ticket says that it waits for Shyam, whatever
+    # else it is missing.
+    if t["groups"][HOLD_FAMILY]:
+        raise Refuse(f"on hold ({HOLD_LABEL}); only Shyam clears it")
     if t["state"] != "OPEN":
         suffix = ""
         if check_text:
@@ -924,6 +1114,259 @@ def cmd_start(a):
         die(f"started, but the receipt comment could not be posted after 3 tries; coordq output was: {output}")
 
 
+def parse_pr_ref(ref):
+    """The repository and the pull request number in an `owner/repo#number` reference."""
+    match = re.fullmatch(r"([^/\s#]+/[^/\s#]+)#(\d+)", ref)
+    if not match:
+        die(f"bad pull request reference {ref!r}, expected owner/repo#number", 2)
+    return match.group(1), int(match.group(2))
+
+
+def fetch_pull(repo, number):
+    return gh_json(["pr", "view", str(number), "-R", repo, "--json",
+                    "number,state,isDraft,title,body,headRefOid,baseRefName,url"])
+
+
+def refs_issue(repo, body):
+    """The issue number a pull request body references with `Refs #n`, or None.
+
+    Only `Refs` and `Ref` count. A pull request body that mentions a number
+    in prose names no issue, and a reference to another repository never
+    counts.
+    """
+    for line in (body or "").splitlines():
+        match = REFS_ISSUE.search(line)
+        if not match:
+            continue
+        return int(match.group(1))
+    return None
+
+
+def check_ticket_key(repo, rcfg, title):
+    """Check the key in an issue title against the key of the repository.
+
+    An issue title that carries no key at all is not an error: the
+    repository key still names the ticket, and the gate title needs it.
+    """
+    if rcfg.get("key") is None:
+        raise Refuse(f"repo {repo} has no key configured")
+    match = TITLE_KEY.match(title or "")
+    if not match:
+        return
+    if match.group(1) != rcfg["key"]:
+        raise Refuse(f"key prefix {match.group(1)} does not match repo key {rcfg['key']}")
+
+
+def router_chain(route):
+    """The models a router route can run, in order.
+
+    The route table lives in the pi extension, so a builder thread that
+    stores only a route still says which models it could have run.
+    """
+    try:
+        with open(os.path.expanduser("~/.pi/agent/extensions/task-router.ts")) as f:
+            source = f.read()
+    except OSError:
+        return []
+    routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
+    if not routes:
+        return []
+    chain = re.search(r"^\s*" + re.escape(route.removeprefix("task/")) + r":\s*\[([^\]]*)\]",
+                      routes.group(1), re.M)
+    if not chain:
+        return []
+    try:
+        entries = json.loads("[" + chain.group(1).rstrip().rstrip(",") + "]")
+    except ValueError:
+        return []
+    return [entry for entry in entries if isinstance(entry, str)]
+
+
+def builder_models(issue, login):
+    """The model the builder thread of the issue ran, and whether it is live.
+
+    The builder thread is the one the ledger of the issue names and the
+    queue receipt points at. The newest attempt that the queue dispatched
+    wins, and its newest run names the model that ran. A builder that
+    stored only a router route names the models that route can run. A
+    builder whose model cannot be read at all leaves the models empty.
+    """
+    try:
+        with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except (FileNotFoundError, ValueError):
+        receipts = {}
+    entries = sorted(intents(ledger_of(issue, login)), key=lambda e: e["attempt"])
+    for entry in reversed(entries):
+        thread_id = receipts.get(entry.get("requestId"))
+        if not thread_id:
+            continue
+        result = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 5})
+        thread = result.get("thread") or {}
+        live = thread.get("status") in LIVE_STATUSES
+        runs = sorted(result.get("recentRuns") or [],
+                      key=lambda run: run.get("ordinal") or 0, reverse=True)
+        for run in runs:
+            model = run.get("executedModel")
+            if isinstance(model, str) and model:
+                return [model], live
+        stored, instance = thread.get("model"), thread.get("providerInstanceId")
+        if instance == "router" and isinstance(stored, str) and stored:
+            return router_chain(stored), live
+        if isinstance(stored, str) and stored and instance:
+            return ["claude" if instance == "claudeAgent" else stored], live
+        return [], live
+    return [], False
+
+
+def gate_reviewer(models, live=False):
+    """The gate model: Sol when the builder ran Claude, Opus otherwise.
+
+    A builder whose model cannot be read leaves the gate on Opus, unless
+    the builder thread is still running: a live builder may be Claude, and
+    two Claude threads must not run at once.
+    """
+    if any("claude" in m.lower() or "anthropic" in m.lower() for m in models):
+        return GATE_SOL
+    return GATE_SOL if live and not models else GATE_OPUS
+
+
+def gate_live(title, gate_id):
+    """Why a gate thread for this pull request head is already on its way, or None.
+
+    A head is taken three ways: a queue item carries it, the queue's
+    gatedHeads map names it, or a gate thread already ran for it. The last
+    one matters because a gate that finished leaves nothing live, and a
+    second gate on the same head would try to merge it again.
+    """
+    try:
+        with open(os.path.join(QUEUE_DIR, "queue.json")) as f:
+            queue = json.load(f)
+    except (FileNotFoundError, ValueError):
+        queue = {}
+    for item in queue.get("items") or []:
+        if (item.get("args") or {}).get("clientRequestId") == gate_id:
+            return f"queued as coordq #{item['id']}"
+    heads = queue.get("gatedHeads") or {}
+    if gate_id in heads:
+        return f"a gate for this head is already recorded as coordq #{heads[gate_id]}"
+    try:
+        with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except (FileNotFoundError, ValueError):
+        receipts = {}
+    if receipts.get(gate_id):
+        return f"a gate thread already ran for this head (thread {receipts[gate_id]})"
+    result = t3_call("t3_thread_list", {"allProjects": True, "limit": 500,
+                                        "statuses": LIVE_STATUSES, "includeSubagents": False})
+    for thread in result.get("threads") or []:
+        if thread.get("title") == title:
+            return f"thread {thread['threadId']} is {thread.get('status')}"
+    return None
+
+
+def check_publisher(repo, head, rcfg):
+    """True when the check of the pull request comes from the check publisher."""
+    statuses = gh_json(["api", f"repos/{repo}/commits/{head}/statuses?per_page=100"])
+    checks = [s for s in statuses if s.get("context") == GATE_CHECK_CONTEXT]
+    return bool(rcfg.get("macPublisher", repo == GATE_PUBLISHER_REPO)) or bool(checks)
+
+
+def ascend_repo(repo, rcfg):
+    """True when the repository stops at the verdict instead of merging."""
+    return (bool(rcfg.get("ascend"))
+            or repo.split("/")[0] != "shyamsivakumar"
+            or any(marker in repo for marker in ASCEND_MARKERS))
+
+
+def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend):
+    """The brief the gate thread receives, with every value filled in."""
+    check = (f"Confirm {GATE_CHECK_CONTEXT} success on {head} using gh api repos/{repo}/commits/{head}/statuses."
+             if publisher else
+             f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
+    merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
+             f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {pr} -R {repo} "
+             f"--squash --match-head-commit {head}`; report the merge commit or refusal.")
+    return f"""{rcfg['key']}-{issue_number} review and merge · #{pr} {head}
+Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues/{issue_number}
+Read the ticket and diff only: `git fetch origin && git diff origin/{base}...{head}`. Check out nothing. Do NOT rerun the suite.
+{check} Re-read prior gate findings and say whether each is resolved.
+Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
+Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+{merge}
+Never call emp. Never print secrets."""
+
+
+def with_gate_lock(repo, pr):
+    """The lock that keeps two gates for one pull request head apart."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    f = open(os.path.join(CACHE_DIR, f"gate-{repo.replace('/', '_')}-{pr}.lock"), "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise Refuse("another gate for this pull request is running")
+    return f
+
+
+def cmd_gate(a):
+    cfg = load_config()
+    repo, number = parse_pr_ref(a.ref)
+    try:
+        rcfg = repo_config(cfg, repo)
+        pull = fetch_pull(repo, number)
+        head = pull["headRefOid"]
+        if pull["state"] != "OPEN":
+            raise Refuse(f"pull request #{number} is {pull['state'].lower()}")
+        if pull.get("isDraft"):
+            raise Refuse(f"pull request #{number} is a draft")
+        issue_number = refs_issue(repo, pull.get("body"))
+        if issue_number is None:
+            raise Refuse(f"pull request #{number} references no issue")
+        issue = fetch_issue(repo, issue_number)
+        check_ticket_key(repo, rcfg, issue["title"])
+        models, live = builder_models(issue, authed_login())
+        model = gate_reviewer(models, live)
+        publisher = check_publisher(repo, head, rcfg)
+        ascend = ascend_repo(repo, rcfg)
+        base = pull.get("baseRefName") or "main"
+        title = f"{rcfg['key']}-{issue_number} review #{number} {head[:8]}"
+        brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend)
+        gate_id = f"gate:{repo}#{number}:{head}"
+        payload = {"projectId": rcfg["projectId"], "title": title, "modelSelection": model,
+                   "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+                   "clientRequestId": gate_id, "message": brief}
+        command = [COORDQ, "start", json.dumps(payload), "--title", title, "--priority", str(GATE_PRIORITY)]
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    except GhError as e:
+        die(f"gh failed ({e.kind}): {e}")
+    if a.print_brief:
+        print(brief)
+        return
+    try:
+        lock = with_gate_lock(repo, number)
+        live = gate_live(title, gate_id)
+        if live:
+            raise Refuse(f"a gate thread for this head is already on its way: {live}")
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    if a.dry_run:
+        print("checks passed")
+        print(f"title: {title}")
+        print(f"reviewer: {model['model']}")
+        print(f"builder model: {models[0] if models else ('unknown, builder is live' if live else 'unknown')}")
+        print("command:\n" + shlex.join(command) + "\n")
+        print("brief:\n" + brief)
+        return
+    try:
+        result = run(command, COORDQ_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        die(f"coordq start timed out after {COORDQ_TIMEOUT}s; check coordq list before retrying")
+    if result.returncode != 0:
+        die(f"coordq start failed: {result.stderr.strip()}")
+    print(result.stdout.strip())
+
+
 def thread_for_attempt(cfg, t, ledger):
     prior = sorted(intents(ledger), key=lambda e: e["attempt"])
     if not prior:
@@ -1097,6 +1540,13 @@ def main():
     s.add_argument("--print-brief", action="store_true",
                    help="print the brief this start would send, then stop without starting")
     s.set_defaults(fn=cmd_start)
+    s = sub.add_parser("gate")
+    s.add_argument("ref", help="the pull request to gate, owner/repo#number")
+    s.add_argument("--dry-run", action="store_true",
+                   help="print the gate this would queue, then stop without queueing")
+    s.add_argument("--print-brief", action="store_true",
+                   help="print the gate brief this pull request would get, then stop without queueing")
+    s.set_defaults(fn=cmd_gate)
     s = sub.add_parser("abandon")
     s.add_argument("ref")
     s.add_argument("--reason", required=True)

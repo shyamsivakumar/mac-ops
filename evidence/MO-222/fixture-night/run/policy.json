@@ -1,0 +1,10 @@
+{
+  "shift": "overnight-2026-11-12",
+  "verify": "balanced",
+  "stall_cap": 3,
+  "slot_cap": 2,
+  "allow_list": [
+    "shyamsivakumar/mac-ops",
+    "shyamsivakumar/strategy-replay-workbench"
+  ]
+}

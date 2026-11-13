@@ -21,7 +21,8 @@ def load_ticket():
 
 ticket = load_ticket()
 
-CFG = {"repos": {"shyamsivakumar/strategy-replay-workbench": {"key": "SRW"}}}
+CFG = {"repos": {"shyamsivakumar/strategy-replay-workbench": {"key": "SRW"}},
+       "template": ["Goal and why", "Blocked by", "Acceptance and proof"]}
 REPO = "shyamsivakumar/strategy-replay-workbench"
 
 
@@ -41,23 +42,47 @@ class BodySectionTest(unittest.TestCase):
         self.assertEqual(ticket.section_blocker_reasons(CFG, REPO, issue("## Blocked by\nNone.\n")), [])
 
     def test_labelled_section_is_read(self):
-        self.assertEqual(ticket.blocked_by_section("Blocked by: SRW-1018 (#806).\n"), "SRW-1018 (#806).")
+        self.assertEqual(ticket.blocked_by_section(CFG, "Blocked by: SRW-1018 (#806).\n"), "SRW-1018 (#806).")
 
     def test_bold_labelled_section_is_read(self):
-        self.assertEqual(ticket.blocked_by_section("**Blocked by**: None.\n"), "None.")
+        self.assertEqual(ticket.blocked_by_section(CFG, "**Blocked by**: None.\n"), "None.")
 
     def test_labelled_section_is_read_when_there_is_no_heading(self):
         body = "Goal and why: x\nBlocked by: SRW-1018 (#806).\nAcceptance: y\n"
-        self.assertEqual(ticket.blocked_by_section(body), "SRW-1018 (#806).")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
 
-    def test_heading_wins_over_a_labelled_line(self):
+    def test_a_list_under_a_labelled_section_is_read(self):
+        body = "Goal and why: x\nBlocked by:\n- SRW-1018 (#806)\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "- SRW-1018 (#806)")
+
+    def test_a_blank_line_before_a_list_is_read(self):
+        body = "Goal and why: x\nBlocked by:\n\n- SRW-1018 (#806)\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "- SRW-1018 (#806)")
+
+    def test_a_blank_line_before_the_next_section_ends_the_list(self):
+        body = "Goal and why: x\nBlocked by: SRW-1018 (#806).\n\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
+
+    def test_the_first_marker_wins_like_the_template_check(self):
         body = "Blocked by: SRW-1018 (#806).\n\n## Blocked by\nSRW-789 (#490).\n"
-        self.assertEqual(ticket.blocked_by_section(body), "SRW-789 (#490).")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
+
+    def test_the_section_is_the_one_the_template_check_reads(self):
+        body = "Goal and why: x\nBlocked by: SRW-1018 (#806).\nAcceptance: y\n"
+        status = ticket.template_status(CFG, body)
+        self.assertEqual(status["Blocked by"], "ok")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "SRW-1018 (#806).")
 
     def test_preserved_contract_is_not_the_section(self):
         body = ("## Scope and non-goals\n<details><summary>Preserved original contract</summary>\n\n"
                 "Blocked by: #49, #51, #52\n\n</details>\n")
-        self.assertIsNone(ticket.blocked_by_section(body))
+        self.assertIsNone(ticket.blocked_by_section(CFG, body))
+
+    def test_the_template_check_reads_a_preserved_contract_and_the_blocker_check_does_not(self):
+        body = ("## Goal and why\nx\n\n## Blocked by\n<details><summary>Preserved original contract</summary>\n\n"
+                "Blocked by: #49, #51, #52\n\n</details>\n")
+        self.assertEqual(ticket.template_status(CFG, body)["Blocked by"], "ok")
+        self.assertEqual(ticket.blocked_by_section(CFG, body), "")
 
 
 class ApprovalSentenceTest(unittest.TestCase):
@@ -191,6 +216,18 @@ class ResolveKeyIssueTest(unittest.TestCase):
     def test_another_ticket_does_not_resolve(self):
         self.assertIsNone(self.resolve(["SRW-1118 · Something else"], 1119))
 
+    def test_a_pull_request_does_not_resolve_a_key(self):
+        self.titles = ["SRW-1119 part 1: a pull request"]
+        ticket.gh_json = lambda args: {"items": [{"number": 905, "title": "SRW-1119 part 1: a pull request",
+                                                    "pull_request": {"url": "https://github.com/o/r/pull/905"}}]}
+        self.assertIsNone(ticket.resolve_key_issue(REPO, "SRW", 1119))
+
+    def test_the_search_asks_for_issues_only(self):
+        seen = []
+        ticket.gh_json = lambda args: seen.append(args) or {"items": []}
+        ticket.resolve_key_issue(REPO, "SRW", 1119)
+        self.assertIn("is:issue", " ".join(seen[0]))
+
 
 TEMPLATE = ["Goal and why", "Context", "Scope and non-goals", "Design fit", "Blocked by",
             "Acceptance and proof", "CI", "Must not cause", "Data/secrets and stop conditions",
@@ -226,6 +263,9 @@ class ValidateStartTest(unittest.TestCase):
         self.saved = ticket.text_blocker_reasons
         ticket.text_blocker_reasons = lambda cfg, repo, issue: ["SRW-9 (#9) is still open"]
         self.addCleanup(lambda: setattr(ticket, "text_blocker_reasons", self.saved))
+        self.saved_pulls = ticket.referencing_pulls
+        ticket.referencing_pulls = lambda repo, number: []
+        self.addCleanup(lambda: setattr(ticket, "referencing_pulls", self.saved_pulls))
 
     def test_text_blockers_refuse_the_start(self):
         with self.assertRaises(ticket.Refuse) as caught:
@@ -244,6 +284,169 @@ class ValidateStartTest(unittest.TestCase):
         with self.assertRaises(ticket.Refuse) as caught:
             ticket.validate_start(START_CFG, REPO, issue)
         self.assertTrue(str(caught.exception).startswith("blocked by open "))
+
+    def test_an_open_pull_request_refuses_the_start(self):
+        ticket.referencing_pulls = lambda repo, number: [
+            {"number": 195, "state": "open", "merged": False, "mergedAt": None,
+             "createdAt": "2026-11-13T10:00:00Z"}]
+        with self.assertRaises(ticket.Refuse) as caught:
+            ticket.validate_start(START_CFG, REPO, start_issue(templated_body()))
+        self.assertIn("open pull request #195", str(caught.exception))
+
+    def test_a_merged_pull_request_refuses_the_start(self):
+        ticket.referencing_pulls = lambda repo, number: [
+            {"number": 190, "state": "closed", "merged": True, "mergedAt": "2026-11-13T10:00:00Z",
+             "createdAt": "2026-11-13T09:00:00Z"}]
+        with self.assertRaises(ticket.Refuse) as caught:
+            ticket.validate_start(START_CFG, REPO, start_issue(templated_body()))
+        self.assertIn("already merged via #190; close the issue", str(caught.exception))
+
+
+class HoldLabelTest(unittest.TestCase):
+    """A ticket Shyam holds waits for him, whatever else it is missing."""
+
+    def setUp(self):
+        self.saved_pulls = ticket.referencing_pulls
+        ticket.referencing_pulls = lambda repo, number: []
+        self.addCleanup(lambda: setattr(ticket, "referencing_pulls", self.saved_pulls))
+
+    def held_issue(self, labels=("stage:todo",)):
+        issue = start_issue(templated_body())
+        issue["labels"] = [{"name": name} for name in labels]
+        return issue
+
+    def test_a_held_ticket_is_refused(self):
+        issue = self.held_issue(("stage:todo", "type:standard", "priority:1",
+                                  "builder:builder", "reviewer:opus", "stage:hold"))
+        with self.assertRaises(ticket.Refuse) as caught:
+            ticket.validate_start(START_CFG, REPO, issue)
+        self.assertEqual(str(caught.exception), "on hold (stage:hold); only Shyam clears it")
+
+    def test_the_hold_is_reported_before_the_other_rules(self):
+        with self.assertRaises(ticket.Refuse) as caught:
+            ticket.validate_start(START_CFG, REPO, self.held_issue(("stage:hold",)))
+        self.assertEqual(str(caught.exception), "on hold (stage:hold); only Shyam clears it")
+
+    def test_a_hold_is_not_a_stage(self):
+        groups, other = ticket.split_labels(START_CFG, ["stage:todo", "stage:hold"])
+        self.assertEqual(groups["stage"], ["todo"])
+        self.assertEqual(groups["hold"], ["hold"])
+        self.assertEqual(other, [])
+
+    def test_a_hold_is_not_a_label_problem(self):
+        groups, _ = ticket.split_labels(START_CFG, ["stage:todo", "stage:hold"])
+        self.assertEqual(ticket.label_problems(START_CFG, groups), [])
+
+    def test_a_ticket_without_the_hold_starts(self):
+        started = ticket.validate_start(START_CFG, REPO, start_issue(templated_body()))
+        self.assertEqual(started["builderAlias"], "builder")
+
+
+class ReferenceWordTest(unittest.TestCase):
+    def test_refs_is_a_reference(self):
+        self.assertTrue(ticket.references_issue("Refs #160", 160))
+
+    def test_fixes_is_a_reference(self):
+        self.assertTrue(ticket.references_issue("Fixes #160", 160))
+
+    def test_closes_is_a_reference(self):
+        self.assertTrue(ticket.references_issue("Closes #160", 160))
+
+    def test_the_reference_is_case_insensitive(self):
+        self.assertTrue(ticket.references_issue("refs #160", 160))
+
+    def test_another_number_is_not_a_reference(self):
+        self.assertFalse(ticket.references_issue("Refs #161", 160))
+
+    def test_a_bare_number_is_not_a_reference(self):
+        self.assertFalse(ticket.references_issue("see #160 for the details", 160))
+
+    def test_a_number_without_the_keyword_is_not_a_reference(self):
+        self.assertFalse(ticket.references_issue("the coordinator wrote `Refs #<n>` in the brief", 160))
+
+    def test_a_second_number_on_the_line_counts(self):
+        self.assertTrue(ticket.references_issue("Refs #161, #160", 160))
+
+    def test_a_number_on_another_line_does_not_count(self):
+        self.assertFalse(ticket.references_issue("Fixes #12.\nAlso mentions #160.", 160))
+
+    def test_a_qualified_reference_counts_in_the_same_repository(self):
+        self.assertTrue(ticket.references_issue("Refs shyamsivakumar/mac-ops#160", 160, "shyamsivakumar/mac-ops"))
+
+    def test_a_qualified_reference_from_another_repository_does_not_count(self):
+        self.assertFalse(ticket.references_issue("Refs shyamsivakumar/other#160", 160, "shyamsivakumar/mac-ops"))
+
+
+class RestartCommentTest(unittest.TestCase):
+    def test_a_coordinator_comment_that_says_the_work_starts_again_is_a_restart(self):
+        self.assertTrue(ticket.is_restart_comment("Coordinator: the merge missed the last rule, redo it."))
+
+    def test_a_coordinator_comment_that_closes_is_not_a_restart(self):
+        self.assertFalse(ticket.is_restart_comment("Coordinator: verified the merge, closing the issue."))
+
+    def test_a_comment_that_does_not_open_with_coordinator_is_not_a_restart(self):
+        self.assertFalse(ticket.is_restart_comment("the merge missed the last rule, redo it."))
+
+
+class PullGuardTest(unittest.TestCase):
+    def setUp(self):
+        self.saved = ticket.referencing_pulls
+        self.addCleanup(lambda: setattr(ticket, "referencing_pulls", self.saved))
+        self.pulls = []
+        ticket.referencing_pulls = lambda repo, number: self.pulls
+
+    def pull(self, number, state="open", merged=False, merged_at=None, created_at="2026-11-13T10:00:00Z"):
+        return {"number": number, "state": state, "merged": merged, "mergedAt": merged_at,
+                "createdAt": created_at}
+
+    def guard(self, comments=None):
+        return ticket.pull_guard_reasons(REPO, {"number": 1, "comments": comments or []})
+
+    def test_no_pull_request_passes(self):
+        self.assertEqual(self.guard(), [])
+
+    def test_an_open_pull_request_names_the_pull_request(self):
+        self.pulls = [self.pull(195)]
+        self.assertEqual(self.guard(), ["open pull request #195 already references this issue"])
+
+    def test_the_newest_open_pull_request_is_named(self):
+        self.pulls = [self.pull(190, created_at="2026-11-13T10:00:00Z"),
+                      self.pull(195, created_at="2026-11-13T11:00:00Z")]
+        self.assertEqual(self.guard(), ["open pull request #195 already references this issue"])
+
+    def test_a_merged_pull_request_names_the_merge(self):
+        self.pulls = [self.pull(190, state="closed", merged=True, merged_at="2026-11-13T12:00:00Z")]
+        self.assertEqual(self.guard(), ["already merged via #190; close the issue"])
+
+    def test_a_restart_after_the_merge_allows_the_start(self):
+        self.pulls = [self.pull(190, state="closed", merged=True, merged_at="2026-11-13T12:00:00Z")]
+        comments = [{"createdAt": "2026-11-13T13:00:00Z",
+                     "body": "Coordinator: the merge missed the last rule, redo it."}]
+        self.assertEqual(self.guard(comments), [])
+
+    def test_an_intent_comment_is_not_a_restart(self):
+        self.pulls = [self.pull(190, state="closed", merged=True, merged_at="2026-11-13T12:00:00Z")]
+        comments = [{"createdAt": "2026-11-13T13:00:00Z",
+                     "body": "Starting SRW-1 attempt 2.\n\n<!-- coordinator-ticket "
+                             "{\"kind\":\"intent\",\"attempt\":2} -->"}]
+        self.assertEqual(self.guard(comments), ["already merged via #190; close the issue"])
+
+    def test_a_coordinator_comment_that_closes_is_not_a_restart(self):
+        self.pulls = [self.pull(190, state="closed", merged=True, merged_at="2026-11-13T12:00:00Z")]
+        comments = [{"createdAt": "2026-11-13T13:00:00Z",
+                     "body": "Coordinator: verified the merge, closing the issue."}]
+        self.assertEqual(self.guard(comments), ["already merged via #190; close the issue"])
+
+    def test_a_receipt_is_not_a_restart(self):
+        self.pulls = [self.pull(190, state="closed", merged=True, merged_at="2026-11-13T12:00:00Z")]
+        comments = [{"createdAt": "2026-11-13T13:00:00Z",
+                     "body": "SRW-1 attempt 1: coordq says \"queued #7\".\n\n<!-- coordinator-ticket "
+                             "{\"kind\":\"receipt\",\"attempt\":1} -->"}]
+        self.assertEqual(self.guard(comments), ["already merged via #190; close the issue"])
+
+    def test_a_closed_unmerged_pull_request_does_not_block(self):
+        self.pulls = [self.pull(190, state="closed", merged=False)]
+        self.assertEqual(self.guard(), [])
 
 
 if __name__ == "__main__":
