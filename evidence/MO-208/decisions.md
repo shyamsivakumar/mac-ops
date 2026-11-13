@@ -244,3 +244,128 @@ The linking is a keyword in the body or title, or the repository key and
 number in the branch name. A pull request that names its ticket in some
 other way stays a record of its own. The later parts (T3b, T3c) may tighten
 this once they decide what a work item is.
+
+---
+
+# MO-208 decisions, attempt 2
+
+Run id: `ticket:shyamsivakumar/mac-ops#176:a2`. Refs #176.
+Same part: T3a of the spec's rollout plan. Attempt 1 delivered the part
+(PR #203, then the reviewer fixes in PR #205). The ticket stayed open, so
+this attempt re-reads the merged code against the brief, proves it by
+running the real command, and fixes what the re-read found.
+
+## What the re-read found
+
+The merged code does what the brief asks. The dry run on today's board
+prints the record count per repository, reads the board through
+`ticket list --fresh --json` and the pull requests through `gh pr list`,
+and writes nothing. Three defects came out of reading it again.
+
+### 1. A pull request whose body names a ticket the board does not show was never linked
+
+The keyword reference decided the link on its own. A pull request whose
+body says `Refs #999`, where issue 999 has left the board, was never
+linked to anything, even when its branch carried the key of a ticket that
+is on the board (`t3/aa-10-second-fix`). It became a record of its own.
+
+That is the harm decision 3 exists to prevent: the ticket and its pull
+request were two work items, and the shift could have worked the same
+piece of work twice.
+
+**Fixed.** The keyword decides when it names a ticket the board shows.
+When it names one the board does not show, the branch is still read. A
+pull request that names neither is still a record of its own. Every
+keyword is read, not only the first, so a body that names an off-board
+issue and then names one on the board still links to the one on the board.
+Every key in the branch name is read too, so a branch that carries more
+than one key (`t3/fix-2-aa-11-thing`) still finds the ticket it names.
+
+**Proof.** A fixture run of the real command, with the ticket and `gh`
+commands replaced by stubs, before and after:
+
+| | linked | records |
+| --- | --- | --- |
+| merged main | 1 | 6 |
+| this attempt | 3 | 4 |
+
+The fixture holds four pull requests: one whose body says `Refs #10` (the
+issue is on the board), one whose body says `Refs #999` (that issue is not
+on the board) and whose branch carries the key of a ticket that is, one
+whose body says `Fixes #999 and #11` and whose branch carries two keys,
+and one that names nothing. The first three join their ticket; the last
+stays a record of its own.
+
+### 2. The total counted records from repositories outside the allow list
+
+The total added the records of the repositories the allow list does not
+name, and then said "across 15 repositories", the number of allowed
+repositories. When the board holds a ticket in a repository the allow list
+does not name, the printed total and the printed repository count
+disagreed.
+
+**Fixed.** The total counts the allowed repositories that read cleanly.
+The records outside the allow list are printed on their own line, with
+their own count.
+
+**Proof.** The real command with a fixture board config that leaves
+`strategy-replay-workbench` out of the allow list:
+
+```
+shyamsivakumar/strategy-replay-workbench            56   n/a     n/a       56  (not allowed)
+
+Total: 79 records across 14 repositories
+56 more records in 1 repository outside the allow list, counted above and marked 'not allowed'.
+```
+
+Before, the same run printed "Total: 135 records across 14 repositories",
+which counted the 56 records of the repository outside the allow list and
+still said 14 repositories.
+
+### 3. A board ticket without a key carried a null key into its record
+
+23 of the 117 board tickets have no key today. Their records carried
+`null` where the other records carried an empty string, so a later part
+that reads `record["key"]` had to handle both.
+
+**Fixed.** The record carries an empty string, like the other fields.
+
+## The reviewer round
+
+One in-session reviewer round (Opus 5.5) read `git diff origin/main...HEAD`
+for this attempt and returned `VERDICT: PASS`. It found no defect that
+breaks the brief. What it found and what came of it:
+
+1. **Minor, fixed.** The closing note still said "a pull request that
+   names a ticket the board does not show stays a record of its own",
+   which the new rule makes false. It now says "a pull request that names
+   no ticket the board shows stays a record of its own".
+2. **Minor, fixed.** The records outside the allow list were reported
+   twice, once in the new line and once in the old note, and the two paths
+   worded it differently. There is one line now, and it is the same on
+   both paths.
+3. **Minor, fixed.** Only the first keyword match and the first key in the
+   branch name were read. A body of `Refs #999 ... Fixes #10` skipped the
+   ticket the board shows, and a branch of `t3/fix-2-mo-208` never reached
+   `MO-208`. Every keyword and every key is read now, and the first one
+   that names a ticket the board shows decides.
+4. **Nit, fixed.** The link signal said `refs #n` whatever the keyword
+   was. It now says the keyword the pull request used (`fixes #10`).
+5. **Nit, fixed.** The linked pull request summary still read a missing
+   field as `None` while the records read it as an empty string. The
+   summary reads it the same way now.
+6. **Nit, fixed.** This section was a placeholder while the round ran. It
+   holds the round's findings now.
+
+## Checks
+
+`python3 scripts/mac_ops_fast_check.py` passed. The full suite,
+`python3 -m unittest discover -s tests -t .`, through `~/.local/bin/heavy`
+ran 148 tests and passed. The `Builder check:` line in the pull request
+body carries the head sha the checks ran on.
+
+## Rollback
+
+Revert the commit and run `python3 install_coordinator.py` again. The
+installed `~/.local/bin/overnight` is left in place by the installer's
+backup transaction; removing it by hand is safe.
