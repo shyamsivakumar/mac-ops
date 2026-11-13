@@ -3,18 +3,31 @@
 ## The commands the overnight module can run
 
     187:        raw = run([TICKET, "list", "--fresh", "--json"], TICKET_TIMEOUT, deadline)
-    997:def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
-    1069:    code, out = run_read(
-    1087:    checks_code, checks_out = run_read(
-    1090:    files_code, files_out = run_read(
+    1014:def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
+    1082:    code, out = run_read(
+    1100:    checks_code, checks_out = run_read(
+    1103:    files_code, files_out = run_read(
 
 ## Forbidden commands in the overnight module (merge, push, force)
 
 None. The module holds no merge, no push and no force push.
 
-## The shell history at the time of the night
+## The slot cap
 
--rw-------@ 1 shyamsivakumar  staff  190879 Nov 13 11:31 /Users/shyamsivakumar/.zsh_history
+The policy snapshot reads the queue's own cap file and writes nothing back:
 
-The shell history was last written before the night started, so it holds no command from the window.
-Every command the night ran is in the shift log and in the receipts.
+    1009:SLOT_CAP_FILE = Path.home() / "Code" / "coordinator" / "queue" / "config.json"
+    1038:def slot_cap() -> int | None:
+    1044:        with open(SLOT_CAP_FILE) as stream:
+    1212:        "slot_cap": slot_cap(),
+
+cap file: ~/Code/coordinator/queue/config.json -> {"cap":6}
+policy snapshot: 6
+
+## The shell history
+
+A command that an agent runs is not an interactive shell command, so it never reaches
+the shell history. The history therefore cannot prove that no rule was broken, and this
+check does not claim that it does. The proof is the shift log, which lists every
+command the night ran, and the module's command list above, which shows there is no
+merge, no push and no force push anywhere in the overnight module.

@@ -23,7 +23,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight intake --dry-run` | Reads the board (`ticket list --fresh --json`) and the open pull requests (`gh pr list` for each allowed repository) into intake records, and prints the record count per repository. Read only: it writes no record and keeps no list of its own. The ticket CLI refreshes its own cache when it reads the board; that cache is the ticket CLI's. |
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
 | `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the PT clock: the start (22:30) reads the board and writes nothing, the report (06:30) writes the morning report, and any other hour does nothing. `--at start` or `--at report` forces a part, for a manual run. |
-| `overnight attend` | The attended first night (spec part T13). A human watches while the shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
+| `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, arming, the tick and the morning report) build on the
@@ -58,13 +58,14 @@ any way that matters.
 the command a person runs when they sit down to watch.
 
 ```sh
-overnight attend --items 3 --minutes 60 --attended-by Shyam
+overnight attend --items 3 --minutes 60 --run-by Shyam --wait
 ```
 
 - It reads the board (`ticket list --fresh --json`) and takes the first
   small items the board shows: on the todo stage, in an allowed
-  repository, of a type that is one small part, with nothing on them that
-  waits for Shyam. The Ascend keys are never taken.
+  repository, and of a type that is one small part (`chore` or
+  `standard`). A ticket Shyam holds is not in the board list at all, so
+  the night never takes one, and the Ascend keys are never taken.
 - It arms the shift in the folder it is given: `run/armed`,
   `run/deadline` and `run/policy.json`. The policy records the allow
   list, the queue's slot cap (read only, never raised) and the verify
@@ -74,12 +75,16 @@ overnight attend --items 3 --minutes 60 --attended-by Shyam
   and the files it touches. It runs no merge, no push and no builder.
 - It writes one receipt per item, the shift log and then the morning
   report, from the same records the report part reads.
-- The night holds the door until its window closes and then ends at the
-  deadline. The shift log says so, and the report repeats it.
+- `--wait` holds the door until the window closes, and then the night
+  ends at the deadline. Without it the night ends as soon as the items
+  are observed, and the shift log says that the window is still open.
+- `--run-by` records who ran the night. The records never claim that a
+  person watched: the command cannot know that, so it says who ran it.
 
 `--dry-run` reads the board and writes nothing. `--root` points the night
 at another folder, which is how a rehearsal runs without touching the
-live records.
+live records. Without `--root` the night writes to a dated folder under
+the runtime folder, so it never mixes with the live receipts.
 
 Load it after the install:
 
@@ -173,7 +178,8 @@ A receipt is markdown with one `- Key: value` line per field.
 | `Checks` | One check, or several separated by semicolons. Each check is a command in backticks and its exit code: `` `cmd` exit 0 ``. |
 | `Gate` | `PASS` or `FAIL`. |
 | `Files` | How many files the item touched. |
-| `Time used` | The builder time, as `N min`. |
+| `Time used` | The builder time, as `N min`. A night that ran no builder says `0 min`. |
+| `Observed` | How long the shift spent looking at the item, in seconds. It is not builder time. |
 | `Stopped because` | Why the item stopped. |
 | `Next` | The next step. |
 
@@ -190,7 +196,9 @@ A receipt is markdown with one `- Key: value` line per field.
   The counts and the lists agree item for item.
 - The report says how the shift ended in one of the four ways the spec
   allows: `deadline`, `all done`, `STOP` or `stall`. When the records
-  explain none of them, it says `UNVERIFIED`.
+  explain none of them, it says `UNVERIFIED`. The shift log may state
+  how the night ended, and the report reads that statement only when the
+  records support it: a claim is never a proof.
 - A count that cannot be checked is written as `UNVERIFIED`: the planned
   count without a shift-log summary, the model use when the allowance was
   not readable, the builder time when a receipt records no time or a
