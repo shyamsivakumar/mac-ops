@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Run one coordinator tick as a fresh headless pi on Sonnet 5.5.
 
-launchd starts this every 30 minutes (dev.coordinator.tick). Each run is one
+launchd starts this every five minutes (dev.coordinator.tick). Each run is one
 short-lived pi process on the coordinator config, inside the coordinator
 sandbox, so a tick can do what the coordinator can and no more. The tick
 follows loop/tick.md and replies with NOOP or ALERT lines: ALERT lines are
 sent to the live pi coordinator terminal, NOOP goes nowhere. Only one tick
-runs at a time (one lock file for every caller) and a run over ten minutes is
+runs at a time (one lock file for every caller) and a run over four minutes is
 killed.
 
 The run is ephemeral (pi --no-session), so it never becomes the newest
@@ -16,7 +16,7 @@ Environment knobs, all optional:
   COORD_TICK_PROMPT_OVERRIDE  replace the tick prompt (proofs and tests)
   COORD_TICK_LOG              log file (default ~/Library/Logs/coordinator/tick.log)
   COORD_TICK_LOCK             lock file (default ~/.local/state/mac-ops/coord-tick.lock)
-  COORD_TICK_TIMEOUT          seconds before a run is killed (default 600)
+  COORD_TICK_TIMEOUT          seconds before a run is killed (default 240)
   COORD_TICK_MODEL            model id (default pi-claude-cli/claude-sonnet-5-5)
 """
 
@@ -39,7 +39,7 @@ LOG_PATH = Path(
     os.environ.get("COORD_TICK_LOG", HOME / "Library/Logs/coordinator/tick.log")
 )
 MODEL = os.environ.get("COORD_TICK_MODEL", "pi-claude-cli/claude-sonnet-5-5")
-TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "600"))
+TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "240"))
 DEFAULT_PROMPT = (
     "Tick (launchd). Run one tick per loop/tick.md. Keep it cheap: filter "
     "command output, act only on what changed, reply NOOP or ALERT lines only."
