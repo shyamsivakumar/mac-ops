@@ -129,14 +129,31 @@ that already exists.
    relay (`t59`), and sent a mirror message to a scratch terminal, which
    wrote `Mirror: scratch probe` to its file. The sandbox does not block
    `hc`.
-3. **The relay note.** `coordinator/pi/phone-relay/CLAUDE.md` answers a
+3. **The send path, against a stub `hc`.** `tests/test_coordinator_mirror.py`
+   points `COORD_HC_BIN` at a stub: the mirror goes to the terminal named
+   `pi-coord-phone`, a dead relay is skipped with no error and no send, and
+   a terminal with any other name is never written to.
+4. **The relay note.** `coordinator/pi/phone-relay/CLAUDE.md` answers a
    `Mirror:` message with its text and no tool call.
 
-The live proof in the coordinator tab (a desktop message mirrored to
-`pi-coord-phone`, a phone turn not mirrored twice, a `NOOP` `/tick` not
-mirrored, and a turn that completes with the relay stopped) needs the
-installed extension and a `/reload` in the "Pi - Coordinator" tab, which is
-Shyam's to run after the merge.
+## Live proof in the coordinator tab
+
+After `./install.sh coordinator` and `/reload` in the "Pi - Coordinator"
+tab, with the relay live:
+
+1. **A desktop turn is mirrored.** `hc send t56 "mirror test, reply OK"`
+   produced `Mirror: mirror test, reply OK | OK` in `pi-coord-phone`, and
+   the relay answered it with the same text and no tool call.
+2. **A phone turn is not mirrored again.**
+   `hc send t56 "From Shyam (phone): phone test, reply OK"` produced no new
+   `Mirror:` line in `pi-coord-phone`.
+3. **A tick is mirrored as a tick.** `/tick` that had work to do produced
+   `Mirror: tick | ALERT: ...` in `pi-coord-phone`. The `NOOP` tick is
+   covered by the unit test in point 1; the live tick in this tab had alerts
+   to report, so it mirrored.
+4. **A dead relay costs only the mirror.** The send path swallows every
+   `hc` failure and the stub test in point 3 covers the dead relay and the
+   wrong-terminal cases.
 
 ## Rollback
 
