@@ -1,0 +1,26 @@
+{
+  "allow": [
+    "digitized/Concerning",
+    "shyamsivakumar/CineJar",
+    "shyamsivakumar/cairn",
+    "shyamsivakumar/catalouge",
+    "shyamsivakumar/fantasy-football-toolkit",
+    "shyamsivakumar/mac-ops",
+    "shyamsivakumar/openscan",
+    "shyamsivakumar/qabot",
+    "shyamsivakumar/recoup",
+    "shyamsivakumar/sams-llm-wiki",
+    "shyamsivakumar/scrapers",
+    "shyamsivakumar/scripture-scroll",
+    "shyamsivakumar/strata",
+    "shyamsivakumar/strategy-replay-workbench",
+    "shyamsivakumar/tunerise"
+  ],
+  "slot_cap": 6,
+  "verify_level": "balanced",
+  "stall_cap": 3,
+  "budget_percent": null,
+  "allowance_used_percent": null,
+  "attended_by": "Shyam",
+  "window_minutes": 1
+}
