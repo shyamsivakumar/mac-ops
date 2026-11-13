@@ -209,7 +209,7 @@ class TestPiCoordinatorFiles(unittest.TestCase):
 
 
 class TestTickJob(unittest.TestCase):
-    """The tick job runs the headless tick every thirty minutes."""
+    """The tick job runs the headless tick every five minutes."""
 
     def setUp(self):
         self.home = Path("/Users/example")
@@ -223,12 +223,12 @@ class TestTickJob(unittest.TestCase):
         parsed = plistlib.loads(data)
         self.assertEqual(parsed["Label"], "dev.coordinator.tick")
 
-    def test_job_runs_the_tick_launcher_every_thirty_minutes(self):
+    def test_job_runs_the_tick_launcher_every_five_minutes(self):
         parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
         self.assertEqual(
             parsed["ProgramArguments"], ["/Users/example/.local/bin/coord-tick"]
         )
-        self.assertEqual(parsed["StartInterval"], 1800)
+        self.assertEqual(parsed["StartInterval"], 300)
 
     def test_job_does_not_run_a_tick_at_load(self):
         parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
