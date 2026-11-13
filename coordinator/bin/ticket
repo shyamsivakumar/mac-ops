@@ -44,6 +44,7 @@ PR_REF_WORDS = ("refs", "ref", "fixes", "fix", "fixed", "closes", "close", "clos
                 "resolves", "resolve", "resolved")
 PR_REF_WORD = re.compile(r"(?i)\b(?:" + "|".join(PR_REF_WORDS) + r")\b")
 PR_REF_NUMBER = re.compile(r"(?:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(\d+)")
+REFS_ISSUE = re.compile(r"(?i)\brefs?\s+#(\d+)")
 RESTART_PATTERN = re.compile(r"(?i)\b(restart|redo|again|reopen|rework|retry|fix|start over|another pass|not done|incomplete)\b")
 RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
 RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
@@ -60,10 +61,8 @@ ATTRIBUTED = re.compile(
     re.I,
 )
 QUOTE_WINDOW = 60
-# The review gate. The rules live in the coordinator CLAUDE.md sections
-# "Review gate" and "Ten minutes start to finish": Opus 5.5 reads the diff,
-# Sol reads it when the builder ran Claude, the gate merges a personal repo
-# on PASS and an Ascend repo stops at the verdict.
+# The review gate: the rules live in the coordinator CLAUDE.md sections
+# "Review gate" and "Ten minutes start to finish".
 GATE_OPUS = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
 GATE_SOL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 GATE_PRIORITY = 400
@@ -1129,30 +1128,28 @@ def fetch_pull(repo, number):
 
 
 def refs_issue(repo, body):
-    """The issue number a pull request body references, or None.
+    """The issue number a pull request body references with `Refs #n`, or None.
 
-    The keyword carries the numbers that follow it on the same line, so
-    `Refs #228` names issue 228 and a reference to another repository never
+    Only `Refs` and `Ref` count. A pull request body that mentions a number
+    in prose names no issue, and a reference to another repository never
     counts.
     """
     for line in (body or "").splitlines():
-        match = PR_REF_WORD.search(line)
+        match = REFS_ISSUE.search(line)
         if not match:
             continue
-        for token in PR_REF_NUMBER.finditer(line[match.end():]):
-            named, number = token.group(1), int(token.group(2))
-            if named and not same_repo(named, repo):
-                continue
-            return number
+        return int(match.group(1))
     return None
 
 
-def check_ticket_key(rcfg, title):
+def check_ticket_key(repo, rcfg, title):
     """Check the key in an issue title against the key of the repository.
 
     An issue title that carries no key at all is not an error: the
     repository key still names the ticket, and the gate title needs it.
     """
+    if rcfg.get("key") is None:
+        raise Refuse(f"repo {repo} has no key configured")
     match = TITLE_KEY.match(title or "")
     if not match:
         return
@@ -1160,43 +1157,65 @@ def check_ticket_key(rcfg, title):
         raise Refuse(f"key prefix {match.group(1)} does not match repo key {rcfg['key']}")
 
 
-def executed_models(value):
-    """Every model a run or a thread record actually ran."""
-    if isinstance(value, dict):
-        found = [value["executedModel"]] if isinstance(value.get("executedModel"), str) else []
-        return found + [m for child in value.values() for m in executed_models(child)]
-    if isinstance(value, list):
-        return [m for child in value for m in executed_models(child)]
-    return []
+def router_chain(route):
+    """The models a router route can run, in order.
+
+    The route table lives in the pi extension, so a builder thread that
+    stores only a route still says which models it could have run.
+    """
+    try:
+        with open(os.path.expanduser("~/.pi/agent/extensions/task-router.ts")) as f:
+            source = f.read()
+    except OSError:
+        return []
+    routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
+    if not routes:
+        return []
+    chain = re.search(r"^\s*" + re.escape(route.removeprefix("task/")) + r":\s*\[([^\]]*)\]",
+                      routes.group(1), re.M)
+    if not chain:
+        return []
+    try:
+        entries = json.loads("[" + chain.group(1).rstrip().rstrip(",") + "]")
+    except ValueError:
+        return []
+    return [entry for entry in entries if isinstance(entry, str)]
 
 
 def builder_models(issue, login):
-    """The models the builder thread of the issue ran, as far as they are known.
+    """The model the builder thread of the issue ran.
 
     The builder thread is the one the ledger of the issue names and the
-    queue receipt points at. A run that has finished records the model it
-    ran; a thread that stores only a model records that model. A builder
-    whose model cannot be read at all leaves the gate on Opus.
+    queue receipt points at. The newest attempt that the queue dispatched
+    wins, and its newest run names the model that ran. A builder that
+    stored only a router route names the models that route can run. A
+    builder whose model cannot be read at all leaves the gate on Opus.
     """
     try:
         with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
             receipts = json.load(f)
     except (FileNotFoundError, ValueError):
         receipts = {}
-    models = []
-    for entry in sorted(intents(ledger_of(issue, login)), key=lambda e: e["attempt"]):
+    entries = sorted(intents(ledger_of(issue, login)), key=lambda e: e["attempt"])
+    for entry in reversed(entries):
         thread_id = receipts.get(entry.get("requestId"))
         if not thread_id:
             continue
         result = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 5})
-        found = executed_models(result.get("recentRuns") or [])
-        if not found:
-            thread = result.get("thread") or {}
-            stored, instance = thread.get("model"), thread.get("providerInstanceId")
-            if isinstance(stored, str) and stored and instance:
-                found = ["claude" if instance == "claudeAgent" else stored]
-        models += found
-    return models
+        runs = sorted(result.get("recentRuns") or [],
+                      key=lambda run: run.get("ordinal") or 0, reverse=True)
+        for run in runs:
+            model = run.get("executedModel")
+            if isinstance(model, str) and model:
+                return [model]
+        thread = result.get("thread") or {}
+        stored, instance = thread.get("model"), thread.get("providerInstanceId")
+        if instance == "router" and isinstance(stored, str) and stored:
+            return router_chain(stored)
+        if isinstance(stored, str) and stored and instance:
+            return ["claude" if instance == "claudeAgent" else stored]
+        return []
+    return []
 
 
 def gate_reviewer(models):
@@ -1205,7 +1224,13 @@ def gate_reviewer(models):
 
 
 def gate_live(title, gate_id):
-    """Why a gate thread for this pull request head is already on its way, or None."""
+    """Why a gate thread for this pull request head is already on its way, or None.
+
+    A head is taken three ways: a queue item carries it, the queue's
+    gatedHeads map names it, or a gate thread already ran for it. The last
+    one matters because a gate that finished leaves nothing live, and a
+    second gate on the same head would try to merge it again.
+    """
     try:
         with open(os.path.join(QUEUE_DIR, "queue.json")) as f:
             queue = json.load(f)
@@ -1216,8 +1241,15 @@ def gate_live(title, gate_id):
             return f"queued as coordq #{item['id']}"
     heads = queue.get("gatedHeads") or {}
     if gate_id in heads:
-        return f"queued as coordq #{heads[gate_id]}"
-    result = t3_call("t3_thread_list", {"allProjects": True, "limit": 100,
+        return f"a gate for this head is already recorded as coordq #{heads[gate_id]}"
+    try:
+        with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except (FileNotFoundError, ValueError):
+        receipts = {}
+    if receipts.get(gate_id):
+        return f"a gate thread already ran for this head (thread {receipts[gate_id]})"
+    result = t3_call("t3_thread_list", {"allProjects": True, "limit": 500,
                                         "statuses": LIVE_STATUSES, "includeSubagents": False})
     for thread in result.get("threads") or []:
         if thread.get("title") == title:
@@ -1227,10 +1259,7 @@ def gate_live(title, gate_id):
 
 def check_publisher(repo, head, rcfg):
     """True when the check of the pull request comes from the check publisher."""
-    try:
-        statuses = gh_json(["api", f"repos/{repo}/commits/{head}/statuses?per_page=100"])
-    except GhError:
-        statuses = []
+    statuses = gh_json(["api", f"repos/{repo}/commits/{head}/statuses?per_page=100"])
     checks = [s for s in statuses if s.get("context") == GATE_CHECK_CONTEXT]
     return bool(rcfg.get("macPublisher", repo == GATE_PUBLISHER_REPO)) or bool(checks)
 
@@ -1260,6 +1289,17 @@ Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}`
 Never call emp. Never print secrets."""
 
 
+def with_gate_lock(repo, pr):
+    """The lock that keeps two gates for one pull request head apart."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    f = open(os.path.join(CACHE_DIR, f"gate-{repo.replace('/', '_')}-{pr}.lock"), "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise Refuse("another gate for this pull request is running")
+    return f
+
+
 def cmd_gate(a):
     cfg = load_config()
     repo, number = parse_pr_ref(a.ref)
@@ -1275,7 +1315,7 @@ def cmd_gate(a):
         if issue_number is None:
             raise Refuse(f"pull request #{number} references no issue")
         issue = fetch_issue(repo, issue_number)
-        check_ticket_key(rcfg, issue["title"])
+        check_ticket_key(repo, rcfg, issue["title"])
         models = builder_models(issue, authed_login())
         model = gate_reviewer(models)
         publisher = check_publisher(repo, head, rcfg)
@@ -1284,10 +1324,6 @@ def cmd_gate(a):
         title = f"{rcfg['key']}-{issue_number} review #{number} {head[:8]}"
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend)
         gate_id = f"gate:{repo}#{number}:{head}"
-        if not a.print_brief:
-            live = gate_live(title, gate_id)
-            if live:
-                raise Refuse(f"a gate thread for this head is already on its way: {live}")
         payload = {"projectId": rcfg["projectId"], "title": title, "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
                    "clientRequestId": gate_id, "message": brief}
@@ -1299,11 +1335,18 @@ def cmd_gate(a):
     if a.print_brief:
         print(brief)
         return
+    try:
+        lock = with_gate_lock(repo, number)
+        live = gate_live(title, gate_id)
+        if live:
+            raise Refuse(f"a gate thread for this head is already on its way: {live}")
+    except Refuse as e:
+        die(f"refused: {e}", 2)
     if a.dry_run:
         print("checks passed")
         print(f"title: {title}")
         print(f"reviewer: {model['model']}")
-        print(f"builder models: {', '.join(models) if models else 'unknown'}")
+        print(f"builder model: {models[0] if models else 'unknown'}")
         print("command:\n" + shlex.join(command) + "\n")
         print("brief:\n" + brief)
         return
