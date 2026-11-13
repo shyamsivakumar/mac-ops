@@ -82,12 +82,17 @@ function checkBash(cmd: string): string | undefined {
   if (rmWhy) return rmWhy;
   const clob = checkClobber(cmd);
   if (clob) return clob;
-  if (SECRET_PATH.test(cmd) && !/^\s*ls\b/.test(cmd)) return "touches a secret file (.env, auth.json, keys, T3 settings)";
-  if (PROTECTED.test(cmd) && MUTATING.test(cmd)) return "writes into a repo, a T3 worktree or the guard; send the change to a T3 thread";
-  if (/\bcd\s+["']?/.test(cmd)) {
-    const m = cmd.match(/\bcd\s+["']?([^\s'";&|]+)/);
-    if (m && PROTECTED.test(m[1]) && MUTATING.test(cmd)) return "writes inside a repo or T3 worktree; send the change to a T3 thread";
+  const literal = cmd.match(/^\s*cat\s+(?:>>?\s*(["']?)([^\s"'<>;|&]+)\1\s*<<(["'])([A-Za-z_][A-Za-z0-9_]*)\3|<<(["'])([A-Za-z_][A-Za-z0-9_]*)\5\s*>>?\s*(["']?)([^\s"'<>;|&]+)\7)\s*\n[\s\S]*?\n[A-Za-z_][A-Za-z0-9_]*\s*$/);
+  let secretCmd = cmd;
+  if (literal) {
+    const target = literal[2] || literal[8];
+    const delimiter = literal[4] || literal[6];
+    const resolvedTarget = abs(target.replace(/^\$(?:TMPDIR|\{TMPDIR\})\//, (process.env.TMPDIR || "/tmp") + "/"), COORD);
+    const lines = cmd.trimEnd().split("\n");
+    const end = lines.findIndex((line, i) => i > 0 && line === delimiter);
+    if (end === lines.length - 1 && (TEMP.test(resolvedTarget) || resolvedTarget.startsWith(COORD + "/"))) secretCmd = lines[0];
   }
+  if (SECRET_PATH.test(secretCmd) && !/^\s*ls\b/.test(cmd)) return "touches a secret file (.env, auth.json, keys, T3 settings)";
   return undefined;
 }
 
