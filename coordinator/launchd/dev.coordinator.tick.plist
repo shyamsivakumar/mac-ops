@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- One coordinator tick every 30 minutes, as a fresh headless pi on Sonnet
-     5.5 (coord-tick). No RunAtLoad: a tick costs a model call, so the first
+<!-- One coordinator tick every 30 minutes, as a fresh headless pi on GPT-6.1
+     Sol (coord-tick). No RunAtLoad: a tick costs a model call, so the first
      one lands one interval after the job loads, not at every boot. The
      launcher takes its own lock, so two ticks never overlap. -->
 <plist version="1.0">
