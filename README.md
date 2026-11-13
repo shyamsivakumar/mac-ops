@@ -266,14 +266,14 @@ this job now covers that step. The job appends one line per poll pass to
 `~/Library/Logs/coordinator/turncap.log`. The dispatch job logs into the
 coordinator checkout's own `queue/` directory, which that repository owns.
 
-The `dev.coordinator.tick` job runs one coordinator tick every five minutes as a
+The `dev.coordinator.tick` job runs one coordinator tick every 30 minutes as a
 fresh headless pi on Sonnet 5.5 (`~/.local/bin/coord-tick`), inside the same
 sandbox and guard as the coordinator, so a tick costs a short cheap turn
 instead of an Opus turn on the long coordinator session. The tick is
 ephemeral (`pi --no-session`), so it never becomes the newest session that
 `coord-ask`, the phone relay or the Herdr panel read. It takes a lock at
 `~/.local/state/mac-ops/coord-tick.lock`, so two ticks never overlap, and a
-run over four minutes is killed.
+run over ten minutes is killed.
 Only the `ALERT:` lines of a tick reply are sent to the live pi coordinator
 terminal; a `NOOP` reply sends nothing. `coord-pi` exports `COORD_WAKE=0`, so
 the coordinator session's own 30-minute wake stays off and `/tick` and
