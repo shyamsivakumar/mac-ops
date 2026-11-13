@@ -96,6 +96,28 @@ passes; the tick job class keeps every assertion it had.
 
 **Owner:** `tests/test_install_coordinator.py:226`
 
+### A stale comment in the sibling launcher names the old interval
+
+**When:** MO-201 in-session review, 2026-11-12 PT.
+
+*`coordinator/pi/bin/coord-pi` carried the comment "The 30-minute tick runs
+from launchd as a headless Sonnet (coord-tick)". It describes the launchd
+tick interval this change moves, so it now says "The 5-minute tick". The
+README line about "the coordinator session's own 30-minute wake" is a
+different timer (`COORD_WAKE`, the in-session wake) and was left alone.*
+
+**Gap:** the reviewer's one finding, a doc-only comment in a file the brief
+did not name.
+
+**Reach:** comment only; no behavior. The reviewer judged it non-blocking.
+
+**Verdict:** sound — the comment now names the schedule the job runs.
+
+**Confidence:** high — the reviewer read both files and confirmed the wake
+timer line is a different timer.
+
+**Owner:** `coordinator/pi/bin/coord-pi:5`
+
 ## Proof
 
 ```text
@@ -114,8 +136,12 @@ after the merge.
 
 ## In-session review
 
-One Opus review round against `git diff origin/main...HEAD`. The verdict and
-the reviewed head SHA are in the PR body and the final report.
+One Opus 5.5 review round against `git diff origin/main...HEAD`. Verdict
+PASS. No scope creep; the interval, the kill and the lock are consistent; the
+test expectation was updated to the stated change with no assertion removed.
+One minor doc finding (the stale "30-minute tick" comment in
+`coordinator/pi/bin/coord-pi`), fixed in the same commit. The reviewed head
+SHA and the verdict are in the PR body and the final report.
 
 ## Rollback
 
