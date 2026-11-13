@@ -234,20 +234,21 @@ export default class Coordinator extends View {
     const seen = stat.code === 0 ? stat.stdout.trim() : "";
     if (seen === this.decisionsStat) return;
     this.decisionsStat = seen;
+    const at = seen ? Number.parseFloat(seen) * 1000 : 0;
     if (!seen) {
-      this.decisions = { items: [], error: "" };
+      this.decisions = { items: [], error: "", at };
       return;
     }
     const file = await exec("cat", [DECISIONS_FILE]);
     if (file.code !== 0) {
       this.decisionsStat = "";
-      this.decisions = { items: [], error: `decisions.json: ${file.stderr.trim()}` };
+      this.decisions = { items: [], error: `decisions.json: ${file.stderr.trim()}`, at };
       return;
     }
     try {
-      this.decisions = { items: JSON.parse(file.stdout).items.map(askOf), error: "" };
+      this.decisions = { items: JSON.parse(file.stdout).items.map(askOf), error: "", at };
     } catch (error) {
-      this.decisions = { items: [], error: `decisions.json: ${error.message}` };
+      this.decisions = { items: [], error: `decisions.json: ${error.message}`, at };
     }
   }
 
@@ -301,6 +302,10 @@ export default class Coordinator extends View {
 
   decisionsError() {
     return (this.pop ? shared("co.asks") : this.decisions)?.error ?? "";
+  }
+
+  decisionsAt() {
+    return (this.pop ? shared("co.asks") : this.decisions)?.at ?? 0;
   }
 
   asks() {
@@ -690,7 +695,7 @@ export default class Coordinator extends View {
       const form = { answers, drafts, decided, clock, editing: this.editing, editor: (q) => this.editor(q), sending: this.sent === "sending", step: Math.max(0, this.indexOf(list)), changed: this.changed };
       return v_flex().id("co-pop").size_full().bg(t.chrome).track_focus(this.handle)
         .on_key_down((e, cx) => this.askKey(e, cx))
-        .child(list.length ? questionPop(t, list, form, cb) : emptyPop(t, this.decisionsError(), cb));
+        .child(list.length ? questionPop(t, list, form, cb, this.decisionsAt(), now) : emptyPop(t, this.decisionsError(), cb, this.decisionsAt(), now));
     }
     const strip = taskStrip(t, this.view, cb, this.box.width);
     const open = list.filter((a) => !decided[a.id]);
@@ -698,7 +703,7 @@ export default class Coordinator extends View {
     return v_flex().id("co-root").size_full().min_h(0).bg(t.chrome)
       .child(status(t, info, this.view, now, this.box.width, this.error))
       .when(strip, (el) => el.child(strip))
-      .when(open.length || error, (el) => el.child(askRow(t, open, open.filter((a) => drafts.has(a.id)).length, error, cb)))
+      .when(open.length || error, (el) => el.child(askRow(t, open, open.filter((a) => drafts.has(a.id)).length, error, cb, this.decisionsAt(), now)))
       .child(conversation(t, this.view, this.error, now, cb))
       .child(composer(t, info, this.input, this.sent, this.focused, answers, cb));
   }

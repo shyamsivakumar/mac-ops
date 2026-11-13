@@ -1,6 +1,6 @@
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, layout, theme, settings } from "herdr";
+import { exec, home, layout, readTextFile, theme, settings } from "herdr";
 
 const OWNERS = ["shyamsivakumar", "slash-eureka"];
 const MINE = "shyamsivakumar";
@@ -19,9 +19,14 @@ const clock = (ms) => { const d = new Date(ms); return `${pad2(d.getHours())}:${
 const NOT_TICKETS = new Set(["UTF", "GPT", "SHA", "ISO", "AES", "RSA", "TLS", "SSL", "CVE", "RFC", "PEP", "CRC", "MD"]);
 const KNOWN_PREFIXES = ["SRW", "MO", "SLA", "AUH", "LMW"];
 
+async function coordinatorPrefixes() {
+  const text = await readTextFile(`${home()}/.coordinator/tickets.json`);
+  return text ? Object.values(JSON.parse(text).repos).map((repo) => repo.key) : [];
+}
+
 // Prefixes are the known ones plus any that appear as an uppercase PREFIX-123 in this load's titles.
-function withTickets(merged) {
-  const prefixes = new Set(KNOWN_PREFIXES);
+function withTickets(merged, coordinator) {
+  const prefixes = new Set([...KNOWN_PREFIXES, ...coordinator]);
   for (const pr of merged) for (const m of pr.title.matchAll(/\b([A-Z]{2,4})-\d+\b/g)) if (!NOT_TICKETS.has(m[1])) prefixes.add(m[1]);
   const pattern = new RegExp(`\\b(${[...prefixes].sort((a, b) => b.length - a.length).join("|")})-?(\\d+)\\b`, "i");
   return merged.map((pr) => {
@@ -97,10 +102,11 @@ async function fetchShipped(now = Date.now()) {
     });
   }
   await pool(jobs, errors);
+  const coordinator = await coordinatorPrefixes();
 
   const days = [...mergedDays.values()];
   return {
-    merged: withTickets([...mergedWeeks.values(), ...days.map((d) => d.prs)].flat().filter((p) => p.at >= start)).sort((a, b) => b.at - a.at),
+    merged: withTickets([...mergedWeeks.values(), ...days.map((d) => d.prs)].flat().filter((p) => p.at >= start), coordinator).sort((a, b) => b.at - a.at),
     capped: days.some((d) => d.capped),
     open: [...openByOwner.values()].flat(),
     errors: [...new Set(errors)], at: Date.now(),

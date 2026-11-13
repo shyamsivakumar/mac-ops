@@ -20,6 +20,11 @@ const WT_SCAN = `${appHome()}/mods/worktrees/scan.sh`;
 const WT_EVERY = 600000;
 const WT_HANG = 660000;
 const WT_MAX_LOAD = 10;
+const WT_FORCE_AFTER = 1800000;
+const WT_LAST = `${WT_DIR}/last.json`;
+const T3_CREDENTIALS = `${home()}/.config/t3mcp/credentials.json`;
+const T3_EVERY = 600000;
+const T3_WARN = 3 * 86400000;
 const CLAUDE_USAGE = `${home()}/.claude/plugins/claude-hud/.usage-cache.json`;
 const CLAUDE_FIVE_HOUR = 5 * 3600000;
 const CLAUDE_WEEK = 7 * 86400000;
@@ -34,6 +39,8 @@ const HERDR_APP = `${home()}/.local/bin/herdr-app`;
 const ERRORS_EVERY = 30000;
 const ERRORS_PANEL = [640, 440];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const LOGIN_ERROR = /log in|cookie|unauthori[sz]ed/i;
 
 const sunday = (year, month, nth) => 1 + ((7 - new Date(Date.UTC(year, month, 1)).getUTCDay()) % 7) + 7 * (nth - 1);
 
@@ -88,6 +95,7 @@ export default class Ops extends View {
     this.mem = null;
     this.claude = null;
     this.minimax = null;
+    this.t3 = null;
     this.modErrors = null;
     this.at = {};
     this.busy = new Set();
@@ -139,9 +147,11 @@ export default class Ops extends View {
       const now = Date.now();
       if (status?.state === "running" && now - status.at * 1000 <= WT_HANG) return { ...this.wt, scanning: true };
       const due = now - Math.max((status?.finished ?? 0) * 1000, this.wtTried ?? 0) >= WT_EVERY;
-      if (due && this.load !== null && this.load < WT_MAX_LOAD) {
+      const lastGood = await exec("stat", ["-f", "%m", WT_LAST]);
+      const overdue = now - (lastGood.code === 0 ? Number(lastGood.stdout) * 1000 : 0) > WT_FORCE_AFTER;
+      if (due && (overdue || (this.load !== null && this.load < WT_MAX_LOAD))) {
         this.wtTried = now;
-        const r = await exec("sh", [WT_SCAN, "scan"]);
+        const r = await exec("nice", ["-n", "10", "sh", WT_SCAN, "scan"]);
         return r.code === 0 && r.stdout.trim() === "started" ? { ...this.wt, scanning: true } : null;
       }
       return status?.state === "done" ? { finished: status.finished } : due ? this.wt : null;
@@ -184,6 +194,7 @@ export default class Ops extends View {
     });
     this.poll(cx, "minimax", USAGE_EVERY, async () => {
       const r = await exec("/usr/bin/env", MMX_ENV, { timeout: 20000 }).catch(() => null);
+      if (r && r.code !== 0 && LOGIN_ERROR.test(r.stderr + r.stdout)) return { at: Date.now(), login: true, windows: [] };
       const plan = r && r.code === 0 ? JSON.parse(r.stdout).model_remains.find((m) => m.model_name === "general") : null;
       return plan && {
         at: Date.now(),
@@ -192,6 +203,10 @@ export default class Ops extends View {
           ["wk", minimaxWindow(plan.current_weekly_remaining_percent, plan.weekly_start_time, plan.weekly_end_time)],
         ],
       };
+    });
+    this.poll(cx, "t3", T3_EVERY, async () => {
+      const credentials = await readJson(T3_CREDENTIALS);
+      return credentials && { expires: Number(credentials.expires_at) * 1000 };
     });
     this.poll(cx, "wt", this.wt?.scanning ? 4000 : 30000, () => this.readWorktrees());
     cx.notify();
@@ -216,11 +231,17 @@ export default class Ops extends View {
 
     const usage = (label, source) => {
       if (!source) return null;
-      const paced = source.windows.map(([name, w]) => [name, pace(w, this.clock)]).filter(([, p]) => p);
+      if (source.login) return plain(`${label}:`, "log in again", t.working, "MiniMax session expired. Run `mmx auth login` in a terminal.");
+      const paced = source.windows.map(([name, w]) => [name, w.used === null ? "n/a" : pace(w, this.clock)]).filter(([, p]) => p);
       if (!paced.length) return null;
       const stale = Date.now() - source.at > CLAUDE_STALE_MS;
       const el = h_flex().gap(5).items_center().flex_none().child(div().text_color(t.dim).child(label));
       paced.forEach(([name, p], i) => {
+        if (p === "n/a") {
+          if (i) el.child(div().text_color(t.dim).child("·"));
+          el.child(div().text_color(t.dim).font_medium().child(`${name} n/a`).tooltip(`No ${name} usage figure in the cache${stale ? `, last refreshed ${clockAt(source.at)}` : ""}.`));
+          return;
+        }
         const text = `${name} ${Math.round(p.used)}%${p.ahead ? " ▲" : ""}`;
         const detail = p.ahead ? `At this pace you run out before the window resets at ${clockAt(p.reset)}, around ${clockAt(p.runout)}. ${Math.round(p.used)}% used, ${Math.round(p.elapsed)}% of the window gone.`
           : `${Math.round(p.used)}% used, ${Math.round(p.elapsed)}% of the window gone. Resets ${clockAt(p.reset)}.`;
@@ -243,6 +264,10 @@ export default class Ops extends View {
       .child(div().size(6).rounded(3).bg(t.blocked))
       .child(div().text_color(t.blocked).font_medium().child(`${errors.length} mod error${errors.length === 1 ? "" : "s"}`))
       .child(div().text_color(t.muted).child(/^mod (\S+?):/.exec(errors[0])?.[1] ?? "app"));
+
+    const t3Left = this.t3 === null ? Infinity : this.t3.expires - Date.now();
+    const t3Date = this.t3 === null ? "" : `${MONTHS[new Date(this.t3.expires).getMonth()]} ${new Date(this.t3.expires).getDate()}`;
+    const t3El = t3Left > T3_WARN ? null : plain("T3", t3Left <= 0 ? `login expired ${t3Date}` : `login expires ${t3Date}`, t3Left <= 0 ? t.blocked : t.working, "run t3mcp login");
 
     const srw = this.srw;
     const poll = srw?.telegram?.pollHealth;
@@ -270,6 +295,7 @@ export default class Ops extends View {
       .child(item(srwColor, "SRW", srwDetail, srwTip))
       .when(this.load !== null && roomy, (el) => el.child(plain("M4", `load ${this.load.toFixed(2)}`, t.muted, "load average, 1 minute")))
       .when(tight, (el) => el.child(plain("heavy", h ? ([running && `${running} run`, paused && `${paused} paused`, queued && `${queued} queued`].filter(Boolean).join(" · ") || "idle") : "n/a", heavyColor, "mac-ops heavy status")))
+      .when(t3El !== null, (el) => el.child(t3El))
       .when(memEl !== null, (el) => el.child(memEl))
       .when(tight && this.claude !== null, (el) => el.child(usage("Claude", this.claude)))
       .when(roomy && this.minimax !== null, (el) => el.child(usage("MiniMax", this.minimax)))
