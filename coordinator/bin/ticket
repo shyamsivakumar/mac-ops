@@ -815,8 +815,9 @@ def validate_start(cfg, repo, issue, check_text=True):
     pull_reasons = pull_guard_reasons(repo, issue)
     if pull_reasons:
         raise Refuse(pull_reasons[0])
-    # A hold is Shyam's own block. It is checked before the other rules so a
-    # held ticket says that it waits for Shyam, whatever else it is missing.
+    # A hold is Shyam's own block. It is checked before the state, key and
+    # label rules, so a held ticket says that it waits for Shyam, whatever
+    # else it is missing.
     if t["groups"][HOLD_FAMILY]:
         raise Refuse(f"on hold ({HOLD_LABEL}); only Shyam clears it")
     if t["state"] != "OPEN":
