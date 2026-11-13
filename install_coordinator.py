@@ -29,7 +29,9 @@ CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tick
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
 TURN_CAP_JOB = "dev.coordinator.turncap"
-MONITOR_PATTERN = r"turn_cap\.py$"
+# A python interpreter running the monitor script and nothing else. A page of
+# the script, a grep of it, or a build job that mentions it does not match.
+MONITOR_PATTERN = r"[Pp]ython[0-9.]* .*/loop/turn_cap\.py( --[A-Za-z0-9-]+)*$"
 
 
 def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
@@ -87,21 +89,28 @@ def log_dirs(rendered: list[tuple[bytes, Path]]) -> set[Path]:
     return dirs
 
 
-def ensure_log_dirs(dirs: set[Path], home: Path) -> list[Path]:
+def ensure_log_dirs(dirs: set[Path], home: Path) -> tuple[list[Path], list[Path]]:
     """Create the log directories this installer owns. launchd does not create
     them, and a job whose log path is missing does not start. Only directories
     under ~/Library/Logs belong to the installer; a job that logs into another
     checkout keeps that directory to itself. Every level below the home
     directory is created on its own and a symlinked level is refused, so the
-    tree is never written through a planted link."""
+    tree is never written through a planted link. A refused directory is
+    reported and left alone; it must not fail the rest of the install."""
     root = home / "Library/Logs"
     created = []
+    refused = []
     for directory in sorted(dirs):
         if not directory.is_relative_to(root) or directory.is_dir():
             continue
-        create_dir_chain(directory, home)
+        try:
+            create_dir_chain(directory, home)
+        except ValueError as exc:
+            refused.append(directory)
+            print(f"Warning: {exc}")
+            continue
         created.append(directory)
-    return created
+    return created, refused
 
 
 def create_dir_chain(directory: Path, home: Path) -> None:
@@ -125,16 +134,26 @@ def monitor_pids(output: str) -> list[int]:
     return pids
 
 
-def launchd_pid(label: str) -> int | None:
-    result = subprocess.run(
-        ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
-    for line in result.stdout.splitlines():
+def run_quiet(argv: list[str]) -> str | None:
+    """Run a command and return its output, or None when it cannot run."""
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=15, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout
+
+
+def parse_launchd_pid(output: str) -> int | None:
+    """Read the pid from launchctl output, in the list form or the print
+    form."""
+    for line in output.splitlines():
         stripped = line.strip()
+        if stripped.startswith('"PID"'):
+            value = stripped.split("=", 1)[1].strip().rstrip(";").strip('"')
+            if value.isdigit():
+                return int(value)
         if stripped.startswith("pid ="):
             value = stripped.split("=", 1)[1].strip()
             if value.isdigit():
@@ -142,19 +161,32 @@ def launchd_pid(label: str) -> int | None:
     return None
 
 
+def launchd_pid(label: str) -> int | None:
+    """Find the pid of a loaded job. launchctl list works in every domain, so a
+    job loaded by the legacy launchctl load is still recognised."""
+    listed = run_quiet(["launchctl", "list", label])
+    if listed is not None:
+        pid = parse_launchd_pid(listed)
+        if pid is not None:
+            return pid
+    printed = run_quiet(["launchctl", "print", f"gui/{os.getuid()}/{label}"])
+    return parse_launchd_pid(printed) if printed is not None else None
+
+
+def manual_pids(pids: list[int], owned: int | None) -> list[int]:
+    """Drop the process launchd owns."""
+    return [pid for pid in pids if pid != owned]
+
+
 def manual_monitors(label: str = TURN_CAP_JOB) -> list[int]:
     """Return the turn-cap monitors that launchd does not own. The monitor has
     no lock, so a hand-started copy and the job would double-interrupt
     threads."""
-    result = subprocess.run(
-        ["pgrep", "-fl", MONITOR_PATTERN],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
+    output = run_quiet(["pgrep", "-fl", MONITOR_PATTERN])
+    if output is None:
+        return []
     owned = launchd_pid(label)
-    return [pid for pid in monitor_pids(result.stdout) if pid != owned]
+    return manual_pids(monitor_pids(output), owned)
 
 
 @contextlib.contextmanager
@@ -273,7 +305,7 @@ def install(checkout: Path, dry_run: bool, home: Path | None = None) -> None:
             indent=2,
         ))
         return
-    created = ensure_log_dirs(log_dirs(render_plists(checkout, home)), home)
+    created, _refused = ensure_log_dirs(log_dirs(render_plists(checkout, home)), home)
     for directory in created:
         print(f"Created log directory: {directory}")
     for pid in manual_monitors():
