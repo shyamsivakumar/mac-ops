@@ -110,7 +110,7 @@ function barItems(v) {
   const decided = shared("co.decided") ?? {};
   const waiting = asks.filter((a) => !decided[a.id]);
   const sent = asks.length - waiting.length;
-  const decisions = asks.length ? [{ id: "decisions", prio: -1, command: "coordinator.asks", label: `Decisions · ${waiting.length} waiting${sent ? ` · ${sent} sent` : ""}`, tone: waiting.length ? "blocked" : undefined, tip: `${waiting.slice(0, 3).map((a) => a.text).join(" · ")}${waiting.length > 3 ? ` · and ${waiting.length - 3} more` : ""}. Click to answer.` }] : [];
+  const decisions = [asks.length ? { id: "decisions", prio: -1, command: "coordinator.asks", label: `Decisions · ${waiting.length} waiting${sent ? ` · ${sent} sent` : ""}`, tone: waiting.length ? "blocked" : undefined, tip: `${waiting.slice(0, 3).map((a) => a.text).join(" · ")}${waiting.length > 3 ? ` · and ${waiting.length - 3} more` : ""}. Click to answer.` } : { id: "decisions", prio: -1, command: "coordinator.asks", label: "Decisions · none", tip: "Nothing is waiting for your answer. Click to open the decisions panel." }];
   const old = w?.failed && w.scannedAt ? ` · ${ago(w.scannedAt, Date.now())} old` : "";
   const failedScan = w?.failed ? [{ id: "wtfail", prio: 1, label: `worktree scan failed: ${w.failed}`, tone: "muted", tip: `The last worktree scan failed: ${w.failed}. ${w.scannedAt ? "The numbers beside it come from the last good scan." : "There is no earlier result."}` }] : [];
   const hasCounts = w && w.stale !== undefined;
