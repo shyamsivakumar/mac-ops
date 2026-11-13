@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+"""The overnight shift's command line.
+
+This part (spec T3a) reads the board and the open pull requests and turns
+them into intake records. It reads only: nothing is written, no second queue
+is kept, and no rule about merging, pushing, the slot cap or the Ascend
+repositories changes.
+
+    overnight intake --dry-run
+
+The board is the list. Intake reads `ticket list --fresh --json` for the
+tickets and `gh pr list` for each allowed repository, and holds the records
+in memory for the run. The later parts of the spec (filtering, ordering,
+arming, the tick and the morning report) build on the same records.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import NoReturn
+
+TICKET = os.environ.get("OVERNIGHT_TICKET", "ticket")
+GH = os.environ.get("OVERNIGHT_GH", "gh")
+TICKET_TIMEOUT = 300
+GH_TIMEOUT = 60
+PR_LIMIT = 100
+PR_FIELDS = "number,title,url,isDraft,headRefName,baseRefName,updatedAt,body"
+# A ticket reference in a pull request body or title. Only the GitHub
+# keywords count: a bare "#123" is often a pull request, not a ticket.
+TICKET_REF = re.compile(r"\b(?:refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
+
+
+def die(message: str, code: int = 1) -> NoReturn:
+    print(f"overnight: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def config_path() -> Path:
+    """Return the coordinator's board config.
+
+    The checkout layout and the installed layout both resolve: the script
+    sits in `coordinator/overnight/` next to `coordinator/config/`, and the
+    installer copies the config to `~/.coordinator/`."""
+    here = Path(__file__).resolve().parent
+    for candidate in (
+        here.parent / "config" / "tickets.json",
+        Path.home() / ".coordinator" / "tickets.json",
+    ):
+        if candidate.is_file():
+            return candidate
+    die("tickets.json not found next to the module or in ~/.coordinator")
+    raise AssertionError("unreachable")
+
+
+def load_config() -> dict:
+    try:
+        with open(config_path()) as stream:
+            return json.load(stream)
+    except (OSError, ValueError) as exc:
+        die(f"cannot read the board config: {exc}")
+        raise AssertionError("unreachable")
+
+
+def allowed_repos(cfg: dict) -> list[tuple[str, str]]:
+    """Return the allowed repositories as (repo, key) pairs.
+
+    The board config is the allow list: it names the repositories the
+    coordinator works on today. The Ascend repositories are not in it."""
+    repos = cfg.get("repos") or {}
+    return sorted((repo, entry.get("key", "")) for repo, entry in repos.items())
+
+
+def run(argv: list[str], timeout: int) -> str:
+    """Run a command and return its stdout, or fail with the error tail."""
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except FileNotFoundError:
+        die(f"{argv[0]} is not on PATH")
+        raise AssertionError("unreachable")
+    except subprocess.TimeoutExpired:
+        die(f"{' '.join(argv)} timed out after {timeout}s")
+        raise AssertionError("unreachable")
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout or "").strip().splitlines()[-3:]
+        die(f"{' '.join(argv)} failed ({result.returncode}): " + " | ".join(tail))
+        raise AssertionError("unreachable")
+    return result.stdout
+
+
+def read_board() -> tuple[list[dict], bool]:
+    """Return the board's tickets and whether the board is stale.
+
+    The ticket CLI owns the cache and the labels, so intake asks it for the
+    list instead of reading GitHub a second way."""
+    raw = run([TICKET, "list", "--fresh", "--json"], TICKET_TIMEOUT)
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        die(f"the ticket CLI did not return JSON: {exc}")
+        raise AssertionError("unreachable")
+    issues = data.get("issues") or []
+    if data.get("stale"):
+        print(
+            "overnight: the board list is stale ("
+            + str((data.get("error") or {}).get("message", "unknown error"))
+            + ")",
+            file=sys.stderr,
+        )
+    return issues, bool(data.get("stale"))
+
+
+def read_pull_requests(repo: str) -> list[dict]:
+    """Return the open pull requests of one repository."""
+    raw = run(
+        [
+            GH,
+            "pr",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(PR_LIMIT),
+            "--json",
+            PR_FIELDS,
+        ],
+        GH_TIMEOUT,
+    )
+    try:
+        rows = json.loads(raw)
+    except ValueError as exc:
+        die(f"gh did not return JSON for {repo}: {exc}")
+        raise AssertionError("unreachable")
+    return rows if isinstance(rows, list) else []
+
+
+def ticket_number(text: str, key: str) -> int | None:
+    """Return the ticket number a pull request names, if it names one.
+
+    The body keyword comes first: it is the strongest link. The branch name
+    is the fallback, and only when the branch carries the repository key
+    (`mo-208`), so a stray number in a branch name does not link."""
+    match = TICKET_REF.search(text or "")
+    if match:
+        return int(match.group(1))
+    if key:
+        branch = re.search(rf"\b{re.escape(key.lower())}-(\d+)\b", (text or "").lower())
+        if branch:
+            return int(branch.group(1))
+    return None
+
+
+def build_records(
+    issues: list[dict], pull_requests: dict[str, list[dict]], keys: dict[str, str]
+) -> dict[str, list[dict]]:
+    """Turn the board and the pull requests into intake records, per repo.
+
+    A ticket with an open pull request is one record that carries the pull
+    request. A pull request with no ticket on the board is a record of its
+    own. Nothing is filtered or ordered here: that is the next part."""
+    records: dict[str, list[dict]] = {}
+    for issue in issues:
+        repo = issue.get("repo", "")
+        record = {
+            "kind": "ticket",
+            "repo": repo,
+            "key": issue.get("key", ""),
+            "number": issue.get("number"),
+            "title": issue.get("title", ""),
+            "url": issue.get("url", ""),
+            "stage": issue.get("stage"),
+            "priority": issue.get("priority"),
+            "type": issue.get("type"),
+            "builder": issue.get("builder"),
+            "reviewer": issue.get("reviewer"),
+            "problems": issue.get("problems", []),
+            "updatedAt": issue.get("updatedAt"),
+            "pr": None,
+        }
+        records.setdefault(repo, []).append(record)
+    for repo, rows in pull_requests.items():
+        bucket = records.setdefault(repo, [])
+        by_number = {r["number"]: r for r in bucket if r["kind"] == "ticket"}
+        for row in rows:
+            number = ticket_number(
+                f"{row.get('title', '')}\n{row.get('body', '')}\n{row.get('headRefName', '')}",
+                keys.get(repo, ""),
+            )
+            summary = {
+                "number": row.get("number"),
+                "title": row.get("title", ""),
+                "url": row.get("url", ""),
+                "isDraft": bool(row.get("isDraft")),
+                "headRefName": row.get("headRefName", ""),
+                "baseRefName": row.get("baseRefName", ""),
+                "updatedAt": row.get("updatedAt"),
+            }
+            target = by_number.get(number) if number is not None else None
+            if target is not None and target["pr"] is None:
+                target["pr"] = summary
+                continue
+            bucket.append(
+                {
+                    "kind": "pr",
+                    "repo": repo,
+                    "key": keys.get(repo, ""),
+                    "number": row.get("number"),
+                    "title": row.get("title", ""),
+                    "url": row.get("url", ""),
+                    "isDraft": bool(row.get("isDraft")),
+                    "headRefName": row.get("headRefName", ""),
+                    "updatedAt": row.get("updatedAt"),
+                }
+            )
+    return records
+
+
+def cmd_intake(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "overnight: intake in this part reads only. Run "
+            "`overnight intake --dry-run`.",
+            file=sys.stderr,
+        )
+        return 2
+    cfg = load_config()
+    repos = allowed_repos(cfg)
+    if not repos:
+        die("the board config names no repositories")
+    keys = {repo: key for repo, key in repos}
+    issues, stale = read_board()
+    pull_requests: dict[str, list[dict]] = {}
+    failures: list[str] = []
+    for repo, _key in repos:
+        try:
+            pull_requests[repo] = read_pull_requests(repo)
+        except SystemExit:
+            failures.append(repo)
+            pull_requests[repo] = []
+    records = build_records(issues, pull_requests, keys)
+    print("Overnight intake - dry run (read only)")
+    print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+    print(f"Allowed repositories: {len(repos)}")
+    print()
+    print(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
+    total = 0
+    for repo, _key in repos:
+        bucket = records.get(repo, [])
+        tickets = sum(1 for r in bucket if r["kind"] == "ticket")
+        linked = sum(1 for r in bucket if r["kind"] == "ticket" and r["pr"])
+        prs = len(pull_requests.get(repo, []))
+        total += len(bucket)
+        print(f"{repo:<45}{tickets:>9}{prs:>6}{linked:>8}{len(bucket):>9}")
+    print()
+    print(
+        f"Total: {total} records across {len(repos)} repositories "
+        f"({len(issues)} board tickets, "
+        f"{sum(len(rows) for rows in pull_requests.values())} open pull requests)"
+    )
+    print(
+        "A pull request that a board ticket names is part of that ticket's "
+        "record, so it adds no record of its own."
+    )
+    if failures:
+        print(
+            "Repositories whose pull requests could not be read: "
+            + ", ".join(failures),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="overnight", description="The overnight shift's command line."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    intake = sub.add_parser(
+        "intake",
+        help="read the board and the open pull requests into intake records",
+    )
+    intake.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read only; no records are written (the only mode in this part)",
+    )
+    intake.set_defaults(func=cmd_intake)
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
