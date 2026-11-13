@@ -125,14 +125,14 @@ used at [src/brief.rs:115](https://github.com/shyamsivakumar/herdr-projects/blob
 and a trust screen on a pane counts as `blocked` for the brief
 ([src/ticker.rs:640-646](https://github.com/shyamsivakumar/herdr-projects/blob/4e4548c3c43888e6be1c96906215998f07dc63f0/src/ticker.rs#L640-L646)).
 
-So: on the states an agent reports about itself — blocked, working, done —
+So: on the states an agent reports about itself (blocked, working, done)
 our detection matches Moonmux's or beats it, because we read the agent's own
 report instead of scraping its screen. Two things Moonmux covers and we do
-not: an agent that reports `error` (a helper's error is not a need for us
-either), and the agents the user started by hand. Everything else Moonmux
-does in this area is presentation, and some of that we already have. The
-recommendations are aimed at the live tree, and they say which tree they
-apply to.
+not: a helper agent that reports `error` (Moonmux turns only a helper's
+error into a need, and we turn neither kind into one), and the agents the
+user started by hand. Everything else Moonmux does in this area is
+presentation, and some of that we already have. The recommendations are
+aimed at the live tree, and they say which tree they apply to.
 
 ## Signals
 
@@ -512,13 +512,9 @@ one wrong citation, plus four smaller points. All are fixed:
    revision 1 and that revision 4 found two detection gaps as well.
 4. **The short answer overstated the comparison.** It said our detection
    is at least as good as Moonmux's and that only presentation ideas were
-   missing. This round fixed it properly: it now says our detection
-   matches or beats Moonmux's on the states an agent reports about itself,
-   and names the two things Moonmux covers and we do not (an agent that
-   reports `error`, and the agents the user started by hand). The round-3
-   version of this fix only removed the second half of the overclaim and
-   left "at least as good on every signal Moonmux has", which was still
-   false.
+   missing. This round removed the second half of the overclaim and left
+   "at least as good as Moonmux's on every signal Moonmux has", which was
+   still false; the fourth round finished the job (see its list below).
 5. **A small overclaim in `decisions.md`.** It said every recommendation
    names a file and a line; recommendation 6 names none, because it says
    what not to copy. It now says five of six do.
@@ -536,8 +532,10 @@ and three smaller points. All are fixed:
    its helper-error rule (row 8) are not covered by us in either tree. The
    round-3 fix had removed only the second half of the overclaim. It now
    says our detection matches or beats Moonmux's on the states an agent
-   reports about itself, and names the two things Moonmux covers and we do
-   not.
+   reports about itself (blocked, working, done), and names the two things
+   Moonmux covers and we do not: a helper agent that reports `error`
+   (Moonmux turns only a helper's error into a need, and we turn neither
+   kind into one), and the agents the user started by hand.
 2. **A wrong claim about `providerTurn()`.** It said the "cut" it returns
    does not feed the task status. It does, indirectly: the cut becomes the
    provider-retry row (`server/core/provider-retries.ts:40-56`), which
@@ -552,3 +550,33 @@ and three smaller points. All are fixed:
 4. **A count.** The Rust table has sixteen rows, the fifteen signals plus
    row 9a, the trust-screen check. The count is now said as such.
 5. The reframe sentence went away with fix 1.
+
+### The run-a3 fifth round
+
+A fifth in-session Opus 5.5 round checked the `providerTurn()` and
+`waiting()` claims (right), every cross-reference (right) and the scope
+(clean), and returned `VERDICT: FAIL` on one sentence about Moonmux that
+the Moonmux source does not support, plus two smaller points. All are
+fixed:
+
+1. **The short answer overstated what Moonmux does with `error`.** It said
+   "an agent that reports `error` (a helper's error is not a need for us
+   either)", which reads as if Moonmux treats any agent's `error` as a
+   need. At `ef34516` it does not: `helper_status()` turns `error` into
+   `blocked` only for a helper
+   (`app/mods/sidebar/main.luau:76-79`), `shown_status()` returns `error`
+   unchanged for any other agent (`:63-72`), and `error` is in neither
+   `LOUDNESS` nor `SECTIONS` (`:40-42`), so it is never drawn as "Needs
+   you". The sentence now says that Moonmux turns only a helper's error
+   into a need and we turn neither kind into one.
+2. **An em dash** in that same sentence, which the voice rules ban. It is
+   gone; the sentence uses parentheses.
+3. **The third-round list described the fourth-round fix.** Its item 4
+   said "This round fixed it properly" and then called the round-3 version
+   of the fix incomplete, which is the fourth round's work. Item 4 now
+   describes what round 3 did, and the fourth-round list carries the rest.
+
+The reviewer also confirmed what was right: the `providerTurn()` and
+`waiting()` citations, every recommendation cross-reference, the row
+counts, and that only the two evidence files changed, with nothing
+installed, copied or read that was out of bounds.

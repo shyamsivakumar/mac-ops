@@ -329,6 +329,19 @@ not decide is `waiting`; the `waiting()` summary now names the `task` role
 and the saved-snapshot fallback; and the Rust table's row count is given as
 sixteen, not fifteen.
 
+### The run-a3 fifth round
+
+A fifth in-session Opus 5.5 round confirmed the `providerTurn()` and
+`waiting()` citations, every cross-reference and the scope, and returned
+`VERDICT: FAIL` on one sentence about Moonmux that the Moonmux source does
+not support, plus two smaller points. All are fixed, and each is listed in
+the evidence file under "The run-a3 fifth round": the short answer no
+longer implies that Moonmux turns any agent's `error` into a need (at
+`ef34516` only a helper's `error` becomes one,
+`app/mods/sidebar/main.luau:76-79`, and `error` is in neither `LOUDNESS`
+nor `SECTIONS`, `:40-42`), the em dash in that sentence is gone, and the
+third-round list describes the third round's work again.
+
 ## Known limits
 
 - The herdr-projects rows describe the released Rust line (0.2.34,
