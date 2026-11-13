@@ -166,8 +166,9 @@ export function mirrorLabel(input: string): string {
 // bullets and table rows: the phone reads a paragraph otherwise.
 export function mirrorText(input: string, reply: string): string {
   const label = mirrorLabel(input);
-  // Only the trailing blank lines go; the body keeps every line break.
-  const body = (reply || "").replace(/\s+$/, "");
+  // A carriage return would act as an Enter in the relay's terminal, so it
+  // goes; the trailing blank lines go; every other line break stays.
+  const body = (reply || "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
   if (!label || !body.trim()) return "";
   // A tick that found nothing to do says so and stays off the phone.
   if (label === "tick" && body.trim() === "NOOP") return "";
@@ -244,6 +245,14 @@ export default function (pi: any) {
     if (event?.messageType === "user" && typeof event.prompt === "string" && event.prompt.trim()) {
       runPrompt = event.prompt;
       latestInput = event.prompt;
+      return;
+    }
+    // A run that no user message started (a custom message, a
+    // continuation) has no label of its own: the previous run's input must
+    // not name it.
+    if (event?.messageType) {
+      runPrompt = "";
+      latestInput = "";
     }
   });
 

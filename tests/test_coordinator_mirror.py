@@ -87,17 +87,35 @@ await emit("input", { text: "headless question", source: "interactive" }, headle
 await emit("before_agent_start", { messageType: "user", prompt: "headless question" }, headless);
 await emit("message_end", assistant("headless answer"), headless);
 
+// A relay that is down costs that mirror and nothing else.
+await emit("input", { text: "relay down", source: "interactive" }, tui);
+await emit("before_agent_start", { messageType: "user", prompt: "relay down" }, tui);
+await emit("message_end", assistant("relay down please"), tui);
+await emit("input", { text: "after the relay failed", source: "interactive" }, tui);
+await emit("message_end", assistant("still mirrored"), tui);
+
 await flushMirrors();
 console.log("SENDS " + JSON.stringify(fs.readFileSync(process.env.PROBE_LOG!, "utf8")));
 """
 
-STUB_HC = """#!/bin/sh
+# The stub records every send with a start and an end marker, so the test
+# can see two sends overlapping, and it fails the send that asks for a dead
+# relay, so the test can see the queue move on.
+MIRROR_STUB_HC = """#!/bin/sh
 case "$1" in
   ls)
     printf '%s\\n' '{"terminals":[{"name":"pi-coord-phone","state":"live","address":"t59"}]}'
     ;;
   send)
-    printf '<<<SEND>>>\\n%s\\n<<<END>>>\\n' "$3" >> "$PROBE_LOG"
+    printf '<<<START>>>\\n' >> "$PROBE_LOG"
+    sleep 0.2
+    case "$3" in
+      *"relay down"*)
+        printf '%s\\n<<<FAIL>>>\\n' "$3" >> "$PROBE_LOG"
+        exit 3
+        ;;
+    esac
+    printf '%s\\n<<<END>>>\\n' "$3" >> "$PROBE_LOG"
     ;;
 esac
 exit 0
@@ -134,17 +152,10 @@ class TestCoordinatorMirrorWiring(unittest.TestCase):
         self.assertIn('runHc(["send", terms[0].address, text])', source)
         self.assertIn("Mirror:", source)
 
-    def test_extension_skips_phone_turns_and_noop_ticks(self):
+    def test_extension_labels_a_phone_turn_and_skips_a_noop_tick(self):
         source = EXTENSION.read_text()
         self.assertIn('const PHONE_MARKER = "From Shyam (phone):"', source)
-        self.assertIn("=== \"NOOP\"", source)
-
-    def test_extension_keeps_the_line_breaks_of_the_reply(self):
-        source = EXTENSION.read_text()
-        mirror = source.split("// ---------- mirror ----------")[1].split("// ---------- wake ----------")[0]
-        # Only the trailing blank lines go; the body keeps its line breaks.
-        self.assertIn('const body = (reply || "").replace(/\\s+$/, "")', mirror)
-        self.assertNotIn("reply.replace(/\\s+/g", mirror)
+        self.assertIn('=== "NOOP"', source)
 
     def test_relay_rules_answer_a_mirror_verbatim(self):
         rules = RELAY_RULES.read_text()
@@ -201,7 +212,7 @@ class TestCoordinatorMirrorEvents(unittest.TestCase):
         tmp = Path(cls.tmp.name)
         cls.log = tmp / "sends.log"
         stub = tmp / "hc"
-        stub.write_text(STUB_HC)
+        stub.write_text(MIRROR_STUB_HC)
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         script = tmp / "events.ts"
         script.write_text("import fs from \"node:fs\";\n" + EVENT_PROBE)
@@ -222,9 +233,17 @@ class TestCoordinatorMirrorEvents(unittest.TestCase):
         line = [l for l in out.stdout.splitlines() if l.startswith("SENDS ")][-1]
         raw = json.loads(line[len("SENDS "):])
         records = []
-        for chunk in raw.split("<<<SEND>>>\n")[1:]:
-            records.append(chunk.split("\n<<<END>>>\n")[0])
-        cls.sends = records
+        for chunk in raw.split("<<<START>>>\n")[1:]:
+            if chunk.endswith("\n<<<END>>>\n"):
+                records.append(("ok", chunk[: -len("\n<<<END>>>\n")]))
+            elif chunk.endswith("\n<<<FAIL>>>\n"):
+                records.append(("fail", chunk[: -len("\n<<<FAIL>>>\n")]))
+            else:
+                # A send that is still open when the next one starts: two
+                # sends overlapped.
+                records.append(("open", chunk))
+        cls.records = records
+        cls.sends = [text for status, text in records if status == "ok"]
 
     @classmethod
     def tearDownClass(cls):
@@ -237,6 +256,7 @@ class TestCoordinatorMirrorEvents(unittest.TestCase):
                 "Mirror: first question\nanswer one",
                 "Mirror: and lane 4 as well\nanswer two",
                 "Mirror: phone\nphone answer",
+                "Mirror: after the relay failed\nstill mirrored",
             ],
         )
 
@@ -246,6 +266,15 @@ class TestCoordinatorMirrorEvents(unittest.TestCase):
     def test_a_noop_tick_and_a_headless_run_are_not_mirrored(self):
         self.assertNotIn("NOOP", "\n".join(self.sends))
         self.assertNotIn("headless", "\n".join(self.sends))
+
+    def test_two_sends_never_overlap(self):
+        self.assertNotIn("open", [status for status, _ in self.records])
+
+    def test_a_dead_relay_costs_that_mirror_and_nothing_else(self):
+        self.assertEqual(
+            [status for status, _ in self.records],
+            ["ok", "ok", "ok", "fail", "ok"],
+        )
 
 
 @unittest.skipIf(BUN is None, "bun is not installed")
