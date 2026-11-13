@@ -23,7 +23,7 @@ The intake command from T3a (`overnight intake --dry-run`) is unchanged.
 
 | Drop | Rule | Source |
 | --- | --- | --- |
-| Ascend work | A key from the spec's list (AUH, MCP, OPS, DBT, OMN), or a repository the merge gate refuses. The repository rule is the one in `coordinator/bin/coordq` (`repo.split('/')[0] != "shyamsivakumar"` plus the Ascend repository names), so the shift and the gate never disagree about what Ascend is. | Spec section 5.1; the existing gate rule. |
+| Ascend work | A key from the spec's list (AUH, MCP, OPS, DBT, OMN), or a repository the merge gate refuses: the gate's repository rule (`repo.split('/')[0] != "shyamsivakumar"` plus the Ascend repository names) in `coordinator/bin/coordq`. | Spec section 5.1; the existing gate rule. |
 | A repository off the allow list | The allow list is the board config, `coordinator/config/tickets.json`, the same list intake uses. | T3a. |
 | A ticket marked `hold` | The word `HOLD` at the start of a line of the ticket's own text. | Spec section 7, drop list. |
 | A ticket marked `needs Shyam` | The phrase `needs Shyam` at the start of a line or of a clause. | Spec section 7, drop list. |
@@ -32,10 +32,12 @@ The intake command from T3a (`overnight intake --dry-run`) is unchanged.
 
 Two decisions worth naming:
 
-- **A mark stands at the start of a line or of a clause.** The board uses
-  "hold" as an ordinary word ("win, loss and hold counts", "a hold
-  outcome"), and a search for the word alone drops real tickets. The same
-  is true of "needs Shyam's OK", which is a note, not a mark.
+- **A mark is the marked form, at the start of a line or of a clause.**
+  The board uses "hold" as an ordinary word ("win, loss and hold counts",
+  "the hold-out set"), and a search for the word alone drops real
+  tickets. "HOLD" in capitals is the mark; "needs Shyam's OK" is a note,
+  not a mark; and a brief that lists the marks themselves ("drop tickets
+  marked hold, needs Shyam, design needed") is not marked either.
 - **The decisions log is append-only history, so the last line about a
   ticket decides.** A hold outlives the question it was asked in, and a
   line that answers the question closes it. A ticket named in passing
@@ -141,6 +143,42 @@ whose branch carries an Ascend key (`auh-12-fix`) is refused on the key.
 Nothing here merges, pushes, raises the slot cap or changes the Ascend
 rules. The filter reads; `check-pr` refuses. The board config, the ticket
 CLI, `coordq` and the gate are untouched.
+
+## Known gaps, found by the in-session review round
+
+An Opus review round read `git diff origin/main...HEAD` and returned
+`VERDICT: FAIL`. This commit fixes the false positives and false negatives
+it found in the drop rules. The findings below are **not** fixed here and
+are the work of the next round:
+
+1. **The filter fails open.** When `gh issue list` fails for a
+   repository, its board tickets are kept with no mark check, and the
+   decisions-log check is skipped for them, and the command still exits 0.
+   The same is true when the decisions log is missing, and a stale board
+   still exits 0. The filter must refuse (non-zero exit) instead.
+2. **`check-pr` fails open.** When the pull request cannot be read, it
+   prints UNVERIFIED and then exits 0. It must refuse instead.
+3. **The decisions-log rule misses how the real log writes an open
+   question.** `loop/tick.md` finds open items with `grep 'OPEN\|PARKED'`,
+   and the log writes `OPEN (needs answer)`, `Q: ...`, a line that ends in
+   `?`, `(Recommended: ...)`, and the number before the key
+   (`#878 SRW-1016`). The rule in this commit reads `HOLD`, `PARKED` and
+   the word "question"; it does not read `OPEN`, `Q:` or the question
+   mark. A ticket named only by a bare `#number` can also be dropped
+   across repositories.
+4. **The gate's per-repository `ascend` flag is not read.** The gate
+   honours `settings["ascend"]` as well as the owner rule. No repository
+   sets that flag today, but the claim "the same rule the gate uses" is
+   not quite true until the flag is read too.
+5. **`check-pr` reads the first key in the branch name only.** A branch
+   such as `t3/fix-12-auh-3` hides the Ascend key behind an earlier
+   key-like token.
+6. **Questions for Shyam also live in `decisions.json`.** The tick writes
+   them there too. This part reads `loop/decisions.md` only, as the brief
+   names it.
+7. The open issue list of one repository is read with a limit of 500. A
+   repository with more open issues than that would lose the text of its
+   older board tickets without saying so.
 
 ## Open point for Shyam
 

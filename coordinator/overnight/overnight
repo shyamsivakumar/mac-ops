@@ -67,29 +67,49 @@ ASCEND_REPO_PARTS = (
     "/omni",
 )
 PERSONAL_OWNER = "shyamsivakumar"
-# The marked words a ticket body may carry. The marks stand at the start
-# of a line or of a clause, so prose that uses the word ("hold counts",
-# "needs Shyam's OK after the backtest") is not a mark.
-HOLD_MARK = re.compile(r"(?im)^[ \t]*(?:[-*+>#]+[ \t]*)*HOLD[ \t]*(?:[:\-–]|$)")
+# The marked words a ticket body may carry. A mark is the marked form:
+# "HOLD" in capitals, "Needs Shyam:" with its question, "design needed"
+# with what it waits for. Prose that uses the word ("hold counts", "needs
+# Shyam's OK after the backtest", "the hold-out set") is not a mark, and
+# a brief that lists the marks themselves ("drop tickets marked hold,
+# needs Shyam, design needed") is not marked either.
+HOLD_MARK = re.compile(
+    r"(?m)^[ \t]*(?:[-*+>#]+[ \t]*)*"
+    r"(?:status[ \t]*:[ \t]*)?"
+    r"HOLD[ \t]*[*]?[ \t]*(?:[:\-–]|$)"
+)
 NEEDS_SHYAM_MARK = re.compile(
-    r"(?im)(?:^[ \t]*(?:[-*+>#]+[ \t]*)*|[.;:!?][ \t]+)needs[ \t]+shyam\b"
+    r"(?i)(?:^[ \t]*(?:[-*+>#]+[ \t]*)*|[.;:!?][ \t]+)"
+    r"needs[ \t]+shyam\b(?![ \t]*'s)(?:[ \t]*:|[ \t]*\bto\b|[ \t]*\bfor\b)"
 )
 DESIGN_MARK = re.compile(
-    r"(?im)(?:^[ \t]*(?:[-*+>#]+[ \t]*)*|[.;:!?][ \t]+)design[ \t]+needed\b"
+    r"(?i)(?:^[ \t]*(?:[-*+>#]+[ \t]*)*|[.;:!?][ \t]+)"
+    r"design[ \t]+needed\b(?:[ \t]*:|[ \t]*\bbefore\b|[ \t]*\bfirst\b)"
 )
 # A decisions log line that leaves a question open. "answered", "closed",
 # "resolved" and "unparked" close a question; a hold and a park outlive
 # the question they were asked in.
 DECISION_QUESTION = re.compile(r"(?i)\bquestion\b")
 DECISION_CLOSED = re.compile(r"(?i)\b(answered|closed|resolved|unparked)\b")
-DECISION_STRONG = re.compile(r"(?i)\b(hold|parked|park|question)\b|needs[ \t]+shyam")
+# The log writes a hold or a park in capitals ("HOLD SRW-685", "PARKED
+# (needs Shyam)"), and an open question as "OPEN (needs answer)" or
+# "Q: ...". A question for Shyam is also written as "asked Shyam about".
+DECISION_STRONG = re.compile(
+    r"\b(HOLD|HELD|PARK|PARKED|OPEN)\b|needs[ \t]+shyam|asked[ \t]+shyam"
+)
+DECISION_ASKS = re.compile(r"(?i)\bQ\s*:")
+# A question the log asks Shyam ends with a question mark, and it carries
+# the log's own recommendation marker.
+DECISION_ASKED = re.compile(r"\?\s*$|\(Recommended:")
 # The subject of a decisions log line: the ticket the line is about. It
-# is the ticket named right after the line's verb ("HOLD SRW-685"), or the
-# first "KEY #number" pair in the line. A ticket that is only named in
-# passing ("once SRW-1067 merges") is not the subject.
+# is the ticket named right after the line's verb ("HOLD SRW-685"), or
+# the first "KEY #number" pair in the line. A ticket that is only named
+# in passing ("once SRW-1067 merges") is not the subject.
 DECISION_SUBJECT = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\s*#\s*(\d+)\b")
-DECISION_VERB = re.compile(r"(?i)\b(hold|holds|held|parked|park|question)\b")
-SUBJECT_TAIL = 80
+DECISION_VERB = re.compile(
+    r"(?i)\b(hold|holds|held|parked|park|open|question)\b|Q\s*:|asked[ \t]+shyam"
+)
+SUBJECT_TAIL = 120
 # The coordinator's loop folder holds the decisions log the tick reads.
 LOOP_DIR = Path(
     os.environ.get(
