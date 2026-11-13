@@ -263,6 +263,11 @@ def cmd_start(a):
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
         queue["next"] += 1
         queue["items"].append(item)
+        # A gate request takes its head with it, so gatekeep does not queue
+        # a second gate for the same head.
+        request_id = str(args.get("clientRequestId") or "")
+        if request_id.startswith("gate:"):
+            queue.setdefault("gatedHeads", {})[request_id] = item["id"]
         save(queue)
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
