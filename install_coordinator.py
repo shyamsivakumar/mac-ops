@@ -38,6 +38,9 @@ PI_FILES = (
     ("phone-relay/CLAUDE.md", ".pi/agent-coordinator/phone-relay/CLAUDE.md"),
 )
 TURN_CAP_JOB = "dev.coordinator.turncap"
+# The overnight shift's launchd job (spec part T12). It fires at 22:30 PT
+# and 06:30 PT, so it is loaded like any other job.
+OVERNIGHT_JOB = "dev.coordinator.overnight"
 # The overnight runner's on-disk contract. The folders come from the
 # overnight runner spec (section 6, revision 2). The shift keeps no second
 # queue here: the board is the list.
@@ -495,6 +498,11 @@ def install(
             "Launchd jobs were not restarted. Load the changed jobs with "
             "launchctl bootout and bootstrap, for example: launchctl bootstrap "
             f"gui/$(id -u) ~/{'Library/LaunchAgents'}/{TURN_CAP_JOB}.plist"
+        )
+        print(
+            f"The overnight job is {OVERNIGHT_JOB}.plist. Load it with: "
+            f"launchctl bootstrap gui/$(id -u) ~/{'Library/LaunchAgents'}/"
+            f"{OVERNIGHT_JOB}.plist"
         )
 
 
