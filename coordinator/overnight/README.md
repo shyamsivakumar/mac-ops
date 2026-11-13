@@ -37,16 +37,17 @@ decisions log. It keeps no list of its own and writes nothing.
 | --- | --- |
 | Ascend work | A key from the spec's list (AUH, MCP, OPS, DBT, OMN), or a repository the merge gate refuses: the same rule the gate uses in `coordinator/bin/coordq`, so the shift and the gate never disagree about what Ascend is. |
 | A repository off the allow list | The allow list is the board config (`coordinator/config/tickets.json`), the same list intake uses. |
-| A ticket marked `hold` | The word `HOLD` at the start of a line of the ticket's own text. |
-| A ticket marked `needs Shyam` | The phrase `needs Shyam` at the start of a line or of a clause. |
-| A ticket marked `design needed` | The phrase `design needed` at the start of a line or of a clause. |
+| A ticket marked `hold` | The word `HOLD` in capitals at the start of a line of the ticket's own text. |
+| A ticket marked `needs Shyam` | The phrase `needs Shyam` with its question (`Needs Shyam: ...`, "needs Shyam to ..."), and not "needs Shyam's OK". |
+| A ticket marked `design needed` | The phrase `design needed` with what it waits for (`design needed: ...`, "design needed before ..."). |
 | An open question in the decisions log | The last line of `loop/decisions.md` that is about the ticket holds or parks it, or asks a question that was never answered. |
 
-A mark stands at the start of a line or of a clause, so a ticket that only
-talks about holding a position, or about a decision that needs Shyam
-later, is not marked. The decisions log is append-only history, so the
-last line that is about a ticket decides: a hold outlives the question it
-was asked in, and a line that answers the question closes it.
+A mark is the marked form and it stands at the start of a line or of a
+clause, so a ticket that only talks about holding a position, or about a
+decision that needs Shyam later, is not marked. The decisions log is
+append-only history, so the last line that is about a ticket decides: a
+hold outlives the question it was asked in, and a line that answers the
+question closes it.
 
 The filter prints every drop with its reason, and it fails when an Ascend
 item survives it. The second check, `check-pr`, refuses an Ascend pull
