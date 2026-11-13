@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, json, os, re, subprocess, sys, time
+import argparse, fcntl, json, os, re, signal, subprocess, sys, time
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -24,14 +24,12 @@ TASK_MODELS = {
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
-# The board refill. When the queue is empty and the machine has free slots,
-# the dispatcher starts tickets from the board, at most once per interval.
 TICKET_BIN = os.environ.get("COORDQ_TICKET", "ticket")
 TICKETS_CONFIG = os.environ.get("COORDQ_TICKETS_CONFIG", os.path.expanduser("~/.coordinator/tickets.json"))
 REFILL_INTERVAL = int(os.environ.get("COORDQ_REFILL_INTERVAL", "300"))
 REFILL_BUDGET = float(os.environ.get("COORDQ_REFILL_BUDGET", "120"))
 REFILL_MAX = int(os.environ.get("COORDQ_REFILL_MAX", "40"))
-REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "200"))
+REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "1000"))
 STAGE = "stage:todo"
 
 
@@ -289,16 +287,46 @@ def mark_refill():
     os.replace(tmp, path("refill.last"))
 
 
+def read_cursor():
+    """The ticket the last scan stopped at, or None."""
+    try:
+        with open(path("refill.cursor")) as f:
+            return json.load(f).get("key")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def write_cursor(key):
+    tmp = path("refill.cursor.tmp")
+    with open(tmp, "w") as f:
+        json.dump({"key": key}, f)
+    os.replace(tmp, path("refill.cursor"))
+
+
+def candidate_key(candidate):
+    return f"{candidate['createdAt']}|{candidate['repository']['nameWithOwner']}|{candidate['number']}"
+
+
 def search_stage_todo(owner):
     """The open stage:todo issues of one owner, oldest first."""
     run = subprocess.run(["gh", "search", "issues", "--owner", owner, "--state", "open",
                           "--label", STAGE, "--sort", "created", "--order", "asc",
                           "--limit", str(REFILL_LIMIT),
-                          "--json", "repository,number,title,createdAt"],
+                          "--json", "repository,number,title,createdAt,labels"],
                          capture_output=True, text=True, timeout=40)
     if run.returncode:
         raise RuntimeError(f"GitHub search failed for {owner}: {run.stderr.strip()[:200]}")
     return json.loads(run.stdout)
+
+
+def stage_todo(candidate):
+    """True when the ticket carries the one stage label the board means.
+
+    A ticket whose stage label is spelled another way, or that carries two
+    stage labels, is one the ticket CLI refuses, so the scan skips it.
+    """
+    names = [label["name"] for label in candidate.get("labels", [])]
+    return [name for name in names if name.startswith("stage:")] == [STAGE]
 
 
 def board_candidates():
@@ -311,23 +339,43 @@ def board_candidates():
     for owner in owners:
         for row in search_stage_todo(owner):
             repo = row["repository"]["nameWithOwner"]
-            if repo in repos:
+            if repo in repos and stage_todo(row):
                 found[(repo, row["number"])] = row
     return sorted(found.values(),
                   key=lambda r: (r["createdAt"], r["repository"]["nameWithOwner"], r["number"]))
 
 
 def ticket_start(repo, number, dry_run):
-    """Run the ticket CLI on one ticket. A refused ticket exits non-zero and
-    changes nothing, so a refusal is a skip and not a start."""
+    """Run the ticket CLI on one ticket.
+
+    A refused ticket exits 2 and changes nothing, so a refusal is a skip and
+    not a start. Any other non-zero exit is a failure. The whole process
+    group is killed on a timeout, so a start cannot keep running after the
+    dispatcher gave up on it.
+    """
     command = [TICKET_BIN, "start", f"{repo}#{number}"]
     if dry_run:
         command.append("--dry-run")
     try:
-        run = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=True)
+    except OSError as e:
+        return 1, f"ticket start could not run: {e}"
+    try:
+        stdout, stderr = process.communicate(timeout=240)
     except subprocess.TimeoutExpired:
-        return 1, "ticket start timed out"
-    return run.returncode, ((run.stdout or "") + (run.stderr or "")).strip()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
+        process.communicate()
+        return 1, "ticket start timed out after 240s"
+    return process.returncode, ((stdout or "") + (stderr or "")).strip()
+
+
+def one_line(text):
+    """The output of the ticket CLI on one line, so a log entry stays a line."""
+    return " ".join(text.split())
 
 
 def used_slots():
@@ -346,7 +394,9 @@ def refill(a):
     The refill runs only when the queue is empty and the machine is below the
     cap, and at most once per REFILL_INTERVAL seconds. Every candidate is a
     ticket the ticket CLI may refuse, and a refusal starts nothing, so the
-    scan moves on to the next candidate.
+    scan moves on to the next candidate. The scan carries on from where the
+    last one stopped, so the tickets the board keeps refusing do not starve
+    the tickets behind them.
     """
     with Lock(False, "refill.lock") as lock:
         if lock is None:
@@ -371,17 +421,28 @@ def refill(a):
         mark_refill()
         try:
             candidates = board_candidates()
-        except (OSError, RuntimeError, ValueError, KeyError) as e:
+        except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
             log(f"refill stopped: {e}")
             return
         if not candidates:
             log("refill stopped: the board has no open stage:todo ticket")
             return
+        keys = [candidate_key(candidate) for candidate in candidates]
+        cursor = read_cursor()
+        start = keys.index(cursor) + 1 if cursor in keys else 0
+        if start >= len(candidates):
+            start = 0
+            log("refill wrapped to the oldest ticket on the board")
+        ordered = candidates[start:] + candidates[:start]
         deadline = time.time() + REFILL_BUDGET
         filled = 0
         scanned = 0
-        for candidate in candidates[:REFILL_MAX]:
+        last_ref = ""
+        for candidate in ordered[:REFILL_MAX]:
             scanned += 1
+            repo = candidate["repository"]["nameWithOwner"]
+            number = candidate["number"]
+            last_ref = f"{repo}#{number}"
             if time.time() > deadline:
                 log("refill stopped: the refill budget is spent")
                 break
@@ -389,28 +450,34 @@ def refill(a):
             if used is None:
                 log("refill stopped: cannot read the live thread count")
                 break
-            # Every start of this refill took a slot, and the count can lag
-            # behind it, so the slots this refill filled count too. The higher
-            # of the two counts wins, so a slow count never starts too many.
             used = max(used, n + filled)
             if used >= limit:
                 log(f"refill stopped: the slots are full ({used}/{limit})")
                 break
-            repo = candidate["repository"]["nameWithOwner"]
-            number = candidate["number"]
             code, out = ticket_start(repo, number, a.dry_run)
+            if code == 2:
+                log(f"refill refused {last_ref}: {one_line(out)[:200]}")
+                continue
             if code != 0:
-                log(f"refill refused {repo}#{number}: {out[:200]}")
+                log(f"refill failed {last_ref}: {one_line(out)[:200]}")
                 continue
             filled += 1
             if a.dry_run:
-                log(f"refill would start {repo}#{number}")
+                log(f"refill would start {last_ref}")
             elif out.startswith("queued"):
-                log(f"refill queued {repo}#{number}: {out[:120]}")
+                log(f"refill queued {last_ref}: {one_line(out)[:120]}")
             else:
-                log(f"refill started {repo}#{number}")
-        if len(candidates) > scanned:
-            log(f"refill scanned {scanned} candidate(s), {len(candidates) - scanned} left for the next refill")
+                log(f"refill started {last_ref}")
+        if last_ref:
+            write_cursor(candidate_key(ordered[scanned - 1]))
+            log(f"refill scanned {scanned} candidate(s); the next refill continues after {last_ref}")
+
+
+def safe_refill(a):
+    try:
+        refill(a)
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        log(f"refill failed: {e}")
 
 
 def cmd_dispatch(a):
@@ -418,17 +485,14 @@ def cmd_dispatch(a):
         f.write(str(int(time.time())))
     if a.dry_run:
         log("dry run: the queue is left alone")
-        refill(a)
+        safe_refill(a)
         return
     with Lock(False) as lock:
         if lock is None:
             log("lock held by another run, skipping")
             return
         drain()
-    try:
-        refill(a)
-    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
-        log(f"refill failed: {e}")
+    safe_refill(a)
 
 
 def cmd_create(a):

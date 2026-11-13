@@ -1,56 +1,66 @@
 # Real board, dispatcher dry run (MO-229, Refs #208)
 
-COORDQ_DIR is a temp folder with an empty queue and cap 6. The board is
-the real one: the real ~/.coordinator/tickets.json, the real gh, the real ticket
-CLI. The thread count is stubbed at 0 because the machine was really at
-cap 6/6 at the time of the run; the last two lines show the real count.
+COORDQ_DIR is a temp folder. The board is the real one: the real
+~/.coordinator/tickets.json, the real gh, the real ticket CLI. The thread
+count is stubbed at 0 in the runs below, because the machine was really
+at cap 6/6 at that moment; the first run shows the real count.
 
 ## Run 1: the real thread count
 
-2026-11-13 13:15:02 dry run: the queue is left alone
-2026-11-13 13:15:02 refill skipped: at cap 6/6
+2026-11-13 13:19:15 dry run: the queue is left alone
+2026-11-13 13:19:15 refill skipped: at cap 6/6
 
 ## Run 2: the thread count stubbed at 0, so the free-slot path runs
 
-2026-11-13 13:15:02 dry run: the queue is left alone
-2026-11-13 13:15:08 refill refused shyamsivakumar/fantasy-football-toolkit#184: refused: missing key in title
-2026-11-13 13:15:09 refill refused shyamsivakumar/fantasy-football-toolkit#185: refused: text blockers: shyamsivakumar/fantasy-football-toolkit#184 is still open
-2026-11-13 13:15:10 refill refused shyamsivakumar/fantasy-football-toolkit#186: refused: text blockers: shyamsivakumar/fantasy-football-toolkit#184 is still open
-2026-11-13 13:15:11 refill refused shyamsivakumar/fantasy-football-toolkit#187: refused: text blockers: shyamsivakumar/fantasy-football-toolkit#184 is still open
-2026-11-13 13:15:12 refill refused shyamsivakumar/fantasy-football-toolkit#188: refused: text blockers: shyamsivakumar/fantasy-football-toolkit#184 is still open
-2026-11-13 13:15:13 refill refused shyamsivakumar/fantasy-football-toolkit#189: refused: missing key in title
-2026-11-13 13:15:14 refill refused shyamsivakumar/fantasy-football-toolkit#190: refused: missing key in title
-2026-11-13 13:15:14 refill refused shyamsivakumar/fantasy-football-toolkit#191: refused: missing key in title
-2026-11-13 13:15:15 refill refused shyamsivakumar/fantasy-football-toolkit#192: refused: missing key in title
-2026-11-13 13:15:16 refill refused shyamsivakumar/fantasy-football-toolkit#193: refused: missing key in title
-2026-11-13 13:15:16 refill refused shyamsivakumar/fantasy-football-toolkit#194: refused: missing key in title
-2026-11-13 13:15:18 refill would start shyamsivakumar/fantasy-football-toolkit#195
-2026-11-13 13:15:19 refill refused shyamsivakumar/fantasy-football-toolkit#196: refused: missing key in title
-2026-11-13 13:15:20 refill refused shyamsivakumar/fantasy-football-toolkit#197: refused: blocked by open shyamsivakumar/fantasy-football-toolkit#195
-2026-11-13 13:15:21 refill refused shyamsivakumar/fantasy-football-toolkit#198: refused: blocked by open shyamsivakumar/fantasy-football-toolkit#197, shyamsivakumar/fantasy-football-toolkit#195
-2026-11-13 13:15:21 refill refused shyamsivakumar/fantasy-football-toolkit#199: refused: blocked by open shyamsivakumar/fantasy-football-toolkit#198, shyamsivakumar/fantasy-football-toolkit#195
-2026-11-13 13:15:22 refill refused shyamsivakumar/fantasy-football-toolkit#200: refused: blocked by open shyamsivakumar/fantasy-football-toolkit#199, shyamsivakumar/fantasy-football-toolkit#195
-2026-11-13 13:15:23 refill refused shyamsivakumar/fantasy-football-toolkit#224: refused: missing key in title
-2026-11-13 13:15:24 refill refused shyamsivakumar/fantasy-football-toolkit#225: refused: missing key in title
-2026-11-13 13:15:26 refill would start shyamsivakumar/fantasy-football-toolkit#226
-2026-11-13 13:15:27 refill refused shyamsivakumar/fantasy-football-toolkit#230: refused: missing key in title
-2026-11-13 13:15:28 refill refused shyamsivakumar/catalouge#49: refused: blocked by open shyamsivakumar/catalouge#48
-2026-11-13 13:15:29 refill would start shyamsivakumar/catalouge#50
-2026-11-13 13:15:30 refill refused shyamsivakumar/catalouge#51: refused: blocked by open shyamsivakumar/catalouge#50, shyamsivakumar/catalouge#48
-2026-11-13 13:15:31 refill refused shyamsivakumar/catalouge#52: refused: blocked by open shyamsivakumar/catalouge#48, shyamsivakumar/catalouge#50
-2026-11-13 13:15:31 refill refused shyamsivakumar/catalouge#53: refused: blocked by open shyamsivakumar/catalouge#51, shyamsivakumar/catalouge#49, shyamsivakumar/catalouge#52
-2026-11-13 13:15:32 refill refused shyamsivakumar/fantasy-football-toolkit#243: refused: missing key in title
-2026-11-13 13:15:32 refill refused shyamsivakumar/fantasy-football-toolkit#246: refused: missing key in title
-2026-11-13 13:15:34 refill would start shyamsivakumar/catalouge#78
-2026-11-13 13:15:35 refill would start shyamsivakumar/fantasy-football-toolkit#281
-2026-11-13 13:15:36 refill refused digitized/Concerning#32: refused: missing key in title
-2026-11-13 13:15:36 refill refused digitized/Concerning#37: refused: missing key in title
-2026-11-13 13:15:37 refill refused digitized/Concerning#38: refused: missing key in title
-2026-11-13 13:15:38 refill refused digitized/Concerning#39: refused: missing key in title
-2026-11-13 13:15:38 refill refused digitized/Concerning#40: refused: missing key in title
-2026-11-13 13:15:39 refill refused digitized/Concerning#46: refused: missing key in title
-2026-11-13 13:15:40 refill refused shyamsivakumar/fantasy-football-toolkit#341: refused: missing key in title
-2026-11-13 13:15:40 refill refused shyamsivakumar/fantasy-football-toolkit#342: refused: missing key in title
-2026-11-13 13:15:41 refill refused shyamsivakumar/fantasy-football-toolkit#343: refused: missing key in title
-2026-11-13 13:15:43 refill refused shyamsivakumar/strategy-replay-workbench#468: refused: blocked by open shyamsivakumar/strategy-replay-workbench#813, shyamsivakumar/strategy-replay-workbench#709
-2026-11-13 13:15:43 refill scanned 40 candidate(s), 89 left for the next refill
+2026-11-13 13:19:15 dry run: the queue is left alone
+2026-11-13 13:19:19 refill refused shyamsivakumar/fantasy-football-toolkit#184: refused: missing key in title
+2026-11-13 13:19:20 refill refused shyamsivakumar/fantasy-football-toolkit#185: refused: text blockers: shyamsivakumar/fantasy-football-toolkit#184 is still open
+2026-11-13 13:19:21 refill refused shyamsivakumar/fantasy-football-toolkit#186: refused: text blockers: shyamsivakumar/fantasy-football-toolkit#184 is still open
+2026-11-13 13:19:22 refill refused shyamsivakumar/fantasy-football-toolkit#187: refused: text blockers: shyamsivakumar/fantasy-football-toolkit#184 is still open
+2026-11-13 13:19:23 refill refused shyamsivakumar/fantasy-football-toolkit#188: refused: text blockers: shyamsivakumar/fantasy-football-toolkit#184 is still open
+2026-11-13 13:19:24 refill refused shyamsivakumar/fantasy-football-toolkit#189: refused: missing key in title
+2026-11-13 13:19:25 refill refused shyamsivakumar/fantasy-football-toolkit#190: refused: missing key in title
+2026-11-13 13:19:26 refill refused shyamsivakumar/fantasy-football-toolkit#191: refused: missing key in title
+2026-11-13 13:19:27 refill refused shyamsivakumar/fantasy-football-toolkit#192: refused: missing key in title
+2026-11-13 13:19:28 refill refused shyamsivakumar/fantasy-football-toolkit#193: refused: missing key in title
+2026-11-13 13:19:29 refill refused shyamsivakumar/fantasy-football-toolkit#194: refused: missing key in title
+2026-11-13 13:19:31 refill would start shyamsivakumar/fantasy-football-toolkit#195
+2026-11-13 13:19:32 refill refused shyamsivakumar/fantasy-football-toolkit#196: refused: missing key in title
+2026-11-13 13:19:33 refill refused shyamsivakumar/fantasy-football-toolkit#197: refused: blocked by open shyamsivakumar/fantasy-football-toolkit#195
+2026-11-13 13:19:33 refill refused shyamsivakumar/fantasy-football-toolkit#198: refused: blocked by open shyamsivakumar/fantasy-football-toolkit#197, shyamsivakumar/fantasy-football-toolkit#195
+2026-11-13 13:19:34 refill refused shyamsivakumar/fantasy-football-toolkit#199: refused: blocked by open shyamsivakumar/fantasy-football-toolkit#198, shyamsivakumar/fantasy-football-toolkit#195
+2026-11-13 13:19:35 refill refused shyamsivakumar/fantasy-football-toolkit#200: refused: blocked by open shyamsivakumar/fantasy-football-toolkit#199, shyamsivakumar/fantasy-football-toolkit#195
+2026-11-13 13:19:36 refill refused shyamsivakumar/fantasy-football-toolkit#224: refused: missing key in title
+2026-11-13 13:19:37 refill refused shyamsivakumar/fantasy-football-toolkit#225: refused: missing key in title
+2026-11-13 13:19:39 refill would start shyamsivakumar/fantasy-football-toolkit#226
+2026-11-13 13:19:40 refill refused shyamsivakumar/fantasy-football-toolkit#230: refused: missing key in title
+2026-11-13 13:19:41 refill refused shyamsivakumar/catalouge#49: refused: blocked by open shyamsivakumar/catalouge#48
+2026-11-13 13:19:42 refill would start shyamsivakumar/catalouge#50
+2026-11-13 13:19:43 refill refused shyamsivakumar/catalouge#51: refused: blocked by open shyamsivakumar/catalouge#50, shyamsivakumar/catalouge#48
+2026-11-13 13:19:44 refill refused shyamsivakumar/catalouge#52: refused: blocked by open shyamsivakumar/catalouge#48, shyamsivakumar/catalouge#50
+2026-11-13 13:19:45 refill refused shyamsivakumar/catalouge#53: refused: blocked by open shyamsivakumar/catalouge#51, shyamsivakumar/catalouge#49, shyamsivakumar/catalouge#52
+2026-11-13 13:19:45 refill refused shyamsivakumar/fantasy-football-toolkit#243: refused: missing key in title
+2026-11-13 13:19:46 refill refused shyamsivakumar/fantasy-football-toolkit#246: refused: missing key in title
+2026-11-13 13:19:48 refill would start shyamsivakumar/catalouge#78
+2026-11-13 13:19:49 refill would start shyamsivakumar/fantasy-football-toolkit#281
+2026-11-13 13:19:50 refill refused digitized/Concerning#32: refused: missing key in title
+2026-11-13 13:19:51 refill refused digitized/Concerning#37: refused: missing key in title
+2026-11-13 13:19:51 refill refused digitized/Concerning#38: refused: missing key in title
+2026-11-13 13:19:52 refill refused digitized/Concerning#39: refused: missing key in title
+2026-11-13 13:19:52 refill refused digitized/Concerning#40: refused: missing key in title
+2026-11-13 13:19:53 refill refused digitized/Concerning#46: refused: missing key in title
+2026-11-13 13:19:54 refill refused shyamsivakumar/fantasy-football-toolkit#341: refused: missing key in title
+2026-11-13 13:19:54 refill refused shyamsivakumar/fantasy-football-toolkit#342: refused: missing key in title
+2026-11-13 13:19:55 refill refused shyamsivakumar/fantasy-football-toolkit#343: refused: missing key in title
+2026-11-13 13:19:57 refill would start shyamsivakumar/strategy-replay-workbench#430
+2026-11-13 13:19:57 refill scanned 40 candidate(s); the next refill continues after shyamsivakumar/strategy-replay-workbench#430
+
+## Run 3: the queue is not empty
+
+2026-11-13 13:19:57 dry run: the queue is left alone
+2026-11-13 13:19:57 refill skipped: the queue holds 1 item(s)
+
+## Run 4: the empty queue again, inside the five minutes
+
+2026-11-13 13:19:57 dry run: the queue is left alone
+2026-11-13 13:19:57 refill skipped: throttled, the last refill was 41s ago
