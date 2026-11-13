@@ -243,6 +243,14 @@ install with `./install.sh coordinator`. Config installs to `~/.coordinator`.
 Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 
+When the queue runs dry and a slot is free, `coordq dispatch` also refills
+from the board: at most once every five minutes it starts the oldest open
+`stage:todo` issues of the repos in `tickets.json` through the `ticket` CLI,
+until the running threads and the waiting queue reach the cap. The ticket CLI
+decides whether an issue may start, and an issue it refuses is left alone for
+an hour. `coordq dispatch --dry-run` reports what a cycle would do and
+starts nothing.
+
 The pi coordinator's own files live under `coordinator/pi/` and install with
 the same command: the guard extension and its sandbox profile, the pi
 settings, the phone relay note and the `coord-pi`, `coord-ask`,

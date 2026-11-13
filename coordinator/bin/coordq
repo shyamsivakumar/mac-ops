@@ -23,6 +23,20 @@ TASK_MODELS = {
 }
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
+# The board refill. When the queue runs dry and a slot is free, the dispatcher
+# starts the oldest todo-stage issues of the configured repos through the
+# ticket CLI, so an idle board refills within minutes instead of waiting for
+# the next tick. One cycle runs at most every five minutes; an issue the
+# ticket CLI refuses is left alone for an hour before it is tried again.
+REFILL_INTERVAL = 300
+REFILL_RETRY = 3600
+REFILL_REFUSED_KEEP = 200
+# A cycle tries a bounded number of issues, so a board full of unstartable
+# issues cannot spend the GitHub rate limit on one cycle.
+REFILL_ATTEMPTS = 10
+TODO_STAGE = "stage:todo"
+TICKET_BIN = os.environ.get("COORDQ_TICKET", "ticket")
+TICKET_CONFIG = os.environ.get("COORDQ_TICKETS_JSON", "")
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
 
 
@@ -128,11 +142,12 @@ def tool_for(args):
 
 
 class Lock:
-    def __init__(self, blocking):
+    def __init__(self, blocking, name="queue.lock"):
         self.blocking = blocking
+        self.name = name
 
     def __enter__(self):
-        self.f = open(path("queue.lock"), "w")
+        self.f = open(path(self.name), "w")
         try:
             fcntl.flock(self.f, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))
         except BlockingIOError:
@@ -260,6 +275,149 @@ def cmd_start(a):
             print(f"started #{item['id']}")
 
 
+def tickets_config_path():
+    """The tickets config the refill reads: the one next to this script, else the installed one."""
+    if TICKET_CONFIG:
+        return TICKET_CONFIG
+    here = os.path.dirname(os.path.realpath(__file__))
+    candidate = os.path.join(here, "..", "config", "tickets.json")
+    return candidate if os.path.exists(candidate) else os.path.expanduser("~/.coordinator/tickets.json")
+
+
+def gh_search(args):
+    run = subprocess.run(["gh", "search", "issues"] + args, capture_output=True, text=True, timeout=40)
+    if run.returncode:
+        raise RuntimeError(f"GitHub search failed: {run.stderr.strip()[:200]}")
+    return json.loads(run.stdout)
+
+
+def search_stage(owner):
+    limit = 100
+    while True:
+        rows = gh_search(["--owner", owner, "--state", "open", "--label", TODO_STAGE,
+                          "--limit", str(limit), "--json", "repository,number,title,createdAt"])
+        if len(rows) < limit or limit >= 1000:
+            return rows
+        limit = min(limit * 2, 1000)
+
+
+def refill_candidates(config):
+    """The open todo-stage issues of the configured repos, oldest first."""
+    repos = config.get("repos") or {}
+    owners = sorted({repo.split("/")[0] for repo in repos})
+    rows = []
+    for owner in owners:
+        for row in search_stage(owner):
+            name = row["repository"]["nameWithOwner"]
+            if name in repos:
+                rows.append((row["createdAt"], name, row["number"], row["title"]))
+    rows.sort()
+    return [(name, number, title) for _, name, number, title in rows]
+
+
+def refill_state():
+    try:
+        with open(path("refill.json")) as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    state.setdefault("at", 0)
+    if not isinstance(state.get("refused"), dict):
+        state["refused"] = {}
+    return state
+
+
+def save_refill_state(state):
+    tmp = path("refill.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, path("refill.json"))
+
+
+def ticket_start(repo, number, dry_run):
+    """Start one issue through the ticket CLI. Returns (return code, message).
+
+    The ticket CLI decides whether the issue may start: it refuses an issue
+    with a missing label, an open blocker or a live thread, and the refill
+    never works around that.
+    """
+    command = [TICKET_BIN, "start", f"{repo}#{number}"]
+    if dry_run:
+        command.append("--dry-run")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return 1, "the ticket CLI timed out"
+    except OSError as e:
+        return 1, f"the ticket CLI could not run: {e}"
+    message = (result.stderr or result.stdout or "").strip()
+    return result.returncode, message.splitlines()[-1] if message else f"exit {result.returncode}"
+
+
+def refill(dry_run=False):
+    """Fill free slots from the board when the queue is empty.
+
+    The board is the list of work. One cycle starts the oldest todo-stage
+    issues through the ticket CLI until the running threads and the waiting
+    queue reach the cap. A cycle runs at most every five minutes, and an
+    issue the ticket CLI refuses is not tried again for an hour.
+    """
+    state = refill_state()
+    now = time.time()
+    if now - state["at"] < REFILL_INTERVAL:
+        return
+    config_file = tickets_config_path()
+    try:
+        with open(config_file) as f:
+            config = json.load(f)
+    except (OSError, ValueError) as e:
+        log(f"refill skipped: cannot read {config_file}: {e}")
+        return
+    try:
+        candidates = refill_candidates(config)
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
+        log(f"refill skipped: cannot read the board: {e}")
+        return
+    state["at"] = now
+    save_refill_state(state)
+    refused = state["refused"]
+    simulated = 0
+    attempts = 0
+    for repo, number, title in candidates:
+        if attempts >= REFILL_ATTEMPTS:
+            log(f"refill stopped after {attempts} attempts")
+            break
+        current = live()
+        if current is None:
+            log("refill stopped: the thread count is unreadable")
+            break
+        queued = len(load()["items"])
+        if current + queued + simulated >= cap():
+            break
+        ref = f"{repo}#{number}"
+        if now - refused.get(ref, 0) < REFILL_RETRY:
+            continue
+        attempts += 1
+        code, message = ticket_start(repo, number, dry_run)
+        if code == 0:
+            if dry_run:
+                simulated += 1
+            log(f"refill {'would start' if dry_run else 'started'} {repo}#{number} {title!r}")
+            continue
+        if code == 2:
+            refused[ref] = now
+            log(f"refill refused {repo}#{number} {title!r}: {message}")
+            continue
+        log(f"refill stopped at {repo}#{number}: {message}")
+        break
+    if len(refused) > REFILL_REFUSED_KEEP:
+        for ref in sorted(refused, key=lambda r: refused[r])[:-REFILL_REFUSED_KEEP]:
+            del refused[ref]
+    save_refill_state(state)
+
+
 def cmd_dispatch(a):
     with open(path("dispatch.last"), "w") as f:
         f.write(str(int(time.time())))
@@ -267,7 +425,19 @@ def cmd_dispatch(a):
         if lock is None:
             log("lock held by another run, skipping")
             return
-        drain()
+        if not a.dry_run:
+            drain()
+        queued = len(load()["items"])
+    if queued:
+        return
+    current = live()
+    if current is None or current >= cap():
+        return
+    with Lock(False, "refill.lock") as lock:
+        if lock is None:
+            log("refill already running, skipping")
+            return
+        refill(a.dry_run)
 
 
 def cmd_create(a):
@@ -460,7 +630,10 @@ def main():
     d.add_argument("id", type=int)
     d.set_defaults(fn=cmd_drop)
     sub.add_parser("status").set_defaults(fn=cmd_status)
-    sub.add_parser("dispatch").set_defaults(fn=cmd_dispatch)
+    d = sub.add_parser("dispatch")
+    d.add_argument("--dry-run", action="store_true",
+                   help="report what the dispatch and the board refill would do, and start nothing")
+    d.set_defaults(fn=cmd_dispatch)
     g = sub.add_parser("gatekeep")
     g.add_argument("--dry-run", action="store_true")
     g.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))
