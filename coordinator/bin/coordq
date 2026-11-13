@@ -267,7 +267,10 @@ def cmd_start(a):
         # a second gate for the same head.
         request_id = str(args.get("clientRequestId") or "")
         if request_id.startswith("gate:"):
-            queue.setdefault("gatedHeads", {})[request_id] = item["id"]
+            heads = queue.setdefault("gatedHeads", {})
+            if request_id in heads:
+                die(f"refused: a gate for this head is already recorded as coordq #{heads[request_id]}")
+            heads[request_id] = item["id"]
         save(queue)
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
