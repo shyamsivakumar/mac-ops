@@ -9,6 +9,7 @@ the exported mirror rules for real.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,23 @@ console.log(JSON.stringify(cases.map(([p, r]) => mirrorText(p, r))));
 """
 
 DESKTOP, PHONE, NOOP_TICK, TICK, NO_REPLY = range(5)
+
+STUB_HC = """#!/bin/sh
+# A stub hc for the send tests. $HC_STUB_MODE says what the core reports.
+if [ "$1" = "ls" ]; then
+  case "$HC_STUB_MODE" in
+    down) echo '{"terminals":[]}' ;;
+    other) echo '{"terminals":[{"address":"t1","name":"some-other-terminal","state":"live"}]}' ;;
+    *) echo '{"terminals":[{"address":"t9","name":"pi-coord-phone","state":"live"}]}' ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "send" ]; then
+  printf '%s\\n' "$2" > "$HC_STUB_SENT"
+  exit 0
+fi
+exit 1
+"""
 
 
 class TestCoordinatorMirrorWiring(unittest.TestCase):
@@ -88,6 +106,53 @@ class TestCoordinatorMirrorRules(unittest.TestCase):
 
     def test_a_turn_without_a_reply_is_not_mirrored(self):
         self.assertEqual(self.results[NO_REPLY], "")
+
+
+@unittest.skipIf(BUN is None, "bun is not installed")
+class TestCoordinatorMirrorSend(unittest.TestCase):
+    """The send path, against a stub hc, so no real terminal is written to."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.stub = Path(self.tmp.name) / "hc"
+        self.stub.write_text(STUB_HC)
+        self.stub.chmod(0o755)
+        self.sent = Path(self.tmp.name) / "sent"
+
+    def send(self, mode, text="Mirror: hello | world"):
+        script = Path(self.tmp.name) / "send.ts"
+        script.write_text(
+            'import { sendMirror } from "%s";\n'
+            'console.log(await sendMirror(process.argv[2]));\n' % EXTENSION
+        )
+        env = {
+            **os.environ,
+            "COORD_HC_BIN": str(self.stub),
+            "HC_STUB_MODE": mode,
+            "HC_STUB_SENT": str(self.sent),
+        }
+        out = subprocess.run(
+            [BUN, "run", str(script), text],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+            env=env,
+        )
+        return out.stdout.strip().splitlines()[-1]
+
+    def test_the_mirror_goes_to_the_named_relay_terminal(self):
+        self.assertEqual(self.send("live"), "true")
+        self.assertEqual(self.sent.read_text().strip(), "t9")
+
+    def test_a_dead_relay_is_skipped_without_an_error(self):
+        self.assertEqual(self.send("down"), "false")
+        self.assertFalse(self.sent.exists())
+
+    def test_no_other_terminal_is_ever_written_to(self):
+        self.assertEqual(self.send("other"), "false")
+        self.assertFalse(self.sent.exists())
 
 
 if __name__ == "__main__":
