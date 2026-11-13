@@ -16,14 +16,20 @@ pull requests.
   - The allow list is the board config (`tickets.json`), the same file the
     ticket CLI reads. The Ascend repositories are not in it, and no Ascend
     rule is written here.
-  - A pull request that a board ticket names (`Refs #n`, `Fixes #n`,
-    `Closes #n` or `Resolves #n` in the body or title, or the repository key
-    and number in the branch name) is part of that ticket's record. A pull
-    request no ticket names is a record of its own. One work item is one
-    record, so the shift cannot pick the same item twice.
-  - The command writes nothing, keeps no list of its own and holds the
+  - A pull request that a board ticket names is part of that ticket's
+    record. A pull request no board ticket names is a record of its own. One
+    work item is one record, so the shift cannot pick the same item twice.
+    A keyword reference (`Refs #n`, `Fixes #n`, `Closes #n`, `Resolves #n`
+    in the body or title) names a GitHub issue number. A branch name
+    carries a ticket key (`mo-208`), whose number is a different counter,
+    so a branch is looked up by key and never by issue number.
+  - The command writes no record, keeps no list of its own and holds the
     records in memory for the run. `overnight intake` without `--dry-run`
     refuses with a clear line, because this part has no write path.
+  - A repository whose pull requests cannot be read, or whose pull request
+    list is cut off at the limit, shows `ERR` in its cells, and the total
+    reads UNVERIFIED. A board ticket in a repository the allow list does
+    not name is counted and marked "not allowed".
 - `install_coordinator.py`: the installer copies the command to
   `~/.local/bin/overnight`, next to `ticket`, `coordq` and `coord-tick`.
 - `coordinator/overnight/README.md`: the module contract now names the
@@ -73,22 +79,25 @@ behaviour. No existing test or check was weakened.
 
 - **When**: revision 1.
 - **The decision**: A ticket with an open pull request is one record that
-  carries the pull request. A pull request that no board ticket names is a
+  carries the pull requests. A pull request that no board ticket names is a
   record of its own.
 - **The gap**: The board and the pull requests are two lists, and a naive
   read would produce two records for one piece of work.
 - **The reach**: The later parts order the work (T3c) and the tick works it
   (T5). With one record per item, an item with an open pull request cannot
   be started twice, and the "pull requests already open" ordering rule
-  reads the record's `pr` field.
-- **Verdict**: sound.
-- **Confidence**: medium. The link is a keyword in the body or title, or
-  the repository key and number in the branch name. A pull request that
-  names its ticket in some other way stays a record of its own, which is
-  the safe direction: it shows up for a human to look at.
+  reads the record's `prs` field.
+- **Verdict**: sound, after the reviewer round. The first version linked a
+  branch name by its number as a GitHub issue number, which was wrong: the
+  board key number and the issue number are different counters. A branch is
+  now looked up by board key.
+- **Confidence**: high for the rule, medium for the link. The link is a
+  keyword in the body or title, or the repository key and number in the
+  branch name. A pull request that names its ticket in some other way, or
+  names a ticket the board does not show, stays a record of its own, which
+  is the safe direction: it shows up for a human to look at.
 
 ### 4. A stale board is reported, not hidden
-
 - **When**: revision 1.
 - **The decision**: `ticket list --fresh --json` can answer with a stale
   cache when GitHub is unreachable. Intake prints that on stderr and says
@@ -131,24 +140,79 @@ behaviour. No existing test or check was weakened.
 
 1. **The real command.** `overnight intake --dry-run` on this Mac's board
    printed the record count per repository for all fifteen allowed
-   repositories (see the transcript in this file's proof log). It read
-   `ticket list --fresh --json` and `gh pr list` per repository, wrote
-   nothing, and changed no queue.
-2. **The link.** On the strategy-replay-workbench board, six pull requests
-   named a board ticket and became part of that ticket's record; the pull
-   requests that named nothing stayed records of their own.
-3. **The installer.** `python3 install_coordinator.py --dry-run` lists
+   repositories, with the command and its exit code at the top of
+   `evidence/MO-208/intake-dry-run.log`. It read `ticket list --fresh
+   --json` and `gh pr list` per repository, wrote no record, changed no
+   queue, and left the ticket CLI's own cache as the only file it touched.
+2. **The link, after the reviewer's fix.** Four strategy-replay-workbench
+   pull requests are part of a board ticket's record: #855 to SRW-1038
+   (issue #853), #976 to SRW-1100 (#975), #895 to SRW-685 (#468) and #878 to
+   SRW-1016 (#843). A pull request that names a ticket the board does not
+   show (for example #987, whose body says "Refs #940" while #940 has left
+   the backlog and todo stages) stays a record of its own, and so does one
+   that names nothing.
+3. **The branch key is a key, not an issue number.** The pull request
+   `work/ffbt-9-agentic-ci` (#412) has a branch that carries the ticket key
+   FFBT-9. It stays a record of its own, because no board ticket has that
+   key. Before the fix it resolved to issue #9, which is a different
+   ticket.
+4. **The installer.** `python3 install_coordinator.py --dry-run` lists
    `~/.local/bin/overnight` and the `.overnight/README.md` copy as the
    files it would write, and creates no folder. The real install wrote the
    command to `~/.local/bin/overnight`, and a second install wrote 0 files.
-4. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed. The full
+5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed. The full
    suite, `python3 -m unittest discover -s tests -t .`, through
    `~/.local/bin/heavy` ran 116 tests and passed.
 
 ## The reviewer round
 
-One in-session reviewer round (Opus) read `git diff origin/main...HEAD` and
-returned `VERDICT: PASS`. What was done with its findings is recorded here.
+One in-session reviewer round (Opus 5.5) read `git diff origin/main...HEAD`
+and returned `VERDICT: PASS` with one major finding, five minor findings
+and six nits. What was done with them:
+
+1. **Major, fixed.** The branch fallback took the number from a ticket key
+   and looked it up as a GitHub issue number. The board key number and the
+   issue number are different counters (MO-208 is issue #176, SRW-1100 is
+   issue #975), so the branch is now looked up by key in the board's own
+   keys, and never by issue number. The keyword path still looks up the
+   issue number, which is what a keyword names. The docstring and decision
+   3 now say that the branch is the fallback and the keyword the first
+   signal.
+2. **Minor, fixed.** A repository whose pull requests cannot be read, or
+   whose pull request list reaches the limit, now shows `ERR` in its pull
+   request, linked and record cells, the total reads UNVERIFIED, and the
+   reason is on stderr. Before, stdout showed zero for that repository.
+3. **Minor, fixed.** The pull request limit is now detected: a repository
+   that reaches `PR_LIMIT` is reported, its counts are not claimed, and the
+   total reads UNVERIFIED.
+4. **Minor, fixed.** The whole intake now runs inside one deadline
+   (`--deadline`, 540 seconds by default), and every command gets what is
+   left of it. The worst case was 300 seconds plus 15 times 60 seconds,
+   which is past the ten-minute turn cap.
+5. **Minor, fixed.** A board ticket in a repository the allow list does not
+   name is counted and printed, marked "not allowed", so the printed total
+   and the board count cannot disagree silently. This happens when the
+   module's config and the ticket CLI's config differ.
+6. **Minor, fixed.** The proof claimed six linked pull requests. It is
+   four, and the proof now says four and explains the off-board case.
+7. **Minor, fixed.** This section claimed a verdict before the review had
+   run. It now records what the review said and what came of it.
+8. **Nit, fixed.** The dead `raise AssertionError("unreachable")` lines
+   after every `die()` are gone; `die()` is `NoReturn`. The
+   `except SystemExit` around the pull request reads is now a `RepoError`
+   that names the repository.
+9. **Nit, fixed.** The README and the module docstring said "writes
+   nothing". They now say the ticket CLI refreshes its own cache when it
+   reads the board, and that the cache is the ticket CLI's, not a queue of
+   the shift's.
+10. **Nit, fixed.** A ticket record now carries a list of pull requests
+    (`prs`), so two pull requests that name the same ticket both sit on
+    that ticket's record instead of one of them standing alone.
+11. **Nit, fixed.** The proof log starts with the command and its exit
+    code, as the spec's evidence rule asks.
+12. **Nit, noted.** The branch build is installed on the live Mac. The
+    command only reads, and the rollback note already says the installed
+    file can be removed by hand.
 
 ## After the merge
 
@@ -166,6 +230,11 @@ backup transaction; removing it by hand is safe.
 ## Known gap, out of scope here
 
 `gh pr list` is asked for at most 100 open pull requests per repository. A
-repository with more open pull requests than that would be under-counted,
-and the count would not say so. No repository on the board is close to
-that today.
+repository with more open pull requests than that has its counts reported
+as UNVERIFIED rather than counted, so the shift never trusts a short
+count. No repository on the board is close to that today.
+
+The linking is a keyword in the body or title, or the repository key and
+number in the branch name. A pull request that names its ticket in some
+other way stays a record of its own. The later parts (T3b, T3c) may tighten
+this once they decide what a work item is.
