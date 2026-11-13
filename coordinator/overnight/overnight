@@ -52,6 +52,11 @@ def die(message: str, code: int = 1) -> NoReturn:
     raise SystemExit(code)
 
 
+def plural(count: int, one: str, many: str) -> str:
+    """Return the word that fits the count."""
+    return one if count == 1 else many
+
+
 def config_path() -> Path:
     """Return the coordinator's board config.
 
@@ -165,20 +170,32 @@ def read_pull_requests(repo: str, deadline: float) -> tuple[list[dict], bool]:
 
 def linked_ticket(
     row: dict, by_number: dict[int, dict], by_key: dict[str, dict]
-) -> dict | None:
-    """Return the board ticket a pull request names, if it names one.
+) -> tuple[dict | None, str]:
+    """Return the board ticket a pull request names, and how it named it.
 
     A keyword reference names a GitHub issue number. A branch name carries
     a ticket key, whose number is a different counter, so the branch is
-    looked up by key and never by issue number."""
+    looked up by key and never by issue number.
+
+    The keyword is the stronger signal, so it decides when it names a
+    ticket the board shows. When it names one the board does not show, the
+    branch is still read: a pull request whose body points at a ticket that
+    has left the board, and whose branch carries the key of a ticket that
+    is on it, is that ticket's work. A pull request that names neither is a
+    record of its own."""
     text = f"{row.get('title', '')}\n{row.get('body', '')}"
     match = TICKET_REF.search(text)
     if match:
-        return by_number.get(int(match.group(1)))
+        target = by_number.get(int(match.group(1)))
+        if target is not None:
+            return target, f"refs #{match.group(1)}"
     match = BRANCH_KEY.search(row.get("headRefName") or "")
     if match:
-        return by_key.get(f"{match.group(1)}-{match.group(2)}".upper())
-    return None
+        key = f"{match.group(1)}-{match.group(2)}".upper()
+        target = by_key.get(key)
+        if target is not None:
+            return target, f"branch {key}"
+    return None, ""
 
 
 def build_records(
@@ -196,10 +213,10 @@ def build_records(
             {
                 "kind": "ticket",
                 "repo": repo,
-                "key": issue.get("key", ""),
+                "key": issue.get("key") or "",
                 "number": issue.get("number"),
-                "title": issue.get("title", ""),
-                "url": issue.get("url", ""),
+                "title": issue.get("title") or "",
+                "url": issue.get("url") or "",
                 "stage": issue.get("stage"),
                 "priority": issue.get("priority"),
                 "type": issue.get("type"),
@@ -230,8 +247,9 @@ def build_records(
                 "baseRefName": row.get("baseRefName", ""),
                 "updatedAt": row.get("updatedAt"),
             }
-            target = linked_ticket(row, by_number, by_key)
+            target, signal = linked_ticket(row, by_number, by_key)
             if target is not None:
+                summary["linkedBy"] = signal
                 target["prs"].append(summary)
                 continue
             bucket.append(
@@ -239,8 +257,8 @@ def build_records(
                     "kind": "pr",
                     "repo": repo,
                     "number": row.get("number"),
-                    "title": row.get("title", ""),
-                    "url": row.get("url", ""),
+                    "title": row.get("title") or "",
+                    "url": row.get("url") or "",
                     "isDraft": bool(row.get("isDraft")),
                     "headRefName": row.get("headRefName", ""),
                     "updatedAt": row.get("updatedAt"),
@@ -289,6 +307,8 @@ def cmd_intake(args: argparse.Namespace) -> int:
     print(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
     total = 0
     clean = 0
+    outside_total = 0
+    outside_repos = 0
     for repo, _key in repos:
         bucket = records.get(repo, [])
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
@@ -305,7 +325,8 @@ def cmd_intake(args: argparse.Namespace) -> int:
     for repo in outside:
         bucket = records[repo]
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
-        total += len(bucket)
+        outside_total += len(bucket)
+        outside_repos += 1
         print(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
     print()
     if unread:
@@ -314,8 +335,20 @@ def cmd_intake(args: argparse.Namespace) -> int:
             f"that read cleanly; {len(unread)} repositories could not be read "
             f"fully: " + ", ".join(sorted(unread))
         )
+        if outside_repos:
+            print(
+                f"{outside_total} more records in {outside_repos} "
+                f"{plural(outside_repos, 'repository', 'repositories')}, "
+                f"outside the allow list."
+            )
         return 1
     print(f"Total: {total} records across {clean} repositories")
+    if outside_repos:
+        print(
+            f"{outside_total} more records in {outside_repos} "
+            f"{plural(outside_repos, 'repository', 'repositories')}, "
+            f"outside the allow list, counted above and marked 'not allowed'."
+        )
     print(
         "A pull request that a board ticket names is part of that ticket's "
         "record, so it adds no record of its own. A pull request that names "
