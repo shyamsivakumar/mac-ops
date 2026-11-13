@@ -55,6 +55,34 @@ const readJson = (path) => readFile(path, "utf8").then(JSON.parse).catch(() => n
 
 const usageColor = (t, used) => (used > 80 ? t.blocked : used >= 50 ? t.working : t.done);
 
+function srwStatus(srw) {
+  if (!srw) return { level: "blocked", detail: "unreachable", tip: "GET /health failed" };
+  const discord = srw.signalSource?.discord;
+  const poll = srw.telegram?.pollHealth;
+  const tip = [
+    `heartbeat ${srw.heartbeat}`,
+    `session ${srw.marketSession}`,
+    discord ? `discord ${discord.state}` : `telegram ${poll?.state}`,
+    discord && `queue ${discord.queueDepth}`,
+    discord?.lastError && `last error ${discord.lastError}`,
+    `jev ${srw.jev?.status}`,
+  ].filter(Boolean).join(" · ");
+  if (!srw.ok) return { level: "blocked", detail: "not ok", tip };
+  if (srw.heartbeat !== "running") return { level: "blocked", detail: `heartbeat ${srw.heartbeat}`, tip };
+  if (!discord) {
+    if (!srw.ready || poll?.state !== "ok") return { level: "working", detail: `poll ${String(poll?.state).replaceAll("_", " ")}`, tip };
+    return { level: "done", detail: `poll ${Math.round(poll.gapMs / 1000)}s`, tip };
+  }
+  const problem = !srw.ready ? "not ready"
+    : discord.state !== "ready" ? `discord ${String(discord.state).replaceAll("_", " ")}`
+    : !discord.connected ? "discord disconnected"
+    : discord.inputBlocked ? "discord input blocked"
+    : discord.queueOverflow ? "discord queue overflow"
+    : discord.lastError ? "discord error"
+    : null;
+  return problem ? { level: "working", detail: problem, tip } : { level: "done", detail: "discord ready", tip };
+}
+
 function clockAt(ms) {
   const d = new Date(ms);
   const time = d.toTimeString().slice(0, 5);
@@ -270,11 +298,8 @@ export default class Ops extends View {
     const t3El = t3Left > T3_WARN ? null : plain("T3", t3Left <= 0 ? `login expired ${t3Date}` : `login expires ${t3Date}`, t3Left <= 0 ? t.blocked : t.working, "run t3mcp login");
 
     const srw = this.srw;
-    const poll = srw?.telegram?.pollHealth;
-    const srwOk = srw?.ok && srw.ready && poll?.state === "ok";
-    const srwColor = !srw || !srw.ok ? t.blocked : srwOk ? t.done : t.working;
-    const srwDetail = !srw ? "unreachable" : !srw.ok ? "not ok" : srw.heartbeat !== "running" ? srw.heartbeat : poll?.state !== "ok" ? `poll ${poll.state.replaceAll("_", " ")}` : `poll ${Math.round(poll.gapMs / 1000)}s`;
-    const srwTip = srw ? `heartbeat ${srw.heartbeat} · session ${srw.marketSession} · telegram ${poll?.state} · discord ${srw.signalSource?.discord?.state} · jev ${srw.jev?.status}` : "GET /health failed";
+    const { level: srwLevel, detail: srwDetail, tip: srwTip } = srwStatus(srw);
+    const srwColor = t[srwLevel];
 
     const h = this.heavy;
     const running = h?.jobs.filter((j) => j.state === "running").length ?? 0;
