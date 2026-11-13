@@ -23,7 +23,9 @@ The brief, with every value filled in, and the thread title
 `<KEY>-<n> review #<pr> <sha8>`. The reviewer is Claude Opus 5.5
 (`claudeAgent` / `claude-opus-5-5`), or Sol (`codex` / `gpt-6.1-sol`) when
 the builder ran a Claude model. A builder whose model cannot be read leaves
-the gate on Opus.
+the gate on Opus, unless the builder thread is still running: then the gate
+takes Sol, because a live builder may be Claude and two Claude threads must
+not run at once.
 
 The brief asks the gate to read the diff only, to confirm the check of that
 exact head (`srw/agent-check` success, or the pull request's
