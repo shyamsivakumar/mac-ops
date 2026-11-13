@@ -22,16 +22,19 @@ Run: `ticket:shyamsivakumar/mac-ops#153:a3`. Refs #153.
 - Verdict: sound. This keeps the requested change bounded.
 - Confidence: high.
 
+## Final coordinator decision
+
+- When: after Opus rejected ad605711 for a second redirection escaping the truncation temp exception.
+- The decision: Drop stated change 2 entirely and restore main's truncation rule byte for byte. For example, both `: > /tmp/a` and `: > /tmp/a > ~/x` block. The coordinator uses its write tool to create temp files instead. Protected-path bash checks remain removed, and the quoted cat heredoc secret exception remains.
+- The gap: None. This is the coordinator's explicit scope revision, superseding both earlier truncation fixes.
+- The reach: Shell truncation has no temp exception. Future work must not infer one from the heredoc output exception.
+- Verdict: sound. Restoring the existing rule avoids reasoning about multiple shell redirections.
+- Confidence: high.
+
 ## Verification
 
-The temporary proof imports both exported checkBash implementations. All 26 must-block cases block on both; all six must-allow cases pass on revision 3. No credential files are read. The sandbox touch probe fails with Operation not permitted. The PR body contains the one-off proof and check results. Installation remains a post-merge action; Shyam must then run /reload.
+The entire DENY array is byte-identical to origin/main. The one-off temporary proof imports both exported checkBash implementations: all 28 must-block cases block on both, and all five must-allow cases pass on the revised guard. Temp truncation moved from must-allow to must-block; the second-redirection reproduction is also must-block. No credential files were read. The PR contains the script and output. Fast check runs on the final head. Sandbox unchanged; the earlier sandbox write probe failed with Operation not permitted.
 
-## Reviewer round
+## Review history and remaining gate
 
-One Luna Max read-only round found that a temp prefix could hide a parent-directory escape. Output paths are now normalized before granting the heredoc exception. Focused regression probes verify that /tmp/../Desktop/out does not qualify, and that an early delimiter followed by a secret read still blocks.
-
-The reviewer also identified deployment wrappers already allowed by main (for example exec railway up). The brief requires the existing deployment DENY rule unchanged, so this pre-existing limitation remains for coordinator review. The reviewer returned FAIL on the pre-fix tree; no second reviewer round was run. The final correction is verified by deterministic probes.
-
-## Opus gate correction
-
-The Opus gate on a20be01e found that truncation still accepted noclobber override syntax and temp paths containing parent traversal. The earlier traversal correction applied only to heredoc outputs. The truncation loop now recognizes `>|` and resolves its target, including TMPDIR expansion, before checking the temp directory boundary. The proof includes both requested new cases and all three concrete gate reproductions. All 26 must-block cases block on main and the corrected guard; all six must-allow cases pass. No other guard rules changed.
+One Luna reviewer round found a heredoc output traversal issue, fixed by normalizing its target before granting the secret prose exception. Two subsequent coordinator Opus gates rejected truncation exceptions. Those exceptions are now removed entirely. The pre-existing deployment wrapper limitations remain unchanged, as required. Coordinator Opus re-gate remains pending. After merge rerun the installer, then ask Shyam to run /reload.

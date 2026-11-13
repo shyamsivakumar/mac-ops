@@ -47,7 +47,7 @@ const DENY: Array<[RegExp, string]> = [
   [/\bgh\s+api\b(?=[^;&|]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--method\s+(?:POST|PUT|PATCH|DELETE)|\s-[fF]\s|--(?:raw-)?field|--input))/i, "gh api is read-only here (use gh issue for ticket edits)"],
   [/(?:^|[;&|(`'"]\s*|\bnpx\s+|\bbunx\s+|\$\(\s*)(?:vercel|railway|wrangler|flyctl|fly|netlify|heroku|terraform|pulumi|alchemy)\b/, "deploys and infra go through T3 threads under an approval"],
   [/\brm\s+(?:-\w*[rR]|--recursive)|\bfind\b[^|;&]*\s-(?:delete|exec\s+rm)\b|\bsrm\b|\bshred\b|\bunlink\b|\brmdir\b|\bos\.(?:remove|unlink|rmdir)\b|\bshutil\.rmtree\b|\bfs\.(?:rm|unlink)/, "deletion needs Shyam's OK"],
-  [/\btruncate\b|\bcp\s+\/dev\/null\b/, "truncating files needs Shyam's OK"],
+  [/\btruncate\b|\bcp\s+\/dev\/null\b|:\s*>\s*\S/, "truncating files needs Shyam's OK"],
   [/\blaunchctl\s+(?:bootout|unload|remove|disable|kill)\b/, "stopping launchd jobs needs Shyam's OK"],
   [/\bemp-hub\b|\bemp\s+call\b/, "Empryo is gone; use coordq/t3mcp"],
   [/\bsecurity\s+(?:find|dump|export)-|\bprintenv\b|(?:^|[;&|]\s*)env\s*(?:$|[|;&])|\bset\s*\|/, "would print secrets"],
@@ -91,10 +91,6 @@ function checkBash(cmd: string): string | undefined {
     const lines = cmd.trimEnd().split("\n");
     const end = lines.findIndex((line, i) => i > 0 && line === delimiter);
     if (end === lines.length - 1 && (TEMP.test(resolvedTarget) || resolvedTarget.startsWith(COORD + "/"))) secretCmd = lines[0];
-  }
-  for (const m of cmd.matchAll(/:\s*>\|?\s*(\S+)/g)) {
-    const target = abs(m[1].replace(/^\$(?:TMPDIR|\{TMPDIR\})\//, (process.env.TMPDIR || "/tmp") + "/"), COORD);
-    if (!TEMP.test(target)) return "truncating files needs Shyam's OK";
   }
   if (SECRET_PATH.test(secretCmd) && !/^\s*ls\b/.test(cmd)) return "touches a secret file (.env, auth.json, keys, T3 settings)";
   return undefined;
