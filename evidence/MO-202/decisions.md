@@ -141,9 +141,10 @@ kept
   reader following them would have changed the wrong code.
 - **The reach**: A reader now sees which of Moonmux's ideas the live tree
   already has (the in-app on-screen suppression, the helper rule for the
-  parent's status, the alert jump) and which it still lacks (`error` as a
-  need, a "seen" memory, time-in-state per agent, an alert for a new
-  `blocked` inside `need`, and the agents the user started by hand).
+  parent's status, which is partly ours, the alert jump) and which it still
+  lacks (a helper's `error` as a need, a "seen" memory, time-in-state per
+  agent, an alert for a new `blocked` inside `need`, and the agents the user
+  started by hand).
 - **Verdict**: sound.
 - **Confidence**: high.
 
@@ -341,6 +342,19 @@ longer implies that Moonmux turns any agent's `error` into a need (at
 `app/mods/sidebar/main.luau:76-79`, and `error` is in neither `LOUDNESS`
 nor `SECTIONS`, `:40-42`), the em dash in that sentence is gone, and the
 third-round list describes the third round's work again.
+
+### The run-a3 sixth round
+
+A sixth in-session Opus 5.5 round confirmed the fifth round's fixes and
+every cross-reference, and returned `VERDICT: FAIL` on one table cell that
+still made the claim the fifth round removed from the short answer, plus
+one smaller point. Both are fixed, and each is listed in the evidence file
+under "The run-a3 sixth round": Rust row 15's detection cell now says that
+a helper that errored counts as needing you and lifts its parent
+(`app/mods/sidebar/main.luau:78`, `:183`), while any other agent's `error`
+is filed under Idle (`LOUDNESS` has no `error`, `:40` and `:181`, and the
+priority view files it under `idle`, `:336`); and decision 6 now names a
+helper's `error` as a need and marks the helper rule as partly ours.
 
 ## Known limits
 
