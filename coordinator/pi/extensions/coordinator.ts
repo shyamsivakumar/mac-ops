@@ -76,17 +76,129 @@ function checkClobber(cmd: string): string | undefined {
   return undefined;
 }
 
+type ShellToken = { value: string; op?: boolean };
+
+function shellSegments(input: string): ShellToken[][] {
+  const segments: ShellToken[][] = [];
+  let tokens: ShellToken[] = [], word = "", active = false;
+  let i = 0, quote = "";
+  const heredocs: Array<{ end: string; literal: boolean; tabs: boolean }> = [];
+  const flush = () => { if (active) tokens.push({ value: word }); word = ""; active = false; };
+  const end = () => { flush(); if (tokens.length) segments.push(tokens); tokens = []; };
+  function substitution(backtick: boolean) {
+    i += backtick ? 1 : 2;
+    const start = i;
+    let depth = 1, q = "";
+    for (; i < input.length; i++) {
+      const c = input[i];
+      if (c === "\\") { i++; continue; }
+      if (backtick && c === "`") break;
+      if (c === "'" && q !== '"') { q = q ? "" : "'"; continue; }
+      if (c === '"' && q !== "'") { q = q ? "" : '"'; continue; }
+      if (!backtick && q !== "'") {
+        if (c === "(") depth++;
+        if (c === ")") { depth--; if (depth === 0) break; }
+      }
+    }
+    segments.push(...shellSegments(input.slice(start, i)));
+    i++;
+  }
+  while (i < input.length) {
+    const c = input[i];
+    if (c === "\\" && quote !== "'") { active = true; word += input[i + 1] || ""; i += 2; continue; }
+    if (quote !== "'" && (input.startsWith("$(", i) || c === "`")) { active = true; substitution(c === "`"); continue; }
+    if (c === "'" || c === '"') {
+      if (!quote) { quote = c; active = true; i++; continue; }
+      if (quote === c) { quote = ""; i++; continue; }
+    }
+    if (quote) { word += c; i++; continue; }
+    if (c === "#" && !active) { while (i < input.length && input[i] !== "\n") i++; continue; }
+    if (input.startsWith("<<", i) && !input.startsWith("<<<", i)) {
+      flush(); i += 2;
+      const tabs = input[i] === "-"; if (tabs) i++;
+      while (/[ \t]/.test(input[i] || "") && i < input.length) i++;
+      let delimiter = "", q = "", literal = false;
+      while (i < input.length) {
+        const d = input[i];
+        if (!q && /[\s;&|<>]/.test(d)) break;
+        if (d === "\\") { literal = true; delimiter += input[++i] || ""; i++; continue; }
+        if (d === "'" || d === '"') {
+          if (!q) { literal = true; q = d; i++; continue; }
+          if (q === d) { q = ""; i++; continue; }
+        }
+        delimiter += d; i++;
+      }
+      heredocs.push({ end: delimiter, literal, tabs }); continue;
+    }
+    if (/\s/.test(c)) {
+      flush(); i++;
+      if (c === "\n") {
+        end();
+        for (const h of heredocs.splice(0)) {
+          let body = "";
+          while (i < input.length) {
+            const next = input.indexOf("\n", i), stop = next < 0 ? input.length : next;
+            const line = input.slice(i, stop); i = stop + 1;
+            if ((h.tabs ? line.replace(/^\t+/, "") : line) === h.end) break;
+            body += line + "\n";
+          }
+          if (!h.literal) {
+            for (let j = 0; j < body.length; j++) {
+              if (body[j] === "\\") { j++; continue; }
+              if (body.startsWith("$(", j) || body[j] === "`") {
+                const saved = input, savedI = i;
+                input = body; i = j; substitution(body[j] === "`"); j = i - 1;
+                input = saved; i = savedI;
+              }
+            }
+          }
+        }
+      }
+      continue;
+    }
+    if (/[;&|()<>]/.test(c)) {
+      flush();
+      if (c === ">" || c === "<") {
+        let op = c; i++;
+        if (input[i] === c || input[i] === "|") op += input[i++];
+        tokens.push({ value: op, op: true });
+      } else { end(); i++; }
+      continue;
+    }
+    active = true; word += c; i++;
+  }
+  end(); return segments;
+}
+
 function checkBash(cmd: string): string | undefined {
-  for (const [re, why] of DENY) if (re.test(cmd)) return why;
-  const rmWhy = checkRm(cmd);
-  if (rmWhy) return rmWhy;
-  const clob = checkClobber(cmd);
-  if (clob) return clob;
-  if (SECRET_PATH.test(cmd) && !/^\s*ls\b/.test(cmd)) return "touches a secret file (.env, auth.json, keys, T3 settings)";
-  if (PROTECTED.test(cmd) && MUTATING.test(cmd)) return "writes into a repo, a T3 worktree or the guard; send the change to a T3 thread";
-  if (/\bcd\s+["']?/.test(cmd)) {
-    const m = cmd.match(/\bcd\s+["']?([^\s'";&|]+)/);
-    if (m && PROTECTED.test(m[1]) && MUTATING.test(cmd)) return "writes inside a repo or T3 worktree; send the change to a T3 thread";
+  let protectedCwd = false;
+  for (const segment of shellSegments(cmd)) {
+    const words = segment.filter(t => !t.op).map(t => t.value);
+    let start = 0;
+    while (start < words.length) {
+      const w = words[start];
+      if (/^[A-Za-z_][\w]*=/.test(w) || /^(env|command|xargs)$/.test(w)) { start++; continue; }
+      if (w === "timeout") { start += 2; continue; }
+      break;
+    }
+    const args = words.slice(start), command = args[0] || "";
+    const text = args.join(" ");
+    for (const [re, why] of DENY) {
+      const match = re.exec(text);
+      if (match && match.index === 0) return why;
+    }
+    if (command === "git" && DENY[2][0].test(text)) return DENY[2][1];
+    const rmWhy = checkRm(text); if (rmWhy) return rmWhy;
+    const clob = checkClobber(segment.map(t => t.op ? t.value : JSON.stringify(t.value)).join(" "));
+    if (clob) return clob;
+    if (/^(cat|less|head|tail|cp|jq|grep|base64|open|source|\.)$/.test(command)
+        && args.slice(1).some(a => SECRET_PATH.test(a))) return "touches a secret file (.env, auth.json, keys, T3 settings)";
+    if (command === "cd") protectedCwd = PROTECTED.test(args[1] || "");
+    const mutation = /^(cp|mv|touch|mkdir|ln|install|rsync|chmod|chown|patch|truncate|tee)$/.test(command)
+      || /^(sed|perl)$/.test(command) && args.some(a => /^-\w*i/.test(a));
+    const targets = segment.filter((t, n) => n > 0 && segment[n - 1].op && /^>/.test(segment[n - 1].value));
+    if (targets.some(t => PROTECTED.test(t.value)) || mutation && (protectedCwd || args.slice(1).some(a => PROTECTED.test(a))))
+      return "writes into a repo, a T3 worktree or the guard; send the change to a T3 thread";
   }
   return undefined;
 }
