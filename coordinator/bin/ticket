@@ -23,6 +23,16 @@ HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 DECISIONS_HEADING = "## Coordinator decisions (override the body)"
 RUN_ID = re.compile(r"ticket:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+:a\d+")
+TEXT_TRIGGERS = ("only after", "build only after", "before building")
+TEXT_KEYWORDS = ("review", "approval", "verdict")
+VERDICT_PASS = "VERDICT: PASS"
+REPO_REF = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
+BARE_REF = re.compile(r"(?<![\w/#])#(\d+)\b")
+COMMENT_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/\d+#(issuecomment-\d+)")
+SECTION_NAME = "Blocked by"
+REF_STATE = {}
+KEY_ISSUE = {}
+COMMENT_TEXT = {}
 RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
 RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
 SHYAM = re.compile(r"\bshyam\b", re.I)
@@ -384,6 +394,172 @@ def blockers_of(issue):
     return [{"repo": blocker_repo(n), "number": n["number"], "title": n["title"], "url": n["url"], "state": n["state"]} for n in blocked["nodes"]]
 
 
+def body_section(body, name):
+    """The text of a `## <name>` section, up to the next heading of the same level."""
+    lines = body.splitlines()
+    for i, line in enumerate(lines):
+        match = HEADING.match(line)
+        if not match or match.group(2).strip().rstrip(":").strip().lower() != name.lower():
+            continue
+        level = len(match.group(1))
+        end = len(lines)
+        for j in range(i + 1, len(lines)):
+            head = HEADING.match(lines[j])
+            if head and len(head.group(1)) <= level:
+                end = j
+                break
+        return "\n".join(lines[i + 1:end]).strip()
+    return None
+
+
+def body_sentences(body):
+    """The body as plain sentences, without headings or fenced code."""
+    text = re.sub(r"```.*?```", " ", body, flags=re.S)
+    text = re.sub(r"(?m)^\s*#{1,6}\s+.*$", " ", text)
+    parts = re.split(r"(?<=[.!?])\s+|\n\s*\n", text)
+    return [" ".join(part.split()) for part in parts if part.strip()]
+
+
+def requires_approval(sentence):
+    """True when a sentence asks for a review or an approval before the build."""
+    low = sentence.lower()
+    if not any(trigger in low for trigger in TEXT_TRIGGERS):
+        return False
+    return any(keyword in low for keyword in TEXT_KEYWORDS)
+
+
+def reference_state(repo, number):
+    """closed, merged or open for a referenced issue or pull request."""
+    key = (repo, number)
+    if key in REF_STATE:
+        return REF_STATE[key]
+    try:
+        item = gh_json(["api", f"repos/{repo}/issues/{number}"])
+    except GhError as error:
+        if "404" in str(error) or "Not Found" in str(error):
+            REF_STATE[key] = None
+            return None
+        raise
+    if "pull_request" in item:
+        pull = gh_json(["api", f"repos/{repo}/pulls/{number}"])
+        state = "merged" if pull.get("merged") else ("open" if pull.get("state") == "open" else "unmerged")
+    else:
+        state = item.get("state")
+    REF_STATE[key] = state
+    return state
+
+
+def resolve_key_issue(repo, key, number):
+    """The issue whose title starts with `<key>-<number> ·`, or None."""
+    cache = (repo, key, number)
+    if cache in KEY_ISSUE:
+        return KEY_ISSUE[cache]
+    prefix = f"{key}-{number} ·"
+    found = None
+    for page in range(1, 11):
+        query = gh_json(["api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} in:title \"{key}-{number}\"",
+                         "-f", "per_page=100", "-f", f"page={page}"])
+        items = query.get("items", [])
+        for item in items:
+            if item["title"].startswith(prefix):
+                found = item["number"]
+                break
+        if found is not None or len(items) < 100:
+            break
+    KEY_ISSUE[cache] = found
+    return found
+
+
+def comment_text(repo, comment_id):
+    """The body of a comment, or an empty string when it cannot be read."""
+    cache = (repo, comment_id)
+    if cache not in COMMENT_TEXT:
+        try:
+            COMMENT_TEXT[cache] = gh_json(["api", f"repos/{repo}/issues/comments/{comment_id}"]).get("body") or ""
+        except GhError:
+            COMMENT_TEXT[cache] = ""
+    return COMMENT_TEXT[cache]
+
+
+def verdict_recorded(repo, issue):
+    """True when a comment carrying `VERDICT: PASS` is linked or posted on the issue.
+
+    The body itself is not evidence: every ticket repeats the gate line
+    `Final line exactly VERDICT: PASS or VERDICT: FAIL`.
+    """
+    texts = [issue.get("body") or ""] + [(c.get("body") or "") for c in (issue.get("comments") or [])]
+    for text in texts:
+        for match in COMMENT_URL.finditer(text):
+            if VERDICT_PASS in comment_text(match.group(1), match.group(2)):
+                return True
+    for comment in issue.get("comments") or []:
+        if VERDICT_PASS in (comment.get("body") or ""):
+            return True
+    return False
+
+
+def section_blocker_reasons(cfg, repo, issue):
+    """Every reference in the `Blocked by` section that is not met yet."""
+    section = body_section(issue.get("body") or "", SECTION_NAME)
+    if not section:
+        return []
+    text = re.sub(r"<!--.*?-->", "", section, flags=re.S).strip()
+    if not text:
+        return []
+    first = text.splitlines()[0].strip().lower().rstrip(".:")
+    if first in ("none", "n/a", "nil", "-"):
+        return []
+    key = cfg["repos"][repo]["key"]
+    reasons = []
+    seen = set()
+
+    def check(target_repo, number, label):
+        if (target_repo, number) in seen:
+            return
+        seen.add((target_repo, number))
+        state = reference_state(target_repo, number)
+        if state in ("closed", "merged"):
+            return
+        if state is None:
+            reasons.append(f"{label} could not be read")
+        elif state == "open":
+            reasons.append(f"{label} is still open")
+        else:
+            reasons.append(f"{label} is not merged")
+
+    masked = REPO_REF.sub(" ", text)
+    for match in REPO_REF.finditer(text):
+        check(match.group(1), int(match.group(2)), f"{match.group(1)}#{match.group(2)}")
+    if key:
+        for match in re.finditer(rf"\b{re.escape(key)}-(\d+)\b", masked):
+            number = resolve_key_issue(repo, key, match.group(1))
+            label = f"{key}-{match.group(1)}"
+            if number is None:
+                if label in seen:
+                    continue
+                seen.add(label)
+                reasons.append(f"{label} has no issue in {repo} whose title starts with '{label} ·'")
+            else:
+                check(repo, number, f"{label} (#{number})")
+    for match in BARE_REF.finditer(masked):
+        check(repo, int(match.group(1)), f"{repo}#{match.group(1)}")
+    return reasons
+
+
+def approval_reasons(cfg, repo, issue):
+    """Sentences that ask for an approval before the build and have no verdict."""
+    sentences = body_sentences(issue.get("body") or "")
+    hits = [sentence for sentence in sentences if requires_approval(sentence)]
+    if not hits or verdict_recorded(repo, issue):
+        return []
+    return [f'the body requires an approval before building: "{sentence}"' for sentence in hits]
+
+
+def text_blocker_reasons(cfg, repo, issue):
+    """Every prerequisite the body names that the ticket does not meet yet."""
+    return section_blocker_reasons(cfg, repo, issue) + approval_reasons(cfg, repo, issue)
+
+
 def resolve_models(cfg, ticket):
     builder = ticket["builder"] or cfg["types"].get(ticket["type"])
     reviewer = ticket["reviewer"] or cfg["types"]["review"]
@@ -434,11 +610,16 @@ def ledger_of(issue, login):
     return entries
 
 
-def validate_start(cfg, repo, issue):
+def validate_start(cfg, repo, issue, check_text=True):
     rcfg = repo_config(cfg, repo)
     t = parse_ticket(cfg, repo, issue)
     if t["state"] != "OPEN":
-        raise Refuse(f"issue is {t['state'].lower()}")
+        suffix = ""
+        if check_text:
+            reasons = text_blocker_reasons(cfg, repo, issue)
+            if reasons:
+                suffix = "; text blockers: " + "; ".join(reasons)
+        raise Refuse(f"issue is {t['state'].lower()}{suffix}")
     if rcfg["key"] is None:
         raise Refuse(f"repo {repo} has no key configured")
     if t["keyProblems"]:
@@ -465,8 +646,12 @@ def validate_start(cfg, repo, issue):
     if bad:
         raise Refuse("template sections " + ", ".join(f"{s} ({v})" for s, v in bad.items()))
     open_blockers = [b for b in blockers_of(issue) if b["state"] == "OPEN"]
+    reasons = text_blocker_reasons(cfg, repo, issue) if check_text else []
+    suffix = ("; text blockers: " + "; ".join(reasons)) if reasons else ""
     if open_blockers:
-        raise Refuse("blocked by open " + ", ".join(f"{b['repo']}#{b['number']}" for b in open_blockers))
+        raise Refuse("blocked by open " + ", ".join(f"{b['repo']}#{b['number']}" for b in open_blockers) + suffix)
+    if reasons:
+        raise Refuse("text blockers: " + "; ".join(reasons))
     t["builderAlias"], t["reviewerAlias"] = resolve_models(cfg, t)
     return t
 
@@ -641,13 +826,15 @@ def authed_login():
 def cmd_start(a):
     cfg = load_config()
     repo, n = parse_ref(a.ref)
+    if getattr(a, "force_text_blockers", False):
+        print("text blocker checks skipped (--force-text-blockers)", flush=True)
     try:
         repo_config(cfg, repo)
         lock = with_ticket_lock(repo, n)
         issue = fetch_issue(repo, n)
         refusal = None
         try:
-            t = validate_start(cfg, repo, issue)
+            t = validate_start(cfg, repo, issue, check_text=not a.force_text_blockers)
         except Refuse as e:
             refusal = e
             t = parse_ticket(cfg, repo, issue)
@@ -879,6 +1066,8 @@ def main():
     s = sub.add_parser("start")
     s.add_argument("ref")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--force-text-blockers", action="store_true",
+                   help="skip the text blocker checks (native blockers still apply)")
     s.add_argument("--print-brief", action="store_true",
                    help="print the brief this start would send, then stop without starting")
     s.set_defaults(fn=cmd_start)
@@ -904,4 +1093,5 @@ def main():
         die(f"gh failed ({e.kind}): {e}")
 
 
-main()
+if __name__ == "__main__":
+    main()
