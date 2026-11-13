@@ -26,11 +26,11 @@ BIN_FILES = (
     "ticket",
 )
 CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
-MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs")
+MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
 # The pi coordinator's own files: guard extension, sandbox profile, settings,
 # phone relay note and launchers.
-PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone", "coord-tick")
+PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone", "coord-tick", "kpane", "kshow")
 PI_FILES = (
     ("extensions/coordinator.ts", ".pi/agent-coordinator/extensions/coordinator.ts"),
     ("coordinator.sb", ".pi/agent-coordinator/coordinator.sb"),
