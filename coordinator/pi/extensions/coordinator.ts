@@ -6,6 +6,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { execFile } from "node:child_process";
 
 const HOME = os.homedir();
 const COORD = path.join(HOME, "Code/coordinator");
@@ -117,6 +118,66 @@ function backup(p: string, cwd: string) {
   } catch { /* new file: nothing to back up */ }
 }
 
+// ---------- mirror ----------
+// The phone relay (Claude "Pi - Coordinator") only shows the turns Shyam
+// starts from the phone. Every other coordinator turn is mirrored there as
+// one "Mirror:" message, so the phone shows the whole session. The mirror
+// goes to exactly one terminal, the relay, and a relay that is down only
+// costs the mirror, never the turn.
+const MIRROR_TERMINAL = "pi-coord-phone";
+const PHONE_MARKER = "From Shyam (phone):";
+const TICK_MARKER = "Tick (";
+const HC = process.env.COORD_HC_BIN || path.join(HOME, ".local/bin/hc");
+
+function runHc(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(HC, args, { timeout: 15000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout || "");
+    });
+  });
+}
+
+function assistantText(m: any): string {
+  const c = m?.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  return c
+    .filter((x: any) => x && x.type === "text" && typeof x.text === "string")
+    .map((x: any) => x.text)
+    .join("\n");
+}
+
+// The mirror text for one turn, or "" when the turn is not mirrored.
+export function mirrorText(prompt: string, reply: string): string {
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  const p = flat(prompt);
+  const r = flat(reply);
+  if (!p || !r) return "";
+  // A phone turn already shows on the phone; mirroring it would double it.
+  if (p.includes(PHONE_MARKER)) return "";
+  const label = p.startsWith(TICK_MARKER) ? "tick" : p;
+  // A tick that found nothing to do says so and stays off the phone.
+  if (label === "tick" && r === "NOOP") return "";
+  return `Mirror: ${label} | ${r}`;
+}
+
+// Sends one mirror message to the relay. A missing or dead relay is skipped.
+export async function sendMirror(text: string): Promise<boolean> {
+  if (!text) return false;
+  try {
+    const listed = JSON.parse(await runHc(["ls", "--json"]));
+    const terms = (listed.terminals || []).filter(
+      (t: any) => t?.name === MIRROR_TERMINAL && t?.state === "live",
+    );
+    if (!terms.length) return false;
+    await runHc(["send", terms[0].address, text]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- wake ----------
 const WAKE_MIN = Number(process.env.COORD_WAKE_MIN || 30);
 const TICK_PROMPT = process.env.COORD_TICK_PROMPT ||
@@ -143,8 +204,40 @@ export default function (pi: any) {
   const touch = (_e: any, ctx: any) => { lastActivity = Date.now(); if (ctx) ctxRef = ctx; };
   pi.on("session_start", touch);
   pi.on("agent_start", touch);
-  pi.on("agent_settled", touch);
   pi.on("input", touch);
+
+  // The prompt that started the turn, so the mirror can name it, and the
+  // freshest assistant text, used when the session entries lag behind.
+  let turnPrompt = "";
+  let assistantTextSeen = "";
+  pi.on("before_agent_start", (event: any) => {
+    if (event?.messageType === "user" && typeof event.prompt === "string") {
+      turnPrompt = event.prompt;
+      assistantTextSeen = "";
+    }
+  });
+
+  pi.on("message_end", (event: any) => {
+    if (event?.message?.role !== "assistant") return;
+    const text = assistantText(event.message);
+    if (text.trim()) assistantTextSeen = text;
+  });
+
+  pi.on("agent_settled", async (event: any, ctx: any) => {
+    touch(event, ctx);
+    // Only the interactive coordinator session mirrors. A headless tick run
+    // (pi -p) is not a coordinator turn Shyam is watching.
+    if (ctx?.mode && ctx.mode !== "tui") return;
+    // An aborted turn has no reply to mirror.
+    if (event?.aborted) return;
+    const prompt = turnPrompt;
+    turnPrompt = "";
+    const reply = assistantTextSeen;
+    const text = mirrorText(prompt, reply);
+    if (!text) return;
+    // Fire and forget: the turn is already over and never waits on the relay.
+    void sendMirror(text);
+  });
 
   function arm() {
     clearInterval(timer);
