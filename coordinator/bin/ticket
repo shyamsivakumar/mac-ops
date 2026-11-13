@@ -1183,13 +1183,13 @@ def router_chain(route):
 
 
 def builder_models(issue, login):
-    """The model the builder thread of the issue ran.
+    """The model the builder thread of the issue ran, and whether it is live.
 
     The builder thread is the one the ledger of the issue names and the
     queue receipt points at. The newest attempt that the queue dispatched
     wins, and its newest run names the model that ran. A builder that
     stored only a router route names the models that route can run. A
-    builder whose model cannot be read at all leaves the gate on Opus.
+    builder whose model cannot be read at all leaves the models empty.
     """
     try:
         with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
@@ -1202,25 +1202,33 @@ def builder_models(issue, login):
         if not thread_id:
             continue
         result = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 5})
+        thread = result.get("thread") or {}
+        live = thread.get("status") in LIVE_STATUSES
         runs = sorted(result.get("recentRuns") or [],
                       key=lambda run: run.get("ordinal") or 0, reverse=True)
         for run in runs:
             model = run.get("executedModel")
             if isinstance(model, str) and model:
-                return [model]
-        thread = result.get("thread") or {}
+                return [model], live
         stored, instance = thread.get("model"), thread.get("providerInstanceId")
         if instance == "router" and isinstance(stored, str) and stored:
-            return router_chain(stored)
+            return router_chain(stored), live
         if isinstance(stored, str) and stored and instance:
-            return ["claude" if instance == "claudeAgent" else stored]
-        return []
-    return []
+            return ["claude" if instance == "claudeAgent" else stored], live
+        return [], live
+    return [], False
 
 
-def gate_reviewer(models):
-    """The gate model: Sol when the builder ran Claude, Opus otherwise."""
-    return GATE_SOL if any("claude" in m.lower() for m in models) else GATE_OPUS
+def gate_reviewer(models, live=False):
+    """The gate model: Sol when the builder ran Claude, Opus otherwise.
+
+    A builder whose model cannot be read leaves the gate on Opus, unless
+    the builder thread is still running: a live builder may be Claude, and
+    two Claude threads must not run at once.
+    """
+    if any("claude" in m.lower() or "anthropic" in m.lower() for m in models):
+        return GATE_SOL
+    return GATE_SOL if live and not models else GATE_OPUS
 
 
 def gate_live(title, gate_id):
@@ -1316,8 +1324,8 @@ def cmd_gate(a):
             raise Refuse(f"pull request #{number} references no issue")
         issue = fetch_issue(repo, issue_number)
         check_ticket_key(repo, rcfg, issue["title"])
-        models = builder_models(issue, authed_login())
-        model = gate_reviewer(models)
+        models, live = builder_models(issue, authed_login())
+        model = gate_reviewer(models, live)
         publisher = check_publisher(repo, head, rcfg)
         ascend = ascend_repo(repo, rcfg)
         base = pull.get("baseRefName") or "main"
@@ -1346,7 +1354,7 @@ def cmd_gate(a):
         print("checks passed")
         print(f"title: {title}")
         print(f"reviewer: {model['model']}")
-        print(f"builder model: {models[0] if models else 'unknown'}")
+        print(f"builder model: {models[0] if models else ('unknown, builder is live' if live else 'unknown')}")
         print("command:\n" + shlex.join(command) + "\n")
         print("brief:\n" + brief)
         return
