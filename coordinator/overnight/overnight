@@ -17,6 +17,14 @@ passed unless the records say it ran.
 
     overnight report --dry-run
 
+`overnight shift` (spec T12) is the command the launchd job fires. One job
+runs at 22:30 PT and again at 06:30 PT, so the command decides which part
+of the night it is: the start reads the board, and the report writes the
+morning report. In dry-run mode the shift does no work, so the only file
+the night writes is the morning report.
+
+    overnight shift --dry-run
+
 The board is the list. Intake reads `ticket list --fresh --json` for the
 tickets and `gh pr list` for each allowed repository, and holds the records
 in memory for the run. The later parts of the spec (filtering, ordering,
@@ -73,6 +81,10 @@ PLANNED = re.compile(r"planned\s+(?P<count>\d+)\s+items?\b", re.I)
 RECEIPT_FILE = re.compile(r"^(?!morning-).+\.md$")
 # The shift log records the end of the shift with the word "stall".
 STALL = re.compile(r"\bstall\b", re.I)
+# The hours the launchd job fires at (spec part T12): the shift starts at
+# 22:30 PT and the morning report is written at 06:30 PT.
+START_HOUR = 22
+REPORT_HOUR = 6
 # The states a receipt can name.
 STATE_DONE = "done"
 STATE_READY = "ready"
@@ -397,6 +409,45 @@ def cmd_intake(args: argparse.Namespace) -> int:
         "no ticket the board shows stays a record of its own."
     )
     return 1 if unread else 0
+
+
+def shift_phase(now: datetime) -> str:
+    """Return the part of the night a PT moment belongs to.
+
+    The launchd job fires at 22:30 PT to start the shift and at 06:30 PT
+    to write the morning report. The hour of the PT clock decides, so the
+    job needs no second program and no state file."""
+    if now.hour == START_HOUR:
+        return "start"
+    if now.hour == REPORT_HOUR:
+        return "report"
+    return "outside"
+
+
+def cmd_shift(args: argparse.Namespace) -> int:
+    """Run the part of the night the launchd job fires.
+
+    The start reads the board and writes nothing. The report writes the
+    morning report, which is the only file a dry night writes. Outside the
+    two hours there is nothing to do."""
+    now = datetime.now(PT)
+    phase = args.at if args.at != "auto" else shift_phase(now)
+    stamp = now.strftime("%Y-%m-%d %H:%M %Z")
+    if phase == "outside":
+        print(f"overnight: {stamp} is outside the overnight window; nothing to do")
+        return 0
+    if phase == "start":
+        if not args.dry_run:
+            die(
+                "the shift start is not built yet (spec parts T4 and T5); "
+                "refusing to start a real shift"
+            )
+        print(f"overnight: {stamp} shift start (dry run, read only)")
+        return cmd_intake(argparse.Namespace(dry_run=True, deadline=args.deadline))
+    print(f"overnight: {stamp} morning report")
+    return cmd_report(
+        argparse.Namespace(root=args.root, date=args.date, dry_run=False)
+    )
 
 
 def report_root(explicit: str | None) -> Path:
@@ -950,6 +1001,39 @@ def main() -> int:
         help="the night of the report, as YYYY-MM-DD (default today, PT)",
     )
     report.set_defaults(func=cmd_report)
+    shift = sub.add_parser(
+        "shift",
+        help="run the part of the night the launchd job fires",
+    )
+    shift.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="do no work: the start reads the board and writes nothing",
+    )
+    shift.add_argument(
+        "--at",
+        choices=("auto", "start", "report"),
+        default="auto",
+        help="which part of the night to run (default: the PT clock decides)",
+    )
+    shift.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    shift.add_argument(
+        "--date",
+        default=None,
+        type=report_day,
+        help="the night of the report, as YYYY-MM-DD (default today, PT)",
+    )
+    shift.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole start may take (default {DEFAULT_DEADLINE})",
+    )
+    shift.set_defaults(func=cmd_shift)
     args = parser.parse_args()
     return args.func(args)
 
