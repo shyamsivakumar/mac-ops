@@ -2,9 +2,9 @@
 """The overnight shift's command line.
 
 This part (spec T3a) reads the board and the open pull requests and turns
-them into intake records. It reads only: nothing is written, no second queue
-is kept, and no rule about merging, pushing, the slot cap or the Ascend
-repositories changes.
+them into intake records. It reads only: it writes no record and keeps no
+list of its own. The ticket CLI refreshes its own cache when it reads the
+board, and that cache is the ticket CLI's, not a queue of the shift's.
 
     overnight intake --dry-run
 
@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import NoReturn
 
@@ -29,11 +30,21 @@ TICKET = os.environ.get("OVERNIGHT_TICKET", "ticket")
 GH = os.environ.get("OVERNIGHT_GH", "gh")
 TICKET_TIMEOUT = 300
 GH_TIMEOUT = 60
+# The whole intake runs inside the turn cap, so every subprocess gets what
+# is left of one overall deadline.
+DEFAULT_DEADLINE = 540
 PR_LIMIT = 100
 PR_FIELDS = "number,title,url,isDraft,headRefName,baseRefName,updatedAt,body"
 # A ticket reference in a pull request body or title. Only the GitHub
 # keywords count: a bare "#123" is often a pull request, not a ticket.
 TICKET_REF = re.compile(r"\b(?:refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
+# A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
+# it is a ticket key number, not a GitHub issue number.
+BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
+
+
+class RepoError(Exception):
+    """A repository could not be read, so its counts are not known."""
 
 
 def die(message: str, code: int = 1) -> NoReturn:
@@ -55,7 +66,6 @@ def config_path() -> Path:
         if candidate.is_file():
             return candidate
     die("tickets.json not found next to the module or in ~/.coordinator")
-    raise AssertionError("unreachable")
 
 
 def load_config() -> dict:
@@ -64,7 +74,6 @@ def load_config() -> dict:
             return json.load(stream)
     except (OSError, ValueError) as exc:
         die(f"cannot read the board config: {exc}")
-        raise AssertionError("unreachable")
 
 
 def allowed_repos(cfg: dict) -> list[tuple[str, str]]:
@@ -76,36 +85,44 @@ def allowed_repos(cfg: dict) -> list[tuple[str, str]]:
     return sorted((repo, entry.get("key", "")) for repo, entry in repos.items())
 
 
-def run(argv: list[str], timeout: int) -> str:
+def run(argv: list[str], timeout: int, deadline: float) -> str:
     """Run a command and return its stdout, or fail with the error tail."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        die("the intake deadline passed before the next command could run")
     try:
         result = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout, check=False
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(timeout, int(left))),
+            check=False,
         )
     except FileNotFoundError:
         die(f"{argv[0]} is not on PATH")
-        raise AssertionError("unreachable")
     except subprocess.TimeoutExpired:
-        die(f"{' '.join(argv)} timed out after {timeout}s")
-        raise AssertionError("unreachable")
+        die(f"{' '.join(argv)} timed out")
     if result.returncode != 0:
         tail = (result.stderr or result.stdout or "").strip().splitlines()[-3:]
-        die(f"{' '.join(argv)} failed ({result.returncode}): " + " | ".join(tail))
-        raise AssertionError("unreachable")
+        raise RepoError(
+            f"{' '.join(argv)} failed ({result.returncode}): " + " | ".join(tail)
+        )
     return result.stdout
 
 
-def read_board() -> tuple[list[dict], bool]:
+def read_board(deadline: float) -> tuple[list[dict], bool]:
     """Return the board's tickets and whether the board is stale.
 
     The ticket CLI owns the cache and the labels, so intake asks it for the
     list instead of reading GitHub a second way."""
-    raw = run([TICKET, "list", "--fresh", "--json"], TICKET_TIMEOUT)
+    try:
+        raw = run([TICKET, "list", "--fresh", "--json"], TICKET_TIMEOUT, deadline)
+    except RepoError as exc:
+        die(str(exc))
     try:
         data = json.loads(raw)
     except ValueError as exc:
         die(f"the ticket CLI did not return JSON: {exc}")
-        raise AssertionError("unreachable")
     issues = data.get("issues") or []
     if data.get("stale"):
         print(
@@ -117,8 +134,9 @@ def read_board() -> tuple[list[dict], bool]:
     return issues, bool(data.get("stale"))
 
 
-def read_pull_requests(repo: str) -> list[dict]:
-    """Return the open pull requests of one repository."""
+def read_pull_requests(repo: str, deadline: float) -> tuple[list[dict], bool]:
+    """Return the open pull requests of one repository, and whether the list
+    was cut off at the limit."""
     raw = run(
         [
             GH,
@@ -134,67 +152,75 @@ def read_pull_requests(repo: str) -> list[dict]:
             PR_FIELDS,
         ],
         GH_TIMEOUT,
+        deadline,
     )
     try:
         rows = json.loads(raw)
     except ValueError as exc:
-        die(f"gh did not return JSON for {repo}: {exc}")
-        raise AssertionError("unreachable")
-    return rows if isinstance(rows, list) else []
+        raise RepoError(f"gh did not return JSON for {repo}: {exc}")
+    if not isinstance(rows, list):
+        raise RepoError(f"gh returned no list for {repo}")
+    return rows, len(rows) >= PR_LIMIT
 
 
-def ticket_number(text: str, key: str) -> int | None:
-    """Return the ticket number a pull request names, if it names one.
+def linked_ticket(
+    row: dict, by_number: dict[int, dict], by_key: dict[str, dict]
+) -> dict | None:
+    """Return the board ticket a pull request names, if it names one.
 
-    The body keyword comes first: it is the strongest link. The branch name
-    is the fallback, and only when the branch carries the repository key
-    (`mo-208`), so a stray number in a branch name does not link."""
-    match = TICKET_REF.search(text or "")
+    A keyword reference names a GitHub issue number. A branch name carries
+    a ticket key, whose number is a different counter, so the branch is
+    looked up by key and never by issue number."""
+    text = f"{row.get('title', '')}\n{row.get('body', '')}"
+    match = TICKET_REF.search(text)
     if match:
-        return int(match.group(1))
-    if key:
-        branch = re.search(rf"\b{re.escape(key.lower())}-(\d+)\b", (text or "").lower())
-        if branch:
-            return int(branch.group(1))
+        return by_number.get(int(match.group(1)))
+    match = BRANCH_KEY.search(row.get("headRefName") or "")
+    if match:
+        return by_key.get(f"{match.group(1)}-{match.group(2)}".upper())
     return None
 
 
 def build_records(
-    issues: list[dict], pull_requests: dict[str, list[dict]], keys: dict[str, str]
+    issues: list[dict], pull_requests: dict[str, list[dict]]
 ) -> dict[str, list[dict]]:
     """Turn the board and the pull requests into intake records, per repo.
 
-    A ticket with an open pull request is one record that carries the pull
-    request. A pull request with no ticket on the board is a record of its
-    own. Nothing is filtered or ordered here: that is the next part."""
+    A ticket with open pull requests is one record that carries them. A
+    pull request that no board ticket names is a record of its own. Nothing
+    is filtered or ordered here: that is the next part."""
     records: dict[str, list[dict]] = {}
     for issue in issues:
         repo = issue.get("repo", "")
-        record = {
-            "kind": "ticket",
-            "repo": repo,
-            "key": issue.get("key", ""),
-            "number": issue.get("number"),
-            "title": issue.get("title", ""),
-            "url": issue.get("url", ""),
-            "stage": issue.get("stage"),
-            "priority": issue.get("priority"),
-            "type": issue.get("type"),
-            "builder": issue.get("builder"),
-            "reviewer": issue.get("reviewer"),
-            "problems": issue.get("problems", []),
-            "updatedAt": issue.get("updatedAt"),
-            "pr": None,
-        }
-        records.setdefault(repo, []).append(record)
+        records.setdefault(repo, []).append(
+            {
+                "kind": "ticket",
+                "repo": repo,
+                "key": issue.get("key", ""),
+                "number": issue.get("number"),
+                "title": issue.get("title", ""),
+                "url": issue.get("url", ""),
+                "stage": issue.get("stage"),
+                "priority": issue.get("priority"),
+                "type": issue.get("type"),
+                "builder": issue.get("builder"),
+                "reviewer": issue.get("reviewer"),
+                "problems": issue.get("problems", []),
+                "updatedAt": issue.get("updatedAt"),
+                "prs": [],
+            }
+        )
     for repo, rows in pull_requests.items():
         bucket = records.setdefault(repo, [])
-        by_number = {r["number"]: r for r in bucket if r["kind"] == "ticket"}
+        by_number = {
+            r["number"]: r for r in bucket if r["kind"] == "ticket" and r["number"]
+        }
+        by_key = {
+            r["key"].upper(): r
+            for r in bucket
+            if r["kind"] == "ticket" and r["key"]
+        }
         for row in rows:
-            number = ticket_number(
-                f"{row.get('title', '')}\n{row.get('body', '')}\n{row.get('headRefName', '')}",
-                keys.get(repo, ""),
-            )
             summary = {
                 "number": row.get("number"),
                 "title": row.get("title", ""),
@@ -204,15 +230,14 @@ def build_records(
                 "baseRefName": row.get("baseRefName", ""),
                 "updatedAt": row.get("updatedAt"),
             }
-            target = by_number.get(number) if number is not None else None
-            if target is not None and target["pr"] is None:
-                target["pr"] = summary
+            target = linked_ticket(row, by_number, by_key)
+            if target is not None:
+                target["prs"].append(summary)
                 continue
             bucket.append(
                 {
                     "kind": "pr",
                     "repo": repo,
-                    "key": keys.get(repo, ""),
                     "number": row.get("number"),
                     "title": row.get("title", ""),
                     "url": row.get("url", ""),
@@ -232,51 +257,75 @@ def cmd_intake(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    deadline = time.monotonic() + args.deadline
     cfg = load_config()
     repos = allowed_repos(cfg)
     if not repos:
         die("the board config names no repositories")
-    keys = {repo: key for repo, key in repos}
-    issues, stale = read_board()
+    issues, stale = read_board(deadline)
     pull_requests: dict[str, list[dict]] = {}
-    failures: list[str] = []
+    unread: dict[str, str] = {}
     for repo, _key in repos:
         try:
-            pull_requests[repo] = read_pull_requests(repo)
-        except SystemExit:
-            failures.append(repo)
-            pull_requests[repo] = []
-    records = build_records(issues, pull_requests, keys)
+            rows, cut = read_pull_requests(repo, deadline)
+        except RepoError as exc:
+            unread[repo] = str(exc)
+            print(f"overnight: {repo}: {exc}", file=sys.stderr)
+            continue
+        pull_requests[repo] = rows
+        if cut:
+            unread[repo] = f"more than {PR_LIMIT} open pull requests"
+            print(
+                f"overnight: {repo}: the pull request list was cut off at "
+                f"{PR_LIMIT}, so the counts are not known",
+                file=sys.stderr,
+            )
+    records = build_records(issues, pull_requests)
+    outside = sorted(set(records) - {repo for repo, _ in repos})
     print("Overnight intake - dry run (read only)")
     print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
     print(f"Allowed repositories: {len(repos)}")
     print()
     print(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
     total = 0
+    clean = 0
     for repo, _key in repos:
         bucket = records.get(repo, [])
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
-        linked = sum(1 for r in bucket if r["kind"] == "ticket" and r["pr"])
-        prs = len(pull_requests.get(repo, []))
+        linked = sum(len(r["prs"]) for r in bucket if r["kind"] == "ticket")
+        if repo in unread:
+            print(f"{repo:<45}{tickets:>9}{'ERR':>6}{'ERR':>8}{'ERR':>9}")
+            continue
+        clean += 1
         total += len(bucket)
-        print(f"{repo:<45}{tickets:>9}{prs:>6}{linked:>8}{len(bucket):>9}")
-    print()
-    print(
-        f"Total: {total} records across {len(repos)} repositories "
-        f"({len(issues)} board tickets, "
-        f"{sum(len(rows) for rows in pull_requests.values())} open pull requests)"
-    )
-    print(
-        "A pull request that a board ticket names is part of that ticket's "
-        "record, so it adds no record of its own."
-    )
-    if failures:
         print(
-            "Repositories whose pull requests could not be read: "
-            + ", ".join(failures),
-            file=sys.stderr,
+            f"{repo:<45}{tickets:>9}{len(pull_requests.get(repo, [])):>6}"
+            f"{linked:>8}{len(bucket):>9}"
+        )
+    for repo in outside:
+        bucket = records[repo]
+        tickets = sum(1 for r in bucket if r["kind"] == "ticket")
+        total += len(bucket)
+        print(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
+    print()
+    if unread:
+        print(
+            f"Total: UNVERIFIED. {total} records from the {clean} repositories "
+            f"that read cleanly; {len(unread)} repositories could not be read "
+            f"fully: " + ", ".join(sorted(unread))
         )
         return 1
+    print(f"Total: {total} records across {clean} repositories")
+    print(
+        "A pull request that a board ticket names is part of that ticket's "
+        "record, so it adds no record of its own. A pull request that names "
+        "a ticket the board does not show stays a record of its own."
+    )
+    if outside:
+        print(
+            "The board holds tickets for repositories that the allow list "
+            "does not name. They are counted above and marked 'not allowed'."
+        )
     return 0
 
 
@@ -293,6 +342,12 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="read only; no records are written (the only mode in this part)",
+    )
+    intake.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole intake may take (default {DEFAULT_DEADLINE})",
     )
     intake.set_defaults(func=cmd_intake)
     args = parser.parse_args()
