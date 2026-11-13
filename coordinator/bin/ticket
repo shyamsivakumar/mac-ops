@@ -29,10 +29,9 @@ VERDICT_PASS = "VERDICT: PASS"
 REPO_REF = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
 BARE_REF = re.compile(r"(?<![\w/#])#(\d+)\b")
 COMMENT_URL = re.compile(r"https?://[^/\s]+/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/\d+#(issuecomment-\d+)")
-SECTION_NAME = "Blocked by"
-LABELLED_SECTION = re.compile(r"(?im)^[ \t]*\**\s*blocked by\s*\**\s*:[ \t]*(.*)$")
 DETAILS_BLOCK = re.compile(r"(?is)<details\b.*?</details>")
 FENCED_BLOCK = re.compile(r"(?s)```.*?```")
+SECTION_NAME = "Blocked by"
 REF_STATE = {}
 KEY_ISSUE = {}
 COMMENT_TEXT = {}
@@ -597,20 +596,32 @@ def own_body(body):
     return FENCED_BLOCK.sub(" ", DETAILS_BLOCK.sub(" ", body))
 
 
-def blocked_by_section(body):
+def blocked_by_section(cfg, body):
     """The body text of the ticket's own `Blocked by` section, or None.
 
-    The coordinator writes the section as a `## Blocked by` heading or as a
-    `Blocked by:` line, and the template check accepts both, so the blocker
-    check reads both. A `<details>` block holds a preserved contract, not this
-    ticket's own section, so it is skipped.
+    The section is read the way the template check reads it, so the blocker
+    check looks at exactly the section the template check accepted: a
+    `## Blocked by` heading or a `Blocked by:` line. A `<details>` block holds
+    a preserved contract, not this ticket's own section, so it is skipped.
     """
-    text = own_body(body)
-    section = body_section(text, SECTION_NAME)
-    if section is not None:
-        return section
-    match = LABELLED_SECTION.search(text)
-    return match.group(1).strip() if match else None
+    lines = own_body(body).splitlines()
+    markers = template_markers(cfg, lines)
+    for start, section, level, rest in markers:
+        if section != SECTION_NAME:
+            continue
+        if level:
+            stops = [m[0] for m in markers if m[0] > start]
+            stops += [j for j in range(start + 1, len(lines)) if (h := HEADING.match(lines[j])) and len(h.group(1)) <= level]
+            end = min(stops, default=len(lines))
+            return re.sub(r"<!--.*?-->", "", "\n".join([rest] + lines[start + 1:end]), flags=re.S).strip()
+        content = [rest]
+        for follow in lines[start + 1:]:
+            text = follow.strip()
+            if not text or not (follow[:1].isspace() or text[0] in "-*+"):
+                break
+            content.append(follow)
+        return "\n".join(content).strip()
+    return None
 
 
 def resolve_key_issue(repo, key, number):
@@ -621,12 +632,14 @@ def resolve_key_issue(repo, key, number):
     prefix = f"{key}-{number}"
     found = None
     for page in range(1, 11):
-        query = gh_json(["api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} in:title \"{key}-{number}\"",
+        query = gh_json(["api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} is:issue in:title \"{key}-{number}\"",
                          "-f", "per_page=100", "-f", f"page={page}"])
         items = query.get("items", [])
         for item in items:
             title = item["title"]
             rest = title[len(prefix):]
+            if item.get("pull_request"):
+                continue
             if title.startswith(prefix) and not rest[:1].isdigit():
                 found = item["number"]
                 break
@@ -666,7 +679,7 @@ def verdict_recorded(repo, issue):
 
 def section_blocker_reasons(cfg, repo, issue):
     """Every reference in the `Blocked by` section that is not met yet."""
-    section = blocked_by_section(issue.get("body") or "")
+    section = blocked_by_section(cfg, issue.get("body") or "")
     if not section:
         return []
     text = re.sub(r"<!--.*?-->", "", section, flags=re.S).strip()
