@@ -30,12 +30,12 @@ The names come from the overnight runner spec, section 6 (revision 2).
 | `run/armed` | Arm step | Shift id and start time. Its presence means "on shift". |
 | `run/deadline` | Arm step | UNIX epoch for quitting time (default 06:00 PT). |
 | `run/policy.json` | Arm step | Snapshot: allow list, slot cap (read only), budget %, stall cap, verify level. |
-| `run/STOP` | Shyam | Stop wins. The shift ends at the next tick. |
-| `run/shift-log.md` | All steps | One line per event, with PT time. |
+| `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next tick. |
 | `receipts/<item>.md` | Tick | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
-| `receipts/morning-YYYY-MM-DD.md` | Report step | The morning report: what merged, what is ready, what is stuck and why, and which decisions wait for Shyam. |
 | `inbox/parking-lot.md` | Tick | Decisions the shift could not make. Each with a default and a recommendation. |
 | `inbox/snag-log.md` | Tick | Problems found (flaky test, conflict, dialog) and what the shift did. |
+| `run/shift-log.md` | All steps | One line per event, with PT time. |
+| `receipts/morning-YYYY-MM-DD.md` | Report step | The morning report: what merged, what is ready, what is stuck and why, and which decisions wait for Shyam. |
 
 There is no `punch-list.md` (spec revision 2): the board is the list, and the
 receipts sit beside it.
