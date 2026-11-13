@@ -40,6 +40,25 @@ class BodySectionTest(unittest.TestCase):
     def test_none_section_passes(self):
         self.assertEqual(ticket.section_blocker_reasons(CFG, REPO, issue("## Blocked by\nNone.\n")), [])
 
+    def test_labelled_section_is_read(self):
+        self.assertEqual(ticket.blocked_by_section("Blocked by: SRW-1018 (#806).\n"), "SRW-1018 (#806).")
+
+    def test_bold_labelled_section_is_read(self):
+        self.assertEqual(ticket.blocked_by_section("**Blocked by**: None.\n"), "None.")
+
+    def test_labelled_section_is_read_when_there_is_no_heading(self):
+        body = "Goal and why: x\nBlocked by: SRW-1018 (#806).\nAcceptance: y\n"
+        self.assertEqual(ticket.blocked_by_section(body), "SRW-1018 (#806).")
+
+    def test_heading_wins_over_a_labelled_line(self):
+        body = "Blocked by: SRW-1018 (#806).\n\n## Blocked by\nSRW-789 (#490).\n"
+        self.assertEqual(ticket.blocked_by_section(body), "SRW-789 (#490).")
+
+    def test_preserved_contract_is_not_the_section(self):
+        body = ("## Scope and non-goals\n<details><summary>Preserved original contract</summary>\n\n"
+                "Blocked by: #49, #51, #52\n\n</details>\n")
+        self.assertIsNone(ticket.blocked_by_section(body))
+
 
 class ApprovalSentenceTest(unittest.TestCase):
     def test_design_review_sentence_is_caught(self):
@@ -81,6 +100,7 @@ class ApprovalSentenceTest(unittest.TestCase):
 class SectionBlockerTest(unittest.TestCase):
     def setUp(self):
         self.states = {("shyamsivakumar/strategy-replay-workbench", 806): "open",
+                       ("shyamsivakumar/strategy-replay-workbench", 816): "open",
                        ("shyamsivakumar/strategy-replay-workbench", 898): "merged",
                        ("shyamsivakumar/strategy-replay-workbench", 490): "open"}
         self.keys = {("shyamsivakumar/strategy-replay-workbench", "SRW", "1018"): 806,
@@ -88,6 +108,10 @@ class SectionBlockerTest(unittest.TestCase):
         ticket.REF_STATE.clear()
         ticket.KEY_ISSUE.clear()
         ticket.COMMENT_TEXT.clear()
+        saved_state = ticket.reference_state
+        saved_key = ticket.resolve_key_issue
+        self.addCleanup(lambda: setattr(ticket, "reference_state", saved_state))
+        self.addCleanup(lambda: setattr(ticket, "resolve_key_issue", saved_key))
         ticket.reference_state = lambda repo, number: self.states.get((repo, number))
         ticket.resolve_key_issue = lambda repo, key, number: self.keys.get((repo, key, number))
 
@@ -124,6 +148,48 @@ class SectionBlockerTest(unittest.TestCase):
     def test_none_with_prose_passes(self):
         body = "## Blocked by\nNone. This is the frontier ticket and can start immediately.\n"
         self.assertEqual(ticket.section_blocker_reasons(CFG, REPO, issue(body)), [])
+
+    def test_labelled_section_names_an_open_key(self):
+        body = "Blocked by: SRW-1018, SRW-1019.\n"
+        self.keys[("shyamsivakumar/strategy-replay-workbench", "SRW", "1019")] = 816
+        reasons = ticket.section_blocker_reasons(CFG, REPO, issue(body))
+        self.assertEqual(reasons, ["SRW-1018 (#806) is still open", "SRW-1019 (#816) is still open"])
+
+    def test_labelled_none_passes(self):
+        self.assertEqual(ticket.section_blocker_reasons(CFG, REPO, issue("Blocked by: none.\n")), [])
+
+    def test_preserved_contract_does_not_block(self):
+        body = ("## Scope and non-goals\n<details><summary>Preserved contract</summary>\n\n"
+                "Blocked by: #806\n\n</details>\n")
+        self.assertEqual(ticket.section_blocker_reasons(CFG, REPO, issue(body)), [])
+
+
+class ResolveKeyIssueTest(unittest.TestCase):
+    def setUp(self):
+        ticket.KEY_ISSUE.clear()
+        self.saved = ticket.gh_json
+        self.titles = []
+        self.addCleanup(lambda: setattr(ticket, "gh_json", self.saved))
+
+    def fake(self, args):
+        return {"items": [{"number": 900 + i, "title": title} for i, title in enumerate(self.titles)]}
+
+    def resolve(self, titles, number):
+        self.titles = titles
+        ticket.gh_json = self.fake
+        return ticket.resolve_key_issue(REPO, "SRW", number)
+
+    def test_middle_dot_title_resolves(self):
+        self.assertEqual(self.resolve(["SRW-1119 · Hash-route tabs"], 1119), 900)
+
+    def test_colon_title_resolves(self):
+        self.assertEqual(self.resolve(["SRW-1119: Hash-route tabs"], 1119), 900)
+
+    def test_a_longer_number_does_not_resolve(self):
+        self.assertIsNone(self.resolve(["SRW-11190 · Something else"], 1119))
+
+    def test_another_ticket_does_not_resolve(self):
+        self.assertIsNone(self.resolve(["SRW-1118 · Something else"], 1119))
 
 
 TEMPLATE = ["Goal and why", "Context", "Scope and non-goals", "Design fit", "Blocked by",
