@@ -36,7 +36,9 @@ the one case the live tree still misses.
   mac-ops coordinator panel.
   - 15 signals, each with how it is detected, the Moonmux file and line at
     the pinned commit `ef34516`, the upstream commit that introduced it,
-    what herdr-projects has today, and a copy-or-skip with a reason.
+    what herdr-projects has today, and a copy-or-skip with a reason. The
+    Rust table has sixteen rows: the same fifteen plus row 9a, the
+    trust-screen check.
   - Revision 4 adds the same 15 signals against the live `herdr-projects`
     tree (`a862ac9`, TypeScript), each with a `blob/<sha>` link.
   - The licenses are named: Moonmux is MIT (Fabien Penso, 2026), herdr-core
@@ -311,6 +313,21 @@ statement that said only presentation ideas were worth copying now says
 that was true for revision 1 and that revision 4 found two detection gaps
 too; the evidence file's short answer names those gaps; and the claim that
 every recommendation names a file and a line now says five of the six do.
+
+### The run-a3 fourth round
+
+A fourth in-session Opus 5.5 round checked the new citation and every
+cross-reference, and returned `VERDICT: FAIL` on one overstatement that
+was still standing, one wrong claim about `providerTurn()`, and three
+smaller points. All are fixed, and each is listed in the evidence file
+under "The run-a3 fourth round": the short answer no longer claims our
+detection is at least as good as Moonmux's on every signal Moonmux has
+(the hand-started-agents signal and the helper-error rule are not covered
+by us in either tree); the text now says that `providerTurn()`'s cut does
+feed the task status through the provider-retry row, and that what it does
+not decide is `waiting`; the `waiting()` summary now names the `task` role
+and the saved-snapshot fallback; and the Rust table's row count is given as
+sixteen, not fifteen.
 
 ## Known limits
 
