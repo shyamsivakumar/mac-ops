@@ -52,14 +52,18 @@ existing test or check. No existing test or check was weakened.
 - **The decision**: The plist has one `ProgramArguments` and two
   `StartCalendarInterval` entries, so the command itself decides whether
   it is the 22:30 start or the 06:30 report. `overnight shift` reads the
-  PT hour and runs the matching part.
+  clock and runs the matching part.
 - **The gap**: launchd cannot pass different arguments to the same job at
   different times, and the spec names one job, `dev.coordinator.overnight`.
 - **The reach**: The job needs no state file and no second program. The
-  hour of the PT clock is the whole rule, and `launchctl print` shows both
-  entries. Any other hour, such as a job that fires after a sleep, does
-  nothing instead of guessing.
-- **Verdict**: sound.
+  clock is the Mac's local clock, the clock launchd fires on, so a run
+  that fires always matches the part it is for; the report and the log
+  still say Pacific time, and a Mac that is not on Pacific time is told
+  so. The windows are an hour wide, so a Mac that wakes late still writes
+  the report. Any other time, such as a run that fires after a long
+  sleep, does nothing instead of guessing.
+- **Verdict**: sound, and the reviewer round changed the clock from
+  Pacific to local so the two can never disagree.
 
 ### 2. The dry run is the shift's mode, and the report is its one write
 
@@ -119,8 +123,8 @@ existing test or check. No existing test or check was weakened.
    (120 tickets, 15 allowed repositories, 148 records) and exited 0
    (`evidence/MO-223/dry-run-start.log`). The `.overnight` folder held no
    receipt, no run file and no inbox entry afterwards.
-4. **A dry run writes only the report.**
-   `~/.local/bin/overnight shift --at report` wrote
+4. **A dry run writes only the report.** The job's own command,
+   `~/.local/bin/overnight shift --at report --dry-run`, wrote
    `~/Code/coordinator/.overnight/receipts/morning-2026-11-13.md` and
    nothing else: `run/`, `inbox/` and `staging/` were empty afterwards
    (`evidence/MO-223/dry-run-report.log`).
@@ -129,6 +133,27 @@ existing test or check. No existing test or check was weakened.
 
 ## The reviewer round
 
-One in-session reviewer round read `git diff origin/main...HEAD` against
-this ticket. Its findings and the probes for them are in
-`evidence/MO-223/reviewer-fixes.log`.
+One in-session reviewer round (Claude Opus 5.5) read `git diff
+origin/main...HEAD` against this ticket and returned `VERDICT: PASS` with
+no blocking findings and seven minor ones. Every finding is fixed, and the
+probe for each one is in `evidence/MO-223/reviewer-fixes.log`.
+
+1. **The decisions file pointed at a log that did not exist.** The log is
+   now in the pull request.
+2. **The hour rule read the Pacific clock while launchd fires on the
+   Mac's local clock.** The dispatch now reads the local clock, the
+   clock launchd fires on, and says so when the Mac is not on Pacific
+   time.
+3. **A late wake skipped the morning report.** The windows are an hour
+   wide now, so a wake at 07:05 still writes the report.
+4. **The `--dry-run` flag meant two things.** The words now say that
+   `report --dry-run` prints and `shift --dry-run` writes the report,
+   because the report is the record of the night, not work.
+5. **The report proof did not run the job's own command.** The proof log
+   now runs `shift --at report --dry-run`, the command the plist holds.
+6. **The install message gave an incomplete load command.** It says to
+   bootout first and then bootstrap.
+7. **Two comments restated the code and the README said "seconds".** The
+   comments are gone and the README says what is true: the start has a
+   nine minute deadline, and the reason no lock is needed is that
+   launchd never starts a second copy of a running job.

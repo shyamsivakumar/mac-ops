@@ -22,11 +22,16 @@ in the mac-ops checkout and is installed by the same installer.
 | --- | --- |
 | `overnight intake --dry-run` | Reads the board (`ticket list --fresh --json`) and the open pull requests (`gh pr list` for each allowed repository) into intake records, and prints the record count per repository. Read only: it writes no record and keeps no list of its own. The ticket CLI refreshes its own cache when it reads the board; that cache is the ticket CLI's. |
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
-| `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the PT clock: the start (22:30) reads the board and writes nothing, the report (06:30) writes the morning report, and any other hour does nothing. `--at start` or `--at report` forces a part, for a manual run. |
+| `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the Mac's local clock: the start (22:00–23:59) reads the board and writes nothing, the report (06:00–07:29) writes the morning report, and any other time does nothing. `--at start` or `--at report` forces a part, for a manual run. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, arming, the tick and the morning report) build on the
 same records, in the same module.
+
+`--dry-run` means no work, and the two commands read it differently on
+purpose. `overnight report --dry-run` prints the report and writes no
+file. `overnight shift --dry-run` writes the morning report, because the
+report is the record of the night, not work.
 
 ## The launchd job
 
@@ -35,21 +40,32 @@ checkout is the job `dev.coordinator.overnight`. The mac-ops installer
 copies it into `~/Library/LaunchAgents` with the rest of the coordinator
 jobs, so the job and the command always come from the same checkout.
 
-The job fires twice a night, and the clock picks the part:
+The job fires twice a night, and the clock picks the part. The clock is the
+Mac's local clock, the clock launchd itself uses, so a run that fires
+always matches the part it is for:
 
-| PT time | What runs |
+| Local time | What runs |
 | --- | --- |
 | 22:30 | The shift start. In dry-run mode it reads the board and writes nothing. |
 | 06:30 | The morning report. It writes `receipts/morning-YYYY-MM-DD.md` and nothing else. |
+
+The windows are an hour wide rather than a minute, so a Mac that wakes
+late still writes the report (until 07:29). A run outside both windows
+does nothing and exits 0.
+
+The Mac must run on Pacific time for these to be the spec's 22:30 and
+06:30 PT. If the Mac's clock is not on Pacific time, the job still runs
+the right part, because the dispatch reads the same clock launchd fires
+on, and it says so in the log.
 
 The job runs in dry-run mode (`shift --dry-run`) until the arm and tick
 parts (T4, T5) land. A dry night does no work, so the morning report is the
 only file it writes. A real shift is not started by the job yet: without
 `--dry-run` the start refuses and says so, rather than pretending to work.
 
-The job has no `RunAtLoad`, so a night does not start at every boot, and
-the job takes no lock: it runs for seconds, so two runs never overlap in
-any way that matters.
+The job has no `RunAtLoad`, so a night does not start at every boot. It
+takes no lock: launchd never starts a second copy of a running job, and
+the two runs are eight hours apart.
 
 Load it after the install:
 

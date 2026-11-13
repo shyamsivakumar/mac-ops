@@ -1,5 +1,5 @@
-# overnight shift --at report (the installed command)
-overnight: 2026-11-13 14:09 PST morning report
+# the job's own command, the report part: overnight shift --at report --dry-run
+overnight: 2026-11-13 14:15 PST morning report
 overnight: wrote /Users/shyamsivakumar/Code/coordinator/.overnight/receipts/morning-2026-11-13.md
 exit=0
 
@@ -7,23 +7,23 @@ exit=0
 /Users/shyamsivakumar/Code/coordinator/.overnight/inbox:
 total 0
 drwxr-xr-x@ 2 shyamsivakumar  staff   64 Nov 13 07:32 .
-drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:08 ..
+drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:15 ..
 
 /Users/shyamsivakumar/Code/coordinator/.overnight/receipts:
 total 8
-drwxr-xr-x@ 3 shyamsivakumar  staff   96 Nov 13 14:09 .
-drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:08 ..
--rw-r--r--@ 1 shyamsivakumar  staff  633 Nov 13 14:09 morning-2026-11-13.md
+drwxr-xr-x@ 3 shyamsivakumar  staff   96 Nov 13 14:15 .
+drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:15 ..
+-rw-r--r--@ 1 shyamsivakumar  staff  633 Nov 13 14:15 morning-2026-11-13.md
 
 /Users/shyamsivakumar/Code/coordinator/.overnight/run:
 total 0
 drwxr-xr-x@ 2 shyamsivakumar  staff   64 Nov 13 07:32 .
-drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:08 ..
+drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:15 ..
 
 /Users/shyamsivakumar/Code/coordinator/.overnight/staging:
 total 0
 drwxr-xr-x@ 2 shyamsivakumar  staff   64 Nov 13 07:32 .
-drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:08 ..
+drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:15 ..
 
 # the report
 # Overnight report — Nov 13, 2026 (the window is UNVERIFIED)
