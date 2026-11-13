@@ -83,8 +83,9 @@ Moonmux's scraper
 - **The reach**: The table answers the ticket's question (what to copy) on
   the merits. This was written for revision 1, when the only ideas left
   worth copying looked like presentation. Revision 4 found two detection
-  gaps as well (an agent that reports `error`, and the agents the user
-  started by hand), so the list of what is worth copying grew.
+  gaps as well (a helper's `error`, which also shows our gap for any
+  agent's `error`, and the agents the user started by hand), so the list of
+  what is worth copying grew.
 - **Verdict**: sound.
 - **Confidence**: high.
 
@@ -355,6 +356,17 @@ a helper that errored counts as needing you and lifts its parent
 is filed under Idle (`LOUDNESS` has no `error`, `:40` and `:181`, and the
 priority view files it under `idle`, `:336`); and decision 6 now names a
 helper's `error` as a need and marks the helper rule as partly ours.
+
+### The run-a3 seventh round
+
+The seventh in-session Opus 5.5 round returned `VERDICT: PASS`: this
+round's two fixes were checked against the Moonmux source at `ef34516`,
+the file was found to agree with itself about `error`, every
+recommendation cross-reference was correct, and the scope was clean. Its
+two small points are fixed here and in the evidence file: the row 15 cell
+now says that the priority view files an errored agent under `idle`, and
+decision 2 now says that what Moonmux turns into a need is a helper's
+`error`, which also shows our gap for any agent's `error`.
 
 ## Known limits
 
