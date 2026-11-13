@@ -246,10 +246,20 @@ See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 The pi coordinator's own files live under `coordinator/pi/` and install with
 the same command: the guard extension and its sandbox profile, the pi
 settings, the phone relay note and the `coord-pi`, `coord-ask`,
-`coord-phone` and `coord-tick` launchers. The guard, profile and settings
+`coord-phone`, `coord-tick`, `kpane` and `kshow` launchers. The guard, profile and settings
 install to `~/.pi/agent-coordinator/`, the launchers to `~/.local/bin/`. They
 are copies of the live files, so a change to the guard goes through a pull
 request like every other change in this repository.
+
+`kpane <image.svg|image.png> [title] [zoom]` shows a diagram in a big popup
+over the coordinator: a Herdr overlay, drawn by the `kpane` mod
+(`coordinator/mods/kpane`), that Esc closes. The popup is near the full
+window, the picture fills it, and `+`, `-` and `Fit` (or the scroll wheel)
+enlarge and shrink it; a zoom of 2 starts at twice the size. `kshow
+<image.png>` prints one to the terminal with kitty graphics. Both print usage
+and exit non-zero on `-h`, `--help`, no arguments or a file that is not
+there. `coord-ask` prints usage the same way and never sends a message that
+starts with `-`.
 
 The `dev.coordinator.turncap` job runs the coordinator's turn-cap monitor
 (`~/Code/coordinator/loop/turn_cap.py`) and keeps it running, so the
