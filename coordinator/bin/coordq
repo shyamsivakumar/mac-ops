@@ -24,6 +24,15 @@ TASK_MODELS = {
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
+# The board refill. When the queue is empty and the machine has free slots,
+# the dispatcher starts tickets from the board, at most once per interval.
+TICKET_BIN = os.environ.get("COORDQ_TICKET", "ticket")
+TICKETS_CONFIG = os.environ.get("COORDQ_TICKETS_CONFIG", os.path.expanduser("~/.coordinator/tickets.json"))
+REFILL_INTERVAL = int(os.environ.get("COORDQ_REFILL_INTERVAL", "300"))
+REFILL_BUDGET = float(os.environ.get("COORDQ_REFILL_BUDGET", "120"))
+REFILL_MAX = int(os.environ.get("COORDQ_REFILL_MAX", "40"))
+REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "200"))
+STAGE = "stage:todo"
 
 
 def path(name):
@@ -129,11 +138,12 @@ def tool_for(args):
 
 
 class Lock:
-    def __init__(self, blocking):
+    def __init__(self, blocking, name="queue.lock"):
         self.blocking = blocking
+        self.name = name
 
     def __enter__(self):
-        self.f = open(path("queue.lock"), "w")
+        self.f = open(path(self.name), "w")
         try:
             fcntl.flock(self.f, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))
         except BlockingIOError:
@@ -261,14 +271,164 @@ def cmd_start(a):
             print(f"started #{item['id']}")
 
 
+def last_refill():
+    """The time of the last refill attempt, or None when there was none."""
+    try:
+        with open(path("refill.last")) as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def mark_refill():
+    """Record a refill attempt. A dry run records it too, so a diagnostic
+    cannot be mistaken for a free refill window."""
+    tmp = path("refill.last.tmp")
+    with open(tmp, "w") as f:
+        f.write(str(time.time()))
+    os.replace(tmp, path("refill.last"))
+
+
+def search_stage_todo(owner):
+    """The open stage:todo issues of one owner, oldest first."""
+    run = subprocess.run(["gh", "search", "issues", "--owner", owner, "--state", "open",
+                          "--label", STAGE, "--sort", "created", "--order", "asc",
+                          "--limit", str(REFILL_LIMIT),
+                          "--json", "repository,number,title,createdAt"],
+                         capture_output=True, text=True, timeout=40)
+    if run.returncode:
+        raise RuntimeError(f"GitHub search failed for {owner}: {run.stderr.strip()[:200]}")
+    return json.loads(run.stdout)
+
+
+def board_candidates():
+    """The open stage:todo issues of the repos in tickets.json, oldest first."""
+    with open(TICKETS_CONFIG) as f:
+        cfg = json.load(f)
+    repos = set(cfg["repos"])
+    owners = sorted({repo.split("/")[0] for repo in repos})
+    found = {}
+    for owner in owners:
+        for row in search_stage_todo(owner):
+            repo = row["repository"]["nameWithOwner"]
+            if repo in repos:
+                found[(repo, row["number"])] = row
+    return sorted(found.values(),
+                  key=lambda r: (r["createdAt"], r["repository"]["nameWithOwner"], r["number"]))
+
+
+def ticket_start(repo, number, dry_run):
+    """Run the ticket CLI on one ticket. A refused ticket exits non-zero and
+    changes nothing, so a refusal is a skip and not a start."""
+    command = [TICKET_BIN, "start", f"{repo}#{number}"]
+    if dry_run:
+        command.append("--dry-run")
+    try:
+        run = subprocess.run(command, capture_output=True, text=True, timeout=240)
+    except subprocess.TimeoutExpired:
+        return 1, "ticket start timed out"
+    return run.returncode, ((run.stdout or "") + (run.stderr or "")).strip()
+
+
+def used_slots():
+    """The live threads plus the queued items, or None when the count is
+    unreadable. The queue counts, because a queued item already holds a
+    slot."""
+    n = live()
+    if n is None:
+        return None
+    return n + len(load()["items"])
+
+
+def refill(a):
+    """Fill free slots from the board.
+
+    The refill runs only when the queue is empty and the machine is below the
+    cap, and at most once per REFILL_INTERVAL seconds. Every candidate is a
+    ticket the ticket CLI may refuse, and a refusal starts nothing, so the
+    scan moves on to the next candidate.
+    """
+    with Lock(False, "refill.lock") as lock:
+        if lock is None:
+            log("refill skipped: another refill is running")
+            return
+        queue = load()
+        if queue["items"]:
+            log(f"refill skipped: the queue holds {len(queue['items'])} item(s)")
+            return
+        n = live()
+        if n is None:
+            log("refill skipped: cannot read the live thread count")
+            return
+        limit = cap()
+        if n >= limit:
+            log(f"refill skipped: at cap {n}/{limit}")
+            return
+        last = last_refill()
+        if last is not None and time.time() - last < REFILL_INTERVAL:
+            log(f"refill skipped: throttled, the last refill was {int(time.time() - last)}s ago")
+            return
+        mark_refill()
+        try:
+            candidates = board_candidates()
+        except (OSError, RuntimeError, ValueError, KeyError) as e:
+            log(f"refill stopped: {e}")
+            return
+        if not candidates:
+            log("refill stopped: the board has no open stage:todo ticket")
+            return
+        deadline = time.time() + REFILL_BUDGET
+        filled = 0
+        scanned = 0
+        for candidate in candidates[:REFILL_MAX]:
+            scanned += 1
+            if time.time() > deadline:
+                log("refill stopped: the refill budget is spent")
+                break
+            used = used_slots()
+            if used is None:
+                log("refill stopped: cannot read the live thread count")
+                break
+            # Every start of this refill took a slot, and the count can lag
+            # behind it, so the slots this refill filled count too. The higher
+            # of the two counts wins, so a slow count never starts too many.
+            used = max(used, n + filled)
+            if used >= limit:
+                log(f"refill stopped: the slots are full ({used}/{limit})")
+                break
+            repo = candidate["repository"]["nameWithOwner"]
+            number = candidate["number"]
+            code, out = ticket_start(repo, number, a.dry_run)
+            if code != 0:
+                log(f"refill refused {repo}#{number}: {out[:200]}")
+                continue
+            filled += 1
+            if a.dry_run:
+                log(f"refill would start {repo}#{number}")
+            elif out.startswith("queued"):
+                log(f"refill queued {repo}#{number}: {out[:120]}")
+            else:
+                log(f"refill started {repo}#{number}")
+        if len(candidates) > scanned:
+            log(f"refill scanned {scanned} candidate(s), {len(candidates) - scanned} left for the next refill")
+
+
 def cmd_dispatch(a):
     with open(path("dispatch.last"), "w") as f:
         f.write(str(int(time.time())))
+    if a.dry_run:
+        log("dry run: the queue is left alone")
+        refill(a)
+        return
     with Lock(False) as lock:
         if lock is None:
             log("lock held by another run, skipping")
             return
         drain()
+    try:
+        refill(a)
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        log(f"refill failed: {e}")
 
 
 def cmd_create(a):
@@ -461,7 +621,10 @@ def main():
     d.add_argument("id", type=int)
     d.set_defaults(fn=cmd_drop)
     sub.add_parser("status").set_defaults(fn=cmd_status)
-    sub.add_parser("dispatch").set_defaults(fn=cmd_dispatch)
+    d = sub.add_parser("dispatch")
+    d.add_argument("--dry-run", action="store_true",
+                   help="start nothing: the queue is left alone and the refill only reports")
+    d.set_defaults(fn=cmd_dispatch)
     g = sub.add_parser("gatekeep")
     g.add_argument("--dry-run", action="store_true")
     g.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))

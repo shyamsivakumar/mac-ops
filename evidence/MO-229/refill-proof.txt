@@ -1,0 +1,17 @@
+# Hermetic proof of the coordq board refill (MO-229, Refs #208)
+
+Temp COORDQ_DIR, stub gh, stub t3mcp, stub ticket. The live queue, the
+live board and the live threads are untouched.
+
+proof dir: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo229-refill-l2m9y_3h
+PASS empty queue starts the oldest candidate :: 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#11 | 2026-11-13 13:14:57 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 | 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#33
+PASS a refused candidate is skipped, not started :: 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#11 | 2026-11-13 13:14:57 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 | 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#33
+PASS the scan continues to the next candidate :: 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#11 | 2026-11-13 13:14:57 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 | 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#33
+PASS the ticket CLI was called once per candidate :: ['shyamsivakumar/mac-ops#11', 'shyamsivakumar/mac-ops#22', 'shyamsivakumar/mac-ops#33']
+PASS a second run inside five minutes starts nothing :: 2026-11-13 13:14:57 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 | 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#33 | 2026-11-13 13:14:57 refill skipped: throttled, the last refill was 0s ago
+PASS a run outside the interval refills again :: 2026-11-13 13:14:57 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 | 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#33 | 2026-11-13 13:14:57 refill skipped: throttled, the last refill was 0s ago | 2026-11-13 13:14:57 refill started shyamsivakumar/mac-ops#11 | 2026-11-13 13:14:57 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 | 2026-11-13 13:14:58 refill started shyamsivakumar/mac-ops#33
+PASS a non-empty queue is not refilled :: 2026-11-13 13:14:58 refill skipped: the queue holds 1 item(s)
+PASS at the cap nothing starts :: 2026-11-13 13:14:58 refill skipped: the queue holds 1 item(s) | 2026-11-13 13:14:58 refill skipped: at cap 6/6
+PASS the cap is never crossed :: calls=['shyamsivakumar/mac-ops#11', 'shyamsivakumar/mac-ops#22'] | 2026-11-13 13:14:58 refill skipped: at cap 6/6 | 2026-11-13 13:14:58 refill started shyamsivakumar/mac-ops#11 | 2026-11-13 13:14:58 refill started shyamsivakumar/mac-ops#22 | 2026-11-13 13:14:58 refill stopped: the slots are full (6/6)
+PASS the dry run starts nothing and reports what it would start :: calls=['shyamsivakumar/mac-ops#11 --dry-run', 'shyamsivakumar/mac-ops#22 --dry-run', 'shyamsivakumar/mac-ops#33 --dry-run'] | 2026-11-13 13:14:58 refill started shyamsivakumar/mac-ops#22 | 2026-11-13 13:14:58 refill stopped: the slots are full (6/6) | 2026-11-13 13:14:58 refill would start shyamsivakumar/mac-ops#11 | 2026-11-13 13:14:58 refill would start shyamsivakumar/mac-ops#22 | 2026-11-13 13:14:58 refill would start shyamsivakumar/mac-ops#33
+RESULT: PASS
