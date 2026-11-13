@@ -1,6 +1,20 @@
 # MO-202 decisions
 
-Run id: `ticket:shyamsivakumar/mac-ops#167:a1`. Refs #167.
+Run id: `ticket:shyamsivakumar/mac-ops#167:a2` (run a2 continues run a1's
+work). Refs #167.
+
+Revision 2 (2026-11-13): the first version of the evidence file went up as
+PR #194 and was merged before the in-session Opus 5.5 review came back. The
+review found ten wrong or unsupported claims. They are fixed in this
+revision, and the follow-up PR carries them. The list is under "Corrections
+after the review" in the evidence file.
+
+Revision 3 (2026-11-13, run a2): the revision 2 corrections sat on a branch
+whose base was the pre-merge parent, so `main` moved under it and the pull
+request came back as conflicting. Run a2 re-applies the same corrected
+content onto `main` as it stands, re-checks the references against a fresh
+read-only clone, and runs one more reviewer round. No new research, no new
+claims, no code.
 
 ## What landed
 
@@ -97,11 +111,15 @@ the mechanism
    same way (`d9e68262268b25a33bfe79cabb41fe60baf5db07`), and herdr-projects
    was read in place at `4e4548c3c43888e6be1c96906215998f07dc63f0`.
 2. **The upstream commits.** `git log --oneline -S` on the Moonmux clone
-   found the commit that introduced each signal: `4d06ea0` (the tmux
+   found the commit that carried each signal: `4d06ea0` (the tmux
    detector, `src/core/tmux/agents.rs`), `8fcf76a` (status grouping,
    `app/mods/sidebar/main.luau`), `dc3b848` (alerts,
-   `app/mods/alerts/main.luau`), `50f21c0` (the elsewhere setting),
-   `e8c3f90` (the Done fix), `bfd23a6` (phrase sorting).
+   `app/mods/alerts/main.luau`), `a571cc5` (the first commit: the herdr
+   listing, the `ours` label, `shown_status`), `e8c3f90` (the screen-hash
+   "still printing" fix), `bfd23a6` (phrase sorting). For four rows the
+   `-S` hit was a later refactor, so the first commit that carried the
+   signal was found by reading that commit's diff; the reviewer caught all
+   four, and the rows now name the first commit.
 3. **The licences.** `LICENSE` in the Moonmux clone is the MIT text with
    "Copyright (c) 2026 Fabien Penso"; `NOTICE` credits herdr-app (Apache-2.0)
    for the Pi icon; the herdr-core `LICENSE` is Apache-2.0.
@@ -111,8 +129,51 @@ the mechanism
 5. **Checks.** `python3 scripts/mac_ops_fast_check.py` passed; the result
    and the head sha are in the PR body.
 
+## The reviewer round
+
+One in-session reviewer round (Claude Opus 5.5, delegated through the task
+router, read-only) read the merged diff against the ticket and returned
+`VERDICT: FAIL` with seventeen findings. What was done with them:
+
+1. **Wrong claim, fixed.** The first version said herdr-projects alerts on
+   agent state rather than on transitions. It does not: the ticker only
+   records a transition when the group changed and there was a previous
+   group (`src/ticker.rs:682-686`), and the alert fires once on the move
+   into `WaitingOnYou` (`src/steps.rs:198-225`). Recommendation 1 was
+   rewritten as the real gap, and the group-versus-status point moved to
+   recommendation 2.
+2. **Wrong commits, fixed.** Rows 5, 7, 11 and 14 named the wrong upstream
+   commit. They now name `e8c3f90`, `a571cc5`, `dc3b848` and `a571cc5` /
+   `4d06ea0`, and the evidence file says how each was found.
+3. **Wrong claims about our side, fixed.** `error` is not treated as
+   needs-you by herdr-projects (row 15), `state_secs` comes from our own
+   `thread.last_state_change` and not from herdr-core's `state_change_seq`
+   (row 13), and herdr-projects does adopt panes it did not start
+   (`Kind::Adopted`, row 14).
+4. **Unsupported, softened.** The tmux OSC pass-through claim in
+   recommendation 6 is no longer stated as fact; it is stated as something
+   to prove before anyone relies on it.
+5. **Acceptance gap, fixed.** The evidence file now carries real
+   `blob/<sha>` links for every file and line, as the acceptance asks.
+6. **Missing context, added.** herdr-projects `origin/main` is 585 commits
+   past the pinned release and has been rewritten as a TypeScript app with no
+   Rust sources; the recommendations now say which tree they apply to.
+7. **Nits, fixed.** The `ctrl-c to interrupt` phrase, the `entry()` line
+   range, the trust-screen line range, the tmux "every server" wording, and
+   the statement that the turn is counted by herdr-core rather than carried
+   in the OSC 7501 report.
+8. **Not changed.** The reviewer's note that the PR was already merged when
+   the review ran is true: PR #194 was merged by the coordinator before the
+   review came back. The corrections ride in a follow-up PR rather than a
+   force push to a merged branch.
+
+Nothing in the review was left unaddressed, and no existing test or check
+was touched.
+
 ## Known limits
 
+- The herdr-projects rows describe the released Rust line (0.2.34,
+  `4e4548c`). `origin/main` has moved on and is now a TypeScript app.
 - Moonmux was not run and not installed, per the brief, so the table
   describes the source, not an observed run.
 - The Moonframe upstream (the framework Moonmux draws with) was not read
