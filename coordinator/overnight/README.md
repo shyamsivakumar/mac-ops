@@ -26,6 +26,23 @@ Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, arming, the tick and the morning report) build on the
 same records, in the same module.
 
+## How a pull request joins a ticket
+
+One work item is one record, so a pull request that belongs to a ticket is
+part of that ticket's record and not a record of its own. Two signals say
+which ticket a pull request belongs to:
+
+1. A keyword reference in the title or the body (`Refs #176`) names a
+   GitHub issue number. It decides when the board shows that issue.
+2. A branch name that carries a ticket key (`t3/aa-10-fix`) names a board
+   ticket by key. The key number and the issue number are different
+   counters, so a branch is never read as an issue number.
+
+When the keyword names an issue the board does not show, the branch is still
+read. A pull request whose body points at a ticket that has left the board,
+and whose branch carries the key of a ticket that is on it, is that ticket's
+work. A pull request that names neither is a record of its own.
+
 ## Folders
 
 | Folder | What it holds |
