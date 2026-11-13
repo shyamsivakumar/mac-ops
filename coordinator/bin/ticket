@@ -36,6 +36,8 @@ FENCED_BLOCK = re.compile(r"(?s)```.*?```")
 REF_STATE = {}
 KEY_ISSUE = {}
 COMMENT_TEXT = {}
+PR_REF_WORDS = ("refs", "fixes", "closes", "fix", "close", "fixed", "closed", "resolves", "resolved", "resolve")
+PR_REF = re.compile(r"(?i)\b(?:" + "|".join(PR_REF_WORDS) + r")\s*:?\s*#(\d+)\b")
 RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
 RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
 SHYAM = re.compile(r"\bshyam\b", re.I)
@@ -452,6 +454,121 @@ def reference_state(repo, number):
     return state
 
 
+def iso_time(text):
+    """A GitHub timestamp as a comparable UTC datetime, or None."""
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def time_key(text):
+    """A sort key for a GitHub timestamp; a missing timestamp sorts first."""
+    return iso_time(text) or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def references_issue(body, number):
+    """True when the body says `Refs #<number>` (or Fixes/Closes) for that number."""
+    return any(int(match.group(1)) == number for match in PR_REF.finditer(body or ""))
+
+
+def referencing_pulls(repo, number):
+    """The pull requests in `repo` whose body references issue `number`.
+
+    The issue timeline names every pull request that mentions the issue, and
+    the pull request itself says whether the mention is a reference. A pull
+    request in another repository never counts.
+    """
+    events = gh_json(["api", "--paginate", f"repos/{repo}/issues/{number}/timeline?per_page=100"])
+    found = {}
+    for event in events:
+        if event.get("event") != "cross-referenced":
+            continue
+        source = (event.get("source") or {}).get("issue") or {}
+        if "pull_request" not in source:
+            continue
+        if (source.get("repository") or {}).get("full_name") != repo:
+            continue
+        pull_number = source.get("number")
+        if pull_number in found:
+            continue
+        if not references_issue(source.get("body") or "", number):
+            continue
+        pull = gh_json(["api", f"repos/{repo}/pulls/{pull_number}"])
+        if not references_issue(pull.get("body") or "", number):
+            continue
+        found[pull_number] = {
+            "number": pull_number,
+            "state": pull.get("state"),
+            "merged": bool(pull.get("merged")),
+            "mergedAt": pull.get("merged_at"),
+            "createdAt": pull.get("created_at"),
+        }
+    return sorted(found.values(), key=lambda pull: pull["number"])
+
+
+def is_intent_comment(body):
+    """True when the comment carries the coordinator's intent ledger line."""
+    for match in LEDGER_LINE.finditer(body or ""):
+        try:
+            entry = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if entry.get("kind") == "intent":
+            return True
+    return False
+
+
+def coordinator_restart_time(issue):
+    """When the coordinator last restarted the work on the issue.
+
+    A restart is the coordinator's own marker for a new attempt: the intent
+    comment `ticket start` posts, or a comment the coordinator writes that
+    opens with `Coordinator`. A receipt is not a restart.
+    """
+    newest = None
+    for comment in issue.get("comments") or []:
+        body = comment.get("body") or ""
+        if not is_intent_comment(body) and not body.strip().lower().startswith("coordinator"):
+            continue
+        created = comment.get("createdAt") or ""
+        if newest is None or created > newest:
+            newest = created
+    return newest
+
+
+def pull_guard_reasons(repo, issue):
+    """Why a start must be refused because a pull request already carries the issue.
+
+    An open pull request means the work is already in flight. A merged one
+    means the work landed, unless the coordinator restarted the issue after
+    that merge.
+    """
+    pulls = referencing_pulls(repo, issue["number"])
+    if not pulls:
+        return []
+    open_pulls = [pull for pull in pulls if pull["state"] == "open"]
+    if open_pulls:
+        newest = max(open_pulls, key=lambda pull: time_key(pull["createdAt"]))
+        return [f"open pull request #{newest['number']} already references this issue"]
+    restart = iso_time(coordinator_restart_time(issue))
+    blocking = []
+    for pull in pulls:
+        if not pull["merged"]:
+            continue
+        merged_at = iso_time(pull["mergedAt"])
+        if restart is None or merged_at is None or merged_at > restart:
+            blocking.append(pull)
+    if blocking:
+        newest = max(blocking, key=lambda pull: time_key(pull["mergedAt"]))
+        return [f"already merged via #{newest['number']}; close the issue"]
+    return []
+
+
 def own_body(body):
     """The body without preserved contracts and code, which name other tickets."""
     return FENCED_BLOCK.sub(" ", DETAILS_BLOCK.sub(" ", body))
@@ -639,6 +756,11 @@ def ledger_of(issue, login):
 def validate_start(cfg, repo, issue, check_text=True):
     rcfg = repo_config(cfg, repo)
     t = parse_ticket(cfg, repo, issue)
+    # The pull request guard comes before the other checks so the refusal
+    # names the pull request that already carries the issue.
+    pull_reasons = pull_guard_reasons(repo, issue)
+    if pull_reasons:
+        raise Refuse(pull_reasons[0])
     if t["state"] != "OPEN":
         suffix = ""
         if check_text:
