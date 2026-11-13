@@ -125,9 +125,12 @@ used at [src/brief.rs:115](https://github.com/shyamsivakumar/herdr-projects/blob
 and a trust screen on a pane counts as `blocked` for the brief
 ([src/ticker.rs:640-646](https://github.com/shyamsivakumar/herdr-projects/blob/4e4548c3c43888e6be1c96906215998f07dc63f0/src/ticker.rs#L640-L646)).
 
-So: our needs-you detection is already at least as good as Moonmux's for
-herdr-core panes, and it is missing the *presentation* ideas (see the
-recommendations), not the detection ideas.
+So: for herdr-core panes our detection is at least as good as Moonmux's on
+every signal Moonmux has, and what we are missing is not the *presentation*
+ideas alone. Two detection gaps are left (an agent that reports `error`, and
+the agents the user started by hand); the rest are presentation. The
+recommendations are aimed at the live tree, and they say which tree they
+apply to.
 
 ## Signals
 
@@ -175,7 +178,7 @@ against the released Rust line and are re-targeted below.
 | 12 | Click the alert, land on the agent | The alert carries `go: { place, task }` ([shared/alerts.ts:97](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L97)) and the `focus` of the message to open, for a done task or an open card ([:101](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L101), [:108](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/shared/alerts.ts#L108)) | **Skip.** Already ours |
 | 13 | Time in the current state | **Partly.** A task carries an age ([server/core/tasks.ts:123-128](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L123-L128)); an agent has no time-in-state next to its status | **Copy the idea.** Display only, on the agent row |
 | 14 | Agents started outside the app are seen too | **No.** The live tree knows only the agents it launched itself: `reconcile()` walks its own `agent` records ([server/core/agents.ts:63-69](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L63-L69)), and `terminal()` matches only a herdr-core terminal labelled with this installation and this launch ([:56-62](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/agents.ts#L56-L62)). An agent the user started by hand has no record and no label match, so it is never seen, and the live tree has no adopt path for a foreign agent (its `adopt` is about moving a task's worktree, [server/core/task-relocation.ts:12](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/task-relocation.ts#L12)). The Rust line does adopt such panes (`Kind::Adopted`) | **Copy the idea.** The gap is in the live tree too. It is recommendation 1 |
-| 15 | A failed agent is a need | **No.** The state word is read at [server/core/source.ts:236](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L236) and only `blocked` is a need, so herdr-core's `error` state falls through to `idle` at [:240](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L240). A task whose agent is in that state then reads as `work` ([server/core/tasks.ts:121](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L121)), unless the agent's logged turn has ended, which makes the task `need` ([tasks.ts:118](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L118), [server/core/logs.ts:59-69](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/logs.ts#L59-L69)) | **The gap, in the live tree.** Recommendation 2 |
+| 15 | A failed agent is a need | **No.** The state word is read at [server/core/source.ts:236](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L236) and only `blocked` is a need, so herdr-core's `error` state falls through to `idle` at [:240](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L240). A task whose agent is in that state then reads as `work` ([server/core/tasks.ts:121](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L121)), unless the agent's log shows a closed turn with nothing open and no background job running, which makes the task `need` ([tasks.ts:118](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L118), [server/core/logs.ts:71-87](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/logs.ts#L71-L87)) | **The gap, in the live tree.** Recommendation 2 |
 
 Not checked in the live tree in this pass: the Rust line's trust-screen
 check (`src/trust_screen.rs`), which has no counterpart in the TypeScript
@@ -236,12 +239,13 @@ presentation choice we already made, in our own words.
    [server/core/tasks.ts:121](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L121)),
    and provider failures have their own path
    ([:238-239](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L238-L239)).
-   The gap is an agent that is alive and reports an error before its logged
-   turn ends: until then the task reads as `work`
+   The gap is an agent that is alive and reports an error before its log
+   shows a closed turn: until then the task reads as `work`
    ([server/core/tasks.ts:121](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L121)),
-   and only when the turn has ended does the log make it `need`
+   and only when the log shows a closed turn with nothing open and no
+   background job running does it become `need`
    ([tasks.ts:118](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L118),
-   [server/core/logs.ts:59-69](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/logs.ts#L59-L69)).
+   [server/core/logs.ts:71-87](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/logs.ts#L71-L87)).
    Add `error` beside `blocked` at
    [:237](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/source.ts#L237)
    (and, in the Rust line, beside `blocked_long` at `src/thread.rs:590`).
@@ -461,9 +465,10 @@ four smaller accuracy points. All are fixed:
 7. The `error` gap is narrower than written: a task whose agent reports
    `error` reads as `work` while the agent's logged turn is still running
    ([server/core/tasks.ts:121](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L121)),
-   and only an ended turn makes it `need`
+   and only a closed turn with nothing open and no background job makes it
+   `need`
    ([tasks.ts:118](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/tasks.ts#L118),
-   [server/core/logs.ts:59-69](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/logs.ts#L59-L69)).
+   [server/core/logs.ts:71-87](https://github.com/shyamsivakumar/herdr-projects/blob/a862ac947306621bac9e8130db8b3cd6ffead6fe/server/core/logs.ts#L71-L87)).
    Row 15 and recommendation 2 now say so.
 8. Live row 8 said Moonmux's helper rule is "already ours"; the live tree
    drops helper events but never turns a helper's `error` into a need. The
@@ -473,3 +478,35 @@ four smaller accuracy points. All are fixed:
    task is already `need`. Reworded.
 10. "What we would gain" listed three things and left out the alert case;
     it now lists four, matching the recommendations.
+
+### The run-a3 third round
+
+A third in-session Opus 5.5 round checked the cross-references (all
+correct) and the two narrowed code claims, and returned `VERDICT: FAIL` on
+one wrong citation, plus four smaller points. All are fixed:
+
+1. **A wrong function was cited in four places.** The text said that once
+   the agent's logged turn has ended the task becomes `need`, citing
+   `server/core/logs.ts:59-69`. That range is `providerTurn()`, whose only
+   caller is the provider-retry path
+   (`server/core/provider-retries.ts:40`); `waiting()` never calls it, and
+   the "cut" it returns does not feed the task status. The function that
+   decides is `waiting()` at `server/core/logs.ts:71-87`: it is true when
+   the log has caught up, a turn has closed, no turn is open and no
+   background job is running (`activityOf` at `server/activity.ts:42`). All
+   four citations now name `logs.ts:71-87`, and the prose says what
+   `waiting()` checks.
+2. **A stale cross-reference in `decisions.md`.** Its review-round list
+   still gave the revision 2 numbering. It now carries the revision 4
+   numbers, like the evidence file.
+3. **A reach statement that contradicted the recommendations.**
+   `decisions.md` said only the alert discipline and the seen state were
+   worth copying, both presentation. It now says that was true for
+   revision 1 and that revision 4 found two detection gaps as well.
+4. **The short answer overstated the comparison.** It said our detection
+   is at least as good as Moonmux's and that only presentation ideas were
+   missing. It now names the two detection gaps and says the
+   recommendations are aimed at the live tree.
+5. **A small overclaim in `decisions.md`.** It said every recommendation
+   names a file and a line; recommendation 6 names none, because it says
+   what not to copy. It now says five of six do.
