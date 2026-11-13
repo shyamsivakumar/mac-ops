@@ -71,7 +71,9 @@ QUOTED = re.compile(r"`([^`]+)`")
 PLANNED = re.compile(r"planned\s+(?P<count>\d+)\s+items?\b", re.I)
 # A receipt is one item of the shift. The morning report is not a receipt.
 RECEIPT_FILE = re.compile(r"^(?!morning-).+\.md$")
-# A check that names no command did not run, whatever the receipt claims.
+# The shift log records the end of the shift with the word "stall".
+STALL = re.compile(r"\bstall\b", re.I)
+# The states a receipt can name.
 STATE_DONE = "done"
 STATE_READY = "ready"
 STATE_STUCK = "stuck"
@@ -84,7 +86,7 @@ try:
     from zoneinfo import ZoneInfo
 
     PT = ZoneInfo("America/Los_Angeles")
-except Exception:  # pragma: no cover - only on a box without tzdata
+except (KeyError, OSError):
     PT = timezone(timedelta(hours=-8), "PT")
 
 
@@ -402,9 +404,16 @@ def report_root(explicit: str | None) -> Path:
 
     The default is the runtime folder the installer creates. A caller can
     point the report at another folder, which is how a dry night on a
-    fixture folder is rendered."""
+    fixture folder is rendered. The installer can move the runtime folder
+    with `MAC_OPS_COORDINATOR_DIR`, and the report follows it."""
     if explicit:
         return Path(explicit).expanduser()
+    from_env = os.environ.get("OVERNIGHT_ROOT")
+    if from_env:
+        return Path(from_env).expanduser()
+    coordinator = os.environ.get("MAC_OPS_COORDINATOR_DIR")
+    if coordinator:
+        return Path(coordinator).expanduser() / ".overnight"
     return Path(OVERNIGHT_ROOT).expanduser()
 
 
@@ -412,8 +421,26 @@ def read_text(path: Path) -> str:
     """Return a file's text, or an empty string when it cannot be read."""
     try:
         return path.read_text()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return ""
+
+
+def split_checks(body: str) -> list[str]:
+    """Return the parts of a checks line, split on the semicolons that sit
+    outside a command."""
+    parts = []
+    current = ""
+    in_command = False
+    for char in body:
+        if char == "`":
+            in_command = not in_command
+        if char == ";" and not in_command:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    parts.append(current)
+    return [part.strip() for part in parts if part.strip()]
 
 
 def parse_check_text(body: str) -> list[dict]:
@@ -422,10 +449,7 @@ def parse_check_text(body: str) -> list[dict]:
     A check line may hold several checks, separated by semicolons. Each
     check counts as run only when it names a command and an exit code."""
     checks = []
-    for part in body.split(";"):
-        part = part.strip()
-        if not part:
-            continue
+    for part in split_checks(body):
         quoted = QUOTED.search(part)
         code = EXIT_CODE.search(part)
         checks.append(
@@ -474,9 +498,9 @@ def classify(receipt: dict) -> tuple[str, str]:
     """Return the state of one receipt and the reason it is not what it claims.
 
     A receipt that claims it is done or ready needs proof: a check that ran
-    with its exit code, and a gate that passed. Without that proof the
-    item is stuck, because the report never reports a check as passed
-    unless it ran."""
+    with its exit code and passed, and a gate that passed. Without that
+    proof the item is stuck, because the report never reports a check as
+    passed unless it ran."""
     fields = receipt["fields"]
     state = (fields.get("state") or "").strip().lower()
     if state not in (STATE_DONE, STATE_READY, STATE_STUCK, STATE_PARKED):
@@ -488,6 +512,10 @@ def classify(receipt: dict) -> tuple[str, str]:
         if missing:
             names = ", ".join(check["raw"] for check in missing)
             return STATE_STUCK, f"a check has no exit code, so it did not run ({names})"
+        failed = [check for check in receipt["checks"] if check["exit"] != 0]
+        if failed:
+            names = ", ".join(check["raw"] for check in failed)
+            return STATE_STUCK, f"a check failed ({names})"
         if (fields.get("gate") or "").strip().upper() != "PASS":
             return STATE_STUCK, "the gate did not pass"
     return state, ""
@@ -510,12 +538,16 @@ def parse_shift_log(text: str) -> dict:
             body = line.split(":", 1)[1] if ":" in line else line
             quoted = QUOTED.search(body)
             code = EXIT_CODE.search(body)
-            full_suite = {
+            suite = {
                 "command": quoted.group(1).strip() if quoted else "",
                 "exit": int(code.group("code")) if code else None,
                 "time": line.split("—", 1)[0].strip() if "—" in line else "",
             }
-        if "stall" in line.lower():
+            # A later line without an exit code does not erase a run that
+            # the log already records.
+            if suite["exit"] is not None or full_suite is None:
+                full_suite = suite
+        if STALL.search(line):
             stall = True
     return {"planned": planned, "full_suite": full_suite, "stall": stall}
 
@@ -584,11 +616,19 @@ def item_label(receipt: dict) -> str:
 
 
 def how_it_ended(root: Path, log: dict, receipts: list[dict], planned: int | None) -> str:
-    """Return how the shift ended."""
+    """Return how the shift ended.
+
+    The spec allows four answers: deadline, all done, STOP and stall. A
+    shift that ended in none of those ways says UNVERIFIED rather than
+    guessing."""
     if (root / "run" / "STOP").exists():
         return "STOP"
     if log["stall"]:
         return "stall"
+    if planned is not None and len(receipts) == planned:
+        states = [classify(receipt)[0] for receipt in receipts]
+        if all(state in (STATE_DONE, STATE_PARKED) for state in states):
+            return "all done"
     deadline = read_text(root / "run" / "deadline").strip()
     if deadline:
         try:
@@ -596,15 +636,7 @@ def how_it_ended(root: Path, log: dict, receipts: list[dict], planned: int | Non
                 return "deadline"
         except ValueError:
             pass
-    if planned is not None and receipts:
-        states = [classify(receipt)[0] for receipt in receipts]
-        if len(receipts) == planned and all(
-            state in (STATE_DONE, STATE_PARKED) for state in states
-        ):
-            return "all done"
-    if planned is not None and not receipts and planned == 0:
-        return "all done"
-    return "unclear"
+    return UNVERIFIED
 
 
 def render_report(snapshot: dict) -> str:
@@ -615,7 +647,6 @@ def render_report(snapshot: dict) -> str:
     records say it ran."""
     receipts = snapshot["receipts"]
     log = snapshot["log"]
-    policy = snapshot["policy"]
     planned = log["planned"]
     counts = {STATE_DONE: 0, STATE_READY: 0, STATE_STUCK: 0, STATE_PARKED: 0}
     unreadable = 0
@@ -630,17 +661,18 @@ def render_report(snapshot: dict) -> str:
             unreadable += 1
             stuck.append({"receipt": receipt, "reason": reason})
             continue
-        counts[state] += 1
         if state == STATE_DONE and fields.get("merged"):
+            counts[STATE_DONE] += 1
             merged.append(receipt)
-        elif state == STATE_READY:
-            ready.append(receipt)
-        elif state == STATE_DONE and fields.get("pr"):
+        elif state in (STATE_DONE, STATE_READY):
             # The work is done but nobody merged it, so it waits for Shyam.
+            counts[STATE_READY] += 1
             ready.append(receipt)
         elif state == STATE_STUCK:
+            counts[STATE_STUCK] += 1
             stuck.append({"receipt": receipt, "reason": reason})
         elif state == STATE_PARKED:
+            counts[STATE_PARKED] += 1
             parked.append(receipt)
 
     lines: list[str] = []
@@ -648,7 +680,11 @@ def render_report(snapshot: dict) -> str:
     lines.append(f"# Overnight report — {day.strftime('%b %-d, %Y')} ({snapshot['window']})")
     lines.append("")
     ended = snapshot["ended"]
-    planned_text = str(planned) if planned is not None else UNVERIFIED
+    disagree = planned is not None and planned < len(receipts)
+    if planned is None or disagree:
+        planned_text = UNVERIFIED
+    else:
+        planned_text = str(planned)
     counts_text = (
         f"{counts[STATE_DONE]} done, {counts[STATE_READY]} ready, "
         f"{counts[STATE_STUCK]} stuck, {counts[STATE_PARKED]} parked"
@@ -736,7 +772,7 @@ def render_report(snapshot: dict) -> str:
                     f"({check['raw']})."
                 )
     suite = log["full_suite"]
-    if suite and suite["exit"] is not None:
+    if suite and suite["command"] and suite["exit"] is not None:
         when = f"ran {suite['time']}" if suite["time"] else "ran"
         if suite["exit"] == 0:
             not_run.append(f"- Full suite: {when}, passed.")
@@ -744,17 +780,22 @@ def render_report(snapshot: dict) -> str:
             not_run.append(f"- Full suite: {when}, failed (exit {suite['exit']}).")
     elif suite:
         not_run.append(
-            "- Full suite: the shift log records it without an exit code, so it did "
-            "not run."
+            "- Full suite: the shift log records it without a command and an exit "
+            "code, so it did not run."
         )
-    elif policy.get("verify"):
+    else:
         not_run.append(
             f"- Full suite: {UNVERIFIED} (the shift log records no full suite run)."
         )
-    if planned is not None and planned != len(receipts):
+    if planned is not None and planned > len(receipts):
         not_run.append(
             f"- {planned - len(receipts)} planned items have no receipt. Which ones: "
             f"{UNVERIFIED}."
+        )
+    if disagree:
+        not_run.append(
+            f"- The shift log plans {planned} items and the receipts hold "
+            f"{len(receipts)}. The planned count is {UNVERIFIED}."
         )
     if not_run:
         lines.extend(not_run)
@@ -765,13 +806,23 @@ def render_report(snapshot: dict) -> str:
     lines.append("## Cost")
     lines.append("")
     minutes = [receipt_minutes(receipt) for receipt in receipts]
-    if receipts and all(value is not None for value in minutes):
+    complete = (
+        planned is not None
+        and planned == len(receipts)
+        and all(value is not None for value in minutes)
+    )
+    if complete:
         builder = format_minutes(sum(value or 0 for value in minutes))
-    elif not receipts:
-        builder = "0 min"
+    elif planned is None:
+        builder = f"{UNVERIFIED} (the planned count is {UNVERIFIED})"
+    elif planned != len(receipts):
+        builder = (
+            f"{UNVERIFIED} ({planned - len(receipts)} planned items have no "
+            "receipt, so their time is unknown)"
+        )
     else:
         builder = f"{UNVERIFIED} (a receipt records no time used)"
-    allowance = policy.get("allowance_used_percent")
+    allowance = snapshot["policy"].get("allowance_used_percent")
     if isinstance(allowance, (int, float)) and not isinstance(allowance, bool):
         model_use = f"{allowance:g}% of allowance"
     else:
@@ -781,9 +832,22 @@ def render_report(snapshot: dict) -> str:
     return "\n".join(lines)
 
 
+def report_day(value: str) -> str:
+    """Return the night of the report, as YYYY-MM-DD."""
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a date as YYYY-MM-DD"
+        )
+    return value
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Render the morning report from the shift's records."""
     root = report_root(args.root)
+    if not root.is_dir():
+        die(f"the overnight folder {root} does not exist")
     receipts_dir = root / "receipts"
     receipts = []
     if receipts_dir.is_dir():
@@ -882,6 +946,7 @@ def main() -> int:
     report.add_argument(
         "--date",
         default=None,
+        type=report_day,
         help="the night of the report, as YYYY-MM-DD (default today, PT)",
     )
     report.set_defaults(func=cmd_report)

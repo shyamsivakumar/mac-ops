@@ -1,0 +1,80 @@
+== B1a: a root folder that does not exist ==
+overnight: the overnight folder /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.8v3n0FtxDA/nothing-here does not exist
+exit code: 1
+
+== B1b: an empty night (no run/, no receipts/) ==
+# Overnight report — Nov 13, 2026 (the window is UNVERIFIED)
+
+How it ended: UNVERIFIED. Items: UNVERIFIED planned, 0 done, 0 ready, 0 stuck, 0 parked.
+
+## Merged (checked on GitHub)
+
+- None.
+
+## Ready for you (gate PASS, waiting on a merge right the shift does not have)
+
+- None.
+
+## Stuck (what stopped it, and the next step)
+
+- None.
+
+## Decisions for you (one at a time, each with my recommendation)
+
+1. None.
+
+## Not run, and why
+
+- Full suite: UNVERIFIED (the shift log records no full suite run).
+
+## Cost
+
+- Builder time: UNVERIFIED (the planned count is UNVERIFIED). Model use: UNVERIFIED (the allowance was not readable).
+
+exit code: 0
+
+== B2a: a log line that holds the word install ==
+How it ended: deadline. Items: 4 planned, 1 done, 1 ready, 2 stuck, 0 parked.
+
+== B2b: a night where every item was done ==
+How it ended: all done. Items: 1 planned, 1 done, 0 ready, 0 stuck, 0 parked.
+
+== B2c: a night the records do not explain ==
+How it ended: deadline. Items: UNVERIFIED planned, 1 done, 1 ready, 2 stuck, 0 parked.
+
+== B3: the shift log plans fewer items than there are receipts ==
+How it ended: deadline. Items: UNVERIFIED planned, 1 done, 1 ready, 2 stuck, 0 parked.
+## Not run, and why
+
+- MO-240 (#231) — Read the policy snapshot at the arm step: `python3 scripts/mac_ops_fast_check.py` has no exit code in the receipt, so it did not run.
+- Full suite: ran 2026-11-13 05:40 AM PT, passed.
+
+== M1: a full suite line with an exit code but no command ==
+- Full suite: the shift log records it without a command and an exit code, so it did not run.
+
+== M2: a skip line after a run that the log records ==
+- Full suite: ran 2026-11-13 05:40 AM PT, passed.
+
+== M3: a receipt whose check failed but whose gate passed ==
+How it ended: deadline. Items: 4 planned, 0 done, 1 ready, 3 stuck, 0 parked.
+- MO-222 (#190) — Morning report shows decisions, cost and the UNVERIFIED rules. Stopped: a check failed (`python3 scripts/mac_ops_fast_check.py` exit 1). Next: unknown.
+
+== M4: a done receipt with a pull request and no merge time ==
+How it ended: deadline. Items: 4 planned, 0 done, 2 ready, 2 stuck, 0 parked.
+1
+
+== M5: a command that holds a semicolon ==
+How it ended: deadline. Items: 4 planned, 1 done, 1 ready, 2 stuck, 0 parked.
+- MO-231 (#223) — Read the board into overnight intake records. Why waiting: the shift has no merge right for this repository.
+
+== M6a: a receipt that is not valid UTF-8 ==
+How it ended: deadline. Items: UNVERIFIED planned, 1 done, 1 ready, 2 stuck, 0 parked, 1 UNVERIFIED.
+exit code: 0
+
+== M6b: a date that is not a date ==
+exit code: 2
+usage: overnight report [-h] [--dry-run] [--root ROOT] [--date DATE]
+overnight report: error: argument --date: '13-11-2026' is not a date as YYYY-MM-DD
+
+== M7: the runtime folder the installer moved ==
+# Overnight report — Nov 13, 2026 (the window is UNVERIFIED)

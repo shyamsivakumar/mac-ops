@@ -13,10 +13,18 @@ count cannot be checked.
 $ python3 coordinator/overnight/overnight report --dry-run --root <copy of the fixture> --date 2026-11-13
 How it ended: deadline. Items: UNVERIFIED planned, 1 done, 1 ready, 2 stuck, 0 parked.
 
+The same fixture night with 12 planned items and 4 receipts, so 8 planned
+items have no receipt and the builder time cannot be checked.
+
+$ python3 coordinator/overnight/overnight report --dry-run --root <copy of the fixture> --date 2026-11-13
+How it ended: deadline. Items: 12 planned, 1 done, 1 ready, 2 stuck, 0 parked.
+- 8 planned items have no receipt. Which ones: UNVERIFIED.
+- Builder time: UNVERIFIED (8 planned items have no receipt, so their time is unknown). Model use: UNVERIFIED (the allowance was not readable).
+
 The write path: the same command without --dry-run writes the report file.
 
 $ python3 coordinator/overnight/overnight report --root <copy of the fixture> --date 2026-11-13
-overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.7TSRR6PC8Y/write/receipts/morning-2026-11-13.md
+overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.u4cTwxlicf/write/receipts/morning-2026-11-13.md
 
 $ ls <copy of the fixture>/receipts
 mo-222.md

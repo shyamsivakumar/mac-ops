@@ -89,7 +89,7 @@ else. It never invents a count and it never upgrades a claim into proof.
 
 | Record | What the report takes from it |
 | --- | --- |
-| `receipts/<item>.md` | The state of one item, its check, its gate verdict, its merge time, its builder time and why it stopped. |
+| `receipts/<item>.md` | The state of one item, its check, its gate verdict, its merge time, its builder time and why it stopped. The merge time is the one the shift wrote after it checked GitHub, so the report does not call GitHub again. |
 | `inbox/parking-lot.md` | The decisions the shift could not make, each with a default and a recommendation. |
 | `run/shift-log.md` | How many items were in scope (`planned N items`), whether the full suite ran and with which exit code, and whether the shift stalled. |
 | `run/policy.json` | The verify level and `allowance_used_percent`, the share of the plan allowance the night used. |
@@ -119,13 +119,25 @@ A receipt is markdown with one `- Key: value` line per field.
 - A check counts as run only when the receipt names the command and its
   exit code. A check that is claimed with neither never appears as passed:
   the item is stuck, and the check is listed under "Not run, and why".
-- An item counts as done only when its receipt holds a check that ran and a
-  gate that passed.
+- An item counts as done only when its receipt holds a check that ran and
+  passed, and a gate that passed. A check that failed leaves the item
+  stuck, whatever the gate says.
+- `done` counts the items that merged, and `ready` counts the items that
+  hold a passing gate but wait for a merge right the shift does not have.
+  The counts and the lists agree item for item.
+- The report says how the shift ended in one of the four ways the spec
+  allows: `deadline`, `all done`, `STOP` or `stall`. When the records
+  explain none of them, it says `UNVERIFIED`.
 - A count that cannot be checked is written as `UNVERIFIED`: the planned
   count without a shift-log summary, the model use when the allowance was
-  not readable, the builder time when a receipt records no time, and the
-  identity of planned items that have no receipt.
+  not readable, the builder time when a receipt records no time or a
+  planned item has no receipt, and the identity of planned items that
+  have no receipt.
+- The full suite counts as run only when the shift log records its command
+  and its exit code.
 - The report never says a check passed if it did not run.
+- The report exits non-zero when the folder that holds the records does
+  not exist, so a wrong folder is not a calm empty report.
 
 ## Source
 

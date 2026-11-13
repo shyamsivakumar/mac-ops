@@ -16,11 +16,13 @@ Run id: `ticket:shyamsivakumar/mac-ops#190:a1`. Refs #190.
     `receipts/morning-YYYY-MM-DD.md`.
   - It reads the receipts, the parking lot, the shift log, the policy
     snapshot, the armed file, the deadline file and the STOP file. It
-    reads no board, keeps no list of its own, and holds the second queue
-    the spec forbids.
+    reads no board and holds no second queue of its own.
   - The report has the headings of spec section 11: how it ended and the
     counts, Merged, Ready for you, Stuck, Decisions for you, Not run and
     why, Cost. The times are PT.
+  - "How it ended" is one of the four ways the spec allows: deadline, all
+    done, STOP or stall. Anything the records do not explain says
+    UNVERIFIED.
   - **Decisions for you** holds the parking-lot entries, each with its
     recommendation and the default that applies if Shyam says nothing, and
     then the parked items, because a parked item waits for a decision.
@@ -35,14 +37,22 @@ Run id: `ticket:shyamsivakumar/mac-ops#190:a1`. Refs #190.
     time, and the identity of planned items that have no receipt.
   - A check counts as run only when the receipt names the command and its
     exit code. A receipt that claims to be done or ready without that
-    proof is reported as stuck, and the check appears under "Not run, and
-    why". The report never says a check passed if it did not run.
+    proof, or with a check that failed, is reported as stuck, and the
+    check appears under "Not run, and why". The report never says a check
+    passed if it did not run.
+  - `done` counts the items that merged and `ready` counts the items that
+    wait for a merge right, so the counts and the lists agree item for
+    item.
+  - The command exits non-zero when the folder that holds the records
+    does not exist, so a wrong folder is not a calm empty report.
 - `coordinator/overnight/README.md`: the contract names the report command,
   the record each field comes from, the receipt fields and the rules the
   report holds.
 - `evidence/MO-222/fixture-night/`: the fixture night the proof renders.
 - `evidence/MO-222/report-dry-run.log`, `evidence/MO-222/report-contrast.log`:
   the report and the contrast runs.
+- `evidence/MO-222/reviewer-fixes.log`: the probes for the findings of the
+  reviewer round.
 - `evidence/MO-222/decisions.md`: this file.
 
 Not touched: the merge, push and slot-cap rules, the Ascend rules, the
@@ -118,7 +128,9 @@ existing test or check. No existing test or check was weakened.
 - **The reach**: The report never keeps a punch list, so the planned
   count is the shift log's summary and not the board. When that summary is
   missing, the report says the planned count is UNVERIFIED and names the
-  planned items that have no receipt as UNVERIFIED too.
+  planned items that have no receipt as UNVERIFIED too. `done` counts the
+  items that merged and `ready` counts the items that wait for a merge
+  right, so the counts and the lists agree item for item.
 - **Verdict**: sound.
 
 ### 6. The report reads records only, so the merged list is the receipts' list
@@ -149,9 +161,9 @@ existing test or check. No existing test or check was weakened.
    coordinator/overnight/overnight report --dry-run --root
    evidence/MO-222/fixture-night --date 2026-11-13` printed the report in
    `evidence/MO-222/report-dry-run.log`, exit code 0. The report shows
-   `Model use: UNVERIFIED (the allowance was not readable)`, the planned
-   count `12 planned` with `8 planned items have no receipt. Which ones:
-   UNVERIFIED`, and the claimed check of MO-240 under "Not run, and why".
+   `Model use: UNVERIFIED (the allowance was not readable)` next to a
+   checkable `Builder time: 45 min`, and the claimed check of MO-240
+   under "Not run, and why" instead of as a pass.
 2. **The same night with a readable allowance.** The same command on a
    copy of the same fixture whose policy snapshot carries
    `allowance_used_percent: 41` prints `Model use: 41% of allowance`. One
@@ -160,16 +172,72 @@ existing test or check. No existing test or check was weakened.
    (`evidence/MO-222/report-contrast.log`).
 3. **A count that cannot be checked.** The same command on a copy of the
    same fixture without the shift-log summary line prints `Items:
-   UNVERIFIED planned`.
+   UNVERIFIED planned`, and on a copy that plans 12 items against 4
+   receipts it prints `8 planned items have no receipt. Which ones:
+   UNVERIFIED` and an UNVERIFIED builder time.
 4. **The write path.** The same command without `--dry-run` writes
    `receipts/morning-2026-11-13.md` and prints where it wrote it.
-5. **Checks.** `python3 scripts/mac_ops_fast_check.py` and the full local
+5. **The probes of the reviewer round.** `evidence/MO-222/reviewer-fixes.log`
+   holds the run of each finding's probe: a folder that does not exist
+   exits 1, an empty night says UNVERIFIED, "install" is not a stall, a
+   night where every item was done says "all done", a planned count below
+   the receipt count never goes negative, a failed check is not done, a
+   semicolon inside a command is one check, a receipt that is not UTF-8
+   is an unreadable item and not a crash, a bad date is a clean error,
+   and the report follows the folder the installer moved.
+6. **Checks.** `python3 scripts/mac_ops_fast_check.py` and the full local
    check through `heavy` are recorded in the pull request body.
 
 ## The reviewer round
 
-One in-session reviewer round read `git diff origin/main...HEAD` against
-this ticket. What it found and what came of it is written here.
+One in-session reviewer round (Claude Opus 5.5) read `git diff
+origin/main...HEAD` against this ticket and returned `VERDICT: FAIL` with
+three blocking findings and ten minor ones. Everything it raised is
+fixed, and the probes for each finding are in
+`evidence/MO-222/reviewer-fixes.log`.
+
+1. **Blocking, fixed.** The report said "Nothing was left unrun" when it
+   had no records at all, so an empty night and a wrong folder looked
+   calm. Now the full suite is always named, an empty night says
+   "Full suite: UNVERIFIED", and the command exits non-zero when the
+   folder that holds the records does not exist.
+2. **Blocking, fixed.** "How it ended" could be wrong: the word "stall"
+   matched "install", the deadline was checked before the all-done case,
+   and an unexplained night said "unclear", which the spec does not
+   allow. Now the stall is a whole word, "all done" is checked before the
+   deadline, and anything else says UNVERIFIED.
+3. **Blocking, fixed.** The planned count was subtracted from the
+   receipts without a guard, so a night with more receipts than planned
+   items printed a negative count. Now the line appears only when the
+   planned count is larger, and a planned count that is smaller than the
+   receipts is written UNVERIFIED with a line that says the records
+   disagree.
+4. **Minor, fixed.** The full suite counted as passed with an exit code
+   but no command. It now needs both, like every other check.
+5. **Minor, fixed.** A later shift-log line without an exit code erased
+   the full suite run the log already recorded. The log now keeps the
+   last line that has an exit code.
+6. **Minor, fixed.** A receipt whose check failed but whose gate passed
+   counted as done. A failed check now leaves the item stuck, whatever
+   the gate says.
+7. **Minor, fixed.** A done receipt with no merge time appeared in no
+   list. The counts now follow the lists: `done` counts what merged,
+   `ready` counts what waits for a merge right.
+8. **Minor, fixed.** A semicolon inside a command split the check. The
+   split now happens only outside the backticks.
+9. **Minor, fixed.** A receipt that is not valid UTF-8 crashed the
+   report, and a bad `--date` gave a raw traceback. A receipt that
+   cannot be read is now an unreadable item, and the date is checked by
+   the parser.
+10. **Minor, fixed.** The report's default folder ignored
+    `MAC_OPS_COORDINATOR_DIR`, which is how the installer moves the
+    runtime folder. The report follows it now.
+11. **Minor, not changed.** The heading "Merged (checked on GitHub)" is
+    the spec's heading, and the report does not call GitHub: the merge
+    time is the one the shift recorded after it checked GitHub. Decision
+    6 says so, and the README names the same source.
+12. **Minor, fixed.** A misplaced comment above the state constants and
+    a coverage pragma on the time-zone fallback are gone.
 
 ## Rollback
 

@@ -1,7 +1,7 @@
 $ python3 coordinator/overnight/overnight report --dry-run --root evidence/MO-222/fixture-night --date 2026-11-13
 # Overnight report — Nov 13, 2026 (10:30 PM PT–06:00 AM PT)
 
-How it ended: deadline. Items: 12 planned, 1 done, 1 ready, 2 stuck, 0 parked.
+How it ended: deadline. Items: 4 planned, 1 done, 1 ready, 2 stuck, 0 parked.
 
 ## Merged (checked on GitHub)
 
@@ -24,7 +24,6 @@ How it ended: deadline. Items: 12 planned, 1 done, 1 ready, 2 stuck, 0 parked.
 
 - MO-240 (#231) — Read the policy snapshot at the arm step: `python3 scripts/mac_ops_fast_check.py` has no exit code in the receipt, so it did not run.
 - Full suite: ran 2026-11-13 05:40 AM PT, passed.
-- 8 planned items have no receipt. Which ones: UNVERIFIED.
 
 ## Cost
 
