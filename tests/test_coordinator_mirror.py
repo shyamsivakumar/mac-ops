@@ -101,7 +101,7 @@ console.log("SENDS " + JSON.stringify(fs.readFileSync(process.env.PROBE_LOG!, "u
 # The stub records every send with a start and an end marker, so the test
 # can see two sends overlapping, and it fails the send that asks for a dead
 # relay, so the test can see the queue move on.
-STUB_HC = """#!/bin/sh
+MIRROR_STUB_HC = """#!/bin/sh
 case "$1" in
   ls)
     printf '%s\\n' '{"terminals":[{"name":"pi-coord-phone","state":"live","address":"t59"}]}'
@@ -212,7 +212,7 @@ class TestCoordinatorMirrorEvents(unittest.TestCase):
         tmp = Path(cls.tmp.name)
         cls.log = tmp / "sends.log"
         stub = tmp / "hc"
-        stub.write_text(STUB_HC)
+        stub.write_text(MIRROR_STUB_HC)
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         script = tmp / "events.ts"
         script.write_text("import fs from \"node:fs\";\n" + EVENT_PROBE)
