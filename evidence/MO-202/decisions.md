@@ -58,22 +58,31 @@ Moonmux's scraper
   compared Moonmux's tmux scraper with our herdr-core path and made our side
   look empty.
 - **The reach**: The table answers the ticket's question (what to copy) on
-  the merits: only the alert discipline and the seen-and-dismissed state are
-  worth anything, and both are presentation, not detection.
+  the merits. On the presentation side, only the alert discipline and the
+  seen-and-dismissed state are worth anything. There is also one
+  detection-side gap on our side: an agent reporting `error` is not treated
+  as needs-you (row 15, recommendation 1).
 - **Verdict**: sound.
 - **Confidence**: high.
 
-### 3. herdr-projects is credited with the one screen read it does
+### 3. herdr-projects is credited with the screen reads it does
 
-- **When**: revision 1.
+- **When**: revision 1, corrected in revision 3.
 - **The decision**: Row 9a records that herdr-projects reads a pane's screen
   for trust dialogs (`src/trust_screen.rs`) and treats a trust screen as
   blocked for the brief (`src/ticker.rs:644-646`). The earlier draft said
-  flatly that herdr-projects never reads a screen, which was wrong.
+  flatly that herdr-projects never reads a screen, which was wrong. Revision
+  1 also implied the trust read was the only screen read; revision 3 drops
+  that claim and names the other two places the screen is read for
+  non-needs-you facts (`src/brief.rs:119-174` for the input box, the
+  delivery marker and the settle key; `src/steps.rs:353-368` for an empty
+  input box before a nudge).
 - **The gap**: The claim came from the needs-you path only; the trust path
-  was found afterwards by grepping for screen reads in `src/`.
-- **The reach**: The row keeps the comparison honest: we have one narrow
-  screen read, for safety, and Moonmux has a general one, for detection.
+  was found afterwards by grepping for screen reads in `src/`, and the other
+  two reads were found by the second reviewer round.
+- **The reach**: The row keeps the comparison honest: we read the screen for
+  safety and for delivery facts, and only the trust read changes the
+  needs-you state; Moonmux has a general screen read, for detection.
 - **Verdict**: sound.
 - **Confidence**: high.
 
@@ -166,6 +175,46 @@ router, read-only) read the merged diff against the ticket and returned
    the review ran is true: PR #194 was merged by the coordinator before the
    review came back. The corrections ride in a follow-up PR rather than a
    force push to a merged branch.
+
+Nothing in the review was left unaddressed, and no existing test or check
+was touched.
+
+## The second reviewer round
+
+One more in-session reviewer round (Codex `gpt-6.1-sol`, delegated, read
+only) read this diff against the ticket and returned `VERDICT: FAIL` with
+seven findings. All seven were checked against the pinned trees and fixed:
+
+1. **The summaries hid the one detection gap.** The short answer said we
+   were only missing presentation ideas, which contradicted row 15 and
+   recommendation 1. Both summaries now say that an agent reporting `error`
+   is not treated as needs-you.
+2. **"A screen is read for one case only" was false.** The trust read is the
+   only screen read that changes a needs-you state, but it is not the only
+   screen read: `src/brief.rs:119-174` and `src/steps.rs:353-368` read the
+   same screen for other facts. Row 9a is now titled "A screen is read for
+   trust dialogs" and names the other reads.
+3. **Row 9 claimed one shared order; there are two.** The overview iterates
+   `Group::DISPLAY_ORDER` (`src/overview.rs:146`), the sidebar metadata
+   publishes `Group::rank()` (`src/sidebar.rs:90`, enumerated at
+   `src/thread.rs:472-480`). The values agree, but they are two lists. The
+   row now says so, and the recommendation is to fold them into one.
+4. **Row 11 cited the wrong lines and described `elsewhere` wrongly.** The
+   visibility suppression is at `app/mods/alerts/main.luau:96-99`, not
+   `84-92`, and `elsewhere` covers agents with no app-owned pane (an agent
+   the app did not start), not agents in another space. Both fixed.
+5. **Row 12 over-claimed our side.** We print the pane and the cockpit
+   cycles to a blocked agent, but our notification carries no id and no
+   agent target (`src/notify.rs:43-51`), so a click does not land on the
+   agent. The row now says "Partly".
+6. **Recommendation 3 was presented as Moonmux's behaviour.** Moonmux
+   demotes a seen `done`, not a seen `blocked`. The recommendation and row 7
+   now say that extending it to `blocked` is our extrapolation.
+7. **Recommendation 1 overstated the gap.** An agent reporting `error` is
+   never made needs-you by that fact, but it does not simply sit in `Idle`:
+   `group()` can put it in `Resolved`, `Landing`, `ReadyForReview` or
+   `Working` on other facts. The recommendation and row 15 now state the
+   condition.
 
 Nothing in the review was left unaddressed, and no existing test or check
 was touched.
