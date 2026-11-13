@@ -173,7 +173,9 @@ export default class Coordinator extends View {
   }
 
   info() {
-    return agents().find((a) => a.space_name === "Coordinator") ?? null;
+    const inSpace = agents().filter((a) => a.space_name === "Coordinator");
+    const pi = inSpace.filter((a) => a.app === "pi");
+    return pi.find((a) => a.tab_name === "Pi - Coordinator") ?? pi[0] ?? inSpace.find((a) => a.tab_name === "Pi - Coordinator") ?? null;
   }
 
   wantImage(ref, cx) {
