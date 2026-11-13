@@ -96,6 +96,7 @@ def main() -> int:
         payload = {
             "threads": threads,
             "lateThreads": threads + [thread("late-merged", paths["merged"]), thread("late-detached", detached)],
+            "altPath": str(paths["active"]),
             "present": [base_sha] + [sha for name, sha in shas.items() if name != "unpublished"],
             "prs": {name: [{"number": i + 1, "state": "MERGED", "headRefName": name, "headRefOid": sha}] for i, (name, sha) in enumerate(shas.items())},
         }
@@ -147,6 +148,13 @@ if mode == 'invalid-json':
     sys.exit(0)
 d = json.loads(Path(os.environ['MO125_FIXTURE']).read_text())
 all_threads = d['lateThreads'] if mode == 'late' and scan >= 5 else d['threads']
+if mode in ('churn', 'path-change', 'settled-flip'):
+    all_threads = [dict(t, updatedAt=f'2026-11-12T00:00:00.{scan:03d}Z') for t in all_threads]
+    for t in all_threads:
+        if t['threadId'] == 'waiting' and mode == 'path-change' and scan % 2:
+            t['worktreePath'] = d['altPath']
+        if t['threadId'] == 'waiting' and mode == 'settled-flip':
+            t['settled'] = scan % 2 == 0
 if tool == 't3_thread_read':
     if mode == 'read-unavailable':
         sys.exit(1)
@@ -194,6 +202,19 @@ print(json.dumps(page))
             result = subprocess.run(args + ["--apply"], env=dict(env, MO125_MODE=mode), capture_output=True, text=True)
             assert result.returncode == 2, (mode, result.stdout, result.stderr)
             assert all(path.is_dir() for path in paths.values()) and detached.is_dir(), mode
+        for mode in ("churn", "path-change", "settled-flip"):
+            counter.write_text("0")
+            calls.write_text("")
+            result = subprocess.run(args + ["--dry-run"], env=dict(env, MO125_MODE=mode), capture_output=True, text=True)
+            list_passes = sum(1 for line in calls.read_text().splitlines() if json.loads(line)["tool"] == "t3_thread_list" and json.loads(line)["cursor"] == 0)
+            if mode == "churn":
+                assert result.returncode == 0, (mode, result.stderr)
+                churned = json.loads(result.stdout)
+                assert churned["eligible"] == dry["eligible"] and churned["held_reasons"] == dry["held_reasons"], churned
+                assert list_passes == 2, list_passes
+            else:
+                assert result.returncode == 2 and "t3_list_changed" in result.stderr, (mode, result.stdout, result.stderr)
+                assert list_passes == 6, (mode, list_passes)
         for mode in ("t3-final", "t3-immediate", "late"):
             counter.write_text("0")
             applied = json.loads(command(args + ["--apply"], env=dict(env, MO125_MODE=mode)))
@@ -212,7 +233,7 @@ print(json.dumps(page))
         requests = [json.loads(line) for line in calls.read_text().splitlines()]
         assert any(request.get("cursor") == 100 for request in requests)
         assert all(request["tool"] == "t3_thread_read" or (request["allProjects"] and request["limit"] <= 100) for request in requests)
-        print(json.dumps({"ok": True, "t3_held": 6, "pages_per_pass": 2, "passes": 2, "fixture_removed": applied["removed"], "failure_modes_blocked": 13, "remote_refs_preserved": True}))
+        print(json.dumps({"ok": True, "t3_held": 6, "pages_per_pass": 2, "passes": 2, "fixture_removed": applied["removed"], "failure_modes_blocked": 15, "updated_at_churn_tolerated": True, "remote_refs_preserved": True}))
     return 0
 
 
