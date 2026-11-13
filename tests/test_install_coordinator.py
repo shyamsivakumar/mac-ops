@@ -90,17 +90,62 @@ class TestTurncapPlist(unittest.TestCase):
         with temp_home() as td:
             home = Path(td)
             missing = home / "Library/Logs/coordinator"
-            created = install_coordinator.ensure_log_dirs({missing}, home)
+            created, refused = install_coordinator.ensure_log_dirs({missing}, home)
             self.assertEqual(created, [missing])
+            self.assertEqual(refused, [])
             self.assertTrue(missing.is_dir())
-            self.assertEqual(install_coordinator.ensure_log_dirs({missing}, home), [])
+            created, refused = install_coordinator.ensure_log_dirs({missing}, home)
+            self.assertEqual(created, [])
+            self.assertEqual(refused, [])
 
     def test_ensure_log_dirs_leaves_other_checkouts_alone(self):
         with temp_home() as td:
             home = Path(td)
             other = home / "Code/coordinator/queue"
-            self.assertEqual(install_coordinator.ensure_log_dirs({other}, home), [])
+            created, refused = install_coordinator.ensure_log_dirs({other}, home)
+            self.assertEqual((created, refused), ([], []))
             self.assertFalse(other.exists())
+
+    def test_symlinked_level_is_refused_and_nothing_is_written_through_it(self):
+        with temp_home() as td:
+            home = Path(td)
+            target = home / "outside"
+            target.mkdir()
+            (home / "Library").symlink_to(target)
+            missing = home / "Library/Logs/coordinator"
+            with redirect_stdout(StringIO()):
+                created, refused = install_coordinator.ensure_log_dirs({missing}, home)
+            self.assertEqual(created, [])
+            self.assertEqual(refused, [missing])
+            self.assertFalse((target / "Logs").exists())
+
+    def test_launchd_pid_is_read_from_either_launchctl_form(self):
+        self.assertEqual(
+            install_coordinator.parse_launchd_pid('\t"PID" = 58640;\n'), 58640
+        )
+        self.assertEqual(install_coordinator.parse_launchd_pid("\tpid = 58640\n"), 58640)
+        self.assertIsNone(install_coordinator.parse_launchd_pid("\tno pid here\n"))
+
+    def test_manual_monitors_excludes_the_launchd_owned_process(self):
+        self.assertEqual(install_coordinator.manual_pids([58640], 58640), [])
+        self.assertEqual(install_coordinator.manual_pids([58640, 999], 58640), [999])
+        self.assertEqual(install_coordinator.manual_pids([58640], None), [58640])
+
+    def test_monitor_pattern_needs_a_python_interpreter_and_the_script_path(self):
+        pattern = install_coordinator.MONITOR_PATTERN
+        self.assertRegex(
+            "/usr/bin/python3 /Users/x/Code/coordinator/loop/turn_cap.py", pattern
+        )
+        self.assertRegex(
+            "/usr/bin/python3 /Users/x/Code/coordinator/loop/turn_cap.py --dry-run",
+            pattern,
+        )
+        self.assertNotRegex("/bin/grep turn_cap.py", pattern)
+        self.assertNotRegex("/bin/cat /Users/x/loop/turn_cap.py", pattern)
+        self.assertNotRegex(
+            "/usr/bin/python3 /tmp/mo_gate.py MO-192 runs loop/turn_cap.py with KeepAlive",
+            pattern,
+        )
 
 
 class TestInstallPath(unittest.TestCase):
