@@ -1,0 +1,100 @@
+# launchctl print gui/$(id -u)/dev.coordinator.overnight
+gui/501/dev.coordinator.overnight = {
+	active count = 0
+	path = /Users/shyamsivakumar/Library/LaunchAgents/dev.coordinator.overnight.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /Users/shyamsivakumar/.local/bin/overnight
+	arguments = {
+		/Users/shyamsivakumar/.local/bin/overnight
+		shift
+		--dry-run
+	}
+
+	stdout path = /Users/shyamsivakumar/Library/Logs/coordinator/overnight.log
+	stderr path = /Users/shyamsivakumar/Library/Logs/coordinator/overnight.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.kLa2XFUE3x/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		PYTHONUNBUFFERED => 1
+		PATH => /Users/shyamsivakumar/.local/bin:/Users/shyamsivakumar/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin
+		HOME => /Users/shyamsivakumar
+		XPC_SERVICE_NAME => dev.coordinator.overnight
+	}
+
+	domain = gui/501 [100015]
+	asid = 100015
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 2
+	last exit code = 0
+
+	event triggers = {
+		dev.coordinator.overnight.268435488 => {
+			keepalive = 0
+			service = dev.coordinator.overnight
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 30
+				"Hour" => 6
+			}
+		}
+		dev.coordinator.overnight.268435487 => {
+			keepalive = 0
+			service = dev.coordinator.overnight
+			stream = com.apple.launchd.calendarinterval
+			monitor = com.apple.UserEventAgent-Aqua
+			descriptor = {
+				"Minute" => 30
+				"Hour" => 22
+			}
+		}
+	}
+
+	event channels = {
+		"com.apple.launchd.calendarinterval" = {
+			port = 0x17f203
+			active = 0
+			managed = 1
+			reset = 0
+			hide = 0
+			watching = 1
+		}
+	}
+
+	resource coalition = {
+		ID = 224811
+		type = resource
+		state = active
+		active count = 1
+		name = dev.coordinator.overnight
+	}
+
+	jetsam coalition = {
+		ID = 224812
+		type = jetsam
+		state = active
+		active count = 1
+		name = dev.coordinator.overnight
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+
+	properties = inferred program
+}
