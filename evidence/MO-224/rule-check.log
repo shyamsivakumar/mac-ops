@@ -1,0 +1,20 @@
+# Rule check for the attended night (MO-224)
+
+## The commands the overnight module can run
+
+    187:        raw = run([TICKET, "list", "--fresh", "--json"], TICKET_TIMEOUT, deadline)
+    997:def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
+    1069:    code, out = run_read(
+    1087:    checks_code, checks_out = run_read(
+    1090:    files_code, files_out = run_read(
+
+## Forbidden commands in the overnight module (merge, push, force)
+
+None. The module holds no merge, no push and no force push.
+
+## The shell history at the time of the night
+
+-rw-------@ 1 shyamsivakumar  staff  190879 Nov 13 11:31 /Users/shyamsivakumar/.zsh_history
+
+The shell history was last written before the night started, so it holds no command from the window.
+Every command the night ran is in the shift log and in the receipts.
