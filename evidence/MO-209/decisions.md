@@ -56,23 +56,23 @@ python3 coordinator/overnight/overnight filter --dry-run
 
 ```
 Overnight filter - dry run (read only)
-Board: 121 tickets
+Board: 112 tickets
 Allowed repositories: 15
 Decisions log: /Users/shyamsivakumar/Code/coordinator/loop/decisions.md
 
-Kept: 113
+Kept: 104
 Dropped: 8
 Board repositories outside the allow list: 0
 
 Drops (each with its reason)
   DROP shyamsivakumar/strategy-replay-workbench#917 SRW-1068 - hold in the decisions log: - 2026-11-12T22:45Z PARKED (needs Shyam): SRW-1068 #917 (last SRW-1033 build slice) replaces refusal-until-false ex...
   DROP shyamsivakumar/strategy-replay-workbench#468 SRW-685 - hold in the decisions log: - 2026-11-12T22:06Z ANSWERED (Shyam via his coding bot, 2:06 PM PT): HOLD SRW-685. Do not merge PR #895 (remove unuse...
-  DROP digitized/Concerning#32 - - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
-  DROP digitized/Concerning#37 - - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
-  DROP digitized/Concerning#38 - - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
-  DROP digitized/Concerning#40 - - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
-  DROP digitized/Concerning#46 - - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
-  DROP digitized/Concerning#39 - - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
+  DROP digitized/Concerning#32 NING-1 - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
+  DROP digitized/Concerning#37 NING-2 - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
+  DROP digitized/Concerning#38 NING-3 - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
+  DROP digitized/Concerning#39 NING-4 - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
+  DROP digitized/Concerning#40 NING-5 - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
+  DROP digitized/Concerning#46 NING-6 - Ascend repo: digitized/Concerning is not a shyamsivakumar repository
 
 Ascend items kept: 0
 ```
@@ -85,8 +85,9 @@ the body rules today. The rules below prove they fire.
 ### 2. The rules on a fixture board
 
 The fixture is in `evidence/MO-209/fixtures/`: a stand-in for the ticket
-CLI, a stand-in for `gh issue list`, and a decisions log. The real
-command runs against them.
+CLI, a stand-in for `gh issue list` and `gh pr view`, and a decisions log
+that writes its open items the way the real log does. The real commands
+run against them.
 
 ```sh
 OVERNIGHT_TICKET=$PWD/evidence/MO-209/fixtures/fake_ticket.py \
@@ -97,12 +98,12 @@ python3 coordinator/overnight/overnight filter --dry-run
 
 ```
 Overnight filter - dry run (read only)
-Board: 8 tickets
+Board: 11 tickets
 Allowed repositories: 15
 Decisions log: .../evidence/MO-209/fixtures/decisions.md
 
 Kept: 1
-Dropped: 7
+Dropped: 10
 Board repositories outside the allow list: 2
 
 Drops (each with its reason)
@@ -112,12 +113,67 @@ Drops (each with its reason)
   DROP shyamsivakumar/mac-ops#904 AUH-1 - Ascend key AUH
   DROP slash-eureka/dbt#905 DBT-9 - Ascend key DBT
   DROP shyamsivakumar/not-on-the-list#906 NTL-1 - repo not on the allow list: shyamsivakumar/not-on-the-list
-  DROP shyamsivakumar/mac-ops#907 MO-907 - hold in the decisions log: - 2026-11-13T00:00Z PARKED (needs Shyam): MO-907 #907 (a ticket with an open question) waits for Shyam's answer. Reco...
+  DROP shyamsivakumar/mac-ops#907 MO-907 - open item in the decisions log: - 2026-11-13T00:00Z PARKED (needs Shyam): MO-907 #907 (a ticket with a parked question) waits for Shyam's answer. Rec...
+  DROP shyamsivakumar/mac-ops#908 MO-908 - open item in the decisions log: - 2026-11-13T00:10Z OPEN (needs answer): MO-908 #908 (a ticket with an OPEN question) - waive it or send it to the bu...
+  DROP shyamsivakumar/mac-ops#909 MO-909 - open question in the decisions log: - 2026-11-13T00:20Z Q: MO-909 #909 (a ticket with a Q: question) which option?
+  DROP shyamsivakumar/mac-ops#910 MO-910 - open question in the decisions log: - 2026-11-13T00:30Z asked Shyam about MO-910 #910 (a ticket Shyam was asked about), waiting.
 
 Ascend items kept: 0
 ```
 
-### 3. The second check refuses an Ascend pull request
+### 3. The filter fails closed
+
+A read that fails ends in a non-zero exit, and nothing it could not check
+is kept.
+
+The ticket text cannot be read (`gh issue list` fails):
+
+```sh
+OVERNIGHT_TICKET=$PWD/evidence/MO-209/fixtures/fake_ticket.py \
+OVERNIGHT_GH=/usr/bin/false \
+OVERNIGHT_DECISIONS=$PWD/evidence/MO-209/fixtures/decisions.md \
+python3 coordinator/overnight/overnight filter --dry-run
+```
+
+```
+REFUSED: the ticket text of these repositories could not be read: shyamsivakumar/mac-ops, ...
+
+Kept: 0
+Dropped: 8
+  DROP shyamsivakumar/mac-ops#900 MO-900 - unverified: the ticket text could not be read
+  ...
+  DROP shyamsivakumar/mac-ops#907 MO-907 - hold in the decisions log: - 2026-11-13T00:00Z PARKED (needs Shyam): MO-907 #907 ...
+
+Ascend items kept: 0
+REFUSED: the filter cannot return a list it could not fully check.
+```
+
+exit code 1. The decisions-log check still ran on the ticket whose text
+could not be read, because that check does not use the ticket text.
+
+The decisions log is missing:
+
+```sh
+OVERNIGHT_DECISIONS=/nonexistent/decisions.md \
+python3 coordinator/overnight/overnight filter --dry-run
+```
+
+```
+REFUSED: the decisions log /nonexistent/decisions.md could not be read
+
+Kept: 0
+Dropped: 8
+  DROP shyamsivakumar/mac-ops#900 MO-900 - unverified: the decisions log could not be read
+  ...
+REFUSED: the filter cannot return a list it could not fully check.
+```
+
+exit code 1. A stale board is refused the same way, before any list is
+printed.
+
+### 4. The second check refuses an Ascend pull request
+
+An Ascend repository:
 
 ```sh
 python3 coordinator/overnight/overnight check-pr --repo slash-eureka/dbt --number 1
@@ -127,58 +183,55 @@ python3 coordinator/overnight/overnight check-pr --repo slash-eureka/dbt --numbe
 REFUSED: slash-eureka/dbt#1: Ascend repo: slash-eureka/dbt is not a shyamsivakumar repository
 ```
 
-The command exits 1 on a refusal. A pull request in a personal repository
-whose branch carries an Ascend key (`auh-12-fix`) is refused on the key.
+exit code 1.
 
-## Checks
+A pull request in a personal repository whose branch carries an Ascend
+key, hidden behind an earlier key-like token:
 
-- `python3 scripts/mac_ops_fast_check.py`: passed.
-- Full local check, through `~/.local/bin/heavy`:
-  `python3 -m unittest discover -s tests -t .` → 148 tests, OK.
-- No new test files. The proof above is the real command on the real
-  board and on a fixture board.
+```sh
+OVERNIGHT_GH=$PWD/evidence/MO-209/fixtures/fake_gh.py \
+python3 coordinator/overnight/overnight check-pr --repo shyamsivakumar/mac-ops --number 1
+```
 
-## Must not cause
+```
+REFUSED: shyamsivakumar/mac-ops#1: Ascend key AUH-3
+  branch t3/fix-12-auh-3
+```
 
-Nothing here merges, pushes, raises the slot cap or changes the Ascend
-rules. The filter reads; `check-pr` refuses. The board config, the ticket
-CLI, `coordq` and the gate are untouched.
+exit code 1. Every key in the branch is read, not only the first.
 
-## Known gaps, found by the in-session review round
+A pull request the check cannot read is refused, not passed:
 
-An Opus review round read `git diff origin/main...HEAD` and returned
-`VERDICT: FAIL`. This commit fixes the false positives and false negatives
-it found in the drop rules. The findings below are **not** fixed here and
-are the work of the next round:
+```sh
+OVERNIGHT_GH=/usr/bin/false \
+python3 coordinator/overnight/overnight check-pr --repo shyamsivakumar/mac-ops --number 1
+```
 
-1. **The filter fails open.** When `gh issue list` fails for a
-   repository, its board tickets are kept with no mark check, and the
-   decisions-log check is skipped for them, and the command still exits 0.
-   The same is true when the decisions log is missing, and a stale board
-   still exits 0. The filter must refuse (non-zero exit) instead.
-2. **`check-pr` fails open.** When the pull request cannot be read, it
-   prints UNVERIFIED and then exits 0. It must refuse instead.
-3. **The decisions-log rule misses how the real log writes an open
-   question.** `loop/tick.md` finds open items with `grep 'OPEN\|PARKED'`,
-   and the log writes `OPEN (needs answer)`, `Q: ...`, a line that ends in
-   `?`, `(Recommended: ...)`, and the number before the key
-   (`#878 SRW-1016`). The rule in this commit reads `HOLD`, `PARKED` and
-   the word "question"; it does not read `OPEN`, `Q:` or the question
-   mark. A ticket named only by a bare `#number` can also be dropped
-   across repositories.
-4. **The gate's per-repository `ascend` flag is not read.** The gate
-   honours `settings["ascend"]` as well as the owner rule. No repository
-   sets that flag today, but the claim "the same rule the gate uses" is
-   not quite true until the flag is read too.
-5. **`check-pr` reads the first key in the branch name only.** A branch
-   such as `t3/fix-12-auh-3` hides the Ascend key behind an earlier
-   key-like token.
-6. **Questions for Shyam also live in `decisions.json`.** The tick writes
-   them there too. This part reads `loop/decisions.md` only, as the brief
-   names it.
-7. The open issue list of one repository is read with a limit of 500. A
-   repository with more open issues than that would lose the text of its
-   older board tickets without saying so.
+```
+REFUSED: shyamsivakumar/mac-ops#1: the pull request could not be read, so the check cannot be trusted.
+```
+
+exit code 1.
+
+## What the two review rounds changed
+
+Two Opus review rounds read `git diff origin/main...HEAD` and both
+returned `VERDICT: FAIL`. What the rounds found, and what this branch
+now does with it:
+
+| Finding | Now |
+| --- | --- |
+| The marks matched prose and briefs | A mark is the marked form: `HOLD` in capitals, `Needs Shyam:` with its question, `design needed` with what it waits for. "needs Shyam's OK" and "hold counts" are not marks, and a brief that lists the marks is not marked. |
+| The filter failed open when a read failed | It fails closed. An unreadable repository, a missing decisions log and a stale board all end in a non-zero exit, and every ticket it could not check is dropped as unverified instead of kept. The decisions-log check runs whether or not the ticket text could be read. |
+| `check-pr` failed open when the pull request could not be read | It refuses the pull request and exits non-zero. It never prints `OK` for a pull request it did not read. |
+| The decisions-log rule missed `OPEN`, `Q:` and a line ending in `?` | It reads `HOLD`, `HELD`, `PARK`, `PARKED`, `OPEN`, `Q:`, "needs Shyam", "asked Shyam about", a line that ends in a question mark and the log's own `(Recommended:` marker. A line is about a ticket when it names the ticket with its issue number in either order, or names it right after the line's verb, so a bare `#number` no longer drops a ticket in another repository. |
+| The gate's per-repository `ascend` flag was not read | It is read now, from the same board config the gate reads. |
+| `check-pr` read only the first key in the branch name | Every key in the branch and in the pull request body is read, so `t3/fix-12-auh-3` still shows its Ascend key. |
+| The open issue list was capped at 500 with no warning | A repository whose list reaches the limit is treated as unread, so the filter refuses. |
+
+One thing stays out of scope: the tick also writes questions for Shyam to
+`decisions.json`, and this part reads `loop/decisions.md` only, as the
+brief names it. The next part can read both.
 
 ## Open point for Shyam
 

@@ -95,19 +95,22 @@ DECISION_CLOSED = re.compile(r"(?i)\b(answered|closed|resolved|unparked)\b")
 # (needs Shyam)"), and an open question as "OPEN (needs answer)" or
 # "Q: ...". A question for Shyam is also written as "asked Shyam about".
 DECISION_STRONG = re.compile(
-    r"\b(HOLD|HELD|PARK|PARKED|OPEN)\b|needs[ \t]+shyam|asked[ \t]+shyam"
+    r"\b(HOLD|HELD|PARK|PARKED|OPEN)\b"
+    r"|(?i:needs[ \t]+shyam)|(?i:asked[ \t]+shyam)"
 )
-DECISION_ASKS = re.compile(r"(?i)\bQ\s*:")
+DECISION_HOLD = re.compile(r"\b(HOLD|HELD)\b")
+DECISION_OPEN = re.compile(r"\b(PARK|PARKED|OPEN)\b")
+DECISION_ASKS = re.compile(r"(?i:\bQ\s*:)")
 # A question the log asks Shyam ends with a question mark, and it carries
 # the log's own recommendation marker.
-DECISION_ASKED = re.compile(r"\?\s*$|\(Recommended:")
+DECISION_ASKED = re.compile(r"\?[ \t]*$|(?i:\(Recommended:)")
 # The subject of a decisions log line: the ticket the line is about. It
 # is the ticket named right after the line's verb ("HOLD SRW-685"), or
 # the first "KEY #number" pair in the line. A ticket that is only named
 # in passing ("once SRW-1067 merges") is not the subject.
-DECISION_SUBJECT = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\s*#\s*(\d+)\b")
 DECISION_VERB = re.compile(
-    r"(?i)\b(hold|holds|held|parked|park|open|question)\b|Q\s*:|asked[ \t]+shyam"
+    r"(?i:\b(hold|holds|held|parked|park|open|question)\b)"
+    r"|(?i:\bQ\s*:)|(?i:asked[ \t]+shyam)"
 )
 SUBJECT_TAIL = 120
 # The coordinator's loop folder holds the decisions log the tick reads.
@@ -435,25 +438,51 @@ def cmd_intake(args: argparse.Namespace) -> int:
 # --- Part T3b: the filter -------------------------------------------------
 
 
-def ascend_reason(repo: str, key: str | None) -> str | None:
+def ascend_reason(repo: str, key: str | None, flagged: bool = False) -> str | None:
     """Return why the work is Ascend, or None when it is not.
 
     A key from the spec's Ascend list (AUH, MCP, OPS, DBT, OMN) is Ascend
     on its own. A repository the merge gate would refuse to merge is
-    Ascend too: the gate's rule is the one in coordinator/bin/coordq, so
-    the shift and the gate never disagree about what Ascend is."""
+    Ascend too: the gate's repository rule is the one in
+    coordinator/bin/coordq, and the gate's own per-repository `ascend`
+    flag is honoured here as well."""
     if key:
         prefix = key.split("-")[0].upper()
         if prefix in ASCEND_KEYS:
             return f"Ascend key {prefix}"
     if not repo:
         return None
+    if flagged:
+        return f"Ascend repo: the board config marks {repo} as Ascend"
     owner = repo.split("/")[0]
     if owner != PERSONAL_OWNER:
         return f"Ascend repo: {repo} is not a {PERSONAL_OWNER} repository"
     if any(part in repo for part in ASCEND_REPO_PARTS):
         return f"Ascend repo: {repo} is an Ascend repository"
     return None
+
+
+def ascend_flags(cfg: dict) -> set[str]:
+    """Return the repositories the board config marks as Ascend.
+
+    The merge gate honours a per-repository `ascend` flag in the board
+    config (coordinator/bin/coordq). The shift reads the same flag, so
+    the two agree on what Ascend is."""
+    repos = cfg.get("repos") or {}
+    return {repo for repo, entry in repos.items() if entry.get("ascend")}
+
+
+def ascend_keys_in(text: str) -> list[str]:
+    """Return the Ascend keys a text carries, such as a branch name.
+
+    Every key in the text is read, so a branch such as
+    "t3/fix-12-auh-3" still shows its Ascend key."""
+    found: list[str] = []
+    for match in BRANCH_KEY.finditer(text or ""):
+        key = f"{match.group(1)}-{match.group(2)}".upper()
+        if key.split("-")[0] in ASCEND_KEYS and key not in found:
+            found.append(key)
+    return found
 
 
 def clip(text: str, width: int = 120) -> str:
@@ -502,7 +531,16 @@ def read_bodies(
             unread.append(repo)
             print(f"overnight: {repo}: {exc}", file=sys.stderr)
             continue
-        for row in rows if isinstance(rows, list) else []:
+        rows = rows if isinstance(rows, list) else []
+        if len(rows) >= ISSUE_LIMIT:
+            unread.append(repo)
+            print(
+                f"overnight: {repo}: the open issue list was cut off at "
+                f"{ISSUE_LIMIT}, so the ticket text is not known",
+                file=sys.stderr,
+            )
+            continue
+        for row in rows:
             number = row.get("number")
             if number in wanted[repo]:
                 bodies[(repo, number)] = (row.get("body") or "") + "\n" + (
@@ -515,8 +553,8 @@ def read_decisions() -> tuple[Path, list[str]]:
     """Return the coordinator's decisions log and its lines.
 
     The log is the coordinator's own parking lot, so it is read where the
-    tick reads it. A missing log is not a crash: the filter says so and
-    the question check is then unverified."""
+    tick reads it. A missing log is not a crash: the filter drops every
+    ticket it cannot check and refuses to return a list."""
     try:
         with open(DECISIONS_FILE) as stream:
             return DECISIONS_FILE, stream.read().splitlines()
@@ -547,23 +585,29 @@ def mark_reason(text: str) -> tuple[str, str] | None:
 def names_ticket(line: str, key: str | None, number: int | None) -> bool:
     """Return True when a decisions log line is about this ticket.
 
-    A line is about a ticket when the ticket is its subject: the ticket
-    named right after the line's verb ("HOLD SRW-685"), or the first
-    "KEY #number" pair in the line. A ticket named in passing ("once
-    SRW-1067 merges") is not the subject of the line."""
-    if key and number:
-        subject = DECISION_SUBJECT.search(line)
-        if (
-            subject
-            and subject.group(1).upper() == key.split("-")[0].upper()
-            and int(subject.group(3)) == number
-        ):
+    A line is about a ticket when it names the ticket with its issue
+    number, in either order ("SRW-685 #468", "#468 SRW-685", and the
+    short form "685 #468"), or when the ticket is named right after the
+    line's verb ("HOLD SRW-685", "OPEN (needs answer): SRW-1080 #990").
+    A ticket named in passing ("once SRW-1067 merges") is not the subject
+    of the line. A bare issue number is not enough: the same number can
+    belong to a ticket in another repository."""
+    if not key or not number:
+        return False
+    prefix, _, keynum = key.partition("-")
+    if not prefix or not keynum:
+        return False
+    pairs = (
+        rf"{re.escape(prefix)}-{re.escape(keynum)}\s*#\s*{number}\b",
+        rf"#\s*{number}\s+{re.escape(prefix)}-{re.escape(keynum)}\b",
+        rf"\b{re.escape(keynum)}\s*#\s*{number}\b",
+    )
+    for pattern in pairs:
+        if re.search(pattern, line, re.I):
             return True
     for verb in DECISION_VERB.finditer(line):
         tail = line[verb.end() : verb.end() + SUBJECT_TAIL]
-        if key and re.search(rf"\b{re.escape(key)}\b", tail, re.I):
-            return True
-        if number and re.search(rf"#\s*{number}\b", tail):
+        if re.search(rf"\b{re.escape(prefix)}-{re.escape(keynum)}\b", tail, re.I):
             return True
     return False
 
@@ -574,70 +618,94 @@ def decision_reason(
     """Return the open question a decisions log leaves for a ticket.
 
     The log is append-only history, so the last line that is about the
-    ticket decides. A line that holds or parks the ticket leaves it open;
-    a line that only asks a question leaves it open until the question is
-    answered, closed or resolved."""
+    ticket decides. The log writes an open item as a hold or a park
+    ("HOLD SRW-685", "PARKED (needs Shyam)"), as "OPEN (needs answer)",
+    as "Q: ...", or as a question that ends in a question mark. A line
+    that answers the question closes it, but a hold outlives the question
+    it was asked in."""
     last = None
     for line in lines:
         if names_ticket(line, key, number):
             last = line
     if last is None:
         return None
-    strong = re.search(r"\b(HOLD|PARKED|PARK)\b", last) or re.search(
-        r"(?i)needs[ \t]+shyam", last
-    )
-    if strong:
+    if DECISION_HOLD.search(last):
         return "hold in the decisions log", clip(last)
+    if DECISION_OPEN.search(last):
+        return "open item in the decisions log", clip(last)
+    if DECISION_STRONG.search(last):
+        return "open question in the decisions log", clip(last)
+    if DECISION_ASKS.search(last):
+        return "open question in the decisions log", clip(last)
+    if DECISION_ASKED.search(last) and not DECISION_CLOSED.search(last):
+        return "open question in the decisions log", clip(last)
     if DECISION_QUESTION.search(last) and not DECISION_CLOSED.search(last):
         return "open question in the decisions log", clip(last)
     return None
 
 
 def cmd_filter(args: argparse.Namespace) -> int:
-    """Filter the board and print every drop with its reason."""
+    """Filter the board and print every drop with its reason.
+
+    The filter fails closed. A ticket whose text could not be read, or
+    whose open question could not be checked, is dropped rather than
+    kept, and the command exits non-zero so the shift knows the list it
+    printed is not one it may work from."""
     deadline = time.monotonic() + args.deadline
     cfg = load_config()
     repos = allowed_repos(cfg)
     allowed = {repo for repo, _ in repos}
+    flagged = ascend_flags(cfg)
     if not repos:
         die("the board config names no repositories")
     issues, stale = read_board(deadline)
+    if stale:
+        print("Overnight filter - dry run (read only)")
+        print("REFUSED: the board list is stale, so the filter cannot be trusted.")
+        print("The ticket CLI could not reach GitHub and fell back to its cache.")
+        return 1
     bodies, unread = read_bodies(issues, deadline)
     path, lines = read_decisions()
+    problems: list[str] = []
+    if unread:
+        problems.append(
+            "the ticket text of these repositories could not be read: "
+            + ", ".join(unread)
+        )
+    if not lines:
+        problems.append(f"the decisions log {path} could not be read")
     kept: list[dict] = []
     drops: list[tuple[dict, str]] = []
     for issue in issues:
         repo = issue.get("repo") or ""
         key = issue.get("key") or ""
-        reason = ascend_reason(repo, key)
+        number = issue.get("number")
+        reason = ascend_reason(repo, key, repo in flagged)
         if reason is None and repo not in allowed:
             reason = f"repo not on the allow list: {repo}"
-        if reason is None:
-            body = bodies.get((repo, issue.get("number")))
-            if body is None:
-                mark = None
-            else:
-                mark = mark_reason(body)
+        body = bodies.get((repo, number))
+        if reason is None and body is not None:
+            mark = mark_reason(body)
             if mark:
                 reason = f"{mark[0]}: {mark[1]}"
-            elif body is not None:
-                found = decision_reason(lines, key, issue.get("number"))
-                if found:
-                    reason = f"{found[0]}: {found[1]}"
+        if reason is None:
+            found = decision_reason(lines, key, number)
+            if found:
+                reason = f"{found[0]}: {found[1]}"
+        if reason is None and body is None:
+            reason = "unverified: the ticket text could not be read"
+        if reason is None and not lines:
+            reason = "unverified: the decisions log could not be read"
         if reason:
             drops.append((issue, reason))
         else:
             kept.append(issue)
     print("Overnight filter - dry run (read only)")
-    print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+    print(f"Board: {len(issues)} tickets")
     print(f"Allowed repositories: {len(repos)}")
     print(f"Decisions log: {path}" + ("" if lines else " (not found)"))
-    if unread:
-        print(
-            "Unread repositories: "
-            + ", ".join(unread)
-            + " (their ticket marks could not be read, so they are unverified)"
-        )
+    for problem in problems:
+        print(f"REFUSED: {problem}")
     print()
     print(f"Kept: {len(kept)}")
     print(f"Dropped: {len(drops)}")
@@ -655,7 +723,11 @@ def cmd_filter(args: argparse.Namespace) -> int:
     survived = [
         issue
         for issue in kept
-        if ascend_reason(issue.get("repo") or "", issue.get("key") or "")
+        if ascend_reason(
+            issue.get("repo") or "",
+            issue.get("key") or "",
+            (issue.get("repo") or "") in flagged,
+        )
     ]
     print(f"Ascend items kept: {len(survived)}")
     if survived:
@@ -663,8 +735,9 @@ def cmd_filter(args: argparse.Namespace) -> int:
             print(f"  FAIL {issue.get('repo')}#{issue.get('number')}")
         print("FAIL: an Ascend item survived the filter.")
         return 1
-    if not lines:
-        print("The decisions log was not found, so the question check is UNVERIFIED.")
+    if problems:
+        print("REFUSED: the filter cannot return a list it could not fully check.")
+        return 1
     return 0
 
 
@@ -673,32 +746,47 @@ def cmd_check_pr(args: argparse.Namespace) -> int:
 
     This is the second check the spec asks for: intake drops Ascend work
     from the board, and this refuses an Ascend pull request before any
-    work starts on it."""
+    work starts on it. The check fails closed: a pull request it could
+    not read is refused, not passed."""
     deadline = time.monotonic() + args.deadline
     repo = args.repo
     number = args.number
-    reason = ascend_reason(repo, None)
+    cfg = load_config()
+    reason = ascend_reason(repo, None, repo in ascend_flags(cfg))
     if reason:
         print(f"REFUSED: {repo}#{number}: {reason}")
         return 1
-    branch = ""
     try:
         raw = run(
-            [GH, "pr", "view", str(number), "-R", repo, "--json", "headRefName"],
+            [
+                GH,
+                "pr",
+                "view",
+                str(number),
+                "-R",
+                repo,
+                "--json",
+                "headRefName,body",
+            ],
             GH_TIMEOUT,
             deadline,
         )
-        branch = (json.loads(raw) or {}).get("headRefName") or ""
+        pull = json.loads(raw) or {}
     except (RepoError, ValueError) as exc:
         print(f"overnight: {repo}#{number}: {exc}", file=sys.stderr)
-        print("The pull request could not be read, so the check is UNVERIFIED.")
-    key = None
-    match = BRANCH_KEY.search(branch)
-    if match:
-        key = f"{match.group(1)}-{match.group(2)}".upper()
-    reason = ascend_reason(repo, key)
-    if reason:
-        print(f"REFUSED: {repo}#{number}: {reason}")
+        print(
+            f"REFUSED: {repo}#{number}: the pull request could not be read, "
+            "so the check cannot be trusted."
+        )
+        return 1
+    branch = pull.get("headRefName") or ""
+    body = pull.get("body") or ""
+    keys = ascend_keys_in(branch)
+    for key in ascend_keys_in(body):
+        if key not in keys:
+            keys.append(key)
+    if keys:
+        print(f"REFUSED: {repo}#{number}: Ascend key {keys[0]}")
         if branch:
             print(f"  branch {branch}")
         return 1
