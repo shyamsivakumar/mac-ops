@@ -15,8 +15,7 @@ path for one pull request.
 - The pull request: its head sha, its base branch and the `Refs #n` issue.
 - The issue: the ticket key in its title, checked against the key of the
   repository in `tickets.json`.
-- The builder thread of the issue: the model it ran, from the queue receipt
-  and the thread record.
+- The builder thread of the issue: the model its newest run ran.
 
 ## What it writes
 
@@ -39,9 +38,12 @@ and the verdict pass on that head.
 ## What it refuses
 
 - The pull request is not open, or is a draft.
-- The pull request body references no issue.
+- The pull request body references no issue with `Refs #n`.
 - The issue title carries a key of another repository.
-- A gate thread for that pull request head is already queued or live.
+- A gate for that pull request head is already queued, already running, or
+  already ran. One head gets one gate: a second gate would try to merge a
+  head that is merged already.
+- Another gate for that pull request is running on this Mac.
 
 ## Flags
 
