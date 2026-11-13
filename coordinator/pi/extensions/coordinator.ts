@@ -130,8 +130,9 @@ const PHONE_MARKER = "From Shyam (phone):";
 const TICK_MARKER = "Tick (";
 // How much of Shyam's own message the phone shows above the reply, and
 // how much of a custom message starts a run with no prompt of its own.
-const MIRROR_MAX = 600;
-const EVENT_MAX = 300;
+// Both are counts of characters, and both end in an ellipsis.
+const MIRROR_QUOTE_MAX = 600;
+const EVENT_QUOTE_MAX = 300;
 const HC = process.env.COORD_HC_BIN || path.join(HOME, ".local/bin/hc");
 
 function runHc(args: string[]): Promise<string> {
@@ -157,25 +158,31 @@ const flat = (s: string) => (s || "").replace(/\s+/g, " ").trim();
 
 // The text of a custom message that starts a run: a string, or the text
 // blocks of an array content.
-function customText(message: any): string {
+// A custom message that starts a run: a string, or a message whose
+// content is a string or a list of blocks.
+type CustomMessage = string | { content?: string | Array<{ type?: string; text?: string }> } | undefined;
+
+function customText(message: CustomMessage): string {
   if (!message) return "";
   if (typeof message === "string") return message;
   const c = message.content;
   if (typeof c === "string") return c;
   if (!Array.isArray(c)) return "";
   return c
-    .filter((x: any) => x && x.type === "text" && typeof x.text === "string")
-    .map((x: any) => x.text)
+    .filter((x) => x && x.type === "text" && typeof x.text === "string")
+    .map((x) => x.text as string)
     .join("\n");
 }
 
 // Shyam's own message as quoted lines: one "> " per line, the line breaks
 // kept, so the phone can tell his words from the reply. A message longer
-// than max is cut and ends with an ellipsis.
+// than max is cut and ends with an ellipsis. The cut counts characters,
+// not code units, so an emoji is never split in half.
 function quoteText(text: string, max: number): string {
   const t = (text || "").replace(/\r\n?/g, "\n").trim();
   if (!t) return "";
-  const cut = t.length > max ? t.slice(0, max - 1) + "…" : t;
+  const chars = Array.from(t);
+  const cut = chars.length > max ? chars.slice(0, max - 1).join("") + "…" : t;
   return cut
     .split("\n")
     .map((line) => (line.trim() ? "> " + line : ">"))
@@ -208,7 +215,7 @@ export function mirrorLabel(input: string): string {
 // The kind sits on its own first line, Shyam's own message is quoted under
 // it, and the reply keeps its line breaks, bullets and table rows: the
 // phone reads a paragraph otherwise.
-export function mirrorText(input: string, reply: string, custom?: any): string {
+export function mirrorText(input: string, reply: string, custom?: CustomMessage): string {
   // A carriage return would act as an Enter in the relay's terminal, so it
   // goes; the trailing blank lines go; every other line break stays.
   const body = (reply || "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
@@ -218,9 +225,9 @@ export function mirrorText(input: string, reply: string, custom?: any): string {
   if (kind === "tick" && body.trim() === "NOOP") return "";
   // A tick has no message of Shyam's to quote, so it shows only its kind.
   let quote = "";
-  if (kind === "you") quote = quoteText(input, MIRROR_MAX);
-  else if (kind === "phone") quote = quoteText(stripPhone(input), MIRROR_MAX);
-  else if (kind === "event") quote = quoteText(customText(custom), EVENT_MAX);
+  if (kind === "you") quote = quoteText(input, MIRROR_QUOTE_MAX);
+  else if (kind === "phone") quote = quoteText(stripPhone(input), MIRROR_QUOTE_MAX);
+  else if (kind === "event") quote = quoteText(customText(custom), EVENT_QUOTE_MAX);
   const head = `Mirror: ${kind}`;
   return quote ? `${head}\n${quote}\n\n${body}` : `${head}\n\n${body}`;
 }
@@ -289,7 +296,7 @@ export default function (pi: any) {
   let latestInput = "";
   let runPrompt = "";
   // The custom message that started a run with no prompt of its own.
-  let runCustom: any = "";
+  let runCustom: CustomMessage = undefined;
   pi.on("input", (event: any) => {
     if (typeof event?.text === "string" && event.text.trim()) latestInput = event.text;
   });
@@ -297,7 +304,7 @@ export default function (pi: any) {
     if (event?.messageType === "user" && typeof event.prompt === "string" && event.prompt.trim()) {
       runPrompt = event.prompt;
       latestInput = event.prompt;
-      runCustom = "";
+      runCustom = undefined;
       return;
     }
     // A run that no user message started (a custom message such as a
@@ -307,13 +314,13 @@ export default function (pi: any) {
     if (event?.messageType === "custom") {
       runPrompt = "";
       latestInput = "";
-      runCustom = event.message || "";
+      runCustom = event.message as CustomMessage;
       return;
     }
     if (event?.messageType) {
       runPrompt = "";
       latestInput = "";
-      runCustom = "";
+      runCustom = undefined;
     }
   });
 
