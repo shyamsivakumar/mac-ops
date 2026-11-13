@@ -38,6 +38,17 @@ PI_FILES = (
     ("phone-relay/CLAUDE.md", ".pi/agent-coordinator/phone-relay/CLAUDE.md"),
 )
 TURN_CAP_JOB = "dev.coordinator.turncap"
+# The overnight runner's on-disk contract. The folders come from the
+# overnight runner spec (section 6, revision 2). The shift keeps no second
+# queue here: the board is the list.
+OVERNIGHT_DIRS = ("run", "receipts", "inbox", "staging")
+OVERNIGHT_README = ("overnight", "README.md")
+GITIGNORE_ENTRY = ".overnight/"
+GITIGNORE_BLOCK = (
+    "# Overnight runner scratch, installed by mac-ops\n"
+    "# The overnight shift's folders hold receipts and logs, never code.\n"
+    ".overnight/\n"
+)
 # A python interpreter running the monitor script and nothing else. A page of
 # the script, a grep of it, or a build job that mentions it does not match.
 MONITOR_PATTERN = r"[Pp]ython[0-9.]* .*/loop/turn_cap\.py( --[A-Za-z0-9-]+)*$"
@@ -76,6 +87,53 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
             if f.is_file()
         ]
     return items
+
+
+def coordinator_dir(home: Path, override: str | None = None) -> Path:
+    """Return the coordinator runtime folder that holds the overnight layout.
+
+    The default is the runtime folder the coordinator already uses. An
+    override lets a caller point the installer at another checkout."""
+    if override:
+        return Path(override).expanduser()
+    from_env = os.environ.get("MAC_OPS_COORDINATOR_DIR")
+    if from_env:
+        return Path(from_env).expanduser()
+    return home / "Code" / "coordinator"
+
+
+def overnight_root(coordinator: Path) -> Path:
+    return coordinator / ".overnight"
+
+
+def overnight_dirs(coordinator: Path) -> list[Path]:
+    root = overnight_root(coordinator)
+    return [root / name for name in OVERNIGHT_DIRS]
+
+
+def git_toplevel(path: Path) -> Path | None:
+    """Return the repository that contains path, or None when there is none."""
+    output = run_quiet(["git", "-C", str(path), "rev-parse", "--show-toplevel"])
+    if output is None:
+        return None
+    top = output.strip()
+    return Path(top) if top else None
+
+
+def gitignore_item(coordinator: Path) -> tuple[Path, bytes] | None:
+    """Return the ignore file to write and its new bytes, or None when the
+    overnight folder is already ignored or no repository contains it."""
+    top = git_toplevel(coordinator)
+    if top is None:
+        return None
+    ignore = top / ".gitignore"
+    current = read_regular(ignore)
+    text = current[0].decode("utf-8", "replace") if current else ""
+    if any(line.strip() == GITIGNORE_ENTRY for line in text.splitlines()):
+        return None
+    body = text.rstrip("\n")
+    updated = (body + "\n\n" + GITIGNORE_BLOCK) if body else GITIGNORE_BLOCK
+    return ignore, updated.encode()
 
 
 def render_plists(checkout: Path, home: Path) -> list[tuple[bytes, Path]]:
@@ -293,11 +351,22 @@ def write(target: Path, data: bytes, mode: int, backups: Path) -> None:
     atomic_write(target, data, mode)
 
 
-def changes(checkout: Path, home: Path) -> list[tuple[Path, bytes, int]]:
+def changes(
+    checkout: Path, home: Path, coordinator: Path | None = None
+) -> list[tuple[Path, bytes, int]]:
     wanted = [
         (target, src.read_bytes(), mode) for src, target, mode in plan(checkout, home)
     ]
     wanted += [(target, data, 0o644) for data, target in render_plists(checkout, home)]
+    coordinator = coordinator or coordinator_dir(home)
+    readme = checkout.joinpath("coordinator", *OVERNIGHT_README)
+    if readme.is_file():
+        wanted.append(
+            (overnight_root(coordinator) / "README.md", readme.read_bytes(), 0o644)
+        )
+    ignore = gitignore_item(coordinator)
+    if ignore is not None:
+        wanted.append((ignore[0], ignore[1], 0o644))
     pending = []
     for target, data, mode in wanted:
         current = read_regular(target)
@@ -309,22 +378,56 @@ def changes(checkout: Path, home: Path) -> list[tuple[Path, bytes, int]]:
     return pending
 
 
-def install(checkout: Path, dry_run: bool, home: Path | None = None) -> None:
+def ensure_overnight_dirs(coordinator: Path, home: Path) -> list[Path]:
+    """Create the overnight folders. A refused directory is reported and left
+    alone; it must not fail the rest of the install."""
+    if not coordinator.is_dir():
+        return []
+    base = home if coordinator.is_relative_to(home) else coordinator
+    created = []
+    for directory in overnight_dirs(coordinator):
+        if directory.is_dir():
+            continue
+        try:
+            create_dir_chain(directory, base)
+        except ValueError as exc:
+            print(f"Warning: {exc}")
+            continue
+        created.append(directory)
+    return created
+
+
+def install(
+    checkout: Path,
+    dry_run: bool,
+    home: Path | None = None,
+    coordinator: Path | None = None,
+) -> None:
     home = home or Path.home()
-    pending = changes(checkout, home)
+    coordinator = coordinator or coordinator_dir(home)
+    pending = changes(checkout, home, coordinator)
     state = home / ".local/state/mac-ops"
     receipt_target = state / RECEIPT_NAME
     # Validate the receipt before any installation writes, even on a no-op.
     read_regular(receipt_target)
     if dry_run:
         print(json.dumps(
-            {"action": "coordinator", "would_write": [str(t) for t, _, _ in pending]},
+            {
+                "action": "coordinator",
+                "would_write": [str(t) for t, _, _ in pending],
+                "overnight_root": str(overnight_root(coordinator)),
+                "would_create": [
+                    str(d) for d in overnight_dirs(coordinator) if not d.is_dir()
+                ],
+            },
             indent=2,
         ))
         return
     created, _refused = ensure_log_dirs(log_dirs(render_plists(checkout, home)), home)
     for directory in created:
         print(f"Created log directory: {directory}")
+    for directory in ensure_overnight_dirs(coordinator, home):
+        print(f"Created overnight directory: {directory}")
     for pid in manual_monitors():
         print(
             f"Warning: a hand-started turn-cap monitor is running (pid {pid}). "
@@ -357,11 +460,19 @@ def install(checkout: Path, dry_run: bool, home: Path | None = None) -> None:
         )
 
 
-def status(checkout: Path) -> None:
-    pending = changes(checkout, Path.home())
+def status(checkout: Path, coordinator: Path | None = None) -> None:
+    home = Path.home()
+    coordinator = coordinator or coordinator_dir(home)
+    pending = changes(checkout, home, coordinator)
+    missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
     print(
         json.dumps(
-            {"in_sync": not pending, "differs": [str(t) for t, _, _ in pending]},
+            {
+                "in_sync": not pending and not missing,
+                "differs": [str(t) for t, _, _ in pending],
+                "overnight_root": str(overnight_root(coordinator)),
+                "overnight_missing": [str(d) for d in missing],
+            },
             indent=2,
         )
     )
@@ -373,14 +484,19 @@ def main() -> None:
         "action", choices=("install", "status"), nargs="?", default="install"
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--coordinator-dir",
+        help="Coordinator runtime folder that holds the overnight layout",
+    )
     args = parser.parse_args()
     checkout = Path(__file__).resolve().parent
+    coordinator = coordinator_dir(Path.home(), args.coordinator_dir)
     if args.action == "status":
-        status(checkout)
+        status(checkout, coordinator)
         return
     if not args.dry_run and sys.platform != "darwin":
         raise RuntimeError("Coordinator install requires macOS")
-    install(checkout, args.dry_run)
+    install(checkout, args.dry_run, coordinator=coordinator)
 
 
 if __name__ == "__main__":
