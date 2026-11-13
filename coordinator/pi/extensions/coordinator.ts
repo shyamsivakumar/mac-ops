@@ -87,9 +87,10 @@ function checkBash(cmd: string): string | undefined {
   if (literal) {
     const target = literal[2] || literal[8];
     const delimiter = literal[4] || literal[6];
+    const resolvedTarget = abs(target.replace(/^\$(?:TMPDIR|\{TMPDIR\})\//, (process.env.TMPDIR || "/tmp") + "/"), COORD);
     const lines = cmd.trimEnd().split("\n");
     const end = lines.findIndex((line, i) => i > 0 && line === delimiter);
-    if (end === lines.length - 1 && (TEMP.test(target) || abs(target, COORD).startsWith(COORD + "/"))) secretCmd = lines[0];
+    if (end === lines.length - 1 && (TEMP.test(resolvedTarget) || resolvedTarget.startsWith(COORD + "/"))) secretCmd = lines[0];
   }
   for (const m of cmd.matchAll(/:\s*>\s*([^\s;|&]+)/g)) {
     if (!TEMP.test(m[1])) return "truncating files needs Shyam's OK";
