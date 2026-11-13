@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
+import importlib.machinery
+import importlib.util
+import os
 import plistlib
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -200,6 +206,172 @@ class TestPiCoordinatorFiles(unittest.TestCase):
                 install_coordinator.changes(CHECKOUT, home),
                 [],
             )
+
+
+class TestTickJob(unittest.TestCase):
+    """The tick job runs the headless tick every thirty minutes."""
+
+    def setUp(self):
+        self.home = Path("/Users/example")
+        rendered = install_coordinator.render_plists(CHECKOUT, self.home)
+        self.rendered = {target.name: data for data, target in rendered}
+
+    def test_job_is_rendered_with_the_home_token_resolved(self):
+        self.assertIn("dev.coordinator.tick.plist", self.rendered)
+        data = self.rendered["dev.coordinator.tick.plist"]
+        self.assertNotIn(b"@HOME@", data)
+        parsed = plistlib.loads(data)
+        self.assertEqual(parsed["Label"], "dev.coordinator.tick")
+
+    def test_job_runs_the_tick_launcher_every_thirty_minutes(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
+        self.assertEqual(
+            parsed["ProgramArguments"], ["/Users/example/.local/bin/coord-tick"]
+        )
+        self.assertEqual(parsed["StartInterval"], 1800)
+
+    def test_job_does_not_run_a_tick_at_load(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
+        self.assertIsNot(parsed.get("RunAtLoad"), True)
+
+    def test_job_logs_into_the_coordinator_log_directory(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
+        self.assertEqual(
+            parsed["StandardOutPath"],
+            "/Users/example/Library/Logs/coordinator/tick.log",
+        )
+        self.assertEqual(parsed["StandardErrorPath"], parsed["StandardOutPath"])
+
+    def test_log_dirs_cover_the_tick_job(self):
+        rendered = install_coordinator.render_plists(CHECKOUT, self.home)
+        dirs = install_coordinator.log_dirs(rendered)
+        self.assertIn(Path("/Users/example/Library/Logs/coordinator"), dirs)
+
+
+class TestTickLauncher(unittest.TestCase):
+    """The tick launcher runs one headless pi and never two at once."""
+
+    def launcher(self):
+        path = CHECKOUT / "coordinator/pi/bin/coord-tick"
+        loader = importlib.machinery.SourceFileLoader("coord_tick", str(path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+
+    def test_launcher_maps_to_the_local_bin_directory(self):
+        home = Path("/Users/example")
+        plan = {
+            target: (source, mode)
+            for source, target, mode in install_coordinator.plan(CHECKOUT, home)
+        }
+        source, mode = plan[home / ".local/bin/coord-tick"]
+        self.assertEqual(source, CHECKOUT / "coordinator/pi/bin/coord-tick")
+        self.assertEqual(mode, 0o755)
+
+    def test_coord_pi_exports_coord_wake_zero(self):
+        launcher = (CHECKOUT / "coordinator/pi/bin/coord-pi").read_text()
+        self.assertIn("export COORD_WAKE=0", launcher)
+
+    def test_only_alert_lines_are_alerts(self):
+        module = self.launcher()
+        self.assertEqual(
+            module.alert_lines("NOOP"),
+            [],
+        )
+        self.assertEqual(
+            module.alert_lines("done\nALERT: one thing\nnoise\nALERT: two things"),
+            ["ALERT: one thing", "ALERT: two things"],
+        )
+
+    def test_an_alert_with_a_list_marker_or_emphasis_is_an_alert(self):
+        module = self.launcher()
+        self.assertEqual(
+            module.alert_lines("- ALERT: one thing"),
+            ["- ALERT: one thing"],
+        )
+        self.assertEqual(
+            module.alert_lines("**ALERT:** one thing"),
+            ["**ALERT:** one thing"],
+        )
+
+    def test_prompt_override_replaces_the_default_prompt(self):
+        module = self.launcher()
+        previous = os.environ.get("COORD_TICK_PROMPT_OVERRIDE")
+        os.environ["COORD_TICK_PROMPT_OVERRIDE"] = "Reply exactly NOOP."
+        try:
+            self.assertEqual(module.prompt(), "Reply exactly NOOP.")
+        finally:
+            if previous is None:
+                del os.environ["COORD_TICK_PROMPT_OVERRIDE"]
+            else:
+                os.environ["COORD_TICK_PROMPT_OVERRIDE"] = previous
+        self.assertIn("loop/tick.md", module.DEFAULT_PROMPT)
+
+    def test_a_second_run_exits_at_the_lock(self):
+        with tempfile.TemporaryDirectory(prefix="coord-tick-test-") as tmp:
+            lock_path = Path(tmp) / "coord-tick.lock"
+            log_path = Path(tmp) / "tick.log"
+            held = open(lock_path, "a+")
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                env = dict(os.environ)
+                env["COORD_TICK_LOCK"] = str(lock_path)
+                env["COORD_TICK_LOG"] = str(log_path)
+                result = subprocess.run(
+                    [sys.executable, str(CHECKOUT / "coordinator/pi/bin/coord-tick")],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=env,
+                )
+            finally:
+                fcntl.flock(held, fcntl.LOCK_UN)
+                held.close()
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("skipped: another tick holds the lock", log_path.read_text())
+
+    def test_the_lock_path_is_the_same_for_every_caller(self):
+        module = self.launcher()
+        previous = os.environ.pop("COORD_TICK_LOCK", None)
+        try:
+            first = module.lock_path()
+            os.environ["TMPDIR"] = "/tmp/other"
+            self.assertEqual(module.lock_path(), first)
+        finally:
+            if previous is None:
+                os.environ.pop("COORD_TICK_LOCK", None)
+            else:
+                os.environ["COORD_TICK_LOCK"] = previous
+
+    def test_the_process_group_is_killed_by_the_child_pid(self):
+        module = self.launcher()
+        process = subprocess.Popen(
+            ["/bin/sleep", "300"], start_new_session=True
+        )
+        try:
+            module.kill_group(process, signal.SIGTERM)
+            self.assertIsNotNone(process.wait(timeout=10))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+    def test_a_stopped_launcher_kills_the_run_it_started(self):
+        module = self.launcher()
+        process = subprocess.Popen(
+            ["/bin/sleep", "300"], start_new_session=True
+        )
+        module.RUNNING.append(process)
+        try:
+            with self.assertRaises(SystemExit):
+                module.stop_on_signal(signal.SIGTERM, None)
+            self.assertIsNotNone(process.wait(timeout=10))
+        finally:
+            module.RUNNING.clear()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
 
 
 class TestInstallPath(unittest.TestCase):
