@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- One coordinator tick every 5 minutes, as a fresh headless pi on Sonnet
+<!-- One coordinator tick every 30 minutes, as a fresh headless pi on Sonnet
      5.5 (coord-tick). No RunAtLoad: a tick costs a model call, so the first
      one lands one interval after the job loads, not at every boot. The
      launcher takes its own lock, so two ticks never overlap. -->
@@ -13,7 +13,7 @@
         <string>@HOME@/.local/bin/coord-tick</string>
     </array>
     <key>StartInterval</key>
-    <integer>300</integer>
+    <integer>1800</integer>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
