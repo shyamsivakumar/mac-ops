@@ -1,6 +1,6 @@
 import { appHome, exec, home, shared, writeTextFile } from "herdr";
 
-// The coordinator runs as pi (coord-pi), which keeps its sessions here.
+// The coordinator runs as pi; its sessions live in the agent's own session folder.
 const DIR = `${home()}/.pi/agent-coordinator/sessions/--Users-shyamsivakumar-Code-coordinator--`;
 // The pi terminal the panel talks to names its session after its tab.
 export const SESSION_NAME = "Pi - Coordinator";
@@ -270,8 +270,9 @@ function composed(text, at) {
 }
 
 function feedUser(p, m, at) {
-  const raw = textOf(m.content).trim();
-  const images = imagesOf(m.content);
+  const typed = pathImages(textOf(m.content));
+  const raw = typed.rest.replace(/<\/?pasted_content[^>]*>/g, "").trim();
+  const images = [...typed.images, ...imagesOf(m.content)];
   const hc = HC_FROM.exec(raw);
   const text = hc ? raw.replace(/<\/?hc\b[^>]*>/g, "").trim() : raw;
   if (!text && !images.length) return;
@@ -384,13 +385,12 @@ function sessions(rows) {
     .filter((row) => row.file);
 }
 
-// The live session belongs to the coordinator's own terminal; a short pi run in
-// the same folder does not. The size filter is the fallback when no session
-// carries the coordinator's name.
+// The live session is the coordinator's own: it carries the coordinator's name
+// and has enough turns to be a conversation, not a one-off pi run. The size
+// filter alone is the fallback when no session carries that name.
 function pickLive(rows) {
-  return rows.find((r) => r.name === SESSION_NAME && r.users > 0)
+  return rows.find((r) => r.name === SESSION_NAME && r.users >= MIN_USERS)
     ?? rows.find((r) => r.users >= MIN_USERS)
-    ?? rows.find((r) => r.users > 0)
     ?? null;
 }
 
@@ -437,9 +437,9 @@ async function readNow() {
     const r = await exec("sh", ["-c", MAIN_SESSIONS]);
     if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot list coordinator sessions");
     const rows = sessions(r.stdout);
-    const live = pickLive(rows);
-    if (!live) throw new Error("no pi coordinator session");
-    files = [live.file, ...rows.filter((row) => row.file !== live.file).map((row) => row.file)];
+    const chosen = pickLive(rows);
+    if (!chosen) throw new Error("no pi coordinator session");
+    files = [chosen.file, ...rows.filter((row) => row.file !== chosen.file).map((row) => row.file)];
     filesAt = Date.now();
   }
   if (live?.file !== files[0]) {
