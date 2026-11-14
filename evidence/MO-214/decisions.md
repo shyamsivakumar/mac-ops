@@ -108,3 +108,62 @@ gate verdict, and it stayed `stuck` because a check is failing.
 - `python3 scripts/mac_ops_fast_check.py` → passed.
 - `~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py` → passed
   (the full local check per `README.md`, "Check a task").
+
+## The review round
+
+The gate read the merged head and failed it. The fixes below are the
+review's findings, applied on top of `origin/main` (which already holds
+the first version of this part, plus the redaction and the shift's work
+parts).
+
+1. **The proof was circular.** The check a receipt recorded could pass on
+   the builder's own line in the pull request body, `Builder check: PASS
+   <head>`. That line is a claim about the check, not the check, and the
+   spec says a claim never counts. The receipt now records
+   `overnight check-head --repo <repo> --number <n>`, and that command
+   reads only the checks that ran on the head: exit 0 when a check ran and
+   passed, exit 1 when a check ran and did not pass, exit 2 when no check
+   ran on the head or the head could not be read. A repository that
+   publishes no checks (CI is agent checks only, as in mac-ops) therefore
+   has no evidence on its heads: its items stay open and the receipt says
+   why. That is the honest answer, not a rule that blocks everything: the
+   shift has no check of its own to show, so it shows nothing.
+2. **The close could land on a pull request.** The receipt's `Ticket`
+   line held `item["number"]`, which for a pull request item is the pull
+   request number, and the fallback in the issue lookup returned the same
+   number when a pull request had no linked ticket. The receipt now holds
+   the issue number (`issue_number()`), a pull request with no linked
+   ticket holds no issue number at all, and the close addresses the number
+   it found the receipt by.
+3. **The close could be pointed at the wrong issue.** The `--receipt`
+   switch let a caller hand the close one ticket's receipt and another
+   ticket's number. The switch is gone: the close finds the receipt by
+   the repository and the issue number in it, and closes that number.
+4. **Two copies of the "check did not run" test.** `unrun_checks()` takes
+   the checks now, and `evidence_holds()` and the report both call it.
+5. **A comment explained a constant.** The constant's purpose moved into
+   the module's own description, and the comment is gone.
+6. **The checks were read twice.** The receipt writer runs one command,
+   `overnight check-head`, and that command reads the head's checks once.
+
+The gate also found the branch sat on the wrong base, so `origin/main` is
+merged in and the diff against it is this part's change alone.
+
+### The proof after the fixes
+
+The receipt is written by the module's own writer for a real pull
+request, and the close runs on it:
+
+```
+$ python3 coordinator/overnight/overnight check-head --repo shyamsivakumar/strategy-replay-workbench --number 1044
+overnight: shyamsivakumar/strategy-replay-workbench#1044 carries a check that ran and passed
+exit=0
+
+$ python3 coordinator/overnight/overnight check-head --repo shyamsivakumar/mac-ops --number 260
+overnight: REFUSED: no check ran on the head of shyamsivakumar/mac-ops#260, so the check is unknown
+exit=2
+```
+
+The second run is the honest answer for a repository that publishes no
+checks: the head carries no check that ran, so a receipt for it cannot
+hold the evidence and the close refuses.
