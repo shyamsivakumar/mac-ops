@@ -7,6 +7,7 @@ LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
 MAX_ATTEMPTS = 3
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
 ASTRA_MODEL = {"instanceId": "codex", "model": "gpt-6-astra"}
 OPUS_MODEL = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
 TASK_MODELS = {
@@ -325,6 +326,8 @@ def drain():
                     with open(receipts_path) as f:
                         receipts = json.load(f)
                 receipts[request_id] = thread_id
+                if request_id.startswith("gate:"):
+                    receipts[":".join(request_id.split(":")[:3])] = thread_id
                 with open(receipts_path + ".tmp", "w") as f:
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
@@ -336,6 +339,16 @@ def drain():
             queue["reservedThreads"].pop(reservation, None)
             item["attempts"] = item.get("attempts", 0) + 1
             item["last_error"] = out[:200]
+            if request_id and request_id.startswith("gate:") and quota_failure(out):
+                key = ":".join(request_id.split(":")[:3])
+                model = fallback_reviewer(queue, key, item["args"]["modelSelection"], item.get("builderModels", []))
+                if model:
+                    item["args"]["modelSelection"] = model
+                    item["args"]["clientRequestId"] = key + ":" + model["model"]
+                    item["attempts"] = 0
+                    log(f"quota fallback {key}: {model['model']}")
+                else:
+                    item["attempts"] = MAX_ATTEMPTS
             save(queue)
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
 
@@ -837,8 +850,27 @@ def reviewer_model(models):
     if any(is_anthropic(m) for m in models):
         return SOL_MODEL
     if any("gpt-" in m.lower() or "openai" in m.lower() or re.search(r"(?:^|/|:)o[0-9](?:-|$)", m.lower()) for m in models):
-        return OPUS_MODEL
+        return DEEPSEEK_MODEL
     return ASTRA_MODEL
+
+
+def quota_failure(value):
+    return any(word in str(value).lower() for word in ("spend limit", "usage limit", "rate_limit", "429"))
+
+
+def fallback_reviewer(queue, key, current, models):
+    tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
+    if current["model"] not in tried:
+        tried.append(current["model"])
+    openai = any("gpt-" in m.lower() or "openai" in m.lower() or re.search(r"(?:^|/|:)o[0-9](?:-|$)", m.lower()) for m in models)
+    deepseek = any("deepseek" in m.lower() for m in models)
+    for candidate in (ASTRA_MODEL, DEEPSEEK_MODEL, SOL_MODEL):
+        if candidate["model"] in tried:
+            continue
+        if (openai and candidate["instanceId"] == "codex") or (deepseek and candidate == DEEPSEEK_MODEL):
+            continue
+        return candidate
+    return None
 
 
 def gate_args(settings, repo, issue, number, head, publisher, model):
@@ -936,7 +968,7 @@ def gate_candidates(config):
                     continue
                 key = f"gate:{repo}#{number}:{head}"
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
-                       "args": gate_args(settings, repo, issue, number, head, publisher, model)}
+                       "builderModels": models, "args": gate_args(settings, repo, issue, number, head, publisher, model)}
                 break
 
 
@@ -991,6 +1023,15 @@ def cmd_gatekeep(a):
                         continue
                     if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
                         continue
+                    if quota_failure(data) or key in queue.get("gateReviewers", {}):
+                        current = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+                        model = fallback_reviewer(queue, key, current, event.get("builderModels", []))
+                        if model is None:
+                            if not a.dry_run:
+                                save(queue)
+                            continue
+                        args["modelSelection"] = model
+                        args["clientRequestId"] = key + ":" + model["model"]
                     print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
                     if not a.dry_run:
                         del heads[key]
@@ -1007,7 +1048,7 @@ def cmd_gatekeep(a):
                 if a.dry_run:
                     continue
                 item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
-                        "title": args["title"], "priority": 5000}
+                        "title": args["title"], "priority": 5000, "builderModels": event.get("builderModels", [])}
                 queue["next"] += 1
                 queue["items"].append(item)
                 heads[key] = item["id"]
@@ -1140,7 +1181,7 @@ def backstop_model(thread, runs):
         entries = router_chain(stored if isinstance(stored, str) else "")
         if entries:
             return reviewer_model(entries)
-    return OPUS_MODEL
+    return ASTRA_MODEL
 
 
 def check_names_head(body, head, publisher, checks):
@@ -1179,7 +1220,7 @@ def gate_request(repo, pr, settings, config, receipts, login):
         if not check_names_head(body, head, publisher, checks):
             return None
         key = f"gate:{repo}#{number}:{head}"
-        return key, gate_args(settings, repo, issue, number, head, publisher, model)
+        return key, gate_args(settings, repo, issue, number, head, publisher, model), builder_models(thread, runs)
     return None
 
 
@@ -1233,14 +1274,14 @@ def cmd_gate(a):
             "FAIL and would block the head from then on. Wait for the builder "
             "to push the check for this head."
         )
-    key, args = found
+    key, args, models = found
     with Lock(True):
         queue = load()
         heads = queue.setdefault("gatedHeads", {})
         if key in heads:
             die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
         item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
-                "title": args["title"], "priority": 5000}
+                "title": args["title"], "priority": 5000, "builderModels": models}
         queue["next"] += 1
         queue["items"].append(item)
         heads[key] = item["id"]
