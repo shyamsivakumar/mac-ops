@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, json, os, re, subprocess, sys, time
+import argparse, fcntl, json, os, re, signal, subprocess, sys, time
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -38,7 +38,7 @@ TICKETS_CONFIG = os.environ.get("COORDQ_TICKETS_CONFIG", os.path.expanduser("~/.
 REFILL_INTERVAL = int(os.environ.get("COORDQ_REFILL_INTERVAL", "300"))
 REFILL_BUDGET = float(os.environ.get("COORDQ_REFILL_BUDGET", "120"))
 REFILL_MAX = int(os.environ.get("COORDQ_REFILL_MAX", "40"))
-REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "200"))
+REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "1000"))
 # The file that holds the refusals of the earlier passes. A candidate whose
 # board state has not changed since its last refusal is skipped, so the scan
 # walks past it and reaches the tickets further down the board.
@@ -60,6 +60,13 @@ STAGE = "stage:todo"
 # stuck; a new head starts the count again.
 STUCK_COUNT = 3
 STUCK_FILE = "gatekeep-stuck.txt"
+# A gate that dies without a verdict is queued again, but a reviewer that
+# cannot run at all fails the same way, so a retry with no end relaunches it
+# on every run. A head is retried at most GATE_RETRY_LIMIT times, with
+# GATE_RETRY_BACKOFF seconds between retries after the first, and then given
+# up until its head changes.
+GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "2"))
+GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
 ROUTER_SOURCE = os.path.expanduser("~/.pi/agent/extensions/task-router.ts")
@@ -96,6 +103,29 @@ def save(queue):
     with open(tmp, "w") as f:
         json.dump(queue, f, indent=1)
     os.replace(tmp, path("queue.json"))
+
+
+def gate_state(value):
+    """The gate state of one recorded head.
+
+    gatedHeads maps a head to its queue item, and to the record
+    `{id, retries, at, givenUp}` once a gate for the head has died without
+    a verdict. A value written before that record is the bare queue item
+    id, which is a head with no retry behind it.
+    """
+    if isinstance(value, dict):
+        retries = value.get("retries")
+        at = value.get("at")
+        return {"id": value.get("id"),
+                "retries": retries if isinstance(retries, int) and not isinstance(retries, bool) else 0,
+                "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
+                "givenUp": bool(value.get("givenUp"))}
+    return {"id": value, "retries": 0, "at": None, "givenUp": False}
+
+
+def gate_label(state):
+    """The recorded gate of one head, for a refusal that names it."""
+    return f"coordq #{state['id']}" if state["id"] is not None else "an earlier gate"
 
 
 def with_model(args):
@@ -384,8 +414,9 @@ def cmd_start(a):
         if request_id.startswith("gate:"):
             heads = queue.setdefault("gatedHeads", {})
             if request_id in heads:
-                die(f"refused: a gate for this head is already recorded as coordq #{heads[request_id]}")
-            heads[request_id] = item["id"]
+                die(f"refused: a gate for this head is already recorded as "
+                    f"{gate_label(gate_state(heads[request_id]))}")
+            heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False}
         save(queue)
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
@@ -424,6 +455,17 @@ def search_stage_todo(owner):
     return json.loads(run.stdout)
 
 
+def stage_todo(candidate):
+    """True when the ticket carries the one stage label the board means.
+
+    A ticket whose stage label is spelled another way, or that carries two
+    stage labels, is one the ticket CLI refuses, so the scan skips it.
+    """
+    names = [label["name"] if isinstance(label, dict) else str(label)
+             for label in candidate.get("labels") or []]
+    return [name for name in names if name.startswith("stage:")] == [STAGE]
+
+
 def board_candidates():
     """The open stage:todo issues of the repos in tickets.json, oldest first."""
     with open(TICKETS_CONFIG) as f:
@@ -434,7 +476,7 @@ def board_candidates():
     for owner in owners:
         for row in search_stage_todo(owner):
             repo = row["repository"]["nameWithOwner"]
-            if repo in repos:
+            if repo in repos and stage_todo(row):
                 found[(repo, row["number"])] = row
     return sorted(found.values(),
                   key=lambda r: (r["createdAt"], r["repository"]["nameWithOwner"], r["number"]))
@@ -445,15 +487,34 @@ def ticket_start(repo, number, dry_run):
     changes nothing, so a refusal is a skip and not a start. The ticket CLI
     exits 2 for a refusal and for a usage error, and 1 for a failed check,
     so the exit code alone does not say which one it was; `is_refusal` reads
-    the answer out of the output."""
+    the answer out of the output.
+
+    The ticket CLI starts the queue entry itself, so a timeout has to take
+    that child with it: the whole process group is killed, or the start
+    keeps running after the dispatcher gave up on it."""
     command = [TICKET_BIN, "start", f"{repo}#{number}"]
     if dry_run:
         command.append("--dry-run")
     try:
-        run = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=True)
+    except OSError as e:
+        return 1, f"ticket start could not run: {e}"
+    try:
+        stdout, stderr = process.communicate(timeout=240)
     except subprocess.TimeoutExpired:
-        return 1, "ticket start timed out"
-    return run.returncode, ((run.stdout or "") + (run.stderr or "")).strip()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
+        process.communicate()
+        return 1, "ticket start timed out after 240s"
+    return process.returncode, ((stdout or "") + (stderr or "")).strip()
+
+
+def one_line(text):
+    """The output of the ticket CLI on one line, so a log entry stays a line."""
+    return " ".join(text.split())
 
 
 def is_refusal(code, out):
@@ -607,22 +668,22 @@ def refill(a):
             examined += 1
             if code != 0:
                 if is_refusal(code, out):
-                    refusals[key] = {"state": board_state, "reason": out[:200],
+                    refusals[key] = {"state": board_state, "reason": one_line(out)[:200],
                                      "at": time.time(), "pass": pass_no}
-                    pass_refusals.append({"key": key, "reason": out[:200]})
-                    log(f"refill refused {key}: {out[:200]}")
+                    pass_refusals.append({"key": key, "reason": one_line(out)[:200]})
+                    log(f"refill refused {key}: {one_line(out)[:200]}")
                 else:
                     # A failure of the check is not a refusal of the ticket.
                     # It is not recorded, so the next pass tries the ticket
                     # again instead of hiding it for the retry age.
-                    log(f"refill could not check {key}: {out[:200]}")
+                    log(f"refill could not check {key}: {one_line(out)[:200]}")
                 continue
             filled += 1
             refusals.pop(key, None)
             if a.dry_run:
                 log(f"refill would start {key}")
             elif out.startswith("queued"):
-                log(f"refill queued {key}: {out[:120]}")
+                log(f"refill queued {key}: {one_line(out)[:120]}")
             else:
                 log(f"refill started {key}")
         # A candidate that left the board keeps no refusal, so the file holds
@@ -642,22 +703,26 @@ def refill(a):
             f"skipped {skipped} unchanged refusal(s), attempted {attempted}, started {filled}")
 
 
+def safe_refill(a):
+    try:
+        refill(a)
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        log(f"refill failed: {e}")
+
+
 def cmd_dispatch(a):
     with open(path("dispatch.last"), "w") as f:
         f.write(str(int(time.time())))
     if a.dry_run:
         log("dry run: the queue is left alone")
-        refill(a)
+        safe_refill(a)
         return
     with Lock(False) as lock:
         if lock is None:
             log("lock held by another run, skipping")
             return
         drain()
-    try:
-        refill(a)
-    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
-        log(f"refill failed: {e}")
+    safe_refill(a)
 
 
 def cmd_create(a):
@@ -956,7 +1021,14 @@ def cmd_gatekeep(a):
                 heads = queue.setdefault("gatedHeads", {})
                 if key in attempted:
                     continue
+                state = gate_state(heads.get(key))
+                retries = 0
                 if key in heads:
+                    # A head whose retries ran out is left alone until its
+                    # head changes, so a reviewer that cannot run is not
+                    # relaunched on every run.
+                    if state["givenUp"]:
+                        continue
                     receipts = load_receipts()
                     thread_id = receipts.get(key)
                     if not thread_id:
@@ -972,6 +1044,16 @@ def cmd_gatekeep(a):
                     if thread.get("status") not in {"failed", "interrupted", "completed"}:
                         continue
                     if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
+                        continue
+                    retries = state["retries"] + 1
+                    if retries > GATE_RETRY_LIMIT:
+                        print(f"gave up {key} after {state['retries']} retries without a verdict",
+                              flush=True)
+                        if not a.dry_run:
+                            heads[key] = {**state, "givenUp": True}
+                            save(queue)
+                        continue
+                    if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
                         continue
                     print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
                     if not a.dry_run:
@@ -992,7 +1074,8 @@ def cmd_gatekeep(a):
                         "title": args["title"], "priority": 5000}
                 queue["next"] += 1
                 queue["items"].append(item)
-                heads[key] = item["id"]
+                heads[key] = {"id": item["id"], "retries": retries,
+                              "at": time.time() if retries else None, "givenUp": False}
                 save(queue)
         write_counts(counts, seen, stuck, a.dry_run)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
@@ -1200,8 +1283,12 @@ def cmd_gate(a):
     key = f"gate:{repo}#{number}:{head}"
     with Lock(True):
         heads = load().setdefault("gatedHeads", {})
-        if key in heads:
-            die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
+        state = gate_state(heads.get(key))
+        # An operator asking for a gate explicitly still gets it, so a head
+        # the automatic retry gave up on is queued again. The retry count is
+        # kept, because the reviewer that could not run has not changed.
+        if key in heads and not state["givenUp"]:
+            die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
     login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
                                capture_output=True, text=True, timeout=40)
     if login_run.returncode:
@@ -1219,13 +1306,19 @@ def cmd_gate(a):
     with Lock(True):
         queue = load()
         heads = queue.setdefault("gatedHeads", {})
-        if key in heads:
-            die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
+        state = gate_state(heads.get(key))
+        if key in heads and not state["givenUp"]:
+            die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
         item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
                 "title": args["title"], "priority": 5000}
         queue["next"] += 1
         queue["items"].append(item)
-        heads[key] = item["id"]
+        # The explicit gate is recorded as undecided again, so a second
+        # explicit gate for the same head is refused while this one is live.
+        # Its retry count stays at the limit, so if it dies without a verdict
+        # the next gatekeep run gives up on the head again, in one line,
+        # instead of reopening the automatic retries.
+        heads[key] = {**state, "id": item["id"], "givenUp": False}
         save(queue)
     print("queued " + key
           + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"])
