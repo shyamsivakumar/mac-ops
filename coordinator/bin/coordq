@@ -40,11 +40,12 @@ REFILL_STATE_FILE = "refill-state.json"
 # the ticket itself changing, for example when a blocker closes, so a refusal
 # is retried when it grows old.
 REFILL_RETRY_AGE = float(os.environ.get("COORDQ_REFILL_RETRY_AGE", "3600"))
-# The ticket CLI exits with this code when it refuses a ticket. Every other
-# non-zero exit is a failure of the check, not a refusal of the ticket.
+# The ticket CLI exits with this code when it refuses a ticket, and also for
+# a usage error. A refusal says so in its own output, and `is_refusal` reads
+# that answer, because the exit code alone cannot tell the two apart.
 REFUSE_CODE = 2
-# The ticket CLI exits with REFUSE_CODE for a refusal and for a usage error,
-# and with 1 for a failed check. A refusal says so in its own first line.
+# The ticket CLI exits with 1 for a missing or unknown issue and for a
+# failed check. A refusal says so in its own first line.
 REFUSE_PREFIX = "refused:"
 STAGE = "stage:todo"
 # The gate keeps a PR that it cannot gate on a report file, so the coordinator
