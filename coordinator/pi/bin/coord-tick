@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one coordinator tick as a fresh headless pi on DeepSeek V4.1 Flash.
+"""Run one coordinator tick as a fresh headless pi on Sonnet 5.5.
 
 launchd starts this every 30 minutes (dev.coordinator.tick). Each run is one
 short-lived pi process on the coordinator config, inside the coordinator
@@ -17,7 +17,7 @@ Environment knobs, all optional:
   COORD_TICK_LOG              log file (default ~/Library/Logs/coordinator/tick.log)
   COORD_TICK_LOCK             lock file (default ~/.local/state/mac-ops/coord-tick.lock)
   COORD_TICK_TIMEOUT          seconds before a run is killed (default 600)
-  COORD_TICK_MODEL            model id (default deepseek/deepseek-flash)
+  COORD_TICK_MODEL            model id (default pi-claude-cli/claude-sonnet-5-5)
 """
 
 from __future__ import annotations
@@ -38,29 +38,11 @@ SANDBOX_PROFILE = PI_DIR / "coordinator.sb"
 LOG_PATH = Path(
     os.environ.get("COORD_TICK_LOG", HOME / "Library/Logs/coordinator/tick.log")
 )
-MODEL = os.environ.get("COORD_TICK_MODEL", "deepseek/deepseek-flash")
+MODEL = os.environ.get("COORD_TICK_MODEL", "pi-claude-cli/claude-sonnet-5-5")
 TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "600"))
 DEFAULT_PROMPT = (
-    "Tick (launchd). You are the coordinator tick. Work from "
-    "~/Code/coordinator/loop/tick.md: read it first, then do what it says. "
-    "Rebuild state (coordq status and coordq list, the t3mcp thread list, "
-    "launchctl list for the dev.coordinator jobs, loop/ticks.log, "
-    "loop/scope.md, loop/decisions.md), then act on what changed since the "
-    "last tick line. Keep every free slot busy with unblocked stage:todo "
-    "work in scope repos: sweep the board, start the highest-priority "
-    "unblocked stage:todo tickets (one at a time for same-file tickets, "
-    "split anything over five minutes first) and keep the queue fed. Queue "
-    "a gate for every open PR head that has none, and send gate FAIL "
-    "findings back to the builder thread. Leave held (stage:hold), blocked "
-    "and dependency-bound tickets untouched: never restart or reopen them. "
-    "Do not edit repos, commit, push or merge. Never run one long "
-    "foreground scan: run every long scan in the background with nohup and "
-    "a log file (for example nohup <command> > $TMPDIR/tick-<name>.log "
-    "2>&1 &), then read that log on the next tick and act on it then, so a "
-    "slow scan never eats the tick. Append exactly one line to "
-    "loop/ticks.log: <YYYY-MM-DD HH:MM PT> | actions with keys | errors. "
-    "End your reply with NOOP, or one ALERT: line per thing Shyam must "
-    "know now. A wake is never Shyam's approval."
+    "Tick (launchd). Run one tick per loop/tick.md. Keep it cheap: filter "
+    "command output, act only on what changed, reply NOOP or ALERT lines only."
 )
 LOCK_NAME = "coord-tick.lock"
 CHILD_PATH = ":".join(

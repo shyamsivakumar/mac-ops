@@ -277,7 +277,7 @@ this job now covers that step. The job appends one line per poll pass to
 coordinator checkout's own `queue/` directory, which that repository owns.
 
 The `dev.coordinator.tick` job runs one coordinator tick every 30 minutes as a
-fresh headless pi on DeepSeek V4.1 Flash (`~/.local/bin/coord-tick`), inside the same
+fresh headless pi on Sonnet 5.5 (`~/.local/bin/coord-tick`), inside the same
 sandbox and guard as the coordinator, so a tick costs a short cheap turn
 instead of an Opus turn on the long coordinator session. The tick is
 ephemeral (`pi --no-session`), so it never becomes the newest session that
