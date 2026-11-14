@@ -116,7 +116,7 @@ class GatekeepBackstopTest(GatekeepBase):
         candidates = [e for e in events if e["kind"] == "candidate"]
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6.1-sol"})
+                         {"instanceId": "codex", "model": "gpt-6-astra"})
 
     def test_no_skip_is_reported(self):
         events = self.candidates()
@@ -128,7 +128,7 @@ class GatekeepBackstopTest(GatekeepBase):
         lines = [line for line in self.errors.splitlines() if line.startswith("backstop ")]
         self.assertEqual(len(lines), 1)
         self.assertIn(f"backstop {REPO}#7: executed model unavailable", lines[0])
-        self.assertIn("reviewer codex gpt-6.1-sol", lines[0])
+        self.assertIn("reviewer codex gpt-6-astra", lines[0])
 
     def test_the_backstop_line_is_logged_once_for_two_issues(self):
         self.pr["body"] = "Refs #9\nRefs #10\n"
@@ -148,7 +148,7 @@ class GatekeepBackstopTest(GatekeepBase):
         candidates = [e for e in events if e["kind"] == "candidate"]
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6.1-sol"})
+                         {"instanceId": "codex", "model": "gpt-6-astra"})
         self.assertEqual([l for l in self.errors.splitlines() if l.startswith("backstop ")], [])
 
     def test_a_minimax_builder_gets_astra(self):
@@ -188,7 +188,7 @@ class GatekeepQueueTest(GatekeepBase):
         gates = [item for item in queue["items"] if item["tool"] == "t3_thread_launch"]
         self.assertEqual(len(gates), 1)
         self.assertEqual(gates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6.1-sol"})
+                         {"instanceId": "codex", "model": "gpt-6-astra"})
 
     def test_a_gated_head_is_not_stuck(self):
         for _ in range(coordq.STUCK_COUNT):
