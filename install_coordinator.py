@@ -38,7 +38,6 @@ PI_FILES = (
     ("phone-relay/CLAUDE.md", ".pi/agent-coordinator/phone-relay/CLAUDE.md"),
 )
 TURN_CAP_JOB = "dev.coordinator.turncap"
-OVERNIGHT_JOB = "dev.coordinator.overnight"
 # The jobs the coordinator retired. A retired job has no plist in the
 # repository, so the installer must also take the installed copy away and
 # unload the running job: otherwise the job stays loaded and keeps
@@ -249,15 +248,27 @@ def run_quiet(argv: list[str]) -> str | None:
     return result.stdout
 
 
-def run_status(argv: list[str]) -> int | None:
-    """Run a command and return its exit code, or None when it cannot run."""
+def run_status(argv: list[str], *, capture_error: list[str] | None = None) -> int | None:
+    """Run a command and return its exit code, or None when it cannot run.
+
+    When capture_error is given, the text the command refused with is
+    appended to it, so a refusal can be reported as it was written."""
     try:
         result = subprocess.run(
             argv, capture_output=True, text=True, timeout=15, check=False
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    if capture_error is not None:
+        capture_error.append((result.stderr or result.stdout or "").strip())
     return result.returncode
+
+
+def run_status_text(argv: list[str]) -> tuple[int | None, str]:
+    """Run a command and return its exit code and the text it refused with."""
+    errors: list[str] = []
+    code = run_status(argv, capture_error=errors)
+    return code, (errors[0] if errors else "")
 
 
 def parse_launchd_pid(output: str) -> int | None:
@@ -334,6 +345,114 @@ def retire_jobs(home: Path) -> list[str]:
             notes.append(f"Could not remove {plist}: {exc}")
             continue
         notes.append(f"Removed the retired job's plist {plist}.")
+    return notes
+
+
+def is_real_home(home: Path) -> bool:
+    """Return True when home is the home of this user.
+
+    A temporary home (a proof or a test) must never touch the jobs of the
+    machine. The same rule retire_jobs follows decides here."""
+    return home == Path.home()
+
+
+def plist_label(data: bytes) -> str | None:
+    """Return the launchd label of a rendered plist, or None when it has none."""
+    try:
+        parsed = plistlib.loads(data)
+    except (plistlib.InvalidFileException, ExpatError, ValueError):
+        return None
+    label = parsed.get("Label")
+    return label if isinstance(label, str) and label else None
+
+
+def changed_launchd_jobs(
+    pending: list[tuple[Path, bytes, int]]
+) -> list[tuple[str | None, Path]]:
+    """Return the launchd jobs whose plist this run changed.
+
+    Only a plist that changed is a job to reload: a job whose installed file
+    is already the wanted one keeps running what it runs."""
+    jobs = []
+    for target, data, _mode in pending:
+        if target.parent.name != "LaunchAgents":
+            continue
+        jobs.append((plist_label(data), target))
+    return jobs
+
+
+def job_released(label: str, uid: int, timeout: float = 15.0) -> bool:
+    """Wait until launchd lets go of the label, and say whether it did.
+
+    launchd keeps the old service for a moment after the bootout. A
+    bootstrap that arrives while the old service is still winding down is
+    refused with "Operation already in progress", so waiting for the
+    release belongs to the reload: the bootout and the bootstrap still run
+    once each, and nothing is retried with other flags."""
+    deadline = time.monotonic() + timeout
+    while True:
+        code = run_status(["launchctl", "print", f"gui/{uid}/{label}"])
+        if code is None:
+            return False
+        if code != 0:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
+def reload_job(label: str, plist: Path, uid: int, timeout: float = 15.0) -> str:
+    """Reload one launchd job and report what launchctl said.
+
+    The job is booted out first, then bootstrapped from the written plist.
+    A job that is not loaded says so, and that is not a refusal: the
+    bootstrap alone is enough. A real refusal is reported with the text
+    launchctl wrote, and is not retried with other flags."""
+    code, error = run_status_text(["launchctl", "bootout", f"gui/{uid}/{label}"])
+    if code is None:
+        return f"Refused to reload the launchd job {label}: launchctl could not be run."
+    if code != 0 and job_loaded(label):
+        return (
+            f"Refused to reload the launchd job {label}: launchctl bootout "
+            f"gui/{uid}/{label} failed: {error}"
+        )
+    if not job_released(label, uid, timeout):
+        return (
+            f"Refused to reload the launchd job {label}: launchd kept the job "
+            f"after the bootout, so the new plist was not loaded."
+        )
+    code, error = run_status_text(["launchctl", "bootstrap", f"gui/{uid}", str(plist)])
+    if code == 0:
+        return f"Reloaded the launchd job {label}."
+    if job_loaded(label):
+        return (
+            f"Reloaded the launchd job {label}: launchd had loaded the new "
+            f"plist itself."
+        )
+    return (
+        f"Refused to reload the launchd job {label}: launchctl bootstrap "
+        f"gui/{uid} {plist} failed: {error} The job is not loaded now."
+    )
+
+
+def reload_jobs(home: Path, jobs: list[tuple[str | None, Path]]) -> list[str]:
+    """Reload the launchd jobs whose plist changed in this run.
+
+    Only the real home touches the jobs of the machine: a temporary home
+    writes its own files and leaves every running job alone, the same rule
+    retire_jobs follows."""
+    notes: list[str] = []
+    if not is_real_home(home):
+        for label, plist in jobs:
+            name = label or plist.name
+            notes.append(f"Skipped the reload of {name}: this is not the real home.")
+        return notes
+    uid = os.getuid()
+    for label, plist in jobs:
+        if label is None:
+            notes.append(f"Refused to reload {plist}: the plist names no launchd job.")
+            continue
+        notes.append(reload_job(label, plist, uid))
     return notes
 
 
@@ -517,6 +636,10 @@ def install(
                 "action": "coordinator",
                 "would_write": [str(t) for t, _, _ in pending],
                 "would_retire": [str(path) for path in retired_plists(home)],
+                "would_reload": [
+                    label or str(target)
+                    for label, target in changed_launchd_jobs(pending)
+                ],
                 "overnight_root": str(overnight_root(coordinator)),
                 "would_create": [
                     str(d) for d in overnight_dirs(coordinator) if not d.is_dir()
@@ -562,19 +685,8 @@ def install(
     }
     write(receipt_target, json.dumps(receipt).encode(), 0o600, backups)
     print(f"Wrote {len(pending)} coordinator files. Backups: {backups}")
-    if any(t.parent.name == "LaunchAgents" for t, _, _ in pending):
-        print(
-            "Launchd jobs were not restarted. Load the changed jobs with "
-            "launchctl bootout and bootstrap, for example: launchctl bootstrap "
-            f"gui/$(id -u) ~/{'Library/LaunchAgents'}/{TURN_CAP_JOB}.plist"
-        )
-        print(
-            f"The overnight job is {OVERNIGHT_JOB}.plist. A job that is "
-            f"already loaded needs bootout first: launchctl bootout "
-            f"gui/$(id -u)/{OVERNIGHT_JOB} (a job that is not loaded says so), "
-            f"then launchctl bootstrap gui/$(id -u) "
-            f"~/{'Library/LaunchAgents'}/{OVERNIGHT_JOB}.plist"
-        )
+    for note in reload_jobs(home, changed_launchd_jobs(pending)):
+        print(note)
 
 
 def status(checkout: Path, coordinator: Path | None = None) -> None:
