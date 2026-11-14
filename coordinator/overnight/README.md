@@ -99,7 +99,7 @@ file.
 | Group | What is in it |
 | --- | --- |
 | Failing pull requests | A pull request that is open and whose checks show a failure. `gh pr checks` answers for each one; a pull request with no checks at all is not a failure. |
-| Pull requests with a gate PASS | A pull request whose head the gate has looked at, where the gate's own message ends with `VERDICT: PASS`. The gate thread is found in the coordinator's dispatch receipts (`gate:<repo>#<pr>:<head>`), so a gate for an older head is never a verdict for the current one. |
+| Pull requests with a gate PASS | A pull request whose head the gate has looked at, where the gate's own last message in the thread's latest run ends with `VERDICT: PASS` and carries the line `CHECK: PASS <head>`. The gate thread is found in the coordinator's dispatch receipts (`gate:<repo>#<pr>:<head>`), so a gate for an older head is never a verdict for the current one, and a later run of the same thread replaces an earlier verdict. |
 | Ready tickets already split into 5-minute parts | A ready ticket whose own text says it is a bounded slice: a light build slice, a light chore, or a part that says how many minutes it takes. |
 | Ready tickets not yet split | Every other ready ticket. The shift splits it first, then adds the parts. |
 
@@ -110,13 +110,19 @@ PASS is in flight: it is not work for the night, and the list says that
 too.
 
 Inside a group the order is the board's: the priority label first, then
-the items whose blockers are met, then the board's own order. A blocker
-is met when its issue is closed, so it is not on the open issue list. A
-blocker the shift cannot check is treated as unmet, so the shift does
-not start work whose order it cannot prove.
+the items whose blockers are met, then the repository and the issue
+number. A blocker is met when its issue is closed, so it is neither on
+the open issue list nor missing from the closed one. A blocker the shift
+cannot check is not a met blocker, so it is reported as blocked.
+
+A blocked item is not left out. It stays in its group, is marked with the
+blocker that holds it, and is ordered after the items that are ready, so
+the night sees it and knows why it waits.
 
 The order writes one line to `run/shift-log.md`: the planned count and
-the counts per repository and per state. That line is the night's record
+the counts per repository and per state (failing, gate PASS, split,
+unsplit, in flight and not ready). A count the shift could not check is
+written as `UNVERIFIED`, never as a zero. That line is the night's record
 of what was in scope, and the morning report reads it for the planned
 count. It holds no list: the board is the list.
 
