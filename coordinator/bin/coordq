@@ -733,7 +733,7 @@ def reviewer_model(models):
     """Choose a reviewer from a different builder vendor."""
     if any(is_anthropic(m) for m in models):
         return SOL_MODEL
-    if any("gpt-" in m.lower() or "openai" in m.lower() for m in models):
+    if any("gpt-" in m.lower() or "openai" in m.lower() or re.search(r"(?:^|/|:)o[0-9](?:-|$)", m.lower()) for m in models):
         return OPUS_MODEL
     return ASTRA_MODEL
 

@@ -151,14 +151,14 @@ class GatekeepBackstopTest(GatekeepBase):
                          {"instanceId": "codex", "model": "gpt-6.1-sol"})
         self.assertEqual([l for l in self.errors.splitlines() if l.startswith("backstop ")], [])
 
-    def test_a_builder_with_a_known_model_that_is_not_claude_keeps_opus(self):
+    def test_a_minimax_builder_gets_astra(self):
         coordq.read_builder_thread = lambda thread_id: (
             {"providerInstanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}, [])
         events = self.candidates()
         candidates = [e for e in events if e["kind"] == "candidate"]
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "claudeAgent", "model": "claude-opus-5-5"})
+                         {"instanceId": "codex", "model": "gpt-6-astra"})
 
 
 class GatekeepQueueTest(GatekeepBase):
