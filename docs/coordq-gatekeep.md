@@ -53,7 +53,10 @@ The retry count lives with the head's queue item in `gatedHeads`, as
 no retry behind it. The record names the head, so a pull request that pushes a
 new head starts again at no retries. An explicit `coordq gate <repo>#<pr>`
 still queues a given-up head, because an operator asked for it: it keeps the
-retry count, so that gate is not retried automatically either.
+retry count and is recorded as undecided again, so a second explicit gate for
+the same head is refused while that one is live, and if it dies without a
+verdict the head is given up again in one line rather than reopening the
+automatic retries.
 Dry-run still reads GitHub and builder runs. API or malformed-data errors fail
 visibly. This command never merges; the reviewer brief permits merge only after
 CHECK and VERDICT pass for the exact head, using --match-head-commit.
