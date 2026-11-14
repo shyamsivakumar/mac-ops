@@ -606,117 +606,30 @@ def reviewer_model(models):
     return SOL_MODEL if any(is_anthropic(m) for m in models) else OPUS_MODEL
 
 
-def gate_for(repo, pr, settings, config, receipts, login, skipped, require_check=True):
-    """Return the gate request of one open pull request, or None.
+def gate_args(settings, repo, issue, number, head, publisher, model):
+    """The launch arguments of the gate for one pull request.
 
-    The request names the head it looks at, so the queue refuses a second
-    gate for that head. A pull request whose builder check does not name
-    its head has no gate, unless the caller asks for one anyway: the gate
-    reports the check as it is, and the builder fixes it."""
-    head, number = pr["head"]["sha"], pr["number"]
-    body = pr.get("body") or ""
-    refs = re.findall(r"\bRefs #(\d+)\b", body)
-    for issue in dict.fromkeys(refs):
-        ledger = []
-        for comment in gh_json(f"repos/{repo}/issues/{issue}/comments?per_page=100"):
-            if comment["user"]["login"] != login:
-                continue
-            for match in re.finditer(r"<!-- coordinator-ticket (\{.*?\}) -->", comment["body"]):
-                ledger.append(json.loads(match[1]))
-        completed = [e for e in ledger if e.get("kind") == "receipt"]
-        if not completed:
-            continue
-        receipt = max(completed, key=lambda e: e["attempt"])
-        intents = [e for e in ledger if e.get("kind") == "intent"]
-        if intents and max(e["attempt"] for e in intents) != receipt["attempt"]:
-            continue
-        thread_id = receipts.get(receipt["requestId"])
-        if not thread_id:
-            print(f"skip {repo}#{number}: builder dispatch receipt unavailable", file=sys.stderr)
-            continue
-        code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1})
-        if code:
-            raise RuntimeError("cannot read builder run")
-        result = json.loads(out)
-        runs = result.get("recentRuns", [])
-        models = executed_models(runs[0]) if runs else []
-        unknown_model = False
-        reason = None
-        if not models:
-            thread = result.get("thread", {})
-            instance, stored = thread.get("providerInstanceId"), thread.get("model")
-            if not isinstance(stored, str) or not stored or not instance:
-                reason = "stored builder model unavailable"
-            elif instance == "router":
-                try:
-                    with open(os.path.expanduser("~/.pi/agent/extensions/task-router.ts")) as f:
-                        source = f.read()
-                    routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
-                    chain = re.search(r"^\s*" + re.escape(stored.removeprefix("task/")) + r":\s*\[([^\]]*)\]", routes[1], re.M) if routes and stored.startswith("task/") else None
-                    entries = json.loads("[" + chain[1].rstrip().rstrip(",") + "]") if chain else []
-                    if not entries or not all(isinstance(m, str) and "/" in m for m in entries):
-                        reason = "router chain unavailable"
-                    elif any("claude" in m.lower() or "anthropic" in m.lower() for m in entries):
-                        reason = "router chain includes Claude"
-                    else:
-                        models = entries
-                except (OSError, ValueError):
-                    reason = "router chain unavailable"
-            else:
-                models = ["claude" if instance == "claudeAgent" else stored]
-            if reason:
-                if (repo, number) not in skipped:
-                    print(f"skip {repo}#{number}: {reason}", file=sys.stderr)
-                    skipped.add((repo, number))
-                unknown_model = True
-        if unknown_model:
-            if require_check:
-                continue
-            # A chain that includes Claude is a Claude build, so it gets
-            # the Sol gate, the same rule the line below applies. A
-            # builder whose model is truly unknown gets the Opus gate.
-            model = (
-                SOL_MODEL
-                if reason == "router chain includes Claude"
-                else OPUS_MODEL
-            )
-        else:
-            model = SOL_MODEL if any("claude" in m.lower() for m in models) else OPUS_MODEL
-        statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
-        checks = [x for x in statuses if x["context"] == "srw/agent-check"]
-        publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
-        if publisher:
-            passed = bool(checks) and checks[0]["state"] == "success"
-        else:
-            passed = f"Builder check: PASS {head}" in body.splitlines()
-        # The check names this head: the line names it, or the repository
-        # publishes its agent check on it. A trailing note after the head
-        # does not change the verdict.
-        named = any(
-            line.strip().startswith(f"Builder check: PASS {head}")
-            for line in body.splitlines()
-        ) or passed
-        if not passed and require_check:
-            continue
-        key = f"gate:{repo}#{number}:{head}"
-        ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
-        merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
-                 f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-        close = (" Ascend repo: do not close the issue." if ascend else
-                 f" Only when that merge produced a merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
-        check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
-                 if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
-        message = f"""{settings['key']}-{issue} review and merge · #{number} {head}
+    One brief for every gate: the queue's own gatekeeper and the tick's
+    backstop build the same request here, so a gate reads the same
+    whichever way it was queued."""
+    key = f"gate:{repo}#{number}:{head}"
+    ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
+    merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
+             f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
+    close = (" Ascend repo: do not close the issue." if ascend else
+             f" Only when that merge produced a merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
+    check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
+             if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
+    message = f"""{settings['key']}-{issue} review and merge · #{number} {head}
 Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues/{issue}
 Read the ticket and diff only: `git fetch origin && git diff origin/main...{head}`. Check out nothing. Do NOT rerun the suite.
 {check} Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
 {merge}{close} Never call emp. Never print secrets."""
-        return key, {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
-                     "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
-                     "clientRequestId": key, "message": message}, passed, named
-    return None
+    return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
+            "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+            "clientRequestId": key, "message": message}
 
 
 def gate_candidates(config):
@@ -783,24 +696,8 @@ def gate_candidates(config):
                     continue
                 model = reviewer_model(models)
                 key = f"gate:{repo}#{number}:{head}"
-                ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
-                merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
-                         f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-                close = (" Ascend repo: do not close the issue." if ascend else
-                         f" Only when that merge produced a merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
-                check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
-                         if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
-                message = f"""{settings['key']}-{issue} review and merge · #{number} {head}
-Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues/{issue}
-Read the ticket and diff only: `git fetch origin && git diff origin/main...{head}`. Check out nothing. Do NOT rerun the suite.
-{check} Re-read prior gate findings and say whether each is resolved.
-Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
-Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
-{merge}{close} Never call emp. Never print secrets."""
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
-                       "args": {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
-                                "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
-                                "clientRequestId": key, "message": message}}
+                       "args": gate_args(settings, repo, issue, number, head, publisher, model)}
                 break
 
 
@@ -880,6 +777,203 @@ def write_counts(counts, seen, stuck, dry_run):
     os.replace(tmp, path(STUCK_FILE))
 
 
+def cmd_fix(a):
+    """Send a failed gate's findings back to the builder of one pull request.
+
+    The gate's own report is the finding, so this reads it from the gate
+    thread and sends it to the thread that built the pull request. The
+    builder thread is the one the coordinator started for the ticket, so
+    the findings go back to the builder that holds the work."""
+    repo, number = parse_ref(a.ref)
+    try:
+        with open(path("dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except (OSError, ValueError) as e:
+        die(f"refused: the dispatch receipts could not be read: {e}")
+    run = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
+                         capture_output=True, text=True, timeout=40)
+    if run.returncode:
+        die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
+    pr = json.loads(run.stdout)
+    if pr.get("state") != "open":
+        die(f"refused: {repo}#{number} is not open")
+    head = pr["head"]["sha"]
+    gate_thread = receipts.get(f"gate:{repo}#{number}:{head}")
+    if not gate_thread:
+        die(f"refused: no gate has looked at {repo}#{number} at {head}")
+    code, out = call("t3_thread_read", {"threadId": gate_thread, "maxCharsPerItem": 20000})
+    if code:
+        die("refused: the gate thread could not be read")
+    try:
+        data = json.loads(out)
+    except ValueError:
+        die("refused: the gate thread could not be read")
+    texts = [i.get("text") or "" for i in (data.get("items") or [])
+             if i.get("type") == "assistant_message"]
+    report = texts[-1] if texts else ""
+    if not report.rstrip().endswith("VERDICT: FAIL"):
+        die(f"refused: the gate of {repo}#{number} did not end VERDICT: FAIL")
+    issue = 0
+    for line in (pr.get("body") or "").splitlines():
+        match = re.search(r"\bRefs?\s+#(\d+)", line)
+        if match:
+            issue = int(match.group(1))
+            break
+    if not issue:
+        die(f"refused: {repo}#{number} names no ticket, so it has no builder")
+    prefix = f"ticket:{repo}#{issue}:a"
+    builder, attempt = "", 0
+    for key, value in receipts.items():
+        if not key.startswith(prefix):
+            continue
+        try:
+            number_of_attempt = int(key[len(prefix):])
+        except ValueError:
+            continue
+        if number_of_attempt > attempt:
+            builder, attempt = value, number_of_attempt
+    if not builder:
+        die(f"refused: no builder thread is known for {repo}#{issue}")
+    message = (
+        f"The Opus gate on PR #{number} at {head} returned VERDICT: FAIL. "
+        "Fix every critical and major finding below (minors if small), run "
+        "the check, push, update the PR body's Builder check line to the new "
+        "head, and report.\n\n" + report[-6000:]
+    )
+    args = {"threadId": builder, "message": message}
+    with Lock(True):
+        queue = load()
+        item = {"id": queue["next"], "tool": "t3_thread_send", "args": args,
+                "title": f"{repo}#{number} gate findings", "priority": 300}
+        queue["next"] += 1
+        queue["items"].append(item)
+        save(queue)
+    print(f"queued a finding for {repo}#{number} -> builder {builder}")
+
+
+def backstop_model(thread, runs):
+    """The gate model for a builder whose executed model is not known.
+
+    A route that can run an Anthropic model is a Claude build, so it gets
+    the Sol gate, the same rule a known Claude build gets. A builder
+    whose model is truly unknown gets the Opus gate."""
+    models = builder_models(thread, runs)
+    if models:
+        return reviewer_model(models)
+    instance, stored = thread.get("providerInstanceId"), thread.get("model")
+    if instance == "router" or (isinstance(stored, str) and stored.startswith("task/")):
+        entries = router_chain(stored if isinstance(stored, str) else "")
+        if entries and any(is_anthropic(m) for m in entries):
+            return SOL_MODEL
+    return OPUS_MODEL
+
+
+def check_names_head(body, head, publisher, checks):
+    """Return True when the builder's check names this head.
+
+    The check is the line the builder wrote in the pull request body,
+    `Builder check: PASS <head>`, or the agent check the repository
+    publishes on the head. A trailing note after the head (the command
+    that produced it) does not change the verdict."""
+    for line in (body or "").splitlines():
+        if line.strip().startswith(f"Builder check: PASS {head}"):
+            return True
+    if publisher:
+        return bool(checks) and checks[0]["state"] == "success"
+    return False
+
+
+def gate_request(repo, pr, settings, config, receipts, login):
+    """Return the gate request of one open pull request, or None.
+
+    The backstop gates a head the queue's own gatekeeper left alone. The
+    builder's check must name the head: a gate that cannot read the diff
+    would only report the check, and recording the head would block it
+    from then on. The gate model follows the builder's own rule."""
+    head, number = pr["head"]["sha"], pr["number"]
+    body = pr.get("body") or ""
+    for issue in dict.fromkeys(re.findall(r"\bRefs #(\d+)\b", body)):
+        thread_id = builder_thread_for_issue(repo, issue)
+        if not thread_id:
+            continue
+        thread, runs = read_builder_thread(thread_id)
+        model = backstop_model(thread, runs)
+        statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
+        checks = [x for x in statuses if x["context"] == "srw/agent-check"]
+        publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
+        if not check_names_head(body, head, publisher, checks):
+            return None
+        key = f"gate:{repo}#{number}:{head}"
+        return key, gate_args(settings, repo, issue, number, head, publisher, model)
+    return None
+
+
+def parse_ref(ref):
+    """Return the repository and number of an owner/repo#number reference."""
+    match = re.fullmatch(r"([^/\s#]+/[^/\s#]+)#(\d+)", ref)
+    if not match:
+        die(f"bad reference {ref!r}, expected owner/repo#number")
+    return match.group(1), int(match.group(2))
+
+
+def cmd_gate(a):
+    """Queue the gate for one open pull request head.
+
+    The queue's own gatekeeper gates the pull requests whose builder
+    check names their head. This is the tick's backstop: it gates the
+    head the tick names, so a head no gate looked at is not left
+    ungated. The head is recorded in the queue's own list, so a head is
+    never gated twice."""
+    repo, number = parse_ref(a.ref)
+    with open(a.config) as f:
+        config = json.load(f)
+    settings = (config.get("repos") or {}).get(repo)
+    if not settings:
+        die(f"refused: {repo} is not on the board")
+    run = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
+                         capture_output=True, text=True, timeout=40)
+    if run.returncode:
+        die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
+    pr = json.loads(run.stdout)
+    if pr.get("state") != "open":
+        die(f"refused: {repo}#{number} is not open")
+    if pr.get("draft"):
+        die(f"refused: {repo}#{number} is a draft")
+    head = pr["head"]["sha"]
+    key = f"gate:{repo}#{number}:{head}"
+    with Lock(True):
+        heads = load().setdefault("gatedHeads", {})
+        if key in heads:
+            die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
+    login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
+                               capture_output=True, text=True, timeout=40)
+    if login_run.returncode:
+        die("refused: the authenticated GitHub user is unknown")
+    login = login_run.stdout.strip()
+    found = gate_request(repo, pr, settings, config, load_receipts(), login)
+    if not found:
+        die(
+            f"refused: the builder check of {repo}#{number} does not name the "
+            f"head {head}, so a gate for this head would only report CHECK: "
+            "FAIL and would block the head from then on. Wait for the builder "
+            "to push the check for this head."
+        )
+    key, args = found
+    with Lock(True):
+        queue = load()
+        heads = queue.setdefault("gatedHeads", {})
+        if key in heads:
+            die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
+        item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
+                "title": args["title"], "priority": 5000}
+        queue["next"] += 1
+        queue["items"].append(item)
+        heads[key] = item["id"]
+        save(queue)
+    print("queued " + key
+          + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"])
+
+
 def main():
     p = argparse.ArgumentParser(prog="coordq")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -909,8 +1003,12 @@ def main():
     o.add_argument("ref", help="the pull request to gate, as owner/repo#number")
     o.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))
     o.set_defaults(fn=cmd_gate)
+    f = sub.add_parser("fix")
+    f.add_argument("ref", help="the pull request whose findings go back, as owner/repo#number")
+    f.set_defaults(fn=cmd_fix)
     a = p.parse_args()
     a.fn(a)
 
 
-main()
+if __name__ == "__main__":
+    main()
