@@ -74,8 +74,7 @@ ATTRIBUTED = re.compile(
 QUOTE_WINDOW = 60
 # The review gate: the rules live in the coordinator CLAUDE.md sections
 # "Review gate" and "Ten minutes start to finish".
-GATE_OPUS = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
-GATE_SOL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+GATE_ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
 GATE_PRIORITY = 400
 GATE_CHECK_CONTEXT = "srw/agent-check"
 GATE_PUBLISHER_REPO = "shyamsivakumar/strategy-replay-workbench"
@@ -1294,15 +1293,7 @@ def builder_models(issue, login):
 
 
 def gate_reviewer(models, live=False):
-    """The gate model: Sol when the builder ran Claude, Opus otherwise.
-
-    A builder whose model cannot be read leaves the gate on Opus, unless
-    the builder thread is still running: a live builder may be Claude, and
-    two Claude threads must not run at once.
-    """
-    if any("claude" in m.lower() or "anthropic" in m.lower() for m in models):
-        return GATE_SOL
-    return GATE_SOL if live and not models else GATE_OPUS
+    return GATE_ASTRA
 
 
 def gate_live(title, gate_id):
