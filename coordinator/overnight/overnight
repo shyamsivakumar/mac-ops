@@ -181,6 +181,10 @@ STALL = re.compile(r"\bstall\b", re.I)
 # minute, so a Mac that wakes late still writes the report.
 START_WINDOW = (22 * 60, 24 * 60 - 1)
 REPORT_WINDOW = (6 * 60, 7 * 60 + 29)
+# The shift log states how the night ended, in one of the four ways the
+# spec allows. The report reads that statement, but only when the records
+# support it: a claim is never a proof.
+ENDED = re.compile(r"(?:^|\|)\s*ended:\s*(?P<how>deadline|all done|stop|stall)\s*$", re.I)
 # The states a receipt can name.
 STATE_DONE = "done"
 STATE_READY = "ready"
@@ -683,11 +687,12 @@ def classify(receipt: dict) -> tuple[str, str]:
 
 
 def parse_shift_log(text: str) -> dict:
-    """Return what the shift log records: the planned count, the full suite
-    and a stall."""
+    """Return what the shift log records: the planned count, the full suite,
+    a stall and the statement of how the night ended."""
     planned: int | None = None
     full_suite: dict | None = None
     stall = False
+    ended: str | None = None
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -710,7 +715,16 @@ def parse_shift_log(text: str) -> dict:
                 full_suite = suite
         if STALL.search(line):
             stall = True
-    return {"planned": planned, "full_suite": full_suite, "stall": stall}
+        found_end = ENDED.match(line)
+        if found_end:
+            how = found_end.group("how").lower()
+            ended = "STOP" if how == "stop" else how
+    return {
+        "planned": planned,
+        "full_suite": full_suite,
+        "stall": stall,
+        "ended": ended,
+    }
 
 
 def parse_parking_lot(text: str) -> list[dict]:
@@ -781,22 +795,43 @@ def how_it_ended(root: Path, log: dict, receipts: list[dict], planned: int | Non
 
     The spec allows four answers: deadline, all done, STOP and stall. A
     shift that ended in none of those ways says UNVERIFIED rather than
-    guessing."""
+    guessing.
+
+    The shift log states how the night ended, and the report reads that
+    statement. It reads it only when the records support it: "all done"
+    needs every receipt to be done or parked, "deadline" needs the clock
+    to be past the deadline, "STOP" needs the STOP file and "stall" needs
+    the stall in the log. A claim the records do not support is never
+    repeated."""
     if (root / "run" / "STOP").exists():
         return "STOP"
-    if log["stall"]:
-        return "stall"
-    if planned is not None and len(receipts) == planned:
-        states = [classify(receipt)[0] for receipt in receipts]
-        if all(state in (STATE_DONE, STATE_PARKED) for state in states):
-            return "all done"
+    states = [classify(receipt)[0] for receipt in receipts]
+    all_done = (
+        planned is not None
+        and bool(receipts)
+        and len(receipts) == planned
+        and all(state in (STATE_DONE, STATE_PARKED) for state in states)
+    )
+    deadline_passed = False
     deadline = read_text(root / "run" / "deadline").strip()
     if deadline:
         try:
-            if datetime.now(timezone.utc).timestamp() > float(deadline):
-                return "deadline"
+            deadline_passed = datetime.now(timezone.utc).timestamp() > float(deadline)
         except ValueError:
-            pass
+            deadline_passed = False
+    claim = (log.get("ended") or "").strip()
+    if claim == "all done" and all_done:
+        return "all done"
+    if claim == "deadline" and deadline_passed:
+        return "deadline"
+    if claim == "stall" and log["stall"]:
+        return "stall"
+    if log["stall"]:
+        return "stall"
+    if all_done:
+        return "all done"
+    if deadline_passed:
+        return "deadline"
     return UNVERIFIED
 
 
@@ -1962,6 +1997,352 @@ def cmd_order(args: argparse.Namespace) -> int:
     return 0
 
 
+
+# --- The attended first night (spec part T13) ------------------------------
+
+# The types the attended night may work: one small part. These are the
+# board's own types. A ticket Shyam holds never reaches the list, because
+# the ticket CLI keeps it out, so the night needs no second hold rule.
+SMALL_TYPES = {"chore", "standard"}
+# The gate's verdict line, as the gate writes it.
+GATE_VERDICT = re.compile(r"VERDICT:\s*(?P<verdict>PASS|FAIL)", re.I)
+# The keys of the Ascend repositories. The allow list leaves them out; the
+# check is here so the shift can say that it left them out.
+ASCEND_KEYS = {"AUH", "MCP", "OPS", "DBT", "OMN"}
+# The queue's own slot cap file. The shift reads it and never writes it.
+SLOT_CAP_FILE = Path.home() / "Code" / "coordinator" / "queue" / "config.json"
+# The folders the attended night writes.
+ATTEND_DIRS = ("run", "receipts", "inbox", "staging")
+
+
+def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
+    """Run a read-only command and return its exit code and its output.
+
+    A read-only command that fails is not fatal: the shift keeps the exit
+    code and what it saw, and the receipt says so. Nothing here merges,
+    pushes or writes to a repository."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        die("the attended night ran out of time before the next command could run")
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(timeout, int(left))),
+            check=False,
+        )
+    except FileNotFoundError:
+        die(f"{argv[0]} is not on PATH")
+    except subprocess.TimeoutExpired:
+        return 124, f"{' '.join(argv)} timed out"
+    return result.returncode, (result.stdout or "") + (result.stderr or "")
+
+
+def slot_cap() -> int | None:
+    """Return the queue's slot cap, read only.
+
+    The shift never writes this file and never raises the cap. When the
+    file cannot be read the cap is unknown, and the policy says so."""
+    try:
+        with open(SLOT_CAP_FILE) as stream:
+            value = json.load(stream).get("cap")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def select_items(issues: list[dict], allowed: set[str], limit: int) -> list[dict]:
+    """Return the small board items the attended night may work.
+
+    The board is the list. The attended night takes the first items the
+    board shows that are small: on the todo stage, in an allowed
+    repository, and of a type that is one small part. A ticket Shyam holds
+    is not in the list at all, so the night never takes one. The Ascend
+    keys are never taken."""
+    picked: list[dict] = []
+    for issue in issues:
+        if len(picked) >= limit:
+            break
+        if issue.get("stage") != "todo":
+            continue
+        if issue.get("repo") not in allowed:
+            continue
+        key = (issue.get("key") or "").upper()
+        if key.split("-")[0] in ASCEND_KEYS:
+            continue
+        if (issue.get("type") or "").lower() not in SMALL_TYPES:
+            continue
+        picked.append(issue)
+    return picked
+
+
+def pull_request_gate_verdict(repo: str, number: int, deadline: float) -> str:
+    """Return the gate's verdict on a pull request: PASS, FAIL or UNKNOWN.
+
+    The gate writes its verdict on the pull request, as a comment or as a
+    review. When the shift cannot read one, the verdict is UNKNOWN, and a
+    receipt with an UNKNOWN gate is never counted as passed.
+
+    The name says which verdict this is: the one the gate wrote on the
+    pull request. The module's other `gate_verdict` reads the gate's own
+    receipts for a head, and the two are not the same read."""
+    code, out = run_read(
+        [GH, "pr", "view", str(number), "-R", repo, "--json", "comments,reviews"],
+        GH_TIMEOUT,
+        deadline,
+    )
+    if code != 0:
+        return "UNKNOWN"
+    found = GATE_VERDICT.findall(out)
+    if not found:
+        return "UNKNOWN"
+    return str(found[-1]).upper()
+
+
+def observe_pull_request(repo: str, number: int, deadline: float) -> dict:
+    """Return what a pull request really shows.
+
+    Every command here is read only. Each exit code is kept, because a
+    check counts as run only when it names its command and its exit code."""
+    checks_code, checks_out = run_read(
+        [GH, "pr", "checks", str(number), "-R", repo], GH_TIMEOUT, deadline
+    )
+    files_code, files_out = run_read(
+        [GH, "pr", "view", str(number), "-R", repo, "--json", "files"],
+        GH_TIMEOUT,
+        deadline,
+    )
+    files = 0
+    if files_code == 0:
+        try:
+            rows = json.loads(files_out)
+            if isinstance(rows, dict):
+                rows = rows.get("files") or []
+            files = len(rows) if isinstance(rows, list) else 0
+        except ValueError:
+            files = 0
+    # "no checks reported" is not a failed check: the pull request has no
+    # checks yet, and the receipt says that instead of claiming a failure.
+    no_checks = "no checks reported" in checks_out.lower()
+    return {
+        "checks_exit": checks_code,
+        "checks_out": checks_out,
+        "no_checks": no_checks,
+        "files": files,
+        "gate": pull_request_gate_verdict(repo, number, deadline),
+    }
+
+
+def receipt_text(issue: dict, state: str, pr: dict | None, observation: dict | None,
+                 observed: int, stopped: str, nxt: str) -> str:
+    """Return one receipt of the attended night.
+
+    The receipt holds what the shift really saw. A check that did not run
+    has no exit code, and a gate that could not be read says UNKNOWN. No
+    builder ran, so the builder time is zero and the time the shift spent
+    looking is recorded apart from it."""
+    fields = issue.get("title") or ""
+    lines = [f"# {issue.get('key') or issue.get('number')}", ""]
+    lines.append(f"- Item: {fields}")
+    lines.append(f"- Repo: {issue.get('repo', '')}")
+    lines.append(f"- Ticket: {issue.get('key', '')} (#{issue.get('number')})")
+    lines.append(f"- State: {state}")
+    if pr:
+        lines.append(f"- PR: {pr.get('url', '')}")
+    if observation:
+        command = f"gh pr checks {pr.get('number')} -R {issue.get('repo', '')}"
+        lines.append(f"- Checks: `{command}` exit {observation['checks_exit']}")
+        lines.append(f"- Gate: {observation['gate']}")
+        lines.append(f"- Files: {observation['files']}")
+    lines.append("- Time used: 0 min")
+    lines.append(f"- Observed: {observed} s")
+    lines.append(f"- Stopped because: {stopped}")
+    lines.append(f"- Next: {nxt}")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_attend(args: argparse.Namespace) -> int:
+    """Run the attended first night.
+
+    This is the command a person runs when they sit down to watch the
+    night. The shift arms itself in the folder it is given, reads the
+    board, takes the small items the board shows and observes each one for
+    real: the pull request it has, the checks it runs, the gate's verdict
+    and the files it touches. It writes one receipt per item, the shift log
+    and then the morning report.
+
+    The night runs no merge, no push and no builder. The tick part (T5) is
+    not built yet, so the attended night observes and records what it
+    really saw, and every receipt says what stopped it."""
+    deadline = time.monotonic() + args.deadline
+    cfg = load_config()
+    repos = allowed_repos(cfg)
+    allowed = {repo for repo, _key in repos}
+    if not allowed:
+        die("the board config names no repositories")
+    issues, stale = read_board(deadline)
+    items = select_items(issues, allowed, args.items)
+    if len(items) < args.items:
+        die(
+            f"the board shows only {len(items)} small items, and the "
+            f"attended night was asked for {args.items}"
+        )
+    root = Path(args.root).expanduser() if args.root else report_root(None) / (
+        f"attended-{args.date or datetime.now(PT).strftime('%Y-%m-%d')}"
+    )
+    if args.dry_run:
+        print("Overnight attended night - dry run (read only)")
+        print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+        print(f"Run by: {args.run_by}")
+        print(f"Planned items: {len(items)}")
+        for issue in items:
+            print(
+                f"- {issue.get('key')} (#{issue.get('number')}) "
+                f"{issue.get('title', '')} [{issue.get('type')}] {issue.get('repo')}"
+            )
+        print("A dry run writes no record and starts no work.")
+        return 0
+    for name in ATTEND_DIRS:
+        (root / name).mkdir(parents=True, exist_ok=True)
+    start = datetime.now(PT)
+    close = start + timedelta(minutes=args.minutes)
+    shift_id = f"attended-{start.strftime('%Y%m%d-%H%M')}"
+    (root / "run" / "armed").write_text(
+        f"shift: {shift_id}\n"
+        f"start: {pt_clock(start)}\n"
+        f"run by: {args.run_by}\n"
+        f"items: {len(items)}\n"
+    )
+    (root / "run" / "deadline").write_text(f"{close.timestamp()}\n")
+    policy = {
+        "allow": sorted(allowed),
+        "slot_cap": slot_cap(),
+        "verify_level": "balanced",
+        "stall_cap": 3,
+        "budget_percent": None,
+        "allowance_used_percent": None,
+        "run_by": args.run_by,
+        "window_minutes": args.minutes,
+    }
+    (root / "run" / "policy.json").write_text(json.dumps(policy, indent=2) + "\n")
+    log_lines = [
+        f"{start.strftime('%Y-%m-%d %H:%M %Z')} | attended night | started, "
+        f"run by {args.run_by}, planned {len(items)} items",
+        f"{start.strftime('%Y-%m-%d %H:%M %Z')} | attended night | the shift "
+        f"runs read-only commands only: no merge, no push, no builder",
+    ]
+    # The log exists from the start, so a night that stops early still
+    # leaves a record of what it did.
+    log_path = root / "run" / "shift-log.md"
+    log_path.write_text("\n".join(log_lines) + "\n")
+    pr_cache: dict[str, list[dict]] = {}
+    for issue in items:
+        item_start = time.monotonic()
+        repo = issue.get("repo", "")
+        # The issue numbers of one repository are its own, so the board
+        # maps are built per repository.
+        by_number = {
+            other["number"]: other
+            for other in issues
+            if other.get("repo") == repo and other.get("number")
+        }
+        by_key = {
+            (other.get("key") or "").upper(): other
+            for other in issues
+            if other.get("repo") == repo and other.get("key")
+        }
+        if repo not in pr_cache:
+            try:
+                rows, _cut = read_pull_requests(repo, deadline)
+            except RepoError as exc:
+                rows = []
+                print(f"overnight: {repo}: {exc}", file=sys.stderr)
+            pr_cache[repo] = rows
+        linked = []
+        for row in pr_cache[repo]:
+            target, _signal = linked_ticket(row, by_number, by_key)
+            if target is not None and target.get("number") == issue.get("number"):
+                linked.append(row)
+        pr = linked[0] if linked else None
+        observation = None
+        if pr:
+            observation = observe_pull_request(repo, pr["number"], deadline)
+            checks_code = observation["checks_exit"]
+            gate = observation["gate"]
+            if observation["no_checks"]:
+                state = "stuck"
+                stopped = "the pull request has no checks yet"
+                nxt = "the builder runs the checks for this pull request"
+            elif checks_code != 0:
+                state = "stuck"
+                stopped = (
+                    f"the checks on the pull request did not pass "
+                    f"(exit {checks_code})"
+                )
+                nxt = "the builder fixes the failing check and the gate runs again"
+            elif gate != "PASS":
+                state = "stuck"
+                stopped = f"the gate did not pass (gate {gate})"
+                nxt = "the gate runs again on the pull request"
+            else:
+                state = "ready"
+                stopped = (
+                    "the shift has no merge right for this repository, so the "
+                    "pull request waits for Shyam"
+                )
+                nxt = "Shyam merges the pull request in the morning"
+        else:
+            state = "stuck"
+            stopped = "no pull request is open for this ticket"
+            nxt = (
+                "the tick part (T5) starts the builder for this item; the "
+                "attended night only observes"
+            )
+        elapsed = time.monotonic() - item_start
+        observed = int(elapsed + 0.5)
+        receipt = root / "receipts" / f"{issue.get('key')}.md"
+        receipt.write_text(
+            receipt_text(issue, state, pr, observation, observed, stopped, nxt)
+        )
+        detail = (
+            f"`gh pr checks {pr['number']} -R {repo}` exit {observation['checks_exit']}"
+            f"{' (no checks yet)' if observation['no_checks'] else ''}, "
+            f"gate {observation['gate']}"
+            if observation
+            else "no pull request is open"
+        )
+        log_lines.append(
+            f"{datetime.now(PT).strftime('%Y-%m-%d %H:%M %Z')} | item "
+            f"{issue.get('key')} (#{issue.get('number')}) | {state} | {detail}"
+        )
+    if args.wait:
+        # The human is watching: the shift holds the door until its window
+        # closes. It waits the whole window, so the night never ends early
+        # and claims the deadline.
+        remaining = close.timestamp() - time.time()
+        while remaining > 0:
+            time.sleep(min(remaining, 60))
+            remaining = close.timestamp() - time.time()
+    if (root / "run" / "STOP").exists():
+        end = "ended: STOP"
+    elif datetime.now(PT) >= close:
+        end = "ended: deadline"
+    else:
+        end = "ended: the items were observed and the window is still open"
+    log_lines.append(
+        f"{datetime.now(PT).strftime('%Y-%m-%d %H:%M %Z')} | attended night | "
+        f"{end}"
+    )
+    log_path.write_text("\n".join(log_lines) + "\n")
+    print(f"overnight: attended night {shift_id} wrote {len(items)} receipts")
+    for issue in items:
+        print(f"  - {issue.get('key')} (#{issue.get('number')})")
+    return cmd_report(
+        argparse.Namespace(root=str(root), date=args.date, dry_run=False)
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="overnight", description="The overnight shift's command line."
@@ -2088,6 +2469,55 @@ def main() -> int:
         help=f"seconds the whole start may take (default {DEFAULT_DEADLINE})",
     )
     shift.set_defaults(func=cmd_shift)
+    attend = sub.add_parser(
+        "attend",
+        help="run the attended first night: a human watches, three small items",
+    )
+    attend.add_argument(
+        "--items",
+        type=int,
+        default=3,
+        help="how many small board items the night works (default 3)",
+    )
+    attend.add_argument(
+        "--minutes",
+        type=int,
+        default=60,
+        help="how many minutes the human watches (default 60)",
+    )
+    attend.add_argument(
+        "--run-by",
+        default="the operator",
+        help="who runs the night (default: the operator)",
+    )
+    attend.add_argument(
+        "--wait",
+        action="store_true",
+        help="hold the door until the window closes before the night ends",
+    )
+    attend.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    attend.add_argument(
+        "--date",
+        default=None,
+        type=report_day,
+        help="the night of the report, as YYYY-MM-DD (default today, PT)",
+    )
+    attend.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read the board and write no record",
+    )
+    attend.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole night may take (default {DEFAULT_DEADLINE})",
+    )
+    attend.set_defaults(func=cmd_attend)
     args = parser.parse_args()
     return args.func(args)
 
