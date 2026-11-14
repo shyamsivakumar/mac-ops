@@ -1287,13 +1287,18 @@ def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend):
     merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
              f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {pr} -R {repo} "
              f"--squash --match-head-commit {head}`; report the merge commit or refusal.")
+    close = (" Ascend repo: do not close the issue." if ascend else
+             f" Only when that merge produced a merge commit, close the ticket: run `gh issue close "
+             f"{issue_number} -R {repo} --comment \"VERDICT: PASS. Merged via #{pr} "
+             f"(<merge commit sha>).\"` with <merge commit sha> the merge commit you reported. "
+             f"On VERDICT: FAIL, or when the merge did not happen, close nothing.")
     return f"""{rcfg['key']}-{issue_number} review and merge · #{pr} {head}
 Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues/{issue_number}
 Read the ticket and diff only: `git fetch origin && git diff origin/{base}...{head}`. Check out nothing. Do NOT rerun the suite.
 {check} Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
-{merge}
+{merge}{close}
 Never call emp. Never print secrets."""
 
 
