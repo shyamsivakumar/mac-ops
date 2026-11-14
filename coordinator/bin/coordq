@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, json, os, re, subprocess, sys, time
+import argparse, fcntl, json, math, os, re, subprocess, sys, time
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -284,37 +284,33 @@ def tickets_config_path():
     return candidate if os.path.exists(candidate) else os.path.expanduser("~/.coordinator/tickets.json")
 
 
-def gh_search(args):
+def gh_search(query):
+    """One search request for the configured repos, oldest issues first.
+
+    The query names every configured repository, so a page holds the oldest
+    issues a refill may start and not the oldest issues of the owner.
+    """
     try:
-        run = subprocess.run(["gh", "search", "issues"] + args, capture_output=True, text=True, timeout=40)
+        run = subprocess.run(["gh", "api", "-X", "GET", "search/issues", "-f", f"q={query}",
+                              "-f", "sort=created", "-f", "order=asc", "-f", "per_page=100"],
+                             capture_output=True, text=True, timeout=40)
     except OSError as e:
         raise RuntimeError(f"GitHub search could not run: {e}") from e
     if run.returncode:
         raise RuntimeError(f"GitHub search failed: {run.stderr.strip()[:200]}")
-    return json.loads(run.stdout)
-
-
-def search_stage(owner):
-    """The owner's todo-stage issues, oldest first, in one search request.
-
-    The search API sorts by creation date, so one page already holds the
-    oldest issues, which are the ones a refill starts.
-    """
-    return gh_search(["--owner", owner, "--state", "open", "--label", TODO_STAGE,
-                      "--sort", "created", "--order", "asc", "--limit", "100",
-                      "--json", "repository,number,title,createdAt"])
+    return json.loads(run.stdout).get("items", [])
 
 
 def refill_candidates(config):
     """The open todo-stage issues of the configured repos, oldest first."""
-    repos = config.get("repos") or {}
-    owners = sorted({repo.split("/")[0] for repo in repos})
+    repos = sorted(config.get("repos") or {})
+    if not repos:
+        return []
+    query = " ".join(f"repo:{repo}" for repo in repos) + f" is:open label:{TODO_STAGE}"
     rows = []
-    for owner in owners:
-        for row in search_stage(owner):
-            name = row["repository"]["nameWithOwner"]
-            if name in repos:
-                rows.append((row["createdAt"], name, row["number"], row["title"]))
+    for item in gh_search(query):
+        name = "/".join(item["repository_url"].split("/")[-2:])
+        rows.append((item["created_at"], name, item["number"], item["title"]))
     rows.sort()
     return [(name, number, title) for _, name, number, title in rows]
 
@@ -327,20 +323,30 @@ def refill_state():
         state = {}
     if not isinstance(state, dict):
         state = {}
-    at = state.get("at")
-    state["at"] = at if isinstance(at, (int, float)) and not isinstance(at, bool) else 0
+    state["at"] = finite_number(state.get("at")) or 0
     refused = state.get("refused")
     if not isinstance(refused, dict):
         refused = {}
-    state["refused"] = {ref: at for ref, at in refused.items()
-                        if isinstance(at, (int, float)) and not isinstance(at, bool)}
+    cleaned = {}
+    for ref, at in refused.items():
+        value = finite_number(at)
+        if isinstance(ref, str) and value is not None:
+            cleaned[ref] = value
+    state["refused"] = cleaned
     return state
+
+
+def finite_number(value):
+    """The value when it is a finite number, else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
 
 
 def save_refill_state(state):
     tmp = path("refill.json.tmp")
     with open(tmp, "w") as f:
-        json.dump(state, f)
+        json.dump(state, f, allow_nan=False)
     os.replace(tmp, path("refill.json"))
 
 
