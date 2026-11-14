@@ -11,6 +11,7 @@ import plistlib
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -617,15 +618,53 @@ def ensure_overnight_dirs(coordinator: Path, home: Path) -> list[Path]:
     return created
 
 
+def git_value(checkout: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(checkout), *args], capture_output=True,
+        text=True, timeout=30, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Cannot verify checkout: git " + " ".join(args))
+    return result.stdout.strip()
+
+
+def install_commit(checkout: Path) -> str:
+    if git_value(checkout, "status", "--porcelain", "--untracked-files=all"):
+        raise RuntimeError("Refusing install: checkout is dirty")
+    git_value(checkout, "fetch", "origin", "main")
+    head = git_value(checkout, "rev-parse", "HEAD")
+    if head != git_value(checkout, "rev-parse", "refs/remotes/origin/main"):
+        raise RuntimeError("Refusing install: HEAD differs from origin/main")
+    return head
+
+
 def install(
     checkout: Path,
     dry_run: bool,
     home: Path | None = None,
     coordinator: Path | None = None,
 ) -> None:
+    commit = install_commit(checkout)
     home = home or Path.home()
     coordinator = coordinator or coordinator_dir(home)
-    pending = changes(checkout, home, coordinator)
+    with tempfile.TemporaryDirectory(prefix="mac-ops-install-") as folder:
+        snapshot = Path(folder)
+        archive = snapshot / "source.tar"
+        with archive.open("wb") as stream:
+            subprocess.run(
+                ["git", "-C", str(checkout), "archive", commit, "coordinator"],
+                stdout=stream, check=True, timeout=30,
+            )
+        subprocess.run(
+            ["tar", "-xf", str(archive), "-C", str(snapshot)],
+            check=True, timeout=30,
+        )
+        pending = changes(snapshot, home, coordinator)
+        rendered = render_plists(snapshot, home)
+    install_payload(checkout, commit, dry_run, home, coordinator, pending, rendered)
+
+
+def install_payload(checkout, commit, dry_run, home, coordinator, pending, rendered):
     state = home / ".local/state/mac-ops"
     receipt_target = state / RECEIPT_NAME
     # Validate the receipt before any installation writes, even on a no-op.
@@ -650,7 +689,7 @@ def install(
         return
     for note in retire_jobs(home):
         print(note)
-    created, _refused = ensure_log_dirs(log_dirs(render_plists(checkout, home)), home)
+    created, _refused = ensure_log_dirs(log_dirs(rendered), home)
     for directory in created:
         print(f"Created log directory: {directory}")
     for directory in ensure_overnight_dirs(coordinator, home):
@@ -666,9 +705,6 @@ def install(
             f"Warning: a hand-started turn-cap monitor is running (pid {pid}). "
             f"Stop it so only one monitor runs: kill {pid}"
         )
-    if not pending:
-        print("Wrote 0 coordinator files. Already in sync.")
-        return
     transaction = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex
     backups = state / "coordinator-backups" / transaction
     # Reserve a unique transaction using the same no-follow directory walk.
@@ -678,6 +714,7 @@ def install(
     for target, data, mode in pending:
         write(target, data, mode, backups)
     receipt = {
+        "commit_sha": commit,
         "checkout": str(checkout),
         "installed_at": time.time(),
         "written": [str(t) for t, _, _ in pending],
@@ -695,10 +732,18 @@ def status(checkout: Path, coordinator: Path | None = None) -> None:
     pending = changes(checkout, home, coordinator)
     missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
     retired = [str(path) for path in retired_plists(home)]
+    saved = read_regular(home / ".local/state/mac-ops" / RECEIPT_NAME)
+    installed_sha = json.loads(saved[0]).get("commit_sha") if saved else None
+    git_value(checkout, "fetch", "origin", "main")
+    main_sha = git_value(checkout, "rev-parse", "refs/remotes/origin/main")
+    drift = installed_sha != main_sha
     print(
         json.dumps(
             {
-                "in_sync": not pending and not missing and not retired,
+                "installed_sha": installed_sha,
+                "origin_main_sha": main_sha,
+                "drift": drift,
+                "in_sync": not pending and not missing and not retired and not drift,
                 "differs": [str(t) for t, _, _ in pending],
                 "overnight_root": str(overnight_root(coordinator)),
                 "overnight_missing": [str(d) for d in missing],
