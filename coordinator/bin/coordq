@@ -55,6 +55,13 @@ STAGE = "stage:todo"
 # stuck; a new head starts the count again.
 STUCK_COUNT = 3
 STUCK_FILE = "gatekeep-stuck.txt"
+# A gate that dies without a verdict is queued again, but a reviewer that
+# cannot run at all fails the same way, so a retry with no end relaunches it
+# on every run. A head is retried at most GATE_RETRY_LIMIT times, with
+# GATE_RETRY_BACKOFF seconds between retries after the first, and then given
+# up until its head changes.
+GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "2"))
+GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
 ROUTER_SOURCE = os.path.expanduser("~/.pi/agent/extensions/task-router.ts")
@@ -91,6 +98,29 @@ def save(queue):
     with open(tmp, "w") as f:
         json.dump(queue, f, indent=1)
     os.replace(tmp, path("queue.json"))
+
+
+def gate_state(value):
+    """The gate state of one recorded head.
+
+    gatedHeads maps a head to its queue item, and to the record
+    `{id, retries, at, givenUp}` once a gate for the head has died without
+    a verdict. A value written before that record is the bare queue item
+    id, which is a head with no retry behind it.
+    """
+    if isinstance(value, dict):
+        retries = value.get("retries")
+        at = value.get("at")
+        return {"id": value.get("id"),
+                "retries": retries if isinstance(retries, int) and not isinstance(retries, bool) else 0,
+                "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
+                "givenUp": bool(value.get("givenUp"))}
+    return {"id": value, "retries": 0, "at": None, "givenUp": False}
+
+
+def gate_label(state):
+    """The recorded gate of one head, for a refusal that names it."""
+    return f"coordq #{state['id']}" if state["id"] is not None else "an earlier gate"
 
 
 def with_model(args):
@@ -318,6 +348,12 @@ def drain():
                 queue["reservedThreads"][reservation] = thread_id
             except (ValueError, TypeError, AttributeError) as e:
                 log(f"reservation #{reservation} retained: {e}")
+            else:
+                # The launch is no longer in flight. The thread ID in
+                # reservedThreads is the record of what the slot held, so the
+                # slot is free as soon as the launch call returns.
+                queue["reserved"].pop(reservation, None)
+                log(f"released reservation #{reservation}: {thread_id}")
         if code == 0:
             if request_id and item["tool"] == "t3_thread_launch":
                 receipts_path = path("dispatch-receipts.json")
@@ -381,8 +417,9 @@ def cmd_start(a):
         if request_id.startswith("gate:"):
             heads = queue.setdefault("gatedHeads", {})
             if request_id in heads:
-                die(f"refused: a gate for this head is already recorded as coordq #{heads[request_id]}")
-            heads[request_id] = item["id"]
+                die(f"refused: a gate for this head is already recorded as "
+                    f"{gate_label(gate_state(heads[request_id]))}")
+            heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False}
         save(queue)
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
@@ -883,6 +920,11 @@ def gate_args(settings, repo, issue, number, head, publisher, model):
     ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
     merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
              f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
+    fast_forward = ("" if ascend else
+                    " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
+                    "find the worktree that has main checked out in `git worktree list` and run `git fetch origin` then "
+                    "`git merge --ff-only origin/main` there; when no worktree has main checked out, run `git fetch origin main:main`. "
+                    "Report `git rev-parse main origin/main` (one hash twice) or the exact refusal. Fast-forward no other repository.")
     close = (" Ascend repo: do not close the issue." if ascend else
              f" Only when that merge produced a merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
     check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
@@ -893,7 +935,7 @@ Read the ticket and diff only: `git fetch origin && git diff origin/main...{head
 {check} Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
-{merge}{close} Never call emp. Never print secrets."""
+{merge}{fast_forward}{close} Never call emp. Never print secrets."""
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
             "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
@@ -1006,7 +1048,14 @@ def cmd_gatekeep(a):
                 heads = queue.setdefault("gatedHeads", {})
                 if key in attempted:
                     continue
+                state = gate_state(heads.get(key))
+                retries = 0
                 if key in heads:
+                    # A head whose retries ran out is left alone until its
+                    # head changes, so a reviewer that cannot run is not
+                    # relaunched on every run.
+                    if state["givenUp"]:
+                        continue
                     receipts = load_receipts()
                     thread_id = receipts.get(key)
                     if not thread_id:
@@ -1023,6 +1072,19 @@ def cmd_gatekeep(a):
                         continue
                     if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
                         continue
+                    retries = state["retries"] + 1
+                    if retries > GATE_RETRY_LIMIT:
+                        print(f"gave up {key} after {state['retries']} retries without a verdict",
+                              flush=True)
+                        if not a.dry_run:
+                            heads[key] = {**state, "givenUp": True}
+                            save(queue)
+                        continue
+                    if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
+                        continue
+                    # A gate that ran out of quota, or that already moved to
+                    # another reviewer, continues on the next eligible one
+                    # instead of being relaunched on the same account.
                     if quota_failure(data) or key in queue.get("gateReviewers", {}):
                         current = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
                         model = fallback_reviewer(queue, key, current, event.get("builderModels", []))
@@ -1051,7 +1113,8 @@ def cmd_gatekeep(a):
                         "title": args["title"], "priority": 5000, "builderModels": event.get("builderModels", [])}
                 queue["next"] += 1
                 queue["items"].append(item)
-                heads[key] = item["id"]
+                heads[key] = {"id": item["id"], "retries": retries,
+                              "at": time.time() if retries else None, "givenUp": False}
                 save(queue)
         write_counts(counts, seen, stuck, a.dry_run)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
@@ -1259,8 +1322,12 @@ def cmd_gate(a):
     key = f"gate:{repo}#{number}:{head}"
     with Lock(True):
         heads = load().setdefault("gatedHeads", {})
-        if key in heads:
-            die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
+        state = gate_state(heads.get(key))
+        # An operator asking for a gate explicitly still gets it, so a head
+        # the automatic retry gave up on is queued again. The retry count is
+        # kept, because the reviewer that could not run has not changed.
+        if key in heads and not state["givenUp"]:
+            die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
     login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
                                capture_output=True, text=True, timeout=40)
     if login_run.returncode:
@@ -1278,13 +1345,19 @@ def cmd_gate(a):
     with Lock(True):
         queue = load()
         heads = queue.setdefault("gatedHeads", {})
-        if key in heads:
-            die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
+        state = gate_state(heads.get(key))
+        if key in heads and not state["givenUp"]:
+            die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
         item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
                 "title": args["title"], "priority": 5000, "builderModels": models}
         queue["next"] += 1
         queue["items"].append(item)
-        heads[key] = item["id"]
+        # The explicit gate is recorded as undecided again, so a second
+        # explicit gate for the same head is refused while this one is live.
+        # Its retry count stays at the limit, so if it dies without a verdict
+        # the next gatekeep run gives up on the head again, in one line,
+        # instead of reopening the automatic retries.
+        heads[key] = {**state, "id": item["id"], "givenUp": False}
         save(queue)
     print("queued " + key
           + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"])
