@@ -917,6 +917,7 @@ def cmd_gatekeep(a):
         counts = load_counts()
         seen = set()
         stuck = []
+        attempted = set()
         for event in gate_candidates(config):
             if event["kind"] == "skip":
                 pr = event["pr"]
@@ -932,8 +933,35 @@ def cmd_gatekeep(a):
             with Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
-                if key in heads:
+                if key in attempted:
                     continue
+                if key in heads:
+                    receipts = load_receipts()
+                    thread_id = receipts.get(key)
+                    if not thread_id:
+                        continue
+                    code, out = call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 20000})
+                    if code:
+                        continue
+                    data = json.loads(out)
+                    thread = data.get("thread") or {}
+                    texts = [i.get("text") or "" for i in (data.get("items") or [])
+                             if i.get("type") == "assistant_message"]
+                    report = texts[-1].rstrip() if texts else ""
+                    if thread.get("status") not in {"failed", "interrupted", "completed"}:
+                        continue
+                    if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
+                        continue
+                    print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
+                    if not a.dry_run:
+                        del heads[key]
+                        save(queue)
+                        del receipts[key]
+                        receipt_path = path("dispatch-receipts.json")
+                        with open(receipt_path + ".tmp", "w") as f:
+                            json.dump(receipts, f)
+                        os.replace(receipt_path + ".tmp", receipt_path)
+                attempted.add(key)
                 print(("would queue " if a.dry_run else "queued ") + key
                       + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
                       flush=True)
