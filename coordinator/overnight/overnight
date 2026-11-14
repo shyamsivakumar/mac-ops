@@ -38,17 +38,18 @@ passed unless the records say it ran.
 
     overnight report --dry-run
 
-`overnight shift` (spec T12) is the command the launchd job fires. The job
-fires it on a fixed interval, every day: the shift runs 24x7, so there is
-no night window and no part of the night. Every run is one cycle: it reads
-the policy snapshot, reads the board under the snapshot's allow list,
-orders it and writes the cycle's line to the shift log. The shift is never
-armed and never unarmed. The morning report is on demand now
-(`overnight report`), so the job does not write it. In dry-run mode the
-shift does no work, so the cycle's line in the shift log is the only file
-it writes.
+`overnight shift` (spec T12, revision 3) is the command the launchd job
+fires. The job fires it on a fixed interval, every day: the shift runs
+24x7, so there is no night window and no part of the night. Every run is
+one cycle: it reads the policy snapshot, reads the whole board under the
+snapshot's allow list, works it (there is no item cap and no allowance
+stop) and writes a receipt for every item whose state changed. The shift
+is never armed and never unarmed. The first cycle of the morning writes
+the day's morning report, so Shyam reads one report in the morning;
+`--report` writes it on demand.
 
-    overnight shift --dry-run
+    overnight shift
+    overnight shift --report
 
 `overnight receipt` (spec T5b) writes the receipt of every item whose state
 the shift can see: the state, the pull request, the checks and their exit
@@ -248,6 +249,11 @@ STALL = re.compile(r"\bstall\b", re.I)
 # The shift log states how the night ended, in one of the four ways the
 # spec allows. The report reads that statement, but only when the records
 # support it: a claim is never a proof.
+# The shift runs 24x7 and never ends, so it has no window. The morning
+# report has a time: the first cycle that lands in this window writes the
+# day's report. The window is an hour and a half wide, so a Mac that wakes
+# late still writes it.
+REPORT_WINDOW = (6 * 60, 7 * 60 + 29)
 ENDED = re.compile(r"(?:^|\|)\s*ended:\s*(?P<how>deadline|all done|stop|stall)\s*$", re.I)
 # The states a receipt can name.
 STATE_DONE = "done"
@@ -706,6 +712,36 @@ def cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def report_window(now: datetime) -> bool:
+    """Return True when a moment belongs to the morning report window.
+
+    The shift has no window and never ends. The report has a time: it is
+    written by the first cycle of the morning, so Shyam reads one report a
+    day."""
+    minutes = now.hour * 60 + now.minute
+    return REPORT_WINDOW[0] <= minutes <= REPORT_WINDOW[1]
+
+
+def write_morning_report(root: Path) -> int:
+    """Write the day's morning report, once a day.
+
+    The report is the record of the day the shift worked: what merged, what
+    is ready, what is stuck and which decisions wait for Shyam. The first
+    cycle that lands in the morning window writes it, and a later cycle
+    leaves it alone, so a day has one report.
+
+    The report is rendered by the report code, from the shift's own
+    records, and it invents nothing."""
+    day = datetime.now(PT).strftime("%Y-%m-%d")
+    out = root / "receipts" / f"morning-{day}.md"
+    if out.exists():
+        print(f"overnight: today's morning report {out} is already written")
+        return 0
+    return cmd_report(
+        argparse.Namespace(root=str(root), date=day, dry_run=False)
+    )
+
+
 def cmd_shift(args: argparse.Namespace) -> int:
     """Run one cycle of the shift.
 
@@ -716,8 +752,13 @@ def cmd_shift(args: argparse.Namespace) -> int:
 
     The job fires the shift on a fixed interval, every day, so there is
     no night window and no part of the night: every run is one cycle. The
-    morning report is on demand now (`overnight report`), so the job does
-    not write it.
+    cycle works the whole board: there is no item cap and no allowance
+    stop. It writes a receipt for every item whose state changed.
+
+    The morning report has a time even though the shift does not. The
+    first cycle that lands in the morning window writes the day's report,
+    so a day has one report and Shyam reads one thing in the morning.
+    `--report` writes it on demand.
 
     The clock is the Mac's local clock, the clock launchd fires on. The
     shift log still says Pacific time, and a Mac that is not on Pacific
@@ -732,12 +773,19 @@ def cmd_shift(args: argparse.Namespace) -> int:
             "fires on the Mac's local clock, not Pacific time",
             file=sys.stderr,
         )
+    # The report cycle: the one cycle of the day that also leaves the
+    # morning report. The shift has no window; the report has a time.
+    report_cycle = report_window(now_local) or bool(getattr(args, "report", False))
     # STOP wins over every other rule: the shift ends at the next cycle.
     if (root / "run" / "STOP").exists():
         print(
             f"overnight: {stamp} run/STOP exists, so the shift stops at "
             "this cycle"
         )
+        # The report still runs: it is the record of the day, and it says
+        # that the shift ended with STOP.
+        if report_cycle and not args.dry_run:
+            return write_morning_report(root)
         return 0
     # The shift reads its contract on every cycle.
     policy, policy_error = load_policy(root)
@@ -793,10 +841,21 @@ def cmd_shift(args: argparse.Namespace) -> int:
             f"overnight: {stamp} shift cycle wrote {written} receipts of "
             f"{len(items)} items"
         )
+        # The cycle states the count it worked, so the morning report's
+        # planned count is the count of the items the report lists. The
+        # order's own line keeps its per-repository detail; the order
+        # counts the work items and the cycle counts every item it saw,
+        # including the pull requests already in flight and the backlog.
+        write_shift_line(
+            root,
+            f"planned {len(items)} items | the cycle worked {len(items)} items",
+        )
         print(
             "overnight: the shift starts no builder and works no board item "
             "yet (spec part T5); it writes the receipts of what it saw"
         )
+        if report_cycle:
+            return write_morning_report(root)
         return 0
     print(f"overnight: {stamp} shift cycle (dry run, read only)")
     return cmd_order(
@@ -3147,14 +3206,22 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
         GH_TIMEOUT,
         deadline,
     )
-    if view_code == 0:
+    # A pull request whose view cannot be read is not a pull request that
+    # did not merge. The receipt says the view could not be read, so the
+    # item is never counted as done on a guess.
+    view_error = ""
+    if view_code != 0:
+        view_error = "the pull request's view could not be read"
+    else:
         try:
             view = json.loads(view_out)
         except ValueError:
             view = {}
-        files = view.get("files") or []
-        facts["files"] = len(files) if isinstance(files, list) else 0
-        merged = str(view.get("mergedAt") or "")
+            view_error = "the pull request's view could not be parsed"
+        else:
+            files = view.get("files") or []
+            facts["files"] = len(files) if isinstance(files, list) else 0
+            merged = str(view.get("mergedAt") or "")
 
     verdict = ""
     gate_thread = (item.get("gate") or {}).get("threadId") or ""
@@ -3172,7 +3239,11 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
             builder["createdAt"], builder["updatedAt"]
         )
 
-    if failed:
+    if view_error:
+        facts["state"] = STATE_STUCK
+        facts["why"] = view_error
+        facts["next"] = "the shift reads the pull request again on the next cycle"
+    elif failed:
         facts["state"] = STATE_STUCK
         facts["why"] = "a check is failing: " + ", ".join(facts["failing"])
         facts["next"] = "the builder fixes the failing check and the gate runs again"
@@ -3704,6 +3775,11 @@ def main() -> int:
         type=int,
         default=DEFAULT_DEADLINE,
         help=f"seconds the whole cycle may take (default {DEFAULT_DEADLINE})",
+    )
+    shift.add_argument(
+        "--report",
+        action="store_true",
+        help="write the day's morning report after the cycle",
     )
     shift.set_defaults(func=cmd_shift)
     policy = sub.add_parser(

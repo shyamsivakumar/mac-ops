@@ -251,11 +251,11 @@ class TestRetiredTickJob(unittest.TestCase):
         self.assertNotIn("StartCalendarInterval", parsed)
         self.assertNotIn("RunAtLoad", parsed)
 
-    def test_the_overnight_job_runs_the_shift_in_dry_run_mode(self):
+    def test_the_overnight_job_runs_real_shift_cycles(self):
         parsed = plistlib.loads(self.rendered["dev.coordinator.overnight.plist"])
         self.assertEqual(
             parsed["ProgramArguments"],
-            ["/Users/example/.local/bin/overnight", "shift", "--dry-run"],
+            ["/Users/example/.local/bin/overnight", "shift"],
         )
 
 

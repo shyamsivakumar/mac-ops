@@ -1,15 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The overnight shift (spec part T12, revision 3). One job fires the
-     shift on a fixed interval, every day: the shift runs 24x7, so there is
-     no night window, no 22:30 start and no 06:00 deadline, and the shift
-     is never unarmed. Every cycle reads the board. The morning report is
-     on demand now (`overnight report`), so this job has no calendar entry
-     for it.
+<!-- The overnight shift (spec part T12, revision 3; T14). One job fires
+     the shift on a fixed interval, every day: the shift runs 24x7, so
+     there is no night window, no 22:30 start and no 06:00 deadline, and
+     the shift is never unarmed.
 
-     The job runs in dry-run mode until the arm and work parts (T4, T5)
-     land, so a cycle reads the board, orders it and writes the cycle's
-     line to the shift log, and nothing else.
+     The job runs real cycles (spec part T14): every cycle reads the whole
+     board, works it with no item cap and writes a receipt for every item
+     whose state changed. The first cycle of the morning writes the day's
+     morning report, so Shyam reads one report in the morning.
 
      No RunAtLoad: the first cycle lands one interval after the job loads.
      launchd starts one copy of a job at a time, so two cycles never run
@@ -22,7 +21,6 @@
     <array>
         <string>@HOME@/.local/bin/overnight</string>
         <string>shift</string>
-        <string>--dry-run</string>
     </array>
     <key>StartInterval</key>
     <integer>1800</integer>
