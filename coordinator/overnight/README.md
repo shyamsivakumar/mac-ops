@@ -26,6 +26,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. It fails closed: a pull request it cannot read is refused, not passed. |
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
 | `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the Mac's local clock: the start (22:00–23:59) reads the board and writes nothing, the report (06:00–07:29) writes the morning report, and any other time does nothing. `--at start` or `--at report` forces a part, for a manual run. |
+| `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, arming, the tick and the morning report) build on the
@@ -129,6 +130,40 @@ The job has no `RunAtLoad`, so a night does not start at every boot. It
 takes no lock: launchd never starts a second copy of a running job, and
 the two runs are eight hours apart.
 
+## The attended first night
+
+`overnight attend` is the rehearsal before the first unattended night, and
+the command a person runs when they sit down to watch.
+
+```sh
+overnight attend --items 3 --minutes 60 --run-by Shyam --wait
+```
+
+- It reads the board (`ticket list --fresh --json`) and takes the first
+  small items the board shows: on the todo stage, in an allowed
+  repository, and of a type that is one small part (`chore` or
+  `standard`). A ticket Shyam holds is not in the board list at all, so
+  the night never takes one, and the Ascend keys are never taken.
+- It arms the shift in the folder it is given: `run/armed`,
+  `run/deadline` and `run/policy.json`. The policy records the allow
+  list, the queue's slot cap (read only, never raised) and the verify
+  level.
+- It observes each item for real, with read-only commands only: the open
+  pull request for the ticket, the checks on it, the gate's verdict on it
+  and the files it touches. It runs no merge, no push and no builder.
+- It writes one receipt per item, the shift log and then the morning
+  report, from the same records the report part reads.
+- `--wait` holds the door until the window closes, and then the night
+  ends at the deadline. Without it the night ends as soon as the items
+  are observed, and the shift log says that the window is still open.
+- `--run-by` records who ran the night. The records never claim that a
+  person watched: the command cannot know that, so it says who ran it.
+
+`--dry-run` reads the board and writes nothing. `--root` points the night
+at another folder, which is how a rehearsal runs without touching the
+live records. Without `--root` the night writes to a dated folder under
+the runtime folder, so it never mixes with the live receipts.
+
 Load it after the install:
 
 ```sh
@@ -177,7 +212,7 @@ The names come from the overnight runner spec, section 6 (revision 2).
 | `receipts/<item>.md` | Tick | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
 | `inbox/parking-lot.md` | Tick | Decisions the shift could not make. Each with a default and a recommendation. |
 | `inbox/snag-log.md` | Tick | Problems found (flaky test, conflict, dialog) and what the shift did. |
-| `run/shift-log.md` | All steps | One line per event, with PT time. |
+| `run/shift-log.md` | All steps | One line per event, with PT time. It also states how the night ended (`ended: deadline`, `ended: all done`, `ended: STOP` or `ended: stall`). |
 | `receipts/morning-YYYY-MM-DD.md` | Report step | The morning report: what merged, what is ready, what is stuck and why, and which decisions wait for Shyam. |
 
 There is no `punch-list.md` (spec revision 2): the board is the list, and the
@@ -202,7 +237,7 @@ else. It never invents a count and it never upgrades a claim into proof.
 | --- | --- |
 | `receipts/<item>.md` | The state of one item, its check, its gate verdict, its merge time, its builder time and why it stopped. The merge time is the one the shift wrote after it checked GitHub, so the report does not call GitHub again. |
 | `inbox/parking-lot.md` | The decisions the shift could not make, each with a default and a recommendation. |
-| `run/shift-log.md` | How many items were in scope (`planned N items`), whether the full suite ran and with which exit code, and whether the shift stalled. |
+| `run/shift-log.md` | How many items were in scope (`planned N items`), whether the full suite ran and with which exit code, whether the shift stalled, and how the night ended (`ended: deadline`, `ended: all done`, `ended: STOP` or `ended: stall`). |
 | `run/policy.json` | The verify level and `allowance_used_percent`, the share of the plan allowance the night used. |
 | `run/armed`, `run/deadline` | The window of the night, in PT. |
 | `run/STOP` | Its presence means the shift was stopped. |
@@ -221,7 +256,8 @@ A receipt is markdown with one `- Key: value` line per field.
 | `Checks` | One check, or several separated by semicolons. Each check is a command in backticks and its exit code: `` `cmd` exit 0 ``. |
 | `Gate` | `PASS` or `FAIL`. |
 | `Files` | How many files the item touched. |
-| `Time used` | The builder time, as `N min`. |
+| `Time used` | The builder time, as `N min`. A night that ran no builder says `0 min`. |
+| `Observed` | How long the shift spent looking at the item, in seconds. It is not builder time. |
 | `Stopped because` | Why the item stopped. |
 | `Next` | The next step. |
 
@@ -238,7 +274,9 @@ A receipt is markdown with one `- Key: value` line per field.
   The counts and the lists agree item for item.
 - The report says how the shift ended in one of the four ways the spec
   allows: `deadline`, `all done`, `STOP` or `stall`. When the records
-  explain none of them, it says `UNVERIFIED`.
+  explain none of them, it says `UNVERIFIED`. The shift log may state
+  how the night ended, and the report reads that statement only when the
+  records support it: a claim is never a proof.
 - A count that cannot be checked is written as `UNVERIFIED`: the planned
   count without a shift-log summary, the model use when the allowance was
   not readable, the builder time when a receipt records no time or a
