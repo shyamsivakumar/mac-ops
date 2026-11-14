@@ -21,13 +21,80 @@ in the mac-ops checkout and is installed by the same installer.
 | Command | What it does |
 | --- | --- |
 | `overnight intake --dry-run` | Reads the board (`ticket list --fresh --json`) and the open pull requests (`gh pr list` for each allowed repository) into intake records, and prints the record count per repository. Read only: it writes no record and keeps no list of its own. The ticket CLI refreshes its own cache when it reads the board; that cache is the ticket CLI's. |
+| `overnight filter --dry-run` | Filters the board and prints every drop with its reason. Read only. It fails closed: it exits non-zero and drops what it could not check. |
+| `overnight order --dry-run` | Orders the whole board and prints the full ordered list: the failing pull requests, then the pull requests with a gate PASS, then the ready tickets that are already 5-minute parts, then the ready tickets that are not split yet. It writes one summary line to `run/shift-log.md` and no list file. |
+| `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. It fails closed: a pull request it cannot read is refused, not passed. |
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
-| `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the PT clock: the start (22:30) reads the board and writes nothing, the report (06:30) writes the morning report, and any other hour does nothing. `--at start` or `--at report` forces a part, for a manual run. |
+| `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the Mac's local clock: the start (22:00–23:59) reads the board and writes nothing, the report (06:00–07:29) writes the morning report, and any other time does nothing. `--at start` or `--at report` forces a part, for a manual run. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, arming, the tick and the morning report) build on the
 same records, in the same module.
+
+## The order
+
+The order is the spec's, and it is the whole board: no cap and no list
+file.
+
+| Group | What is in it |
+| --- | --- |
+| Failing pull requests | A pull request that is open and whose checks show a failure. `gh pr checks` answers for each one; a pull request with no checks at all is not a failure. |
+| Pull requests with a gate PASS | A pull request whose head the gate has looked at, where the gate's own message ends with `VERDICT: PASS`. The gate thread is found in the coordinator's dispatch receipts (`gate:<repo>#<pr>:<head>`), so a gate for an older head is never a verdict for the current one. |
+| Ready tickets already split into 5-minute parts | A ready ticket whose own text says it is a bounded slice: a light build slice, a light chore, or a part that says how many minutes it takes. |
+| Ready tickets not yet split | Every other ready ticket. The shift splits it first, then adds the parts. |
+
+A ticket is ready when the board's stage is `todo`. A ticket in another
+stage is not ready and is not work, so the list says so instead of
+dropping it. A pull request that is open and neither failing nor gate
+PASS is in flight: it is not work for the night, and the list says that
+too.
+
+Inside a group the order is the board's: the priority label first, then
+the items whose blockers are met, then the board's own order. A blocker
+is met when its issue is closed, so it is not on the open issue list. A
+blocker the shift cannot check is treated as unmet, so the shift does
+not start work whose order it cannot prove.
+
+The order writes one line to `run/shift-log.md`: the planned count and
+the counts per repository and per state. That line is the night's record
+of what was in scope, and the morning report reads it for the planned
+count. It holds no list: the board is the list.
+
+`--dry-run` means no work, and the two commands read it differently on
+purpose. `overnight report --dry-run` prints the report and writes no
+file. `overnight shift --dry-run` writes the morning report, because the
+report is the record of the night, not work.
+
+## What the filter drops
+
+The filter reads the board, the tickets' own text and the coordinator's
+decisions log. It keeps no list of its own and writes nothing.
+
+| Drop | How it is found |
+| --- | --- |
+| Ascend work | A key from the spec's list (AUH, MCP, OPS, DBT, OMN), or a repository the merge gate refuses: the same repository rule and the same per-repository `ascend` flag the gate uses in `coordinator/bin/coordq`, so the shift and the gate agree on what Ascend is. |
+| A repository off the allow list | The allow list is the board config (`coordinator/config/tickets.json`), the same list intake uses. |
+| A ticket marked `hold` | The word `HOLD` in capitals at the start of a line of the ticket's own text. |
+| A ticket marked `needs Shyam` | The phrase `needs Shyam` with its question (`Needs Shyam: ...`, "needs Shyam to ..."), and not "needs Shyam's OK". |
+| A ticket marked `design needed` | The phrase `design needed` with what it waits for (`design needed: ...`, "design needed before ..."). |
+| An open question in the decisions log | The last line of `loop/decisions.md` that is about the ticket holds or parks it, opens it, asks it as `Q: ...`, or asks Shyam a question that was never answered. |
+
+A mark is the marked form and it stands at the start of a line or of a
+clause, so a ticket that only talks about holding a position, or about a
+decision that needs Shyam later, is not marked. The decisions log is
+append-only history, so the last line that is about a ticket decides: a
+hold outlives the question it was asked in, and a line that answers the
+question closes it.
+
+The filter prints every drop with its reason, and it fails closed. A
+ticket whose text could not be read, a ticket whose open question could
+not be checked, a stale board and a missing decisions log all end in a
+non-zero exit: the filter never returns a list it could not fully check.
+The second check, `check-pr`, refuses an Ascend pull request by
+repository, by the board config's `ascend` flag, or by any Ascend key its
+branch or its body carries.
+
 
 ## The launchd job
 
@@ -36,21 +103,32 @@ checkout is the job `dev.coordinator.overnight`. The mac-ops installer
 copies it into `~/Library/LaunchAgents` with the rest of the coordinator
 jobs, so the job and the command always come from the same checkout.
 
-The job fires twice a night, and the clock picks the part:
+The job fires twice a night, and the clock picks the part. The clock is the
+Mac's local clock, the clock launchd itself uses, so a run that fires
+always matches the part it is for:
 
-| PT time | What runs |
+| Local time | What runs |
 | --- | --- |
 | 22:30 | The shift start. In dry-run mode it reads the board and writes nothing. |
 | 06:30 | The morning report. It writes `receipts/morning-YYYY-MM-DD.md` and nothing else. |
+
+The windows are an hour wide rather than a minute, so a Mac that wakes
+late still writes the report (until 07:29). A run outside both windows
+does nothing and exits 0.
+
+The Mac must run on Pacific time for these to be the spec's 22:30 and
+06:30 PT. If the Mac's clock is not on Pacific time, the job still runs
+the right part, because the dispatch reads the same clock launchd fires
+on, and it says so in the log.
 
 The job runs in dry-run mode (`shift --dry-run`) until the arm and tick
 parts (T4, T5) land. A dry night does no work, so the morning report is the
 only file it writes. A real shift is not started by the job yet: without
 `--dry-run` the start refuses and says so, rather than pretending to work.
 
-The job has no `RunAtLoad`, so a night does not start at every boot, and
-the job takes no lock: it runs for seconds, so two runs never overlap in
-any way that matters.
+The job has no `RunAtLoad`, so a night does not start at every boot. It
+takes no lock: launchd never starts a second copy of a running job, and
+the two runs are eight hours apart.
 
 ## The attended first night
 

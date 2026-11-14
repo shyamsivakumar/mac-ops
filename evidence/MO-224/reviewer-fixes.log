@@ -19,8 +19,8 @@ open".
 
 **Probe.** `python3 coordinator/overnight/overnight attend --items 3
 --minutes 1 --wait --run-by "the agent (rehearsal)" --root
-~/Code/coordinator/.overnight/attended-2026-11-13` ran from 14:29 to
-14:30 PT (the whole window), and the shift log's last line reads `ended:
+~/Code/coordinator/.overnight/attended-2026-11-13` ran from 16:58 to
+16:59 PT (the whole window), and the shift log's last line reads `ended:
 deadline` with `run/deadline` behind it
 (`evidence/MO-224/shift-log.md`).
 
@@ -54,7 +54,7 @@ shift spent looking in its own field, `Observed`.
 
 **Probe.** The proof report's cost line reads "Builder time: 0 min", and
 each receipt reads `- Time used: 0 min` with `- Observed: N s`
-(`evidence/MO-224/MO-231.md`, `evidence/MO-224/morning-2026-11-13.md`).
+(`evidence/MO-224/SRW-975.md`, `evidence/MO-224/morning-2026-11-13.md`).
 
 ## 4. The records claimed a person watched
 
@@ -97,9 +97,9 @@ inside another word.
 ticket FFBT-1 (#344) is not in the board list at all, and `ticket list
 --fresh --json` returns 118 tickets without it.
 
-**Probe.** `ticket list --fresh --json | python3 -c ...` shows FFBT-1 is
-absent from the list, and the dry run picks MO-231, MO-234 and MO-237,
-none of which is held.
+**Probe.** `ticket list --fresh --json` returns the board without the
+held tickets, and the dry run picks three items the board shows
+(SRW-1057, SRW-975, SRW-976), none of them held.
 
 ## 7. The night wrote into the live receipts folder
 

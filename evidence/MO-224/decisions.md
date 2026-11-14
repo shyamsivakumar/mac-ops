@@ -54,7 +54,7 @@ person watched and the records must not claim it.
   the two receipt fields the night writes (`Time used` and `Observed`).
 - `evidence/MO-224/`: the proof runs. `attended-run.log`,
   `shift-log.md`, `policy.json`, `armed`, the three receipts
-  (`MO-231.md`, `MO-234.md`, `MO-237.md`), the morning report
+  (`SRW-1057.md`, `SRW-975.md`, `SRW-976.md`), the morning report
   (`morning-2026-11-13.md`) and `rule-check.log`.
 
 Not touched: the merge, push and slot-cap rules, the Ascend rules, the
@@ -137,7 +137,7 @@ command.
 
 1. **The command reads the board and picks three small items.**
    `python3 coordinator/overnight/overnight attend --dry-run --items 3
-   --run-by "the agent (rehearsal)"` printed the board (118 tickets), the
+   --run-by "the agent (rehearsal)"` printed the board (113 tickets), the
    three planned items and wrote nothing.
 2. **The night runs and writes three receipts and one report.**
    `python3 coordinator/overnight/overnight attend --items 3 --minutes 1
@@ -166,6 +166,43 @@ command.
    the report hold no token, key, cookie or `.env` value.
 6. **Checks.** `python3 scripts/mac_ops_fast_check.py` and the full local
    check through `heavy` are recorded in the pull request body.
+
+## The merge with origin/main
+
+Main moved while this pull request was open (T3b, T3c and the gatekeep
+work landed), so the branch conflicted with it and GitHub could not
+create the merge commit. The branch was rebased on `origin/main` and the
+conflicts were resolved there; because a force push is not allowed, the
+same tree was then landed as a merge commit of `origin/main` into this
+branch, so the push is a fast-forward and no history was rewritten.
+
+The conflicts and how each was resolved:
+
+1. **`coordinator/overnight/overnight`, the constants.** Main had
+   replaced the two launchd hours with the local-clock windows
+   (`START_WINDOW`, `REPORT_WINDOW`), and this branch had added the
+   `ENDED` pattern next to the old `START_HOUR`/`REPORT_HOUR` pair.
+   Resolved by keeping main's windows and this branch's `ENDED`, and
+   dropping the two constants main had already replaced.
+2. **`coordinator/overnight/overnight`, the two new blocks.** Main added
+   the T3b filter and the T3c order, and this branch added the attended
+   night. Both are additions at the same place, so the resolution keeps
+   both: main's filter and order first, this branch's attended night
+   after them.
+3. **`coordinator/overnight/overnight`, one name.** Main's T3c block
+   defines `gate_verdict` for the gate's own receipts, and this branch
+   defined a `gate_verdict` that reads the verdict the gate wrote on the
+   pull request. Two functions with one name would have broken the
+   module, so this branch's function is now `pull_request_gate_verdict`
+   and says in its docstring which of the two reads it is. No behaviour
+   changed.
+4. **`coordinator/overnight/README.md`, the command table.** Main
+   rewrote the `overnight shift` row for the local-clock windows, and
+   this branch added the `overnight attend` row. Resolved by keeping
+   main's row and adding this branch's row.
+
+Nothing from main was dropped, no test, check or fixture was changed,
+and no scope, dependency or approval was touched.
 
 ## The reviewer round
 

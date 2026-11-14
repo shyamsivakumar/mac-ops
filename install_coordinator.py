@@ -26,11 +26,11 @@ BIN_FILES = (
     "ticket",
 )
 CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
-MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs")
+MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
 # The pi coordinator's own files: guard extension, sandbox profile, settings,
 # phone relay note and launchers.
-PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone", "coord-tick")
+PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone", "coord-tick", "kpane", "kshow")
 PI_FILES = (
     ("extensions/coordinator.ts", ".pi/agent-coordinator/extensions/coordinator.ts"),
     ("coordinator.sb", ".pi/agent-coordinator/coordinator.sb"),
@@ -38,8 +38,6 @@ PI_FILES = (
     ("phone-relay/CLAUDE.md", ".pi/agent-coordinator/phone-relay/CLAUDE.md"),
 )
 TURN_CAP_JOB = "dev.coordinator.turncap"
-# The overnight shift's launchd job (spec part T12). It fires at 22:30 PT
-# and 06:30 PT, so it is loaded like any other job.
 OVERNIGHT_JOB = "dev.coordinator.overnight"
 # The overnight runner's on-disk contract. The folders come from the
 # overnight runner spec (section 6, revision 2). The shift keeps no second
@@ -500,9 +498,11 @@ def install(
             f"gui/$(id -u) ~/{'Library/LaunchAgents'}/{TURN_CAP_JOB}.plist"
         )
         print(
-            f"The overnight job is {OVERNIGHT_JOB}.plist. Load it with: "
-            f"launchctl bootstrap gui/$(id -u) ~/{'Library/LaunchAgents'}/"
-            f"{OVERNIGHT_JOB}.plist"
+            f"The overnight job is {OVERNIGHT_JOB}.plist. A job that is "
+            f"already loaded needs bootout first: launchctl bootout "
+            f"gui/$(id -u)/{OVERNIGHT_JOB} (a job that is not loaded says so), "
+            f"then launchctl bootstrap gui/$(id -u) "
+            f"~/{'Library/LaunchAgents'}/{OVERNIGHT_JOB}.plist"
         )
 
 

@@ -2,11 +2,12 @@
 
 ## The commands the overnight module can run
 
-    187:        raw = run([TICKET, "list", "--fresh", "--json"], TICKET_TIMEOUT, deadline)
-    1014:def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
-    1082:    code, out = run_read(
-    1100:    checks_code, checks_out = run_read(
-    1103:    files_code, files_out = run_read(
+    283:        raw = run([TICKET, "list", "--fresh", "--json"], TICKET_TIMEOUT, deadline)
+    1627:        raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
+    2018:def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
+    2090:    code, out = run_read(
+    2108:    checks_code, checks_out = run_read(
+    2111:    files_code, files_out = run_read(
 
 ## Forbidden commands in the overnight module (merge, push, force)
 
@@ -16,10 +17,10 @@ None. The module holds no merge, no push and no force push.
 
 The policy snapshot reads the queue's own cap file and writes nothing back:
 
-    1009:SLOT_CAP_FILE = Path.home() / "Code" / "coordinator" / "queue" / "config.json"
-    1038:def slot_cap() -> int | None:
-    1044:        with open(SLOT_CAP_FILE) as stream:
-    1212:        "slot_cap": slot_cap(),
+    2013:SLOT_CAP_FILE = Path.home() / "Code" / "coordinator" / "queue" / "config.json"
+    2042:def slot_cap() -> int | None:
+    2048:        with open(SLOT_CAP_FILE) as stream:
+    2220:        "slot_cap": slot_cap(),
 
 cap file: ~/Code/coordinator/queue/config.json -> {"cap":6}
 policy snapshot: 6
