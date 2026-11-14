@@ -157,12 +157,26 @@ BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
 # named group `secret` keeps the rest of the match (the name of an
 # environment variable, the header of a cookie line) and redacts only the
 # group. A pattern without one is redacted whole.
+#
+# Every group starts with `(?!\[REDACTED:)`, so a value that is already
+# redacted is not redacted again: the redaction of a text is the same
+# text, and a record that is written twice is not damaged.
 SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "private key",
         re.compile(
             r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?"
             r"-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+        ),
+    ),
+    (
+        # A key block that was cut short: the check's own output often
+        # ends in the middle of the key. It runs to the end of the text,
+        # unless an END marker follows it.
+        "private key",
+        re.compile(
+            r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+            r"(?:(?!-----END)[\s\S])*$"
         ),
     ),
     ("aws key", re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}\b")),
@@ -172,8 +186,12 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b"
         ),
     ),
+    ("gitlab token", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")),
     ("anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}\b")),
-    ("openai key", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
+    (
+        "openai key",
+        re.compile(r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}"),
+    ),
     ("slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
     ("google api key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
     ("huggingface token", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
@@ -187,49 +205,83 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "authorization header",
         re.compile(
             r"(?i)\b(?:authorization|proxy-authorization|x-api-key)[ \t]*[:=][ \t]*"
-            r"(?P<secret>[^\s\"']+(?:[ \t]+[^\s\"']+)?)"
+            r"(?P<secret>(?!\[REDACTED:)[^\s\"']+"
+            r"(?:[ \t]+(?!\[REDACTED:)[^\s\"']+)?)"
         ),
     ),
     (
         "bearer token",
-        re.compile(r"(?i)\bbearer[ \t]+(?P<secret>[A-Za-z0-9._~+/-]{8,}=*)"),
+        re.compile(
+            r"(?i)\bbearer[ \t]+(?P<secret>(?!\[REDACTED:)[A-Za-z0-9._~+/-]{8,}=*)"
+        ),
     ),
     (
         "cookie",
-        re.compile(r"(?i)\b(?:set-)?cookie[ \t]*[:=][ \t]*(?P<secret>[^\s;]+)"),
+        re.compile(
+            r"(?i)\b(?:set-)?cookie[ \t]*[:=][ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)[^\s;]+)"
+        ),
     ),
     (
+        # A session cookie on its own. It needs a cookie context (the
+        # start of a line, a space or a `;`) and a value that is long
+        # enough to be a token, so prose like "session = 3 of 5" is left
+        # alone.
         "session cookie",
         re.compile(
-            r"(?i)\b(?:session|sessionid|sid|jsessionid|phpsessid|csrf|xsrf)"
-            r"[ \t]*=[ \t]*(?P<secret>[^\s;]+)"
+            r"(?i)(?:^|[;\s])(?:session|sessionid|sid|jsessionid|phpsessid|csrf"
+            r"|xsrf)[ \t]*=[ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)[A-Za-z0-9._~+/-]{8,})"
         ),
     ),
     (
         "url credentials",
-        re.compile(r"://[^/\s:@]+:(?P<secret>[^/\s@]+)@"),
+        re.compile(
+            r"://[^/\s:@]*:(?P<secret>(?!\[REDACTED:)[^/\s@]+(?:\@[^/\s@]*)?)@"
+        ),
     ),
     (
+        # A field that names a secret, in JSON, in YAML or in a command
+        # line. The name may be quoted, and the value may be quoted.
         "secret field",
         re.compile(
-            r"(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token"
-            r"|secret[_-]?key|client[_-]?secret|password|passwd|passphrase)"
-            r"[ \t]*[:=][ \t]*[\"']?(?P<secret>[^\s\"',;]+)"
+            r"(?i)(?<![A-Za-z0-9_])[\"']?"
+            r"(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token"
+            r"|gh[_-]?token|secret[_-]?key|client[_-]?secret|password|passwd"
+            r"|passphrase|token|secret)"
+            r"[\"']?[ \t]*[:=][ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+))"
         ),
     ),
     (
-        ".env value",
-        re.compile(
-            r"(?m)^[ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*[ \t]*=[ \t]*"
-            r"(?P<secret>\S+)"
-        ),
-    ),
-    (
+        # An environment variable whose name ends in a secret word. The
+        # name has an underscore, so prose like "the token: expired" is
+        # left alone.
         "environment secret",
         re.compile(
-            r"(?m)^[ \t]*(?:export[ \t]+)?(?:[A-Za-z0-9]+_)*"
-            r"(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIALS?)[A-Za-z0-9_]*"
-            r"[ \t]*=[ \t]*(?P<secret>\S+)"
+            r"(?i)(?<![A-Za-z0-9_])(?:export[ \t]+)?[A-Za-z0-9]+_[A-Za-z0-9_]*"
+            r"(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?)"
+            r"[ \t]*[:=][ \t]*(?P<secret>(?!\[REDACTED:)[^\s]+)"
+        ),
+    ),
+    (
+        # The same, for a name that is the secret word itself. The name
+        # has to be followed by `=`, so a heading that says "Secret:" is
+        # left alone.
+        "environment secret",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_])(?:export[ \t]+)?"
+            r"(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?)"
+            r"[ \t]*=[ \t]*(?P<secret>(?!\[REDACTED:)[^\s]+)"
+        ),
+    ),
+    (
+        # A `.env` line: the name is an environment variable's name and
+        # the line holds nothing else.
+        ".env value",
+        re.compile(
+            r"(?m)^[ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*_[A-Z0-9_]*[ \t]*=[ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)\S+)[ \t]*$"
         ),
     ),
 )
@@ -3557,9 +3609,9 @@ def write_receipt(root: Path, item: dict, body: str) -> str:
     same state every cycle. The receipt is redacted before it is written
     and before it is compared, so the comparison is between what is on
     disk and what would be written."""
-    body = redact(body)
+    safe = redact(body)
     path = receipt_path(root, item)
-    if path.exists() and without_observed(read_text(path)) == without_observed(body):
+    if path.exists() and without_observed(read_text(path)) == without_observed(safe):
         return "unchanged"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3567,7 +3619,7 @@ def write_receipt(root: Path, item: dict, body: str) -> str:
         # a run that dies mid-write never leaves a half receipt for the
         # morning report to read.
         scratch = path.with_name(path.name + ".tmp")
-        write_record(scratch, body)
+        write_record(scratch, safe)
         os.replace(scratch, path)
     except OSError as exc:
         return f"failed: {exc}"
