@@ -2272,6 +2272,27 @@ FAILED_CHECK = frozenset(
         "STARTUP_FAILURE",
     }
 )
+# How a commit status ended, in the words the checks command used.
+STATUS_BUCKET = {
+    "SUCCESS": "pass",
+    "FAILURE": "fail",
+    "ERROR": "fail",
+    "PENDING": "pending",
+    "EXPECTED": "skipping",
+}
+# How a check run ended. A cancelled run is inconclusive, so it is
+# skipped, and a timed out run failed.
+CHECK_BUCKET = {
+    "SUCCESS": "pass",
+    "FAILURE": "fail",
+    "ACTION_REQUIRED": "fail",
+    "TIMED_OUT": "fail",
+    "STARTUP_FAILURE": "fail",
+    "CANCELLED": "skipping",
+    "SKIPPED": "skipping",
+    "NEUTRAL": "skipping",
+    "STALE": "skipping",
+}
 # The board's stage labels. A ready ticket is one the board says may be
 # worked now.
 READY_STAGE = "todo"
@@ -2397,11 +2418,13 @@ def read_closed_issues(
 def read_checks(repo: str, number: int, deadline: float) -> tuple[list[dict], str]:
     """Return the checks of one pull request and the reason none are known.
 
-    `gh pr checks` prints the checks as JSON and exits 0 even when a
-    check failed, so the failure is in the rows, not in the exit code.
-    It exits 1 with `no checks reported` when the pull request carries no
-    checks at all, which is an answer too: a pull request with no checks
-    is not a failing pull request. A read that fails for any other reason
+    `gh pr view` reads the checks of a pull request as a rollup. A commit
+    status carries its context, and a check run carries the app that ran
+    it. The board keeps both, because an agent check is named by the
+    repository's own publisher and every other check is external.
+
+    A pull request that carries no checks at all is not a failing pull
+    request: the rollup is empty and that is an answer. A read that fails
     is a refusal, never a failure."""
     left = deadline - time.monotonic()
     if left <= 0:
@@ -2411,12 +2434,12 @@ def read_checks(repo: str, number: int, deadline: float) -> tuple[list[dict], st
             [
                 GH,
                 "pr",
-                "checks",
+                "view",
                 str(number),
                 "-R",
                 repo,
                 "--json",
-                "name,state,bucket",
+                "statusCheckRollup",
             ],
             capture_output=True,
             text=True,
@@ -2426,35 +2449,156 @@ def read_checks(repo: str, number: int, deadline: float) -> tuple[list[dict], st
     except FileNotFoundError:
         return [], f"{GH} is not on PATH"
     except subprocess.TimeoutExpired:
-        return [], f"gh pr checks {repo}#{number} timed out"
+        return [], f"gh pr view {repo}#{number} timed out"
     out = (result.stdout or "").strip()
     err = (result.stderr or "").strip()
-    if result.returncode == 0:
-        try:
-            rows = json.loads(out or "[]")
-        except ValueError as exc:
-            return [], f"gh pr checks did not return JSON for {repo}#{number}: {exc}"
-        return (rows if isinstance(rows, list) else []), ""
-    if "no checks reported" in err or "no checks reported" in out:
-        return [], ""
-    return [], (
-        f"gh pr checks {repo}#{number} failed ({result.returncode}): "
-        + (err or out)[-200:]
+    if result.returncode != 0:
+        return [], (
+            f"gh pr view {repo}#{number} failed ({result.returncode}): "
+            + (err or out)[-200:]
+        )
+    try:
+        payload = json.loads(out or "{}")
+    except ValueError as exc:
+        return [], f"gh pr view did not return JSON for {repo}#{number}: {exc}"
+    entries = (
+        payload.get("statusCheckRollup") if isinstance(payload, dict) else None
     )
+    if not isinstance(entries, list):
+        return [], f"gh pr view returned no check rollup for {repo}#{number}"
+    return check_rows(entries), ""
 
 
-def failing_checks(rows: list[dict]) -> list[str]:
-    """Return the checks of a pull request that failed.
+def check_rows(entries: list) -> list[dict]:
+    """Return the rollup of a pull request as check rows.
+
+    Every row keeps its name, its context, its app, its state and its
+    bucket. The name says which check it is, the context is the status
+    name, and the app is the publisher that posted it. The state and the
+    bucket say how the check ended, in the same words the checks command
+    used: `fail`, `pass`, `pending` and `skipping`."""
+    rows = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        context = str(entry.get("context") or "")
+        name = str(entry.get("name") or "") or context
+        state = str(entry.get("state") or "").upper()
+        bucket = STATUS_BUCKET.get(state, "") if context else ""
+        if not context:
+            status = str(entry.get("status") or "").upper()
+            conclusion = str(entry.get("conclusion") or "").upper()
+            if status == "COMPLETED":
+                state = conclusion
+                bucket = CHECK_BUCKET.get(conclusion, "")
+            else:
+                state = ""
+                bucket = "pending"
+        app = ""
+        publisher = entry.get("app")
+        if isinstance(publisher, dict):
+            app = str(publisher.get("slug") or publisher.get("name") or "")
+        rows.append(
+            {
+                "name": name,
+                "context": context,
+                "app": app,
+                "state": state,
+                "bucket": bucket,
+            }
+        )
+    return rows
+
+
+def agent_check_names(key: str) -> frozenset[str]:
+    """Return the agent check names of one repository.
+
+    `srw/agent-check` is the agent check of strategy-replay-workbench, and
+    `<key>/agent-check` is the same name for the other repositories. The
+    gate reads these names, so the board copies them instead of inventing
+    a wider rule of its own."""
+    names = {AGENT_CHECK}
+    if key:
+        names.add(f"{key.strip().lower()}/agent-check")
+    return frozenset(names)
+
+
+def publisher_apps(rows: list[dict], agent_names: frozenset[str]) -> frozenset[str]:
+    """Return the apps that publish a repository's own agent check.
+
+    A check that one of these apps posted is an agent check, whatever its
+    name says."""
+    apps = set()
+    for row in rows:
+        if str(row.get("context") or "").strip().lower() not in agent_names:
+            continue
+        app = str(row.get("app") or "").strip().lower()
+        if app:
+            apps.add(app)
+    return frozenset(apps)
+
+
+def is_agent_check(
+    row: dict, agent_names: frozenset[str], apps: frozenset[str]
+) -> bool:
+    """Return True when a check row is one of the repository's own checks.
+
+    The agent check is the status the repository's own publisher posts on
+    the head. Every other check is external: a deployment, a preview or a
+    bot, none of which is an agent check of this repository."""
+    for field in ("name", "context"):
+        if str(row.get(field) or "").strip().lower() in agent_names:
+            return True
+    app = str(row.get("app") or "").strip().lower()
+    return bool(app) and app in apps
+
+
+def failing_checks(
+    rows: list[dict], agent_names: frozenset[str], apps: frozenset[str]
+) -> tuple[list[str], list[str]]:
+    """Return the failing agent checks and the failing external checks.
 
     A cancelled check is inconclusive, not a failure, so it does not put
-    the pull request in the failing group."""
-    failed = []
+    the pull request in the failing group. An external check never blocks
+    a pull request, but it is listed, so the failure stays visible."""
+    agent_failed: list[str] = []
+    external_failed: list[str] = []
     for row in rows:
         state = str(row.get("state") or "").upper()
         bucket = str(row.get("bucket") or "").upper()
-        if state in FAILED_CHECK or bucket in FAILED_CHECK:
-            failed.append(f"{row.get('name') or '?'} ({state or bucket})")
-    return failed
+        if state not in FAILED_CHECK and bucket not in FAILED_CHECK:
+            continue
+        if is_agent_check(row, agent_names, apps):
+            agent_failed.append(f"{row.get('name') or '?'} ({state or bucket})")
+            continue
+        name = str(row.get("name") or "?").strip() or "?"
+        if name not in external_failed:
+            external_failed.append(name)
+    return agent_failed, external_failed
+
+
+def check_verdict(rows: list[dict], key: str) -> dict:
+    """Return what the checks of one pull request say.
+
+    `failed` are the failing agent checks, and they block the pull
+    request. `external` are the failing checks that are not agent checks:
+    they stay visible and never block."""
+    names = agent_check_names(key)
+    apps = publisher_apps(rows, names)
+    failed, external = failing_checks(rows, names, apps)
+    return {"failed": failed, "external": external, "blocks": bool(failed)}
+
+
+def apply_checks(item: dict, rows: list[dict], key: str) -> bool:
+    """Record the checks of a pull request on its board item.
+
+    The item keeps the failing agent checks and the failing external
+    checks. The answer is True when an agent check failed, and only then:
+    an external failure stays visible but never blocks a pull request."""
+    state = check_verdict(rows, key)
+    item["checks"] = {"failed": state["failed"]}
+    item["externalChecks"] = state["external"]
+    return state["blocks"]
 
 
 def read_receipts() -> tuple[dict[str, str], str]:
@@ -2962,9 +3106,10 @@ def collect_items(
                         in_flight.append(item)
                         count_for(repo)["in_flight"] += 1
                         continue
-                    failed = failing_checks(rows)
-                    item["checks"] = {"failed": failed}
-                    if failed:
+                    blocked = apply_checks(item, rows, keys.get(repo, ""))
+                    failed = (item.get("checks") or {}).get("failed") or []
+                    external = item.get("externalChecks") or []
+                    if blocked:
                         item["reason"] = "failing check: " + ", ".join(failed)
                         item["actionReason"] = "a check is failing"
                         failing.append(item)
@@ -3056,6 +3201,11 @@ def collect_items(
                         }.get(status, "")
                     if verdict == "PASS":
                         item["reason"] = "gate PASS"
+                        if external:
+                            item["reason"] += (
+                                "; external checks failing: "
+                                + ", ".join(external)
+                            )
                         gate_pass.append(item)
                         count_for(repo)["gate"] += 1
                         count_for(repo)["total"] += 1
@@ -3066,6 +3216,10 @@ def collect_items(
                         item["reason"] = (
                             "open pull request, no failing check and no gate "
                             "verdict"
+                        )
+                    if external:
+                        item["reason"] += (
+                            "; external checks failing: " + ", ".join(external)
                         )
                     in_flight.append(item)
                     count_for(repo)["in_flight"] += 1
@@ -4395,6 +4549,8 @@ def board_item(order: int, group: str, item: dict) -> dict:
         row["issue"] = item.get("issue") or 0
         row["draft"] = bool(item.get("isDraft"))
         row["failed"] = (item.get("checks") or {}).get("failed") or []
+        if item.get("externalChecks"):
+            row["externalChecks"] = list(item["externalChecks"])
         gate = item.get("gate") or {}
         row["gate"] = gate.get("status") or "none"
         if gate.get("threadId"):
