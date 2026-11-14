@@ -5,6 +5,10 @@ DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
 LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
 MAX_ATTEMPTS = 3
+TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
+# A launch learns its thread only after the call, so its reservedThreads record
+# carries this prefix and reconcile knows the thread may not be listed live yet.
+LAUNCH_RECORD = "launch:"
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
@@ -232,16 +236,40 @@ def active_thread_ids():
         cursor = next_cursor
 
 
-def reconcile_reservations(queue, active):
+def thread_status(thread_id):
+    code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1})
+    if code:
+        raise RuntimeError(f"cannot read thread {thread_id}")
+    return json.loads(out).get("thread", {}).get("status")
+
+
+def reconcile_reservations(queue, active, statuses=None):
     reserved = queue.setdefault("reserved", {})
     threads = queue.setdefault("reservedThreads", {})
+    known = {} if statuses is None else statuses
     for key, at in list(reserved.items()):
+        record = threads.get(key)
+        launched = isinstance(record, str) and record.startswith(LAUNCH_RECORD)
+        thread = record[len(LAUNCH_RECORD):] if launched else record
         expired = time.time() - at >= 600
-        if expired or threads.get(key) in active:
-            if expired:
-                log(f"EXPIRED reservation #{key} after ten minutes")
-            reserved.pop(key)
-            threads.pop(key, None)
+        seen = bool(thread) and thread in active
+        finished = False
+        if launched and not (expired or seen):
+            # A launch thread can finish before any pass lists it live.
+            if thread not in known:
+                try:
+                    known[thread] = thread_status(thread)
+                except (RuntimeError, ValueError, TypeError, AttributeError):
+                    known[thread] = None
+            finished = known[thread] in TERMINAL_STATUSES
+        if not (expired or seen or finished):
+            continue
+        if expired:
+            log(f"EXPIRED reservation #{key} after ten minutes")
+        elif finished:
+            log(f"released reservation #{key}: thread {thread} is {known[thread]}")
+        reserved.pop(key)
+        threads.pop(key, None)
     save(queue)
 
 
@@ -253,6 +281,7 @@ def undispatchable_tool(item):
 
 
 def drain():
+    statuses = {}
     while True:
         queue = load()
         dispatchable = []
@@ -282,7 +311,7 @@ def drain():
         except (RuntimeError, ValueError, KeyError, TypeError) as e:
             log(f"{e}, nothing started")
             return
-        reconcile_reservations(queue, active)
+        reconcile_reservations(queue, active, statuses)
         if not ready:
             return
         n = max(n, len(active))
@@ -325,7 +354,7 @@ def drain():
                     result = json.loads(out)
                     thread = result.get("thread", result).get("threadId")
                     if isinstance(thread, str) and thread:
-                        queue["reservedThreads"][key] = thread
+                        queue["reservedThreads"][key] = LAUNCH_RECORD + thread
                 except (ValueError, TypeError, AttributeError):
                     log(f"reservation #{key} retained: launch reply has no thread ID")
             save(queue)
@@ -345,15 +374,9 @@ def drain():
                 thread_id = result.get("thread", result).get("threadId")
                 if not isinstance(thread_id, str) or not thread_id:
                     raise ValueError("successful launch has no threadId")
-                queue["reservedThreads"][reservation] = thread_id
+                queue["reservedThreads"][reservation] = LAUNCH_RECORD + thread_id
             except (ValueError, TypeError, AttributeError) as e:
                 log(f"reservation #{reservation} retained: {e}")
-            else:
-                # The launch is no longer in flight. The thread ID in
-                # reservedThreads is the record of what the slot held, so the
-                # slot is free as soon as the launch call returns.
-                queue["reserved"].pop(reservation, None)
-                log(f"released reservation #{reservation}: {thread_id}")
         if code == 0:
             if request_id and item["tool"] == "t3_thread_launch":
                 receipts_path = path("dispatch-receipts.json")
