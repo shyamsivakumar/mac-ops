@@ -193,6 +193,15 @@ function (`redact`) is the only thing that applies it. Every write in the
 module goes through `write_record` or `append_record`, which call it, so
 no writer has to remember the rule.
 
+The console is a writer too. Launchd writes everything the module prints
+to the job's own log (`~/Library/Logs/coordinator/overnight.log`), and a
+printed line can carry a secret: a gate thread's report, a command's own
+output tail, a pull request title, a receipt body. So every line the
+module prints goes through `emit`, which calls the same `redact`
+function. A writer added later (the inbox of T10, the punch list of an
+older spec revision) uses `write_record`, `append_record` or `emit`, and
+the rule holds for it without the writer knowing the rule.
+
 The patterns, in the order they are applied:
 
 | Pattern | What it matches |
