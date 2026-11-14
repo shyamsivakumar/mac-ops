@@ -17,7 +17,7 @@ Environment knobs, all optional:
   COORD_TICK_LOG              log file (default ~/Library/Logs/coordinator/tick.log)
   COORD_TICK_LOCK             lock file (default ~/.local/state/mac-ops/coord-tick.lock)
   COORD_TICK_TIMEOUT          seconds before a run is killed (default 600)
-  COORD_TICK_MODEL            model id (default openai/gpt-6.1-sol)
+  COORD_TICK_MODEL            model id (default pi-claude-cli/claude-sonnet-5-5)
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ SANDBOX_PROFILE = PI_DIR / "coordinator.sb"
 LOG_PATH = Path(
     os.environ.get("COORD_TICK_LOG", HOME / "Library/Logs/coordinator/tick.log")
 )
-MODEL = os.environ.get("COORD_TICK_MODEL", "openai/gpt-6.1-sol")
+MODEL = os.environ.get("COORD_TICK_MODEL", "pi-claude-cli/claude-sonnet-5-5")
 TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "600"))
 DEFAULT_PROMPT = (
     "Tick (launchd). Run one tick per loop/tick.md. Keep it cheap: filter "
