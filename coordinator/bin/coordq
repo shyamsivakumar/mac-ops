@@ -641,10 +641,10 @@ def gate_for(repo, pr, settings, config, receipts, login, skipped, require_check
         runs = result.get("recentRuns", [])
         models = executed_models(runs[0]) if runs else []
         unknown_model = False
+        reason = None
         if not models:
             thread = result.get("thread", {})
             instance, stored = thread.get("providerInstanceId"), thread.get("model")
-            reason = None
             if not isinstance(stored, str) or not stored or not instance:
                 reason = "stored builder model unavailable"
             elif instance == "router":
@@ -672,7 +672,14 @@ def gate_for(repo, pr, settings, config, receipts, login, skipped, require_check
         if unknown_model:
             if require_check:
                 continue
-            model = OPUS_MODEL
+            # A chain that includes Claude is a Claude build, so it gets
+            # the Sol gate, the same rule the line below applies. A
+            # builder whose model is truly unknown gets the Opus gate.
+            model = (
+                SOL_MODEL
+                if reason == "router chain includes Claude"
+                else OPUS_MODEL
+            )
         else:
             model = SOL_MODEL if any("claude" in m.lower() for m in models) else OPUS_MODEL
         statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
@@ -682,6 +689,13 @@ def gate_for(repo, pr, settings, config, receipts, login, skipped, require_check
             passed = bool(checks) and checks[0]["state"] == "success"
         else:
             passed = f"Builder check: PASS {head}" in body.splitlines()
+        # The check names this head: the line names it, or the repository
+        # publishes its agent check on it. A trailing note after the head
+        # does not change the verdict.
+        named = any(
+            line.strip().startswith(f"Builder check: PASS {head}")
+            for line in body.splitlines()
+        ) or passed
         if not passed and require_check:
             continue
         key = f"gate:{repo}#{number}:{head}"
@@ -701,7 +715,7 @@ Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}`
 {merge}{close} Never call emp. Never print secrets."""
         return key, {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
                      "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
-                     "clientRequestId": key, "message": message}, passed
+                     "clientRequestId": key, "message": message}, passed, named
     return None
 
 

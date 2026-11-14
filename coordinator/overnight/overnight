@@ -99,6 +99,9 @@ TICKET_REF = re.compile(r"\b(refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
 # The reference the coordinator's own queue reads: a "Refs #<n>" line. A
 # pull request that carries one names the ticket its gate reads.
 REFS_ISSUE = re.compile(r"\brefs?\s+#(\d+)", re.I)
+# The check a repository publishes on a head. The builder's own line in the
+# pull request body is the other form of the same check.
+AGENT_CHECK = "srw/agent-check"
 # A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
 # it is a ticket key number, not a GitHub issue number.
 BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
@@ -2341,6 +2344,10 @@ def collect_items(
                             item["actionReason"] = (
                                 "no board ticket names this pull request"
                             )
+                        elif not builder_check_passes(pull, rows, head):
+                            item["actionReason"] = (
+                                "the builder check does not name this head"
+                            )
                         else:
                             item["action"] = "gate"
                             item["actionCommand"] = (
@@ -2448,6 +2455,29 @@ def collect_items(
         "queue": queue_state,
         "live": live,
     }
+
+
+def builder_check_passes(pull: dict, rows: list[dict], head: str) -> bool:
+    """Return True when the builder's check names this head.
+
+    The check is the line the builder wrote in the pull request body,
+    `Builder check: PASS <head>`, or the agent check the repository
+    publishes on the head. A trailing note after the head (the command
+    that produced it) does not change the verdict. A check that does not
+    name the head is no check for that head, so the head is not gated:
+    a gate that cannot read the diff would only report the check."""
+    if not head:
+        return False
+    for line in (pull.get("body") or "").splitlines():
+        if line.strip().startswith(f"Builder check: PASS {head}"):
+            return True
+    for row in rows or []:
+        if str(row.get("name") or "") != AGENT_CHECK:
+            continue
+        state = str(row.get("bucket") or row.get("state") or "").upper()
+        if state in ("PASS", "SUCCESS"):
+            return True
+    return False
 
 
 def refs_issue(body: str) -> int:
