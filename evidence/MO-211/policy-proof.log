@@ -1,0 +1,21 @@
+== a fresh folder, no snapshot: a real cycle refuses ==
+exit=1
+
+== a dry cycle without a snapshot reads the board only ==
+overnight: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json does not exist; a dry run reads the board only
+overnight: 2026-11-13 17:14 PST shift start (dry run, read only)
+Overnight intake - dry run (read only)
+Board: 111 tickets
+
+== the snapshot is written ==
+overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json
+Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+
+== run/STOP stops the next working cycle ==
+overnight: 2026-11-13 17:14 PST run/STOP exists, so the shift stops at this cycle
+exit=0
+
+== the report still runs with STOP in place ==
+overnight: 2026-11-13 17:14 PST morning report
+overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/receipts/morning-2026-11-13.md
+exit=0

@@ -1,0 +1,34 @@
+# Rule check for the attended night (MO-224)
+
+## The commands the overnight module can run
+
+    283:        raw = run([TICKET, "list", "--fresh", "--json"], TICKET_TIMEOUT, deadline)
+    1627:        raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
+    2018:def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
+    2090:    code, out = run_read(
+    2108:    checks_code, checks_out = run_read(
+    2111:    files_code, files_out = run_read(
+
+## Forbidden commands in the overnight module (merge, push, force)
+
+None. The module holds no merge, no push and no force push.
+
+## The slot cap
+
+The policy snapshot reads the queue's own cap file and writes nothing back:
+
+    2013:SLOT_CAP_FILE = Path.home() / "Code" / "coordinator" / "queue" / "config.json"
+    2042:def slot_cap() -> int | None:
+    2048:        with open(SLOT_CAP_FILE) as stream:
+    2220:        "slot_cap": slot_cap(),
+
+cap file: ~/Code/coordinator/queue/config.json -> {"cap":6}
+policy snapshot: 6
+
+## The shell history
+
+A command that an agent runs is not an interactive shell command, so it never reaches
+the shell history. The history therefore cannot prove that no rule was broken, and this
+check does not claim that it does. The proof is the shift log, which lists every
+command the night ran, and the module's command list above, which shows there is no
+merge, no push and no force push anywhere in the overnight module.
