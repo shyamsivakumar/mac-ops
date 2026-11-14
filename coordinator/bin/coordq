@@ -1022,11 +1022,11 @@ def cmd_gatekeep(a):
                         continue
                     # A gate that ran out of quota, or that already moved to
                     # Opus, continues on the next reviewer of the list instead
-                    # of being relaunched on the same account. When the list is
-                    # spent, nothing is queued for the head.
+                    # of being relaunched on the same account. The model the
+                    # dead gate was queued on is the one that is recorded as
+                    # tried. When the list is spent, nothing is queued.
                     if quota_failure(data) or key in queue.get("gateReviewers", {}):
-                        current = {"model": thread.get("model")}
-                        model = fallback_reviewer(queue, key, current)
+                        model = fallback_reviewer(queue, key, args["modelSelection"])
                         if model is None:
                             if not a.dry_run:
                                 save(queue)
