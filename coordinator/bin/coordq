@@ -32,6 +32,21 @@ REFILL_INTERVAL = int(os.environ.get("COORDQ_REFILL_INTERVAL", "300"))
 REFILL_BUDGET = float(os.environ.get("COORDQ_REFILL_BUDGET", "120"))
 REFILL_MAX = int(os.environ.get("COORDQ_REFILL_MAX", "40"))
 REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "200"))
+# The file that holds the refusals of the earlier passes. A candidate whose
+# board state has not changed since its last refusal is skipped, so the scan
+# walks past it and reaches the tickets further down the board.
+REFILL_STATE_FILE = "refill-state.json"
+# A refusal is kept this long. The board state of a ticket can change without
+# the ticket itself changing, for example when a blocker closes, so a refusal
+# is retried when it grows old.
+REFILL_RETRY_AGE = float(os.environ.get("COORDQ_REFILL_RETRY_AGE", "3600"))
+# The ticket CLI exits with this code when it refuses a ticket, and also for
+# a usage error. A refusal says so in its own output, and `is_refusal` reads
+# that answer, because the exit code alone cannot tell the two apart.
+REFUSE_CODE = 2
+# The ticket CLI exits with 1 for a missing or unknown issue and for a
+# failed check. A refusal says so in its own first line.
+REFUSE_PREFIX = "refused:"
 STAGE = "stage:todo"
 # The gate keeps a PR that it cannot gate on a report file, so the coordinator
 # tick can see it. A PR that is skipped on the same head this many times is
@@ -310,7 +325,7 @@ def search_stage_todo(owner):
     run = subprocess.run(["gh", "search", "issues", "--owner", owner, "--state", "open",
                           "--label", STAGE, "--sort", "created", "--order", "asc",
                           "--limit", str(REFILL_LIMIT),
-                          "--json", "repository,number,title,createdAt"],
+                          "--json", "repository,number,title,createdAt,updatedAt,labels"],
                          capture_output=True, text=True, timeout=40)
     if run.returncode:
         raise RuntimeError(f"GitHub search failed for {owner}: {run.stderr.strip()[:200]}")
@@ -335,7 +350,10 @@ def board_candidates():
 
 def ticket_start(repo, number, dry_run):
     """Run the ticket CLI on one ticket. A refused ticket exits non-zero and
-    changes nothing, so a refusal is a skip and not a start."""
+    changes nothing, so a refusal is a skip and not a start. The ticket CLI
+    exits 2 for a refusal and for a usage error, and 1 for a failed check,
+    so the exit code alone does not say which one it was; `is_refusal` reads
+    the answer out of the output."""
     command = [TICKET_BIN, "start", f"{repo}#{number}"]
     if dry_run:
         command.append("--dry-run")
@@ -344,6 +362,67 @@ def ticket_start(repo, number, dry_run):
     except subprocess.TimeoutExpired:
         return 1, "ticket start timed out"
     return run.returncode, ((run.stdout or "") + (run.stderr or "")).strip()
+
+
+def is_refusal(code, out):
+    """True when the ticket CLI refused the ticket. The exit code is not
+    enough: 2 also covers a usage error, and 1 covers a failed check."""
+    if code != REFUSE_CODE:
+        return False
+    return any(line.startswith(REFUSE_PREFIX) for line in out.splitlines())
+
+
+def load_refill_state():
+    """The refusals of the earlier passes and the count of the passes."""
+    try:
+        with open(path(REFILL_STATE_FILE)) as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    if not isinstance(state.get("refusals"), dict):
+        state["refusals"] = {}
+    try:
+        state["passes"] = int(state.get("passes") or 0)
+    except (TypeError, ValueError):
+        state["passes"] = 0
+    return state
+
+
+def save_refill_state(state):
+    tmp = path(REFILL_STATE_FILE + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=1)
+    os.replace(tmp, path(REFILL_STATE_FILE))
+
+
+def candidate_key(candidate):
+    return f"{candidate['repository']['nameWithOwner']}#{candidate['number']}"
+
+
+def candidate_state(candidate):
+    """The state of a candidate as the board shows it: when it last changed,
+    what it is called and which labels it carries. A refusal is worth
+    retrying when this differs from the state the refusal was made on."""
+    labels = sorted(label["name"] if isinstance(label, dict) else str(label)
+                    for label in candidate.get("labels") or [])
+    return json.dumps([candidate.get("updatedAt"), candidate.get("title"), labels])
+
+
+def unchanged_refusal(refusals, key, state, now):
+    """The refusal of an earlier pass for this candidate, when the candidate
+    has not changed since and the refusal is not older than the retry age."""
+    prior = refusals.get(key)
+    if not isinstance(prior, dict) or prior.get("state") != state:
+        return None
+    try:
+        age = now - float(prior.get("at") or 0)
+    except (TypeError, ValueError):
+        return None
+    if age < 0 or age > REFILL_RETRY_AGE:
+        return None
+    return prior
 
 
 def used_slots():
@@ -363,6 +442,11 @@ def refill(a):
     cap, and at most once per REFILL_INTERVAL seconds. Every candidate is a
     ticket the ticket CLI may refuse, and a refusal starts nothing, so the
     scan moves on to the next candidate.
+
+    A refused candidate is recorded with its reason, and the next pass skips
+    it while the board shows the same state. The scan therefore walks past
+    the tickets that cannot start and reaches the tickets further down the
+    board, which the old first-REFILL_MAX window never did.
     """
     with Lock(False, "refill.lock") as lock:
         if lock is None:
@@ -394,13 +478,29 @@ def refill(a):
             log("refill stopped: the board has no open stage:todo ticket")
             return
         deadline = time.time() + REFILL_BUDGET
+        state = load_refill_state()
+        pass_no = state["passes"] + 1
+        refusals = state["refusals"]
         filled = 0
-        scanned = 0
-        for candidate in candidates[:REFILL_MAX]:
-            scanned += 1
+        attempted = 0
+        skipped = 0
+        examined = 0
+        seen = {candidate_key(candidate) for candidate in candidates}
+        pass_refusals = []
+        for candidate in candidates:
+            if attempted >= REFILL_MAX:
+                log(f"refill stopped: the pass attempt budget of {REFILL_MAX} is spent")
+                break
             if time.time() > deadline:
                 log("refill stopped: the refill budget is spent")
                 break
+            key = candidate_key(candidate)
+            board_state = candidate_state(candidate)
+            prior = unchanged_refusal(refusals, key, board_state, time.time())
+            if prior:
+                skipped += 1
+                examined += 1
+                continue
             used = used_slots()
             if used is None:
                 log("refill stopped: cannot read the live thread count")
@@ -415,18 +515,43 @@ def refill(a):
             repo = candidate["repository"]["nameWithOwner"]
             number = candidate["number"]
             code, out = ticket_start(repo, number, a.dry_run)
+            attempted += 1
+            examined += 1
             if code != 0:
-                log(f"refill refused {repo}#{number}: {out[:200]}")
+                if is_refusal(code, out):
+                    refusals[key] = {"state": board_state, "reason": out[:200],
+                                     "at": time.time(), "pass": pass_no}
+                    pass_refusals.append({"key": key, "reason": out[:200]})
+                    log(f"refill refused {key}: {out[:200]}")
+                else:
+                    # A failure of the check is not a refusal of the ticket.
+                    # It is not recorded, so the next pass tries the ticket
+                    # again instead of hiding it for the retry age.
+                    log(f"refill could not check {key}: {out[:200]}")
                 continue
             filled += 1
+            refusals.pop(key, None)
             if a.dry_run:
-                log(f"refill would start {repo}#{number}")
+                log(f"refill would start {key}")
             elif out.startswith("queued"):
-                log(f"refill queued {repo}#{number}: {out[:120]}")
+                log(f"refill queued {key}: {out[:120]}")
             else:
-                log(f"refill started {repo}#{number}")
-        if len(candidates) > scanned:
-            log(f"refill scanned {scanned} candidate(s), {len(candidates) - scanned} left for the next refill")
+                log(f"refill started {key}")
+        # A candidate that left the board keeps no refusal, so the file holds
+        # the state of the board and nothing else.
+        for key in [k for k in refusals if k not in seen]:
+            del refusals[key]
+        # A dry run changes nothing, so it writes no state and counts no
+        # pass. A diagnostic must not hide a ticket from the next real pass.
+        if not a.dry_run:
+            state["passes"] = pass_no
+            state["refusals"] = refusals
+            state["last_pass"] = {"pass": pass_no, "at": time.time(), "examined": examined,
+                                  "skipped": skipped, "attempted": attempted, "started": filled,
+                                  "refusals": pass_refusals}
+            save_refill_state(state)
+        log(f"refill pass {pass_no}: examined {examined} candidate(s) of {len(candidates)}, "
+            f"skipped {skipped} unchanged refusal(s), attempted {attempted}, started {filled}")
 
 
 def cmd_dispatch(a):
