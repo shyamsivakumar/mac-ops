@@ -343,6 +343,12 @@ def drain():
                 queue["reservedThreads"][reservation] = thread_id
             except (ValueError, TypeError, AttributeError) as e:
                 log(f"reservation #{reservation} retained: {e}")
+            else:
+                # The launch is no longer in flight. The thread ID in
+                # reservedThreads is the record of what the slot held, so the
+                # slot is free as soon as the launch call returns.
+                queue["reserved"].pop(reservation, None)
+                log(f"released reservation #{reservation}: {thread_id}")
         if code == 0:
             if request_id and item["tool"] == "t3_thread_launch":
                 receipts_path = path("dispatch-receipts.json")
