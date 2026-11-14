@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The overnight shift (spec parts T12 and T14). One job fires twice a
-     night: at 22:30 it starts the shift, at 06:30 it writes the morning
-     report. The shift runs the unattended night: the whole backlog, no
-     item cap, over the full window (22:30 to 06:00 PT). It reads the
-     board, coordq and T3 and keeps no second queue, and it runs no merge
-     and no push. No RunAtLoad: a night does not start at every boot. -->
+<!-- The overnight shift (spec part T12, revision 3; T14). One job fires
+     the shift on a fixed interval, every day: the shift runs 24x7, so
+     there is no night window, no 22:30 start and no 06:00 deadline, and
+     the shift is never unarmed.
+
+     The job runs real cycles (spec part T14): every cycle reads the whole
+     board, works it with no item cap and writes a receipt for every item
+     whose state changed. The first cycle of the morning writes the day's
+     morning report, so Shyam reads one report in the morning.
+
+     No RunAtLoad: the first cycle lands one interval after the job loads.
+     launchd starts one copy of a job at a time, so two cycles never run
+     at once. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -15,21 +22,8 @@
         <string>@HOME@/.local/bin/overnight</string>
         <string>shift</string>
     </array>
-    <key>StartCalendarInterval</key>
-    <array>
-        <dict>
-            <key>Hour</key>
-            <integer>22</integer>
-            <key>Minute</key>
-            <integer>30</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>6</integer>
-            <key>Minute</key>
-            <integer>30</integer>
-        </dict>
-    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
