@@ -1,0 +1,17 @@
+# Hermetic proof of the coordq board refill follow-ups (MO-229, Refs #208)
+
+The follow-ups of the reviewer round on the refill that PR #221 landed.
+Temp COORDQ_DIR, stub gh, stub t3mcp, stub ticket. The live queue, the
+live board and the live threads are untouched.
+
+proof dir: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo229-followup-j3dif28u
+PASS the refill starts the oldest candidates :: 2026-11-14 02:01:11 refill started shyamsivakumar/mac-ops#11 | 2026-11-14 02:01:11 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 and another line | 2026-11-14 02:01:11 refill started shyamsivakumar/mac-ops#33 | 2026-11-14 02:01:11 refill pass 1: examined 3 candidate(s) of 3, skipped 0 unchanged refusal(s), attempted 3, started 2
+PASS a refused candidate is skipped, not started :: 2026-11-14 02:01:11 refill started shyamsivakumar/mac-ops#11 | 2026-11-14 02:01:11 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 and another line | 2026-11-14 02:01:11 refill started shyamsivakumar/mac-ops#33 | 2026-11-14 02:01:11 refill pass 1: examined 3 candidate(s) of 3, skipped 0 unchanged refusal(s), attempted 3, started 2
+PASS a refusal with a newline in its answer stays one log line :: 2026-11-14 02:01:11 refill refused shyamsivakumar/mac-ops#22: refused: issue is blocked by open owner/repo#7 and another line
+PASS a ticket whose stage label is spelled another way is not examined :: ['shyamsivakumar/mac-ops#11', 'shyamsivakumar/mac-ops#22', 'shyamsivakumar/mac-ops#33']
+PASS the refusal is recorded for the next pass :: ["shyamsivakumar/mac-ops#22"]
+PASS a second run inside five minutes starts nothing :: 2026-11-14 02:01:11 refill started shyamsivakumar/mac-ops#33 | 2026-11-14 02:01:11 refill pass 1: examined 3 candidate(s) of 3, skipped 0 unchanged refusal(s), attempted 3, started 2 | 2026-11-14 02:01:11 refill skipped: throttled, the last refill was 0s ago
+PASS the next pass walks past the recorded refusal :: 2026-11-14 02:01:11 refill started shyamsivakumar/mac-ops#11 | 2026-11-14 02:01:11 refill started shyamsivakumar/mac-ops#33 | 2026-11-14 02:01:11 refill pass 2: examined 3 candidate(s) of 3, skipped 1 unchanged refusal(s), attempted 2, started 2
+PASS at the cap nothing starts :: 2026-11-14 02:01:11 refill started shyamsivakumar/mac-ops#33 | 2026-11-14 02:01:11 refill pass 2: examined 3 candidate(s) of 3, skipped 1 unchanged refusal(s), attempted 2, started 2 | 2026-11-14 02:01:11 refill skipped: at cap 6/6
+PASS the dry run starts nothing and reports what it would start :: calls=['shyamsivakumar/mac-ops#11 --dry-run', 'shyamsivakumar/mac-ops#22 --dry-run', 'shyamsivakumar/mac-ops#33 --dry-run']
+RESULT: PASS
