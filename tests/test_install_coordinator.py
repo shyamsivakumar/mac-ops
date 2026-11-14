@@ -264,7 +264,7 @@ class TestTickJob(unittest.TestCase):
     def test_the_overnight_job_fires_on_a_fixed_interval_every_day(self):
         parsed = plistlib.loads(self.rendered["dev.coordinator.overnight.plist"])
         self.assertEqual(parsed["Label"], "dev.coordinator.overnight")
-        self.assertEqual(parsed["StartInterval"], 1800)
+        self.assertEqual(parsed["StartInterval"], 300)
         self.assertNotIn("StartCalendarInterval", parsed)
         self.assertNotIn("RunAtLoad", parsed)
 
