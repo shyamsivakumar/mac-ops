@@ -770,6 +770,7 @@ def gate_candidates(config):
     login = login_run.stdout.strip()
     receipts = load_receipts()
     skipped = set()
+    noted = set()
     for repo, settings in config["repos"].items():
         for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100"):
             if pr["draft"]:
@@ -803,13 +804,18 @@ def gate_candidates(config):
                     continue
                 thread, runs = read_builder_thread(thread_id)
                 models = builder_models(thread, runs)
-                if not models:
-                    reason = "executed model unavailable"
-                    if (repo, number) not in skipped:
-                        print(f"skip {repo}#{number}: {reason}", file=sys.stderr)
-                        skipped.add((repo, number))
-                        yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head, "reason": reason}
-                    continue
+                if models:
+                    model = reviewer_model(models)
+                else:
+                    # A build whose executed model is not known is still
+                    # gated, on the backstop reviewer: the gate that waits
+                    # for the model to appear never comes. The check below
+                    # still decides whether the pull request is gated.
+                    model = backstop_model(thread, runs)
+                    if (repo, number) not in noted:
+                        print(f"backstop {repo}#{number}: executed model unavailable, reviewer "
+                              f"{model['instanceId']} {model['model']}", file=sys.stderr)
+                        noted.add((repo, number))
                 statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
                 checks = [x for x in statuses if x["context"] == "srw/agent-check"]
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -819,7 +825,6 @@ def gate_candidates(config):
                     passed = f"Builder check: PASS {head}" in body.splitlines()
                 if not passed:
                     continue
-                model = reviewer_model(models)
                 key = f"gate:{repo}#{number}:{head}"
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
                        "args": gate_args(settings, repo, issue, number, head, publisher, model)}
