@@ -89,6 +89,13 @@ goes in and does not come out.
     overnight redact --file fixture.txt
     overnight redact --text 'ghp_...'
 
+The console is a writer as well (spec T7b). Launchd writes everything the
+module prints to the job's own log, and a printed line can carry a secret:
+a gate thread's report, a command's own output tail, a pull request title.
+So every line the module prints goes through the same redaction function
+(`emit`), and the job log holds no more than the records under
+`.overnight/` do.
+
 The clock is the Mac's local clock, the clock launchd fires on. The
 report and the log say Pacific time.
 
@@ -331,6 +338,21 @@ def redact(text: str) -> str:
     return "".join(out)
 
 
+def emit(text: str = "", err: bool = False, end: str = "\n") -> None:
+    """Print the shift's own output with every secret redacted.
+
+    The console is a writer too. Launchd writes everything the module
+    prints to the job's own log, and a printed line can carry a secret:
+    a gate thread's report, a command's own output tail, a pull request
+    title, a receipt body. So the console goes through the same redaction
+    function as the records under `.overnight/`, and the job log holds no
+    more than the records do.
+
+    The whole text is redacted at once, not line by line, so a secret
+    that spans lines (a private key block) is redacted as one thing."""
+    print(redact(text), file=sys.stderr if err else sys.stdout, end=end)
+
+
 def write_record(path: Path, text: str) -> Path:
     """Write a record under the overnight root and return the path.
 
@@ -508,7 +530,7 @@ class RepoError(Exception):
 
 
 def die(message: str, code: int = 1) -> NoReturn:
-    print(f"overnight: {message}", file=sys.stderr)
+    emit(f"overnight: {message}", err=True)
     raise SystemExit(code)
 
 
@@ -590,11 +612,11 @@ def read_board(deadline: float) -> tuple[list[dict], bool]:
         die(f"the ticket CLI did not return JSON: {exc}")
     issues = data.get("issues") or []
     if data.get("stale"):
-        print(
+        emit(
             "overnight: the board list is stale ("
             + str((data.get("error") or {}).get("message", "unknown error"))
             + ")",
-            file=sys.stderr,
+            err=True,
         )
     return issues, bool(data.get("stale"))
 
@@ -734,10 +756,10 @@ def build_records(
 
 def cmd_intake(args: argparse.Namespace) -> int:
     if not args.dry_run:
-        print(
+        emit(
             "overnight: intake in this part reads only. Run "
             "`overnight intake --dry-run`.",
-            file=sys.stderr,
+            err=True,
         )
         return 2
     deadline = time.monotonic() + args.deadline
@@ -760,23 +782,23 @@ def cmd_intake(args: argparse.Namespace) -> int:
             rows, cut = read_pull_requests(repo, deadline)
         except RepoError as exc:
             unread[repo] = str(exc)
-            print(f"overnight: {repo}: {exc}", file=sys.stderr)
+            emit(f"overnight: {repo}: {exc}", err=True)
             continue
         pull_requests[repo] = rows
         if cut:
             unread[repo] = f"more than {PR_LIMIT} open pull requests"
-            print(
+            emit(
                 f"overnight: {repo}: the pull request list was cut off at "
                 f"{PR_LIMIT}, so the counts are not known",
-                file=sys.stderr,
+                err=True,
             )
     records = build_records(issues, pull_requests)
     outside = sorted(set(records) - {repo for repo, _ in repos})
-    print("Overnight intake - dry run (read only)")
-    print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
-    print(f"Allowed repositories: {len(repos)}")
-    print()
-    print(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
+    emit("Overnight intake - dry run (read only)")
+    emit(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit()
+    emit(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
     total = 0
     clean = 0
     outside_total = 0
@@ -786,11 +808,11 @@ def cmd_intake(args: argparse.Namespace) -> int:
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
         linked = sum(len(r["prs"]) for r in bucket if r["kind"] == "ticket")
         if repo in unread:
-            print(f"{repo:<45}{tickets:>9}{'ERR':>6}{'ERR':>8}{'ERR':>9}")
+            emit(f"{repo:<45}{tickets:>9}{'ERR':>6}{'ERR':>8}{'ERR':>9}")
             continue
         clean += 1
         total += len(bucket)
-        print(
+        emit(
             f"{repo:<45}{tickets:>9}{len(pull_requests.get(repo, [])):>6}"
             f"{linked:>8}{len(bucket):>9}"
         )
@@ -799,23 +821,23 @@ def cmd_intake(args: argparse.Namespace) -> int:
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
         outside_total += len(bucket)
         outside_repos += 1
-        print(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
-    print()
+        emit(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
+    emit()
     if unread:
-        print(
+        emit(
             f"Total: UNVERIFIED. {total} records from the {clean} repositories "
             f"that read cleanly; {len(unread)} repositories could not be read "
             f"fully: " + ", ".join(sorted(unread))
         )
     else:
-        print(f"Total: {total} records across {clean} repositories")
+        emit(f"Total: {total} records across {clean} repositories")
     if outside_repos:
-        print(
+        emit(
             f"{outside_total} more records in {outside_repos} "
             f"{plural(outside_repos, 'repository', 'repositories')} outside the "
             f"allow list, counted above and marked 'not allowed'."
         )
-    print(
+    emit(
         "A pull request that a board ticket names is part of that ticket's "
         "record, so it adds no record of its own. A pull request that names "
         "no ticket the board shows stays a record of its own."
@@ -927,16 +949,16 @@ def cmd_policy(args: argparse.Namespace) -> int:
     root = report_root(args.root)
     policy = build_policy()
     if args.dry_run:
-        print("Overnight policy - dry run (nothing written)")
+        emit("Overnight policy - dry run (nothing written)")
         for line in policy_lines(policy):
-            print(line)
-        print(f"The snapshot would be written to {policy_path(root)}")
+            emit(line)
+        emit(f"The snapshot would be written to {policy_path(root)}")
         return 0
     path = write_policy(root, policy)
-    print(f"overnight: wrote {path}")
+    emit(f"overnight: wrote {path}")
     for line in policy_lines(policy):
-        print(line)
-    print(
+        emit(line)
+    emit(
         "The shift reads this snapshot on every cycle. It is never unarmed, it "
         "has no deadline, and run/STOP still stops it at the next cycle."
     )
@@ -964,7 +986,7 @@ def cmd_redact(args: argparse.Namespace) -> int:
     redacted = redact(text)
     if redacted and not redacted.endswith("\n"):
         redacted += "\n"
-    print(redacted, end="")
+    emit(redacted, end="")
     return 0
 
 
@@ -991,7 +1013,7 @@ def write_morning_report(root: Path) -> int:
     day = datetime.now(PT).strftime("%Y-%m-%d")
     out = root / "receipts" / f"morning-{day}.md"
     if out.exists():
-        print(f"overnight: today's morning report {out} is already written")
+        emit(f"overnight: today's morning report {out} is already written")
         return 0
     return cmd_report(
         argparse.Namespace(root=str(root), date=day, dry_run=False)
@@ -1024,17 +1046,17 @@ def cmd_shift(args: argparse.Namespace) -> int:
     stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
     root = report_root(args.root)
     if now_local.utcoffset() != now_pt.utcoffset():
-        print(
+        emit(
             "overnight: the Mac's clock is not on Pacific time, so the job "
             "fires on the Mac's local clock, not Pacific time",
-            file=sys.stderr,
+            err=True,
         )
     # The report cycle: the one cycle of the day that also leaves the
     # morning report. The shift has no window; the report has a time.
     report_cycle = report_window(now_local) or bool(getattr(args, "report", False))
     # STOP wins over every other rule: the shift ends at the next cycle.
     if (root / "run" / "STOP").exists():
-        print(
+        emit(
             f"overnight: {stamp} run/STOP exists, so the shift stops at "
             "this cycle"
         )
@@ -1052,9 +1074,9 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 f"the shift has no policy snapshot: {policy_error}. Run "
                 "`overnight policy` to write it."
             )
-        print(
+        emit(
             f"overnight: {policy_error}; a dry run reads the board only",
-            file=sys.stderr,
+            err=True,
         )
     else:
         allowed = policy_allow(policy)
@@ -1063,16 +1085,16 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 f"the policy snapshot {policy_path(root)} names no "
                 "repositories, so the shift has nothing it may work"
             )
-        print(f"overnight: {stamp} shift cycle under {policy_path(root)}")
+        emit(f"overnight: {stamp} shift cycle under {policy_path(root)}")
         for line in policy_lines(policy):
-            print(line)
+            emit(line)
     if not args.dry_run:
         # A real cycle writes the receipts of the items it sees: the
         # receipt is the cycle's record, and it is written on every state
         # change. The cycle still starts no builder and works no board
         # item: that part of the spec (T5) is not built, and the cycle
         # says so instead of pretending it works.
-        print(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
+        emit(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
         code = cmd_order(
             argparse.Namespace(
                 dry_run=True,
@@ -1087,13 +1109,13 @@ def cmd_shift(args: argparse.Namespace) -> int:
             time.monotonic() + args.deadline, allowed
         )
         if error:
-            print(
+            emit(
                 f"overnight: REFUSED: {error}; the cycle wrote no receipt",
-                file=sys.stderr,
+                err=True,
             )
             return 1
         written = write_receipts(root, items, receipts, time.monotonic() + args.deadline)
-        print(
+        emit(
             f"overnight: {stamp} shift cycle wrote {written} receipts of "
             f"{len(items)} items"
         )
@@ -1106,14 +1128,14 @@ def cmd_shift(args: argparse.Namespace) -> int:
             root,
             f"planned {len(items)} items | the cycle worked {len(items)} items",
         )
-        print(
+        emit(
             "overnight: the shift starts no builder and works no board item "
             "yet (spec part T5); it writes the receipts of what it saw"
         )
         if report_cycle:
             return write_morning_report(root)
         return 0
-    print(f"overnight: {stamp} shift cycle (dry run, read only)")
+    emit(f"overnight: {stamp} shift cycle (dry run, read only)")
     return cmd_order(
         argparse.Namespace(
             dry_run=True,
@@ -1670,12 +1692,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     }
     report = render_report(snapshot)
     if args.dry_run:
-        print(report)
+        emit(report)
         return 0
     out = receipts_dir / f"morning-{day.strftime('%Y-%m-%d')}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     write_record(out, report)
-    print(f"overnight: wrote {out}")
+    emit(f"overnight: wrote {out}")
     return 0
 
 
@@ -1778,15 +1800,15 @@ def read_bodies(
             rows = json.loads(raw)
         except (RepoError, ValueError) as exc:
             unread.append(repo)
-            print(f"overnight: {repo}: {exc}", file=sys.stderr)
+            emit(f"overnight: {repo}: {exc}", err=True)
             continue
         rows = rows if isinstance(rows, list) else []
         if len(rows) >= ISSUE_LIMIT:
             unread.append(repo)
-            print(
+            emit(
                 f"overnight: {repo}: the open issue list was cut off at "
                 f"{ISSUE_LIMIT}, so the ticket text is not known",
-                file=sys.stderr,
+                err=True,
             )
             continue
         numbers = open_numbers.setdefault(repo, set())
@@ -1956,9 +1978,9 @@ def cmd_filter(args: argparse.Namespace) -> int:
         die("the board config names no repositories")
     issues, stale = read_board(deadline)
     if stale:
-        print("Overnight filter - dry run (read only)")
-        print("REFUSED: the board list is stale, so the filter cannot be trusted.")
-        print("The ticket CLI could not reach GitHub and fell back to its cache.")
+        emit("Overnight filter - dry run (read only)")
+        emit("REFUSED: the board list is stale, so the filter cannot be trusted.")
+        emit("The ticket CLI could not reach GitHub and fell back to its cache.")
         return 1
     bodies, unread, _open = read_bodies(issues, deadline)
     path, lines = read_decisions()
@@ -1971,26 +1993,26 @@ def cmd_filter(args: argparse.Namespace) -> int:
     if not lines:
         problems.append(f"the decisions log {path} could not be read")
     kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
-    print("Overnight filter - dry run (read only)")
-    print(f"Board: {len(issues)} tickets")
-    print(f"Allowed repositories: {len(repos)}")
-    print(f"Decisions log: {path}" + ("" if lines else " (not found)"))
+    emit("Overnight filter - dry run (read only)")
+    emit(f"Board: {len(issues)} tickets")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit(f"Decisions log: {path}" + ("" if lines else " (not found)"))
     for problem in problems:
-        print(f"REFUSED: {problem}")
-    print()
-    print(f"Kept: {len(kept)}")
-    print(f"Dropped: {len(drops)}")
+        emit(f"REFUSED: {problem}")
+    emit()
+    emit(f"Kept: {len(kept)}")
+    emit(f"Dropped: {len(drops)}")
     outside = sorted({issue.get("repo") or "" for issue in issues} - allowed)
-    print(f"Board repositories outside the allow list: {len(outside)}")
+    emit(f"Board repositories outside the allow list: {len(outside)}")
     if drops:
-        print()
-        print("Drops (each with its reason)")
+        emit()
+        emit("Drops (each with its reason)")
         for issue, reason in drops:
             key = issue.get("key") or "-"
-            print(
+            emit(
                 f"  DROP {issue.get('repo')}#{issue.get('number')} {key} - {reason}"
             )
-    print()
+    emit()
     survived = [
         issue
         for issue in kept
@@ -2000,14 +2022,14 @@ def cmd_filter(args: argparse.Namespace) -> int:
             (issue.get("repo") or "") in flagged,
         )
     ]
-    print(f"Ascend items kept: {len(survived)}")
+    emit(f"Ascend items kept: {len(survived)}")
     if survived:
         for issue in survived:
-            print(f"  FAIL {issue.get('repo')}#{issue.get('number')}")
-        print("FAIL: an Ascend item survived the filter.")
+            emit(f"  FAIL {issue.get('repo')}#{issue.get('number')}")
+        emit("FAIL: an Ascend item survived the filter.")
         return 1
     if problems:
-        print("REFUSED: the filter cannot return a list it could not fully check.")
+        emit("REFUSED: the filter cannot return a list it could not fully check.")
         return 1
     return 0
 
@@ -2025,7 +2047,7 @@ def cmd_check_pr(args: argparse.Namespace) -> int:
     cfg = load_config()
     reason = ascend_reason(repo, None, repo in ascend_flags(cfg))
     if reason:
-        print(f"REFUSED: {repo}#{number}: {reason}")
+        emit(f"REFUSED: {repo}#{number}: {reason}")
         return 1
     try:
         raw = run(
@@ -2044,8 +2066,8 @@ def cmd_check_pr(args: argparse.Namespace) -> int:
         )
         pull = json.loads(raw) or {}
     except (RepoError, ValueError) as exc:
-        print(f"overnight: {repo}#{number}: {exc}", file=sys.stderr)
-        print(
+        emit(f"overnight: {repo}#{number}: {exc}", err=True)
+        emit(
             f"REFUSED: {repo}#{number}: the pull request could not be read, "
             "so the check cannot be trusted."
         )
@@ -2057,11 +2079,11 @@ def cmd_check_pr(args: argparse.Namespace) -> int:
         if key not in keys:
             keys.append(key)
     if keys:
-        print(f"REFUSED: {repo}#{number}: Ascend key {keys[0]}")
+        emit(f"REFUSED: {repo}#{number}: Ascend key {keys[0]}")
         if branch:
-            print(f"  branch {branch}")
+            emit(f"  branch {branch}")
         return 1
-    print(f"OK: {repo}#{number} is not an Ascend pull request")
+    emit(f"OK: {repo}#{number} is not an Ascend pull request")
     return 0
 
 # --- Part T3c: the order --------------------------------------------------
@@ -2885,10 +2907,10 @@ def cmd_order(args: argparse.Namespace) -> int:
     if not repos:
         die("the board config names no repositories")
     issues, stale = read_board(deadline)
-    print("Overnight order - dry run (read only)")
+    emit("Overnight order - dry run (read only)")
     if stale:
-        print("REFUSED: the board list is stale, so the order cannot be trusted.")
-        print("The ticket CLI could not reach GitHub and fell back to its cache.")
+        emit("REFUSED: the board list is stale, so the order cannot be trusted.")
+        emit("The ticket CLI could not reach GitHub and fell back to its cache.")
         return 1
     bodies, unread, open_numbers = read_bodies(issues, deadline)
     path, lines = read_decisions()
@@ -2903,8 +2925,8 @@ def cmd_order(args: argparse.Namespace) -> int:
     kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
     if problems:
         for problem in problems:
-            print(f"REFUSED: {problem}")
-        print("REFUSED: the order cannot return a list it could not fully check.")
+            emit(f"REFUSED: {problem}")
+        emit("REFUSED: the order cannot return a list it could not fully check.")
         return 1
 
     receipts, receipt_error = read_receipts()
@@ -2912,8 +2934,8 @@ def cmd_order(args: argparse.Namespace) -> int:
         deadline, repos, issues, bodies, open_numbers, drops, receipts
     )
     if result.get("pr_error"):
-        print(f"REFUSED: {result['pr_error']}")
-        print("REFUSED: the order cannot return a list it could not fully check.")
+        emit(f"REFUSED: {result['pr_error']}")
+        emit("REFUSED: the order cannot return a list it could not fully check.")
         return 1
     failing = result["failing"]
     gate_pass = result["gate_pass"]
@@ -2926,13 +2948,13 @@ def cmd_order(args: argparse.Namespace) -> int:
     gate_error = receipt_error
 
     def show(title: str, items: list[dict], start: int) -> int:
-        print()
-        print(f"{title} ({len(items)})")
+        emit()
+        emit(f"{title} ({len(items)})")
         for offset, item in enumerate(items):
             blockers = ""
             if item.get("blockers"):
                 blockers = " [blocked: " + "; ".join(item["blockers"]) + "]"
-            print(
+            emit(
                 f"  {start + offset}. {item['repo']}#{item['number']} "
                 f"{item.get('key') or '-'} {item['title']} - {item.get('reason', '')}"
                 f"{blockers}"
@@ -2940,19 +2962,19 @@ def cmd_order(args: argparse.Namespace) -> int:
         return start + len(items)
 
     planned = len(failing) + len(gate_pass) + len(split_items) + len(unsplit_items)
-    print(f"Board: {len(issues)} tickets")
-    print(f"Allowed repositories: {len(repos)}")
-    print(f"Decisions log: {path}")
-    print(f"Dropped by the filter: {len(drops)}")
-    print(f"Planned items: {planned}")
+    emit(f"Board: {len(issues)} tickets")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit(f"Decisions log: {path}")
+    emit(f"Dropped by the filter: {len(drops)}")
+    emit(f"Planned items: {planned}")
     if gate_error:
-        print(
+        emit(
             "The gate dispatches could not be read, so no pull request is "
             f"called gate PASS: {gate_error}"
         )
     if unverified_prs:
         for note in unverified_prs:
-            print(f"UNVERIFIED: {note}")
+            emit(f"UNVERIFIED: {note}")
     index = 1
     index = show("Failing pull requests", failing, index)
     index = show("Pull requests with a gate PASS", gate_pass, index)
@@ -2962,10 +2984,10 @@ def cmd_order(args: argparse.Namespace) -> int:
     show("Not ready: the board stage is not todo", backlog, index)
     line = f"planned {planned} items | {summarize(counts)}"
     log = write_shift_line(report_root(args.root), line)
-    print()
-    print(f"Summary line written to {log}")
-    print(f"  {line}")
-    print(
+    emit()
+    emit(f"Summary line written to {log}")
+    emit(f"  {line}")
+    emit(
         "No list file is written: the board is the list, and this run wrote "
         "one line of the shift log and nothing else."
     )
@@ -3165,16 +3187,16 @@ def cmd_attend(args: argparse.Namespace) -> int:
         f"attended-{args.date or datetime.now(PT).strftime('%Y-%m-%d')}"
     )
     if args.dry_run:
-        print("Overnight attended night - dry run (read only)")
-        print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
-        print(f"Run by: {args.run_by}")
-        print(f"Planned items: {len(items)}")
+        emit("Overnight attended night - dry run (read only)")
+        emit(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+        emit(f"Run by: {args.run_by}")
+        emit(f"Planned items: {len(items)}")
         for issue in items:
-            print(
+            emit(
                 f"- {issue.get('key')} (#{issue.get('number')}) "
                 f"{issue.get('title', '')} [{issue.get('type')}] {issue.get('repo')}"
             )
-        print("A dry run writes no record and starts no work.")
+        emit("A dry run writes no record and starts no work.")
         return 0
     for name in ATTEND_DIRS:
         (root / name).mkdir(parents=True, exist_ok=True)
@@ -3229,7 +3251,7 @@ def cmd_attend(args: argparse.Namespace) -> int:
                 rows, _cut = read_pull_requests(repo, deadline)
             except RepoError as exc:
                 rows = []
-                print(f"overnight: {repo}: {exc}", file=sys.stderr)
+                emit(f"overnight: {repo}: {exc}", err=True)
             pr_cache[repo] = rows
         linked = []
         for row in pr_cache[repo]:
@@ -3308,9 +3330,9 @@ def cmd_attend(args: argparse.Namespace) -> int:
         f"{end}"
     )
     write_record(log_path, "\n".join(log_lines) + "\n")
-    print(f"overnight: attended night {shift_id} wrote {len(items)} receipts")
+    emit(f"overnight: attended night {shift_id} wrote {len(items)} receipts")
     for issue in items:
-        print(f"  - {issue.get('key')} (#{issue.get('number')})")
+        emit(f"  - {issue.get('key')} (#{issue.get('number')})")
     return cmd_report(
         argparse.Namespace(root=str(root), date=args.date, dry_run=False)
     )
@@ -3689,10 +3711,10 @@ def cmd_close(args: argparse.Namespace) -> int:
         found = find_receipt(root, args.repo, args.number)
         path = found if found else Path("")
     if not path.name:
-        print(
+        emit(
             f"overnight: REFUSED: no receipt for {args.repo}#{args.number}, "
             "so there is no evidence to close on",
-            file=sys.stderr,
+            err=True,
         )
         return 1
     receipt = parse_receipt(path)
@@ -3703,11 +3725,11 @@ def cmd_close(args: argparse.Namespace) -> int:
         holds = False
         reason = f"the receipt says {state or 'no state'}, not done"
     if not holds:
-        print(
+        emit(
             f"overnight: REFUSED: {path.name} does not hold the evidence: {reason}",
-            file=sys.stderr,
+            err=True,
         )
-        print("overnight: the issue stays open.", file=sys.stderr)
+        emit("overnight: the issue stays open.", err=True)
         return 1
     pull = (fields.get("pr") or "").strip()
     comment = (
@@ -3728,22 +3750,22 @@ def cmd_close(args: argparse.Namespace) -> int:
         comment,
     ]
     if args.dry_run:
-        print(f"overnight: {path.name} holds the evidence:")
-        print(f"  state: {state}")
+        emit(f"overnight: {path.name} holds the evidence:")
+        emit(f"  state: {state}")
         for check in receipt["checks"]:
-            print(f"  check: {check['raw']}")
-        print(f"  gate: {fields.get('gate')}")
-        print("overnight: the close would run:")
-        print("  " + " ".join(argv))
+            emit(f"  check: {check['raw']}")
+        emit(f"  gate: {fields.get('gate')}")
+        emit("overnight: the close would run:")
+        emit("  " + " ".join(argv))
         return 0
     code, out = run_write(argv, GH_TIMEOUT, deadline)
     if code != 0:
-        print(
+        emit(
             f"overnight: the close failed ({code}): {out.strip()}",
-            file=sys.stderr,
+            err=True,
         )
         return 1
-    print(
+    emit(
         f"overnight: closed {args.repo}#{args.number}; the receipt holds the "
         "evidence."
     )
@@ -3768,7 +3790,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         deadline, getattr(args, "allowed", None)
     )
     if error:
-        print(f"overnight: REFUSED: {error}", file=sys.stderr)
+        emit(f"overnight: REFUSED: {error}", err=True)
         return 1
     if bool(args.repo) != bool(args.number):
         die(
@@ -3783,24 +3805,24 @@ def cmd_receipt(args: argparse.Namespace) -> int:
             and int(item.get("number") or 0) == args.number
         ]
         if not picked:
-            print(
+            emit(
                 f"overnight: {args.repo}#{args.number} is not an item the shift "
                 "works, so it has no receipt",
-                file=sys.stderr,
+                err=True,
             )
             return 1
         items = picked
     elif args.items > 0:
         items = items[: args.items]
     if not items:
-        print("overnight: the board shows no item to write a receipt for")
+        emit("overnight: the board shows no item to write a receipt for")
         return 0
     root = report_root(args.root)
-    print(f"Overnight receipts - {len(items)} item(s)")
+    emit(f"Overnight receipts - {len(items)} item(s)")
     write_receipts(root, items, receipts, deadline, dry_run=args.dry_run)
     if args.dry_run:
-        print()
-        print("A dry run writes no receipt.")
+        emit()
+        emit("A dry run writes no receipt.")
     return 0
 
 
@@ -3867,9 +3889,9 @@ def write_receipts(
         path = receipt_path(root, item)
         label = item.get("key") or f"{item.get('repo')}#{item.get('number')}"
         if dry_run:
-            print()
-            print(f"--- {label} (dry run, nothing written) ---")
-            print(body, end="")
+            emit()
+            emit(f"--- {label} (dry run, nothing written) ---")
+            emit(body, end="")
             continue
         # The state the receipt held before this run, read before the file
         # is written: a receipt read after the write holds the new state
@@ -3879,13 +3901,13 @@ def write_receipts(
             previous = (parse_receipt(path)["fields"].get("state") or "").strip()
         outcome = write_receipt(root, item, body)
         change = bool(previous) and previous != facts["state"]
-        print(
+        emit(
             f"  {label} | {facts['state']} | gate {facts['gate']} | "
             f"{outcome}"
             + (f" | state {previous} -> {facts['state']}" if change else "")
         )
         if outcome.startswith("failed"):
-            print(f"overnight: {outcome}", file=sys.stderr)
+            emit(f"overnight: {outcome}", err=True)
             continue
         written += 1
         write_shift_line(
@@ -3972,10 +3994,10 @@ def cmd_board(args: argparse.Namespace) -> int:
         die("the board config names no repositories")
     issues, stale = read_board(deadline)
     if stale:
-        print(
+        emit(
             "overnight: REFUSED: the board list is stale, so the board "
             "cannot be trusted.",
-            file=sys.stderr,
+            err=True,
         )
         return 1
     bodies, unread, open_numbers = read_bodies(issues, deadline)
@@ -3991,14 +4013,14 @@ def cmd_board(args: argparse.Namespace) -> int:
     kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
     if problems:
         for problem in problems:
-            print(f"overnight: REFUSED: {problem}", file=sys.stderr)
+            emit(f"overnight: REFUSED: {problem}", err=True)
         return 1
     receipts, receipt_error = read_receipts()
     result = collect_items(
         deadline, repos, issues, bodies, open_numbers, drops, receipts
     )
     if result.get("pr_error"):
-        print(f"overnight: REFUSED: {result['pr_error']}", file=sys.stderr)
+        emit(f"overnight: REFUSED: {result['pr_error']}", err=True)
         return 1
     groups = (
         ("failing", result["failing"]),
@@ -4054,7 +4076,7 @@ def cmd_board(args: argparse.Namespace) -> int:
         },
         "items": items,
     }
-    print(json.dumps(payload, separators=(",", ":")))
+    emit(json.dumps(payload, separators=(",", ":")))
     return 0
 
 
