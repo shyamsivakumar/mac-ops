@@ -4,15 +4,42 @@
   "defaultThinkingLevel": "medium",
   "enabledModels": [
     "pi-claude-cli/claude-opus-5-5",
-    "pi-claude-cli/claude-sonnet-5-5"
+    "openai/gpt-6.1-sol",
+    "openai/gpt-6-astra"
   ],
   "skills": [],
   "quietStartup": true,
   "theme": "dark",
   "compaction": {
     "enabled": true,
-    "reserveTokens": 800000,
-    "keepRecentTokens": 20000
+    "reserveTokens": 64000,
+    "keepRecentTokens": 20000,
+    "modelOverrides": {
+      "openai/gpt-6.1-sol": {
+        "reserveTokens": 32000
+      },
+      "openai/gpt-6-astra": {
+        "reserveTokens": 32000
+      },
+      "minimax/MiniMax-M3.1-Flash": {
+        "reserveTokens": 32000
+      },
+      "minimax/MiniMax-M3": {
+        "reserveTokens": 32000
+      },
+      "minimax/MiniMax-M2.7": {
+        "reserveTokens": 32000
+      },
+      "deepseek/deepseek-flash": {
+        "reserveTokens": 32000
+      },
+      "deepseek/deepseek-v4-pro": {
+        "reserveTokens": 32000
+      },
+      "zai/glm-5.3": {
+        "reserveTokens": 32000
+      }
+    }
   },
   "packages": [
     "git:github.com/dmmulroy/pi-claude-cli"

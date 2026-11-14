@@ -217,7 +217,7 @@ export default class Coordinator extends View {
       }
       this.refreshing = false;
       const v = this.view;
-      const stamp = JSON.stringify([v?.rev, v?.activity, v?.activityAt, v?.tokens, this.error, this.decisionsStat, this.info()?.status === "working" && v?.activity ? Math.floor(Date.now() / ELAPSED_EVERY) : 0]);
+      const stamp = JSON.stringify([v?.rev, v?.activity, v?.activityAt, v?.tokens, v?.model, v?.errored, this.error, this.decisionsStat, this.info()?.status === "working" && v?.activity ? Math.floor(Date.now() / ELAPSED_EVERY) : 0]);
       if (stamp === this.stamp) return;
       this.stamp = stamp;
       const published = JSON.stringify(this.decisions);
@@ -656,7 +656,7 @@ export default class Coordinator extends View {
       togglePreview: (cx) => this.togglePreview(cx),
       attachments: (text) => pathImages(text).images,
       openImage: (path) => exec("open", [path]),
-      working: info?.status === "working",
+      working: info?.status === "working" && !this.view?.errored,
       turnSize: (key, height, cx, above) => {
         const known = this.heights.get(key);
         if (known !== undefined && Math.abs(known - height) < 1) return;

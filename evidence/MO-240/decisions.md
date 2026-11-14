@@ -38,24 +38,29 @@ The morning report is on demand now (`overnight report`), which is spec
 revision 3, point 4, so the job no longer writes it and no calendar entry
 remains for it.
 
-### 3. A cycle is the board read plus the cycle's record
+### 3. A cycle is the policy, the board read and the cycle's record
 
-A cycle reads the board, orders it and writes the cycle's line to
-`run/shift-log.md`. It writes no list file: the board is the list, and the
-board's items stay in intake order because the shift never writes to the
-board.
+A cycle reads the policy snapshot (`run/policy.json`, the T4 contract that
+landed on main in MO-211), reads the board, orders it and writes the
+cycle's line to `run/shift-log.md`. It writes no list file: the board is
+the list, and the board's items stay in intake order because the shift
+never writes to the board.
+
+`run/STOP` still stops the shift at the next cycle, and it wins over
+every other rule. A cycle that finds no policy snapshot refuses to work
+(a dry run reads the board only and says so).
 
 The shift is never armed: `run/armed` does not gate it, and there is no
-night deadline. `run/STOP` still stops it, at the next cycle.
+night deadline.
 
 ### 4. The shift still does no work in this part
 
 The plist runs `overnight shift --dry-run`, and a shift without
-`--dry-run` still refuses with "the shift's work parts are not built yet
-(spec parts T4 and T5)". The arm and work parts (T4, T5) are their own
-tickets, and this ticket changes only the schedule and the retirement of
-the tick. Nothing here starts a ticket, so nothing here can start a ticket
-the ticket CLI would refuse.
+`--dry-run` still refuses with "the shift's board work is not built yet
+(spec part T5)". The work part (T5) is its own ticket, and this ticket
+changes only the schedule and the retirement of the tick. Nothing here
+starts a ticket, so nothing here can start a ticket the ticket CLI would
+refuse.
 
 ### 5. The tick job is retired in the repository and in the installer
 
@@ -89,6 +94,33 @@ The launcher `coordinator/pi/bin/coord-tick` and the guard extension's
 wake prompt were left alone: the coordinator scoped this change to the
 launchd folder, the installer and the overnight module. Nothing runs the
 launcher any more, because no job points at it.
+
+### 7. The rebase onto origin/main
+
+The first head could not be merged: `main` had moved on (MO-211, the T4
+policy snapshot, and the attended first night). The branch is rebased
+onto `origin/main` and the conflicts are resolved by keeping both sides of
+the contract:
+
+- The T4 policy work stays: the cycle reads `run/policy.json`, prints the
+  policy's lines, refuses to work when the snapshot names no repository,
+  and `run/STOP` still stops the shift at the next cycle.
+- The night phases go: `START_WINDOW`, `REPORT_WINDOW`, `shift_phase()`,
+  the `--at start` / `--at report` options and the "outside the window"
+  branch are gone, because the shift runs 24x7 and has no part of the
+  night.
+- The cycle keeps the board order: it reads the board, orders it and
+  writes the cycle's line in the shift log. The morning report stays an
+  on-demand command (`overnight report`), which the job does not run.
+
+### 8. The retired-plist path list is built once
+
+The gate's second finding: the path of a retired job's plist was built in
+two places, in the same way, for the dry run and for the status. One
+helper now builds it: `retired_plist(label, home)` returns the path, and
+`retired_plists(home)` returns the paths that are still there. The dry
+run's `would_retire` and the status's `retired_leftovers` both come from
+that one list, and `retire_jobs()` takes its path from the same helper.
 
 ## The proof
 
@@ -163,14 +195,15 @@ the next install will clear:
 ### The shift command by hand
 
 ```
-$ python3 coordinator/overnight/overnight shift --dry-run --root <scratch> --deadline 420
-overnight: 2026-11-13 17:01 PST shift cycle (dry run, read only)
+$ python3 coordinator/overnight/overnight shift --dry-run --root <scratch> --deadline 300
+overnight: <scratch>/run/policy.json does not exist; a dry run reads the board only
+overnight: 2026-11-13 17:36 PST shift cycle (dry run, read only)
 Overnight order - dry run (read only)
-Board: 113 tickets
+Board: 94 tickets
 Allowed repositories: 15
 Decisions log: /Users/shyamsivakumar/Code/coordinator/loop/decisions.md
-Dropped by the filter: 8
-Planned items: 100
+Dropped by the filter: 5
+Planned items: 86
 
 Failing pull requests (5)
   1. shyamsivakumar/fantasy-football-toolkit#412 FFBT-9 ... - failing check: Vercel (FAILURE)
@@ -182,9 +215,13 @@ Ready tickets already split into 5-minute parts (17)
 Not ready: the board stage is not todo (1)
 
 Summary line written to <scratch>/run/shift-log.md
-  planned 100 items | ...
+  planned 86 items | ...
 No list file is written: the board is the list, and this run wrote one line of the shift log and nothing else.
 ```
+
+The first line is the T4 contract: the scratch folder holds no policy
+snapshot, so a dry run reads the board only and says so. A cycle with a
+snapshot prints the snapshot's lines instead.
 
 The cycle wrote one line to the shift log and nothing else, and the board's
 items are in intake order: the shift wrote no list and changed nothing on
