@@ -902,6 +902,19 @@ def write_counts(counts, seen, stuck, dry_run):
     os.replace(tmp, path(STUCK_FILE))
 
 
+def fix_key(repo, number, head):
+    """The key of a fix send. It names the head, so a new head is a new fix."""
+    return f"fix:{repo}#{number}:{head}"
+
+
+def prior_fix(queue, key):
+    """The queue item of an earlier fix send for this key, or None."""
+    heads = queue.get("fixedHeads")
+    if not isinstance(heads, dict):
+        return None
+    return heads.get(key)
+
+
 def cmd_fix(a):
     """Send a failed gate's findings back to the builder of one pull request.
 
@@ -923,6 +936,16 @@ def cmd_fix(a):
     if pr.get("state") != "open":
         die(f"refused: {repo}#{number} is not open")
     head = pr["head"]["sha"]
+    key = fix_key(repo, number, head)
+    # The findings of one head go back once. The gate and the tick may both
+    # ask for the same fix, and a builder that already fixed them must not
+    # be asked again.
+    try:
+        prior = prior_fix(load(), key)
+    except (OSError, ValueError):
+        prior = None
+    if prior is not None:
+        die(f"refused: findings for this head were already sent as coordq #{prior}")
     gate_thread = receipts.get(f"gate:{repo}#{number}:{head}")
     if not gate_thread:
         die(f"refused: no gate has looked at {repo}#{number} at {head}")
@@ -948,11 +971,11 @@ def cmd_fix(a):
         die(f"refused: {repo}#{number} names no ticket, so it has no builder")
     prefix = f"ticket:{repo}#{issue}:a"
     builder, attempt = "", 0
-    for key, value in receipts.items():
-        if not key.startswith(prefix):
+    for receipt_key, value in receipts.items():
+        if not receipt_key.startswith(prefix):
             continue
         try:
-            number_of_attempt = int(key[len(prefix):])
+            number_of_attempt = int(receipt_key[len(prefix):])
         except ValueError:
             continue
         if number_of_attempt > attempt:
@@ -968,10 +991,14 @@ def cmd_fix(a):
     args = {"threadId": builder, "message": message}
     with Lock(True):
         queue = load()
+        heads = queue.setdefault("fixedHeads", {})
+        if key in heads:
+            die(f"refused: findings for this head were already sent as coordq #{heads[key]}")
         item = {"id": queue["next"], "tool": "t3_thread_send", "args": args,
                 "title": f"{repo}#{number} gate findings", "priority": 300}
         queue["next"] += 1
         queue["items"].append(item)
+        heads[key] = item["id"]
         save(queue)
     print(f"queued a finding for {repo}#{number} -> builder {builder}")
 
