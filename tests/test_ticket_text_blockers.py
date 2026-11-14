@@ -2,7 +2,9 @@
 
 The CLI is a script without a .py suffix, so it is loaded by path.
 """
+import contextlib
 import importlib.util
+import io
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -258,6 +260,18 @@ def start_issue(body):
     }
 
 
+def stub_pull_files(test, files=("coordinator/bin/ticket",)):
+    """Answer the pull guard's changed-file question without the network.
+
+    The guard asks GitHub which files a merged pull request changed. A fake
+    pull request number must never reach the network, so the tests answer for
+    it: by default a changed code file, which is a merge that delivered.
+    """
+    saved = ticket.pull_files
+    ticket.pull_files = lambda repo, number: list(files)
+    test.addCleanup(lambda: setattr(ticket, "pull_files", saved))
+
+
 class ValidateStartTest(unittest.TestCase):
     def setUp(self):
         self.saved = ticket.text_blocker_reasons
@@ -266,6 +280,7 @@ class ValidateStartTest(unittest.TestCase):
         self.saved_pulls = ticket.referencing_pulls
         ticket.referencing_pulls = lambda repo, number: []
         self.addCleanup(lambda: setattr(ticket, "referencing_pulls", self.saved_pulls))
+        stub_pull_files(self)
 
     def test_text_blockers_refuse_the_start(self):
         with self.assertRaises(ticket.Refuse) as caught:
@@ -394,6 +409,7 @@ class PullGuardTest(unittest.TestCase):
         self.addCleanup(lambda: setattr(ticket, "referencing_pulls", self.saved))
         self.pulls = []
         ticket.referencing_pulls = lambda repo, number: self.pulls
+        stub_pull_files(self)
 
     def pull(self, number, state="open", merged=False, merged_at=None, created_at="2026-11-13T10:00:00Z"):
         return {"number": number, "state": state, "merged": merged, "mergedAt": merged_at,
@@ -447,6 +463,93 @@ class PullGuardTest(unittest.TestCase):
     def test_a_closed_unmerged_pull_request_does_not_block(self):
         self.pulls = [self.pull(190, state="closed", merged=False)]
         self.assertEqual(self.guard(), [])
+
+
+class DocsOnlyDeliveryTest(unittest.TestCase):
+    """A merge that only changed plans and documents does not deliver a ticket.
+
+    A plan PR may name a ticket its implementation has not reached yet, and
+    that reference alone must not refuse the start forever.
+    """
+
+    def setUp(self):
+        self.saved = ticket.referencing_pulls
+        self.addCleanup(lambda: setattr(ticket, "referencing_pulls", self.saved))
+        self.pulls = [{"number": 1038, "state": "closed", "merged": True,
+                       "mergedAt": "2026-11-13T12:00:00Z", "createdAt": "2026-11-13T09:00:00Z"}]
+        ticket.referencing_pulls = lambda repo, number: self.pulls
+        self.notices = []
+
+    def guard(self, comments=None):
+        self.notices = []
+        return ticket.pull_guard_reasons(REPO, {"number": 472, "comments": comments or []}, self.notices)
+
+    def test_a_docs_only_merge_does_not_refuse(self):
+        stub_pull_files(self, ["evidence/SRW-761/plan.md"])
+        self.assertEqual(self.guard(), [])
+
+    def test_a_docs_only_merge_is_reported(self):
+        stub_pull_files(self, ["evidence/SRW-761/plan.md"])
+        self.guard()
+        self.assertEqual(self.notices, ["merged PR #1038 changed only docs; not treated as delivery"])
+
+    def test_a_docs_merge_with_a_code_file_still_refuses(self):
+        stub_pull_files(self, ["evidence/SRW-761/plan.md", "coordinator/bin/ticket"])
+        self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+        self.assertEqual(self.notices, [])
+
+    def test_a_merge_that_changed_a_file_outside_docs_refuses(self):
+        stub_pull_files(self, ["scripts/mac_ops_fast_check.py"])
+        self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+
+    def test_every_documentation_path_counts_as_docs(self):
+        for path in ("evidence/x/plan.md", "docs/design.md", "README.md", "AGENTS.md", "docs/x.png"):
+            with self.subTest(path=path):
+                stub_pull_files(self, [path])
+                self.assertEqual(self.guard(), [])
+
+    def test_an_unknown_file_list_still_refuses(self):
+        saved = ticket.pull_files
+        self.addCleanup(lambda: setattr(ticket, "pull_files", saved))
+        ticket.pull_files = lambda repo, number: None
+        self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+
+    def test_an_empty_file_list_still_refuses(self):
+        stub_pull_files(self, [])
+        self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+
+    def test_a_gate_merge_comment_makes_a_docs_merge_deliver(self):
+        stub_pull_files(self, ["evidence/SRW-761/plan.md"])
+        comments = [{"body": "Coordinator closeout.\n\nVERDICT: PASS. Merged via #1038",
+                     "createdAt": "2026-11-13T13:00:00Z"}]
+        self.assertEqual(self.guard(comments), ["already merged via #1038; close the issue"])
+        self.assertEqual(self.notices, [])
+
+    def test_a_gate_comment_for_another_merge_does_not_count(self):
+        stub_pull_files(self, ["evidence/SRW-761/plan.md"])
+        comments = [{"body": "VERDICT: PASS. Merged via #1039",
+                     "createdAt": "2026-11-13T13:00:00Z"}]
+        self.assertEqual(self.guard(comments), [])
+
+    def test_a_gate_comment_without_the_merge_sentence_does_not_count(self):
+        stub_pull_files(self, ["evidence/SRW-761/plan.md"])
+        comments = [{"body": "VERDICT: PASS.\n\nThe plan is good.",
+                     "createdAt": "2026-11-13T13:00:00Z"}]
+        self.assertEqual(self.guard(comments), [])
+
+    def test_the_start_proceeds_with_the_notice_on_stderr(self):
+        stub_pull_files(self, ["evidence/SRW-761/plan.md"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            started = ticket.validate_start(START_CFG, REPO, start_issue(templated_body()))
+        self.assertEqual(started["builderAlias"], "builder")
+        self.assertIn("merged PR #1038 changed only docs; not treated as delivery", err.getvalue())
+
+    def test_a_code_merge_still_refuses_the_start(self):
+        stub_pull_files(self, ["coordinator/bin/ticket"])
+        with self.assertRaises(ticket.Refuse) as caught:
+            ticket.validate_start(START_CFG, REPO, start_issue(templated_body()))
+        self.assertIn("already merged via #1038", str(caught.exception))
 
 
 if __name__ == "__main__":

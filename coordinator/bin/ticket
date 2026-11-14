@@ -46,6 +46,12 @@ PR_REF_WORD = re.compile(r"(?i)\b(?:" + "|".join(PR_REF_WORDS) + r")\b")
 PR_REF_NUMBER = re.compile(r"(?:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(\d+)")
 REFS_ISSUE = re.compile(r"(?i)\brefs?\s+#(\d+)")
 RESTART_PATTERN = re.compile(r"(?i)\b(restart|redo|again|reopen|rework|retry|fix|start over|another pass|not done|incomplete)\b")
+# A merged pull request delivers the ticket only when it changed a file outside
+# these paths. A plan or a document may name a ticket whose implementation is
+# still on an unmerged branch, and that reference must not read as delivery.
+DOC_PATH_PREFIXES = ("evidence/", "docs/")
+DOC_PATH_SUFFIXES = (".md",)
+CLOSE_VERDICT_PASS = re.compile(r"VERDICT: PASS\.\s*Merged via #(\d+)\b")
 RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
 RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
 SHYAM = re.compile(r"\bshyam\b", re.I)
@@ -582,13 +588,54 @@ def coordinator_restart_time(issue):
     return newest
 
 
-def pull_guard_reasons(repo, issue):
+def pull_files(repo, number):
+    """The paths a pull request changed, or None when GitHub cannot say.
+
+    None means the start cannot tell whether the merge delivered anything, so
+    the merge keeps counting as delivery. Only a known list of documentation
+    paths takes a merge out of the delivery count.
+    """
+    try:
+        files = gh_json(["api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
+    except GhError:
+        return None
+    if not isinstance(files, list):
+        return None
+    return [entry.get("filename") or "" for entry in files if isinstance(entry, dict)]
+
+
+def delivers_ticket(path):
+    """True when a changed path is outside the plan and documentation paths."""
+    lowered = path.lower()
+    return not (lowered.startswith(DOC_PATH_PREFIXES) or lowered.endswith(DOC_PATH_SUFFIXES))
+
+
+def gate_merge_comment(issue, number):
+    """True when a gate comment says the merge of `number` delivered the issue.
+
+    The coordinator writes `VERDICT: PASS. Merged via #N` when a pull request
+    closed the ticket, and that sentence is delivery even when the diff is
+    only documentation.
+    """
+    for comment in issue.get("comments") or []:
+        for match in CLOSE_VERDICT_PASS.finditer(comment.get("body") or ""):
+            if int(match.group(1)) == number:
+                return True
+    return False
+
+
+def pull_guard_reasons(repo, issue, notices=None):
     """Why a start must be refused because a pull request already carries the issue.
 
     An open pull request means the work is already in flight. A merged one
     means the work landed, unless the coordinator restarted the issue after
-    that merge.
+    that merge, or the merge only touched plans and documents and the gate did
+    not record it as the merge that closed the ticket. A merge that changed
+    nothing outside the documentation paths says so on `notices`, and the
+    start goes ahead.
     """
+    if notices is None:
+        notices = []
     pulls = referencing_pulls(repo, issue["number"])
     if not pulls:
         return []
@@ -602,8 +649,13 @@ def pull_guard_reasons(repo, issue):
         if not pull["merged"]:
             continue
         merged_at = iso_time(pull["mergedAt"])
-        if restart is None or merged_at is None or merged_at > restart:
-            blocking.append(pull)
+        if restart is not None and merged_at is not None and merged_at <= restart:
+            continue
+        files = pull_files(repo, pull["number"])
+        if files and not any(delivers_ticket(name) for name in files) and not gate_merge_comment(issue, pull["number"]):
+            notices.append(f"merged PR #{pull['number']} changed only docs; not treated as delivery")
+            continue
+        blocking.append(pull)
     if blocking:
         newest = max(blocking, key=lambda pull: time_key(pull["mergedAt"]))
         return [f"already merged via #{newest['number']}; close the issue"]
@@ -821,7 +873,10 @@ def validate_start(cfg, repo, issue, check_text=True):
     t = parse_ticket(cfg, repo, issue)
     # The pull request guard comes before the other checks so the refusal
     # names the pull request that already carries the issue.
-    pull_reasons = pull_guard_reasons(repo, issue)
+    pull_notices = []
+    pull_reasons = pull_guard_reasons(repo, issue, pull_notices)
+    for notice in pull_notices:
+        print(notice, file=sys.stderr)
     if pull_reasons:
         raise Refuse(pull_reasons[0])
     # A hold is Shyam's own block. It is checked before the state, key and
