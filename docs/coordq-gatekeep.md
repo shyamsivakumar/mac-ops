@@ -40,6 +40,23 @@ final `VERDICT: PASS` or `VERDICT: FAIL` is queued again on the next run.
 The old receipt is cleared under the queue lock. Each head is retried at most
 once per run. Live gates, gates with verdicts, and missing receipts stay deduplicated.
 Dry-run reports `regating` without writing state. A new head can receive a gate.
+
+A gate that dies without a verdict looks the same whether it lost its thread
+or its reviewer could not run at all, so the retry is bounded by count, not by
+the failure text. A head is retried at most `COORDQ_GATE_RETRY_LIMIT` times
+(two by default), the second and later retries wait `COORDQ_GATE_RETRY_BACKOFF`
+seconds (300 by default) after the retry before them, and then the head is
+given up: one line `gave up gate:<repo>#<pr>:<head> after <n> retries without
+a verdict` in `queue/gatekeep.log`, and nothing is queued for that head again.
+The retry count lives with the head's queue item in `gatedHeads`, as
+`{id, retries, at, givenUp}`, and a bare queue item id is read as a head with
+no retry behind it. The record names the head, so a pull request that pushes a
+new head starts again at no retries. An explicit `coordq gate <repo>#<pr>`
+still queues a given-up head, because an operator asked for it: it keeps the
+retry count and is recorded as undecided again, so a second explicit gate for
+the same head is refused while that one is live, and if it dies without a
+verdict the head is given up again in one line rather than reopening the
+automatic retries.
 Dry-run still reads GitHub and builder runs. API or malformed-data errors fail
 visibly. This command never merges; the reviewer brief permits merge only after
 CHECK and VERDICT pass for the exact head, using --match-head-commit.
