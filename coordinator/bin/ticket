@@ -73,9 +73,9 @@ ATTRIBUTED = re.compile(
 )
 QUOTE_WINDOW = 60
 # The review gate: the rules live in the coordinator CLAUDE.md sections
-# "Review gate" and "Ten minutes start to finish".
-GATE_OPUS = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
-GATE_SOL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+# "Review gate" and "Ten minutes start to finish". Every gate runs on Astra;
+# the queue's Opus failover lives in coordq and picks nothing here.
+GATE_ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
 GATE_PRIORITY = 400
 GATE_CHECK_CONTEXT = "srw/agent-check"
 GATE_PUBLISHER_REPO = "shyamsivakumar/strategy-replay-workbench"
@@ -1231,80 +1231,6 @@ def check_ticket_key(repo, rcfg, title):
         raise Refuse(f"key prefix {match.group(1)} does not match repo key {rcfg['key']}")
 
 
-def router_chain(route):
-    """The models a router route can run, in order.
-
-    The route table lives in the pi extension, so a builder thread that
-    stores only a route still says which models it could have run.
-    """
-    try:
-        with open(os.path.expanduser("~/.pi/agent/extensions/task-router.ts")) as f:
-            source = f.read()
-    except OSError:
-        return []
-    routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
-    if not routes:
-        return []
-    chain = re.search(r"^\s*" + re.escape(route.removeprefix("task/")) + r":\s*\[([^\]]*)\]",
-                      routes.group(1), re.M)
-    if not chain:
-        return []
-    try:
-        entries = json.loads("[" + chain.group(1).rstrip().rstrip(",") + "]")
-    except ValueError:
-        return []
-    return [entry for entry in entries if isinstance(entry, str)]
-
-
-def builder_models(issue, login):
-    """The model the builder thread of the issue ran, and whether it is live.
-
-    The builder thread is the one the ledger of the issue names and the
-    queue receipt points at. The newest attempt that the queue dispatched
-    wins, and its newest run names the model that ran. A builder that
-    stored only a router route names the models that route can run. A
-    builder whose model cannot be read at all leaves the models empty.
-    """
-    try:
-        with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
-            receipts = json.load(f)
-    except (FileNotFoundError, ValueError):
-        receipts = {}
-    entries = sorted(intents(ledger_of(issue, login)), key=lambda e: e["attempt"])
-    for entry in reversed(entries):
-        thread_id = receipts.get(entry.get("requestId"))
-        if not thread_id:
-            continue
-        result = t3_call("t3_thread_read", {"threadId": thread_id, "limit": 5})
-        thread = result.get("thread") or {}
-        live = thread.get("status") in LIVE_STATUSES
-        runs = sorted(result.get("recentRuns") or [],
-                      key=lambda run: run.get("ordinal") or 0, reverse=True)
-        for run in runs:
-            model = run.get("executedModel")
-            if isinstance(model, str) and model:
-                return [model], live
-        stored, instance = thread.get("model"), thread.get("providerInstanceId")
-        if instance == "router" and isinstance(stored, str) and stored:
-            return router_chain(stored), live
-        if isinstance(stored, str) and stored and instance:
-            return ["claude" if instance == "claudeAgent" else stored], live
-        return [], live
-    return [], False
-
-
-def gate_reviewer(models, live=False):
-    """The gate model: Sol when the builder ran Claude, Opus otherwise.
-
-    A builder whose model cannot be read leaves the gate on Opus, unless
-    the builder thread is still running: a live builder may be Claude, and
-    two Claude threads must not run at once.
-    """
-    if any("claude" in m.lower() or "anthropic" in m.lower() for m in models):
-        return GATE_SOL
-    return GATE_SOL if live and not models else GATE_OPUS
-
-
 def gate_live(title, gate_id):
     """Why a gate thread for this pull request head is already on its way, or None.
 
@@ -1411,8 +1337,7 @@ def cmd_gate(a):
             raise Refuse(f"pull request #{number} references no issue")
         issue = fetch_issue(repo, issue_number)
         check_ticket_key(repo, rcfg, issue["title"])
-        models, live = builder_models(issue, authed_login())
-        model = gate_reviewer(models, live)
+        model = GATE_ASTRA
         publisher = check_publisher(repo, head, rcfg)
         ascend = ascend_repo(repo, rcfg)
         base = pull.get("baseRefName") or "main"
@@ -1441,7 +1366,6 @@ def cmd_gate(a):
         print("checks passed")
         print(f"title: {title}")
         print(f"reviewer: {model['model']}")
-        print(f"builder model: {models[0] if models else ('unknown, builder is live' if live else 'unknown')}")
         print("command:\n" + shlex.join(command) + "\n")
         print("brief:\n" + brief)
         return

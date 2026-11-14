@@ -27,8 +27,6 @@ COMMENT = {"user": {"login": "me"},
            "body": "attempt 1\n<!-- coordinator-ticket "
                    + json.dumps(RECEIPT)
                    + " -->"}
-BUILDER_THREAD = {"providerInstanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
-BUILDER_RUNS = [{"executedModel": "minimax/MiniMax-M3.1-Flash"}]
 # The gate died for a reviewer-side reason: no message, so no verdict.
 DEAD_GATE = {"thread": {"status": "failed"},
              "items": [{"type": "user_message", "text": "review"}],
@@ -75,8 +73,8 @@ class RetryLimitBase(unittest.TestCase):
 
     def setUp(self):
         self.saved = {name: getattr(coordq, name)
-                      for name in ("gh_json", "load_receipts", "read_builder_thread",
-                                   "router_chain", "subprocess", "call", "gate_request")}
+                      for name in ("gh_json", "load_receipts", "subprocess", "call",
+                                   "gate_request")}
         self.addCleanup(lambda: [setattr(coordq, name, value)
                                  for name, value in self.saved.items()])
         self.pr = {"draft": False, "number": 7, "head": {"sha": HEAD},
@@ -85,8 +83,6 @@ class RetryLimitBase(unittest.TestCase):
         coordq.subprocess = types.SimpleNamespace(
             run=lambda *a, **k: FakeRun("me\n"))
         coordq.load_receipts = lambda: {RECEIPT["requestId"]: "builder-1", self.key: "gate-1"}
-        coordq.read_builder_thread = lambda thread_id: (BUILDER_THREAD, BUILDER_RUNS)
-        coordq.router_chain = lambda route: []
         coordq.gh_json = self.fake_gh
         coordq.call = lambda tool, args, rules=None: (0, json.dumps(DEAD_GATE))
         self.config = os.path.join(QUEUE_DIR, "gatekeep-config.json")
@@ -232,13 +228,12 @@ class ExplicitGateTest(RetryLimitBase):
         self.write_queue(heads={self.key: {"id": 4, "retries": coordq.GATE_RETRY_LIMIT,
                                           "at": time.time(), "givenUp": True}})
         self.gate = {"projectId": "P", "title": "T-9 review #7 aaaaaaaa",
-                     "modelSelection": {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
+                     "modelSelection": coordq.ASTRA_MODEL,
                      "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
                      "clientRequestId": self.key, "message": "review"}
-        # The gate request carries the builder's executed models, so the
-        # reviewer route follows the builder's real vendor.
-        coordq.gate_request = lambda *a, **k: (
-            self.key, self.gate, coordq.builder_models(BUILDER_THREAD, BUILDER_RUNS))
+        # The gate request carries the reviewer of the gate. Every gate runs
+        # on Astra, so the request names Astra.
+        coordq.gate_request = lambda *a, **k: (self.key, self.gate)
         self.pull = {"state": "open", "draft": False, "number": 7, "head": {"sha": HEAD},
                      "body": "Refs #9"}
 
