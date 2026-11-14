@@ -24,7 +24,7 @@ TASK_MODELS = {
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
-# The board refill. When the queue is empty and the machine has free slots,
+# The board refill. When the machine has free slots,
 # the dispatcher starts tickets from the board, at most once per interval.
 TICKET_BIN = os.environ.get("COORDQ_TICKET", "ticket")
 TICKETS_CONFIG = os.environ.get("COORDQ_TICKETS_CONFIG", os.path.expanduser("~/.coordinator/tickets.json"))
@@ -200,6 +200,11 @@ def drain():
         dispatchable = []
         dropped = set()
         for item in queue["items"]:
+            if item.get("attempts", 0) >= MAX_ATTEMPTS:
+                dropped.add(item["id"])
+                queue.setdefault("failed", []).append(item)
+                log(f"DROPPED #{item['id']} after {item['attempts']} attempts: {item.get('last_error', 'unknown error')}")
+                continue
             tool = undispatchable_tool(item)
             if tool is None:
                 dispatchable.append(item)
@@ -260,6 +265,7 @@ def drain():
             wait_until_counted(n)
         else:
             item["attempts"] = item.get("attempts", 0) + 1
+            item["last_error"] = out[:200]
             save(queue)
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
 
@@ -438,7 +444,7 @@ def used_slots():
 def refill(a):
     """Fill free slots from the board.
 
-    The refill runs only when the queue is empty and the machine is below the
+    The refill runs when live plus queued work is below the
     cap, and at most once per REFILL_INTERVAL seconds. Every candidate is a
     ticket the ticket CLI may refuse, and a refusal starts nothing, so the
     scan moves on to the next candidate.
@@ -452,11 +458,7 @@ def refill(a):
         if lock is None:
             log("refill skipped: another refill is running")
             return
-        queue = load()
-        if queue["items"]:
-            log(f"refill skipped: the queue holds {len(queue['items'])} item(s)")
-            return
-        n = live()
+        n = used_slots()
         if n is None:
             log("refill skipped: cannot read the live thread count")
             return
@@ -606,7 +608,7 @@ def cmd_status(a):
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
-    print(json.dumps({"cap": cap(), "live": live(), "queued": len(load()["items"]), "stuck": stuck}))
+    print(json.dumps({"cap": cap(), "live": live(), "queued": len(load()["items"]), "failed": load().get("failed", []), "stuck": stuck}))
 
 
 
