@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Print a picture to the terminal with kitty graphics.
+
+usage: kshow <image.png>
+
+The picture is sent as base64 kitty graphics, so a terminal that speaks the
+protocol shows it in place. Use kpane for a big window instead of this.
+"""
+
+from __future__ import annotations
+
+import base64
+import signal
+import sys
+from pathlib import Path
+
+USAGE = """usage: kshow <image.png>
+
+Print a picture to the terminal with kitty graphics.
+
+  kshow diagram.png
+"""
+
+
+def main() -> int:
+    # A closed pipe (the picture piped into head) is not an error.
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help"):
+        print(USAGE, end="")
+        return 1
+    if not args:
+        print(USAGE, file=sys.stderr, end="")
+        return 1
+    if len(args) > 1:
+        print("kshow: too many arguments", file=sys.stderr)
+        print(USAGE, file=sys.stderr, end="")
+        return 1
+
+    source = Path(args[0]).expanduser()
+    if not source.is_file():
+        print(f"kshow: no such file: {args[0]}", file=sys.stderr)
+        print(USAGE, file=sys.stderr, end="")
+        return 1
+
+    try:
+        data = base64.b64encode(source.read_bytes()).decode()
+    except OSError as exc:
+        print(f"kshow: cannot read {source}: {exc}", file=sys.stderr)
+        return 1
+
+    parts = [data[i : i + 4096] for i in range(0, len(data), 4096)]
+    for index, part in enumerate(parts):
+        more = 1 if index < len(parts) - 1 else 0
+        head = "f=100,a=T," if index == 0 else ""
+        sys.stdout.write(f"\033_G{head}m={more};{part}\033\\")
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

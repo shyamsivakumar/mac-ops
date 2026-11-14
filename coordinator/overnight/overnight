@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 """The overnight shift's command line.
 
-Two parts live here.
+Three parts live here.
 
 `overnight intake --dry-run` (spec T3a) reads the board and the open pull
 requests and turns them into intake records. It reads only: it writes no
 record and keeps no list of its own. The ticket CLI refreshes its own
 cache when it reads the board, and that cache is the ticket CLI's, not a
 queue of the shift's.
+
+`overnight filter --dry-run` (spec T3b) filters that board: it drops the
+Ascend work, the holds, the tickets that need Shyam, the tickets that
+need a design and the tickets with an open question in the coordinator's
+decisions log, and it prints every drop with its reason. It reads only.
+`overnight check-pr --repo <repo> --number <n>` is the second check: it
+refuses any pull request in an Ascend repository. Both fail closed: a
+read that fails is a refusal, never a pass.
+
+    overnight intake --dry-run
+    overnight filter --dry-run
+    overnight check-pr --repo <repo> --number <n>
 
 `overnight report` (spec T11) renders the morning report from the shift's
 own records: the receipts, the parking lot, the shift log and the policy
@@ -17,10 +29,21 @@ passed unless the records say it ran.
 
     overnight report --dry-run
 
+`overnight shift` (spec T12) is the command the launchd job fires. One job
+runs at 22:30 and again at 06:30, so the command decides which part of the
+night it is: the start reads the board, and the report writes the
+morning report. In dry-run mode the shift does no work, so the only file
+the night writes is the morning report.
+
+    overnight shift --dry-run
+
+The clock is the Mac's local clock, the clock launchd fires on. The
+report and the log say Pacific time.
+
 The board is the list. Intake reads `ticket list --fresh --json` for the
 tickets and `gh pr list` for each allowed repository, and holds the records
-in memory for the run. The later parts of the spec (filtering, ordering,
-arming and the tick) build on the same records.
+in memory for the run. The later parts of the spec (ordering, arming and
+the tick) build on the same records.
 """
 
 from __future__ import annotations
@@ -44,6 +67,9 @@ GH_TIMEOUT = 60
 # is left of one overall deadline.
 DEFAULT_DEADLINE = 540
 PR_LIMIT = 100
+# The open issues of one repository, read for the marks a ticket body
+# carries. The board's tickets are a small part of that list.
+ISSUE_LIMIT = 500
 PR_FIELDS = "number,title,url,isDraft,headRefName,baseRefName,updatedAt,body"
 # A ticket reference in a pull request body or title. Only the GitHub
 # keywords count: a bare "#123" is often a pull request, not a ticket.
@@ -51,6 +77,80 @@ TICKET_REF = re.compile(r"\b(refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
 # A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
 # it is a ticket key number, not a GitHub issue number.
 BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
+
+# --- Part T3b: the filter -------------------------------------------------
+#
+# The Ascend rule is the one the merge gate already uses (coordinator/bin/
+# coordq, the `ascend` line in the gate prompt): a repository the gate
+# would refuse to merge is a repository the shift never touches. The
+# spec's key list (AUH, MCP, OPS, DBT, OMN) is added, so a ticket whose
+# key is an Ascend key is dropped even when it sits in a personal repo.
+ASCEND_KEYS = frozenset({"AUH", "MCP", "OPS", "DBT", "OMN"})
+ASCEND_REPO_PARTS = (
+    "action-underwriting-hub",
+    "ascend-mcp",
+    "data-ops",
+    "/dbt",
+    "/omni",
+)
+PERSONAL_OWNER = "shyamsivakumar"
+# The marked words a ticket body may carry. A mark is the marked form:
+# "HOLD" in capitals, "Needs Shyam:" with its question, "design needed"
+# with what it waits for. Prose that uses the word ("hold counts", "needs
+# Shyam's OK after the backtest", "the hold-out set") is not a mark, and
+# a brief that lists the marks themselves ("drop tickets marked hold,
+# needs Shyam, design needed") is not marked either.
+HOLD_MARK = re.compile(
+    r"(?m)^[ \t]*(?:[-*+>#]+[ \t]*)*"
+    r"(?:status[ \t]*:[ \t]*)?"
+    r"HOLD[ \t]*[*]?[ \t]*(?:[:\-–]|$)"
+)
+NEEDS_SHYAM_MARK = re.compile(
+    r"(?i)(?:^[ \t]*(?:[-*+>#]+[ \t]*)*|[.;:!?][ \t]+)"
+    r"needs[ \t]+shyam\b(?![ \t]*'s)(?:[ \t]*:|[ \t]*\bto\b|[ \t]*\bfor\b)"
+)
+DESIGN_MARK = re.compile(
+    r"(?i)(?:^[ \t]*(?:[-*+>#]+[ \t]*)*|[.;:!?][ \t]+)"
+    r"design[ \t]+needed\b(?:[ \t]*:|[ \t]*\bbefore\b|[ \t]*\bfirst\b)"
+)
+# A decisions log line that leaves a question open. "answered", "closed",
+# "resolved" and "unparked" close a question; a hold and a park outlive
+# the question they were asked in.
+DECISION_QUESTION = re.compile(r"(?i)\bquestion\b")
+DECISION_CLOSED = re.compile(r"(?i)\b(answered|closed|resolved|unparked)\b")
+# The log writes a hold or a park in capitals ("HOLD SRW-685", "PARKED
+# (needs Shyam)"), and an open question as "OPEN (needs answer)" or
+# "Q: ...". A question for Shyam is also written as "asked Shyam about".
+DECISION_STRONG = re.compile(
+    r"\b(HOLD|HELD|PARK|PARKED|OPEN)\b"
+    r"|(?i:needs[ \t]+shyam)|(?i:asked[ \t]+shyam)"
+)
+DECISION_HOLD = re.compile(r"\b(HOLD|HELD)\b")
+DECISION_OPEN = re.compile(r"\b(PARK|PARKED|OPEN)\b")
+DECISION_ASKS = re.compile(r"(?i:\bQ\s*:)")
+# A question the log asks Shyam ends with a question mark, and it carries
+# the log's own recommendation marker.
+DECISION_ASKED = re.compile(r"\?[ \t]*$|(?i:\(Recommended:)")
+# The subject of a decisions log line: the ticket the line is about. It
+# is the ticket named right after the line's verb ("HOLD SRW-685"), or
+# the first "KEY #number" pair in the line. A ticket that is only named
+# in passing ("once SRW-1067 merges") is not the subject.
+DECISION_VERB = re.compile(
+    r"(?i:\b(hold|holds|held|parked|park|open|question)\b)"
+    r"|(?i:\bQ\s*:)|(?i:asked[ \t]+shyam)"
+)
+SUBJECT_TAIL = 120
+# The coordinator's loop folder holds the decisions log the tick reads.
+LOOP_DIR = Path(
+    os.environ.get(
+        "OVERNIGHT_LOOP_DIR", str(Path.home() / "Code" / "coordinator" / "loop")
+    )
+)
+DECISIONS_FILE = Path(
+    os.environ.get(
+        "OVERNIGHT_DECISIONS", str(LOOP_DIR / "decisions.md")
+    )
+)
 
 # --- The morning report (spec section 11) -----------------------------------
 
@@ -73,6 +173,12 @@ PLANNED = re.compile(r"planned\s+(?P<count>\d+)\s+items?\b", re.I)
 RECEIPT_FILE = re.compile(r"^(?!morning-).+\.md$")
 # The shift log records the end of the shift with the word "stall".
 STALL = re.compile(r"\bstall\b", re.I)
+# The launchd job fires at 22:30 and 06:30 (spec part T12). The clock is
+# the Mac's local clock, the clock launchd itself uses, so a run that
+# fires always matches the part it is for. The windows are wider than one
+# minute, so a Mac that wakes late still writes the report.
+START_WINDOW = (22 * 60, 24 * 60 - 1)
+REPORT_WINDOW = (6 * 60, 7 * 60 + 29)
 # The states a receipt can name.
 STATE_DONE = "done"
 STATE_READY = "ready"
@@ -397,6 +503,57 @@ def cmd_intake(args: argparse.Namespace) -> int:
         "no ticket the board shows stays a record of its own."
     )
     return 1 if unread else 0
+
+
+def shift_phase(now: datetime) -> str:
+    """Return the part of the night a moment belongs to.
+
+    The job fires at 22:30 and 06:30, and a Mac that wakes late fires the
+    report after 06:30, so the windows are an hour wide rather than a
+    minute."""
+    minutes = now.hour * 60 + now.minute
+    if START_WINDOW[0] <= minutes <= START_WINDOW[1]:
+        return "start"
+    if REPORT_WINDOW[0] <= minutes <= REPORT_WINDOW[1]:
+        return "report"
+    return "outside"
+
+
+def cmd_shift(args: argparse.Namespace) -> int:
+    """Run the part of the night the launchd job fires.
+
+    The start reads the board and writes nothing. The report writes the
+    morning report, which is the only file a dry night writes. Outside the
+    two windows there is nothing to do.
+
+    The clock is the Mac's local clock, the clock launchd fires on. The
+    report and the log still say Pacific time, and a Mac that is not on
+    Pacific time is told so."""
+    now_local = datetime.now().astimezone()
+    now_pt = datetime.now(PT)
+    phase = args.at if args.at != "auto" else shift_phase(now_local)
+    stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
+    if phase == "outside":
+        print(f"overnight: {stamp} is outside the overnight window; nothing to do")
+        return 0
+    if now_local.utcoffset() != now_pt.utcoffset():
+        print(
+            "overnight: the Mac's clock is not on Pacific time, so the job "
+            "fires at the Mac's local 22:30 and 06:30, not Pacific time",
+            file=sys.stderr,
+        )
+    if phase == "start":
+        if not args.dry_run:
+            die(
+                "the shift start is not built yet (spec parts T4 and T5); "
+                "refusing to start a real shift"
+            )
+        print(f"overnight: {stamp} shift start (dry run, read only)")
+        return cmd_intake(argparse.Namespace(dry_run=True, deadline=args.deadline))
+    print(f"overnight: {stamp} morning report")
+    return cmd_report(
+        argparse.Namespace(root=args.root, date=args.date, dry_run=False)
+    )
 
 
 def report_root(explicit: str | None) -> Path:
@@ -908,6 +1065,365 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+
+# --- Part T3b: the filter -------------------------------------------------
+
+
+def ascend_reason(repo: str, key: str | None, flagged: bool = False) -> str | None:
+    """Return why the work is Ascend, or None when it is not.
+
+    A key from the spec's Ascend list (AUH, MCP, OPS, DBT, OMN) is Ascend
+    on its own. A repository the merge gate would refuse to merge is
+    Ascend too: the gate's repository rule is the one in
+    coordinator/bin/coordq, and the gate's own per-repository `ascend`
+    flag is honoured here as well."""
+    if key:
+        prefix = key.split("-")[0].upper()
+        if prefix in ASCEND_KEYS:
+            return f"Ascend key {prefix}"
+    if not repo:
+        return None
+    if flagged:
+        return f"Ascend repo: the board config marks {repo} as Ascend"
+    owner = repo.split("/")[0]
+    if owner != PERSONAL_OWNER:
+        return f"Ascend repo: {repo} is not a {PERSONAL_OWNER} repository"
+    if any(part in repo for part in ASCEND_REPO_PARTS):
+        return f"Ascend repo: {repo} is an Ascend repository"
+    return None
+
+
+def ascend_flags(cfg: dict) -> set[str]:
+    """Return the repositories the board config marks as Ascend.
+
+    The merge gate honours a per-repository `ascend` flag in the board
+    config (coordinator/bin/coordq). The shift reads the same flag, so
+    the two agree on what Ascend is."""
+    repos = cfg.get("repos") or {}
+    return {repo for repo, entry in repos.items() if entry.get("ascend")}
+
+
+def ascend_keys_in(text: str) -> list[str]:
+    """Return the Ascend keys a text carries, such as a branch name.
+
+    Every key in the text is read, so a branch such as
+    "t3/fix-12-auh-3" still shows its Ascend key."""
+    found: list[str] = []
+    for match in BRANCH_KEY.finditer(text or ""):
+        key = f"{match.group(1)}-{match.group(2)}".upper()
+        if key.split("-")[0] in ASCEND_KEYS and key not in found:
+            found.append(key)
+    return found
+
+
+def clip(text: str, width: int = 120) -> str:
+    """Return one readable line of a matched mark."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= width else flat[: width - 3] + "..."
+
+
+def read_bodies(
+    issues: list[dict], deadline: float
+) -> tuple[dict[tuple[str, int], str], list[str]]:
+    """Return the board tickets' bodies and the repositories that failed.
+
+    The ticket CLI's list carries no body, and the marks the shift reads
+    live in the ticket's own text, so the module reads the bodies of the
+    open issues of the repositories that hold board tickets."""
+    bodies: dict[tuple[str, int], str] = {}
+    unread: list[str] = []
+    wanted: dict[str, set[int]] = {}
+    for issue in issues:
+        repo = issue.get("repo") or ""
+        number = issue.get("number")
+        if repo and number:
+            wanted.setdefault(repo, set()).add(number)
+    for repo in sorted(wanted):
+        try:
+            raw = run(
+                [
+                    GH,
+                    "issue",
+                    "list",
+                    "-R",
+                    repo,
+                    "--state",
+                    "open",
+                    "--limit",
+                    str(ISSUE_LIMIT),
+                    "--json",
+                    "number,title,body",
+                ],
+                GH_TIMEOUT,
+                deadline,
+            )
+            rows = json.loads(raw)
+        except (RepoError, ValueError) as exc:
+            unread.append(repo)
+            print(f"overnight: {repo}: {exc}", file=sys.stderr)
+            continue
+        rows = rows if isinstance(rows, list) else []
+        if len(rows) >= ISSUE_LIMIT:
+            unread.append(repo)
+            print(
+                f"overnight: {repo}: the open issue list was cut off at "
+                f"{ISSUE_LIMIT}, so the ticket text is not known",
+                file=sys.stderr,
+            )
+            continue
+        for row in rows:
+            number = row.get("number")
+            if number in wanted[repo]:
+                bodies[(repo, number)] = (row.get("body") or "") + "\n" + (
+                    row.get("title") or ""
+                )
+    return bodies, unread
+
+
+def read_decisions() -> tuple[Path, list[str]]:
+    """Return the coordinator's decisions log and its lines.
+
+    The log is the coordinator's own parking lot, so it is read where the
+    tick reads it. A missing log is not a crash: the filter drops every
+    ticket it cannot check and refuses to return a list."""
+    try:
+        with open(DECISIONS_FILE) as stream:
+            return DECISIONS_FILE, stream.read().splitlines()
+    except OSError:
+        return DECISIONS_FILE, []
+
+
+def mark_reason(text: str) -> tuple[str, str] | None:
+    """Return the mark a ticket body carries, with the line that carries it.
+
+    A mark stands at the start of a line or of a clause, so a ticket that
+    only talks about holding a position, or about a decision that needs
+    Shyam later, is not marked."""
+    for pattern, reason in (
+        (HOLD_MARK, "marked hold"),
+        (NEEDS_SHYAM_MARK, "marked needs Shyam"),
+        (DESIGN_MARK, "marked design needed"),
+    ):
+        match = pattern.search(text)
+        if match:
+            start = text.rfind("\n", 0, match.start()) + 1
+            end = text.find("\n", match.start())
+            line = text[start : end if end != -1 else len(text)]
+            return reason, clip(line)
+    return None
+
+
+def names_ticket(line: str, key: str | None, number: int | None) -> bool:
+    """Return True when a decisions log line is about this ticket.
+
+    A line is about a ticket when it names the ticket with its issue
+    number, in either order ("SRW-685 #468", "#468 SRW-685", and the
+    short form "685 #468"), or when the ticket is named right after the
+    line's verb ("HOLD SRW-685", "OPEN (needs answer): SRW-1080 #990").
+    A ticket named in passing ("once SRW-1067 merges") is not the subject
+    of the line. A bare issue number is not enough: the same number can
+    belong to a ticket in another repository."""
+    if not key or not number:
+        return False
+    prefix, _, keynum = key.partition("-")
+    if not prefix or not keynum:
+        return False
+    pairs = (
+        rf"{re.escape(prefix)}-{re.escape(keynum)}\s*#\s*{number}\b",
+        rf"#\s*{number}\s+{re.escape(prefix)}-{re.escape(keynum)}\b",
+        rf"\b{re.escape(keynum)}\s*#\s*{number}\b",
+    )
+    for pattern in pairs:
+        if re.search(pattern, line, re.I):
+            return True
+    for verb in DECISION_VERB.finditer(line):
+        tail = line[verb.end() : verb.end() + SUBJECT_TAIL]
+        if re.search(rf"\b{re.escape(prefix)}-{re.escape(keynum)}\b", tail, re.I):
+            return True
+    return False
+
+
+def decision_reason(
+    lines: list[str], key: str | None, number: int | None
+) -> tuple[str, str] | None:
+    """Return the open question a decisions log leaves for a ticket.
+
+    The log is append-only history, so the last line that is about the
+    ticket decides. The log writes an open item as a hold or a park
+    ("HOLD SRW-685", "PARKED (needs Shyam)"), as "OPEN (needs answer)",
+    as "Q: ...", or as a question that ends in a question mark. A line
+    that answers the question closes it, but a hold outlives the question
+    it was asked in."""
+    last = None
+    for line in lines:
+        if names_ticket(line, key, number):
+            last = line
+    if last is None:
+        return None
+    if DECISION_HOLD.search(last):
+        return "hold in the decisions log", clip(last)
+    if DECISION_OPEN.search(last):
+        return "open item in the decisions log", clip(last)
+    if DECISION_STRONG.search(last):
+        return "open question in the decisions log", clip(last)
+    if DECISION_ASKS.search(last):
+        return "open question in the decisions log", clip(last)
+    if DECISION_ASKED.search(last) and not DECISION_CLOSED.search(last):
+        return "open question in the decisions log", clip(last)
+    if DECISION_QUESTION.search(last) and not DECISION_CLOSED.search(last):
+        return "open question in the decisions log", clip(last)
+    return None
+
+
+def cmd_filter(args: argparse.Namespace) -> int:
+    """Filter the board and print every drop with its reason.
+
+    The filter fails closed. A ticket whose text could not be read, or
+    whose open question could not be checked, is dropped rather than
+    kept, and the command exits non-zero so the shift knows the list it
+    printed is not one it may work from."""
+    deadline = time.monotonic() + args.deadline
+    cfg = load_config()
+    repos = allowed_repos(cfg)
+    allowed = {repo for repo, _ in repos}
+    flagged = ascend_flags(cfg)
+    if not repos:
+        die("the board config names no repositories")
+    issues, stale = read_board(deadline)
+    if stale:
+        print("Overnight filter - dry run (read only)")
+        print("REFUSED: the board list is stale, so the filter cannot be trusted.")
+        print("The ticket CLI could not reach GitHub and fell back to its cache.")
+        return 1
+    bodies, unread = read_bodies(issues, deadline)
+    path, lines = read_decisions()
+    problems: list[str] = []
+    if unread:
+        problems.append(
+            "the ticket text of these repositories could not be read: "
+            + ", ".join(unread)
+        )
+    if not lines:
+        problems.append(f"the decisions log {path} could not be read")
+    kept: list[dict] = []
+    drops: list[tuple[dict, str]] = []
+    for issue in issues:
+        repo = issue.get("repo") or ""
+        key = issue.get("key") or ""
+        number = issue.get("number")
+        reason = ascend_reason(repo, key, repo in flagged)
+        if reason is None and repo not in allowed:
+            reason = f"repo not on the allow list: {repo}"
+        body = bodies.get((repo, number))
+        if reason is None and body is not None:
+            mark = mark_reason(body)
+            if mark:
+                reason = f"{mark[0]}: {mark[1]}"
+        if reason is None:
+            found = decision_reason(lines, key, number)
+            if found:
+                reason = f"{found[0]}: {found[1]}"
+        if reason is None and body is None:
+            reason = "unverified: the ticket text could not be read"
+        if reason is None and not lines:
+            reason = "unverified: the decisions log could not be read"
+        if reason:
+            drops.append((issue, reason))
+        else:
+            kept.append(issue)
+    print("Overnight filter - dry run (read only)")
+    print(f"Board: {len(issues)} tickets")
+    print(f"Allowed repositories: {len(repos)}")
+    print(f"Decisions log: {path}" + ("" if lines else " (not found)"))
+    for problem in problems:
+        print(f"REFUSED: {problem}")
+    print()
+    print(f"Kept: {len(kept)}")
+    print(f"Dropped: {len(drops)}")
+    outside = sorted({issue.get("repo") or "" for issue in issues} - allowed)
+    print(f"Board repositories outside the allow list: {len(outside)}")
+    if drops:
+        print()
+        print("Drops (each with its reason)")
+        for issue, reason in drops:
+            key = issue.get("key") or "-"
+            print(
+                f"  DROP {issue.get('repo')}#{issue.get('number')} {key} - {reason}"
+            )
+    print()
+    survived = [
+        issue
+        for issue in kept
+        if ascend_reason(
+            issue.get("repo") or "",
+            issue.get("key") or "",
+            (issue.get("repo") or "") in flagged,
+        )
+    ]
+    print(f"Ascend items kept: {len(survived)}")
+    if survived:
+        for issue in survived:
+            print(f"  FAIL {issue.get('repo')}#{issue.get('number')}")
+        print("FAIL: an Ascend item survived the filter.")
+        return 1
+    if problems:
+        print("REFUSED: the filter cannot return a list it could not fully check.")
+        return 1
+    return 0
+
+
+def cmd_check_pr(args: argparse.Namespace) -> int:
+    """Refuse any pull request that is Ascend work.
+
+    This is the second check the spec asks for: intake drops Ascend work
+    from the board, and this refuses an Ascend pull request before any
+    work starts on it. The check fails closed: a pull request it could
+    not read is refused, not passed."""
+    deadline = time.monotonic() + args.deadline
+    repo = args.repo
+    number = args.number
+    cfg = load_config()
+    reason = ascend_reason(repo, None, repo in ascend_flags(cfg))
+    if reason:
+        print(f"REFUSED: {repo}#{number}: {reason}")
+        return 1
+    try:
+        raw = run(
+            [
+                GH,
+                "pr",
+                "view",
+                str(number),
+                "-R",
+                repo,
+                "--json",
+                "headRefName,body",
+            ],
+            GH_TIMEOUT,
+            deadline,
+        )
+        pull = json.loads(raw) or {}
+    except (RepoError, ValueError) as exc:
+        print(f"overnight: {repo}#{number}: {exc}", file=sys.stderr)
+        print(
+            f"REFUSED: {repo}#{number}: the pull request could not be read, "
+            "so the check cannot be trusted."
+        )
+        return 1
+    branch = pull.get("headRefName") or ""
+    body = pull.get("body") or ""
+    keys = ascend_keys_in(branch)
+    for key in ascend_keys_in(body):
+        if key not in keys:
+            keys.append(key)
+    if keys:
+        print(f"REFUSED: {repo}#{number}: Ascend key {keys[0]}")
+        if branch:
+            print(f"  branch {branch}")
+        return 1
+    print(f"OK: {repo}#{number} is not an Ascend pull request")
+    return 0
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="overnight", description="The overnight shift's command line."
@@ -929,6 +1445,36 @@ def main() -> int:
         help=f"seconds the whole intake may take (default {DEFAULT_DEADLINE})",
     )
     intake.set_defaults(func=cmd_intake)
+
+    filt = sub.add_parser(
+        "filter",
+        help="drop the Ascend, held and needs-Shyam work from the board",
+    )
+    filt.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read only; nothing is written (the only mode in this part)",
+    )
+    filt.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole filter may take (default {DEFAULT_DEADLINE})",
+    )
+    filt.set_defaults(func=cmd_filter)
+    check = sub.add_parser(
+        "check-pr",
+        help="refuse any pull request that is Ascend work",
+    )
+    check.add_argument("--repo", required=True, help="the repository of the pull request")
+    check.add_argument("--number", required=True, type=int, help="the pull request number")
+    check.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the check may take (default {DEFAULT_DEADLINE})",
+    )
+    check.set_defaults(func=cmd_check_pr)
     report = sub.add_parser(
         "report",
         help="render the morning report from the shift's records",
@@ -950,6 +1496,39 @@ def main() -> int:
         help="the night of the report, as YYYY-MM-DD (default today, PT)",
     )
     report.set_defaults(func=cmd_report)
+    shift = sub.add_parser(
+        "shift",
+        help="run the part of the night the launchd job fires",
+    )
+    shift.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="do no work: the start reads the board and writes nothing",
+    )
+    shift.add_argument(
+        "--at",
+        choices=("auto", "start", "report"),
+        default="auto",
+        help="which part of the night to run (default: the PT clock decides)",
+    )
+    shift.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    shift.add_argument(
+        "--date",
+        default=None,
+        type=report_day,
+        help="the night of the report, as YYYY-MM-DD (default today, PT)",
+    )
+    shift.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole start may take (default {DEFAULT_DEADLINE})",
+    )
+    shift.set_defaults(func=cmd_shift)
     args = parser.parse_args()
     return args.func(args)
 

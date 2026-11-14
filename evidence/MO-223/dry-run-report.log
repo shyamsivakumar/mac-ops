@@ -1,0 +1,55 @@
+# the job's own command, the report part: overnight shift --at report --dry-run
+overnight: 2026-11-13 14:15 PST morning report
+overnight: wrote /Users/shyamsivakumar/Code/coordinator/.overnight/receipts/morning-2026-11-13.md
+exit=0
+
+# the overnight folder after the dry night
+/Users/shyamsivakumar/Code/coordinator/.overnight/inbox:
+total 0
+drwxr-xr-x@ 2 shyamsivakumar  staff   64 Nov 13 07:32 .
+drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:15 ..
+
+/Users/shyamsivakumar/Code/coordinator/.overnight/receipts:
+total 8
+drwxr-xr-x@ 3 shyamsivakumar  staff   96 Nov 13 14:15 .
+drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:15 ..
+-rw-r--r--@ 1 shyamsivakumar  staff  633 Nov 13 14:15 morning-2026-11-13.md
+
+/Users/shyamsivakumar/Code/coordinator/.overnight/run:
+total 0
+drwxr-xr-x@ 2 shyamsivakumar  staff   64 Nov 13 07:32 .
+drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:15 ..
+
+/Users/shyamsivakumar/Code/coordinator/.overnight/staging:
+total 0
+drwxr-xr-x@ 2 shyamsivakumar  staff   64 Nov 13 07:32 .
+drwxr-xr-x@ 7 shyamsivakumar  staff  224 Nov 13 14:15 ..
+
+# the report
+# Overnight report — Nov 13, 2026 (the window is UNVERIFIED)
+
+How it ended: UNVERIFIED. Items: UNVERIFIED planned, 0 done, 0 ready, 0 stuck, 0 parked.
+
+## Merged (checked on GitHub)
+
+- None.
+
+## Ready for you (gate PASS, waiting on a merge right the shift does not have)
+
+- None.
+
+## Stuck (what stopped it, and the next step)
+
+- None.
+
+## Decisions for you (one at a time, each with my recommendation)
+
+1. None.
+
+## Not run, and why
+
+- Full suite: UNVERIFIED (the shift log records no full suite run).
+
+## Cost
+
+- Builder time: UNVERIFIED (the planned count is UNVERIFIED). Model use: UNVERIFIED (the allowance was not readable).

@@ -7,6 +7,10 @@ Used by the "Pi - Coordinator" Remote Control relay (Claude app on the phone).
 """
 import glob, json, os, subprocess, sys, time
 
+USAGE = """usage: coord-ask "<message>"   send the message to the coordinator and print its reply
+       coord-ask --last        print the coordinator's latest reply without sending
+"""
+
 SESSION_DIRS = [os.path.expanduser(p) for p in (
     "~/.pi/agent-coordinator/sessions/--Users-shyamsivakumar-Code-coordinator--",
     "~/.pi/agent/sessions/--Users-shyamsivakumar-Code-coordinator--",
@@ -51,11 +55,17 @@ def last_reply():
 
 def main():
     args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help"):
+        print(USAGE, end=""); sys.exit(1)
     if not args:
-        sys.exit(__doc__)
+        print(USAGE, file=sys.stderr, end=""); sys.exit(1)
     if args == ["--last"]:
         print(last_reply()[1]); return
     msg = " ".join(args).replace("\n", " ").strip()
+    # A message that starts with "-" is a flag, not something to send.
+    if not msg or msg.startswith("-"):
+        print(f"coord-ask: refusing to send {msg!r}", file=sys.stderr)
+        print(USAGE, file=sys.stderr, end=""); sys.exit(1)
     t = terminal()
     before, _ = last_reply()
     subprocess.run(["hc", "send", t, f"From Shyam (phone): {msg}"], check=True, capture_output=True, timeout=30)

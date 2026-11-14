@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The overnight shift (spec part T12). One job fires twice a night: at
+     22:30 it starts the shift, at 06:30 it writes the morning report. The
+     shift runs in dry-run mode until the arm and tick parts (T4, T5) land,
+     so the job reads the board and writes the morning report, and nothing
+     else. No RunAtLoad: a night does not start at every boot. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.coordinator.overnight</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@HOME@/.local/bin/overnight</string>
+        <string>shift</string>
+        <string>--dry-run</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>22</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>6</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>@HOME@/.local/bin:@HOME@/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@HOME@/Library/Logs/coordinator/overnight.log</string>
+    <key>StandardErrorPath</key>
+    <string>@HOME@/Library/Logs/coordinator/overnight.log</string>
+</dict>
+</plist>
