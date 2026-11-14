@@ -1,79 +1,78 @@
 # MO-225 decisions
 
-Overnight runner spec part T14: the first unattended night. The night works
-the whole backlog, with no item cap, over the full window, and leaves one
-morning report.
+Overnight runner spec part T14: the first unattended night. The coordinator
+does checked work unattended and leaves one morning report.
 
 Run id: `ticket:shyamsivakumar/mac-ops#193:a1`. Refs #193.
 
 ## What this ticket does and does not claim
 
-The command that runs the unattended night now exists and is proven against
-the real board (`overnight night`, proof below). The real overnight window
-(22:30 to 06:00 PT on the Mac, with nobody watching) has **not run yet**:
-the launchd job runs it tonight once the installer has put the new job and
-the new command on this Mac. The first real morning report is therefore
-Shyam's to read in the morning, and this ticket does not claim it has been
-read.
+The shift now runs real cycles, unattended, and leaves one morning report a
+day. The command is proven against the real board (proof below). The real
+overnight run has **not happened yet**: the Mac needs the installer to put
+the new job and the new command in place, and then the job runs the shift
+every 30 minutes, 24x7, and the first morning report lands in the morning.
+Shyam reads that report. This ticket does not claim it has been read.
 
-What the night does and does not do:
+The branch was rebased onto `origin/main` after the gate's first FAIL, and
+the design was reworked against main's revision 3 of the spec
+(`c41a3b4`, "Overnight: the shift runs 24x7 and the pi tick is retired"):
 
-- It works the whole backlog: every ticket in an allowed repository, minus
-  the Ascend work, the holds, the tickets that need Shyam and the tickets
-  with an open question in the decisions log. There is no item cap, no
-  allowance stop and no allowance read. The board is the list, so there is
-  no second queue and no punch-list file.
-- It runs no merge, no push and no builder. The queue and the tick do that
-  work, under the rules that apply today, and the night records what they
-  really did: each item's pull request, its checks, the gate's verdict and
-  the merge time. This is the module's own division of labour (the tick
-  part, T5, works the board; MO-239, mac-ops #251), and it is why the
-  night needs no merge right, no push right and no slot-cap change.
-- It refuses a cycle it cannot fully check. A stale board, ticket text it
-  could not read or a decisions log it could not read stops the cycle and
-  says so in the shift log, rather than reporting from half the truth.
-- It reads the policy snapshot first. A night with no contract does no
-  work.
+- Main retired the night window. The shift runs 24x7, has no 22:30 start,
+  no 06:00 deadline, is never armed and never unarmed, and every firing is
+  one cycle. The first version of this ticket added a 22:30-to-06:00
+  `overnight night` command with its own window. That window is gone: it
+  contradicted main, and the shift has no window to work in.
+- Main's `cmd_shift` already writes the receipts of every item whose state
+  changed, from the board under the policy snapshot. The first version of
+  this ticket wrote its own receipts. That code is gone: main's is the one
+  that stays, and this ticket does not fork it.
+- The tick job was retired. The shift job took over its 30-minute cadence,
+  and it runs in dry-run mode. T14 is the part that makes the job do the
+  real work.
+
+So "full window" (spec revision 2) now means what main's revision 3 means:
+the shift runs the whole time, works the whole backlog, and there is no
+item cap and no allowance stop. The morning report is the one thing Shyam
+reads.
 
 ## What landed
 
-- `coordinator/overnight/overnight`: a new `night` subcommand in the same
-  module as `intake`, `filter`, `order`, `board`, `report`, `shift`,
-  `policy` and `attend`. Not a bolt-on: the module already holds the
-  board read, the filter, the policy snapshot, the receipts and the report
-  code, and the night uses those parts.
-  - The window is the spec's: the night starts when it starts and closes
-    at 06:00 PT, so a night that starts late still ends at 06:00 PT.
-  - The cycle is the tick's cadence, 30 minutes. Each cycle reads the
-    whole board again and writes a receipt only when the item's state
-    changed.
-  - The receipt holds the pull request, the check with its exit code, the
-    gate's verdict, the merge time when it merged, and the builder time as
-    `UNVERIFIED`, because the night does not know how long a builder ran.
-    The night records its own looking time apart from the builder's.
-  - `--minutes` and `--cycles` bound a run, so a rehearsal can run
-    without the whole night. `--dry-run` reads the board and writes no
-    record.
-- `coordinator/overnight/overnight`: the shift command's start phase now
-  runs the unattended night instead of refusing to start a real shift. The
-  report phase is unchanged.
-- `coordinator/overnight/overnight`: the report has one new state,
-  `waiting`: an item whose builder holds it and has no pull request yet.
-  It is not stuck, and it is not a decision for Shyam, so it is listed
-  under "Still running" instead of "Decisions for you". Before this, the
-  whole backlog without a pull request would have landed in the decisions
-  list, which is what the first proof run showed.
-- `coordinator/launchd/dev.coordinator.overnight.plist`: the job runs the
-  shift for real (`shift`, not `shift --dry-run`). At 22:30 it starts the
-  night; at 06:30 it writes the morning report from the same records.
-- `coordinator/overnight/README.md`: the contract names the new command,
-  the new state and the new job behaviour.
-- `evidence/MO-225/night/`: the proof run's records: `run/policy.json`,
-  `run/armed`, `run/deadline`, `run/shift-log.md`, 75 receipts and the
-  morning report `receipts/morning-2026-11-13.md`.
+- `coordinator/launchd/dev.coordinator.overnight.plist`: the job runs real
+  cycles (`shift`, not `shift --dry-run`). Every 30 minutes the shift reads
+  the policy snapshot, reads the whole board, and writes a receipt for every
+  item whose state changed.
+- `coordinator/overnight/overnight`: the first cycle of the morning writes
+  the day's morning report, so a day has one report and Shyam reads one
+  thing in the morning. The shift has no window; the report has a time
+  (06:00 to 07:29 PT, an hour and a half wide so a Mac that wakes late
+  still writes it). `overnight shift --report` writes it on demand, and a
+  later morning cycle leaves the day's report alone.
+- `coordinator/overnight/overnight`: `run/STOP` still stops the shift at the
+  next cycle, and the report still runs when it does. The report then says
+  the shift ended with STOP, which is the record of the day.
+- `coordinator/overnight/overnight`: the cycle states the count it worked,
+  so the report's planned count is the count of the items the report lists.
+  The order's own line keeps its per-repository detail: the order counts the
+  work items, and the cycle counts every item it saw, including the pull
+  requests already in flight and the backlog.
+- `coordinator/overnight/overnight`: a pull request whose view cannot be
+  read or parsed is no longer treated as a pull request that did not merge.
+  The receipt says the view could not be read, so the item is never counted
+  as done on a guess. (This was the gate's minor finding about a silently
+  swallowed parse error, in main's receipt code.)
+- `coordinator/overnight/README.md`: the contract names the real cycles, the
+  morning report and the stop switch.
+- `tests/test_install_coordinator.py`: the test that pinned the job to
+  dry-run mode now pins it to real cycles. The behavior it asserted is the
+  behavior this ticket changes; the assertion is as strict as before.
+- `evidence/MO-225/shift/`: the proof run's records: `run/policy.json`,
+  `run/shift-log.md`, the receipts and the morning report.
 
-Not touched: the merge, push, slot-cap and Ascend rules. The night reads
-the queue's slot cap (6) and never writes it. No secret is read or
+Not touched: the merge, push, slot-cap and Ascend rules. The shift reads
+the queue's slot cap and never writes it. It starts no builder and runs no
+merge and no push: the queue starts the work, under the rules that apply
+today, and the shift records what it really saw. No secret is read or
 written.
 
 ## The proof
@@ -81,30 +80,41 @@ written.
 The real command, against the real board, with read-only `gh` calls:
 
 ```sh
-overnight policy --root evidence/MO-225/night
-overnight night --root evidence/MO-225/night --minutes 1 --interval 60
+overnight policy --root evidence/MO-225/shift
+overnight shift --root evidence/MO-225/shift --report
 ```
 
-- 75 items planned, 8 dropped by the filter (with their reasons), 75
-  receipts written, 2 cycles, ended: deadline.
-- The morning report (`evidence/MO-225/night/receipts/morning-2026-11-13.md`):
-  "How it ended: deadline. Items: 75 planned, 0 done, 0 ready, 6 stuck, 0
-  parked, 69 waiting." The six stuck items are real: three pull requests
-  whose checks fail and three whose gate the shift could not read
-  (`UNKNOWN`). The 69 waiting items have no pull request yet.
-- The window in the proof was one minute, not the full night, so the run
-  fits the turn cap. The full window is the launchd job's window.
+- One cycle, 94 items, 94 receipts, one morning report.
+- The report says: "How it ended: UNVERIFIED. Items: 94 planned, 0 done, 0
+  ready, 94 stuck, 0 parked." The end line is UNVERIFIED because a 24x7
+  shift does not end: the shift log says how it ended only when the shift
+  stopped, when everything finished or when it stalled. The stopped case is
+  proven separately (below).
+- The stop switch is proven by hand: with `run/STOP` in place, the cycle
+  stops before it works anything, and the report is still written and says
+  "How it ended: STOP".
+- A second cycle was run over the same folder: it rewrote only the receipts
+  whose state or evidence changed and left the rest alone, and it left the
+  day's report alone.
 
 ## What is left
 
 1. Install on this Mac: `python3 install_coordinator.py` in `~/Code/mac-ops`,
-   so the new `overnight` command and the new launchd job are live.
-2. The real window: the job starts the night at 22:30 PT, the cycles run
-   until 06:00 PT, and the morning report lands by 06:30 PT. Shyam reads
-   it in the morning. That is T14's acceptance, and it is not yet met.
+   so the new `overnight` command and the new job are live.
+2. The real run: the job's cycles then run unattended, 24x7, and the first
+   morning report lands by 07:29 PT. Shyam reads it in the morning. That is
+   T14's acceptance, and it is not met yet.
 3. The gate's call on the diff.
+
+## Known limits of main's model, unchanged here
+
+- An item whose builder has not opened a pull request yet is `stuck` in
+  main's vocabulary, so a day with a full backlog reads as a day of stuck
+  items. That is main's state model, and changing it is a separate ticket.
+- The report's window is UNVERIFIED for the same reason the end line is: a
+  24x7 shift has no window and no end.
 
 ## Rollback
 
 Revert the commit and reinstall. The old job ran `shift --dry-run`, so a
-reverted Mac reads the board and writes the morning report again.
+reverted Mac reads the board and writes the cycle's line again.
