@@ -66,8 +66,10 @@ new unit test file was added, and no existing test or check was touched.
 ### The live board: the refill started a ticket from past the old window
 
 The real refill ran against the live board and the live coordinator queue
-directory (`~/Code/coordinator/queue`), from the branch head, and the log
-lines are in `~/Code/coordinator/queue/dispatch.log`:
+directory (`~/Code/coordinator/queue`), from the branch copy of
+`coordinator/bin/coordq` at commit `821d75b` (the head that carries the
+refusal-contract fix, and the code that produced the quoted lines), and the
+log lines are in `~/Code/coordinator/queue/dispatch.log`:
 
 ```
 2026-11-13 17:37:36 refill started shyamsivakumar/strategy-replay-workbench#899
@@ -125,6 +127,21 @@ though its last refusal is still on file.
 - `~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py` passed.
 - The head sha and the check result are in the pull request body.
 
+## The installed coordinator
+
+The installed `~/.local/bin/coordq` on this Mac carries pull request #251
+head `6343bdef`, which has the gate backstop and the gate subcommand. This
+branch changes the same file, so after both pull requests merge the
+installer must run once from `main` so the installed file matches the merged
+code. The installer was not run for this ticket.
+
+The live proof above did not depend on the installed file: it ran the branch
+copy of `coordinator/bin/coordq` directly against the live queue directory,
+so the quoted `refill pass 5` line comes from this branch's head
+(`821d75b`), not from the installed binary and not from the old code (the
+old code writes `refill scanned N candidate(s)`, a line that is not in that
+log segment).
+
 ## The reviewer round and the gate
 
 The in-session Opus 5.5 round read `git diff origin/main...HEAD` and
@@ -159,7 +176,11 @@ The coordinator's gate then read the branch at `94bef35` and returned
 3. **The exit code cannot tell a refusal from a failed check.** Fixed on the
    `coordq` side: `is_refusal()` reads `refused:` out of the output. The
    ticket CLI was not touched, because it is out of scope for this ticket.
-4. **The `ticket_start` docstring did not match the code.** Fixed.
+4. **The `ticket_start` docstring did not match the code.** Fixed, and the
+   comment on `REFUSE_CODE` now states the real contract: a refusal and a
+   usage error both exit 2, a missing or unknown issue exits 1.
+5. **The Builder check line named an older head.** The pull request body
+   names the head the check ran on, and this file records the same head.
 
 ## Known limits
 
