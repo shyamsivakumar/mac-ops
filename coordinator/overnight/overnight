@@ -121,6 +121,7 @@ from typing import NoReturn
 
 TICKET = os.environ.get("OVERNIGHT_TICKET", "ticket")
 GH = os.environ.get("OVERNIGHT_GH", "gh")
+OVERNIGHT_BIN = os.environ.get("OVERNIGHT_BIN", "overnight")
 TICKET_TIMEOUT = 300
 GH_TIMEOUT = 60
 # The whole intake runs inside the turn cap, so every subprocess gets what
@@ -1229,14 +1230,14 @@ def parse_receipt(path: Path) -> dict:
     return {"path": path, "fields": fields, "checks": checks}
 
 
-def unrun_checks(receipt: dict) -> list[dict]:
-    """Return the checks of a receipt that did not run.
+def unrun_checks(checks: list[dict]) -> list[dict]:
+    """Return the checks that did not run.
 
     A check with no command or no exit code is a claim, not a run. The
     report never reports such a check as passed."""
     return [
         check
-        for check in receipt["checks"]
+        for check in checks
         if not check["command"] or check["exit"] is None
     ]
 
@@ -1270,12 +1271,16 @@ def evidence_holds(fields: dict, checks: list[dict]) -> tuple[bool, str]:
     read it from one place."""
     if not checks:
         return False, "the receipt holds no check, so nothing ran"
-    missing = [check for check in checks if not check["command"] or check["exit"] is None]
+    missing = unrun_checks(checks)
     if missing:
         names = ", ".join(check["raw"] for check in missing)
         return False, f"a check has no exit code, so it did not run ({names})"
     failed = [check for check in checks if check["exit"] != 0]
     if failed:
+        unknown = [check for check in failed if check["exit"] == 2]
+        if unknown:
+            names = ", ".join(check["raw"] for check in unknown)
+            return False, f"the check did not run, so it proved nothing ({names})"
         names = ", ".join(check["raw"] for check in failed)
         return False, f"a check failed ({names})"
     if (fields.get("gate") or "").strip().upper() != "PASS":
@@ -1552,7 +1557,7 @@ def render_report(snapshot: dict) -> str:
     lines.append("")
     not_run: list[str] = []
     for receipt in receipts:
-        for check in unrun_checks(receipt):
+        for check in unrun_checks(receipt["checks"]):
             label = item_label(receipt)
             if check["command"]:
                 not_run.append(
@@ -3437,6 +3442,68 @@ def read_thread_facts(thread_id: str, deadline: float) -> dict:
     return facts
 
 
+def check_head_holds(repo: str, number: int, deadline: float) -> int:
+    """Return what a pull request's head carries: 0, 1 or 2.
+
+    0: a check ran on the head and passed. 1: a check ran on the head and
+    did not pass. 2: no check ran on the head, or the head could not be
+    read.
+
+    Only a published check counts. The builder's own line in the pull
+    request body, `Builder check: PASS <head>`, is a claim about the
+    check and not the check, so it never makes a head pass. A repository
+    that publishes no checks (CI is agent checks only, as in mac-ops) has
+    no evidence on its heads, and the shift says so."""
+    code, out = run_read(
+        [
+            GH,
+            "pr",
+            "checks",
+            str(number),
+            "-R",
+            repo,
+            "--json",
+            "name,state,bucket",
+        ],
+        GH_TIMEOUT,
+        deadline,
+    )
+    if code != 0:
+        return 2
+    try:
+        rows = json.loads(out or "[]")
+    except ValueError:
+        return 2
+    if not isinstance(rows, list) or not rows:
+        return 2
+    failed = [
+        row
+        for row in rows
+        if str(row.get("bucket") or row.get("state") or "").upper()
+        not in ("PASS", "SUCCESS")
+    ]
+    return 1 if failed else 0
+
+
+def check_line(repo: str, number: int, deadline: float) -> str:
+    """Return the receipt's check line: the command the shift ran, and its exit.
+
+    A check counts as run only when the receipt names the command and its
+    exit code, so the line holds the command that really ran: the shift
+    asks `overnight check-head` what the pull request's head carries, and
+    the command it records is the command it ran."""
+    argv = [
+        OVERNIGHT_BIN,
+        "check-head",
+        "--repo",
+        repo,
+        "--number",
+        str(number),
+    ]
+    code, _out = run_read(argv, GH_TIMEOUT, deadline)
+    return f"`{' '.join(argv)}` exit {code}"
+
+
 def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
     """Return what one item really shows, from its pull request and its threads.
 
@@ -3478,10 +3545,7 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
         return facts
 
     facts["pr"] = item.get("url") or ""
-    code, _out = run_read(
-        [GH, "pr", "checks", str(number), "-R", repo], GH_TIMEOUT, deadline
-    )
-    facts["checks"] = f"`gh pr checks {number} -R {repo}` exit {code}"
+    facts["checks"] = check_line(repo, number, deadline)
     failed = (item.get("checks") or {}).get("failed") or []
     facts["failing"] = [str(name) for name in failed]
 
@@ -3580,6 +3644,28 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
     return facts
 
 
+def issue_number(item: dict) -> object:
+    """Return the number of the ticket's issue, or nothing when it has none.
+
+    The board numbers its issues and GitHub numbers its pull requests in
+    different counters, so an item that is a pull request carries the
+    issue number in `ticket` and its own number in `number`. A pull
+    request with no linked ticket has no issue to close, so it has no
+    issue number here: the receipt leaves the number out and the close
+    step finds no receipt for it."""
+    ticket = item.get("ticket")
+    if ticket:
+        return ticket
+    if item.get("kind") == "pull-request":
+        return ""
+    return item.get("number")
+
+
+def ticket_text(number: object) -> str:
+    """Return the issue number as a receipt's Ticket line writes it."""
+    return f" (#{number})" if number else ""
+
+
 def receipt_body(item: dict, facts: dict, observed: int) -> str:
     """Return the text of one receipt.
 
@@ -3590,7 +3676,7 @@ def receipt_body(item: dict, facts: dict, observed: int) -> str:
     lines = [f"# {label}", ""]
     lines.append(f"- Item: {title}")
     lines.append(f"- Repo: {item.get('repo') or ''}")
-    lines.append(f"- Ticket: {item.get('key') or ''} (#{item.get('number')})")
+    lines.append(f"- Ticket: {item.get('key') or ''}{ticket_text(issue_number(item))}")
     lines.append(f"- State: {facts['state']}")
     if item.get("kind") != "pull-request" and item.get("url"):
         lines.append(f"- Issue: {item['url']}")
@@ -3694,6 +3780,40 @@ def run_write(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
 
+def cmd_check_head(args: argparse.Namespace) -> int:
+    """Check a pull request's head against the checks that ran on it.
+
+    A repository that publishes checks is checked with `gh pr checks`. A
+    repository that publishes none (CI is agent checks only, as in
+    mac-ops) has no check on its heads, so the shift knows that and says
+    so. The builder's own line in the pull request body is a claim about
+    the check and not the check, so it never counts.
+
+    Exit 0: a check ran on the head and passed. Exit 1: a check ran on
+    the head and did not pass. Exit 2: no check ran on the head, or the
+    head could not be read, which is a refusal."""
+    deadline = time.monotonic() + args.deadline
+    code = check_head_holds(args.repo, args.number, deadline)
+    if code == 0:
+        emit(
+            f"overnight: {args.repo}#{args.number} carries a check that ran "
+            "and passed"
+        )
+    elif code == 1:
+        emit(
+            f"overnight: {args.repo}#{args.number} carries a check that ran "
+            "and did not pass",
+            err=True,
+        )
+    else:
+        emit(
+            f"overnight: REFUSED: no check ran on the head of "
+            f"{args.repo}#{args.number}, so the check is unknown",
+            err=True,
+        )
+    return code
+
+
 def cmd_close(args: argparse.Namespace) -> int:
     """Close a ticket's issue when its receipt holds the evidence.
 
@@ -3705,12 +3825,8 @@ def cmd_close(args: argparse.Namespace) -> int:
     is missing."""
     deadline = time.monotonic() + args.deadline
     root = report_root(args.root)
-    if args.receipt:
-        path = Path(args.receipt).expanduser()
-    else:
-        found = find_receipt(root, args.repo, args.number)
-        path = found if found else Path("")
-    if not path.name:
+    path = find_receipt(root, args.repo, args.number)
+    if path is None:
         emit(
             f"overnight: REFUSED: no receipt for {args.repo}#{args.number}, "
             "so there is no evidence to close on",
@@ -4331,11 +4447,6 @@ def main() -> int:
         "--number", required=True, type=int, help="the number of the ticket's issue"
     )
     close.add_argument(
-        "--receipt",
-        default=None,
-        help="the receipt file to read (default: the receipt of the ticket)",
-    )
-    close.add_argument(
         "--root",
         default=None,
         help="the folder that holds the shift's records (default the runtime folder)",
@@ -4352,6 +4463,21 @@ def main() -> int:
         help=f"seconds the whole close may take (default {DEFAULT_DEADLINE})",
     )
     close.set_defaults(func=cmd_close)
+    head = sub.add_parser(
+        "check-head",
+        help="check a pull request's head against the checks that ran on it",
+    )
+    head.add_argument("--repo", required=True, help="the repository of the pull request")
+    head.add_argument(
+        "--number", required=True, type=int, help="the number of the pull request"
+    )
+    head.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole check may take (default {DEFAULT_DEADLINE})",
+    )
+    head.set_defaults(func=cmd_check_head)
     redact_cmd = sub.add_parser(
         "redact",
         help="print a text with every secret pattern redacted",
