@@ -104,6 +104,10 @@ from typing import NoReturn
 
 TICKET = os.environ.get("OVERNIGHT_TICKET", "ticket")
 GH = os.environ.get("OVERNIGHT_GH", "gh")
+# The installed command of this module. The receipt records the command it
+# ran, and the shift checks a head with this command when a repository
+# publishes no checks of its own.
+OVERNIGHT_BIN = os.environ.get("OVERNIGHT_BIN", "overnight")
 TICKET_TIMEOUT = 300
 GH_TIMEOUT = 60
 # The whole intake runs inside the turn cap, so every subprocess gets what
@@ -900,14 +904,14 @@ def parse_receipt(path: Path) -> dict:
     return {"path": path, "fields": fields, "checks": checks}
 
 
-def unrun_checks(receipt: dict) -> list[dict]:
-    """Return the checks of a receipt that did not run.
+def unrun_checks(checks: list[dict]) -> list[dict]:
+    """Return the checks that did not run.
 
     A check with no command or no exit code is a claim, not a run. The
     report never reports such a check as passed."""
     return [
         check
-        for check in receipt["checks"]
+        for check in checks
         if not check["command"] or check["exit"] is None
     ]
 
@@ -941,7 +945,7 @@ def evidence_holds(fields: dict, checks: list[dict]) -> tuple[bool, str]:
     read it from one place."""
     if not checks:
         return False, "the receipt holds no check, so nothing ran"
-    missing = [check for check in checks if not check["command"] or check["exit"] is None]
+    missing = unrun_checks(checks)
     if missing:
         names = ", ".join(check["raw"] for check in missing)
         return False, f"a check has no exit code, so it did not run ({names})"
@@ -1223,7 +1227,7 @@ def render_report(snapshot: dict) -> str:
     lines.append("")
     not_run: list[str] = []
     for receipt in receipts:
-        for check in unrun_checks(receipt):
+        for check in unrun_checks(receipt["checks"]):
             label = item_label(receipt)
             if check["command"]:
                 not_run.append(
@@ -3107,6 +3111,75 @@ def read_thread_facts(thread_id: str, deadline: float) -> dict:
     return facts
 
 
+def check_head_holds(repo: str, number: int, deadline: float) -> int:
+    """Return 0 when the pull request's head carries a passing check, else 1.
+
+    The check is the one the coordinator's gate reads: the agent check a
+    repository publishes on the head, or the builder's own line in the
+    pull request body, `Builder check: PASS <head>`. A repository that
+    publishes no checks at all (CI is agent checks only, as in mac-ops)
+    still carries that line, so its head can be checked like any other.
+    A head that cannot be read is a refusal, never a pass."""
+    code, out = run_read(
+        [
+            GH,
+            "pr",
+            "view",
+            str(number),
+            "-R",
+            repo,
+            "--json",
+            "body,headRefOid",
+        ],
+        GH_TIMEOUT,
+        deadline,
+    )
+    if code != 0:
+        return 2
+    try:
+        pull = json.loads(out)
+    except ValueError:
+        return 2
+    head = str(pull.get("headRefOid") or "")
+    try:
+        rows, unknown = read_checks(repo, number, deadline)
+    except RepoError:
+        rows, unknown = [], "the checks could not be read"
+    if not head or unknown:
+        return 2
+    return 0 if builder_check_passes(pull, rows, head) else 1
+
+
+def check_line(repo: str, number: int, deadline: float) -> str:
+    """Return the receipt's check line: the command the shift ran, and its exit.
+
+    A check counts as run only when the receipt names the command and its
+    exit code, so the line holds the command that really ran. A pull
+    request that publishes checks is read with `gh pr checks`. A pull
+    request that publishes none is read with `overnight check-head`, which
+    checks the head against the published check and the builder's line,
+    and so has an exit code of its own."""
+    try:
+        rows, _unknown = read_checks(repo, number, deadline)
+    except RepoError:
+        rows = []
+    if rows:
+        code, _out = run_read(
+            [GH, "pr", "checks", str(number), "-R", repo], GH_TIMEOUT, deadline
+        )
+        return f"`gh pr checks {number} -R {repo}` exit {code}"
+    argv = [
+        OVERNIGHT_BIN,
+        "check-head",
+        "--repo",
+        repo,
+        "--number",
+        str(number),
+    ]
+    code, _out = run_read(argv, GH_TIMEOUT, deadline)
+    return f"`{' '.join(argv)}` exit {code}"
+
+
 def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
     """Return what one item really shows, from its pull request and its threads.
 
@@ -3148,10 +3221,7 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
         return facts
 
     facts["pr"] = item.get("url") or ""
-    code, _out = run_read(
-        [GH, "pr", "checks", str(number), "-R", repo], GH_TIMEOUT, deadline
-    )
-    facts["checks"] = f"`gh pr checks {number} -R {repo}` exit {code}"
+    facts["checks"] = check_line(repo, number, deadline)
     failed = (item.get("checks") or {}).get("failed") or []
     facts["failing"] = [str(name) for name in failed]
 
@@ -3200,10 +3270,6 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
         facts["why"] = "a check is failing: " + ", ".join(facts["failing"])
         facts["next"] = "the builder fixes the failing check and the gate runs again"
     elif merged:
-        # The spec's evidence rule (part T6): the merge alone is not the
-        # proof. The receipt has to hold the command, its exit code and
-        # the gate's PASS before the item counts as done, so a receipt
-        # never claims a done item it cannot show.
         holds, reason = evidence_holds(
             {"gate": facts["gate"]}, parse_check_text(facts["checks"])
         )
@@ -3238,6 +3304,16 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
     return facts
 
 
+def issue_number(item: dict) -> object:
+    """Return the number of the ticket's issue, not of its pull request.
+
+    The board numbers its issues and GitHub numbers its pull requests in
+    different counters, so an item that is a pull request carries the
+    issue number in `ticket` and its own number in `number`. The close
+    step and the receipt both address the issue, so both read it here."""
+    return item.get("ticket") or item.get("number")
+
+
 def receipt_body(item: dict, facts: dict, observed: int) -> str:
     """Return the text of one receipt.
 
@@ -3248,7 +3324,7 @@ def receipt_body(item: dict, facts: dict, observed: int) -> str:
     lines = [f"# {label}", ""]
     lines.append(f"- Item: {title}")
     lines.append(f"- Repo: {item.get('repo') or ''}")
-    lines.append(f"- Ticket: {item.get('key') or ''} (#{item.get('number')})")
+    lines.append(f"- Ticket: {item.get('key') or ''} (#{issue_number(item)})")
     lines.append(f"- State: {facts['state']}")
     if item.get("kind") != "pull-request" and item.get("url"):
         lines.append(f"- Issue: {item['url']}")
@@ -3349,6 +3425,36 @@ def run_write(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
 
+def cmd_check_head(args: argparse.Namespace) -> int:
+    """Check a pull request's head against the check the gate reads.
+
+    A repository that publishes checks is checked by `gh pr checks`. A
+    repository that publishes none (CI is agent checks only, as in
+    mac-ops) carries the builder's own line, `Builder check: PASS <head>`,
+    in the pull request body. This command answers for both, so a shift
+    has a command with an exit code to record in a receipt.
+
+    Exit 0: the head carries a passing check. Exit 1: it does not. Exit 2:
+    the head or its checks could not be read, which is a refusal."""
+    deadline = time.monotonic() + args.deadline
+    code = check_head_holds(args.repo, args.number, deadline)
+    if code == 0:
+        print(f"overnight: {args.repo}#{args.number} carries a passing check")
+    elif code == 1:
+        print(
+            f"overnight: {args.repo}#{args.number} carries no passing check "
+            "on its head",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"overnight: REFUSED: the head of {args.repo}#{args.number} could "
+            "not be read, so the check is unknown",
+            file=sys.stderr,
+        )
+    return code
+
+
 def cmd_close(args: argparse.Namespace) -> int:
     """Close a ticket's issue when its receipt holds the evidence.
 
@@ -3360,12 +3466,8 @@ def cmd_close(args: argparse.Namespace) -> int:
     is missing."""
     deadline = time.monotonic() + args.deadline
     root = report_root(args.root)
-    if args.receipt:
-        path = Path(args.receipt).expanduser()
-    else:
-        found = find_receipt(root, args.repo, args.number)
-        path = found if found else Path("")
-    if not path.name:
+    path = find_receipt(root, args.repo, args.number)
+    if path is None:
         print(
             f"overnight: REFUSED: no receipt for {args.repo}#{args.number}, "
             "so there is no evidence to close on",
@@ -3981,11 +4083,6 @@ def main() -> int:
         "--number", required=True, type=int, help="the number of the ticket's issue"
     )
     close.add_argument(
-        "--receipt",
-        default=None,
-        help="the receipt file to read (default: the receipt of the ticket)",
-    )
-    close.add_argument(
         "--root",
         default=None,
         help="the folder that holds the shift's records (default the runtime folder)",
@@ -4002,6 +4099,21 @@ def main() -> int:
         help=f"seconds the whole close may take (default {DEFAULT_DEADLINE})",
     )
     close.set_defaults(func=cmd_close)
+    head = sub.add_parser(
+        "check-head",
+        help="check a pull request's head against the check the gate reads",
+    )
+    head.add_argument("--repo", required=True, help="the repository of the pull request")
+    head.add_argument(
+        "--number", required=True, type=int, help="the number of the pull request"
+    )
+    head.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole check may take (default {DEFAULT_DEADLINE})",
+    )
+    head.set_defaults(func=cmd_check_head)
     args = parser.parse_args()
     return args.func(args)
 

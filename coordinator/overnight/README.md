@@ -29,6 +29,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
 | `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order. `--dry-run` prints the receipt and writes no file. |
 | `overnight close --repo <repo> --number <n>` | Closes a ticket's issue, and only when the receipt holds the evidence (spec part T6): a check command, its exit code and a gate PASS on the pull request. A receipt with a claim but no exit code leaves the issue open, and the command says which record is missing. `--dry-run` says what the close would run and closes nothing. |
+| `overnight check-head --repo <repo> --number <n>` | Checks a pull request's head against the check the coordinator's gate reads, and exits 0 only when the head carries one. It is the command a receipt records for a repository that publishes no checks of its own (CI is agent checks only, as in mac-ops). Exit 1 means no passing check on the head; exit 2 means the head or its checks could not be read, which is a refusal. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
@@ -174,13 +175,37 @@ overnight close --repo shyamsivakumar/mac-ops --number 182 --dry-run
 
 The close step finds the receipt by the fields it holds (the repository and
 the issue number in its `Ticket` line), so the folder of receipts stays the
-only record of what the shift did. It refuses with a non-zero exit when the
-receipt holds no check, a check with no exit code, a check that failed, a
-gate that did not pass, or a state that is not `done`. The issue then stays
-open, and the refusal names the record that is missing.
+only record of what the shift did. The `Ticket` line names the ticket's
+issue, never its pull request: the board numbers issues and GitHub numbers
+pull requests in different counters, so the receipt holds both, the issue
+in `Ticket` and the pull request in `PR`. The close addresses the issue
+only, and it takes the number from the receipt it found, so a close can
+never land on another ticket's issue.
+
+It refuses with a non-zero exit when there is no receipt for that issue,
+when the receipt holds no check, a check with no exit code, a check that
+failed, a gate that did not pass, or a state that is not `done`. The issue
+then stays open, and the refusal names the record that is missing.
 
 The close step writes nothing but the close itself. It does not merge, does
-not push and does not touch the slot cap or the Ascend rules.
+not push and does not touch the slot cap or the Ascend rules. It has no
+caller yet: the gate's own brief still closes a ticket after its merge
+(`coordinator/bin/coordq`), and that path is unchanged by this part.
+
+## The check a receipt records
+
+A check counts as run only when the receipt names the command and its exit
+code, so the receipt writer records the command it really ran.
+
+| Repository | Command the receipt records |
+| --- | --- |
+| One that publishes checks | `gh pr checks <n> -R <repo>` and its exit code. |
+| One that publishes none (CI is agent checks only, as in mac-ops) | `overnight check-head --repo <repo> --number <n>` and its exit code. The command reads the head the gate reads: the agent check a repository publishes on it, or the builder's line in the pull request body, `Builder check: PASS <head>`. Exit 0 only when the head carries that check. |
+
+The second row exists because a repository with no CI statuses answers `gh
+pr checks` with exit 1 and "no checks reported". That is the absence of a
+check, not a failing one, and a receipt that recorded it as a run would
+mark every item of such a repository stuck.
 
 ## What the filter drops
 
