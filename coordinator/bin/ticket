@@ -1290,7 +1290,9 @@ def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend):
     close = (" Ascend repo: do not close the issue." if ascend else
              f" Only when that merge produced a merge commit, close the ticket: run `gh issue close "
              f"{issue_number} -R {repo} --comment \"VERDICT: PASS. Merged via #{pr} "
-             f"(<merge commit sha>).\"` with <merge commit sha> the merge commit you reported. "
+             f"(<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it "
+             f"with `gh pr view {pr} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge "
+             f"output did not give it. "
              f"On VERDICT: FAIL, or when the merge did not happen, close nothing.")
     return f"""{rcfg['key']}-{issue_number} review and merge · #{pr} {head}
 Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues/{issue_number}

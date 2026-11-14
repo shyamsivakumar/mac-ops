@@ -566,7 +566,7 @@ def gate_candidates(config):
                 merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
                          f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
                 close = (" Ascend repo: do not close the issue." if ascend else
-                         f" Only when that merge produced a merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
+                         f" Only when that merge produced a merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
                 check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
                          if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
                 message = f"""{settings['key']}-{issue} review and merge · #{number} {head}

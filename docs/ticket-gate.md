@@ -39,10 +39,12 @@ and the verdict pass on that head.
 
 A personal repository closes its ticket in the same step. After the merge
 produced a merge commit, the brief tells the gate to run `gh issue close
-<n> -R <repo> --comment "VERDICT: PASS. Merged via #<pr> (<merge sha>)."`
-so the board stops showing finished work as open. On a failed verdict, or
-when the merge did not happen, the brief closes nothing. An Ascend
-repository stops at the verdict and closes nothing either.
+<n> -R <repo> --comment "VERDICT: PASS. Merged via #<pr> (<merge commit
+sha>)."` so the board stops showing finished work as open. The merge
+commit is the one the gate reported, or the one `gh pr view <pr> --json
+mergeCommit` gives. On a failed verdict, or when the merge did not happen,
+the brief closes nothing. An Ascend repository stops at the verdict and
+closes nothing either.
 
 ## What it refuses
 
