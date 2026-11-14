@@ -45,7 +45,9 @@ class ReviewerQuotaTests(unittest.TestCase):
             receipts = {key: 'failed'}
             with patch.multiple(c, Lock=Lock, load=lambda: queue, save=lambda q: None,
                     load_counts=lambda: {}, write_counts=lambda *a: None,
-                    gate_candidates=lambda cfg: [event], load_receipts=lambda: receipts,
+                    # The same head reaches the loop twice, so the run must
+                    # queue one reviewer, not two.
+                    gate_candidates=lambda cfg: [event, event], load_receipts=lambda: receipts,
                     path=lambda name: d + '/' + name,
                     call=lambda *a: (0, json.dumps({'thread': {'status': 'failed', 'model': 'gpt-6-astra', 'providerInstanceId': 'codex'}, 'items': [{'type': 'assistant_message', 'text': 'spend limit'}]}))):
                 with redirect_stdout(io.StringIO()):

@@ -895,7 +895,7 @@ def quota_failure(value):
     return any(word in str(value).lower() for word in ("spend limit", "usage limit", "rate_limit", "429"))
 
 
-def fallback_reviewer(queue, key, current, models):
+def fallback_reviewer(queue, key, current, models=()):
     tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
     if current["model"] not in tried:
         tried.append(current["model"])
@@ -1086,7 +1086,7 @@ def cmd_gatekeep(a):
                     # another reviewer, continues on the next eligible one
                     # instead of being relaunched on the same account.
                     if quota_failure(data) or key in queue.get("gateReviewers", {}):
-                        current = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+                        current = {"model": thread.get("model")}
                         model = fallback_reviewer(queue, key, current, event.get("builderModels", []))
                         if model is None:
                             if not a.dry_run:
@@ -1140,6 +1140,12 @@ def write_counts(counts, seen, stuck, dry_run):
     with Lock(True):
         queue = load()
         queue["gatekeepSkips"] = kept
+        # The reviewers tried for a head are kept while the head is in the
+        # queue, so a fallback is not retried on every run. A head the queue
+        # no longer holds gives up its history.
+        queue["gateReviewers"] = {key: value
+                                  for key, value in (queue.get("gateReviewers") or {}).items()
+                                  if key in (queue.get("gatedHeads") or {})}
         save(queue)
     lines = [f"{pr} {head} {reason}" for pr, head, reason in sorted(stuck)]
     tmp = path(STUCK_FILE + ".tmp")
