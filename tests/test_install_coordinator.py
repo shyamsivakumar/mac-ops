@@ -397,6 +397,9 @@ class TestLaunchdReload(unittest.TestCase):
 
         def fake_status(argv, *, capture_error=None):
             calls.append(list(argv))
+            if argv[1] == "print":
+                # launchd has let the job go.
+                return 1
             return 0
 
         def fake_quiet(argv):
@@ -458,6 +461,7 @@ class TestLaunchdReload(unittest.TestCase):
                 [c for c in calls if c[0] == "launchctl"],
                 [
                     ["launchctl", "bootout", f"gui/{uid}/dev.coordinator.turncap"],
+                    ["launchctl", "print", f"gui/{uid}/dev.coordinator.turncap"],
                     ["launchctl", "bootstrap", f"gui/{uid}", str(plist)],
                 ],
             )
@@ -502,6 +506,57 @@ class TestLaunchdReload(unittest.TestCase):
             self.assertIn("Refused to reload", note)
             self.assertIn("Input/output error", note)
             self.assertEqual([c[1] for c in calls], ["bootout", "list"])
+
+    def test_a_refused_bootstrap_is_reported_and_the_job_is_said_to_be_down(self):
+        with temp_home() as td:
+            home = Path(td)
+            calls: list[list[str]] = []
+
+            def fake_status(argv, *, capture_error=None):
+                calls.append(list(argv))
+                if argv[1] == "bootstrap":
+                    if capture_error is not None:
+                        capture_error.append(
+                            "Bootstrap failed: 5: Input/output error"
+                        )
+                    return 5
+                if argv[1] == "print":
+                    return 1
+                if argv[1] == "list":
+                    return 1
+                return 0
+
+            with mock.patch.object(install_coordinator, "run_status", fake_status):
+                note = install_coordinator.reload_job(
+                    "dev.coordinator.turncap", home / "x.plist", os.getuid()
+                )
+            self.assertIn("Refused to reload", note)
+            self.assertIn("Input/output error", note)
+            self.assertIn("not loaded now", note)
+
+    def test_a_job_launchd_loaded_itself_counts_as_reloaded(self):
+        with temp_home() as td:
+            home = Path(td)
+
+            def fake_status(argv, *, capture_error=None):
+                if argv[1] == "bootstrap":
+                    if capture_error is not None:
+                        capture_error.append(
+                            "Bootstrap failed: 37: Operation already in progress"
+                        )
+                    return 37
+                if argv[1] == "print":
+                    return 1
+                if argv[1] == "list":
+                    return 0
+                return 0
+
+            with mock.patch.object(install_coordinator, "run_status", fake_status):
+                note = install_coordinator.reload_job(
+                    "dev.coordinator.turncap", home / "x.plist", os.getuid()
+                )
+            self.assertIn("Reloaded the launchd job dev.coordinator.turncap", note)
+            self.assertIn("launchd had loaded the new plist itself", note)
 
 
 class TestInstallPath(unittest.TestCase):
