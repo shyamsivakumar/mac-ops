@@ -229,18 +229,38 @@ export function blocksOf(text) {
   return out;
 }
 
-const newParser = () => ({ turns: [], open: new Map(), tools: new Map(), pending: null, tokens: 0, model: "", errored: false });
+const newParser = () => ({ turns: [], open: new Map(), tools: new Map(), pending: null, tokens: 0, model: "", errored: false, failure: null });
 
 const TEMPLATE_MARK = /\]<\][^\[\]]*\[>\[\w*/g;
 const ERROR_MESSAGE = /"message"\s*:\s*"([^"]*)"/;
 const ERROR_MAX = 140;
+const HICCUP_MAX = 60;
+
+const RAW_CALL = /<invoke|<\/tool_call>|\]<\][^\[\]]*\[>\[/;
 
 const stripMarks = (text) => text.replace(TEMPLATE_MARK, "");
 
-function errorLine(m) {
+function thinkingReply(m) {
+  const raw = blocks(m.content).filter((b) => b.type === "thinking").map((b) => b.thinking ?? "").join("\n\n");
+  const cut = RAW_CALL.exec(raw);
+  return { text: stripMarks(cut ? raw.slice(0, cut.index) : raw).trim(), rawCall: Boolean(cut) };
+}
+
+function errorMessage(m) {
   const raw = String(m.errorMessage ?? "").trim();
   const message = (ERROR_MESSAGE.exec(raw)?.[1] ?? raw).replace(/\s*\(\d{3}\)\s*$/, "").replace(/\.$/, "");
-  return `${m.provider ?? "model"} error: ${clip(message || "unknown error", ERROR_MAX)}. The turn stopped.`;
+  return clip(message || "unknown error", ERROR_MAX);
+}
+
+function failureItem(m) {
+  const provider = m.provider ?? "model";
+  const message = errorMessage(m);
+  return {
+    k: "event",
+    error: true,
+    text: `${provider} error: ${message}. The turn stopped.`,
+    retriedText: `${provider} hiccup (${clip(message, HICCUP_MAX)}), retried`,
+  };
 }
 
 function lastTurn(p, at) {
@@ -254,8 +274,14 @@ function feedAssistant(p, m, at) {
   const u = m.usage;
   if (u) p.tokens = (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
   if (m.model) p.model = m.model;
+  if (p.failure) {
+    p.failure.error = false;
+    p.failure.text = p.failure.retriedText;
+    p.failure = null;
+  }
   p.errored = m.stopReason === "error";
   const turn = lastTurn(p, at);
+  let spoke = false;
   for (const b of blocks(m.content)) {
     if (b.type === "toolCall") {
       const item = toolItem(b, at);
@@ -268,9 +294,22 @@ function feedAssistant(p, m, at) {
     if (text) {
       turn.items.push({ k: "text", text });
       turn.at = at;
+      spoke = true;
     }
   }
-  if (p.errored) turn.items.push({ k: "event", error: true, text: errorLine(m) });
+  if (m.stopReason === "stop" && !spoke) {
+    const thought = thinkingReply(m);
+    if (thought.text) {
+      turn.items.push({ k: "text", text: thought.text });
+      turn.items.push({ k: "event", text: "shown from the model's thinking" });
+      if (thought.rawCall) turn.items.push({ k: "event", text: "The model wrote a tool call as text, so it did not run." });
+      turn.at = at;
+    }
+  }
+  if (p.errored) {
+    p.failure = failureItem(m);
+    turn.items.push(p.failure);
+  }
 }
 
 function feedModel(p, rec, at) {
@@ -302,6 +341,7 @@ function feedUser(p, m, at) {
   p.tools.clear();
   p.pending = null;
   p.errored = false;
+  p.failure = null;
   p.turns.push({
     role: hc && !composed(text, at) ? "session" : "you",
     from: hc?.[1] ?? "",
