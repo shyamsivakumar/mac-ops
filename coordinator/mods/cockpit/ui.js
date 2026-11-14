@@ -104,6 +104,11 @@ const NOTICE_MIN = 140;
 const HINT_ROOM = 64;
 const NOTICE_TONE = { success: "done", error: "blocked", info: "muted" };
 const barCost = (item) => (item.label.length + (item.more?.length ?? 0)) * 6.2 + 12;
+function projectItem(v) {
+  if (!v.project) return { id: "project", prio: 3, label: "Project · all", tip: "Showing every project. Click to show one project only (P)." };
+  return { id: "project", prio: -1, label: `Project · ${v.project}${v.projectCount ? "" : " · no cards"}`, tone: "working", tip: `Showing only ${v.project}. Bulk actions touch only these cards. Click to change (P).` };
+}
+
 function barItems(v) {
   const { worktrees: w, slots } = v;
   const asks = shared("co.asks")?.items ?? [];
@@ -118,6 +123,7 @@ function barItems(v) {
     ...decisions,
     ...failedScan,
     { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
+    projectItem(v),
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
 }
@@ -654,6 +660,7 @@ export const KEY_TABLE = [
   { keys: "f", group: "Board", all: "Fold or show this column" },
   { keys: "e", group: "Board", all: "Open this column in a pop-up" },
   { keys: "b", group: "Board", all: "Fold or show Backlog" },
+  { keys: "P", group: "Board", all: "Choose one project to show, or all projects" },
   { keys: "R", group: "Board", all: "Reload the board now" },
   { keys: "?", group: "Board", all: "Show this list" },
 ];
@@ -680,6 +687,22 @@ export function keySheet(t, cb) {
           .children(KEY_TABLE.filter((r) => r.group === group).map((r) => h_flex().w_full().min_h(22).gap(10).items_start().py(2)
             .child(div().w(54).flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(r.keys))
             .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.muted).child(r.all))))))));
+}
+
+export const PROJECT_ROW = 30;
+export const projectSheetHeight = (rows) => Math.min(DEC_CAP, 34 + 20 + rows * PROJECT_ROW);
+
+export function projectSheet(t, chooser, chosen, cb) {
+  return v_flex().size_full().min_h(0)
+    .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Show project"))
+      .child(headButton(t, "project-close", "✕", "Close", () => cb.close())))
+    .child(v_flex().id("project-body").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().w_full().flex_none().p(10).children(chooser.list.map((p, i) => h_flex().id(`project-${i}`).w_full().h(PROJECT_ROW).px(8).gap(8).items_center().rounded(4).cursor_pointer()
+        .bg(i === chosen ? t.selected : t.chrome).hover((s) => s.bg(t.raised)).on_click(() => cb.pick(p.name))
+        .child(div().w(10).flex_none().text_size(11).text_color(t.done).child(p.name === chooser.current ? "✓" : ""))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).font_medium().text_color(t.foreground).child(p.name ?? "All projects"))
+        .child(div().flex_none().text_size(11).text_color(t.dim).child(String(p.count)))))));
 }
 
 export const noticeHeight = (notice) => Math.min(DEC_CAP, 34 + 24 + Math.ceil(notice.text.length / 70) * 18 + notice.items.length * 56);

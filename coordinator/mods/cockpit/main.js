@@ -4,9 +4,9 @@ import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
 import { load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, verdictEntries, verdictOf } from "./hub.js";
-import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
+import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, sheetHeight, thumb, toolbar } from "./ui.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -17,12 +17,14 @@ const IDLE_AFTER = 90000;
 const TICK = 60000;
 const POP_FOLLOW = 600000;
 const SAVED = "board";
+const PROJECT_KEY = "project";
 const SAVED_VERSION = 4;
 const ACT_GRACE = 20000;
 const ARM_FOR = 4000;
 const LOAD_STALE = 300000;
 const STUCK_AFTER = 25000;
 const COMPACT_BELOW = 700;
+const PROJECT_SHEET_WIDTH = 420;
 const COMPACT_ORDER = ["needs", "ready", "run", "backlog", "done"];
 const MIN_COL = 164;
 const COLUMN_OF = { wait: "needs", fail: "needs", stop: "needs", run: "run", done: "done" };
@@ -44,6 +46,12 @@ const PLAN_BUCKET = "failed the merge check";
 const NOTICE_FOR = 8000;
 let noticeSeq = 0;
 
+const tally = (groups) => {
+  const counts = new Map();
+  for (const g of groups) counts.set(g.project, (counts.get(g.project) ?? 0) + 1);
+  return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+};
+
 const say = (level, title, body, items = [], explicit = false) => {
   const shown = shared("cockpit.notice");
   if (level === "info" && !explicit && shown?.level === "error" && shown.items.length) return;
@@ -62,7 +70,12 @@ export default class Board extends View {
     this.overlay = props()?.overlay ?? null;
     this.dec = props()?.dec ?? null;
     this.notice = props()?.notice ?? null;
-    this.sheet = Boolean(props()?.keys || this.notice);
+    this.chooser = props()?.projects ?? null;
+    this.sheet = Boolean(props()?.keys || this.notice || this.chooser);
+    this.chosen = this.chooser ? Math.max(0, this.chooser.list.findIndex((p) => p.name === this.chooser.current)) : 0;
+    this.projects = [];
+    this.project = this.pop || this.dec || this.sheet ? null : localStorage.getItem(PROJECT_KEY);
+    this.projectSeen = shared("cockpit.project")?.rev ?? 0;
     this.outcome = null;
     this.noticeSeen = null;
     this.noticeTimer = null;
@@ -253,6 +266,7 @@ export default class Board extends View {
     if (this.deciding === `panel:${id}`) return;
     this.deciding = `panel:${id}`;
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
+    if (id === "project") return this.openProjects(cx);
     if (id === "wt" || id === "wtfail") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
     openOverlay({ mod: "ops-panels", kind: "dialog", width: 520, height: 340, props: { panel: "queue", seed: { running: this.board?.running ?? 0, cap: this.cap } } });
   }
@@ -389,7 +403,8 @@ export default class Board extends View {
     this.background("tickets", async () => {
       try {
         this.issues = await listIssues(force);
-        this.issueGroups = this.issues.issues.map(issueGroup);
+        const projectOf = await repoProjects();
+        this.issueGroups = this.issues.issues.map((issue) => issueGroup(issue, projectOf));
         this.ticketError = "";
       } catch (error) {
         this.ticketError = error.message;
@@ -461,13 +476,16 @@ export default class Board extends View {
 
   columns(t, now) {
     const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, groups: [] }]));
-    const groups = this.groups();
-    for (const g of groups) {
+    const live = this.groups();
+    const replaced = new Set(this.issueGroups.map((g) => g.key));
+    const queued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))];
+    this.projects = tally([...live, ...queued]);
+    const keep = (g) => !this.project || g.project === this.project;
+    for (const g of live.filter(keep)) {
       g.info = this.prInfo(g);
       cols[this.mergeCandidate(g) ? "ready" : COLUMN_OF[g.kind]].groups.push(g);
     }
-    const replaced = new Set(this.issueGroups.map((g) => g.key));
-    cols.backlog.groups.push(...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key)));
+    cols.backlog.groups.push(...queued.filter(keep));
     const reviewed = cols.done.groups.flatMap((g) => g.threads).filter((c) => c.review);
     const cb = {
       press: (key, e, cx) => {
@@ -756,7 +774,38 @@ export default class Board extends View {
     openOverlay({ mod: "cockpit", kind: "dialog", width: SHEET_WIDTH, height: sheetHeight(), props: { keys: true } });
   }
 
+  openProjects(cx) {
+    if (this.pop || this.deciding === "projects") return;
+    this.deciding = "projects";
+    cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
+    const list = [{ name: null, count: this.projects.reduce((sum, p) => sum + p.count, 0) }, ...this.projects];
+    if (this.project && !list.some((p) => p.name === this.project)) list.push({ name: this.project, count: 0 });
+    openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: projectSheetHeight(list.length), props: { projects: { list, current: this.project } } });
+  }
+
+  chooseProject(name) {
+    setShared("cockpit.project", { name, rev: Date.now() });
+    closeOverlay(this.overlay);
+  }
+
+  applyProject(chosen) {
+    this.projectSeen = chosen.rev;
+    this.armed = null;
+    this.project = chosen.name;
+    if (chosen.name === null) localStorage.removeItem(PROJECT_KEY);
+    else localStorage.setItem(PROJECT_KEY, chosen.name);
+  }
+
   sheetKey(e) {
+    if (this.chooser) {
+      const last = this.chooser.list.length - 1;
+      if (e.key === "j" || e.key === "down") this.chosen = Math.min(last, this.chosen + 1);
+      else if (e.key === "k" || e.key === "up") this.chosen = Math.max(0, this.chosen - 1);
+      else if (e.key === "enter") this.chooseProject(this.chooser.list[this.chosen].name);
+      else if (e.key !== "P" && !(e.key === "p" && e.modifiers.shift)) return false;
+      else closeOverlay(this.overlay);
+      return true;
+    }
     if (e.key !== "?" && e.key !== "enter" && !(e.key === "/" && e.modifiers.shift)) return false;
     closeOverlay(this.overlay);
     return true;
@@ -1317,6 +1366,7 @@ export default class Board extends View {
     else if (k === "q") this.queue(c, cx);
     else if (k === "p") this.openPr(c);
     else if (k === "n") this.jump();
+    else if (k === "P" && !this.pop) this.openProjects(cx);
     else if (k === "f" && c && !this.pop) this.toggleFold(c.col);
     else if (k === "e" && c && !this.pop) this.expand(c.col);
     else if (k === "b" && !this.pop) this.toggleFold("backlog");
@@ -1411,7 +1461,7 @@ export default class Board extends View {
     return v_flex().id("ck-keys").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
+      .child(this.chooser ? projectSheet(t, this.chooser, this.chosen, { close: () => closeOverlay(this.overlay), pick: (name) => this.chooseProject(name) }) : this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
   }
 
   renderDecision(t) {
@@ -1439,6 +1489,8 @@ export default class Board extends View {
     this.drawn = now;
     const popped = shared("cockpit.pop");
     if (this.pop && popped?.key === this.pop && popped.rev > this.applied) this.apply(popped);
+    const chosen = shared("cockpit.project");
+    if (!this.pop && chosen && chosen.rev > this.projectSeen) this.applyProject(chosen);
     const actedAt = shared("cockpit.acted") ?? 0;
     if (actedAt > this.actedSeen) {
       this.actedSeen = actedAt;
@@ -1485,7 +1537,7 @@ export default class Board extends View {
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots }, cb))
+      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()
           .on_size_change((size, cx) => {
