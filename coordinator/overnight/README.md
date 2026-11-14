@@ -25,7 +25,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight order --dry-run` | Orders the whole board and prints the full ordered list: the failing pull requests, then the pull requests with a gate PASS, then the ready tickets that are already 5-minute parts, then the ready tickets that are not split yet. It writes one summary line to `run/shift-log.md` and no list file. |
 | `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. It fails closed: a pull request it cannot read is refused, not passed. |
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
-| `overnight shift --dry-run` | The command the launchd job fires. Every run is one cycle: it reads the policy snapshot, reads the board, orders it and writes the cycle's line to `run/shift-log.md`. The shift runs 24x7, so there is no night window and no part of the night, and the shift is never armed. The morning report is on demand (`overnight report`), not something the job writes. |
+| `overnight shift --dry-run` | The command the launchd job fires. Every run is one cycle: it reads the policy snapshot, reads the board under the snapshot's allow list, orders it and writes the cycle's line to `run/shift-log.md`. The shift runs 24x7, so there is no night window and no part of the night, and the shift is never armed. The morning report is on demand (`overnight report`), not something the job writes. |
 | `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 
@@ -53,7 +53,7 @@ overnight policy
 
 | Field | What it holds |
 | --- | --- |
-| `allow` | The repositories the shift may touch, from the board config (`coordinator/config/tickets.json`). |
+| `allow` | The repositories the shift may touch, from the board config (`coordinator/config/tickets.json`). The cycle reads and orders only these repositories. |
 | `slot_cap` | The queue's own slot cap, read from the coordq config (`$COORDQ_DIR/config.json`). It is read only and never raised. It is `null` when the cap cannot be read. |
 | `stall_cap` | Cycles with no new work before the shift ends as a stall. |
 | `retry_cap` | Fix tries per item before the item is parked. |

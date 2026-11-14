@@ -41,8 +41,12 @@ LOG_PATH = Path(
 MODEL = os.environ.get("COORD_TICK_MODEL", "pi-claude-cli/claude-sonnet-5-5")
 TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "600"))
 DEFAULT_PROMPT = (
-    "Tick (launchd). Run one tick per loop/tick.md. Keep it cheap: filter "
-    "command output, act only on what changed, reply NOOP or ALERT lines only."
+    "Tick (launchd). Run one tick per loop/tick.md. Work the whole board "
+    "with `overnight board --json --action`: it returns every board ticket "
+    "and every open pull request the coordinator may act on, in the order "
+    "the night shift works them, and every item carries the one action it "
+    "needs. Keep it cheap: filter command output, act only on what changed, "
+    "reply NOOP or ALERT lines only."
 )
 LOCK_NAME = "coord-tick.lock"
 CHILD_PATH = ":".join(
