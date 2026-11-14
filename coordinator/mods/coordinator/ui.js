@@ -200,7 +200,7 @@ function groupLine(t, items, cb) {
 function eventLine(t, item) {
   return h_flex().w_full().gap(6).items_start()
     .child(div().flex_none().text_size(MONO).text_color(t.dim).child("◦"))
-    .child(div().flex_1().min_w(0).text_size(10.5).text_color(t.muted).child(item.text));
+    .child(div().flex_1().min_w(0).text_size(10.5).text_color(item.error ? t.blocked : t.muted).child(item.text));
 }
 
 const IMAGE_MAX = 220;
@@ -339,9 +339,10 @@ export function conversation(t, view, error, now, cb) {
 
 export function status(t, info, view, at, width, error) {
   const narrow = width < 440;
-  const [word, tone] = STATUS[info?.status] ?? ["not running", "dim"];
-  const working = info?.status === "working";
-  const doing = error ? "transcript unreadable, showing old data" : working ? (view?.activity ? `${view.activity} · ${elapsed(view.activityAt, at)}` : "Thinking") : view?.lastReplyAt ? `replied ${ago(view.lastReplyAt, at)}` : "";
+  const errored = Boolean(view?.errored);
+  const [word, tone] = errored ? ["error", "blocked"] : STATUS[info?.status] ?? ["not running", "dim"];
+  const working = info?.status === "working" && !errored;
+  const doing = error ? "transcript unreadable, showing old data" : errored ? "last turn failed" : working ? (view?.activity ? `${view.activity} · ${elapsed(view.activityAt, at)}` : "Thinking") : view?.lastReplyAt ? `replied ${ago(view.lastReplyAt, at)}` : "";
   const tokens = view?.tokens ?? 0;
   const fraction = Math.min(1, tokens / CONTEXT_WINDOW);
   return h_flex().h(26).px(10).gap(6).flex_none().items_center().border_b(1).border_color(t.border)
@@ -350,6 +351,7 @@ export function status(t, info, view, at, width, error) {
     .child(div().flex_none().text_size(10.5).font_medium().text_color(t[tone]).child(word))
     .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(doing))
     .when(working && view?.lastReplyAt && !narrow, (el) => el.child(div().flex_none().text_size(10).text_color(t.dim).child(`replied ${ago(view.lastReplyAt, at)}`)))
+    .when(Boolean(view?.model), (el) => el.child(div().flex_none().max_w(narrow ? 90 : 160).truncate().text_size(10).text_color(t.dim).child(view.model)))
     .when(tokens, (el) => el.child(h_flex().gap(6).items_center().flex_none()
       .when(!narrow, (b) => b.child(div().w(48).h(4).rounded(2).bg(t.background).child(div().h(4).rounded(2).w(Math.max(2, Math.round(48 * fraction))).bg(fraction > 0.8 ? t.blocked : t.accent))))
       .child(div().text_size(10).text_color(fraction > 0.8 ? t.blocked : t.dim).child(`${Math.round(tokens / 1000)}k/1M`))))
