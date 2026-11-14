@@ -40,6 +40,9 @@ REFILL_STATE_FILE = "refill-state.json"
 # the ticket itself changing, for example when a blocker closes, so a refusal
 # is retried when it grows old.
 REFILL_RETRY_AGE = float(os.environ.get("COORDQ_REFILL_RETRY_AGE", "3600"))
+# The ticket CLI exits with this code when it refuses a ticket. Every other
+# non-zero exit is a failure of the check, not a refusal of the ticket.
+REFUSE_CODE = 2
 STAGE = "stage:todo"
 # The gate keeps a PR that it cannot gate on a report file, so the coordinator
 # tick can see it. A PR that is skipped on the same head this many times is
@@ -461,12 +464,12 @@ def refill(a):
             return
         deadline = time.time() + REFILL_BUDGET
         state = load_refill_state()
-        state["passes"] += 1
-        pass_no = state["passes"]
+        pass_no = state["passes"] + 1
         refusals = state["refusals"]
         filled = 0
         attempted = 0
         skipped = 0
+        examined = 0
         seen = {candidate_key(candidate) for candidate in candidates}
         pass_refusals = []
         for candidate in candidates:
@@ -481,6 +484,7 @@ def refill(a):
             prior = unchanged_refusal(refusals, key, board_state, time.time())
             if prior:
                 skipped += 1
+                examined += 1
                 continue
             used = used_slots()
             if used is None:
@@ -497,11 +501,18 @@ def refill(a):
             number = candidate["number"]
             code, out = ticket_start(repo, number, a.dry_run)
             attempted += 1
+            examined += 1
             if code != 0:
-                refusals[key] = {"state": board_state, "reason": out[:200],
-                                 "at": time.time(), "pass": pass_no}
-                pass_refusals.append({"key": key, "reason": out[:200]})
-                log(f"refill refused {key}: {out[:200]}")
+                if code == REFUSE_CODE:
+                    refusals[key] = {"state": board_state, "reason": out[:200],
+                                     "at": time.time(), "pass": pass_no}
+                    pass_refusals.append({"key": key, "reason": out[:200]})
+                    log(f"refill refused {key}: {out[:200]}")
+                else:
+                    # A failure of the check is not a refusal of the ticket.
+                    # It is not recorded, so the next pass tries the ticket
+                    # again instead of hiding it for the retry age.
+                    log(f"refill could not check {key}: {out[:200]}")
                 continue
             filled += 1
             refusals.pop(key, None)
@@ -515,12 +526,17 @@ def refill(a):
         # the state of the board and nothing else.
         for key in [k for k in refusals if k not in seen]:
             del refusals[key]
-        state["last_pass"] = {"pass": pass_no, "at": time.time(), "examined": len(candidates),
-                              "skipped": skipped, "attempted": attempted, "started": filled,
-                              "refusals": pass_refusals}
-        save_refill_state(state)
-        log(f"refill pass {pass_no}: examined {len(candidates)} candidate(s), skipped {skipped} "
-            f"unchanged refusal(s), attempted {attempted}, started {filled}")
+        # A dry run changes nothing, so it writes no state and counts no
+        # pass. A diagnostic must not hide a ticket from the next real pass.
+        if not a.dry_run:
+            state["passes"] = pass_no
+            state["refusals"] = refusals
+            state["last_pass"] = {"pass": pass_no, "at": time.time(), "examined": examined,
+                                  "skipped": skipped, "attempted": attempted, "started": filled,
+                                  "refusals": pass_refusals}
+            save_refill_state(state)
+        log(f"refill pass {pass_no}: examined {examined} candidate(s) of {len(candidates)}, "
+            f"skipped {skipped} unchanged refusal(s), attempted {attempted}, started {filled}")
 
 
 def cmd_dispatch(a):
