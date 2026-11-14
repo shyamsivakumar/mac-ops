@@ -389,11 +389,11 @@ def append_record(path: Path, text: str) -> Path:
 #
 # The queue's own folder, the one coordq reads. The shift reads the cap
 # from the same place coordq reads it and never writes it.
-COORDQ_DIR = Path(
+COORDQ_QUEUE_DIR = Path(
     os.environ.get("COORDQ_DIR", str(Path.home() / "Code" / "coordinator" / "queue"))
 )
 # The queue's own slot cap file. The shift reads it and never writes it.
-SLOT_CAP_FILE = COORDQ_DIR / "config.json"
+SLOT_CAP_FILE = COORDQ_QUEUE_DIR / "config.json"
 # The verify level for v1 is balanced (spec section 9).
 VERIFY_LEVEL = "balanced"
 # The stall cap: three cycles with no new work end the shift (spec section 10).
@@ -859,9 +859,10 @@ def policy_path(root: Path) -> Path:
 
 
 def load_policy(root: Path) -> tuple[dict | None, str]:
-    """Return the policy snapshot and the reason it could not be read.
+    """Return the policy snapshot and the reason it cannot be used.
 
-    A missing snapshot and a snapshot that is not a JSON object are both
+    A missing snapshot, a snapshot that is not a JSON object and a
+    snapshot that is missing one of the contract's fields are all
     failures: the shift has no contract to work under without one, so it
     says which one it found and stops."""
     path = policy_path(root)
@@ -874,14 +875,45 @@ def load_policy(root: Path) -> tuple[dict | None, str]:
         return None, f"{path} is not JSON: {exc}"
     if not isinstance(loaded, dict):
         return None, f"{path} is not a JSON object"
+    problem = policy_problem(loaded)
+    if problem:
+        return None, f"{path} is not a contract: {problem}"
     return loaded, ""
 
 
+def policy_problem(policy: dict) -> str:
+    """Return why a snapshot is not a contract, or an empty string.
+
+    The contract has five fields: the allow list, the slot cap, the stall
+    cap, the retry cap and the verify level. A snapshot that is missing
+    one of them, or that holds the wrong kind of value, is not a
+    contract, and the shift refuses it instead of working under half a
+    rule."""
+    allow = policy.get("allow")
+    if not isinstance(allow, list) or not allow:
+        return "it names no repository"
+    if not all(isinstance(name, str) and name.strip() for name in allow):
+        return "its allow list is not a list of repository names"
+    for name in ("slot_cap", "stall_cap", "retry_cap"):
+        value = policy.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return f"its {name.replace('_', ' ')} is not a number"
+    level = policy.get("verify_level")
+    if not isinstance(level, str) or not level.strip():
+        return "its verify level is not a name"
+    return ""
+
+
 def write_policy(root: Path, policy: dict) -> Path:
-    """Write the policy snapshot and return the path it went to."""
+    """Write the policy snapshot and return the path it went to.
+
+    The write is atomic: a cycle that reads while the snapshot is being
+    written reads the old one or the new one, never half of one."""
     path = policy_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_record(path, json.dumps(policy, indent=2) + "\n")
+    tmp = path.parent / f"{path.name}.tmp"
+    write_record(tmp, json.dumps(policy, indent=2) + "\n")
+    os.replace(tmp, path)
     return path
 
 
@@ -899,9 +931,15 @@ def build_policy() -> dict:
     repos = allowed_repos(cfg)
     if not repos:
         die("the board config names no repositories")
+    cap = slot_cap()
+    if not isinstance(cap, int) or isinstance(cap, bool):
+        die(
+            f"the queue's slot cap cannot be read from {SLOT_CAP_FILE}, so "
+            "the shift's contract cannot be written without it"
+        )
     return {
         "allow": sorted(repo for repo, _key in repos),
-        "slot_cap": slot_cap(),
+        "slot_cap": cap,
         "stall_cap": STALL_CAP,
         "retry_cap": RETRY_CAP,
         "verify_level": VERIFY_LEVEL,
@@ -910,11 +948,34 @@ def build_policy() -> dict:
 
 
 def policy_allow(policy: dict) -> list[str]:
-    """Return the repositories the snapshot allows."""
+    """Return the repositories the snapshot names."""
     allow = policy.get("allow")
     if not isinstance(allow, list):
         return []
     return [str(name) for name in allow if str(name)]
+
+
+def cycle_allow(policy: dict) -> list[str]:
+    """Return the repositories the shift may work this cycle.
+
+    The snapshot names the repositories, and the Ascend rule still wins:
+    a repository the merge gate would refuse is never read, whatever the
+    snapshot says. So a hand-edited snapshot cannot make the shift read
+    Ascend work."""
+    names = policy_allow(policy)
+    if not names:
+        return []
+    cfg = load_config()
+    keys = {
+        repo: entry.get("key", "")
+        for repo, entry in (cfg.get("repos") or {}).items()
+    }
+    flagged = ascend_flags(cfg)
+    return [
+        name
+        for name in names
+        if ascend_reason(name, keys.get(name), name in flagged) is None
+    ]
 
 
 def policy_lines(policy: dict) -> list[str]:
@@ -1024,7 +1085,7 @@ def write_morning_report(root: Path) -> int:
 def cmd_shift(args: argparse.Namespace) -> int:
     """Run one cycle of the shift.
 
-    The shift is never unarmed and has no deadline (spec revision 3), so a
+    The shift is never unarmed and has no deadline (spec revision 3): a
     cycle never waits for an arm and never ends on a clock. It reads the
     policy snapshot on every cycle, and `run/STOP` still stops it at the
     next cycle.
@@ -1072,23 +1133,30 @@ def cmd_shift(args: argparse.Namespace) -> int:
     if policy is None:
         if not args.dry_run:
             die(
-                f"the shift has no policy snapshot: {policy_error}. Run "
-                "`overnight policy` to write it."
+                f"the shift has no usable policy snapshot: {policy_error}. "
+                "Run `overnight policy` to write it."
             )
         emit(
             f"overnight: {policy_error}; a dry run reads the board only",
             err=True,
         )
     else:
-        allowed = policy_allow(policy)
+        allowed = cycle_allow(policy)
         if not allowed:
             die(
                 f"the policy snapshot {policy_path(root)} names no "
-                "repositories, so the shift has nothing it may work"
+                "repository the shift may work"
             )
         emit(f"overnight: {stamp} shift cycle under {policy_path(root)}")
         for line in policy_lines(policy):
             emit(line)
+        dropped = len(policy_allow(policy)) - len(allowed)
+        if dropped:
+            emit(
+                f"The snapshot names {dropped} Ascend "
+                f"{plural(dropped, 'repository', 'repositories')}, and the "
+                "shift never reads Ascend work."
+            )
     if not args.dry_run:
         # A real cycle writes the receipts of the items it sees: the
         # receipt is the cycle's record, and it is written on every state

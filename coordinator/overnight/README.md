@@ -58,7 +58,7 @@ overnight policy
 | Field | What it holds |
 | --- | --- |
 | `allow` | The repositories the shift may touch, from the board config (`coordinator/config/tickets.json`). The cycle reads and orders only these repositories. |
-| `slot_cap` | The queue's own slot cap, read from the coordq config (`$COORDQ_DIR/config.json`). It is read only and never raised. It is `null` when the cap cannot be read. |
+| `slot_cap` | The queue's own slot cap, read from the coordq config (`$COORDQ_DIR/config.json`). It is read only and never raised. |
 | `stall_cap` | Cycles with no new work before the shift ends as a stall. |
 | `retry_cap` | Fix tries per item before the item is parked. |
 | `verify_level` | How much each item is checked. It is `balanced` for v1. |
@@ -70,14 +70,26 @@ the items or on the model finds none, and that is the rule.
 
 The shift reads the snapshot on every cycle. A cycle that would work the
 board and finds no snapshot refuses and says so: a cycle with no contract
-does no work. A dry run reads the board without one and says that it did.
+does no work. A snapshot that is missing one of the five contract fields,
+or that holds the wrong kind of value, is not a contract, and the cycle
+refuses it too. The command refuses to write a snapshot at all when the
+queue's slot cap cannot be read: a contract without the cap is not a
+contract. A dry run reads the board without one and says that it did.
+
+The Ascend rule still wins over the snapshot. The cycle reads the
+repositories the snapshot names, minus the ones the merge gate would
+refuse, so a hand-edited snapshot cannot make the shift read Ascend
+work.
+
 `run/STOP` still stops the shift at the next cycle, and it wins over every
 other rule. The morning report still runs: it is the record of the night,
 and it says that the night ended with STOP.
 
 Writing the snapshot again replaces it with the same contract, so the
-command can run on every boot. It never writes the queue's config, and it
-never touches the merge, push, slot cap or Ascend rules.
+command can run on every boot. The write is atomic, so a cycle that reads
+while the snapshot is being written reads the old one or the new one. The
+command never writes the queue's config, and it never touches the merge,
+push, slot cap or Ascend rules.
 
 ## The order
 
