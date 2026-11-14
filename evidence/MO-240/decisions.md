@@ -99,9 +99,11 @@ launcher any more, because no job points at it.
 
 The first head could not be merged: `main` had moved on (MO-211, the T4
 policy snapshot, and the attended first night). The branch now merges
-`origin/main` (c0a41df) into it, so the push is a fast-forward and no
-force push was needed. The conflicts are resolved by keeping both sides
-of the contract:
+`origin/main` into it, so the push is a fast-forward and no force push
+was needed. `main` moved again while the gate was running (MO-239, the
+tick works the whole board in the shift's order, and MO-244), so the
+branch merges `origin/main` a second time (76ba160). The conflicts are
+resolved by keeping both sides of the contract:
 
 - The T4 policy work stays: the cycle reads `run/policy.json`, prints the
   policy's lines, refuses to work when the snapshot names no repository,
@@ -113,6 +115,10 @@ of the contract:
 - The cycle keeps the board order: it reads the board, orders it and
   writes the cycle's line in the shift log. The morning report stays an
   on-demand command (`overnight report`), which the job does not run.
+- Main's MO-239 work stays: `cmd_order` still uses `collect_items()` and
+  `read_all_checks()`, and `overnight board` is untouched. The policy
+  list is applied on top of it, in one helper (`policy_repos`) that
+  `cmd_order` and `cmd_board` both call.
 
 ### 8. The retired-plist path list is built once
 
@@ -136,10 +142,12 @@ not enforced: the shift said "shift cycle under policy.json" and then read
 every repository in the config.
 
 `cmd_order` now takes the list the same way `cmd_intake` takes it on main:
-an `allowed` override in the namespace. When the override is there, the
-order reads the pull requests of those repositories only, and the filter
-drops everything outside the list. The board config still holds the key of
-each repository, so the blocker check reads the same keys as before.
+an `allowed` override in the namespace. One helper, `policy_repos(cfg,
+override)`, holds the rule for `cmd_order` and `cmd_board`: when the
+override is there, the command reads the pull requests of those
+repositories only, and the filter drops everything outside the list. The
+board config still holds the key of each repository, so the blocker check
+reads the same keys as before.
 
 A cycle without a snapshot is a dry run that reads the whole board and
 says so, which is what it did before.
@@ -152,13 +160,13 @@ $ cat <scratch>/run/policy.json
  "retry_cap": 2, "verify_level": "standard", ...}
 
 $ python3 coordinator/overnight/overnight shift --dry-run --root <scratch> --deadline 300
-overnight: 2026-11-13 18:32 PST shift cycle under <scratch>/run/policy.json
+overnight: 2026-11-13 18:35 PST shift cycle under <scratch>/run/policy.json
 Allow list: 1 repositories (shyamsivakumar/mac-ops)
 Slot cap: 6 (read only, from the coordq config; never raised)
 Stall cap: 3 cycles with no new work
 Retry cap: 2 fix tries per item, then it is parked
 Verify level: standard
-overnight: 2026-11-13 18:32 PST shift cycle (dry run, read only)
+overnight: 2026-11-13 18:35 PST shift cycle (dry run, read only)
 Overnight order - dry run (read only)
 Board: 91 tickets
 Allowed repositories: 1
@@ -173,9 +181,9 @@ Summary line written to <scratch>/run/shift-log.md
 ```
 
 One repository in the list, one repository read, everything else dropped by
-the filter. The same run without a snapshot reads the whole board (94
-tickets, 15 repositories), so the difference is the snapshot's list and
-nothing else.
+the filter. The same run without a snapshot reads the whole board (91
+tickets, 15 repositories, 83 planned items), so the difference is the
+snapshot's list and nothing else.
 
 ### 10. Why the tick's launcher stays
 
