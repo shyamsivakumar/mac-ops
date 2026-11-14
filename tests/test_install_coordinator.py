@@ -15,6 +15,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -383,6 +384,124 @@ class TestTickLauncher(unittest.TestCase):
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=10)
+
+
+class TestLaunchdReload(unittest.TestCase):
+    """An install reloads the launchd jobs whose plist it changed.
+
+    launchd reads a plist only when the job is bootstrapped, so a correct
+    install that leaves the old job running is not a correct install."""
+
+    def launcher(self, calls):
+        """A fake launchctl that records every call and starts nothing."""
+
+        def fake_status(argv, *, capture_error=None):
+            calls.append(list(argv))
+            return 0
+
+        def fake_quiet(argv):
+            calls.append(list(argv))
+            return None
+
+        return fake_status, fake_quiet
+
+    def test_a_temporary_home_never_starts_launchctl(self):
+        with temp_home() as td:
+            home = Path(td)
+            agents = home / "Library" / "LaunchAgents"
+            agents.mkdir(parents=True)
+            (agents / "dev.coordinator.turncap.plist").write_bytes(
+                plistlib.dumps(
+                    {"Label": "dev.coordinator.turncap", "ProgramArguments": ["/bin/true"]}
+                )
+            )
+            calls: list[list[str]] = []
+            fake_status, fake_quiet = self.launcher(calls)
+            out = StringIO()
+            with mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(out):
+                    install_coordinator.install(CHECKOUT, False, home)
+            self.assertEqual([c for c in calls if c[0] == "launchctl"], [])
+            self.assertIn("Skipped the reload of dev.coordinator.turncap", out.getvalue())
+            self.assertIn("not the real home", out.getvalue())
+
+    def test_a_changed_job_is_reloaded_with_bootout_then_bootstrap(self):
+        with temp_home() as td:
+            home = Path(td)
+            calls: list[list[str]] = []
+            fake_status, fake_quiet = self.launcher(calls)
+            # The first install writes every file and touches no job: the
+            # home is not the real one.
+            with mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(StringIO()):
+                    install_coordinator.install(CHECKOUT, False, home)
+            self.assertEqual([c for c in calls if c[0] == "launchctl"], [])
+            # One installed plist drifts from the checkout. Only that job
+            # is a job to reload.
+            plist = home / "Library/LaunchAgents/dev.coordinator.turncap.plist"
+            parsed = plistlib.loads(plist.read_bytes())
+            parsed["EnvironmentVariables"] = dict(
+                parsed.get("EnvironmentVariables", {}), MAC_OPS_PROOF="1"
+            )
+            plist.write_bytes(plistlib.dumps(parsed))
+            calls.clear()
+            out = StringIO()
+            with mock.patch.object(Path, "home", return_value=home), \
+                    mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(out):
+                    install_coordinator.install(CHECKOUT, False, home)
+            uid = os.getuid()
+            self.assertEqual(
+                [c for c in calls if c[0] == "launchctl"],
+                [
+                    ["launchctl", "bootout", f"gui/{uid}/dev.coordinator.turncap"],
+                    ["launchctl", "bootstrap", f"gui/{uid}", str(plist)],
+                ],
+            )
+            self.assertIn("Reloaded the launchd job dev.coordinator.turncap", out.getvalue())
+
+    def test_an_unchanged_plist_leaves_every_job_running(self):
+        with temp_home() as td:
+            home = Path(td)
+            calls: list[list[str]] = []
+            fake_status, fake_quiet = self.launcher(calls)
+            with mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(StringIO()):
+                    install_coordinator.install(CHECKOUT, False, home)
+            calls.clear()
+            with mock.patch.object(Path, "home", return_value=home), \
+                    mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(StringIO()):
+                    install_coordinator.install(CHECKOUT, False, home)
+            self.assertEqual([c for c in calls if c[0] == "launchctl"], [])
+
+    def test_a_refused_reload_is_reported_with_the_text_launchctl_wrote(self):
+        with temp_home() as td:
+            home = Path(td)
+            calls: list[list[str]] = []
+
+            def fake_status(argv, *, capture_error=None):
+                calls.append(list(argv))
+                if argv[1] == "bootout":
+                    if capture_error is not None:
+                        capture_error.append("Boot-out failed: 5: Input/output error")
+                    return 5
+                if argv[1] == "list":
+                    return 0
+                return 0
+
+            with mock.patch.object(install_coordinator, "run_status", fake_status):
+                note = install_coordinator.reload_job(
+                    "dev.coordinator.turncap", home / "x.plist", os.getuid()
+                )
+            self.assertIn("Refused to reload", note)
+            self.assertIn("Input/output error", note)
+            self.assertEqual([c[1] for c in calls], ["bootout", "list"])
 
 
 class TestInstallPath(unittest.TestCase):
