@@ -739,7 +739,12 @@ def cmd_shift(args: argparse.Namespace) -> int:
         )
     print(f"overnight: {stamp} shift cycle (dry run, read only)")
     return cmd_order(
-        argparse.Namespace(dry_run=True, root=args.root, deadline=args.deadline)
+        argparse.Namespace(
+            dry_run=True,
+            root=args.root,
+            deadline=args.deadline,
+            allowed=allowed,
+        )
     )
 
 
@@ -1948,12 +1953,22 @@ def cmd_order(args: argparse.Namespace) -> int:
     is one line of the shift log."""
     deadline = time.monotonic() + args.deadline
     cfg = load_config()
-    repos = allowed_repos(cfg)
+    config_repos = allowed_repos(cfg)
+    override = getattr(args, "allowed", None)
+    if override:
+        # The shift works under the allow list in its policy snapshot, so
+        # the cycle orders the board under the snapshot and not under a
+        # second list of its own. The board config still holds the key of
+        # each repository.
+        keys_of = {repo: key for repo, key in config_repos}
+        repos = [(repo, keys_of.get(repo, "")) for repo in override]
+    else:
+        repos = config_repos
+    if not repos:
+        die("the board config names no repositories")
     allowed = {repo for repo, _ in repos}
     flagged = ascend_flags(cfg)
     keys = {repo: key for repo, key in repos}
-    if not repos:
-        die("the board config names no repositories")
     issues, stale = read_board(deadline)
     print("Overnight order - dry run (read only)")
     if stale:

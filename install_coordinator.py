@@ -275,6 +275,20 @@ def parse_launchd_pid(output: str) -> int | None:
     return None
 
 
+def retired_plist(label: str, home: Path) -> Path:
+    """Return the installed path of a retired job's plist."""
+    return home / "Library" / "LaunchAgents" / f"{label}.plist"
+
+
+def retired_plists(home: Path) -> list[Path]:
+    """Return the installed plists of the retired jobs that are still there.
+
+    One helper builds the list, so the dry run, the status and the
+    retirement itself all name the same paths the same way."""
+    paths = [retired_plist(label, home) for label in RETIRED_JOBS]
+    return [path for path in paths if path.is_file()]
+
+
 def job_loaded(label: str) -> bool:
     """Return True when launchd has the job loaded."""
     return run_status(["launchctl", "list", label]) == 0
@@ -293,7 +307,7 @@ def retire_jobs(home: Path) -> list[str]:
     notes: list[str] = []
     live = home == Path.home()
     for label in RETIRED_JOBS:
-        plist = home / "Library" / "LaunchAgents" / f"{label}.plist"
+        plist = retired_plist(label, home)
         if not plist.is_file():
             continue
         if not live:
@@ -501,11 +515,7 @@ def install(
             {
                 "action": "coordinator",
                 "would_write": [str(t) for t, _, _ in pending],
-                "would_retire": [
-                    str(home / "Library" / "LaunchAgents" / f"{label}.plist")
-                    for label in RETIRED_JOBS
-                    if (home / "Library" / "LaunchAgents" / f"{label}.plist").is_file()
-                ],
+                "would_retire": [str(path) for path in retired_plists(home)],
                 "overnight_root": str(overnight_root(coordinator)),
                 "would_create": [
                     str(d) for d in overnight_dirs(coordinator) if not d.is_dir()
@@ -571,11 +581,7 @@ def status(checkout: Path, coordinator: Path | None = None) -> None:
     coordinator = coordinator or coordinator_dir(home)
     pending = changes(checkout, home, coordinator)
     missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
-    retired = [
-        str(home / "Library" / "LaunchAgents" / f"{label}.plist")
-        for label in RETIRED_JOBS
-        if (home / "Library" / "LaunchAgents" / f"{label}.plist").is_file()
-    ]
+    retired = [str(path) for path in retired_plists(home)]
     print(
         json.dumps(
             {

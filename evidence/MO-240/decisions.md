@@ -116,12 +116,76 @@ of the contract:
 
 ### 8. The retired-plist path list is built once
 
-The gate's second finding: the path of a retired job's plist was built in
-two places, in the same way, for the dry run and for the status. One
-helper now builds it: `retired_plist(label, home)` returns the path, and
+The gate's finding: the path of a retired job's plist was built in two
+places, in the same way, for the dry run and for the status. One helper
+now builds it: `retired_plist(label, home)` returns the path, and
 `retired_plists(home)` returns the paths that are still there. The dry
 run's `would_retire` and the status's `retired_leftovers` both come from
 that one list, and `retire_jobs()` takes its path from the same helper.
+
+(The helper was lost once: the merge onto `origin/main` took the file that
+had no conflict, which was the version without it. The gate caught it, and
+it is back in the head this body describes.)
+
+### 9. The shift reads the policy snapshot's repository list
+
+The gate's major finding: the cycle read the policy snapshot, printed its
+lines, and then handed the work to `cmd_order` without the snapshot's list.
+`cmd_order` fell back to the board config's list, so the T4 contract was
+not enforced: the shift said "shift cycle under policy.json" and then read
+every repository in the config.
+
+`cmd_order` now takes the list the same way `cmd_intake` takes it on main:
+an `allowed` override in the namespace. When the override is there, the
+order reads the pull requests of those repositories only, and the filter
+drops everything outside the list. The board config still holds the key of
+each repository, so the blocker check reads the same keys as before.
+
+A cycle without a snapshot is a dry run that reads the whole board and
+says so, which is what it did before.
+
+The proof (a scratch root with a snapshot that allows one repository):
+
+```
+$ cat <scratch>/run/policy.json
+{"allow": ["shyamsivakumar/mac-ops"], "slot_cap": 6, "stall_cap": 3,
+ "retry_cap": 2, "verify_level": "standard", ...}
+
+$ python3 coordinator/overnight/overnight shift --dry-run --root <scratch> --deadline 300
+overnight: 2026-11-13 18:32 PST shift cycle under <scratch>/run/policy.json
+Allow list: 1 repositories (shyamsivakumar/mac-ops)
+Slot cap: 6 (read only, from the coordq config; never raised)
+Stall cap: 3 cycles with no new work
+Retry cap: 2 fix tries per item, then it is parked
+Verify level: standard
+overnight: 2026-11-13 18:32 PST shift cycle (dry run, read only)
+Overnight order - dry run (read only)
+Board: 91 tickets
+Allowed repositories: 1
+Dropped by the filter: 81
+Planned items: 10
+
+Ready tickets already split into 5-minute parts (9)
+  1. shyamsivakumar/mac-ops#181 MO-213 ... - already a 5-minute part
+  ...
+Summary line written to <scratch>/run/shift-log.md
+  planned 10 items | shyamsivakumar/mac-ops 10 (failing 0, gate-pass 0, split 9, unsplit 1)
+```
+
+One repository in the list, one repository read, everything else dropped by
+the filter. The same run without a snapshot reads the whole board (94
+tickets, 15 repositories), so the difference is the snapshot's list and
+nothing else.
+
+### 10. Why the tick's launcher stays
+
+The ticket retires the tick job and its runbook, not the launcher. The
+launcher `coordinator/pi/bin/coord-tick` is the one part of the tick that
+is not the job, it is the only way a person can still run a tick by hand,
+and it lives in `coordinator/pi/`, which the coordinator's scope for this
+ticket excluded. No plist points at it any more, so nothing runs it every
+30 minutes. The repository README says this and why, so the file is not a
+mystery.
 
 ## The proof
 

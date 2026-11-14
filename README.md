@@ -287,7 +287,13 @@ runbook is `coordinator/overnight/README.md` in this checkout, and
 ephemeral headless pi (`pi --no-session`, so it never becomes the newest
 session that `coord-ask`, the phone relay or the Herdr panel read), it takes
 a lock at `~/.local/state/mac-ops/coord-tick.lock` so two ticks never
-overlap, and a run over ten minutes is killed. Only the `ALERT:` lines of a
+overlap, and a run over ten minutes is killed. Why it stays: the ticket
+retires the job and its runbook, not the launcher. The launcher is the one
+part of the tick that is not the job, it is the only way a person can still
+run a tick by hand, and it lives in `coordinator/pi/`, which this ticket
+does not change. No plist points at it any more, so nothing runs it every 30
+minutes; removing it is a separate cleanup.
+Only the `ALERT:` lines of a
 tick reply are sent to the live pi coordinator terminal; a `NOOP` reply sends
 nothing. `coord-pi` exports `COORD_WAKE=0`, so the coordinator session's own
 30-minute wake stays off and `/tick` and `/wake on` remain for manual use.
