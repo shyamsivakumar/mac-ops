@@ -1,0 +1,11 @@
+{
+  "key": "MO-999",
+  "item": "MO-999 a fixture item over its hard budget",
+  "repo": "shyamsivakumar/mac-ops",
+  "number": 217,
+  "builder_minutes": 9,
+  "fix_tries": 0,
+  "soft_budget_minutes": 5,
+  "hard_budget_minutes": 8,
+  "retry_cap": 2
+}
