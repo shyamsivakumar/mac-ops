@@ -12,8 +12,16 @@
   "theme": "dark",
   "compaction": {
     "enabled": true,
-    "reserveTokens": 800000,
-    "keepRecentTokens": 20000
+    "reserveTokens": 64000,
+    "keepRecentTokens": 20000,
+    "modelOverrides": {
+      "openai/gpt-6.1-sol": {
+        "reserveTokens": 32000
+      },
+      "openai/gpt-6-astra": {
+        "reserveTokens": 32000
+      }
+    }
   },
   "packages": [
     "git:github.com/dmmulroy/pi-claude-cli"
