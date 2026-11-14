@@ -1,21 +1,57 @@
-== a fresh folder, no snapshot: a real cycle refuses ==
+== 1. a fresh folder, no snapshot: a real cycle refuses ==
+overnight: the shift has no usable policy snapshot: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo211-fix/run/policy.json does not exist. Run `overnight policy` to write it.
 exit=1
 
-== a dry cycle without a snapshot reads the board only ==
-overnight: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json does not exist; a dry run reads the board only
-overnight: 2026-11-13 17:14 PST shift start (dry run, read only)
-Overnight intake - dry run (read only)
-Board: 111 tickets
+== 2. a dry cycle without a snapshot reads the board only ==
+overnight: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo211-fix/run/policy.json does not exist; a dry run reads the board only
+overnight: 2026-11-14 00:08 PST shift cycle (dry run, read only)
+Overnight order - dry run (read only)
+Board: 110 tickets
+Allowed repositories: 15
+Decisions log: /Users/shyamsivakumar/Code/coordinator/loop/decisions.md
+Dropped by the filter: 13
+Planned items: 85
 
-== the snapshot is written ==
-overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json
-Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+Failing pull requests (6)
+  1. shyamsivakumar/fantasy-football-toolkit#423 FFBT-24 docs: FFBT-24 bounded live observation, authenticated success path still held (Refs #281) - failing check: Vercel (FAILURE)
+  2. shyamsivakumar/fantasy-football-toolkit#425 FFBT-35 FFBT-35: inventory approved current-news and development sources - failing check: Vercel (FAILURE)
+  3. shyamsivakumar/fantasy-football-toolkit#426 FFBT-34 docs: record the #230 Draft Aide read-only window (run a4, USER_COORDINATION_REQUIRED) - failing check: Vercel (FAILURE)
+  4. shyamsivakumar/fantasy-football-toolkit#430 FFBT-7 docs: define day-one feedback capture contract - failing check: Vercel (FAILURE)
+  5. shyamsivakumar/fantasy-football-toolkit#412 - ci: replace Woodpecker verification with local check - failing check: Vercel (FAILURE)
+  6. shyamsivakumar/fantasy-football-toolkit#442 - fix: keep Trade Block block state consistent with unavailable evidence (Refs #414) - failing check: Vercel (FAILURE)
 
-== run/STOP stops the next working cycle ==
-overnight: 2026-11-13 17:14 PST run/STOP exists, so the shift stops at this cycle
+Pull requests with a gate PASS (0)
+
+Ready tickets already split into 5-minute parts (12)
 exit=0
 
-== the report still runs with STOP in place ==
-overnight: 2026-11-13 17:14 PST morning report
-overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/receipts/morning-2026-11-13.md
+== 3. the snapshot is written ==
+overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo211-fix/run/policy.json
+Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+Slot cap: 6 (read only, from the coordq config; never raised)
+Stall cap: 3 cycles with no new work
+Retry cap: 2 fix tries per item, then it is parked
+Verify level: balanced
+No item cap and no allowance stop: the whole backlog is in scope and model use is never a stop condition.
+The shift reads this snapshot on every cycle. It is never unarmed, it has no deadline, and run/STOP still stops it at the next cycle.
+exit=0
+
+== 4. a snapshot with a field removed is not a contract ==
+overnight: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo211-fix/run/policy.json is not a contract: its slot cap is not a number; a dry run reads the board only
+overnight: 2026-11-14 00:08 PST shift cycle (dry run, read only)
+Overnight order - dry run (read only)
+
+== 5. the snapshot is written again, and the cap cannot be read ==
+overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo211-fix/run/policy.json
+Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+overnight: the queue's slot cap cannot be read from /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo211-noqueue/config.json, so the shift's contract cannot be written without it
+exit=1
+
+== 6. run/STOP stops the next cycle ==
+overnight: 2026-11-14 00:09 PST run/STOP exists, so the shift stops at this cycle
+exit=0
+
+== 7. the report still runs with STOP in place ==
+overnight: 2026-11-14 00:09 PST run/STOP exists, so the shift stops at this cycle
+overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo211-fix/receipts/morning-2026-11-14.md
 exit=0
