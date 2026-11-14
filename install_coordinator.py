@@ -42,9 +42,10 @@ OVERNIGHT_JOB = "dev.coordinator.overnight"
 # The jobs the coordinator retired. A retired job has no plist in the
 # repository, so the installer must also take the installed copy away and
 # unload the running job: otherwise the job stays loaded and keeps
-# running. The shift works the board now, so the pi tick is retired
-# (overnight runner spec, revision 3).
-RETIRED_JOBS = ("dev.coordinator.tick",)
+# running. No job is retired now: the pi tick is back (MO-250, mac-ops
+# #267), it runs on DeepSeek and it leaves board intake to the shift and
+# to `coordq`'s refill.
+RETIRED_JOBS: tuple[str, ...] = ()
 # The overnight runner's on-disk contract. The folders come from the
 # overnight runner spec (section 6, revision 2). The shift keeps no second
 # queue here: the board is the list.
