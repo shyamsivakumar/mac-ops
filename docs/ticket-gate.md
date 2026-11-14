@@ -15,17 +15,15 @@ path for one pull request.
 - The pull request: its head sha, its base branch and the `Refs #n` issue.
 - The issue: the ticket key in its title, checked against the key of the
   repository in `tickets.json`.
-- The builder thread of the issue: the model its newest run ran.
 
 ## What it writes
 
 The brief, with every value filled in, and the thread title
-`<KEY>-<n> review #<pr> <sha8>`. The reviewer is Claude Opus 5.5
-(`claudeAgent` / `claude-opus-5-5`), or Sol (`codex` / `gpt-6.1-sol`) when
-the builder ran a Claude model. A builder whose model cannot be read leaves
-the gate on Opus, unless the builder thread is still running: then the gate
-takes Sol, because a live builder may be Claude and two Claude threads must
-not run at once.
+`<KEY>-<n> review #<pr> <sha8>`. Every gate runs on Astra (`codex` /
+`gpt-6-astra`), whatever built the pull request, so the CLI reads no builder
+model. The queue's one failover, Opus (`claudeAgent` / `claude-opus-5-5`),
+lives in `coordq` and is used only after an Astra gate died on a quota or a
+rate limit.
 
 The brief asks the gate to read the diff only, to confirm the check of that
 exact head (`srw/agent-check` success, or the pull request's

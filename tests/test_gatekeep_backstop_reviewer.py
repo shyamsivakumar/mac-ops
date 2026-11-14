@@ -1,4 +1,4 @@
-"""Tests for the gatekeep backstop reviewer.
+"""Tests for the reviewer of a gatekeep candidate.
 
 `coordq` is a script without a .py suffix, so it is loaded by path. The
 queue directory is a temporary one, so a proof never touches the live
@@ -15,6 +15,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,11 +27,6 @@ COMMENT = {"user": {"login": "me"},
            "body": "attempt 1\n<!-- coordinator-ticket "
                    + json.dumps(RECEIPT)
                    + " -->"}
-# The builder ran on a router route and its run recorded no executed model.
-THREAD = {"providerInstanceId": "router", "model": "task/ui"}
-RUNS = [{"executedModel": None}]
-# The task/ui route can run a Claude model, so the route is a Claude build.
-ROUTE = ["anthropic/claude-sonnet-5-5", "codex/gpt-6.1-terra"]
 
 coordq = None
 QUEUE_DIR = None
@@ -78,8 +74,7 @@ class GatekeepBase(unittest.TestCase):
 
     def setUp(self):
         self.saved = {name: getattr(coordq, name)
-                      for name in ("gh_json", "load_receipts", "read_builder_thread",
-                                   "router_chain", "subprocess")}
+                      for name in ("gh_json", "load_receipts", "subprocess")}
         self.addCleanup(lambda: [setattr(coordq, name, value)
                                  for name, value in self.saved.items()])
         self.pr = {"draft": False, "number": 7, "head": {"sha": HEAD},
@@ -87,8 +82,6 @@ class GatekeepBase(unittest.TestCase):
         coordq.subprocess = types.SimpleNamespace(
             run=lambda *a, **k: FakeRun("me\n"))
         coordq.load_receipts = lambda: {RECEIPT["requestId"]: "thread-1"}
-        coordq.read_builder_thread = lambda thread_id: (THREAD, RUNS)
-        coordq.router_chain = lambda route: ROUTE
         coordq.gh_json = self.fake_gh
 
     def fake_gh(self, endpoint):
@@ -101,8 +94,8 @@ class GatekeepBase(unittest.TestCase):
         raise AssertionError(f"unexpected endpoint {endpoint}")
 
 
-class GatekeepBackstopTest(GatekeepBase):
-    """A builder without an executed model is gated, not skipped."""
+class GatekeepCandidateTest(GatekeepBase):
+    """Every candidate is gated on Astra, whatever built it."""
 
     def candidates(self):
         errors = io.StringIO()
@@ -111,54 +104,39 @@ class GatekeepBackstopTest(GatekeepBase):
         self.errors = errors.getvalue()
         return events
 
-    def test_the_candidate_uses_the_backstop_reviewer(self):
-        events = self.candidates()
-        candidates = [e for e in events if e["kind"] == "candidate"]
+    def test_the_candidate_uses_astra(self):
+        candidates = [e for e in self.candidates() if e["kind"] == "candidate"]
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6.1-sol"})
+                         {"instanceId": "codex", "model": "gpt-6-astra"})
+
+    def test_the_builder_run_is_not_read_to_pick_the_reviewer(self):
+        # The reviewer no longer follows the builder, so nothing reads the
+        # builder thread of the pull request while choosing it.
+        with patch.object(coordq, "call", side_effect=AssertionError("builder read")):
+            candidates = [e for e in self.candidates() if e["kind"] == "candidate"]
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["args"]["modelSelection"], coordq.ASTRA_MODEL)
+
+    def test_no_line_about_the_builder_model_is_logged(self):
+        self.candidates()
+        self.assertEqual([line for line in self.errors.splitlines()
+                          if line.startswith("backstop ")], [])
 
     def test_no_skip_is_reported(self):
-        events = self.candidates()
-        skips = [e for e in events if e["kind"] == "skip"]
+        skips = [e for e in self.candidates() if e["kind"] == "skip"]
         self.assertEqual([e["reason"] for e in skips], [])
 
-    def test_the_backstop_line_is_logged_once(self):
-        self.candidates()
-        lines = [line for line in self.errors.splitlines() if line.startswith("backstop ")]
-        self.assertEqual(len(lines), 1)
-        self.assertIn(f"backstop {REPO}#7: executed model unavailable", lines[0])
-        self.assertIn("reviewer codex gpt-6.1-sol", lines[0])
-
-    def test_the_backstop_line_is_logged_once_for_two_issues(self):
-        self.pr["body"] = "Refs #9\nRefs #10\n"
-        self.candidates()
-        lines = [line for line in self.errors.splitlines() if line.startswith("backstop ")]
-        self.assertEqual(len(lines), 1)
+    def test_a_missing_builder_run_is_skipped(self):
+        coordq.load_receipts = lambda: {}
+        with patch.object(coordq, "builder_thread_for_issue", return_value=None):
+            skips = [e for e in self.candidates() if e["kind"] == "skip"]
+        self.assertEqual([e["reason"] for e in skips], ["builder run not found"])
 
     def test_a_pull_request_without_a_passing_check_is_not_gated(self):
         self.pr["body"] = "Refs #9\n"
         events = self.candidates()
         self.assertEqual([e for e in events if e["kind"] == "candidate"], [])
-
-    def test_a_builder_with_a_known_model_keeps_its_reviewer(self):
-        coordq.read_builder_thread = lambda thread_id: (
-            {"providerInstanceId": "claudeAgent", "model": "claude-sonnet-5"}, [])
-        events = self.candidates()
-        candidates = [e for e in events if e["kind"] == "candidate"]
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6.1-sol"})
-        self.assertEqual([l for l in self.errors.splitlines() if l.startswith("backstop ")], [])
-
-    def test_a_minimax_builder_gets_astra(self):
-        coordq.read_builder_thread = lambda thread_id: (
-            {"providerInstanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}, [])
-        events = self.candidates()
-        candidates = [e for e in events if e["kind"] == "candidate"]
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6-astra"})
 
 
 class GatekeepQueueTest(GatekeepBase):
@@ -188,7 +166,7 @@ class GatekeepQueueTest(GatekeepBase):
         gates = [item for item in queue["items"] if item["tool"] == "t3_thread_launch"]
         self.assertEqual(len(gates), 1)
         self.assertEqual(gates[0]["args"]["modelSelection"],
-                         {"instanceId": "codex", "model": "gpt-6.1-sol"})
+                         {"instanceId": "codex", "model": "gpt-6-astra"})
 
     def test_a_gated_head_is_not_stuck(self):
         for _ in range(coordq.STUCK_COUNT):
