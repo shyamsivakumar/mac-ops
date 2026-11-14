@@ -43,6 +43,9 @@ REFILL_RETRY_AGE = float(os.environ.get("COORDQ_REFILL_RETRY_AGE", "3600"))
 # The ticket CLI exits with this code when it refuses a ticket. Every other
 # non-zero exit is a failure of the check, not a refusal of the ticket.
 REFUSE_CODE = 2
+# The ticket CLI exits with REFUSE_CODE for a refusal and for a usage error,
+# and with 1 for a failed check. A refusal says so in its own first line.
+REFUSE_PREFIX = "refused:"
 STAGE = "stage:todo"
 # The gate keeps a PR that it cannot gate on a report file, so the coordinator
 # tick can see it. A PR that is skipped on the same head this many times is
@@ -346,7 +349,10 @@ def board_candidates():
 
 def ticket_start(repo, number, dry_run):
     """Run the ticket CLI on one ticket. A refused ticket exits non-zero and
-    changes nothing, so a refusal is a skip and not a start."""
+    changes nothing, so a refusal is a skip and not a start. The ticket CLI
+    exits 2 for a refusal and for a usage error, and 1 for a failed check,
+    so the exit code alone does not say which one it was; `is_refusal` reads
+    the answer out of the output."""
     command = [TICKET_BIN, "start", f"{repo}#{number}"]
     if dry_run:
         command.append("--dry-run")
@@ -355,6 +361,14 @@ def ticket_start(repo, number, dry_run):
     except subprocess.TimeoutExpired:
         return 1, "ticket start timed out"
     return run.returncode, ((run.stdout or "") + (run.stderr or "")).strip()
+
+
+def is_refusal(code, out):
+    """True when the ticket CLI refused the ticket. The exit code is not
+    enough: 2 also covers a usage error, and 1 covers a failed check."""
+    if code != REFUSE_CODE:
+        return False
+    return any(line.startswith(REFUSE_PREFIX) for line in out.splitlines())
 
 
 def load_refill_state():
@@ -503,7 +517,7 @@ def refill(a):
             attempted += 1
             examined += 1
             if code != 0:
-                if code == REFUSE_CODE:
+                if is_refusal(code, out):
                     refusals[key] = {"state": board_state, "reason": out[:200],
                                      "at": time.time(), "pass": pass_no}
                     pass_refusals.append({"key": key, "reason": out[:200]})
