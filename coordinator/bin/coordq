@@ -179,12 +179,38 @@ class Lock:
             self.f.close()
 
 
-def wait_until_counted(before):
-    for _ in range(10):
-        n = live()
-        if n is not None and n > before:
-            return
-        time.sleep(1)
+def active_thread_ids():
+    ids = set()
+    cursor = None
+    while True:
+        args = {"allProjects": True, "limit": 100, "statuses": LIVE_STATUSES,
+                "includeSubagents": False}
+        if cursor is not None:
+            args["cursor"] = cursor
+        code, out = call("t3_thread_list", args)
+        if code:
+            raise RuntimeError("cannot read active thread IDs")
+        result = json.loads(out)
+        ids.update(row["threadId"] for row in result["threads"])
+        next_cursor = result.get("nextCursor")
+        if next_cursor is None:
+            return ids
+        if cursor is not None and next_cursor <= cursor:
+            raise RuntimeError("active thread pagination did not advance")
+        cursor = next_cursor
+
+
+def reconcile_reservations(queue, active):
+    reserved = queue.setdefault("reserved", {})
+    threads = queue.setdefault("reservedThreads", {})
+    for key, at in list(reserved.items()):
+        expired = time.time() - at >= 600
+        if expired or threads.get(key) in active:
+            if expired:
+                log(f"EXPIRED reservation #{key} after ten minutes")
+            reserved.pop(key)
+            threads.pop(key, None)
+    save(queue)
 
 
 def undispatchable_tool(item):
@@ -215,14 +241,21 @@ def drain():
             queue["items"] = [i for i in queue["items"] if i["id"] not in dropped]
             save(queue)
         ready = sorted((i for i in dispatchable if i.get("attempts", 0) < MAX_ATTEMPTS), key=lambda i: (-i["priority"], i["id"]))
-        if not ready:
-            return
         n = live()
         if n is None:
             log("cannot read thread count, nothing started")
             return
-        if n >= cap():
-            log(f"at cap {n}/{cap()}, {len(ready)} waiting")
+        try:
+            active = active_thread_ids()
+        except (RuntimeError, ValueError, KeyError, TypeError) as e:
+            log(f"{e}, nothing started")
+            return
+        reconcile_reservations(queue, active)
+        if not ready:
+            return
+        n = max(n, len(active))
+        if n + len(queue["reserved"]) >= cap():
+            log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
         item = ready[0]
         steps = item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]
@@ -233,11 +266,37 @@ def drain():
             except RuntimeError as e:
                 log(f"{e}, nothing started")
                 return
+        reservation = str(item["id"])
+        keys = [f"{reservation}:pre:{time.time_ns()}:{i}" for i in range(len(steps) - 1)] + [reservation]
+        if n + len(queue["reserved"]) + len(steps) > cap():
+            log(f"waiting for {len(steps)} slots for #{item['id']}")
+            return
+        for key, step in zip(keys, steps):
+            queue["reserved"][key] = time.time()
+            if step["tool"] == "t3_thread_send":
+                queue["reservedThreads"][key] = step["args"]["threadId"]
+        save(queue)
         code, out = 0, ""
-        for step in steps:
-            code, out = call(step["tool"], step["args"], rules)
+        for index, (key, step) in enumerate(zip(keys, steps)):
+            try:
+                code, out = call(step["tool"], step["args"], rules)
+            except (OSError, subprocess.SubprocessError) as e:
+                code, out = 1, str(e)
             if code != 0:
+                for unused in keys[index:]:
+                    queue["reserved"].pop(unused, None)
+                    queue["reservedThreads"].pop(unused, None)
+                save(queue)
                 break
+            if step["tool"] == "t3_thread_launch":
+                try:
+                    result = json.loads(out)
+                    thread = result.get("thread", result).get("threadId")
+                    if isinstance(thread, str) and thread:
+                        queue["reservedThreads"][key] = thread
+                except (ValueError, TypeError, AttributeError):
+                    log(f"reservation #{key} retained: launch reply has no thread ID")
+            save(queue)
         request_id = item["args"].get("clientRequestId")
         if code == 0 and request_id and item["tool"] == "t3_thread_launch":
             try:
@@ -248,6 +307,15 @@ def drain():
             except (ValueError, TypeError, AttributeError) as e:
                 item["attempts"] = MAX_ATTEMPTS - 1
                 code, out = 1, f"invalid launch reply: {e}"
+        if code == 0 and item["tool"] == "t3_thread_launch":
+            try:
+                result = json.loads(out)
+                thread_id = result.get("thread", result).get("threadId")
+                if not isinstance(thread_id, str) or not thread_id:
+                    raise ValueError("successful launch has no threadId")
+                queue["reservedThreads"][reservation] = thread_id
+            except (ValueError, TypeError, AttributeError) as e:
+                log(f"reservation #{reservation} retained: {e}")
         if code == 0:
             if request_id and item["tool"] == "t3_thread_launch":
                 receipts_path = path("dispatch-receipts.json")
@@ -262,8 +330,9 @@ def drain():
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
             save(queue)
             log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})")
-            wait_until_counted(n)
         else:
+            queue["reserved"].pop(reservation, None)
+            queue["reservedThreads"].pop(reservation, None)
             item["attempts"] = item.get("attempts", 0) + 1
             item["last_error"] = out[:200]
             save(queue)
@@ -608,7 +677,7 @@ def cmd_status(a):
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
-    print(json.dumps({"cap": cap(), "live": live(), "queued": len(load()["items"]), "failed": load().get("failed", []), "stuck": stuck}))
+    print(json.dumps({"cap": cap(), "live": live(), "reserved": load().get("reserved", {}), "queued": len(load()["items"]), "failed": load().get("failed", []), "stuck": stuck}))
 
 
 

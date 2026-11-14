@@ -50,3 +50,56 @@ class CapacityTests(unittest.TestCase):
         from pathlib import Path
         log = Path(self.tmp.name, "dispatch.log").read_text()
         self.assertEqual(log.count("DROPPED #1 after 3 attempts: missing projectId"), 1)
+
+    def queue_sends(self):
+        self.q.save({"next": 31, "items": [
+            {"id": n, "tool": "t3_thread_send", "args": {"threadId": str(n)},
+             "priority": 0, "title": "burst"} for n in range(1, 31)]})
+        self.q.live = lambda: 0
+
+    def test_burst_with_stale_total_and_individual_visibility(self):
+        self.queue_sends()
+        visible = set()
+        started = []
+        def start(tool, args, rules=None):
+            started.append(args["threadId"])
+            self.assertLessEqual(len(visible) + len(self.q.load()["reserved"]), 6)
+            return 0, "{}"
+        with patch.object(self.q, "active_thread_ids", side_effect=lambda: set(visible)), patch.object(self.q, "call", side_effect=start):
+            self.q.drain()
+            self.assertEqual(len(started), 6)
+            for thread in started[:]:
+                visible.add(thread)
+                self.q.drain()
+                self.assertEqual(len(started), 6)
+                self.assertEqual(len(visible) + len(self.q.load()["reserved"]), 6)
+
+    def test_expired_reservation_does_not_block(self):
+        self.queue_sends()
+        data = self.q.load()
+        data["reserved"] = {"old": self.q.time.time() - 601}
+        self.q.save(data)
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(self.q, "call", return_value=(0, "{}")) as start:
+            self.q.drain()
+        self.assertEqual(start.call_count, 6)
+        self.assertNotIn("old", self.q.load()["reserved"])
+
+    def test_failed_start_releases_reservation(self):
+        self.queue_sends()
+        data = self.q.load()
+        data["items"] = data["items"][:1]
+        self.q.save(data)
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(self.q, "call", return_value=(1, "failed")):
+            self.q.drain()
+        self.assertEqual(self.q.load()["reserved"], {})
+
+    def test_pre_steps_reserve_their_own_slots(self):
+        self.queue_sends()
+        data = self.q.load()
+        data["items"] = data["items"][:1]
+        data["items"][0]["pre"] = [{"tool": "t3_thread_send", "args": {"threadId": "pre"}}]
+        self.q.save(data)
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(self.q, "call", side_effect=[(0, "{}"), (1, "failed"), (1, "failed"), (1, "failed")]):
+            self.q.drain()
+        self.assertEqual(len(self.q.load()["reserved"]), 1)
+        self.assertEqual(set(self.q.load()["reservedThreads"].values()), {"pre"})
