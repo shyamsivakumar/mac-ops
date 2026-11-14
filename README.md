@@ -276,20 +276,27 @@ this job now covers that step. The job appends one line per poll pass to
 `~/Library/Logs/coordinator/turncap.log`. The dispatch job logs into the
 coordinator checkout's own `queue/` directory, which that repository owns.
 
-The `dev.coordinator.tick` job runs one coordinator tick every 30 minutes as a
-fresh headless pi on Sonnet 5.5 (`~/.local/bin/coord-tick`), inside the same
-sandbox and guard as the coordinator, so a tick costs a short cheap turn
-instead of an Opus turn on the long coordinator session. The tick is
-ephemeral (`pi --no-session`), so it never becomes the newest session that
-`coord-ask`, the phone relay or the Herdr panel read. It takes a lock at
-`~/.local/state/mac-ops/coord-tick.lock`, so two ticks never overlap, and a
-run over ten minutes is killed.
-Only the `ALERT:` lines of a tick reply are sent to the live pi coordinator
-terminal; a `NOOP` reply sends nothing. `coord-pi` exports `COORD_WAKE=0`, so
-the coordinator session's own 30-minute wake stays off and `/tick` and
-`/wake on` remain for manual use. The job has no `RunAtLoad`, because a tick
-costs a model call: the first one lands one interval after the job loads. It
-appends one line per run to `~/Library/Logs/coordinator/tick.log`.
+The `dev.coordinator.tick` job is retired (overnight runner spec, revision 3):
+the shift is the one loop that decides work. No tick plist is in the
+repository, the installer removes an installed one and unloads the running
+job, and the shift's own launchd job (`dev.coordinator.overnight`) fires the
+shift on a fixed interval, every day, and is never unarmed. The shift's
+runbook is `coordinator/overnight/README.md` in this checkout, and
+`loop/tick.md` is no longer the runbook for board work. The launcher
+(`~/.local/bin/coord-tick`) is still installed as a tool: it runs one
+ephemeral headless pi (`pi --no-session`, so it never becomes the newest
+session that `coord-ask`, the phone relay or the Herdr panel read), it takes
+a lock at `~/.local/state/mac-ops/coord-tick.lock` so two ticks never
+overlap, and a run over ten minutes is killed. Why it stays: the ticket
+retires the job and its runbook, not the launcher. The launcher is the one
+part of the tick that is not the job, it is the only way a person can still
+run a tick by hand, and it lives in `coordinator/pi/`, which this ticket
+does not change. No plist points at it any more, so nothing runs it every 30
+minutes; removing it is a separate cleanup.
+Only the `ALERT:` lines of a
+tick reply are sent to the live pi coordinator terminal; a `NOOP` reply sends
+nothing. `coord-pi` exports `COORD_WAKE=0`, so the coordinator session's own
+30-minute wake stays off and `/tick` and `/wake on` remain for manual use.
 
 ## Agent session traces (MO-124)
 

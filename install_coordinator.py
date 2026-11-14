@@ -39,6 +39,12 @@ PI_FILES = (
 )
 TURN_CAP_JOB = "dev.coordinator.turncap"
 OVERNIGHT_JOB = "dev.coordinator.overnight"
+# The jobs the coordinator retired. A retired job has no plist in the
+# repository, so the installer must also take the installed copy away and
+# unload the running job: otherwise the job stays loaded and keeps
+# running. The shift works the board now, so the pi tick is retired
+# (overnight runner spec, revision 3).
+RETIRED_JOBS = ("dev.coordinator.tick",)
 # The overnight runner's on-disk contract. The folders come from the
 # overnight runner spec (section 6, revision 2). The shift keeps no second
 # queue here: the board is the list.
@@ -269,6 +275,67 @@ def parse_launchd_pid(output: str) -> int | None:
     return None
 
 
+def retired_plist(label: str, home: Path) -> Path:
+    """Return the installed path of a retired job's plist."""
+    return home / "Library" / "LaunchAgents" / f"{label}.plist"
+
+
+def retired_plists(home: Path) -> list[Path]:
+    """Return the installed plists of the retired jobs that are still there.
+
+    One helper builds the list, so the dry run, the status and the
+    retirement itself all name the same paths the same way."""
+    paths = [retired_plist(label, home) for label in RETIRED_JOBS]
+    return [path for path in paths if path.is_file()]
+
+
+def job_loaded(label: str) -> bool:
+    """Return True when launchd has the job loaded."""
+    return run_status(["launchctl", "list", label]) == 0
+
+
+def retire_jobs(home: Path) -> list[str]:
+    """Unload the retired jobs and remove the installed copy of their plists.
+
+    The running job is only unloaded for the real home: a temporary home (a
+    proof or a test) never touches the jobs of the machine, it only removes
+    the copy it holds. The real install finds the installed plist and
+    unloads the job with it.
+
+    Every step is best effort and every refusal is reported: a job that
+    cannot be unloaded must be said out loud, not hidden."""
+    notes: list[str] = []
+    live = home == Path.home()
+    for label in RETIRED_JOBS:
+        plist = retired_plist(label, home)
+        if not plist.is_file():
+            continue
+        if not live:
+            notes.append(
+                f"Removed {plist}. The running job was left alone: this is "
+                "not the real home."
+            )
+        else:
+            uid = os.getuid()
+            code = run_status(["launchctl", "bootout", f"gui/{uid}/{label}"])
+            if code == 0:
+                notes.append(f"Unloaded the retired job {label}.")
+            elif job_loaded(label):
+                notes.append(
+                    f"The retired job {label} is still loaded: launchctl "
+                    f"bootout gui/{uid}/{label} did not work. Stop it by hand."
+                )
+            else:
+                notes.append(f"The retired job {label} was not loaded.")
+        try:
+            plist.unlink()
+        except OSError as exc:
+            notes.append(f"Could not remove {plist}: {exc}")
+            continue
+        notes.append(f"Removed the retired job's plist {plist}.")
+    return notes
+
+
 def launchd_pid(label: str) -> int | None:
     """Find the pid of a loaded job. launchctl list works in every domain, so a
     job loaded by the legacy launchctl load is still recognised."""
@@ -448,6 +515,7 @@ def install(
             {
                 "action": "coordinator",
                 "would_write": [str(t) for t, _, _ in pending],
+                "would_retire": [str(path) for path in retired_plists(home)],
                 "overnight_root": str(overnight_root(coordinator)),
                 "would_create": [
                     str(d) for d in overnight_dirs(coordinator) if not d.is_dir()
@@ -456,6 +524,8 @@ def install(
             indent=2,
         ))
         return
+    for note in retire_jobs(home):
+        print(note)
     created, _refused = ensure_log_dirs(log_dirs(render_plists(checkout, home)), home)
     for directory in created:
         print(f"Created log directory: {directory}")
@@ -511,13 +581,16 @@ def status(checkout: Path, coordinator: Path | None = None) -> None:
     coordinator = coordinator or coordinator_dir(home)
     pending = changes(checkout, home, coordinator)
     missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
+    retired = [str(path) for path in retired_plists(home)]
     print(
         json.dumps(
             {
-                "in_sync": not pending and not missing,
+                "in_sync": not pending and not missing and not retired,
                 "differs": [str(t) for t, _, _ in pending],
                 "overnight_root": str(overnight_root(coordinator)),
                 "overnight_missing": [str(d) for d in missing],
+                "retired_jobs": list(RETIRED_JOBS),
+                "retired_leftovers": retired,
             },
             indent=2,
         )
