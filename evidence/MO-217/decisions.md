@@ -1,6 +1,12 @@
 # MO-217 decisions
 
-Run id: `ticket:shyamsivakumar/mac-ops#185:a1`. Refs #185.
+Run id: `ticket:shyamsivakumar/mac-ops#185:a2`. Refs #185.
+
+Run a1 built this change on the same base (`4f0fa76`) and left it on a
+local branch with no pull request. Run a2 re-ran the proof commands on the
+current base and found the same results: the fixture stop, the receipt,
+the fast check. The only edits run a2 made are the run id in this file and
+the head-check line below.
 
 ## What landed
 
@@ -154,9 +160,17 @@ Verify level: balanced
 
 ## Check
 
-`python3 scripts/mac_ops_fast_check.py` and the full local check through
-`heavy` pass at the head of this branch. The builder check line is in
-the pull request body.
+`python3 scripts/mac_ops_fast_check.py` passes at the head of this branch
+(`fast-check: passed; selected checks are not the full suite`), and the same
+command through `heavy` is the repo's full local check (README, "Check a
+task"). The builder check line is in the pull request body.
+
+## Facts run a2 re-verified against the real tools
+
+- The queue really writes `fixedHeads` keys as `fix:<repo>#<n>:<head>`
+  (`coordinator/bin/coordq`), so one key is one fix try.
+- `t3_thread_read` really returns `recentRuns` with `startedAt` and
+  `completedAt`, so the builder time is read and not claimed.
 
 ## Rollback
 
