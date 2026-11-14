@@ -188,12 +188,20 @@ class GiveUpTest(RetryLimitBase):
                                           "at": time.time(), "givenUp": False}})
 
     def test_the_dry_run_prints_one_give_up_line_and_no_queue_line(self):
+        before = self.read_queue()
         out, _ = self.run_gatekeep(dry_run=True)
         self.assertNotIn("would queue gate:", out)
         lines = [line for line in out.splitlines() if line.startswith("gave up ")]
         self.assertEqual(len(lines), 1)
         self.assertIn(self.key, lines[0])
         self.assertIn(f"after {coordq.GATE_RETRY_LIMIT} retries without a verdict", lines[0])
+        self.assertEqual(self.read_queue(), before)
+
+    def test_an_odd_record_does_not_stop_the_run(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": "x", "at": "yesterday",
+                                          "givenUp": False}})
+        out, _ = self.run_gatekeep(dry_run=True)
+        self.assertIn("would queue " + self.key, out)
 
     def test_the_give_up_is_written_and_announced_once(self):
         out, _ = self.run_gatekeep()
@@ -253,8 +261,21 @@ class ExplicitGateTest(RetryLimitBase):
         self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"],
                          coordq.GATE_RETRY_LIMIT)
         self.assertEqual(self.gate_items()[0]["args"]["clientRequestId"], self.key)
+
+    def test_a_second_explicit_gate_is_refused(self):
+        self.gate_once()
+        with self.assertRaises(SystemExit):
+            with redirect_stderr(io.StringIO()):
+                self.gate_once()
+        self.assertEqual(len(self.gate_items()), 1)
+
+    def test_a_given_up_head_that_dies_again_is_given_up_in_one_line(self):
+        self.gate_once()
         out, _ = self.run_gatekeep()
-        self.assertEqual([line for line in out.splitlines() if line.startswith("gave up")], [])
+        self.assertEqual(len([line for line in out.splitlines()
+                              if line.startswith("gave up ")]), 1)
+        self.assertEqual(len(self.gate_items()), 1)
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
 
     def test_a_live_head_is_still_refused(self):
         self.write_queue(heads={self.key: {"id": 4, "retries": 1,
