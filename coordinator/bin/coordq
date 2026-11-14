@@ -5,6 +5,12 @@ DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
 LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
 MAX_ATTEMPTS = 3
+# A launch thread can finish before a later drain pass ever sees it live: a gate
+# launch thread lives about twenty seconds while drain runs every thirty. Once a
+# dispatch has a recorded thread id, a slot the thread has not claimed after
+# this long is free again, because the thread has finished or never appeared.
+# The ten-minute expiry still covers a dispatch that never returned a thread id.
+UNSEEN_GRACE = 30
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 ASTRA_MODEL = {"instanceId": "codex", "model": "gpt-6-astra"}
@@ -205,12 +211,22 @@ def reconcile_reservations(queue, active):
     reserved = queue.setdefault("reserved", {})
     threads = queue.setdefault("reservedThreads", {})
     for key, at in list(reserved.items()):
-        expired = time.time() - at >= 600
-        if expired or threads.get(key) in active:
-            if expired:
-                log(f"EXPIRED reservation #{key} after ten minutes")
-            reserved.pop(key)
-            threads.pop(key, None)
+        age = time.time() - at
+        thread = threads.get(key)
+        expired = age >= 600
+        seen = thread in active
+        # The thread list lags a start by seconds, so a slot is held until its
+        # thread is seen live. A dispatch whose recorded thread never shows up
+        # within the grace has finished, so the slot is free.
+        unclaimed = bool(thread) and age >= UNSEEN_GRACE
+        if not (expired or seen or unclaimed):
+            continue
+        if expired:
+            log(f"EXPIRED reservation #{key} after ten minutes")
+        elif not seen:
+            log(f"released reservation #{key}: thread {thread} is not live")
+        reserved.pop(key)
+        threads.pop(key, None)
     save(queue)
 
 
@@ -317,12 +333,6 @@ def drain():
                 queue["reservedThreads"][reservation] = thread_id
             except (ValueError, TypeError, AttributeError) as e:
                 log(f"reservation #{reservation} retained: {e}")
-            else:
-                # The launch is no longer in flight. The thread ID in
-                # reservedThreads is the record of what the slot held, so the
-                # slot is free as soon as the launch call returns.
-                queue["reserved"].pop(reservation, None)
-                log(f"released reservation #{reservation}: {thread_id}")
         if code == 0:
             if request_id and item["tool"] == "t3_thread_launch":
                 receipts_path = path("dispatch-receipts.json")
