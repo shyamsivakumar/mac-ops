@@ -22,6 +22,7 @@ in the mac-ops checkout and is installed by the same installer.
 | --- | --- |
 | `overnight intake --dry-run` | Reads the board (`ticket list --fresh --json`) and the open pull requests (`gh pr list` for each allowed repository) into intake records, and prints the record count per repository. Read only: it writes no record and keeps no list of its own. The ticket CLI refreshes its own cache when it reads the board; that cache is the ticket CLI's. |
 | `overnight filter --dry-run` | Filters the board and prints every drop with its reason. Read only. It fails closed: it exits non-zero and drops what it could not check. |
+| `overnight order --dry-run` | Orders the whole board and prints the full ordered list: the failing pull requests, then the pull requests with a gate PASS, then the ready tickets that are already 5-minute parts, then the ready tickets that are not split yet. It writes one summary line to `run/shift-log.md` and no list file. |
 | `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. It fails closed: a pull request it cannot read is refused, not passed. |
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
 | `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the Mac's local clock: the start (22:00–23:59) reads the board and writes nothing, the report (06:00–07:29) writes the morning report, and any other time does nothing. `--at start` or `--at report` forces a part, for a manual run. |
@@ -29,6 +30,35 @@ in the mac-ops checkout and is installed by the same installer.
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, arming, the tick and the morning report) build on the
 same records, in the same module.
+
+## The order
+
+The order is the spec's, and it is the whole board: no cap and no list
+file.
+
+| Group | What is in it |
+| --- | --- |
+| Failing pull requests | A pull request that is open and whose checks show a failure. `gh pr checks` answers for each one; a pull request with no checks at all is not a failure. |
+| Pull requests with a gate PASS | A pull request whose head the gate has looked at, where the gate's own message ends with `VERDICT: PASS`. The gate thread is found in the coordinator's dispatch receipts (`gate:<repo>#<pr>:<head>`), so a gate for an older head is never a verdict for the current one. |
+| Ready tickets already split into 5-minute parts | A ready ticket whose own text says it is a bounded slice: a light build slice, a light chore, or a part that says how many minutes it takes. |
+| Ready tickets not yet split | Every other ready ticket. The shift splits it first, then adds the parts. |
+
+A ticket is ready when the board's stage is `todo`. A ticket in another
+stage is not ready and is not work, so the list says so instead of
+dropping it. A pull request that is open and neither failing nor gate
+PASS is in flight: it is not work for the night, and the list says that
+too.
+
+Inside a group the order is the board's: the priority label first, then
+the items whose blockers are met, then the board's own order. A blocker
+is met when its issue is closed, so it is not on the open issue list. A
+blocker the shift cannot check is treated as unmet, so the shift does
+not start work whose order it cannot prove.
+
+The order writes one line to `run/shift-log.md`: the planned count and
+the counts per repository and per state. That line is the night's record
+of what was in scope, and the morning report reads it for the planned
+count. It holds no list: the board is the list.
 
 `--dry-run` means no work, and the two commands read it differently on
 purpose. `overnight report --dry-run` prints the report and writes no
