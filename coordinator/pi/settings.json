@@ -5,7 +5,11 @@
   "enabledModels": [
     "pi-claude-cli/claude-opus-5-5",
     "openai/gpt-6.1-sol",
-    "openai/gpt-6-astra"
+    "openai/gpt-6-astra",
+    "claude-team/claude-opus-5-5",
+    "claude-team/claude-sonnet-5-5",
+    "claude-team/claude-haiku-5-5",
+    "claude-team/claude-fable-5-2"
   ],
   "skills": [],
   "quietStartup": true,
@@ -42,7 +46,8 @@
     }
   },
   "packages": [
-    "git:github.com/dmmulroy/pi-claude-cli"
+    "git:github.com/dmmulroy/pi-claude-cli",
+    "/Users/shyamsivakumar/.pi/agent-coordinator/packages/pi-claude-team"
   ],
   "lastChangelogVersion": "1.5.2"
 }
