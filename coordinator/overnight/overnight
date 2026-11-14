@@ -104,9 +104,6 @@ from typing import NoReturn
 
 TICKET = os.environ.get("OVERNIGHT_TICKET", "ticket")
 GH = os.environ.get("OVERNIGHT_GH", "gh")
-# The installed command of this module. The receipt records the command it
-# ran, and the shift checks a head with this command when a repository
-# publishes no checks of its own.
 OVERNIGHT_BIN = os.environ.get("OVERNIGHT_BIN", "overnight")
 TICKET_TIMEOUT = 300
 GH_TIMEOUT = 60
@@ -949,8 +946,12 @@ def evidence_holds(fields: dict, checks: list[dict]) -> tuple[bool, str]:
     if missing:
         names = ", ".join(check["raw"] for check in missing)
         return False, f"a check has no exit code, so it did not run ({names})"
-    failed = [check for check in checks if check["exit"] != 0]
+    failed = [check for check in checks if check["exit"] not in (0,)]
     if failed:
+        unknown = [check for check in failed if check["exit"] == 2]
+        if unknown:
+            names = ", ".join(check["raw"] for check in unknown)
+            return False, f"the check did not run, so it proved nothing ({names})"
         names = ", ".join(check["raw"] for check in failed)
         return False, f"a check failed ({names})"
     if (fields.get("gate") or "").strip().upper() != "PASS":
@@ -3112,24 +3113,27 @@ def read_thread_facts(thread_id: str, deadline: float) -> dict:
 
 
 def check_head_holds(repo: str, number: int, deadline: float) -> int:
-    """Return 0 when the pull request's head carries a passing check, else 1.
+    """Return what a pull request's head carries: 0, 1 or 2.
 
-    The check is the one the coordinator's gate reads: the agent check a
-    repository publishes on the head, or the builder's own line in the
-    pull request body, `Builder check: PASS <head>`. A repository that
-    publishes no checks at all (CI is agent checks only, as in mac-ops)
-    still carries that line, so its head can be checked like any other.
-    A head that cannot be read is a refusal, never a pass."""
+    0: a check ran on the head and passed. 1: a check ran on the head and
+    did not pass. 2: no check ran on the head, or the head could not be
+    read.
+
+    Only a published check counts. The builder's own line in the pull
+    request body, `Builder check: PASS <head>`, is a claim about the
+    check and not the check, so it never makes a head pass. A repository
+    that publishes no checks (CI is agent checks only, as in mac-ops)
+    therefore has no evidence on its heads, and the shift says so."""
     code, out = run_read(
         [
             GH,
             "pr",
-            "view",
+            "checks",
             str(number),
             "-R",
             repo,
             "--json",
-            "body,headRefOid",
+            "name,state,bucket",
         ],
         GH_TIMEOUT,
         deadline,
@@ -3137,37 +3141,27 @@ def check_head_holds(repo: str, number: int, deadline: float) -> int:
     if code != 0:
         return 2
     try:
-        pull = json.loads(out)
+        rows = json.loads(out or "[]")
     except ValueError:
         return 2
-    head = str(pull.get("headRefOid") or "")
-    try:
-        rows, unknown = read_checks(repo, number, deadline)
-    except RepoError:
-        rows, unknown = [], "the checks could not be read"
-    if not head or unknown:
+    if not isinstance(rows, list) or not rows:
         return 2
-    return 0 if builder_check_passes(pull, rows, head) else 1
+    failed = [
+        row
+        for row in rows
+        if str(row.get("bucket") or row.get("state") or "").upper()
+        not in ("PASS", "SUCCESS")
+    ]
+    return 1 if failed else 0
 
 
 def check_line(repo: str, number: int, deadline: float) -> str:
     """Return the receipt's check line: the command the shift ran, and its exit.
 
     A check counts as run only when the receipt names the command and its
-    exit code, so the line holds the command that really ran. A pull
-    request that publishes checks is read with `gh pr checks`. A pull
-    request that publishes none is read with `overnight check-head`, which
-    checks the head against the published check and the builder's line,
-    and so has an exit code of its own."""
-    try:
-        rows, _unknown = read_checks(repo, number, deadline)
-    except RepoError:
-        rows = []
-    if rows:
-        code, _out = run_read(
-            [GH, "pr", "checks", str(number), "-R", repo], GH_TIMEOUT, deadline
-        )
-        return f"`gh pr checks {number} -R {repo}` exit {code}"
+    exit code, so the line holds the command that really ran: the shift
+    asks `overnight check-head` what the pull request's head carries, and
+    the command it records is the command it ran."""
     argv = [
         OVERNIGHT_BIN,
         "check-head",
@@ -3305,13 +3299,25 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
 
 
 def issue_number(item: dict) -> object:
-    """Return the number of the ticket's issue, not of its pull request.
+    """Return the number of the ticket's issue, or nothing when it has none.
 
     The board numbers its issues and GitHub numbers its pull requests in
     different counters, so an item that is a pull request carries the
-    issue number in `ticket` and its own number in `number`. The close
-    step and the receipt both address the issue, so both read it here."""
-    return item.get("ticket") or item.get("number")
+    issue number in `ticket` and its own number in `number`. A pull
+    request with no linked ticket has no issue to close, so it has no
+    issue number here: the receipt leaves the number out and the close
+    step finds no receipt for it."""
+    ticket = item.get("ticket")
+    if ticket:
+        return ticket
+    if item.get("kind") == "pull-request":
+        return ""
+    return item.get("number")
+
+
+def ticket_text(number: object) -> str:
+    """Return the issue number as it is written in a receipt's Ticket line."""
+    return f" (#{number})" if number else ""
 
 
 def receipt_body(item: dict, facts: dict, observed: int) -> str:
@@ -3324,7 +3330,7 @@ def receipt_body(item: dict, facts: dict, observed: int) -> str:
     lines = [f"# {label}", ""]
     lines.append(f"- Item: {title}")
     lines.append(f"- Repo: {item.get('repo') or ''}")
-    lines.append(f"- Ticket: {item.get('key') or ''} (#{issue_number(item)})")
+    lines.append(f"- Ticket: {item.get('key') or ''}{ticket_text(issue_number(item))}")
     lines.append(f"- State: {facts['state']}")
     if item.get("kind") != "pull-request" and item.get("url"):
         lines.append(f"- Issue: {item['url']}")
@@ -3439,17 +3445,17 @@ def cmd_check_head(args: argparse.Namespace) -> int:
     deadline = time.monotonic() + args.deadline
     code = check_head_holds(args.repo, args.number, deadline)
     if code == 0:
-        print(f"overnight: {args.repo}#{args.number} carries a passing check")
+        print(f"overnight: {args.repo}#{args.number} carries a check that ran and passed")
     elif code == 1:
         print(
-            f"overnight: {args.repo}#{args.number} carries no passing check "
-            "on its head",
+            f"overnight: {args.repo}#{args.number} carries a check that ran and did "
+            "not pass",
             file=sys.stderr,
         )
     else:
         print(
-            f"overnight: REFUSED: the head of {args.repo}#{args.number} could "
-            "not be read, so the check is unknown",
+            f"overnight: REFUSED: no check ran on the head of "
+            f"{args.repo}#{args.number}, so the check is unknown",
             file=sys.stderr,
         )
     return code
