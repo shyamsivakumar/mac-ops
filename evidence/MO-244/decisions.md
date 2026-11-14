@@ -10,21 +10,19 @@ may redo the work.
 
 ## Change
 
-`coordinator/bin/coordq`:
+`coordinator/bin/coordq`, in `cmd_fix` only:
 
-- `fix_key(repo, number, head)` builds the key `fix:{repo}#{n}:{head}`, the
-  same shape as the gate key `gate:{repo}#{n}:{head}`.
-- `prior_fix(queue, key)` reads the `fixedHeads` map of `queue.json`, the way
-  the gates read `gatedHeads`.
-- `cmd_fix` refuses a head that already has a fix send, before it reads the
-  gate thread, with
-  `refused: findings for this head were already sent as coordq #<id>`.
-- `cmd_fix` records the key and the queue item id in `fixedHeads` under the
-  queue lock, so the check and the append are one step. The check is repeated
-  inside the lock, so two callers that race both see the first one.
-
-The loop over the dispatch receipts read the loop variable `key`, which would
-have overwritten the fix key. It is now `receipt_key`.
+- The key of a fix send is `fix:{repo}#{n}:{head}`, the same shape as the gate
+  key `gate:{repo}#{n}:{head}`.
+- The queue keeps those keys in a `fixedHeads` map in `queue.json`, the way the
+  gates keep theirs in `gatedHeads`.
+- `cmd_fix` refuses a head that already has a fix send with
+  `refused: findings for this head were already sent as coordq #<id>`. The
+  check runs twice, once before the gate thread is read and once inside the
+  queue lock next to the append, the same shape as the gate's own two checks.
+  Nothing is added to the queue when the call is refused.
+- The loop over the dispatch receipts read the loop variable `key`, which
+  would have overwritten the fix key. It is now `receipt_key`.
 
 Nothing else changed: the gate selection, the refill, the message text and the
 receipt lookup are untouched.
@@ -36,58 +34,51 @@ gets a new send.
 
 ## Proof
 
-A hermetic rig, no live queue: a temporary `COORDQ_DIR`, a temporary `HOME`,
-a stub `t3mcp` and a stub `gh` that serve one pull request at a known head
-with a gate thread whose last message ends `VERDICT: FAIL`.
-
-### Two fixes on one head
+`evidence/MO-244/prove_fix_dedupe.sh` is the rig: a temporary `COORDQ_DIR`, a
+temporary `HOME`, a stub `t3mcp` and a stub `gh` that serve one pull request
+at a known head whose gate thread ends `VERDICT: FAIL`. The live queue is
+never read nor written.
 
 ```
-=== head 1111111111111111111111111111111111111111 | queue items before: 0
-=== first coordq fix ===
+=== queue items before: 0
+
+=== first fix on head 1111111111111111111111111111111111111111
 queued a finding for shyamsivakumar/strategy-replay-workbench#974 -> builder thread-builder-251
 exit=0
 === queue items after the first fix: 1
 
-=== second coordq fix ===
+=== second fix on head 1111111111111111111111111111111111111111
 refused: findings for this head were already sent as coordq #1
 exit=1
 === queue items after the second fix: 1
 
-=== fixedHeads in queue.json ===
-{
- "fix:shyamsivakumar/strategy-replay-workbench#974:1111111111111111111111111111111111111111": 1
-}
-items: [(1, 't3_thread_send', 'shyamsivakumar/strategy-replay-workbench#974 gate findings')]
-```
-
-The queue grew by one item and the second call refused.
-
-### A new head still gets a fix
-
-```
-=== fix on head 1111 (first) ===
+=== first fix on the new head 2222222222222222222222222222222222222222
 queued a finding for shyamsivakumar/strategy-replay-workbench#974 -> builder thread-builder-251
 exit=0
-=== fix on head 1111 (second) ===
-refused: findings for this head were already sent as coordq #1
-exit=1
-=== queue items: 1
+=== queue items after the fix on the new head: 2
 
-=== fix on the new head 2222 ===
-queued a finding for shyamsivakumar/strategy-replay-workbench#974 -> builder thread-builder-251
-exit=0
-=== queue items: 2
+=== fixedHeads
 {
  "fix:shyamsivakumar/strategy-replay-workbench#974:1111111111111111111111111111111111111111": 1,
  "fix:shyamsivakumar/strategy-replay-workbench#974:2222222222222222222222222222222222222222": 2
 }
+items: [(1, 't3_thread_send', 'shyamsivakumar/strategy-replay-workbench#974 gate findings'), (2, 't3_thread_send', 'shyamsivakumar/strategy-replay-workbench#974 gate findings')]
 ```
+
+The queue grew by one item on the first call, the second call refused, and a
+new head got its own send.
 
 ### The live queue
 
 `~/Code/coordinator/queue/queue.json` was not read nor written by the proof.
 It holds no `fixedHeads` after the proof.
+
+## The limit this keeps
+
+`fixedHeads` is never cleared, the same as `gatedHeads`. A head that was fixed
+and then dropped from the queue, or whose send failed three times, cannot be
+fixed again without editing `queue.json` by hand. The ticket keeps that out of
+scope.
 
 ## Rollback
 
