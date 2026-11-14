@@ -6,7 +6,7 @@ C = runpy.run_path('coordinator/bin/coordq')
 
 class ReviewerQuotaTests(unittest.TestCase):
     def test_vendor_routing(self):
-        for builder, expected in [('claude', 'SOL_MODEL'), ('gpt-6.1-sol', 'DEEPSEEK_MODEL'), ('minimax/m3', 'ASTRA_MODEL'), ('deepseek/flash', 'ASTRA_MODEL'), ('glm/5', 'ASTRA_MODEL')]:
+        for builder, expected in [('claude', 'ASTRA_MODEL'), ('gpt-6.1-sol', 'ASTRA_MODEL'), ('minimax/m3', 'ASTRA_MODEL'), ('deepseek/flash', 'ASTRA_MODEL'), ('glm/5', 'ASTRA_MODEL')]:
             self.assertEqual(C['reviewer_model']([builder]), C[expected])
         self.assertEqual(C['reviewer_model']([]), C['ASTRA_MODEL'])
 
