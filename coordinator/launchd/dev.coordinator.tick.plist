@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- One coordinator tick every 30 minutes, as a fresh headless pi on Sonnet
-     5.5 (coord-tick). No RunAtLoad: a tick costs a model call, so the first
-     one lands one interval after the job loads, not at every boot. The
-     launcher takes its own lock, so two ticks never overlap. -->
+<!-- One coordinator tick every 30 minutes, as a fresh headless pi on DeepSeek
+     (coord-tick). The tick decides, gates, routes failures and reports
+     drift; the shift and `coordq`'s refill own board intake, so the tick
+     never starts tickets.
+
+     The model is pinned here so the job runs on DeepSeek
+     (deepseek/deepseek-flash) and not on the Claude plan. No RunAtLoad: a
+     tick costs a model call, so the first one lands one interval after the
+     job loads, not at every boot. The launcher takes its own lock, so two
+     ticks never overlap. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -16,6 +22,8 @@
     <integer>1800</integer>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>COORD_TICK_MODEL</key>
+        <string>deepseek/deepseek-flash</string>
         <key>PATH</key>
         <string>@HOME@/.local/bin:@HOME@/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>HOME</key>

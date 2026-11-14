@@ -243,21 +243,31 @@ install with `./install.sh coordinator`. Config installs to `~/.coordinator`.
 Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 
-When the queue runs dry and a slot is free, `coordq dispatch` also refills
+When live plus queued work is below the cap, `coordq dispatch` also refills
 from the board: at most once every five minutes it starts the oldest open
 `stage:todo` issues of the repos in `tickets.json` through the `ticket` CLI,
 until the running threads and the waiting queue reach the cap. The ticket CLI
-decides whether an issue may start, and an issue it refuses is left alone for
-an hour. `coordq dispatch --dry-run` reports what a cycle would do and
+decides whether an issue may start. Refusals are cached while the board state
+is unchanged, with an expiry that allows another attempt. `coordq dispatch --dry-run` reports what a cycle would do and
 starts nothing.
 
 The pi coordinator's own files live under `coordinator/pi/` and install with
 the same command: the guard extension and its sandbox profile, the pi
 settings, the phone relay note and the `coord-pi`, `coord-ask`,
-`coord-phone` and `coord-tick` launchers. The guard, profile and settings
+`coord-phone`, `coord-tick`, `kpane` and `kshow` launchers. The guard, profile and settings
 install to `~/.pi/agent-coordinator/`, the launchers to `~/.local/bin/`. They
 are copies of the live files, so a change to the guard goes through a pull
 request like every other change in this repository.
+
+`kpane <image.svg|image.png> [title] [zoom]` shows a diagram in a big popup
+over the coordinator: a Herdr overlay, drawn by the `kpane` mod
+(`coordinator/mods/kpane`), that Esc closes. The popup is near the full
+window, the picture fills it, and `+`, `-` and `Fit` (or the scroll wheel)
+enlarge and shrink it; a zoom of 2 starts at twice the size. `kshow
+<image.png>` prints one to the terminal with kitty graphics. Both print usage
+and exit non-zero on `-h`, `--help`, no arguments or a file that is not
+there. `coord-ask` prints usage the same way and never sends a message that
+starts with `-`.
 
 The `dev.coordinator.turncap` job runs the coordinator's turn-cap monitor
 (`~/Code/coordinator/loop/turn_cap.py`) and keeps it running, so the
@@ -274,20 +284,26 @@ this job now covers that step. The job appends one line per poll pass to
 `~/Library/Logs/coordinator/turncap.log`. The dispatch job logs into the
 coordinator checkout's own `queue/` directory, which that repository owns.
 
-The `dev.coordinator.tick` job runs one coordinator tick every 30 minutes as a
-fresh headless pi on Sonnet 5.5 (`~/.local/bin/coord-tick`), inside the same
-sandbox and guard as the coordinator, so a tick costs a short cheap turn
-instead of an Opus turn on the long coordinator session. The tick is
-ephemeral (`pi --no-session`), so it never becomes the newest session that
-`coord-ask`, the phone relay or the Herdr panel read. It takes a lock at
-`~/.local/state/mac-ops/coord-tick.lock`, so two ticks never overlap, and a
-run over ten minutes is killed.
-Only the `ALERT:` lines of a tick reply are sent to the live pi coordinator
-terminal; a `NOOP` reply sends nothing. `coord-pi` exports `COORD_WAKE=0`, so
-the coordinator session's own 30-minute wake stays off and `/tick` and
-`/wake on` remain for manual use. The job has no `RunAtLoad`, because a tick
-costs a model call: the first one lands one interval after the job loads. It
-appends one line per run to `~/Library/Logs/coordinator/tick.log`.
+The `dev.coordinator.tick` job runs again (MO-250, mac-ops #267): it fires
+the tick every 30 minutes, on DeepSeek, and the installer leaves it alone
+(the retired set is empty). The tick reads the whole board but starts no
+tickets: the shift and `coordq`'s refill own board intake, so there is one
+intake owner. The tick decides, gates, routes failures and reports drift.
+The shift's own launchd job (`dev.coordinator.overnight`) fires the shift on
+a fixed interval, every day, and is never unarmed. The shift's runbook is
+`coordinator/overnight/README.md` in this checkout. The launcher
+(`~/.local/bin/coord-tick`) is installed as a tool too: it runs one
+ephemeral headless pi (`pi --no-session`, so it never becomes the newest
+session that `coord-ask`, the phone relay or the Herdr panel read), it takes
+a lock at `~/.local/state/mac-ops/coord-tick.lock` so two ticks never
+overlap, and a run over ten minutes is killed. The job's plist pins the
+model with `COORD_TICK_MODEL=deepseek/deepseek-flash`, so a tick costs
+DeepSeek credits and not Claude plan credits; the launcher's default model
+is the same one, and `COORD_TICK_MODEL` overrides it for a manual run.
+Only the `ALERT:` lines of a
+tick reply are sent to the live pi coordinator terminal; a `NOOP` reply sends
+nothing. `coord-pi` exports `COORD_WAKE=0`, so the coordinator session's own
+30-minute wake stays off and `/tick` and `/wake on` remain for manual use.
 
 ## Agent session traces (MO-124)
 
@@ -323,3 +339,4 @@ blocks, and loop percentiles. Shadow replay uses live `reviewer.instructions`
 --review-policy board --out <report-dir>`).
 
 The [automatic ticket gate](docs/coordq-gatekeep.md) queues checked PR heads through coordq.
+The [one pull request gate](docs/ticket-gate.md) (`ticket gate owner/repo#number`) builds the same brief by hand for one pull request.

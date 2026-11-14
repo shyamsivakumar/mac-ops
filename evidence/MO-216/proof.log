@@ -1,0 +1,57 @@
+### 1. the old module (origin/main) prints the key to the console
+old: the fake key in the console output: 1
+### 2. the new module prints the same board
+new: the fake key in the console output: 0
+new: redactions in the console output: 1
+### 3. a dry shift with the fake key in the thread report
+shift exit: 0
+### 4. the morning report
+report exit: 0
+### 5. the grep
+the records under the fixture root:
+<root>/queue/config.json
+<root>/queue/dispatch-receipts.json
+<root>/queue/queue.json
+<root>/receipts/CineJar-123.md
+<root>/receipts/Concerning-123.md
+<root>/receipts/MO-999.md
+<root>/receipts/cairn-123.md
+<root>/receipts/catalouge-123.md
+<root>/receipts/fantasy-football-toolkit-123.md
+<root>/receipts/morning-2026-11-14.md
+<root>/receipts/openscan-123.md
+<root>/receipts/qabot-123.md
+<root>/receipts/recoup-123.md
+<root>/receipts/sams-llm-wiki-123.md
+<root>/receipts/scrapers-123.md
+<root>/receipts/scripture-scroll-123.md
+<root>/receipts/strata-123.md
+<root>/receipts/strategy-replay-workbench-123.md
+<root>/receipts/tunerise-123.md
+<root>/run/policy.json
+<root>/run/shift-log.md
+the fake key under .overnight:
+grep exit=1 (1 means no match)
+the fake key in the shift's own console output: 0
+redactions in the shift's own console output: 15
+the receipt the shift wrote:
+# MO-999
+
+- Item: Fixture pull request GITHUB_TOKEN=[REDACTED:github token]
+- Repo: shyamsivakumar/mac-ops
+- Ticket: MO-999 (#123)
+- State: stuck
+- PR: https://github.com/shyamsivakumar/mac-ops/pull/123
+- Checks: `gh pr checks 123 -R shyamsivakumar/mac-ops` exit 0
+- Gate: FAIL
+- Files: 1
+- Builder thread: t-mo216-builder
+- Time used: 90 min
+- Observed: 0 s
+- Stopped because: the gate did not pass
+- Next: the builder fixes the gate findings and the gate runs again
+WORK=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp.oBFf4wQewM
+
+### 6. the same title, old module and new module
+old (origin/main): "title":"Fixture pull request GITHUB_TOKEN=ghp_FAKEfakeFAKEfakeFAKEfake1234"
+new (this branch): "title":"Fixture pull request GITHUB_TOKEN=[REDACTED:github token] builder check does not name this head"

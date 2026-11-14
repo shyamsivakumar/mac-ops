@@ -21,34 +21,437 @@ in the mac-ops checkout and is installed by the same installer.
 | Command | What it does |
 | --- | --- |
 | `overnight intake --dry-run` | Reads the board (`ticket list --fresh --json`) and the open pull requests (`gh pr list` for each allowed repository) into intake records, and prints the record count per repository. Read only: it writes no record and keeps no list of its own. The ticket CLI refreshes its own cache when it reads the board; that cache is the ticket CLI's. |
+| `overnight filter --dry-run` | Filters the board and prints every drop with its reason. Read only. It fails closed: it exits non-zero and drops what it could not check. |
+| `overnight order --dry-run` | Orders the whole board and prints the full ordered list: the failing pull requests, then the pull requests with a gate PASS, then the ready tickets that are already 5-minute parts, then the ready tickets that are not split yet. It writes one summary line to `run/shift-log.md` and no list file. |
+| `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. It fails closed: a pull request it cannot read is refused, not passed. |
+| `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
+| `overnight shift` | The command the launchd job fires. Every run is one cycle: it reads the policy snapshot, reads the whole board under the snapshot's allow list, works it (there is no item cap and no allowance stop) and writes a receipt for every item whose state changed. The shift runs 24x7, so there is no night window and no part of the night, and the shift is never armed. The first cycle of the morning writes the day's morning report, so Shyam reads one report in the morning; `--report` writes it on demand, and `--dry-run` does no work on the board. |
+| `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
+| `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order. `--dry-run` prints the receipt and writes no file. |
+| `overnight close --repo <repo> --number <n>` | Closes a ticket's issue, and only when the receipt holds the evidence (spec part T6): a check command, its exit code and a gate PASS on the pull request. A receipt with a claim but no exit code leaves the issue open, and the command says which record is missing. `--dry-run` says what the close would run and closes nothing. |
+| `overnight check-head --repo <repo> --number <n>` | Checks a pull request's head against the checks that ran on it, and exits 0 only when such a check ran and passed. It is the command a receipt records. Exit 1 means a check ran and did not pass; exit 2 means no check ran on the head (or the head could not be read), which is a refusal. The builder's own line in the pull request body is a claim about the check, so it never counts. |
+| `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
+| `overnight redact` | Prints a text with every secret pattern redacted (spec part T7a). It is the redaction the shift writes with, made visible: the fake key goes in and does not come out. It writes nothing. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
-(filtering, ordering, arming, the tick and the morning report) build on the
+(filtering, ordering, the policy snapshot and the work parts) build on the
 same records, in the same module.
+
+The pi tick is retired. `dev.coordinator.tick` (the headless pi run that
+followed `loop/tick.md` every 30 minutes) no longer runs, and `loop/tick.md`
+is no longer the runbook for board work: this file and the shift's own
+records are. The mechanical jobs stay as they are: `dev.coordinator.dispatch`
+starts queued items and refills slots every 30 s, `dev.coordinator.gatekeep`
+queues a gate for every open pull request head every 60 s, and
+`dev.coordinator.turncap` caps turns.
+
+## The policy snapshot
+
+The shift runs 24x7 and is never unarmed (spec revision 3). There is no
+`run/armed` and no `run/deadline`, and the shift always runs. What is left
+of the arm step is the policy snapshot, and it is the whole contract:
+
+```sh
+overnight policy
+```
+
+| Field | What it holds |
+| --- | --- |
+| `allow` | The repositories the shift may touch, from the board config (`coordinator/config/tickets.json`). The cycle reads and orders only these repositories. |
+| `slot_cap` | The queue's own slot cap, read from the coordq config (`$COORDQ_DIR/config.json`). It is read only and never raised. |
+| `stall_cap` | Cycles with no new work before the shift ends as a stall. |
+| `retry_cap` | Fix tries per item before the item is parked. |
+| `verify_level` | How much each item is checked. It is `balanced` for v1. |
+| `written_at` | When the snapshot was written, in Pacific time. |
+
+There is no item cap and no allowance stop: the whole backlog is in scope
+and model use is never a stop condition. A reader that looks for a cap on
+the items or on the model finds none, and that is the rule.
+
+The shift reads the snapshot on every cycle. A cycle that would work the
+board and finds no snapshot refuses and says so: a cycle with no contract
+does no work. A snapshot that is missing one of the five contract fields,
+or that holds the wrong kind of value, is not a contract, and the cycle
+refuses it too. The command refuses to write a snapshot at all when the
+queue's slot cap cannot be read: a contract without the cap is not a
+contract. A dry run reads the board without one and says that it did.
+
+The Ascend rule still wins over the snapshot. The cycle reads the
+repositories the snapshot names, minus the ones the merge gate would
+refuse, so a hand-edited snapshot cannot make the shift read Ascend
+work.
+
+`run/STOP` still stops the shift at the next cycle, and it wins over every
+other rule. The morning report still runs: it is the record of the night,
+and it says that the night ended with STOP.
+
+Writing the snapshot again replaces it with the same contract, so the
+command can run on every boot. The write is atomic, so a cycle that reads
+while the snapshot is being written reads the old one or the new one. The
+command never writes the queue's config, and it never touches the merge,
+push, slot cap or Ascend rules.
+
+## The order
+
+The order is the spec's, and it is the whole board: no cap and no list
+file.
+
+| Group | What is in it |
+| --- | --- |
+| Failing pull requests | A pull request that is open and whose checks show a failure. `gh pr checks` answers for each one; a pull request with no checks at all is not a failure. |
+| Pull requests with a gate PASS | A pull request whose head the gate has looked at, where the gate's own last message in the thread's latest run ends with `VERDICT: PASS` and carries the line `CHECK: PASS <head>`. The gate thread is found in the coordinator's dispatch receipts (`gate:<repo>#<pr>:<head>`), so a gate for an older head is never a verdict for the current one, and a later run of the same thread replaces an earlier verdict. |
+| Ready tickets already split into 5-minute parts | A ready ticket whose own text says it is a bounded slice: a light build slice, a light chore, or a part that says how many minutes it takes. |
+| Ready tickets not yet split | Every other ready ticket. The shift splits it first, then adds the parts. |
+
+A ticket is ready when the board's stage is `todo`. A ticket in another
+stage is not ready and is not work, so the list says so instead of
+dropping it. A pull request that is open and neither failing nor gate
+PASS is in flight: it is not work for the night, and the list says that
+too.
+
+Inside a group the order is the board's: the priority label first, then
+the items whose blockers are met, then the repository and the issue
+number. A blocker is met when its issue is closed, so it is neither on
+the open issue list nor missing from the closed one. A blocker the shift
+cannot check is not a met blocker, so it is reported as blocked.
+
+A blocked item is not left out. It stays in its group, is marked with the
+blocker that holds it, and is ordered after the items that are ready, so
+the night sees it and knows why it waits.
+
+The order writes one line to `run/shift-log.md`: the planned count and
+the counts per repository and per state (failing, gate PASS, split,
+unsplit, in flight and not ready). A count the shift could not check is
+written as `UNVERIFIED`, never as a zero. That line is the night's record
+of what was in scope, and the morning report reads it for the planned
+count. It holds no list: the board is the list.
+
+`--dry-run` means no work, and the two commands read it differently on
+purpose. `overnight report --dry-run` prints the report and writes no
+file. `overnight shift --dry-run` does no work on the board and writes
+only the cycle's line in the shift log, because that line is the cycle's
+record, not work.
+
+## The receipt per item
+
+A receipt is the only proof the shift has, so it is written on every state
+change of an item and is rewritten when the item's state or its evidence
+changes. A receipt that says the same thing is left alone, so the folder
+holds the record of the state changes and not a copy of the same state
+every cycle.
+
+```sh
+overnight receipt --repo shyamsivakumar/mac-ops --number 181
+overnight receipt --items 3
+```
+
+A cycle writes the receipts: a real `overnight shift` cycle reads the
+board under the policy snapshot, writes the receipt of every item it sees
+and writes one line per receipt to the shift log. It still starts no
+builder and works no board item, so a cycle that cannot start work still
+leaves the record of what it saw. A dry run writes no receipt.
+
+Every field is read, never claimed:
+
+| Field | Where it comes from |
+| --- | --- |
+| `State` | What the pull request and the gate really show: `done` when GitHub says the pull request merged, `ready` when the gate passed and the shift has no merge right, `stuck` for everything else. |
+| `PR` | The pull request the board links to the item. |
+| `Checks` | `overnight check-head --repo <repo> --number <n>` and its exit code. A check counts as run only when the receipt names the command and its exit code. |
+| `Failing checks` | The checks that failed, as GitHub names them. |
+| `Gate` | The gate's own last line (`VERDICT: PASS` or `VERDICT: FAIL`) read from the gate thread of that head, or from the pull request's own review when there is no gate thread. `UNKNOWN` when neither can be read. |
+| `Files` | How many files the pull request touches. |
+| `Builder thread` | The thread the coordinator built the pull request in. |
+| `Time used` | The builder's own time: the minutes between the thread's own created and updated times. A night that ran no builder says `0 min`. |
+| `Observed` | How long the shift spent looking at the item, in seconds. |
+| `Stopped because` | Why the item stopped, derived from the evidence above. |
+| `Next` | The next step, derived from the evidence above. |
+
+The receipt never carries a model claim where a proof belongs: the gate
+verdict comes from the gate, the checks come from the command that ran
+them and the builder time comes from the thread's own times. The cycle
+writes the receipt, so no agent writes one by hand.
+
+## The evidence rule for a done item
+
+An item counts as done, and the coordinator closes its issue, only when the
+receipt records a command, its exit code and a gate PASS on the pull
+request. A model claim alone never counts.
+
+The rule lives in one place in the module (`evidence_holds`), and three
+things read it:
+
+| Reader | What it does with the rule |
+| --- | --- |
+| The receipt writer | A pull request that merged is `done` only when the receipt holds the evidence. When it does not, the receipt says `stuck` and says which record is missing: "a check has no exit code, so it did not run" or "the gate did not pass". A receipt never claims a done item it cannot show. |
+| The morning report | The report keeps the rule it already held: a check that did not run leaves the item stuck, whatever the receipt's own state says. |
+| `overnight close` | The close step. It reads the receipt of the ticket and closes the issue only when the receipt holds the evidence. |
+
+```sh
+overnight close --repo shyamsivakumar/mac-ops --number 182
+overnight close --repo shyamsivakumar/mac-ops --number 182 --dry-run
+```
+
+The close step finds the receipt by the fields it holds (the repository and
+the issue number in its `Ticket` line), so the folder of receipts stays the
+only record of what the shift did. The `Ticket` line names the ticket's
+issue, never its pull request: the board numbers issues and GitHub numbers
+pull requests in different counters, so the receipt holds both, the issue
+in `Ticket` and the pull request in `PR`. The close addresses the issue
+only, and it takes the number from the receipt it found, so a close can
+never land on another ticket's issue. There is no switch that names a
+receipt file, so a receipt for one ticket can never close another issue.
+
+It refuses with a non-zero exit when there is no receipt for that issue,
+when the receipt holds no check, a check with no exit code, a check that
+failed, a gate that did not pass, or a state that is not `done`. The issue
+then stays open, and the refusal names the record that is missing.
+
+The close step writes nothing but the close itself. It does not merge, does
+not push and does not touch the slot cap or the Ascend rules. It has no
+caller yet: the gate's own brief still closes a ticket after its merge
+(`coordinator/bin/coordq`), and that path is unchanged by this part.
+
+## The check a receipt records
+
+A check counts as run only when the receipt names the command and its exit
+code, so the receipt writer records the command it really ran:
+`overnight check-head --repo <repo> --number <n>`.
+
+That command reads the checks that ran on the pull request's head and
+answers with its exit code:
+
+| Exit | What it means |
+| --- | --- |
+| 0 | A check ran on the head and passed. |
+| 1 | A check ran on the head and did not pass. |
+| 2 | No check ran on the head, or the head could not be read. A refusal, never a pass. |
+
+Only a published check counts. The builder's own line in the pull request
+body, `Builder check: PASS <head>`, is a claim about the check and not the
+check, so it never makes a head pass. A repository that publishes no checks
+(CI is agent checks only, as in mac-ops) therefore has no evidence on its
+heads: its items stay open, and the receipt says why.
+
+## The secret redaction
+
+Every record the shift writes under `.overnight/` goes through one
+redaction function, so no receipt, no shift log line and no morning
+report holds a token, a key, a cookie or a `.env` value. The pattern
+list lives in that one place (`SECRET_PATTERNS` in the module) and the
+function (`redact`) is the only thing that applies it. Every write in the
+module goes through `write_record` or `append_record`, which call it, so
+no writer has to remember the rule.
+
+The console is a writer too. Launchd writes everything the module prints
+to the job's own log (`~/Library/Logs/coordinator/overnight.log`), and a
+printed line can carry a secret: a gate thread's report, a command's own
+output tail, a pull request title, a receipt body. So every line the
+module prints goes through `emit`, which calls the same `redact`
+function. A writer added later (the inbox of T10, the punch list of an
+older spec revision) uses `write_record`, `append_record` or `emit`, and
+the rule holds for it without the writer knowing the rule.
+
+The patterns, in the order they are applied:
+
+| Pattern | What it matches |
+| --- | --- |
+| `private key` | A PEM private key block, from `BEGIN` to `END`, and a block that was cut short (the check's own output often ends in the middle of the key). |
+| `aws key`, `github token`, `gitlab token`, `anthropic key`, `openai key`, `slack token`, `google api key`, `huggingface token`, `npm token`, `stripe key` | The token shapes of the tools the shift's own builders use. |
+| `jwt` | A JSON web token. |
+| `authorization header`, `bearer token` | An `Authorization:` header and the token behind `Bearer`. |
+| `cookie`, `session cookie` | A `Cookie:` or `Set-Cookie:` header, and a session cookie on its own when it sits in a cookie context and is long enough to be a token. |
+| `url credentials` | The password in a URL with credentials in it. |
+| `secret field` | A `api_key=`, `password:`, `client_secret:` field, in JSON, in YAML or in a command line, quoted or not. |
+| `environment secret` | An environment variable whose name ends in `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD`, `PASSPHRASE` or `CREDENTIALS`, anywhere in the line. |
+| `.env value` | A `.env` line: an environment variable's name and its value, and nothing else on the line. |
+
+The replacement keeps no part of the value and says what was redacted:
+`[REDACTED:github token]`. A record that says what it hid is still a
+record; a record that keeps the value is a leak. A pattern that matched
+part of a line keeps the rest of the line: `GITHUB_TOKEN=[REDACTED:github
+token]` still says which variable it was.
+
+The redaction of a text is the same text: a value that is already
+redacted is not redacted again. So a receipt that is written on two
+cycles is the same receipt, and the receipt writer's own comparison (the
+receipt on disk against the body it would write) still holds.
+
+The patterns leave prose alone. `STATE=merged`, `session = 3 of 5` and
+`Secret: unknown` are records, not secrets, and they stay readable.
+
+The command shows the redaction on a fixture. It writes nothing.
+
+```sh
+overnight redact --file fixture.txt
+overnight redact --text 'GITHUB_TOKEN=ghp_...'
+```
+
+## What the filter drops
+
+The filter reads the board, the tickets' own text and the coordinator's
+decisions log. It keeps no list of its own and writes nothing.
+
+| Drop | How it is found |
+| --- | --- |
+| Ascend work | A key from the spec's list (AUH, MCP, OPS, DBT, OMN), or a repository the merge gate refuses: the same repository rule and the same per-repository `ascend` flag the gate uses in `coordinator/bin/coordq`, so the shift and the gate agree on what Ascend is. |
+| A repository off the allow list | The allow list is the board config (`coordinator/config/tickets.json`), the same list intake uses. |
+| A ticket marked `hold` | The word `HOLD` in capitals at the start of a line of the ticket's own text. |
+| A ticket marked `needs Shyam` | The phrase `needs Shyam` with its question (`Needs Shyam: ...`, "needs Shyam to ..."), and not "needs Shyam's OK". |
+| A ticket marked `design needed` | The phrase `design needed` with what it waits for (`design needed: ...`, "design needed before ..."). |
+| An open question in the decisions log | The last line of `loop/decisions.md` that is about the ticket holds or parks it, opens it, asks it as `Q: ...`, or asks Shyam a question that was never answered. |
+
+A mark is the marked form and it stands at the start of a line or of a
+clause, so a ticket that only talks about holding a position, or about a
+decision that needs Shyam later, is not marked. The decisions log is
+append-only history, so the last line that is about a ticket decides: a
+hold outlives the question it was asked in, and a line that answers the
+question closes it.
+
+The filter prints every drop with its reason, and it fails closed. A
+ticket whose text could not be read, a ticket whose open question could
+not be checked, a stale board and a missing decisions log all end in a
+non-zero exit: the filter never returns a list it could not fully check.
+The second check, `check-pr`, refuses an Ascend pull request by
+repository, by the board config's `ascend` flag, or by any Ascend key its
+branch or its body carries.
+
+
+## The launchd job
+
+`coordinator/launchd/dev.coordinator.overnight.plist` in the mac-ops
+checkout is the job `dev.coordinator.overnight`. The mac-ops installer
+copies it into `~/Library/LaunchAgents` with the rest of the coordinator
+jobs, so the job and the command always come from the same checkout.
+
+The job fires on a fixed interval, every day. The shift runs 24x7, so
+there is no night window, no 22:30 start and no 06:00 deadline: every
+cycle is the same cycle.
+
+| Every 5 minutes | What runs |
+| --- | --- |
+| Any time of day | One shift cycle. It reads the policy snapshot, reads the whole board, works it and writes the receipt of every item whose state changed. |
+| 06:00 to 07:29 PT | The same cycle, and it writes the day's morning report. The report is written once a day: the first morning cycle writes it and a later cycle leaves it alone. |
+
+The interval lives in the plist (`StartInterval`), not in the command, so
+one place owns it: 300 seconds, so a stalled pull request waits at most
+five minutes for its next action. The job has no `RunAtLoad`, so the
+first cycle lands one interval after the job loads and not at every boot.
+
+The job takes the shift's own lock, `~/.local/state/mac-ops/overnight-shift.lock`
+(`OVERNIGHT_SHIFT_LOCK` moves it). A cycle that starts while another
+cycle holds the lock does no work and says so in the log, so two cycles
+never run at once, whatever starts them: the scheduled job, or a person
+at a shell. A lock that cannot be opened refuses the cycle, because a
+cycle that runs unlocked is a cycle that can overlap another one. A cycle
+takes about a minute and a half on the current board, well inside the
+five-minute interval.
+
+The Mac must run on Pacific time for the shift log to say Pacific time.
+If the Mac's clock is not on Pacific time, the job still fires, and it
+says so in the log.
+
+The job runs real cycles (spec part T14): a cycle reads the board under
+the policy snapshot, works it with no item cap and writes a receipt for
+every item whose state changed. It still starts no builder and runs no
+merge and no push: the queue starts the work, under the rules that apply
+today, and the shift records what it really saw. The policy snapshot (T4)
+is read on every cycle, and a cycle that finds no snapshot refuses to
+work.
+
+The shift is never armed: `run/armed` does not gate it, and every cycle
+reads the board. The morning report has a time even though the shift does
+not: the first cycle of the morning writes the day's report, so Shyam
+reads one report in the morning. `run/STOP` still stops the shift at the
+next cycle, and the report still runs when it does: the report says the
+shift ended with STOP.
+
+## The attended first night
+
+`overnight attend` is the rehearsal before the first unattended night, and
+the command a person runs when they sit down to watch.
+
+```sh
+overnight attend --items 3 --minutes 60 --run-by Shyam --wait
+```
+
+- It reads the board (`ticket list --fresh --json`) and takes the first
+  small items the board shows: on the todo stage, in an allowed
+  repository, and of a type that is one small part (`chore` or
+  `standard`). A ticket Shyam holds is not in the board list at all, so
+  the night never takes one, and the Ascend keys are never taken.
+- It arms the shift in the folder it is given: `run/armed`,
+  `run/deadline` and `run/policy.json`. The policy records the allow
+  list, the queue's slot cap (read only, never raised), the stall cap, the
+  retry cap and the verify level. The rehearsal keeps its own window
+  (`run/armed` and `run/deadline`) because it is a rehearsal with a human
+  in it; the shift itself has neither and always runs.
+- It observes each item for real, with read-only commands only: the open
+  pull request for the ticket, the checks on it, the gate's verdict on it
+  and the files it touches. It runs no merge, no push and no builder.
+- It writes one receipt per item, the shift log and then the morning
+  report, from the same records the report part reads.
+- `--wait` holds the door until the window closes, and then the night
+  ends at the deadline. Without it the night ends as soon as the items
+  are observed, and the shift log says that the window is still open.
+- `--run-by` records who ran the night. The records never claim that a
+  person watched: the command cannot know that, so it says who ran it.
+
+`--dry-run` reads the board and writes nothing. `--root` points the night
+at another folder, which is how a rehearsal runs without touching the
+live records. Without `--root` the night writes to a dated folder under
+the runtime folder, so it never mixes with the live receipts.
+
+Load it after the install:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.coordinator.overnight.plist
+launchctl print gui/$(id -u)/dev.coordinator.overnight
+```
+
+Its log is `~/Library/Logs/coordinator/overnight.log`.
+
+## How a pull request joins a ticket
+
+One work item is one record, so a pull request that belongs to a ticket is
+part of that ticket's record and not a record of its own. Two signals say
+which ticket a pull request belongs to:
+
+1. A keyword reference in the title or the body (`Refs #176`) names a
+   GitHub issue number. It decides when the board shows that issue.
+2. A branch name that carries a ticket key (`t3/aa-10-fix`) names a board
+   ticket by key. The key number and the issue number are different
+   counters, so a branch is never read as an issue number.
+
+When the keyword names an issue the board does not show, the branch is still
+read. A pull request whose body points at a ticket that has left the board,
+and whose branch carries the key of a ticket that is on it, is that ticket's
+work. A pull request that names neither is a record of its own.
 
 ## Folders
 
 | Folder | What it holds |
 | --- | --- |
-| `run/` | The shift contract: when the shift is armed, when it must stop, and what it is allowed to do. |
-| `receipts/` | One receipt per item, plus the morning report. Receipts are the only proof a tick writes. |
+| `run/` | The shift contract: the policy snapshot, and the STOP file that ends the shift. |
+| `receipts/` | One receipt per item, plus the morning report. Receipts are the only proof a cycle writes. |
 | `inbox/` | What the shift could not decide or could not fix: the parking lot and the snag log. |
 | `staging/` | Scratch for work in flight (worktree path, branch, builder notes). It is scratch, not a queue: an empty shift leaves it empty. |
 
 ## Files
 
-The names come from the overnight runner spec, section 6 (revision 2).
+The names come from the overnight runner spec, section 6 (revision 2), as
+revision 3 changes them.
 
 | File | Who writes | What it holds |
 | --- | --- | --- |
-| `run/armed` | Arm step | Shift id and start time. Its presence means "on shift". |
-| `run/deadline` | Arm step | UNIX epoch for quitting time (default 06:00 PT). |
-| `run/policy.json` | Arm step | Snapshot: allow list, slot cap (read only), budget %, stall cap, verify level. |
-| `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next tick. |
-| `receipts/<item>.md` | Tick | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
-| `inbox/parking-lot.md` | Tick | Decisions the shift could not make. Each with a default and a recommendation. |
-| `inbox/snag-log.md` | Tick | Problems found (flaky test, conflict, dialog) and what the shift did. |
-| `run/shift-log.md` | All steps | One line per event, with PT time. |
+| `run/policy.json` | `overnight policy` (and the attended first night) | Snapshot: allow list, slot cap (read only), stall cap, retry cap, verify level. No item cap and no allowance stop. |
+| `run/armed` | The attended first night only | Shift id and start time of the rehearsal. The shift is always armed (revision 3). |
+| `run/deadline` | The attended first night only | UNIX epoch the rehearsal ends at. The shift has no deadline (revision 3). |
+| `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
+| `receipts/<item>.md` | A cycle (`overnight receipt`) | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
+| `inbox/parking-lot.md` | A cycle | Decisions the shift could not make. Each with a default and a recommendation. |
+| `inbox/snag-log.md` | A cycle | Problems found (flaky test, conflict, dialog) and what the shift did. |
+| `run/shift-log.md` | All steps | One line per event, with PT time. It also states how the night ended (`ended: deadline`, `ended: all done`, `ended: STOP` or `ended: stall`). |
 | `receipts/morning-YYYY-MM-DD.md` | Report step | The morning report: what merged, what is ready, what is stuck and why, and which decisions wait for Shyam. |
 
 There is no `punch-list.md` (spec revision 2): the board is the list, and the
@@ -63,6 +466,66 @@ receipts sit beside it.
   cookie or `.env` value.
 - The folder is scratch for one shift. Nothing here changes merge, push, the
   slot cap or the Ascend rules.
+
+## What the morning report reads
+
+The report is rendered from the records in this folder and from nothing
+else. It never invents a count and it never upgrades a claim into proof.
+
+| Record | What the report takes from it |
+| --- | --- |
+| `receipts/<item>.md` | The state of one item, its check, its gate verdict, its merge time, its builder time and why it stopped. The merge time is the one the shift wrote after it checked GitHub, so the report does not call GitHub again. |
+| `inbox/parking-lot.md` | The decisions the shift could not make, each with a default and a recommendation. |
+| `run/shift-log.md` | How many items were in scope (`planned N items`), whether the full suite ran and with which exit code, whether the shift stalled, and how the night ended (`ended: deadline`, `ended: all done`, `ended: STOP` or `ended: stall`). |
+| `run/policy.json` | The verify level and `allowance_used_percent`, the share of the plan allowance the night used. |
+| `run/armed`, `run/deadline` | The window of the attended rehearsal, in PT. A shift that is always armed and has no deadline has no window, so the report writes the window as UNVERIFIED. |
+| `run/STOP` | Its presence means the shift was stopped. |
+
+### The receipt fields
+
+A receipt is markdown with one `- Key: value` line per field.
+
+| Field | What it holds |
+| --- | --- |
+| `Item` | One line naming the work. |
+| `Repo`, `Ticket` | Where the work is (`MO-222 (#190)`). |
+| `State` | `done`, `ready`, `stuck` or `parked`. |
+| `PR` | The pull request, when there is one. |
+| `Merged` | The PT time the merge landed on GitHub. |
+| `Checks` | One check, or several separated by semicolons. Each check is a command in backticks and its exit code: `` `cmd` exit 0 ``. |
+| `Gate` | `PASS` or `FAIL`. |
+| `Files` | How many files the item touched. |
+| `Time used` | The builder time, as `N min`. A night that ran no builder says `0 min`. |
+| `Observed` | How long the shift spent looking at the item, in seconds. It is not builder time. |
+| `Stopped because` | Why the item stopped. |
+| `Next` | The next step. |
+
+### The rules the report holds
+
+- A check counts as run only when the receipt names the command and its
+  exit code. A check that is claimed with neither never appears as passed:
+  the item is stuck, and the check is listed under "Not run, and why".
+- An item counts as done only when its receipt holds a check that ran and
+  passed, and a gate that passed. A check that failed leaves the item
+  stuck, whatever the gate says.
+- `done` counts the items that merged, and `ready` counts the items that
+  hold a passing gate but wait for a merge right the shift does not have.
+  The counts and the lists agree item for item.
+- The report says how the shift ended in one of the four ways the spec
+  allows: `deadline`, `all done`, `STOP` or `stall`. When the records
+  explain none of them, it says `UNVERIFIED`. The shift log may state
+  how the night ended, and the report reads that statement only when the
+  records support it: a claim is never a proof.
+- A count that cannot be checked is written as `UNVERIFIED`: the planned
+  count without a shift-log summary, the model use when the allowance was
+  not readable, the builder time when a receipt records no time or a
+  planned item has no receipt, and the identity of planned items that
+  have no receipt.
+- The full suite counts as run only when the shift log records its command
+  and its exit code.
+- The report never says a check passed if it did not run.
+- The report exits non-zero when the folder that holds the records does
+  not exist, so a wrong folder is not a calm empty report.
 
 ## Source
 

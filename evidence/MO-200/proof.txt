@@ -1,17 +1,19 @@
 Revision 2 (run ticket:shyamsivakumar/mac-ops#163:a3). The text blocker check
-itself landed in attempt 2 (b43b4e4, PR #204). This attempt closes two gaps
+landed in attempt 2 (#206, squash b16b3d5). This attempt closes three gaps
 between the landed check and the brief: the `Blocked by` section was read only
-as a `## Blocked by` heading, and a key resolved only by the `<KEY>-<n> ·`
-title prefix.
+as a `## Blocked by` heading, a key resolved only by the `<KEY>-<n> ·` title
+prefix, and a key could resolve to a pull request.
+
+The board moved while this ran. `main` gained the check that refuses a start
+when a pull request already carries the issue (#223), SRW #806 was closed, and
+the stage labels of several tickets were taken. The dry runs below are the
+live output at the time of the run.
 
 $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#890 --dry-run
-refused: issue is closed; text blockers: SRW-789 (#490) is still open; the body requires an approval before building: "Build only after the separate Opus design review the design document requires; if no such verdict is recorded, stop with `WAITING:` and name the missing approval."
+refused: already merged via #989; close the issue
 
 $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#899 --dry-run
-refused: blocked by open shyamsivakumar/strategy-replay-workbench#806; text blockers: SRW-1018 (#806) is still open
-
-$ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#490 --dry-run
-checks passed
+refused: needs exactly one stage label, found 0
 
 $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#1018 --dry-run
 refused: missing type label
@@ -20,40 +22,63 @@ $ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#
 text blocker checks skipped (--force-text-blockers)
 refused: missing type label
 
-$ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#890 --dry-run --force-text-blockers
-text blocker checks skipped (--force-text-blockers)
-refused: issue is closed
+$ python3 coordinator/bin/ticket start shyamsivakumar/strategy-replay-workbench#492 --dry-run
+checks passed
+intent comment:
 
-The `Blocked by` section of the same real bodies, read with the landed code
-and with this change. The probe calls the function the CLI calls, because the
-CLI stops on SRW #1018 earlier, at the label check ("missing type label"), and
-the label check runs before the text check.
+The text blocker reasons for the same real bodies. The probe calls the
+functions the `ticket start` path calls, because on these tickets the CLI
+stops earlier, at the merged pull request check, the label check or the
+template check, and those checks run before the text check.
 
-$ git show HEAD:coordinator/bin/ticket > /tmp/old_ticket.py
-$ python3 evidence/MO-200/section_probe.py /tmp/old_ticket.py 1018 shyamsivakumar/strategy-replay-workbench
+$ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 890 shyamsivakumar/strategy-replay-workbench
+body section: 'Coordinator Opus PASS on revised SRW-789 design; B1 #898 is complete. No build starts before approval.'
+section reasons: []
+text blockers: ['the body requires an approval before building: "Build only after the separate Opus design review the design document requires; if no such verdict is recorded, stop with `WAITING:` and name the missing approval."']
+
+$ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 899 shyamsivakumar/strategy-replay-workbench
+body section: "SRW-1018 (https://github.com/shyamsivakumar/strategy-replay-workbench/issues/806, still open), whose part 1 is merged as `0d681c75` (SRW-1018 part 1: P01a boot-order proof and mutation, PR #905). Start only after the remaining SRW-1018 work has merged, because that work adds cases to the same runner's `--case` branches and would otherwise conflict."
+section reasons: []
+text blockers: []
+
+SRW #806 was closed at 21:15 on 2026-11-13, after the earlier run of this
+proof, so the SRW-1018 blocker of #899 is met and the section names no
+reason. The pull request named in that body is not a key: the key SRW-1018
+resolves to issue #806.
+
+The `Blocked by` section of a body written as a `Blocked by:` line, read with
+the code before #206 and with the code of this branch.
+
+$ git show a780e95:coordinator/bin/ticket > /tmp/pre206_ticket.py   # before #206
+$ python3 evidence/MO-200/section_probe.py /tmp/pre206_ticket.py 1018 shyamsivakumar/strategy-replay-workbench
 body section: None
-reasons: []
+section reasons: []
+text blockers: []
 
 $ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 1018 shyamsivakumar/strategy-replay-workbench
 body section: 'SRW-1119, SRW-1120.'
-reasons: ['SRW-1119 (#1016) is still open', 'SRW-1120 (#1017) is still open']
+section reasons: ['SRW-1120 (#1017) is still open']
+text blockers: ['SRW-1120 (#1017) is still open']
 
 $ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 1015 shyamsivakumar/strategy-replay-workbench
 body section: 'none.'
-reasons: []
+section reasons: []
+text blockers: []
 
 $ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 53 shyamsivakumar/catalouge
 body section: 'Use existing native GitHub blocked-by relationships as authoritative; preserve them. Parent/spec links are context, not additional blocking edges. stage:todo is queued, not permission to bypass prerequisites.'
-reasons: []
+section reasons: []
+text blockers: []
 
-$ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 490 shyamsivakumar/strategy-replay-workbench
+$ python3 evidence/MO-200/section_probe.py coordinator/bin/ticket 492 shyamsivakumar/strategy-replay-workbench
 body section: 'None.'
-reasons: []
+section reasons: []
+text blockers: []
 
 $ python3 -m unittest tests.test_ticket_text_blockers
-................................
+....................................................................
 ----------------------------------------------------------------------
-Ran 32 tests in 0.003s
+Ran 64 tests in 0.005s
 
 OK
 
@@ -61,6 +86,6 @@ $ python3 scripts/mac_ops_fast_check.py
 fast-check: passed; selected checks are not the full suite
 
 $ ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
-Ran 148 tests in 2.801s
+Ran 180 tests in 2.643s
 
 OK

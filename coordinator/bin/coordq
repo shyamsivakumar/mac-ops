@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, json, math, os, re, subprocess, sys, time
+import argparse, fcntl, json, os, re, subprocess, sys, time
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -23,21 +23,39 @@ TASK_MODELS = {
 }
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
-# The board refill. When the queue runs dry and a slot is free, the dispatcher
-# starts the oldest todo-stage issues of the configured repos through the
-# ticket CLI, so an idle board refills within minutes instead of waiting for
-# the next tick. One cycle runs at most every five minutes; an issue the
-# ticket CLI refuses is left alone for an hour before it is tried again.
-REFILL_INTERVAL = 300
-REFILL_RETRY = 3600
-REFILL_REFUSED_KEEP = 200
-# A cycle tries a bounded number of issues, so a board full of unstartable
-# issues cannot spend the GitHub rate limit on one cycle.
-REFILL_ATTEMPTS = 10
-TODO_STAGE = "stage:todo"
-TICKET_BIN = os.environ.get("COORDQ_TICKET", "ticket")
-TICKET_CONFIG = os.environ.get("COORDQ_TICKETS_JSON", "")
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
+# The board refill. When the machine has free slots,
+# the dispatcher starts tickets from the board, at most once per interval.
+TICKET_BIN = os.environ.get("COORDQ_TICKET", "ticket")
+TICKETS_CONFIG = os.environ.get("COORDQ_TICKETS_CONFIG", os.path.expanduser("~/.coordinator/tickets.json"))
+REFILL_INTERVAL = int(os.environ.get("COORDQ_REFILL_INTERVAL", "300"))
+REFILL_BUDGET = float(os.environ.get("COORDQ_REFILL_BUDGET", "120"))
+REFILL_MAX = int(os.environ.get("COORDQ_REFILL_MAX", "40"))
+REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "200"))
+# The file that holds the refusals of the earlier passes. A candidate whose
+# board state has not changed since its last refusal is skipped, so the scan
+# walks past it and reaches the tickets further down the board.
+REFILL_STATE_FILE = "refill-state.json"
+# A refusal is kept this long. The board state of a ticket can change without
+# the ticket itself changing, for example when a blocker closes, so a refusal
+# is retried when it grows old.
+REFILL_RETRY_AGE = float(os.environ.get("COORDQ_REFILL_RETRY_AGE", "3600"))
+# The ticket CLI exits with this code when it refuses a ticket, and also for
+# a usage error. A refusal says so in its own output, and `is_refusal` reads
+# that answer, because the exit code alone cannot tell the two apart.
+REFUSE_CODE = 2
+# The ticket CLI exits with 1 for a missing or unknown issue and for a
+# failed check. A refusal says so in its own first line.
+REFUSE_PREFIX = "refused:"
+STAGE = "stage:todo"
+# The gate keeps a PR that it cannot gate on a report file, so the coordinator
+# tick can see it. A PR that is skipped on the same head this many times is
+# stuck; a new head starts the count again.
+STUCK_COUNT = 3
+STUCK_FILE = "gatekeep-stuck.txt"
+TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
+ROUTER_SOURCE = os.path.expanduser("~/.pi/agent/extensions/task-router.ts")
 
 
 def path(name):
@@ -133,7 +151,8 @@ def call(tool, args, rules=None):
 
 
 def live():
-    code, out = call("t3_thread_list", {"allProjects": True, "limit": 1, "statuses": LIVE_STATUSES})
+    code, out = call("t3_thread_list", {"allProjects": True, "limit": 1, "statuses": LIVE_STATUSES,
+                                        "includeSubagents": False})
     return json.loads(out)["total"] if code == 0 else None
 
 
@@ -181,6 +200,11 @@ def drain():
         dispatchable = []
         dropped = set()
         for item in queue["items"]:
+            if item.get("attempts", 0) >= MAX_ATTEMPTS:
+                dropped.add(item["id"])
+                queue.setdefault("failed", []).append(item)
+                log(f"DROPPED #{item['id']} after {item['attempts']} attempts: {item.get('last_error', 'unknown error')}")
+                continue
             tool = undispatchable_tool(item)
             if tool is None:
                 dispatchable.append(item)
@@ -241,6 +265,7 @@ def drain():
             wait_until_counted(n)
         else:
             item["attempts"] = item.get("attempts", 0) + 1
+            item["last_error"] = out[:200]
             save(queue)
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
 
@@ -267,6 +292,14 @@ def cmd_start(a):
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
         queue["next"] += 1
         queue["items"].append(item)
+        # A gate request takes its head with it, so gatekeep does not queue
+        # a second gate for the same head.
+        request_id = str(args.get("clientRequestId") or "")
+        if request_id.startswith("gate:"):
+            heads = queue.setdefault("gatedHeads", {})
+            if request_id in heads:
+                die(f"refused: a gate for this head is already recorded as coordq #{heads[request_id]}")
+            heads[request_id] = item["id"]
         save(queue)
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
@@ -275,189 +308,270 @@ def cmd_start(a):
             print(f"started #{item['id']}")
 
 
-def tickets_config_path():
-    """The tickets config the refill reads: the one next to this script, else the installed one."""
-    if TICKET_CONFIG:
-        return TICKET_CONFIG
-    here = os.path.dirname(os.path.realpath(__file__))
-    candidate = os.path.join(here, "..", "config", "tickets.json")
-    return candidate if os.path.exists(candidate) else os.path.expanduser("~/.coordinator/tickets.json")
-
-
-def gh_search(query):
-    """One search request for the configured repos, oldest issues first.
-
-    The query names every configured repository, so a page holds the oldest
-    issues a refill may start and not the oldest issues of the owner.
-    """
+def last_refill():
+    """The time of the last refill attempt, or None when there was none."""
     try:
-        run = subprocess.run(["gh", "api", "-X", "GET", "search/issues", "-f", f"q={query}",
-                              "-f", "sort=created", "-f", "order=asc", "-f", "per_page=100"],
-                             capture_output=True, text=True, timeout=40)
-    except OSError as e:
-        raise RuntimeError(f"GitHub search could not run: {e}") from e
+        with open(path("refill.last")) as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def mark_refill():
+    """Record a refill attempt. A dry run records it too, so a diagnostic
+    cannot be mistaken for a free refill window."""
+    tmp = path("refill.last.tmp")
+    with open(tmp, "w") as f:
+        f.write(str(time.time()))
+    os.replace(tmp, path("refill.last"))
+
+
+def search_stage_todo(owner):
+    """The open stage:todo issues of one owner, oldest first."""
+    run = subprocess.run(["gh", "search", "issues", "--owner", owner, "--state", "open",
+                          "--label", STAGE, "--sort", "created", "--order", "asc",
+                          "--limit", str(REFILL_LIMIT),
+                          "--json", "repository,number,title,createdAt,updatedAt,labels"],
+                         capture_output=True, text=True, timeout=40)
     if run.returncode:
-        raise RuntimeError(f"GitHub search failed: {run.stderr.strip()[:200]}")
-    return json.loads(run.stdout).get("items", [])
+        raise RuntimeError(f"GitHub search failed for {owner}: {run.stderr.strip()[:200]}")
+    return json.loads(run.stdout)
 
 
-def refill_candidates(config):
-    """The open todo-stage issues of the configured repos, oldest first."""
-    repos = sorted(config.get("repos") or {})
-    if not repos:
-        return []
-    query = " ".join(f"repo:{repo}" for repo in repos) + f" is:open label:{TODO_STAGE}"
-    rows = []
-    for item in gh_search(query):
-        name = "/".join(item["repository_url"].split("/")[-2:])
-        rows.append((item["created_at"], name, item["number"], item["title"]))
-    rows.sort()
-    return [(name, number, title) for _, name, number, title in rows]
+def board_candidates():
+    """The open stage:todo issues of the repos in tickets.json, oldest first."""
+    with open(TICKETS_CONFIG) as f:
+        cfg = json.load(f)
+    repos = set(cfg["repos"])
+    owners = sorted({repo.split("/")[0] for repo in repos})
+    found = {}
+    for owner in owners:
+        for row in search_stage_todo(owner):
+            repo = row["repository"]["nameWithOwner"]
+            if repo in repos:
+                found[(repo, row["number"])] = row
+    return sorted(found.values(),
+                  key=lambda r: (r["createdAt"], r["repository"]["nameWithOwner"], r["number"]))
 
 
-def refill_state():
+def ticket_start(repo, number, dry_run):
+    """Run the ticket CLI on one ticket. A refused ticket exits non-zero and
+    changes nothing, so a refusal is a skip and not a start. The ticket CLI
+    exits 2 for a refusal and for a usage error, and 1 for a failed check,
+    so the exit code alone does not say which one it was; `is_refusal` reads
+    the answer out of the output."""
+    command = [TICKET_BIN, "start", f"{repo}#{number}"]
+    if dry_run:
+        command.append("--dry-run")
     try:
-        with open(path("refill.json")) as f:
+        run = subprocess.run(command, capture_output=True, text=True, timeout=240)
+    except subprocess.TimeoutExpired:
+        return 1, "ticket start timed out"
+    return run.returncode, ((run.stdout or "") + (run.stderr or "")).strip()
+
+
+def is_refusal(code, out):
+    """True when the ticket CLI refused the ticket. The exit code is not
+    enough: 2 also covers a usage error, and 1 covers a failed check."""
+    if code != REFUSE_CODE:
+        return False
+    return any(line.startswith(REFUSE_PREFIX) for line in out.splitlines())
+
+
+def load_refill_state():
+    """The refusals of the earlier passes and the count of the passes."""
+    try:
+        with open(path(REFILL_STATE_FILE)) as f:
             state = json.load(f)
     except (OSError, ValueError):
         state = {}
     if not isinstance(state, dict):
         state = {}
-    state["at"] = finite_number(state.get("at")) or 0
-    refused = state.get("refused")
-    if not isinstance(refused, dict):
-        refused = {}
-    cleaned = {}
-    for ref, at in refused.items():
-        value = finite_number(at)
-        if isinstance(ref, str) and value is not None:
-            cleaned[ref] = value
-    state["refused"] = cleaned
+    if not isinstance(state.get("refusals"), dict):
+        state["refusals"] = {}
+    try:
+        state["passes"] = int(state.get("passes") or 0)
+    except (TypeError, ValueError):
+        state["passes"] = 0
     return state
 
 
-def finite_number(value):
-    """The value when it is a finite number, else None."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return value if math.isfinite(value) else None
-
-
 def save_refill_state(state):
-    tmp = path("refill.json.tmp")
+    tmp = path(REFILL_STATE_FILE + ".tmp")
     with open(tmp, "w") as f:
-        json.dump(state, f, allow_nan=False)
-    os.replace(tmp, path("refill.json"))
+        json.dump(state, f, indent=1)
+    os.replace(tmp, path(REFILL_STATE_FILE))
 
 
-def ticket_start(repo, number, dry_run):
-    """Start one issue through the ticket CLI. Returns (return code, message).
+def candidate_key(candidate):
+    return f"{candidate['repository']['nameWithOwner']}#{candidate['number']}"
 
-    The ticket CLI decides whether the issue may start: it refuses an issue
-    with a missing label, an open blocker or a live thread, and the refill
-    never works around that.
+
+def candidate_state(candidate):
+    """The state of a candidate as the board shows it: when it last changed,
+    what it is called and which labels it carries. A refusal is worth
+    retrying when this differs from the state the refusal was made on."""
+    labels = sorted(label["name"] if isinstance(label, dict) else str(label)
+                    for label in candidate.get("labels") or [])
+    return json.dumps([candidate.get("updatedAt"), candidate.get("title"), labels])
+
+
+def unchanged_refusal(refusals, key, state, now):
+    """The refusal of an earlier pass for this candidate, when the candidate
+    has not changed since and the refusal is not older than the retry age."""
+    prior = refusals.get(key)
+    if not isinstance(prior, dict) or prior.get("state") != state:
+        return None
+    try:
+        age = now - float(prior.get("at") or 0)
+    except (TypeError, ValueError):
+        return None
+    if age < 0 or age > REFILL_RETRY_AGE:
+        return None
+    return prior
+
+
+def used_slots():
+    """The live threads plus the queued items, or None when the count is
+    unreadable. The queue counts, because a queued item already holds a
+    slot."""
+    n = live()
+    if n is None:
+        return None
+    return n + len(load()["items"])
+
+
+def refill(a):
+    """Fill free slots from the board.
+
+    The refill runs when live plus queued work is below the
+    cap, and at most once per REFILL_INTERVAL seconds. Every candidate is a
+    ticket the ticket CLI may refuse, and a refusal starts nothing, so the
+    scan moves on to the next candidate.
+
+    A refused candidate is recorded with its reason, and the next pass skips
+    it while the board shows the same state. The scan therefore walks past
+    the tickets that cannot start and reaches the tickets further down the
+    board, which the old first-REFILL_MAX window never did.
     """
-    command = [TICKET_BIN, "start", f"{repo}#{number}"]
-    if dry_run:
-        command.append("--dry-run")
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
-    except subprocess.TimeoutExpired:
-        return 1, "the ticket CLI timed out"
-    except OSError as e:
-        return 1, f"the ticket CLI could not run: {e}"
-    message = (result.stderr or result.stdout or "").strip()
-    return result.returncode, message.splitlines()[-1] if message else f"exit {result.returncode}"
-
-
-def refill(dry_run=False):
-    """Fill free slots from the board when the queue is empty.
-
-    The board is the list of work. One cycle starts the oldest todo-stage
-    issues through the ticket CLI until the running threads and the waiting
-    queue reach the cap. A cycle runs at most every five minutes, and an
-    issue the ticket CLI refuses is not tried again for an hour. A dry run
-    keeps its refusals to itself, so looking at the board does not put any
-    issue on a cooldown.
-    """
-    state = refill_state()
-    now = time.time()
-    if now - state["at"] < REFILL_INTERVAL:
-        return
-    config_file = tickets_config_path()
-    try:
-        with open(config_file) as f:
-            config = json.load(f)
-    except (OSError, ValueError) as e:
-        log(f"refill skipped: cannot read {config_file}: {e}")
-        return
-    state["at"] = now
-    save_refill_state(state)
-    try:
-        candidates = refill_candidates(config)
-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        log(f"refill skipped: cannot read the board: {e}")
-        return
-    refused = state["refused"]
-    simulated = 0
-    attempts = 0
-    for repo, number, title in candidates:
-        if attempts >= REFILL_ATTEMPTS:
-            log(f"refill stopped after {attempts} attempts")
-            break
-        current = live()
-        if current is None:
-            log("refill stopped: the thread count is unreadable")
-            break
-        queued = len(load()["items"])
-        if current + queued + simulated >= cap():
-            break
-        ref = f"{repo}#{number}"
-        if now - refused.get(ref, 0) < REFILL_RETRY:
-            continue
-        attempts += 1
-        code, message = ticket_start(repo, number, dry_run)
-        if code == 0:
-            if dry_run:
-                simulated += 1
-            log(f"refill {'would start' if dry_run else 'started'} {repo}#{number} {title!r}")
-            if not dry_run and len(load()["items"]) > queued:
-                log("refill stopped: the start waited in the queue, the board is at the cap")
+    with Lock(False, "refill.lock") as lock:
+        if lock is None:
+            log("refill skipped: another refill is running")
+            return
+        n = used_slots()
+        if n is None:
+            log("refill skipped: cannot read the live thread count")
+            return
+        limit = cap()
+        if n >= limit:
+            log(f"refill skipped: at cap {n}/{limit}")
+            return
+        last = last_refill()
+        if last is not None and time.time() - last < REFILL_INTERVAL:
+            log(f"refill skipped: throttled, the last refill was {int(time.time() - last)}s ago")
+            return
+        mark_refill()
+        try:
+            candidates = board_candidates()
+        except (OSError, RuntimeError, ValueError, KeyError) as e:
+            log(f"refill stopped: {e}")
+            return
+        if not candidates:
+            log("refill stopped: the board has no open stage:todo ticket")
+            return
+        deadline = time.time() + REFILL_BUDGET
+        state = load_refill_state()
+        pass_no = state["passes"] + 1
+        refusals = state["refusals"]
+        filled = 0
+        attempted = 0
+        skipped = 0
+        examined = 0
+        seen = {candidate_key(candidate) for candidate in candidates}
+        pass_refusals = []
+        for candidate in candidates:
+            if attempted >= REFILL_MAX:
+                log(f"refill stopped: the pass attempt budget of {REFILL_MAX} is spent")
                 break
-            continue
-        if code == 2:
-            if not dry_run:
-                refused[ref] = now
-            log(f"refill refused {repo}#{number} {title!r}: {message}")
-            continue
-        log(f"refill stopped at {repo}#{number}: {message}")
-        break
-    if len(refused) > REFILL_REFUSED_KEEP:
-        for ref in sorted(refused, key=lambda r: refused[r])[:-REFILL_REFUSED_KEEP]:
-            del refused[ref]
-    save_refill_state(state)
+            if time.time() > deadline:
+                log("refill stopped: the refill budget is spent")
+                break
+            key = candidate_key(candidate)
+            board_state = candidate_state(candidate)
+            prior = unchanged_refusal(refusals, key, board_state, time.time())
+            if prior:
+                skipped += 1
+                examined += 1
+                continue
+            used = used_slots()
+            if used is None:
+                log("refill stopped: cannot read the live thread count")
+                break
+            # Every start of this refill took a slot, and the count can lag
+            # behind it, so the slots this refill filled count too. The higher
+            # of the two counts wins, so a slow count never starts too many.
+            used = max(used, n + filled)
+            if used >= limit:
+                log(f"refill stopped: the slots are full ({used}/{limit})")
+                break
+            repo = candidate["repository"]["nameWithOwner"]
+            number = candidate["number"]
+            code, out = ticket_start(repo, number, a.dry_run)
+            attempted += 1
+            examined += 1
+            if code != 0:
+                if is_refusal(code, out):
+                    refusals[key] = {"state": board_state, "reason": out[:200],
+                                     "at": time.time(), "pass": pass_no}
+                    pass_refusals.append({"key": key, "reason": out[:200]})
+                    log(f"refill refused {key}: {out[:200]}")
+                else:
+                    # A failure of the check is not a refusal of the ticket.
+                    # It is not recorded, so the next pass tries the ticket
+                    # again instead of hiding it for the retry age.
+                    log(f"refill could not check {key}: {out[:200]}")
+                continue
+            filled += 1
+            refusals.pop(key, None)
+            if a.dry_run:
+                log(f"refill would start {key}")
+            elif out.startswith("queued"):
+                log(f"refill queued {key}: {out[:120]}")
+            else:
+                log(f"refill started {key}")
+        # A candidate that left the board keeps no refusal, so the file holds
+        # the state of the board and nothing else.
+        for key in [k for k in refusals if k not in seen]:
+            del refusals[key]
+        # A dry run changes nothing, so it writes no state and counts no
+        # pass. A diagnostic must not hide a ticket from the next real pass.
+        if not a.dry_run:
+            state["passes"] = pass_no
+            state["refusals"] = refusals
+            state["last_pass"] = {"pass": pass_no, "at": time.time(), "examined": examined,
+                                  "skipped": skipped, "attempted": attempted, "started": filled,
+                                  "refusals": pass_refusals}
+            save_refill_state(state)
+        log(f"refill pass {pass_no}: examined {examined} candidate(s) of {len(candidates)}, "
+            f"skipped {skipped} unchanged refusal(s), attempted {attempted}, started {filled}")
 
 
 def cmd_dispatch(a):
     with open(path("dispatch.last"), "w") as f:
         f.write(str(int(time.time())))
+    if a.dry_run:
+        log("dry run: the queue is left alone")
+        refill(a)
+        return
     with Lock(False) as lock:
         if lock is None:
             log("lock held by another run, skipping")
             return
-        if not a.dry_run:
-            drain()
-        queued = len(load()["items"])
-    if queued:
-        return
-    current = live()
-    if current is None or current >= cap():
-        return
-    with Lock(False, "refill.lock") as lock:
-        if lock is None:
-            log("refill already running, skipping")
-            return
-        refill(a.dry_run)
+        drain()
+    try:
+        refill(a)
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        log(f"refill failed: {e}")
 
 
 def cmd_create(a):
@@ -491,7 +605,10 @@ def cmd_drop(a):
 
 
 def cmd_status(a):
-    print(json.dumps({"cap": cap(), "live": live(), "queued": len(load()["items"])}))
+    stuck = [f"{pr} {value['head']} {value['reason']}"
+             for pr, value in sorted(load_counts().items())
+             if value.get("count", 0) >= STUCK_COUNT]
+    print(json.dumps({"cap": cap(), "live": live(), "queued": len(load()["items"]), "failed": load().get("failed", []), "stuck": stuck}))
 
 
 
@@ -501,18 +618,161 @@ def gh_json(endpoint):
     if run.returncode:
         raise RuntimeError(f"GitHub request failed: {endpoint}")
     pages = json.loads(run.stdout)
-    return [row for page in pages for row in page]
+    rows = []
+    for page in pages if isinstance(pages, list) else [pages]:
+        if isinstance(page, list):
+            rows.extend(page)
+        else:
+            rows.append(page)
+    return rows
+
+
+def load_receipts():
+    try:
+        with open(path("dispatch-receipts.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def issue_key(repo, number):
+    """The ticket key of an issue, taken from its title ('MO-233 · ...').
+
+    The key number is not the issue number: issue 226 of mac-ops is the
+    ticket MO-233.
+    """
+    rows = gh_json(f"repos/{repo}/issues/{number}")
+    if not rows:
+        return None
+    match = TITLE_KEY.match(rows[0].get("title") or "")
+    return match.group(0) if match else None
+
+
+def builder_thread_for_key(key):
+    code, out = call("t3_thread_list", {"allProjects": True, "titleContains": f"{key} ·", "limit": 100})
+    if code:
+        raise RuntimeError(f"cannot list the threads of {key}")
+    threads = [t for t in json.loads(out).get("threads", [])
+               if not REVIEW_TITLE.search(t.get("title") or "")]
+    if not threads:
+        return None
+    newest = max(threads, key=lambda t: (t.get("createdAt") or "", t.get("threadId") or ""))
+    return newest.get("threadId")
+
+
+def builder_thread_for_issue(repo, issue):
+    """The builder thread of an issue, found through the ticket key.
+
+    A build that no `ticket start` receipt covers has no receipt to read.
+    """
+    key = issue_key(repo, issue)
+    if not key:
+        return None
+    return builder_thread_for_key(key)
+
+
+def router_chain(route):
+    """The fallback chain of a pi task route, in the order the router tries it."""
+    try:
+        with open(ROUTER_SOURCE) as f:
+            source = f.read()
+    except OSError:
+        return None
+    routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
+    name = route.removeprefix("task/")
+    chain = re.search(r"^\s*" + re.escape(name) + r":\s*\[([^\]]*)\]", routes[1], re.M) if routes and route.startswith("task/") else None
+    if not chain:
+        return None
+    try:
+        entries = json.loads("[" + chain[1].rstrip().rstrip(",") + "]")
+    except ValueError:
+        return None
+    if not entries or not all(isinstance(m, str) and "/" in m for m in entries):
+        return None
+    return entries
+
+
+def read_builder_thread(thread_id):
+    code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1, "runLimit": 5})
+    if code:
+        raise RuntimeError("cannot read builder run")
+    result = json.loads(out)
+    return result.get("thread", {}), result.get("recentRuns", [])
+
+
+def is_anthropic(model):
+    lowered = model.lower()
+    return "claude" in lowered or "anthropic" in lowered
+
+
+def builder_models(thread, runs):
+    """The models the builder run executed.
+
+    The run reports the model it executed. A run that reports none gives no
+    evidence, and a router route is no evidence either: its chain says what
+    the router would run, not what it ran. A block that expired since the
+    build hides which model the router fell back to, so a route that can run
+    an Anthropic model gives no evidence at all.
+    """
+    models = executed_models(runs[0]) if runs else []
+    if models:
+        return models
+    instance, stored = thread.get("providerInstanceId"), thread.get("model")
+    if instance == "router" or (isinstance(stored, str) and stored.startswith("task/")):
+        entries = router_chain(stored if isinstance(stored, str) else "")
+        if not entries or any(is_anthropic(m) for m in entries):
+            return []
+        return entries
+    if not isinstance(stored, str) or not stored or not instance:
+        return []
+    return ["claude" if instance == "claudeAgent" else stored]
+
+
+def reviewer_model(models):
+    """A Claude builder gets Sol; every other builder gets Opus."""
+    return SOL_MODEL if any(is_anthropic(m) for m in models) else OPUS_MODEL
+
+
+def gate_args(settings, repo, issue, number, head, publisher, model):
+    """The launch arguments of the gate for one pull request.
+
+    One brief for every gate: the queue's own gatekeeper and the tick's
+    backstop build the same request here, so a gate reads the same
+    whichever way it was queued."""
+    key = f"gate:{repo}#{number}:{head}"
+    ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
+    merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
+             f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
+    close = (" Ascend repo: do not close the issue." if ascend else
+             f" Only when that merge produced a merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
+    check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
+             if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
+    message = f"""{settings['key']}-{issue} review and merge · #{number} {head}
+Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues/{issue}
+Read the ticket and diff only: `git fetch origin && git diff origin/main...{head}`. Check out nothing. Do NOT rerun the suite.
+{check} Re-read prior gate findings and say whether each is resolved.
+Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
+Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
+{merge}{close} Never call emp. Never print secrets."""
+    return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
+            "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+            "clientRequestId": key, "message": message}
 
 
 def gate_candidates(config):
+    """The gate candidates and the skips of one gatekeep run.
+
+    Every event carries the pull request it belongs to, so the caller can
+    count the skips of a pull request and report the ones it cannot gate.
+    """
     login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
                                capture_output=True, text=True, timeout=40)
     if login_run.returncode:
         raise RuntimeError("cannot identify authenticated GitHub user")
     login = login_run.stdout.strip()
-    with open(path("dispatch-receipts.json")) as f:
-        receipts = json.load(f)
+    receipts = load_receipts()
     skipped = set()
+    noted = set()
     for repo, settings in config["repos"].items():
         for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100"):
             if pr["draft"]:
@@ -534,44 +794,29 @@ def gate_candidates(config):
                 intents = [e for e in ledger if e.get("kind") == "intent"]
                 if intents and max(e["attempt"] for e in intents) != receipt["attempt"]:
                     continue
-                thread_id = receipts.get(receipt["requestId"])
+                # The receipt names the builder run. A build that no receipt
+                # covers is found through the ticket key of the issue.
+                thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
                 if not thread_id:
-                    print(f"skip {repo}#{number}: builder dispatch receipt unavailable", file=sys.stderr)
+                    if (repo, number) not in skipped:
+                        print(f"skip {repo}#{number}: builder run not found", file=sys.stderr)
+                        skipped.add((repo, number))
+                        yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                               "reason": "builder run not found"}
                     continue
-                code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1})
-                if code:
-                    raise RuntimeError("cannot read builder run")
-                result = json.loads(out)
-                runs = result.get("recentRuns", [])
-                models = executed_models(runs[0]) if runs else []
-                if not models:
-                    thread = result.get("thread", {})
-                    instance, stored = thread.get("providerInstanceId"), thread.get("model")
-                    reason = None
-                    if not isinstance(stored, str) or not stored or not instance:
-                        reason = "stored builder model unavailable"
-                    elif instance == "router":
-                        try:
-                            with open(os.path.expanduser("~/.pi/agent/extensions/task-router.ts")) as f:
-                                source = f.read()
-                            routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
-                            chain = re.search(r"^\s*" + re.escape(stored.removeprefix("task/")) + r":\s*\[([^\]]*)\]", routes[1], re.M) if routes and stored.startswith("task/") else None
-                            entries = json.loads("[" + chain[1].rstrip().rstrip(",") + "]") if chain else []
-                            if not entries or not all(isinstance(m, str) and "/" in m for m in entries):
-                                reason = "router chain unavailable"
-                            elif any("claude" in m.lower() or "anthropic" in m.lower() for m in entries):
-                                reason = "router chain includes Claude"
-                            else:
-                                models = entries
-                        except (OSError, ValueError):
-                            reason = "router chain unavailable"
-                    else:
-                        models = ["claude" if instance == "claudeAgent" else stored]
-                    if reason:
-                        if (repo, number) not in skipped:
-                            print(f"skip {repo}#{number}: {reason}", file=sys.stderr)
-                            skipped.add((repo, number))
-                        continue
+                thread, runs = read_builder_thread(thread_id)
+                models = builder_models(thread, runs)
+                if models:
+                    model = reviewer_model(models)
+                else:
+                    # A build whose executed model is not known is still
+                    # gated, on the backstop reviewer. The check below
+                    # still decides whether the pull request is gated.
+                    model = backstop_model(thread, runs)
+                    if (repo, number) not in noted:
+                        print(f"backstop {repo}#{number}: executed model unavailable, reviewer "
+                              f"{model['instanceId']} {model['model']}", file=sys.stderr)
+                        noted.add((repo, number))
                 statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
                 checks = [x for x in statuses if x["context"] == "srw/agent-check"]
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -581,23 +826,9 @@ def gate_candidates(config):
                     passed = f"Builder check: PASS {head}" in body.splitlines()
                 if not passed:
                     continue
-                model = SOL_MODEL if any("claude" in m.lower() for m in models) else OPUS_MODEL
                 key = f"gate:{repo}#{number}:{head}"
-                ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
-                merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
-                         f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-                check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
-                         if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
-                message = f"""{settings['key']}-{issue} review and merge · #{number} {head}
-Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues/{issue}
-Read the ticket and diff only: `git fetch origin && git diff origin/main...{head}`. Check out nothing. Do NOT rerun the suite.
-{check} Re-read prior gate findings and say whether each is resolved.
-Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
-Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
-{merge} Never call emp. Never print secrets."""
-                yield key, {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
-                            "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
-                            "clientRequestId": key, "message": message}
+                yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
+                       "args": gate_args(settings, repo, issue, number, head, publisher, model)}
                 break
 
 
@@ -614,13 +845,29 @@ def cmd_gatekeep(a):
     with open(a.config) as f:
         config = json.load(f)
     try:
-        for key, args in gate_candidates(config):
+        counts = load_counts()
+        seen = set()
+        stuck = []
+        for event in gate_candidates(config):
+            if event["kind"] == "skip":
+                pr = event["pr"]
+                previous = counts.get(pr)
+                count = previous["count"] + 1 if previous and previous.get("head") == event["head"] else 1
+                counts[pr] = {"head": event["head"], "count": count, "reason": event["reason"]}
+                seen.add(pr)
+                if count >= STUCK_COUNT:
+                    stuck.append((pr, event["head"], event["reason"]))
+                continue
+            counts.pop(event["pr"], None)
+            key, args = event["key"], event["args"]
             with Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
                 if key in heads:
                     continue
-                print(("would queue " if a.dry_run else "queued ") + key, flush=True)
+                print(("would queue " if a.dry_run else "queued ") + key
+                      + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
+                      flush=True)
                 if a.dry_run:
                     continue
                 item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
@@ -629,8 +876,245 @@ def cmd_gatekeep(a):
                 queue["items"].append(item)
                 heads[key] = item["id"]
                 save(queue)
+        write_counts(counts, seen, stuck, a.dry_run)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
         die(f"gatekeep stopped: {e}")
+
+
+def load_counts():
+    counts = load().get("gatekeepSkips")
+    return counts if isinstance(counts, dict) else {}
+
+
+def write_counts(counts, seen, stuck, dry_run):
+    """Keep the skip counts and write the report of the stuck pull requests.
+
+    The file is written from scratch every run, so a pull request that is
+    gated or gone leaves it.
+    """
+    for pr, head, reason in stuck:
+        print(f"stuck {pr} {head} {reason}", file=sys.stderr)
+    if dry_run:
+        return
+    kept = {pr: value for pr, value in counts.items() if pr in seen}
+    with Lock(True):
+        queue = load()
+        queue["gatekeepSkips"] = kept
+        save(queue)
+    lines = [f"{pr} {head} {reason}" for pr, head, reason in sorted(stuck)]
+    tmp = path(STUCK_FILE + ".tmp")
+    with open(tmp, "w") as f:
+        f.write("".join(line + "\n" for line in lines))
+    os.replace(tmp, path(STUCK_FILE))
+
+
+def cmd_fix(a):
+    """Send a failed gate's findings back to the builder of one pull request.
+
+    The gate's own report is the finding, so this reads it from the gate
+    thread and sends it to the thread that built the pull request. The
+    builder thread is the one the coordinator started for the ticket, so
+    the findings go back to the builder that holds the work."""
+    repo, number = parse_ref(a.ref)
+    try:
+        with open(path("dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except (OSError, ValueError) as e:
+        die(f"refused: the dispatch receipts could not be read: {e}")
+    run = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
+                         capture_output=True, text=True, timeout=40)
+    if run.returncode:
+        die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
+    pr = json.loads(run.stdout)
+    if pr.get("state") != "open":
+        die(f"refused: {repo}#{number} is not open")
+    head = pr["head"]["sha"]
+    key = f"fix:{repo}#{number}:{head}"
+    # The findings of one head go back once. The gate and the tick may both
+    # ask for the same fix, and a builder that already fixed them must not
+    # be asked again.
+    with Lock(True):
+        heads = load().setdefault("fixedHeads", {})
+        if key in heads:
+            die(f"refused: findings for this head were already sent as coordq #{heads[key]}")
+    gate_thread = receipts.get(f"gate:{repo}#{number}:{head}")
+    if not gate_thread:
+        die(f"refused: no gate has looked at {repo}#{number} at {head}")
+    code, out = call("t3_thread_read", {"threadId": gate_thread, "maxCharsPerItem": 20000})
+    if code:
+        die("refused: the gate thread could not be read")
+    try:
+        data = json.loads(out)
+    except ValueError:
+        die("refused: the gate thread could not be read")
+    texts = [i.get("text") or "" for i in (data.get("items") or [])
+             if i.get("type") == "assistant_message"]
+    report = texts[-1] if texts else ""
+    if not report.rstrip().endswith("VERDICT: FAIL"):
+        die(f"refused: the gate of {repo}#{number} did not end VERDICT: FAIL")
+    issue = 0
+    for line in (pr.get("body") or "").splitlines():
+        match = re.search(r"\bRefs?\s+#(\d+)", line)
+        if match:
+            issue = int(match.group(1))
+            break
+    if not issue:
+        die(f"refused: {repo}#{number} names no ticket, so it has no builder")
+    prefix = f"ticket:{repo}#{issue}:a"
+    builder, attempt = "", 0
+    for receipt_key, value in receipts.items():
+        if not receipt_key.startswith(prefix):
+            continue
+        try:
+            number_of_attempt = int(receipt_key[len(prefix):])
+        except ValueError:
+            continue
+        if number_of_attempt > attempt:
+            builder, attempt = value, number_of_attempt
+    if not builder:
+        die(f"refused: no builder thread is known for {repo}#{issue}")
+    message = (
+        f"The Opus gate on PR #{number} at {head} returned VERDICT: FAIL. "
+        "Fix every critical and major finding below (minors if small), run "
+        "the check, push, update the PR body's Builder check line to the new "
+        "head, and report.\n\n" + report[-6000:]
+    )
+    args = {"threadId": builder, "message": message}
+    with Lock(True):
+        queue = load()
+        heads = queue.setdefault("fixedHeads", {})
+        if key in heads:
+            die(f"refused: findings for this head were already sent as coordq #{heads[key]}")
+        item = {"id": queue["next"], "tool": "t3_thread_send", "args": args,
+                "title": f"{repo}#{number} gate findings", "priority": 300}
+        queue["next"] += 1
+        queue["items"].append(item)
+        heads[key] = item["id"]
+        save(queue)
+    print(f"queued a finding for {repo}#{number} -> builder {builder}")
+
+
+def backstop_model(thread, runs):
+    """The gate model for a builder whose executed model is not known.
+
+    A route that can run an Anthropic model is a Claude build, so it gets
+    the Sol gate, the same rule a known Claude build gets. A builder
+    whose model is truly unknown gets the Opus gate."""
+    models = builder_models(thread, runs)
+    if models:
+        return reviewer_model(models)
+    instance, stored = thread.get("providerInstanceId"), thread.get("model")
+    if instance == "router" or (isinstance(stored, str) and stored.startswith("task/")):
+        entries = router_chain(stored if isinstance(stored, str) else "")
+        if entries and any(is_anthropic(m) for m in entries):
+            return SOL_MODEL
+    return OPUS_MODEL
+
+
+def check_names_head(body, head, publisher, checks):
+    """Return True when the builder's check names this head.
+
+    The check is the line the builder wrote in the pull request body,
+    `Builder check: PASS <head>`, or the agent check the repository
+    publishes on the head. A trailing note after the head (the command
+    that produced it) does not change the verdict."""
+    for line in (body or "").splitlines():
+        if line.strip().startswith(f"Builder check: PASS {head}"):
+            return True
+    if publisher:
+        return bool(checks) and checks[0]["state"] == "success"
+    return False
+
+
+def gate_request(repo, pr, settings, config, receipts, login):
+    """Return the gate request of one open pull request, or None.
+
+    The backstop gates a head the queue's own gatekeeper left alone. The
+    builder's check must name the head: a gate that cannot read the diff
+    would only report the check, and recording the head would block it
+    from then on. The gate model follows the builder's own rule."""
+    head, number = pr["head"]["sha"], pr["number"]
+    body = pr.get("body") or ""
+    for issue in dict.fromkeys(re.findall(r"\bRefs #(\d+)\b", body)):
+        thread_id = builder_thread_for_issue(repo, issue)
+        if not thread_id:
+            continue
+        thread, runs = read_builder_thread(thread_id)
+        model = backstop_model(thread, runs)
+        statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
+        checks = [x for x in statuses if x["context"] == "srw/agent-check"]
+        publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
+        if not check_names_head(body, head, publisher, checks):
+            return None
+        key = f"gate:{repo}#{number}:{head}"
+        return key, gate_args(settings, repo, issue, number, head, publisher, model)
+    return None
+
+
+def parse_ref(ref):
+    """Return the repository and number of an owner/repo#number reference."""
+    match = re.fullmatch(r"([^/\s#]+/[^/\s#]+)#(\d+)", ref)
+    if not match:
+        die(f"bad reference {ref!r}, expected owner/repo#number")
+    return match.group(1), int(match.group(2))
+
+
+def cmd_gate(a):
+    """Queue the gate for one open pull request head.
+
+    The queue's own gatekeeper gates the pull requests whose builder
+    check names their head. This is the tick's backstop: it gates the
+    head the tick names, so a head no gate looked at is not left
+    ungated. The head is recorded in the queue's own list, so a head is
+    never gated twice."""
+    repo, number = parse_ref(a.ref)
+    with open(a.config) as f:
+        config = json.load(f)
+    settings = (config.get("repos") or {}).get(repo)
+    if not settings:
+        die(f"refused: {repo} is not on the board")
+    run = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
+                         capture_output=True, text=True, timeout=40)
+    if run.returncode:
+        die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
+    pr = json.loads(run.stdout)
+    if pr.get("state") != "open":
+        die(f"refused: {repo}#{number} is not open")
+    if pr.get("draft"):
+        die(f"refused: {repo}#{number} is a draft")
+    head = pr["head"]["sha"]
+    key = f"gate:{repo}#{number}:{head}"
+    with Lock(True):
+        heads = load().setdefault("gatedHeads", {})
+        if key in heads:
+            die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
+    login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
+                               capture_output=True, text=True, timeout=40)
+    if login_run.returncode:
+        die("refused: the authenticated GitHub user is unknown")
+    login = login_run.stdout.strip()
+    found = gate_request(repo, pr, settings, config, load_receipts(), login)
+    if not found:
+        die(
+            f"refused: the builder check of {repo}#{number} does not name the "
+            f"head {head}, so a gate for this head would only report CHECK: "
+            "FAIL and would block the head from then on. Wait for the builder "
+            "to push the check for this head."
+        )
+    key, args = found
+    with Lock(True):
+        queue = load()
+        heads = queue.setdefault("gatedHeads", {})
+        if key in heads:
+            die(f"refused: a gate for this head is already recorded as coordq #{heads[key]}")
+        item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
+                "title": args["title"], "priority": 5000}
+        queue["next"] += 1
+        queue["items"].append(item)
+        heads[key] = item["id"]
+        save(queue)
+    print("queued " + key
+          + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"])
 
 
 def main():
@@ -652,14 +1136,22 @@ def main():
     sub.add_parser("status").set_defaults(fn=cmd_status)
     d = sub.add_parser("dispatch")
     d.add_argument("--dry-run", action="store_true",
-                   help="report what the dispatch and the board refill would do, and start nothing")
+                   help="start nothing: the queue is left alone and the refill only reports")
     d.set_defaults(fn=cmd_dispatch)
     g = sub.add_parser("gatekeep")
     g.add_argument("--dry-run", action="store_true")
     g.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))
     g.set_defaults(fn=cmd_gatekeep)
+    o = sub.add_parser("gate")
+    o.add_argument("ref", help="the pull request to gate, as owner/repo#number")
+    o.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))
+    o.set_defaults(fn=cmd_gate)
+    f = sub.add_parser("fix")
+    f.add_argument("ref", help="the pull request whose findings go back, as owner/repo#number")
+    f.set_defaults(fn=cmd_fix)
     a = p.parse_args()
     a.fn(a)
 
 
-main()
+if __name__ == "__main__":
+    main()

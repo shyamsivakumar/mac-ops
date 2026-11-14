@@ -11,6 +11,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The overnight runner is Python without a .py suffix, so the changed file
+# list has to name it by hand.
+SUFFIXLESS_PYTHON = ("coordinator/overnight/overnight",)
+
 
 def git(*args):
     return subprocess.check_output(["git", "-C", str(ROOT), *args])
@@ -60,6 +64,10 @@ def main():
         affected = new
     tests = sorted(str(path.relative_to(ROOT)) for name, path in modules.items() if name in affected and path.parent == ROOT / "tests" and path.name.startswith("test_") and path.name.endswith(".py"))
     changed_python = sorted(name for name in changes if name.endswith(".py") and (ROOT / name).is_file())
+    changed_python = sorted(
+        set(changed_python)
+        | {name for name in SUFFIXLESS_PYTHON if name in changes}
+    )
     changed_shell = sorted(name for name in changes if name.endswith(".sh") and (ROOT / name).is_file())
     print(f"fast-check: base={base}", flush=True)
     print(f"fast-check: changed={sorted(changes)}", flush=True)

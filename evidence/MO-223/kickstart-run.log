@@ -1,0 +1,8 @@
+# launchctl kickstart -p gui/$(id -u)/dev.coordinator.overnight
+60781
+	runs = 3
+	last exit code = 0
+# log
+overnight: 2026-11-13 14:09 PST is outside the overnight window; nothing to do
+overnight: 2026-11-13 14:09 PST is outside the overnight window; nothing to do
+overnight: 2026-11-13 14:15 PST is outside the overnight window; nothing to do

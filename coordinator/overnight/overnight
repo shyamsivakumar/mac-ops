@@ -1,46 +1,536 @@
 #!/usr/bin/env python3
 """The overnight shift's command line.
 
-This part (spec T3a) reads the board and the open pull requests and turns
-them into intake records. It reads only: it writes no record and keeps no
-list of its own. The ticket CLI refreshes its own cache when it reads the
-board, and that cache is the ticket CLI's, not a queue of the shift's.
+Three parts live here.
+
+`overnight intake --dry-run` (spec T3a) reads the board and the open pull
+requests and turns them into intake records. It reads only: it writes no
+record and keeps no list of its own. The ticket CLI refreshes its own
+cache when it reads the board, and that cache is the ticket CLI's, not a
+queue of the shift's.
+
+`overnight filter --dry-run` (spec T3b) filters that board: it drops the
+Ascend work, the holds, the tickets that need Shyam, the tickets that
+need a design and the tickets with an open question in the coordinator's
+decisions log, and it prints every drop with its reason. It reads only.
+`overnight check-pr --repo <repo> --number <n>` is the second check: it
+refuses any pull request in an Ascend repository. Both fail closed: a
+read that fails is a refusal, never a pass.
 
     overnight intake --dry-run
+    overnight filter --dry-run
+    overnight check-pr --repo <repo> --number <n>
+
+`overnight board --json` (spec T3d) returns the whole board for the
+day tick: every board ticket and every open pull request the coordinator
+may act on, in the order the shift works them, and the one action each
+item needs now (start the ready work, queue a gate for an open head that
+has none, send a failed gate's findings back to its builder). It reads
+only: it writes no file and keeps no list. The board is the list.
+
+    overnight board --json
+
+`overnight report` (spec T11) renders the morning report from the shift's
+own records: the receipts, the parking lot, the shift log and the policy
+snapshot. It never keeps a second queue and it invents nothing. A count it
+cannot check is written as UNVERIFIED, and a check is never reported as
+passed unless the records say it ran.
+
+    overnight report --dry-run
+
+`overnight shift` (spec T12, revision 3) is the command the launchd job
+fires. The job fires it every five minutes, every day: the shift runs
+24x7, so there is no night window and no part of the night. Every run is
+one cycle: it reads the policy snapshot, reads the whole board under the
+snapshot's allow list, works it (there is no item cap and no allowance
+stop) and writes a receipt for every item whose state changed. The shift
+is never armed and never unarmed. The first cycle of the morning writes
+the day's morning report, so Shyam reads one report in the morning;
+`--report` writes it on demand. A real cycle takes the shift's own lock,
+so two cycles never run at once, whatever starts them.
+
+    overnight shift
+    overnight shift --report
+
+`overnight receipt` (spec T5b) writes the receipt of every item whose state
+the shift can see: the state, the pull request, the checks and their exit
+codes, the gate's own verdict, the files the pull request touches, the
+builder's own time and why the item stopped. Every field is read from
+GitHub, the queue or a thread, so a receipt never carries a model claim
+where a proof belongs. The receipt is written on every state change of an
+item and is rewritten when the item's state or its evidence changes.
+
+    overnight receipt --repo shyamsivakumar/mac-ops --number 181
+    overnight receipt --items 3
+
+`overnight close` (spec T6) closes a ticket's issue, and only when the
+receipt holds the evidence: a command, its exit code and a gate PASS on
+the pull request. The receipt is the proof, so a receipt that holds a
+claim without an exit code leaves the issue open and the command says
+which record is missing.
+
+    overnight close --repo shyamsivakumar/mac-ops --number 182
+
+`overnight policy` (spec T4, revision 3) writes the policy snapshot the
+shift reads on every cycle: `run/policy.json`. The shift is never unarmed
+and has no deadline, so the snapshot is the whole contract. It holds the
+allow list, the queue's slot cap (read only, never raised), the stall cap,
+the retry cap and the verify level. It has no item cap and no allowance
+stop: the whole backlog is in scope and model use is never a stop
+condition.
+
+    overnight policy
+
+`overnight redact` (spec T7a) is the one redaction the shift has. Every
+record it writes under `.overnight/` goes through it, so no receipt, no
+shift log line and no morning report holds a token, a key, a cookie or a
+`.env` value. The command shows the redaction on a fixture: the fake key
+goes in and does not come out.
+
+    overnight redact --file fixture.txt
+    overnight redact --text 'ghp_...'
+
+The console is a writer as well (spec T7b). Launchd writes everything the
+module prints to the job's own log, and a printed line can carry a secret:
+a gate thread's report, a command's own output tail, a pull request title.
+So every line the module prints goes through the same redaction function
+(`emit`), and the job log holds no more than the records under
+`.overnight/` do.
+
+The clock is the Mac's local clock, the clock launchd fires on. The
+report and the log say Pacific time.
 
 The board is the list. Intake reads `ticket list --fresh --json` for the
 tickets and `gh pr list` for each allowed repository, and holds the records
-in memory for the run. The later parts of the spec (filtering, ordering,
-arming, the tick and the morning report) build on the same records.
+in memory for the run. The later parts of the spec (ordering, arming and
+the tick) build on the same records.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NoReturn
 
 TICKET = os.environ.get("OVERNIGHT_TICKET", "ticket")
 GH = os.environ.get("OVERNIGHT_GH", "gh")
+OVERNIGHT_BIN = os.environ.get("OVERNIGHT_BIN", "overnight")
 TICKET_TIMEOUT = 300
 GH_TIMEOUT = 60
 # The whole intake runs inside the turn cap, so every subprocess gets what
 # is left of one overall deadline.
 DEFAULT_DEADLINE = 540
 PR_LIMIT = 100
-PR_FIELDS = "number,title,url,isDraft,headRefName,baseRefName,updatedAt,body"
+# The open issues of one repository, read for the marks a ticket body
+# carries. The board's tickets are a small part of that list.
+ISSUE_LIMIT = 500
+PR_FIELDS = (
+    "number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body"
+)
 # A ticket reference in a pull request body or title. Only the GitHub
 # keywords count: a bare "#123" is often a pull request, not a ticket.
-TICKET_REF = re.compile(r"\b(?:refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
+TICKET_REF = re.compile(r"\b(refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
+# The reference the coordinator's own queue reads: a "Refs #<n>" line. A
+# pull request that carries one names the ticket its gate reads.
+REFS_ISSUE = re.compile(r"\brefs?\s+#(\d+)", re.I)
+# The check a repository publishes on a head. The builder's own line in the
+# pull request body is the other form of the same check.
+AGENT_CHECK = "srw/agent-check"
 # A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
 # it is a ticket key number, not a GitHub issue number.
 BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
+
+# --- Part T7a: the secret redaction ---------------------------------------
+#
+# The shift writes its records under `.overnight/`: the receipts, the
+# shift log, the parking lot, the policy snapshot and the morning report.
+# A record quotes what it read: a pull request title, a branch name, a
+# check's own output, a command line. Any of those can carry a token, a
+# key, a cookie or a value out of a `.env` file. So every write under the
+# root goes through one redaction function, and the pattern list lives in
+# that one place (spec section 5, rule 4).
+#
+# The replacement says what was redacted and keeps no part of the value:
+# `[REDACTED:github token]`. A record that says what it hid is still a
+# record. A record that keeps the value is a leak.
+
+# The pattern list. Each entry is a name and a pattern. A pattern with a
+# named group `secret` keeps the rest of the match (the name of an
+# environment variable, the header of a cookie line) and redacts only the
+# group. A pattern without one is redacted whole.
+#
+# Every group starts with `(?!\[REDACTED:)`, so a value that is already
+# redacted is not redacted again: the redaction of a text is the same
+# text, and a record that is written twice is not damaged.
+SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "private key",
+        re.compile(
+            r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?"
+            r"-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+        ),
+    ),
+    (
+        # A key block that was cut short: the check's own output often
+        # ends in the middle of the key. It runs to the end of the text,
+        # unless an END marker follows it.
+        "private key",
+        re.compile(
+            r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+            r"(?:(?!-----END)[\s\S])*$"
+        ),
+    ),
+    ("aws key", re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}\b")),
+    (
+        "github token",
+        re.compile(
+            r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b"
+        ),
+    ),
+    ("gitlab token", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")),
+    ("anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}\b")),
+    (
+        "openai key",
+        re.compile(r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}"),
+    ),
+    ("slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("google api key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("huggingface token", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
+    ("npm token", re.compile(r"\bnpm_[A-Za-z0-9]{30,}\b")),
+    ("stripe key", re.compile(r"\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{10,}\b")),
+    (
+        "jwt",
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b"),
+    ),
+    (
+        "authorization header",
+        re.compile(
+            r"(?i)\b(?:authorization|proxy-authorization|x-api-key)[ \t]*[:=][ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)[^\s\"']+"
+            r"(?:[ \t]+(?!\[REDACTED:)[^\s\"']+)?)"
+        ),
+    ),
+    (
+        "bearer token",
+        re.compile(
+            r"(?i)\bbearer[ \t]+(?P<secret>(?!\[REDACTED:)[A-Za-z0-9._~+/-]{8,}=*)"
+        ),
+    ),
+    (
+        "cookie",
+        re.compile(
+            r"(?i)\b(?:set-)?cookie[ \t]*[:=][ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)[^\s;]+)"
+        ),
+    ),
+    (
+        # A session cookie on its own. It needs a cookie context (the
+        # start of a line, a space or a `;`) and a value that is long
+        # enough to be a token, so prose like "session = 3 of 5" is left
+        # alone.
+        "session cookie",
+        re.compile(
+            r"(?i)(?:^|[;\s])(?:session|sessionid|sid|jsessionid|phpsessid|csrf"
+            r"|xsrf)[ \t]*=[ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)[A-Za-z0-9._~+/-]{8,})"
+        ),
+    ),
+    (
+        "url credentials",
+        re.compile(
+            r"://[^/\s:@]*:(?P<secret>(?!\[REDACTED:)[^/\s@]+(?:\@[^/\s@]*)?)@"
+        ),
+    ),
+    (
+        # A field that names a secret, in JSON, in YAML or in a command
+        # line. The name may be quoted, and the value may be quoted.
+        "secret field",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_])[\"']?"
+            r"(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token"
+            r"|gh[_-]?token|secret[_-]?key|client[_-]?secret|password|passwd"
+            r"|passphrase|token|secret)"
+            r"[\"']?[ \t]*[:=][ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+))"
+        ),
+    ),
+    (
+        # An environment variable whose name ends in a secret word. The
+        # name has an underscore, so prose like "the token: expired" is
+        # left alone.
+        "environment secret",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_])(?:export[ \t]+)?[A-Za-z0-9]+_[A-Za-z0-9_]*"
+            r"(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?)"
+            r"[ \t]*[:=][ \t]*(?P<secret>(?!\[REDACTED:)[^\s]+)"
+        ),
+    ),
+    (
+        # The same, for a name that is the secret word itself. The name
+        # has to be followed by `=`, so a heading that says "Secret:" is
+        # left alone.
+        "environment secret",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_])(?:export[ \t]+)?"
+            r"(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?)"
+            r"[ \t]*=[ \t]*(?P<secret>(?!\[REDACTED:)[^\s]+)"
+        ),
+    ),
+    (
+        # A `.env` line: the name is an environment variable's name and
+        # the line holds nothing else.
+        ".env value",
+        re.compile(
+            r"(?m)^[ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*_[A-Z0-9_]*[ \t]*=[ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)\S+)[ \t]*$"
+        ),
+    ),
+)
+
+
+def redact(text: str) -> str:
+    """Return the text with every secret pattern replaced.
+
+    One function, one pattern list, one replacement shape. Every record
+    the shift writes under `.overnight/` goes through this function, so a
+    receipt, a shift log line and the morning report cannot hold a token,
+    a key, a cookie or a `.env` value. The replacement names the pattern
+    and keeps no part of the value.
+
+    Every pattern is matched against the text as it came in, never
+    against the text another pattern already changed: a replacement is
+    not a secret, and a replacement that a later pattern reads again
+    would leave half a secret behind. The spans that match are merged
+    and the merged span is replaced once, under the name of the pattern
+    that comes first in the list."""
+    spans: list[tuple[int, int, int, str]] = []
+    for priority, (name, pattern) in enumerate(SECRET_PATTERNS):
+        for match in pattern.finditer(text):
+            if "secret" in pattern.groupindex:
+                start, end = match.span("secret")
+            else:
+                start, end = match.span()
+            if end > start:
+                spans.append((start, end, priority, name))
+    if not spans:
+        return text
+    spans.sort(key=lambda span: (span[0], span[2], span[1]))
+    merged: list[list] = []
+    for start, end, priority, name in spans:
+        if merged and start <= merged[-1][1]:
+            current = merged[-1]
+            current[1] = max(current[1], end)
+        else:
+            merged.append([start, end, priority, name])
+    out: list[str] = []
+    last = 0
+    for start, end, _priority, name in merged:
+        out.append(text[last:start])
+        out.append(f"[REDACTED:{name}]")
+        last = end
+    out.append(text[last:])
+    return "".join(out)
+
+
+def emit(text: str = "", err: bool = False, end: str = "\n") -> None:
+    """Print the shift's own output with every secret redacted.
+
+    The console is a writer too. Launchd writes everything the module
+    prints to the job's own log, and a printed line can carry a secret:
+    a gate thread's report, a command's own output tail, a pull request
+    title, a receipt body. So the console goes through the same redaction
+    function as the records under `.overnight/`, and the job log holds no
+    more than the records do.
+
+    The whole text is redacted at once, not line by line, so a secret
+    that spans lines (a private key block) is redacted as one thing."""
+    print(redact(text), file=sys.stderr if err else sys.stdout, end=end)
+
+
+def write_record(path: Path, text: str) -> Path:
+    """Write a record under the overnight root and return the path.
+
+    Every write under `.overnight/` goes through this function, so the
+    redaction is not a rule each writer has to remember: it happens here,
+    once, for the receipt, the shift log, the parking lot, the policy
+    snapshot and the morning report alike."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(redact(text), encoding="utf-8")
+    return path
+
+
+def append_record(path: Path, text: str) -> Path:
+    """Append to a record under the overnight root and return the path.
+
+    The append is a write like any other, so it is redacted the same way."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(redact(text))
+    return path
+
+
+# --- Part T4: the policy snapshot constants -------------------------------
+#
+# Revision 3 of the spec: the shift runs 24x7 and is never unarmed. There
+# is no `run/armed` and no `run/deadline`, and the shift always runs. What
+# is left of the arm step is the policy snapshot: the contract the shift
+# reads on every cycle.
+#
+# The snapshot holds the repositories the shift may touch, the queue's own
+# slot cap (read only, from the coordq config), the caps that end an item
+# and the verify level. It has no item cap and no allowance stop.
+#
+# The queue's own folder, the one coordq reads. The shift reads the cap
+# from the same place coordq reads it and never writes it.
+COORDQ_QUEUE_DIR = Path(
+    os.environ.get("COORDQ_DIR", str(Path.home() / "Code" / "coordinator" / "queue"))
+)
+# The queue's own slot cap file. The shift reads it and never writes it.
+SLOT_CAP_FILE = COORDQ_QUEUE_DIR / "config.json"
+# The verify level for v1 is balanced (spec section 9).
+VERIFY_LEVEL = "balanced"
+# The stall cap: three cycles with no new work end the shift (spec section 10).
+STALL_CAP = 3
+# The retry cap: two fix tries, then the item is parked (spec section 10).
+RETRY_CAP = 2
+
+# --- Part T3b: the filter -------------------------------------------------
+#
+# The Ascend rule is the one the merge gate already uses (coordinator/bin/
+# coordq, the `ascend` line in the gate prompt): a repository the gate
+# would refuse to merge is a repository the shift never touches. The
+# spec's key list (AUH, MCP, OPS, DBT, OMN) is added, so a ticket whose
+# key is an Ascend key is dropped even when it sits in a personal repo.
+ASCEND_KEYS = frozenset({"AUH", "MCP", "OPS", "DBT", "OMN"})
+ASCEND_REPO_PARTS = (
+    "action-underwriting-hub",
+    "ascend-mcp",
+    "data-ops",
+    "/dbt",
+    "/omni",
+)
+PERSONAL_OWNER = "shyamsivakumar"
+# The marked words a ticket body may carry. A mark is the marked form:
+# "HOLD" in capitals, "Needs Shyam:" with its question, "design needed"
+# with what it waits for. Prose that uses the word ("hold counts", "needs
+# Shyam's OK after the backtest", "the hold-out set") is not a mark, and
+# a brief that lists the marks themselves ("drop tickets marked hold,
+# needs Shyam, design needed") is not marked either.
+HOLD_MARK = re.compile(
+    r"(?m)^[ \t]*(?:[-*+>#]+[ \t]*)*"
+    r"(?:status[ \t]*:[ \t]*)?"
+    r"HOLD[ \t]*[*]?[ \t]*(?:[:\-–]|$)"
+)
+NEEDS_SHYAM_MARK = re.compile(
+    r"(?i)(?:^[ \t]*(?:[-*+>#]+[ \t]*)*|[.;:!?][ \t]+)"
+    r"needs[ \t]+shyam\b(?![ \t]*'s)(?:[ \t]*:|[ \t]*\bto\b|[ \t]*\bfor\b)"
+)
+DESIGN_MARK = re.compile(
+    r"(?i)(?:^[ \t]*(?:[-*+>#]+[ \t]*)*|[.;:!?][ \t]+)"
+    r"design[ \t]+needed\b(?:[ \t]*:|[ \t]*\bbefore\b|[ \t]*\bfirst\b)"
+)
+# A decisions log line that leaves a question open. "answered", "closed",
+# "resolved" and "unparked" close a question; a hold and a park outlive
+# the question they were asked in.
+DECISION_QUESTION = re.compile(r"(?i)\bquestion\b")
+DECISION_CLOSED = re.compile(r"(?i)\b(answered|closed|resolved|unparked)\b")
+# The log writes a hold or a park in capitals ("HOLD SRW-685", "PARKED
+# (needs Shyam)"), and an open question as "OPEN (needs answer)" or
+# "Q: ...". A question for Shyam is also written as "asked Shyam about".
+DECISION_STRONG = re.compile(
+    r"\b(HOLD|HELD|PARK|PARKED|OPEN)\b"
+    r"|(?i:needs[ \t]+shyam)|(?i:asked[ \t]+shyam)"
+)
+DECISION_HOLD = re.compile(r"\b(HOLD|HELD)\b")
+DECISION_OPEN = re.compile(r"\b(PARK|PARKED|OPEN)\b")
+DECISION_ASKS = re.compile(r"(?i:\bQ\s*:)")
+# A question the log asks Shyam ends with a question mark, and it carries
+# the log's own recommendation marker.
+DECISION_ASKED = re.compile(r"\?[ \t]*$|(?i:\(Recommended:)")
+# The subject of a decisions log line: the ticket the line is about. It
+# is the ticket named right after the line's verb ("HOLD SRW-685"), or
+# the first "KEY #number" pair in the line. A ticket that is only named
+# in passing ("once SRW-1067 merges") is not the subject.
+DECISION_VERB = re.compile(
+    r"(?i:\b(hold|holds|held|parked|park|open|question)\b)"
+    r"|(?i:\bQ\s*:)|(?i:asked[ \t]+shyam)"
+)
+SUBJECT_TAIL = 120
+# The coordinator's loop folder holds the decisions log the tick reads.
+LOOP_DIR = Path(
+    os.environ.get(
+        "OVERNIGHT_LOOP_DIR", str(Path.home() / "Code" / "coordinator" / "loop")
+    )
+)
+DECISIONS_FILE = Path(
+    os.environ.get(
+        "OVERNIGHT_DECISIONS", str(LOOP_DIR / "decisions.md")
+    )
+)
+
+# --- The morning report (spec section 11) -----------------------------------
+
+# The report's own root. It is the runtime folder the installer creates,
+# so the installed command and the checkout agree.
+OVERNIGHT_ROOT = os.environ.get(
+    "OVERNIGHT_ROOT", str(Path.home() / "Code" / "coordinator" / ".overnight")
+)
+# A receipt is markdown with `- Key: value` lines. The key is matched
+# loosely so `Time used:` and `time used:` are the same field.
+FIELD_LINE = re.compile(r"^-\s*(?P<key>[A-Za-z][A-Za-z ]*?)\s*:\s*(?P<value>.*)$")
+# A check counts as run only when the records carry its exit code.
+EXIT_CODE = re.compile(r"\bexit\s+(?P<code>\d+)\b", re.I)
+# The command of a check is the backticked part of the line.
+QUOTED = re.compile(r"`([^`]+)`")
+# The intake summary line of the shift log carries how many items were in
+# scope. Without it the planned count cannot be checked.
+PLANNED = re.compile(r"planned\s+(?P<count>\d+)\s+items?\b", re.I)
+# A receipt is one item of the shift. The morning report is not a receipt.
+RECEIPT_FILE = re.compile(r"^(?!morning-).+\.md$")
+# The shift log records the end of the shift with the word "stall".
+STALL = re.compile(r"\bstall\b", re.I)
+# The launchd job fires the shift on a fixed interval, every day (spec
+# part T12, revision 3). There is no night window and no part of the
+# night: every cycle is the same cycle, and the shift is never unarmed.
+# The job's own interval lives in the plist.
+# The shift's own lock keeps two cycles apart: the job fires every five
+# minutes and a cycle takes about a minute and a half, so the next fire
+# lands long after the cycle ended, and the lock covers the case where a
+# person starts a cycle by hand.
+SHIFT_LOCK_NAME = "overnight-shift.lock"
+# The shift log states how the night ended, in one of the four ways the
+# spec allows. The report reads that statement, but only when the records
+# support it: a claim is never a proof.
+# The shift runs 24x7 and never ends, so it has no window. The morning
+# report has a time: the first cycle that lands in this window writes the
+# day's report. The window is an hour and a half wide, so a Mac that wakes
+# late still writes it.
+REPORT_WINDOW = (6 * 60, 7 * 60 + 29)
+ENDED = re.compile(r"(?:^|\|)\s*ended:\s*(?P<how>deadline|all done|stop|stall)\s*$", re.I)
+# The states a receipt can name.
+STATE_DONE = "done"
+STATE_READY = "ready"
+STATE_STUCK = "stuck"
+STATE_PARKED = "parked"
+STATE_UNREADABLE = "unreadable"
+# The word the report uses for a count it cannot check.
+UNVERIFIED = "UNVERIFIED"
+
+try:
+    from zoneinfo import ZoneInfo
+
+    PT = ZoneInfo("America/Los_Angeles")
+except (KeyError, OSError):
+    PT = timezone(timedelta(hours=-8), "PT")
 
 
 class RepoError(Exception):
@@ -48,8 +538,13 @@ class RepoError(Exception):
 
 
 def die(message: str, code: int = 1) -> NoReturn:
-    print(f"overnight: {message}", file=sys.stderr)
+    emit(f"overnight: {message}", err=True)
     raise SystemExit(code)
+
+
+def plural(count: int, one: str, many: str) -> str:
+    """Return the word that fits the count."""
+    return one if count == 1 else many
 
 
 def config_path() -> Path:
@@ -125,11 +620,11 @@ def read_board(deadline: float) -> tuple[list[dict], bool]:
         die(f"the ticket CLI did not return JSON: {exc}")
     issues = data.get("issues") or []
     if data.get("stale"):
-        print(
+        emit(
             "overnight: the board list is stale ("
             + str((data.get("error") or {}).get("message", "unknown error"))
             + ")",
-            file=sys.stderr,
+            err=True,
         )
     return issues, bool(data.get("stale"))
 
@@ -165,20 +660,33 @@ def read_pull_requests(repo: str, deadline: float) -> tuple[list[dict], bool]:
 
 def linked_ticket(
     row: dict, by_number: dict[int, dict], by_key: dict[str, dict]
-) -> dict | None:
-    """Return the board ticket a pull request names, if it names one.
+) -> tuple[dict | None, str]:
+    """Return the board ticket a pull request names, and how it named it.
 
     A keyword reference names a GitHub issue number. A branch name carries
     a ticket key, whose number is a different counter, so the branch is
-    looked up by key and never by issue number."""
-    text = f"{row.get('title', '')}\n{row.get('body', '')}"
-    match = TICKET_REF.search(text)
-    if match:
-        return by_number.get(int(match.group(1)))
-    match = BRANCH_KEY.search(row.get("headRefName") or "")
-    if match:
-        return by_key.get(f"{match.group(1)}-{match.group(2)}".upper())
-    return None
+    looked up by key and never by issue number.
+
+    The keyword is the stronger signal, so it decides when it names a
+    ticket the board shows. Every keyword is read, so a body that names an
+    issue the board does not show and then names one it does still links
+    to the one it shows. When no keyword names a ticket the board shows,
+    the branch is read: a pull request whose body points at a ticket that
+    has left the board, and whose branch carries the key of a ticket that
+    is on it, is that ticket's work. A pull request that names neither is
+    a record of its own."""
+    text = f"{row.get('title') or ''}\n{row.get('body') or ''}"
+    for match in TICKET_REF.finditer(text):
+        number = int(match.group(2))
+        target = by_number.get(number)
+        if target is not None:
+            return target, f"{match.group(1).lower()} #{number}"
+    for match in BRANCH_KEY.finditer(row.get("headRefName") or ""):
+        key = f"{match.group(1)}-{match.group(2)}".upper()
+        target = by_key.get(key)
+        if target is not None:
+            return target, f"branch {key}"
+    return None, ""
 
 
 def build_records(
@@ -196,10 +704,10 @@ def build_records(
             {
                 "kind": "ticket",
                 "repo": repo,
-                "key": issue.get("key", ""),
+                "key": issue.get("key") or "",
                 "number": issue.get("number"),
-                "title": issue.get("title", ""),
-                "url": issue.get("url", ""),
+                "title": issue.get("title") or "",
+                "url": issue.get("url") or "",
                 "stage": issue.get("stage"),
                 "priority": issue.get("priority"),
                 "type": issue.get("type"),
@@ -223,15 +731,18 @@ def build_records(
         for row in rows:
             summary = {
                 "number": row.get("number"),
-                "title": row.get("title", ""),
-                "url": row.get("url", ""),
+                "title": row.get("title") or "",
+                "url": row.get("url") or "",
                 "isDraft": bool(row.get("isDraft")),
-                "headRefName": row.get("headRefName", ""),
-                "baseRefName": row.get("baseRefName", ""),
+                "headRefName": row.get("headRefName") or "",
+                "baseRefName": row.get("baseRefName") or "",
+                "headRefOid": row.get("headRefOid") or "",
                 "updatedAt": row.get("updatedAt"),
+                "body": row.get("body") or "",
             }
-            target = linked_ticket(row, by_number, by_key)
+            target, signal = linked_ticket(row, by_number, by_key)
             if target is not None:
+                summary["linkedBy"] = signal
                 target["prs"].append(summary)
                 continue
             bucket.append(
@@ -239,11 +750,13 @@ def build_records(
                     "kind": "pr",
                     "repo": repo,
                     "number": row.get("number"),
-                    "title": row.get("title", ""),
-                    "url": row.get("url", ""),
+                    "title": row.get("title") or "",
+                    "url": row.get("url") or "",
                     "isDraft": bool(row.get("isDraft")),
-                    "headRefName": row.get("headRefName", ""),
+                    "headRefName": row.get("headRefName") or "",
+                    "headRefOid": row.get("headRefOid") or "",
                     "updatedAt": row.get("updatedAt"),
+                    "body": row.get("body") or "",
                 }
             )
     return records
@@ -251,17 +764,24 @@ def build_records(
 
 def cmd_intake(args: argparse.Namespace) -> int:
     if not args.dry_run:
-        print(
+        emit(
             "overnight: intake in this part reads only. Run "
             "`overnight intake --dry-run`.",
-            file=sys.stderr,
+            err=True,
         )
         return 2
     deadline = time.monotonic() + args.deadline
-    cfg = load_config()
-    repos = allowed_repos(cfg)
-    if not repos:
-        die("the board config names no repositories")
+    override = getattr(args, "allowed", None)
+    if override:
+        # The shift works under the allow list in its policy snapshot, so
+        # the cycle reads the board under the snapshot and not under a
+        # second list of its own.
+        repos = [(repo, "") for repo in override]
+    else:
+        cfg = load_config()
+        repos = allowed_repos(cfg)
+        if not repos:
+            die("the board config names no repositories")
     issues, stale = read_board(deadline)
     pull_requests: dict[str, list[dict]] = {}
     unread: dict[str, str] = {}
@@ -270,62 +790,3897 @@ def cmd_intake(args: argparse.Namespace) -> int:
             rows, cut = read_pull_requests(repo, deadline)
         except RepoError as exc:
             unread[repo] = str(exc)
-            print(f"overnight: {repo}: {exc}", file=sys.stderr)
+            emit(f"overnight: {repo}: {exc}", err=True)
             continue
         pull_requests[repo] = rows
         if cut:
             unread[repo] = f"more than {PR_LIMIT} open pull requests"
-            print(
+            emit(
                 f"overnight: {repo}: the pull request list was cut off at "
                 f"{PR_LIMIT}, so the counts are not known",
-                file=sys.stderr,
+                err=True,
             )
     records = build_records(issues, pull_requests)
     outside = sorted(set(records) - {repo for repo, _ in repos})
-    print("Overnight intake - dry run (read only)")
-    print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
-    print(f"Allowed repositories: {len(repos)}")
-    print()
-    print(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
+    emit("Overnight intake - dry run (read only)")
+    emit(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit()
+    emit(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
     total = 0
     clean = 0
+    outside_total = 0
+    outside_repos = 0
     for repo, _key in repos:
         bucket = records.get(repo, [])
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
         linked = sum(len(r["prs"]) for r in bucket if r["kind"] == "ticket")
         if repo in unread:
-            print(f"{repo:<45}{tickets:>9}{'ERR':>6}{'ERR':>8}{'ERR':>9}")
+            emit(f"{repo:<45}{tickets:>9}{'ERR':>6}{'ERR':>8}{'ERR':>9}")
             continue
         clean += 1
         total += len(bucket)
-        print(
+        emit(
             f"{repo:<45}{tickets:>9}{len(pull_requests.get(repo, [])):>6}"
             f"{linked:>8}{len(bucket):>9}"
         )
     for repo in outside:
         bucket = records[repo]
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
-        total += len(bucket)
-        print(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
-    print()
+        outside_total += len(bucket)
+        outside_repos += 1
+        emit(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
+    emit()
     if unread:
-        print(
+        emit(
             f"Total: UNVERIFIED. {total} records from the {clean} repositories "
             f"that read cleanly; {len(unread)} repositories could not be read "
             f"fully: " + ", ".join(sorted(unread))
         )
-        return 1
-    print(f"Total: {total} records across {clean} repositories")
-    print(
+    else:
+        emit(f"Total: {total} records across {clean} repositories")
+    if outside_repos:
+        emit(
+            f"{outside_total} more records in {outside_repos} "
+            f"{plural(outside_repos, 'repository', 'repositories')} outside the "
+            f"allow list, counted above and marked 'not allowed'."
+        )
+    emit(
         "A pull request that a board ticket names is part of that ticket's "
         "record, so it adds no record of its own. A pull request that names "
-        "a ticket the board does not show stays a record of its own."
+        "no ticket the board shows stays a record of its own."
     )
-    if outside:
-        print(
-            "The board holds tickets for repositories that the allow list "
-            "does not name. They are counted above and marked 'not allowed'."
+    return 1 if unread else 0
+
+
+# --- Part T4: the policy snapshot ------------------------------------------
+#
+# The shift is never unarmed and has no deadline (spec revision 3), so the
+# policy snapshot is the whole contract. `overnight policy` writes it and
+# the shift reads it on every cycle.
+
+
+def policy_path(root: Path) -> Path:
+    """Return the path of the policy snapshot."""
+    return root / "run" / "policy.json"
+
+
+def load_policy(root: Path) -> tuple[dict | None, str]:
+    """Return the policy snapshot and the reason it cannot be used.
+
+    A missing snapshot, a snapshot that is not a JSON object and a
+    snapshot that is missing one of the contract's fields are all
+    failures: the shift has no contract to work under without one, so it
+    says which one it found and stops."""
+    path = policy_path(root)
+    text = read_text(path)
+    if not text.strip():
+        return None, f"{path} does not exist"
+    try:
+        loaded = json.loads(text)
+    except ValueError as exc:
+        return None, f"{path} is not JSON: {exc}"
+    if not isinstance(loaded, dict):
+        return None, f"{path} is not a JSON object"
+    problem = policy_problem(loaded)
+    if problem:
+        return None, f"{path} is not a contract: {problem}"
+    return loaded, ""
+
+
+def policy_problem(policy: dict) -> str:
+    """Return why a snapshot is not a contract, or an empty string.
+
+    The contract has five fields: the allow list, the slot cap, the stall
+    cap, the retry cap and the verify level. A snapshot that is missing
+    one of them, or that holds the wrong kind of value, is not a
+    contract, and the shift refuses it instead of working under half a
+    rule."""
+    allow = policy.get("allow")
+    if not isinstance(allow, list) or not allow:
+        return "it names no repository"
+    if not all(isinstance(name, str) and name.strip() for name in allow):
+        return "its allow list is not a list of repository names"
+    for name in ("slot_cap", "stall_cap", "retry_cap"):
+        value = policy.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return f"its {name.replace('_', ' ')} is not a number"
+    level = policy.get("verify_level")
+    if not isinstance(level, str) or not level.strip():
+        return "its verify level is not a name"
+    return ""
+
+
+def write_policy(root: Path, policy: dict) -> Path:
+    """Write the policy snapshot and return the path it went to.
+
+    The write is atomic: a cycle that reads while the snapshot is being
+    written reads the old one or the new one, never half of one."""
+    path = policy_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f"{path.name}.tmp"
+    write_record(tmp, json.dumps(policy, indent=2) + "\n")
+    os.replace(tmp, path)
+    return path
+
+
+def build_policy() -> dict:
+    """Return the policy snapshot the shift works under.
+
+    The allow list is the board config's list of repositories. The slot
+    cap is the queue's own cap, read from the coordq config and never
+    written. The stall cap ends a shift that stops making progress, the
+    retry cap parks an item that keeps failing and the verify level says
+    how much each item is checked. There is no item cap and no allowance
+    stop: the whole backlog is in scope and model use is never a stop
+    condition."""
+    cfg = load_config()
+    repos = allowed_repos(cfg)
+    if not repos:
+        die("the board config names no repositories")
+    cap = slot_cap()
+    if not isinstance(cap, int) or isinstance(cap, bool):
+        die(
+            f"the queue's slot cap cannot be read from {SLOT_CAP_FILE}, so "
+            "the shift's contract cannot be written without it"
         )
+    return {
+        "allow": sorted(repo for repo, _key in repos),
+        "slot_cap": cap,
+        "stall_cap": STALL_CAP,
+        "retry_cap": RETRY_CAP,
+        "verify_level": VERIFY_LEVEL,
+        "written_at": datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z"),
+    }
+
+
+def policy_allow(policy: dict) -> list[str]:
+    """Return the repositories the snapshot names."""
+    allow = policy.get("allow")
+    if not isinstance(allow, list):
+        return []
+    return [str(name) for name in allow if str(name)]
+
+
+def cycle_allow(policy: dict) -> list[str]:
+    """Return the repositories the shift may work this cycle.
+
+    The snapshot names the repositories, and the Ascend rule still wins:
+    a repository the merge gate would refuse is never read, whatever the
+    snapshot says. So a hand-edited snapshot cannot make the shift read
+    Ascend work."""
+    names = policy_allow(policy)
+    if not names:
+        return []
+    cfg = load_config()
+    keys = {
+        repo: entry.get("key", "")
+        for repo, entry in (cfg.get("repos") or {}).items()
+    }
+    flagged = ascend_flags(cfg)
+    return [
+        name
+        for name in names
+        if ascend_reason(name, keys.get(name), name in flagged) is None
+    ]
+
+
+def policy_lines(policy: dict) -> list[str]:
+    """Return the lines that say what the snapshot says."""
+    names = policy_allow(policy)
+    cap = policy.get("slot_cap")
+    cap_text = (
+        str(cap) if isinstance(cap, int) and not isinstance(cap, bool) else "unknown"
+    )
+    allow_text = f" ({', '.join(names)})" if names else ""
+    return [
+        f"Allow list: {len(names)} repositories{allow_text}",
+        f"Slot cap: {cap_text} (read only, from the coordq config; never raised)",
+        f"Stall cap: {policy.get('stall_cap')} cycles with no new work",
+        f"Retry cap: {policy.get('retry_cap')} fix tries per item, then it is parked",
+        f"Verify level: {policy.get('verify_level')}",
+        "No item cap and no allowance stop: the whole backlog is in scope and "
+        "model use is never a stop condition.",
+    ]
+
+
+def cmd_policy(args: argparse.Namespace) -> int:
+    """Write the policy snapshot the shift reads on every cycle.
+
+    The shift is never unarmed and has no deadline, so the snapshot is the
+    whole contract: the repositories the shift may touch, the queue's slot
+    cap (read only), the caps that end an item and the verify level. The
+    command writes no `run/armed` and no `run/deadline`, and it never
+    writes the queue's config.
+
+    Writing it again replaces the snapshot with the same contract, so the
+    command can run on every boot."""
+    root = report_root(args.root)
+    policy = build_policy()
+    if args.dry_run:
+        emit("Overnight policy - dry run (nothing written)")
+        for line in policy_lines(policy):
+            emit(line)
+        emit(f"The snapshot would be written to {policy_path(root)}")
+        return 0
+    path = write_policy(root, policy)
+    emit(f"overnight: wrote {path}")
+    for line in policy_lines(policy):
+        emit(line)
+    emit(
+        "The shift reads this snapshot on every cycle. It is never unarmed, it "
+        "has no deadline, and run/STOP still stops it at the next cycle."
+    )
+    return 0
+
+
+def cmd_redact(args: argparse.Namespace) -> int:
+    """Print a text with every secret pattern redacted.
+
+    The command is the redaction itself, made visible: it reads a fixture
+    (a string, a file or standard input) and prints what a record under
+    `.overnight/` would hold. It writes nothing.
+
+    The fixture is the proof the ticket asks for: a fake key goes in and
+    the key does not come out."""
+    if args.text is not None:
+        text = args.text
+    elif args.file:
+        path = Path(args.file).expanduser()
+        text = read_text(path)
+        if not text:
+            die(f"the fixture {path} is empty or cannot be read")
+    else:
+        text = sys.stdin.read()
+    redacted = redact(text)
+    if redacted and not redacted.endswith("\n"):
+        redacted += "\n"
+    emit(redacted, end="")
+    return 0
+
+
+def report_window(now: datetime) -> bool:
+    """Return True when a moment belongs to the morning report window.
+
+    The shift has no window and never ends. The report has a time: it is
+    written by the first cycle of the morning, so Shyam reads one report a
+    day."""
+    minutes = now.hour * 60 + now.minute
+    return REPORT_WINDOW[0] <= minutes <= REPORT_WINDOW[1]
+
+
+def write_morning_report(root: Path) -> int:
+    """Write the day's morning report, once a day.
+
+    The report is the record of the day the shift worked: what merged, what
+    is ready, what is stuck and which decisions wait for Shyam. The first
+    cycle that lands in the morning window writes it, and a later cycle
+    leaves it alone, so a day has one report.
+
+    The report is rendered by the report code, from the shift's own
+    records, and it invents nothing."""
+    day = datetime.now(PT).strftime("%Y-%m-%d")
+    out = root / "receipts" / f"morning-{day}.md"
+    if out.exists():
+        emit(f"overnight: today's morning report {out} is already written")
+        return 0
+    return cmd_report(
+        argparse.Namespace(root=str(root), date=day, dry_run=False)
+    )
+
+
+def shift_lock_path() -> Path:
+    """The shift's lock file. One path for every caller: launchd jobs and
+    shells see different TMPDIR values, so a TMPDIR lock would not exclude
+    a hand-started cycle from the scheduled one."""
+    override = os.environ.get("OVERNIGHT_SHIFT_LOCK")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".local" / "state" / "mac-ops" / SHIFT_LOCK_NAME
+
+
+def take_shift_lock() -> tuple[int | None, str]:
+    """Take the shift's lock. The pair is the descriptor and the reason it
+    could not be taken: an empty reason means the lock is held.
+
+    The lock is the shift's own, so a cycle that starts while another
+    cycle runs does no work and says so. It is never left out: a lock
+    that cannot be opened refuses the cycle, because a cycle that runs
+    unlocked is a cycle that can overlap another one."""
+    try:
+        path = shift_lock_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        return None, f"the lock file cannot be opened: {exc}"
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None, ""
+    return fd, ""
+
+
+def release_shift_lock(fd: int) -> None:
+    """Give the lock back."""
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def cmd_shift(args: argparse.Namespace) -> int:
+    """Run one cycle of the shift.
+
+    The shift is never unarmed and has no deadline (spec revision 3): a
+    cycle never waits for an arm and never ends on a clock. It reads the
+    policy snapshot on every cycle, and `run/STOP` still stops it at the
+    next cycle.
+
+    The job fires the shift on a fixed interval, every day, so there is
+    no night window and no part of the night: every run is one cycle. The
+    cycle works the whole board: there is no item cap and no allowance
+    stop. It writes a receipt for every item whose state changed.
+
+    The morning report has a time even though the shift does not. The
+    first cycle that lands in the morning window writes the day's report,
+    so a day has one report and Shyam reads one thing in the morning.
+    `--report` writes it on demand.
+
+    The clock is the Mac's local clock, the clock launchd fires on. The
+    shift log still says Pacific time, and a Mac that is not on Pacific
+    time is told so."""
+    now_local = datetime.now().astimezone()
+    now_pt = datetime.now(PT)
+    stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
+    root = report_root(args.root)
+    if now_local.utcoffset() != now_pt.utcoffset():
+        emit(
+            "overnight: the Mac's clock is not on Pacific time, so the job "
+            "fires on the Mac's local clock, not Pacific time",
+            err=True,
+        )
+    # The report cycle: the one cycle of the day that also leaves the
+    # morning report. The shift has no window; the report has a time.
+    report_cycle = report_window(now_local) or bool(getattr(args, "report", False))
+    # STOP wins over every other rule: the shift ends at the next cycle.
+    if (root / "run" / "STOP").exists():
+        emit(
+            f"overnight: {stamp} run/STOP exists, so the shift stops at "
+            "this cycle"
+        )
+        # The report still runs: it is the record of the day, and it says
+        # that the shift ended with STOP.
+        if report_cycle and not args.dry_run:
+            return write_morning_report(root)
+        return 0
+    # The shift reads its contract on every cycle.
+    policy, policy_error = load_policy(root)
+    allowed = None
+    if policy is None:
+        if not args.dry_run:
+            die(
+                f"the shift has no usable policy snapshot: {policy_error}. "
+                "Run `overnight policy` to write it."
+            )
+        emit(
+            f"overnight: {policy_error}; a dry run reads the board only",
+            err=True,
+        )
+    else:
+        allowed = cycle_allow(policy)
+        if not allowed:
+            die(
+                f"the policy snapshot {policy_path(root)} names no "
+                "repository the shift may work"
+            )
+        emit(f"overnight: {stamp} shift cycle under {policy_path(root)}")
+        for line in policy_lines(policy):
+            emit(line)
+        dropped = len(policy_allow(policy)) - len(allowed)
+        if dropped:
+            emit(
+                f"The snapshot names {dropped} Ascend "
+                f"{plural(dropped, 'repository', 'repositories')}, and the "
+                "shift never reads Ascend work."
+            )
+    if not args.dry_run:
+        # The shift's own lock: two cycles never run at once, whatever
+        # starts them. The job fires every five minutes and a cycle takes
+        # about a minute and a half, so the next fire lands long after
+        # this cycle ends. The lock covers the case where a person starts
+        # a cycle by hand while the job's cycle runs.
+        lock_fd, lock_problem = take_shift_lock()
+        if lock_fd is None:
+            if lock_problem:
+                emit(
+                    f"overnight: {stamp} REFUSED: {lock_problem}; the cycle "
+                    "wrote no receipt",
+                    err=True,
+                )
+                return 1
+            emit(
+                f"overnight: {stamp} another cycle holds the lock, so this "
+                "cycle did no work"
+            )
+            return 0
+        try:
+            # A real cycle writes the receipts of the items it sees: the
+            # receipt is the cycle's record, and it is written on every
+            # state change. The cycle still starts no builder and works no
+            # board item: that part of the spec (T5) is not built, and the
+            # cycle says so instead of pretending it works.
+            emit(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
+            code = cmd_order(
+                argparse.Namespace(
+                    dry_run=True,
+                    root=args.root,
+                    deadline=args.deadline,
+                    allowed=allowed,
+                )
+            )
+            if code != 0:
+                return code
+            items, receipts, error = read_work_items(
+                time.monotonic() + args.deadline, allowed
+            )
+            if error:
+                emit(
+                    f"overnight: REFUSED: {error}; the cycle wrote no receipt",
+                    err=True,
+                )
+                return 1
+            written = write_receipts(
+                root, items, receipts, time.monotonic() + args.deadline
+            )
+            emit(
+                f"overnight: {stamp} shift cycle wrote {written} receipts of "
+                f"{len(items)} items"
+            )
+            # The cycle states the count it worked, so the morning report's
+            # planned count is the count of the items the report lists. The
+            # order's own line keeps its per-repository detail; the order
+            # counts the work items and the cycle counts every item it saw,
+            # including the pull requests already in flight and the backlog.
+            write_shift_line(
+                root,
+                f"planned {len(items)} items | the cycle worked {len(items)} items",
+            )
+            emit(
+                "overnight: the shift starts no builder and works no board item "
+                "yet (spec part T5); it writes the receipts of what it saw"
+            )
+            if report_cycle:
+                return write_morning_report(root)
+            return 0
+        finally:
+            release_shift_lock(lock_fd)
+    emit(f"overnight: {stamp} shift cycle (dry run, read only)")
+    return cmd_order(
+        argparse.Namespace(
+            dry_run=True,
+            root=args.root,
+            deadline=args.deadline,
+            allowed=allowed,
+        )
+    )
+
+
+def report_root(explicit: str | None) -> Path:
+    """Return the folder that holds the shift's records.
+
+    The default is the runtime folder the installer creates. A caller can
+    point the report at another folder, which is how a dry night on a
+    fixture folder is rendered. The installer can move the runtime folder
+    with `MAC_OPS_COORDINATOR_DIR`, and the report follows it."""
+    if explicit:
+        return Path(explicit).expanduser()
+    from_env = os.environ.get("OVERNIGHT_ROOT")
+    if from_env:
+        return Path(from_env).expanduser()
+    coordinator = os.environ.get("MAC_OPS_COORDINATOR_DIR")
+    if coordinator:
+        return Path(coordinator).expanduser() / ".overnight"
+    return Path(OVERNIGHT_ROOT).expanduser()
+
+
+def read_text(path: Path) -> str:
+    """Return a file's text, or an empty string when it cannot be read."""
+    try:
+        return path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def split_checks(body: str) -> list[str]:
+    """Return the parts of a checks line, split on the semicolons that sit
+    outside a command."""
+    parts = []
+    current = ""
+    in_command = False
+    for char in body:
+        if char == "`":
+            in_command = not in_command
+        if char == ";" and not in_command:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    parts.append(current)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def parse_check_text(body: str) -> list[dict]:
+    """Return the checks of one receipt line.
+
+    A check line may hold several checks, separated by semicolons. Each
+    check counts as run only when it names a command and an exit code."""
+    checks = []
+    for part in split_checks(body):
+        quoted = QUOTED.search(part)
+        code = EXIT_CODE.search(part)
+        checks.append(
+            {
+                "raw": part,
+                "command": quoted.group(1).strip() if quoted else "",
+                "exit": int(code.group("code")) if code else None,
+            }
+        )
+    return checks
+
+
+def parse_receipt(path: Path) -> dict:
+    """Return one receipt as its fields and its checks."""
+    fields: dict[str, str] = {}
+    checks: list[dict] = []
+    for raw in read_text(path).splitlines():
+        line = raw.strip()
+        if not line.startswith("-"):
+            continue
+        match = FIELD_LINE.match(line)
+        if not match:
+            continue
+        key = match.group("key").strip().lower()
+        value = match.group("value").strip()
+        if key.startswith("check"):
+            checks.extend(parse_check_text(value))
+            continue
+        fields[key] = value
+    return {"path": path, "fields": fields, "checks": checks}
+
+
+def unrun_checks(checks: list[dict]) -> list[dict]:
+    """Return the checks that did not run.
+
+    A check with no command or no exit code is a claim, not a run. The
+    report never reports such a check as passed."""
+    return [
+        check
+        for check in checks
+        if not check["command"] or check["exit"] is None
+    ]
+
+
+def classify(receipt: dict) -> tuple[str, str]:
+    """Return the state of one receipt and the reason it is not what it claims.
+
+    A receipt that claims it is done or ready needs proof: a check that ran
+    with its exit code and passed, and a gate that passed. Without that
+    proof the item is stuck, because the report never reports a check as
+    passed unless it ran."""
+    fields = receipt["fields"]
+    state = (fields.get("state") or "").strip().lower()
+    if state not in (STATE_DONE, STATE_READY, STATE_STUCK, STATE_PARKED):
+        return STATE_UNREADABLE, "the receipt does not name a state"
+    if state in (STATE_DONE, STATE_READY):
+        holds, reason = evidence_holds(fields, receipt["checks"])
+        if not holds:
+            return STATE_STUCK, reason
+    return state, ""
+
+
+def evidence_holds(fields: dict, checks: list[dict]) -> tuple[bool, str]:
+    """Return whether a receipt holds the evidence that makes an item done.
+
+    The spec's rule: an item counts as done, and the coordinator closes
+    its issue, only when the receipt records a command, its exit code and
+    a gate PASS on the pull request. A check with no exit code is a
+    claim, not a run, and a run that failed is not a pass. The rule lives
+    here so the receipt writer, the morning report and the close step
+    read it from one place."""
+    if not checks:
+        return False, "the receipt holds no check, so nothing ran"
+    missing = unrun_checks(checks)
+    if missing:
+        names = ", ".join(check["raw"] for check in missing)
+        return False, f"a check has no exit code, so it did not run ({names})"
+    failed = [check for check in checks if check["exit"] != 0]
+    if failed:
+        unknown = [check for check in failed if check["exit"] == 2]
+        if unknown:
+            names = ", ".join(check["raw"] for check in unknown)
+            return False, f"the check did not run, so it proved nothing ({names})"
+        names = ", ".join(check["raw"] for check in failed)
+        return False, f"a check failed ({names})"
+    if (fields.get("gate") or "").strip().upper() != "PASS":
+        return False, "the gate did not pass"
+    return True, ""
+
+
+def parse_shift_log(text: str) -> dict:
+    """Return what the shift log records: the planned count, the full suite,
+    a stall and the statement of how the night ended."""
+    planned: int | None = None
+    full_suite: dict | None = None
+    stall = False
+    ended: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        found = PLANNED.search(line)
+        if found:
+            planned = int(found.group("count"))
+        if "full suite" in line.lower():
+            body = line.split(":", 1)[1] if ":" in line else line
+            quoted = QUOTED.search(body)
+            code = EXIT_CODE.search(body)
+            suite = {
+                "command": quoted.group(1).strip() if quoted else "",
+                "exit": int(code.group("code")) if code else None,
+                "time": line.split("—", 1)[0].strip() if "—" in line else "",
+            }
+            # A later line without an exit code does not erase a run that
+            # the log already records.
+            if suite["exit"] is not None or full_suite is None:
+                full_suite = suite
+        if STALL.search(line):
+            stall = True
+        found_end = ENDED.match(line)
+        if found_end:
+            how = found_end.group("how").lower()
+            ended = "STOP" if how == "stop" else how
+    return {
+        "planned": planned,
+        "full_suite": full_suite,
+        "stall": stall,
+        "ended": ended,
+    }
+
+
+def parse_parking_lot(text: str) -> list[dict]:
+    """Return the parked decisions, each with its default and its
+    recommendation."""
+    entries: list[dict] = []
+    title = ""
+    body: list[str] = []
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("## "):
+            if title:
+                entries.append({"title": title, "body": body})
+            title = line[3:].strip()
+            body = []
+        elif title:
+            body.append(line)
+    if title:
+        entries.append({"title": title, "body": body})
+    for entry in entries:
+        entry["default"] = ""
+        entry["recommend"] = ""
+        for line in entry["body"]:
+            match = FIELD_LINE.match(line.strip())
+            if not match:
+                continue
+            key = match.group("key").strip().lower()
+            value = match.group("value").strip()
+            if key.startswith("default"):
+                entry["default"] = value
+            elif key.startswith("recommend"):
+                entry["recommend"] = value
+    return entries
+
+
+def receipt_minutes(receipt: dict) -> int | None:
+    """Return the builder time of a receipt in minutes, or None."""
+    text = (receipt["fields"].get("time used") or "").strip()
+    found = re.search(r"(\d+)\s*min", text, re.I)
+    return int(found.group(1)) if found else None
+
+
+def format_minutes(total: int) -> str:
+    """Return a number of minutes as hours and minutes."""
+    hours, minutes = divmod(total, 60)
+    if hours and minutes:
+        return f"{hours} h {minutes} min"
+    if hours:
+        return f"{hours} h"
+    return f"{minutes} min"
+
+
+def pt_clock(moment: datetime) -> str:
+    """Return a moment as a PT clock time."""
+    return moment.astimezone(PT).strftime("%I:%M %p PT")
+
+
+def item_label(receipt: dict) -> str:
+    """Return the name of the item a receipt is about."""
+    fields = receipt["fields"]
+    label = fields.get("ticket") or fields.get("repo") or receipt["path"].stem
+    item = fields.get("item") or ""
+    return f"{label} — {item}" if item else label
+
+
+def how_it_ended(root: Path, log: dict, receipts: list[dict], planned: int | None) -> str:
+    """Return how the shift ended.
+
+    The spec allows four answers: deadline, all done, STOP and stall. A
+    shift that ended in none of those ways says UNVERIFIED rather than
+    guessing.
+
+    The shift log states how the night ended, and the report reads that
+    statement. It reads it only when the records support it: "all done"
+    needs every receipt to be done or parked, "deadline" needs the clock
+    to be past the deadline, "STOP" needs the STOP file and "stall" needs
+    the stall in the log. A claim the records do not support is never
+    repeated."""
+    if (root / "run" / "STOP").exists():
+        return "STOP"
+    states = [classify(receipt)[0] for receipt in receipts]
+    all_done = (
+        planned is not None
+        and bool(receipts)
+        and len(receipts) == planned
+        and all(state in (STATE_DONE, STATE_PARKED) for state in states)
+    )
+    deadline_passed = False
+    deadline = read_text(root / "run" / "deadline").strip()
+    if deadline:
+        try:
+            deadline_passed = datetime.now(timezone.utc).timestamp() > float(deadline)
+        except ValueError:
+            deadline_passed = False
+    claim = (log.get("ended") or "").strip()
+    if claim == "all done" and all_done:
+        return "all done"
+    if claim == "deadline" and deadline_passed:
+        return "deadline"
+    if claim == "stall" and log["stall"]:
+        return "stall"
+    if log["stall"]:
+        return "stall"
+    if all_done:
+        return "all done"
+    if deadline_passed:
+        return "deadline"
+    return UNVERIFIED
+
+
+def render_report(snapshot: dict) -> str:
+    """Return the morning report as markdown.
+
+    Every count comes from the records. A count that cannot be checked is
+    written as UNVERIFIED, and no check is reported as passed unless the
+    records say it ran."""
+    receipts = snapshot["receipts"]
+    log = snapshot["log"]
+    planned = log["planned"]
+    counts = {STATE_DONE: 0, STATE_READY: 0, STATE_STUCK: 0, STATE_PARKED: 0}
+    unreadable = 0
+    merged: list[dict] = []
+    ready: list[dict] = []
+    stuck: list[dict] = []
+    parked: list[dict] = []
+    for receipt in receipts:
+        state, reason = classify(receipt)
+        fields = receipt["fields"]
+        if state == STATE_UNREADABLE:
+            unreadable += 1
+            stuck.append({"receipt": receipt, "reason": reason})
+            continue
+        if state == STATE_DONE and fields.get("merged"):
+            counts[STATE_DONE] += 1
+            merged.append(receipt)
+        elif state in (STATE_DONE, STATE_READY):
+            # The work is done but nobody merged it, so it waits for Shyam.
+            counts[STATE_READY] += 1
+            ready.append(receipt)
+        elif state == STATE_STUCK:
+            counts[STATE_STUCK] += 1
+            stuck.append({"receipt": receipt, "reason": reason})
+        elif state == STATE_PARKED:
+            counts[STATE_PARKED] += 1
+            parked.append(receipt)
+
+    lines: list[str] = []
+    day = snapshot["date"]
+    lines.append(f"# Overnight report — {day.strftime('%b %-d, %Y')} ({snapshot['window']})")
+    lines.append("")
+    ended = snapshot["ended"]
+    disagree = planned is not None and planned < len(receipts)
+    if planned is None or disagree:
+        planned_text = UNVERIFIED
+    else:
+        planned_text = str(planned)
+    counts_text = (
+        f"{counts[STATE_DONE]} done, {counts[STATE_READY]} ready, "
+        f"{counts[STATE_STUCK]} stuck, {counts[STATE_PARKED]} parked"
+    )
+    if unreadable:
+        counts_text += f", {unreadable} {UNVERIFIED}"
+    lines.append(f"How it ended: {ended}. Items: {planned_text} planned, {counts_text}.")
+    lines.append("")
+
+    lines.append("## Merged (checked on GitHub)")
+    lines.append("")
+    if merged:
+        for receipt in merged:
+            fields = receipt["fields"]
+            lines.append(
+                f"- {item_label(receipt)}. Merged {fields.get('merged', '')}."
+            )
+    else:
+        lines.append("- None.")
+    lines.append("")
+
+    lines.append(
+        "## Ready for you (gate PASS, waiting on a merge right the shift does not have)"
+    )
+    lines.append("")
+    if ready:
+        for receipt in ready:
+            fields = receipt["fields"]
+            waiting = fields.get("stopped because") or (
+                "the shift has no merge right for this repository"
+            )
+            lines.append(f"- {item_label(receipt)}. Why waiting: {waiting}.")
+    else:
+        lines.append("- None.")
+    lines.append("")
+
+    lines.append("## Stuck (what stopped it, and the next step)")
+    lines.append("")
+    if stuck:
+        for entry in stuck:
+            receipt = entry["receipt"]
+            fields = receipt["fields"]
+            reason = entry["reason"] or fields.get("stopped because") or "the shift stopped it"
+            nxt = fields.get("next") or "unknown"
+            lines.append(f"- {item_label(receipt)}. Stopped: {reason}. Next: {nxt}.")
+    else:
+        lines.append("- None.")
+    lines.append("")
+
+    lines.append("## Decisions for you (one at a time, each with my recommendation)")
+    lines.append("")
+    decisions = []
+    for entry in snapshot["parking_lot"]:
+        recommendation = entry["recommend"] or f"{UNVERIFIED} (no recommendation recorded)"
+        text = f"{entry['title']} — Recommend: {recommendation}."
+        if entry["default"]:
+            text += f" Default if you say nothing: {entry['default']}"
+        decisions.append(text)
+    for receipt in parked:
+        fields = receipt["fields"]
+        reason = fields.get("stopped because") or "the shift parked it"
+        nxt = fields.get("next") or "unknown"
+        decisions.append(f"{item_label(receipt)}. Stopped: {reason}. Next: {nxt}.")
+    if decisions:
+        for number, text in enumerate(decisions, start=1):
+            lines.append(f"{number}. {text}")
+    else:
+        lines.append("1. None.")
+    lines.append("")
+
+    lines.append("## Not run, and why")
+    lines.append("")
+    not_run: list[str] = []
+    for receipt in receipts:
+        for check in unrun_checks(receipt["checks"]):
+            label = item_label(receipt)
+            if check["command"]:
+                not_run.append(
+                    f"- {label}: `{check['command']}` has no exit code in the receipt, "
+                    "so it did not run."
+                )
+            else:
+                not_run.append(
+                    f"- {label}: a check is claimed with no command, so it did not run "
+                    f"({check['raw']})."
+                )
+    suite = log["full_suite"]
+    if suite and suite["command"] and suite["exit"] is not None:
+        when = f"ran {suite['time']}" if suite["time"] else "ran"
+        if suite["exit"] == 0:
+            not_run.append(f"- Full suite: {when}, passed.")
+        else:
+            not_run.append(f"- Full suite: {when}, failed (exit {suite['exit']}).")
+    elif suite:
+        not_run.append(
+            "- Full suite: the shift log records it without a command and an exit "
+            "code, so it did not run."
+        )
+    else:
+        not_run.append(
+            f"- Full suite: {UNVERIFIED} (the shift log records no full suite run)."
+        )
+    if planned is not None and planned > len(receipts):
+        not_run.append(
+            f"- {planned - len(receipts)} planned items have no receipt. Which ones: "
+            f"{UNVERIFIED}."
+        )
+    if disagree:
+        not_run.append(
+            f"- The shift log plans {planned} items and the receipts hold "
+            f"{len(receipts)}. The planned count is {UNVERIFIED}."
+        )
+    if not_run:
+        lines.extend(not_run)
+    else:
+        lines.append("- Nothing was left unrun.")
+
+    lines.append("")
+    lines.append("## Cost")
+    lines.append("")
+    minutes = [receipt_minutes(receipt) for receipt in receipts]
+    complete = (
+        planned is not None
+        and planned == len(receipts)
+        and all(value is not None for value in minutes)
+    )
+    if complete:
+        builder = format_minutes(sum(value or 0 for value in minutes))
+    elif planned is None:
+        builder = f"{UNVERIFIED} (the planned count is {UNVERIFIED})"
+    elif planned != len(receipts):
+        builder = (
+            f"{UNVERIFIED} ({planned - len(receipts)} planned items have no "
+            "receipt, so their time is unknown)"
+        )
+    else:
+        builder = f"{UNVERIFIED} (a receipt records no time used)"
+    allowance = snapshot["policy"].get("allowance_used_percent")
+    if isinstance(allowance, (int, float)) and not isinstance(allowance, bool):
+        model_use = f"{allowance:g}% of allowance"
+    else:
+        model_use = f"{UNVERIFIED} (the allowance was not readable)"
+    lines.append(f"- Builder time: {builder}. Model use: {model_use}.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def report_day(value: str) -> str:
+    """Return the night of the report, as YYYY-MM-DD."""
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a date as YYYY-MM-DD"
+        )
+    return value
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """Render the morning report from the shift's records."""
+    root = report_root(args.root)
+    if not root.is_dir():
+        die(f"the overnight folder {root} does not exist")
+    receipts_dir = root / "receipts"
+    receipts = []
+    if receipts_dir.is_dir():
+        for path in sorted(receipts_dir.glob("*.md")):
+            if RECEIPT_FILE.match(path.name):
+                receipts.append(parse_receipt(path))
+    policy: dict = {}
+    policy_text = read_text(root / "run" / "policy.json")
+    if policy_text:
+        try:
+            loaded = json.loads(policy_text)
+            if isinstance(loaded, dict):
+                policy = loaded
+        except ValueError:
+            policy = {}
+    log = parse_shift_log(read_text(root / "run" / "shift-log.md"))
+    parking_lot = parse_parking_lot(read_text(root / "inbox" / "parking-lot.md"))
+    day = (
+        datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=PT)
+        if args.date
+        else datetime.now(PT)
+    )
+    start = ""
+    armed = read_text(root / "run" / "armed")
+    for line in armed.splitlines():
+        if line.lower().startswith("start"):
+            start = line.split(":", 1)[1].strip() if ":" in line else ""
+    deadline_text = read_text(root / "run" / "deadline").strip()
+    deadline_clock = ""
+    if deadline_text:
+        try:
+            deadline_clock = pt_clock(
+                datetime.fromtimestamp(float(deadline_text), tz=timezone.utc)
+            )
+        except ValueError:
+            deadline_clock = ""
+    if start and deadline_clock:
+        window = f"{start}–{deadline_clock}"
+    else:
+        window = f"the window is {UNVERIFIED}"
+    snapshot = {
+        "receipts": receipts,
+        "policy": policy,
+        "log": log,
+        "parking_lot": parking_lot,
+        "date": day,
+        "window": window,
+        "ended": how_it_ended(root, log, receipts, log["planned"]),
+    }
+    report = render_report(snapshot)
+    if args.dry_run:
+        emit(report)
+        return 0
+    out = receipts_dir / f"morning-{day.strftime('%Y-%m-%d')}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    write_record(out, report)
+    emit(f"overnight: wrote {out}")
+    return 0
+
+
+
+# --- Part T3b: the filter -------------------------------------------------
+
+
+def ascend_reason(repo: str, key: str | None, flagged: bool = False) -> str | None:
+    """Return why the work is Ascend, or None when it is not.
+
+    A key from the spec's Ascend list (AUH, MCP, OPS, DBT, OMN) is Ascend
+    on its own. A repository the merge gate would refuse to merge is
+    Ascend too: the gate's repository rule is the one in
+    coordinator/bin/coordq, and the gate's own per-repository `ascend`
+    flag is honoured here as well."""
+    if key:
+        prefix = key.split("-")[0].upper()
+        if prefix in ASCEND_KEYS:
+            return f"Ascend key {prefix}"
+    if not repo:
+        return None
+    if flagged:
+        return f"Ascend repo: the board config marks {repo} as Ascend"
+    owner = repo.split("/")[0]
+    if owner != PERSONAL_OWNER:
+        return f"Ascend repo: {repo} is not a {PERSONAL_OWNER} repository"
+    if any(part in repo for part in ASCEND_REPO_PARTS):
+        return f"Ascend repo: {repo} is an Ascend repository"
+    return None
+
+
+def ascend_flags(cfg: dict) -> set[str]:
+    """Return the repositories the board config marks as Ascend.
+
+    The merge gate honours a per-repository `ascend` flag in the board
+    config (coordinator/bin/coordq). The shift reads the same flag, so
+    the two agree on what Ascend is."""
+    repos = cfg.get("repos") or {}
+    return {repo for repo, entry in repos.items() if entry.get("ascend")}
+
+
+def ascend_keys_in(text: str) -> list[str]:
+    """Return the Ascend keys a text carries, such as a branch name.
+
+    Every key in the text is read, so a branch such as
+    "t3/fix-12-auh-3" still shows its Ascend key."""
+    found: list[str] = []
+    for match in BRANCH_KEY.finditer(text or ""):
+        key = f"{match.group(1)}-{match.group(2)}".upper()
+        if key.split("-")[0] in ASCEND_KEYS and key not in found:
+            found.append(key)
+    return found
+
+
+def clip(text: str, width: int = 120) -> str:
+    """Return one readable line of a matched mark."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= width else flat[: width - 3] + "..."
+
+
+def read_bodies(
+    issues: list[dict], deadline: float
+) -> tuple[dict[tuple[str, int], str], list[str], dict[str, set[int]]]:
+    """Return the board tickets' bodies, the repositories that failed and
+    the open issue numbers of each repository.
+
+    The ticket CLI's list carries no body, and the marks the shift reads
+    live in the ticket's own text, so the module reads the bodies of the
+    open issues of the repositories that hold board tickets. The open
+    numbers come free with the same read: a blocker that is not on the
+    open list is closed, so the shift knows which tickets are blocked."""
+    bodies: dict[tuple[str, int], str] = {}
+    unread: list[str] = []
+    open_numbers: dict[str, set[int]] = {}
+    wanted: dict[str, set[int]] = {}
+    for issue in issues:
+        repo = issue.get("repo") or ""
+        number = issue.get("number")
+        if repo and number:
+            wanted.setdefault(repo, set()).add(number)
+    for repo in sorted(wanted):
+        try:
+            raw = run(
+                [
+                    GH,
+                    "issue",
+                    "list",
+                    "-R",
+                    repo,
+                    "--state",
+                    "open",
+                    "--limit",
+                    str(ISSUE_LIMIT),
+                    "--json",
+                    "number,title,body",
+                ],
+                GH_TIMEOUT,
+                deadline,
+            )
+            rows = json.loads(raw)
+        except (RepoError, ValueError) as exc:
+            unread.append(repo)
+            emit(f"overnight: {repo}: {exc}", err=True)
+            continue
+        rows = rows if isinstance(rows, list) else []
+        if len(rows) >= ISSUE_LIMIT:
+            unread.append(repo)
+            emit(
+                f"overnight: {repo}: the open issue list was cut off at "
+                f"{ISSUE_LIMIT}, so the ticket text is not known",
+                err=True,
+            )
+            continue
+        numbers = open_numbers.setdefault(repo, set())
+        for row in rows:
+            number = row.get("number")
+            if isinstance(number, int):
+                numbers.add(number)
+            if number in wanted[repo]:
+                bodies[(repo, number)] = (row.get("body") or "") + "\n" + (
+                    row.get("title") or ""
+                )
+    return bodies, unread, open_numbers
+
+
+def read_decisions() -> tuple[Path, list[str]]:
+    """Return the coordinator's decisions log and its lines.
+
+    The log is the coordinator's own parking lot, so it is read where the
+    tick reads it. A missing log is not a crash: the filter drops every
+    ticket it cannot check and refuses to return a list."""
+    try:
+        with open(DECISIONS_FILE) as stream:
+            return DECISIONS_FILE, stream.read().splitlines()
+    except OSError:
+        return DECISIONS_FILE, []
+
+
+def mark_reason(text: str) -> tuple[str, str] | None:
+    """Return the mark a ticket body carries, with the line that carries it.
+
+    A mark stands at the start of a line or of a clause, so a ticket that
+    only talks about holding a position, or about a decision that needs
+    Shyam later, is not marked."""
+    for pattern, reason in (
+        (HOLD_MARK, "marked hold"),
+        (NEEDS_SHYAM_MARK, "marked needs Shyam"),
+        (DESIGN_MARK, "marked design needed"),
+    ):
+        match = pattern.search(text)
+        if match:
+            start = text.rfind("\n", 0, match.start()) + 1
+            end = text.find("\n", match.start())
+            line = text[start : end if end != -1 else len(text)]
+            return reason, clip(line)
+    return None
+
+
+def names_ticket(line: str, key: str | None, number: int | None) -> bool:
+    """Return True when a decisions log line is about this ticket.
+
+    A line is about a ticket when it names the ticket with its issue
+    number, in either order ("SRW-685 #468", "#468 SRW-685", and the
+    short form "685 #468"), or when the ticket is named right after the
+    line's verb ("HOLD SRW-685", "OPEN (needs answer): SRW-1080 #990").
+    A ticket named in passing ("once SRW-1067 merges") is not the subject
+    of the line. A bare issue number is not enough: the same number can
+    belong to a ticket in another repository."""
+    if not key or not number:
+        return False
+    prefix, _, keynum = key.partition("-")
+    if not prefix or not keynum:
+        return False
+    pairs = (
+        rf"{re.escape(prefix)}-{re.escape(keynum)}\s*#\s*{number}\b",
+        rf"#\s*{number}\s+{re.escape(prefix)}-{re.escape(keynum)}\b",
+        rf"\b{re.escape(keynum)}\s*#\s*{number}\b",
+    )
+    for pattern in pairs:
+        if re.search(pattern, line, re.I):
+            return True
+    for verb in DECISION_VERB.finditer(line):
+        tail = line[verb.end() : verb.end() + SUBJECT_TAIL]
+        if re.search(rf"\b{re.escape(prefix)}-{re.escape(keynum)}\b", tail, re.I):
+            return True
+    return False
+
+
+def decision_reason(
+    lines: list[str], key: str | None, number: int | None
+) -> tuple[str, str] | None:
+    """Return the open question a decisions log leaves for a ticket.
+
+    The log is append-only history, so the last line that is about the
+    ticket decides. The log writes an open item as a hold or a park
+    ("HOLD SRW-685", "PARKED (needs Shyam)"), as "OPEN (needs answer)",
+    as "Q: ...", or as a question that ends in a question mark. A line
+    that answers the question closes it, but a hold outlives the question
+    it was asked in."""
+    last = None
+    for line in lines:
+        if names_ticket(line, key, number):
+            last = line
+    if last is None:
+        return None
+    if DECISION_HOLD.search(last):
+        return "hold in the decisions log", clip(last)
+    if DECISION_OPEN.search(last):
+        return "open item in the decisions log", clip(last)
+    if DECISION_STRONG.search(last):
+        return "open question in the decisions log", clip(last)
+    if DECISION_ASKS.search(last):
+        return "open question in the decisions log", clip(last)
+    if DECISION_ASKED.search(last) and not DECISION_CLOSED.search(last):
+        return "open question in the decisions log", clip(last)
+    if DECISION_QUESTION.search(last) and not DECISION_CLOSED.search(last):
+        return "open question in the decisions log", clip(last)
+    return None
+
+
+def filter_issues(
+    issues: list[dict],
+    allowed: set[str],
+    flagged: set[str],
+    bodies: dict[tuple[str, int], str],
+    lines: list[str],
+) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """Return the tickets that survive the filter and the drops with their
+    reasons.
+
+    The rules are the spec's drop list: Ascend work, a repository off the
+    allow list, a ticket marked hold, needs Shyam or design needed, and a
+    ticket with an open question in the coordinator's decisions log. A
+    ticket whose text could not be read is dropped, never kept: the filter
+    fails closed."""
+    kept: list[dict] = []
+    drops: list[tuple[dict, str]] = []
+    for issue in issues:
+        repo = issue.get("repo") or ""
+        key = issue.get("key") or ""
+        number = issue.get("number")
+        reason = ascend_reason(repo, key, repo in flagged)
+        if reason is None and repo not in allowed:
+            reason = f"repo not on the allow list: {repo}"
+        body = bodies.get((repo, number))
+        if reason is None and body is not None:
+            mark = mark_reason(body)
+            if mark:
+                reason = f"{mark[0]}: {mark[1]}"
+        if reason is None:
+            found = decision_reason(lines, key, number)
+            if found:
+                reason = f"{found[0]}: {found[1]}"
+        if reason is None and body is None:
+            reason = "unverified: the ticket text could not be read"
+        if reason is None and not lines:
+            reason = "unverified: the decisions log could not be read"
+        if reason:
+            drops.append((issue, reason))
+        else:
+            kept.append(issue)
+    return kept, drops
+
+
+def cmd_filter(args: argparse.Namespace) -> int:
+    """Filter the board and print every drop with its reason.
+
+    The filter fails closed. A ticket whose text could not be read, or
+    whose open question could not be checked, is dropped rather than
+    kept, and the command exits non-zero so the shift knows the list it
+    printed is not one it may work from."""
+    deadline = time.monotonic() + args.deadline
+    cfg = load_config()
+    repos = allowed_repos(cfg)
+    allowed = {repo for repo, _ in repos}
+    flagged = ascend_flags(cfg)
+    if not repos:
+        die("the board config names no repositories")
+    issues, stale = read_board(deadline)
+    if stale:
+        emit("Overnight filter - dry run (read only)")
+        emit("REFUSED: the board list is stale, so the filter cannot be trusted.")
+        emit("The ticket CLI could not reach GitHub and fell back to its cache.")
+        return 1
+    bodies, unread, _open = read_bodies(issues, deadline)
+    path, lines = read_decisions()
+    problems: list[str] = []
+    if unread:
+        problems.append(
+            "the ticket text of these repositories could not be read: "
+            + ", ".join(unread)
+        )
+    if not lines:
+        problems.append(f"the decisions log {path} could not be read")
+    kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
+    emit("Overnight filter - dry run (read only)")
+    emit(f"Board: {len(issues)} tickets")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit(f"Decisions log: {path}" + ("" if lines else " (not found)"))
+    for problem in problems:
+        emit(f"REFUSED: {problem}")
+    emit()
+    emit(f"Kept: {len(kept)}")
+    emit(f"Dropped: {len(drops)}")
+    outside = sorted({issue.get("repo") or "" for issue in issues} - allowed)
+    emit(f"Board repositories outside the allow list: {len(outside)}")
+    if drops:
+        emit()
+        emit("Drops (each with its reason)")
+        for issue, reason in drops:
+            key = issue.get("key") or "-"
+            emit(
+                f"  DROP {issue.get('repo')}#{issue.get('number')} {key} - {reason}"
+            )
+    emit()
+    survived = [
+        issue
+        for issue in kept
+        if ascend_reason(
+            issue.get("repo") or "",
+            issue.get("key") or "",
+            (issue.get("repo") or "") in flagged,
+        )
+    ]
+    emit(f"Ascend items kept: {len(survived)}")
+    if survived:
+        for issue in survived:
+            emit(f"  FAIL {issue.get('repo')}#{issue.get('number')}")
+        emit("FAIL: an Ascend item survived the filter.")
+        return 1
+    if problems:
+        emit("REFUSED: the filter cannot return a list it could not fully check.")
+        return 1
+    return 0
+
+
+def cmd_check_pr(args: argparse.Namespace) -> int:
+    """Refuse any pull request that is Ascend work.
+
+    This is the second check the spec asks for: intake drops Ascend work
+    from the board, and this refuses an Ascend pull request before any
+    work starts on it. The check fails closed: a pull request it could
+    not read is refused, not passed."""
+    deadline = time.monotonic() + args.deadline
+    repo = args.repo
+    number = args.number
+    cfg = load_config()
+    reason = ascend_reason(repo, None, repo in ascend_flags(cfg))
+    if reason:
+        emit(f"REFUSED: {repo}#{number}: {reason}")
+        return 1
+    try:
+        raw = run(
+            [
+                GH,
+                "pr",
+                "view",
+                str(number),
+                "-R",
+                repo,
+                "--json",
+                "headRefName,body",
+            ],
+            GH_TIMEOUT,
+            deadline,
+        )
+        pull = json.loads(raw) or {}
+    except (RepoError, ValueError) as exc:
+        emit(f"overnight: {repo}#{number}: {exc}", err=True)
+        emit(
+            f"REFUSED: {repo}#{number}: the pull request could not be read, "
+            "so the check cannot be trusted."
+        )
+        return 1
+    branch = pull.get("headRefName") or ""
+    body = pull.get("body") or ""
+    keys = ascend_keys_in(branch)
+    for key in ascend_keys_in(body):
+        if key not in keys:
+            keys.append(key)
+    if keys:
+        emit(f"REFUSED: {repo}#{number}: Ascend key {keys[0]}")
+        if branch:
+            emit(f"  branch {branch}")
+        return 1
+    emit(f"OK: {repo}#{number} is not an Ascend pull request")
+    return 0
+
+# --- Part T3c: the order --------------------------------------------------
+
+# The T3 client. The gate verdict lives in a T3 thread, so the shift
+# reads T3 for the same reason the coordinator's panel does.
+T3MCP = os.environ.get("OVERNIGHT_T3MCP", "t3mcp")
+T3_TIMEOUT = 60
+# The coordinator's queue folder. The gate dispatches are recorded there,
+# so the shift finds the gate thread of a pull request without guessing.
+COORDQ_DIR = os.environ.get(
+    "COORDQ_DIR", str(Path.home() / "Code" / "coordinator" / "queue")
+)
+# The dispatch receipts: a request id to its T3 thread. A gate request is
+# "gate:<repo>#<pull request>:<head sha>", so the receipt names the head
+# the gate looked at.
+RECEIPTS_FILE = "dispatch-receipts.json"
+# The queue's own file. It names every head a gate was queued for, so the
+# coordinator never gates one head twice.
+QUEUE_FILE = "queue.json"
+# The board key in a thread's title. The builder threads are titled
+# "<key> · <title>", so the key says which ticket a live thread owns.
+THREAD_KEY = re.compile(r"^([A-Za-z]{2,5}-\d+)\s*[·:\-]")
+# The marked forms of a ticket that is already a 5-minute part. The board
+# writes them in the ticket's own words: a light build slice, a light
+# chore, or a part that says how many minutes it takes.
+SPLIT_MARK = re.compile(
+    r"(?i)\b(?:light build slice|light chore|5[- ]minute (?:builder )?part)\b"
+    r"|\bbudget\b[^.\n]{0,40}\bto 5 minutes\b"
+)
+# A check that failed, or that can no longer pass, makes its pull request
+# a failing pull request.
+FAILED_CHECK = frozenset(
+    {
+        "FAILURE",
+        "FAIL",
+        "ERROR",
+        "TIMED_OUT",
+        "ACTION_REQUIRED",
+        "STARTUP_FAILURE",
+    }
+)
+# How a commit status ended, in the words the checks command used.
+STATUS_BUCKET = {
+    "SUCCESS": "pass",
+    "FAILURE": "fail",
+    "ERROR": "fail",
+    "PENDING": "pending",
+    "EXPECTED": "skipping",
+}
+# How a check run ended. A cancelled run is inconclusive, so it is
+# skipped, and a timed out run failed.
+CHECK_BUCKET = {
+    "SUCCESS": "pass",
+    "FAILURE": "fail",
+    "ACTION_REQUIRED": "fail",
+    "TIMED_OUT": "fail",
+    "STARTUP_FAILURE": "fail",
+    "CANCELLED": "skipping",
+    "SKIPPED": "skipping",
+    "NEUTRAL": "skipping",
+    "STALE": "skipping",
+}
+# The board's stage labels. A ready ticket is one the board says may be
+# worked now.
+READY_STAGE = "todo"
+# The "Blocked by" section of a ticket's own text. The section is a
+# heading of any level (`## Blocked by`) or a `Blocked by:` line with the
+# list under it, the same markers the coordinator's own reader accepts.
+BLOCKED_HEADING = re.compile(
+    r"(?i)^(?P<hashes>#{1,6})[ \t]*blocked by\b[ \t]*:?[ \t]*(?P<rest>.*)$"
+)
+HEADING_LINE = re.compile(r"^#{1,6}[ \t]")
+# The key of an issue, taken from its title: "SRW-1055 · ..." is SRW-1055.
+TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+# A reference in a blocker section: a board key of this repository, a
+# reference to another repository's issue, or a bare issue number.
+BLOCK_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
+BLOCK_REPO = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
+BLOCK_BARE = re.compile(r"(?<![A-Za-z0-9_/-])#(\d+)\b")
+
+
+def blocked_by_text(body: str) -> str:
+    """Return the text of the ticket's own "Blocked by" section.
+
+    The section is a heading of any level (`## Blocked by`) with the text
+    under it, or a `Blocked by:` line with the list under the line. A
+    section inside a `<details>` block is skipped, the way the
+    coordinator's own reader skips it, because the board keeps a
+    preserved contract in there."""
+    cleaned = re.sub(r"(?is)<details\b.*?</details>", "", body or "")
+    lines = cleaned.splitlines()
+    for index, line in enumerate(lines):
+        heading = BLOCKED_HEADING.match(line)
+        if not heading:
+            continue
+        level = len(heading.group("hashes") or "")
+        rest = (heading.group("rest") or "").strip()
+        content = [rest] if rest else []
+        for follow in lines[index + 1 :]:
+            if level:
+                if HEADING_LINE.match(follow):
+                    break
+                content.append(follow)
+                continue
+            text = follow.strip()
+            if not text:
+                content.append(follow)
+                continue
+            if not (follow[:1].isspace() or text[0] in "-*+"):
+                break
+            content.append(follow)
+        body_text = re.sub(r"<!--.*?-->", "", "\n".join(content), flags=re.S)
+        return body_text.strip()
+    return ""
+
+
+def issue_title_key(title: str) -> str:
+    """Return the board key an issue title starts with, or nothing."""
+    found = TITLE_KEY.match(title or "")
+    if not found:
+        return ""
+    return f"{found.group(1).upper()}-{found.group(2)}"
+
+
+def read_closed_issues(
+    repos: list[tuple[str, str]], deadline: float
+) -> tuple[dict[str, set[int]], dict[str, set[str]], list[str]]:
+    """Return the closed issue numbers and the closed issue keys of each
+    repository, and the repositories that could not be read.
+
+    A blocker is met when its issue is closed, so the shift needs the
+    closed issues as much as the open ones. A repository whose closed
+    issues cannot be read leaves its blockers unchecked, and an unchecked
+    blocker is not a met blocker."""
+    closed_numbers: dict[str, set[int]] = {}
+    closed_keys: dict[str, set[str]] = {}
+    unread: list[str] = []
+    for repo, _key in repos:
+        try:
+            raw = run(
+                [
+                    GH,
+                    "issue",
+                    "list",
+                    "-R",
+                    repo,
+                    "--state",
+                    "closed",
+                    "--limit",
+                    str(ISSUE_LIMIT),
+                    "--json",
+                    "number,title",
+                ],
+                GH_TIMEOUT,
+                deadline,
+            )
+            rows = json.loads(raw)
+        except (RepoError, ValueError) as exc:
+            unread.append(repo)
+            emit(f"overnight: {repo}: {exc}", err=True)
+            continue
+        if not isinstance(rows, list):
+            unread.append(repo)
+            continue
+        if len(rows) >= ISSUE_LIMIT:
+            unread.append(repo)
+            emit(
+                f"overnight: {repo}: the closed issue list was cut off at "
+                f"{ISSUE_LIMIT}, so the blockers are not known",
+                err=True,
+            )
+            continue
+        numbers = closed_numbers.setdefault(repo, set())
+        keys = closed_keys.setdefault(repo, set())
+        for row in rows:
+            number = row.get("number")
+            if isinstance(number, int):
+                numbers.add(number)
+            key = issue_title_key(row.get("title") or "")
+            if key:
+                keys.add(key)
+    return closed_numbers, closed_keys, unread
+
+
+def read_checks(repo: str, number: int, deadline: float) -> tuple[list[dict], str]:
+    """Return the checks of one pull request and the reason none are known.
+
+    `gh pr view` reads the checks of a pull request as a rollup. A commit
+    status carries its context, and a check run carries the app that ran
+    it. The board keeps both, because an agent check is named by the
+    repository's own publisher and every other check is external.
+
+    A pull request that carries no checks at all is not a failing pull
+    request: the rollup is empty and that is an answer. A read that fails
+    is a refusal, never a failure."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        return [], "the deadline passed before the checks could be read"
+    try:
+        result = subprocess.run(
+            [
+                GH,
+                "pr",
+                "view",
+                str(number),
+                "-R",
+                repo,
+                "--json",
+                "statusCheckRollup",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(GH_TIMEOUT, int(left))),
+            check=False,
+        )
+    except FileNotFoundError:
+        return [], f"{GH} is not on PATH"
+    except subprocess.TimeoutExpired:
+        return [], f"gh pr view {repo}#{number} timed out"
+    out = (result.stdout or "").strip()
+    err = (result.stderr or "").strip()
+    if result.returncode != 0:
+        return [], (
+            f"gh pr view {repo}#{number} failed ({result.returncode}): "
+            + (err or out)[-200:]
+        )
+    try:
+        payload = json.loads(out or "{}")
+    except ValueError as exc:
+        return [], f"gh pr view did not return JSON for {repo}#{number}: {exc}"
+    entries = (
+        payload.get("statusCheckRollup") if isinstance(payload, dict) else None
+    )
+    if not isinstance(entries, list):
+        return [], f"gh pr view returned no check rollup for {repo}#{number}"
+    return check_rows(entries), ""
+
+
+def check_rows(entries: list) -> list[dict]:
+    """Return the rollup of a pull request as check rows.
+
+    Every row keeps its name, its context, its app, its state and its
+    bucket. The name says which check it is, the context is the status
+    name, and the app is the publisher that posted it. The state and the
+    bucket say how the check ended, in the same words the checks command
+    used: `fail`, `pass`, `pending` and `skipping`."""
+    rows = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        context = str(entry.get("context") or "")
+        name = str(entry.get("name") or "") or context
+        state = str(entry.get("state") or "").upper()
+        bucket = STATUS_BUCKET.get(state, "") if context else ""
+        if not context:
+            status = str(entry.get("status") or "").upper()
+            conclusion = str(entry.get("conclusion") or "").upper()
+            if status == "COMPLETED":
+                state = conclusion
+                bucket = CHECK_BUCKET.get(conclusion, "")
+            else:
+                state = ""
+                bucket = "pending"
+        app = ""
+        publisher = entry.get("app")
+        if isinstance(publisher, dict):
+            app = str(publisher.get("slug") or publisher.get("name") or "")
+        rows.append(
+            {
+                "name": name,
+                "context": context,
+                "app": app,
+                "state": state,
+                "bucket": bucket,
+            }
+        )
+    return rows
+
+
+def agent_check_names(key: str) -> frozenset[str]:
+    """Return the agent check names of one repository.
+
+    `srw/agent-check` is the agent check of strategy-replay-workbench, and
+    `<key>/agent-check` is the same name for the other repositories. The
+    gate reads these names, so the board copies them instead of inventing
+    a wider rule of its own."""
+    names = {AGENT_CHECK}
+    if key:
+        names.add(f"{key.strip().lower()}/agent-check")
+    return frozenset(names)
+
+
+def publisher_apps(rows: list[dict], agent_names: frozenset[str]) -> frozenset[str]:
+    """Return the apps that publish a repository's own agent check.
+
+    A check that one of these apps posted is an agent check, whatever its
+    name says."""
+    apps = set()
+    for row in rows:
+        if str(row.get("context") or "").strip().lower() not in agent_names:
+            continue
+        app = str(row.get("app") or "").strip().lower()
+        if app:
+            apps.add(app)
+    return frozenset(apps)
+
+
+def is_agent_check(
+    row: dict, agent_names: frozenset[str], apps: frozenset[str]
+) -> bool:
+    """Return True when a check row is one of the repository's own checks.
+
+    The agent check is the status the repository's own publisher posts on
+    the head. Every other check is external: a deployment, a preview or a
+    bot, none of which is an agent check of this repository."""
+    for field in ("name", "context"):
+        if str(row.get(field) or "").strip().lower() in agent_names:
+            return True
+    app = str(row.get("app") or "").strip().lower()
+    return bool(app) and app in apps
+
+
+def failing_checks(
+    rows: list[dict], agent_names: frozenset[str], apps: frozenset[str]
+) -> tuple[list[str], list[str]]:
+    """Return the failing agent checks and the failing external checks.
+
+    A cancelled check is inconclusive, not a failure, so it does not put
+    the pull request in the failing group. An external check never blocks
+    a pull request, but it is listed, so the failure stays visible."""
+    agent_failed: list[str] = []
+    external_failed: list[str] = []
+    for row in rows:
+        state = str(row.get("state") or "").upper()
+        bucket = str(row.get("bucket") or "").upper()
+        if state not in FAILED_CHECK and bucket not in FAILED_CHECK:
+            continue
+        if is_agent_check(row, agent_names, apps):
+            agent_failed.append(f"{row.get('name') or '?'} ({state or bucket})")
+            continue
+        name = str(row.get("name") or "?").strip() or "?"
+        if name not in external_failed:
+            external_failed.append(name)
+    return agent_failed, external_failed
+
+
+def check_verdict(rows: list[dict], key: str) -> dict:
+    """Return what the checks of one pull request say.
+
+    `failed` are the failing agent checks, and they block the pull
+    request. `external` are the failing checks that are not agent checks:
+    they stay visible and never block."""
+    names = agent_check_names(key)
+    apps = publisher_apps(rows, names)
+    failed, external = failing_checks(rows, names, apps)
+    return {"failed": failed, "external": external, "blocks": bool(failed)}
+
+
+def apply_checks(item: dict, rows: list[dict], key: str) -> bool:
+    """Record the checks of a pull request on its board item.
+
+    The item keeps the failing agent checks and the failing external
+    checks. The answer is True when an agent check failed, and only then:
+    an external failure stays visible but never blocks a pull request."""
+    state = check_verdict(rows, key)
+    item["checks"] = {"failed": state["failed"]}
+    item["externalChecks"] = state["external"]
+    return state["blocks"]
+
+
+def read_receipts() -> tuple[dict[str, str], str]:
+    """Return every dispatch receipt and the reason they are not known.
+
+    The receipts are the queue's own record of what it dispatched. A
+    receipt file that cannot be read is not a pass: the shift then calls
+    no pull request gate PASS, and says so."""
+    path = Path(COORDQ_DIR) / RECEIPTS_FILE
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        return {}, f"the dispatch receipts {path} could not be read: {exc}"
+    if not isinstance(data, dict):
+        return {}, f"the dispatch receipts {path} are not a mapping"
+    return {str(key): str(value) for key, value in data.items()}, ""
+
+
+def read_gate_receipts() -> tuple[dict[str, str], str]:
+    """Return the gate dispatch receipts and the reason they are unknown."""
+    receipts, error = read_receipts()
+    if error:
+        return {}, error
+    return {
+        key: value
+        for key, value in receipts.items()
+        if key.startswith("gate:")
+    }, ""
+
+
+def read_queue_state() -> dict:
+    """Return the queue's own record: the gated heads and the queued tickets.
+
+    The queue names every head it queued a gate for, queued or dispatched,
+    so a head in it is a head the coordinator must not gate a second time.
+    It names every ticket it holds too, so the coordinator does not start
+    a ticket that is already on its way."""
+    path = Path(COORDQ_DIR) / QUEUE_FILE
+    state: dict = {"gatedHeads": set(), "queuedTickets": set(), "error": ""}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        state["error"] = f"the queue {path} could not be read: {exc}"
+        return state
+    if not isinstance(data, dict):
+        state["error"] = f"the queue {path} is not a mapping"
+        return state
+    heads = data.get("gatedHeads")
+    if isinstance(heads, dict):
+        state["gatedHeads"] = {str(key) for key in heads}
+    for item in data.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        args = item.get("args") or {}
+        request_id = str(args.get("clientRequestId") or "")
+        if request_id.startswith("ticket:"):
+            state["queuedTickets"].add(request_id)
+    return state
+
+
+def builder_thread(receipts: dict[str, str], repo: str, number: int) -> tuple[str, int]:
+    """Return the builder thread of a ticket and the attempt that built it.
+
+    The receipts name the thread of every attempt the coordinator started,
+    so the last attempt is the builder that holds the work. A ticket with
+    no attempt has no builder."""
+    prefix = f"ticket:{repo}#{number}:a"
+    thread = ""
+    attempt = 0
+    for key, value in receipts.items():
+        if not key.startswith(prefix):
+            continue
+        try:
+            number_of_attempt = int(key[len(prefix) :])
+        except ValueError:
+            continue
+        if number_of_attempt > attempt:
+            thread = value
+            attempt = number_of_attempt
+    return thread, attempt
+
+
+def latest_run_id(data: dict) -> str:
+    """Return the id of the thread's latest run, or nothing.
+
+    The queue dispatches a gate for the same head under the same request
+    id, so one thread can hold more than one run. The verdict of a thread
+    is the verdict of its latest run: an earlier run's verdict does not
+    survive a later one."""
+    best = None
+    for run in data.get("recentRuns") or []:
+        if not isinstance(run, dict):
+            continue
+        ordinal = run.get("ordinal")
+        if not isinstance(ordinal, int):
+            continue
+        if best is None or ordinal > best.get("ordinal", -1):
+            best = run
+    return str(best.get("runId") or "") if best else ""
+
+
+def check_line_passes(lines: list[str], head: str) -> bool:
+    """Return True when the gate checked this head and it passed.
+
+    The gate's own rule is `CHECK: PASS <head>` before the verdict, so a
+    verdict without that line is a verdict for a head nobody checked."""
+    return f"CHECK: PASS {head}" in lines
+
+
+def read_gate_report(
+    thread_id: str, deadline: float, head: str = ""
+) -> tuple[str, str, str]:
+    """Return the verdict, the report and the update time of a gate thread.
+
+    The verdict is the last line of the gate's own last message in the
+    thread's latest run. A thread that cannot be read, a latest run with
+    no message, and a message that ends with anything else, are all no
+    verdict. When the head is known, the gate must also have checked that
+    head: the line `CHECK: PASS <head>` has to be there. The report is
+    that same message: it holds the findings the builder has to fix."""
+    payload = json.dumps({"threadId": thread_id, "maxCharsPerItem": 20000})
+    try:
+        raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
+    except RepoError:
+        return "", "", ""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return "", "", ""
+    thread = data.get("thread") or {}
+    updated = str(thread.get("updatedAt") or "")
+    items = data.get("items") or []
+    run_id = latest_run_id(data)
+    texts = [
+        item.get("text") or ""
+        for item in items
+        if item.get("type") == "assistant_message"
+        and (not run_id or str(item.get("runId") or "") == run_id)
+    ]
+    if not texts:
+        return "", "", updated
+    text = texts[-1]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    report = text
+    if not lines:
+        return "", report, updated
+    if lines[-1] == "VERDICT: PASS":
+        if head and not check_line_passes(lines, head):
+            return "", report, updated
+        return "PASS", report, updated
+    if lines[-1] == "VERDICT: FAIL":
+        return "FAIL", report, updated
+    return "", report, updated
+
+
+def read_verdict(thread_id: str, deadline: float) -> str:
+    """Return the verdict of one gate thread: PASS, FAIL or nothing."""
+    return read_gate_report(thread_id, deadline)[0]
+
+
+def read_live_threads(deadline: float) -> dict:
+    """Return the live threads: the board keys they own and their ids.
+
+    A live builder owns its ticket, so the coordinator must not start it a
+    second time. The keys come from the threads' own titles."""
+    state: dict = {"keys": set(), "ids": set(), "error": ""}
+    payload = json.dumps(
+        {
+            "allProjects": True,
+            "statuses": ["running", "starting", "preparing", "queued"],
+            "limit": 100,
+        }
+    )
+    try:
+        raw = run([T3MCP, "call", "t3_thread_list", payload], T3_TIMEOUT, deadline)
+    except RepoError:
+        state["error"] = "the live threads could not be read"
+        return state
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        state["error"] = "the live threads could not be read"
+        return state
+    for thread in data.get("threads") or []:
+        thread_id = str(thread.get("threadId") or "")
+        if thread_id:
+            state["ids"].add(thread_id)
+        title = str(thread.get("title") or "")
+        match = THREAD_KEY.match(title)
+        if match:
+            state["keys"].add(match.group(1).upper())
+    return state
+
+
+def read_thread_messages(thread_id: str, deadline: float) -> tuple[str, list[str]]:
+    """Return when a thread was last updated and what it said.
+
+    The texts are the thread's own messages, so a caller can tell whether
+    a message it wants to send was already sent."""
+    payload = json.dumps({"threadId": thread_id, "maxCharsPerItem": 20000})
+    try:
+        raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
+        data = json.loads(raw)
+    except (RepoError, ValueError):
+        return "", []
+    thread = data.get("thread") or {}
+    updated = str(thread.get("updatedAt") or "")
+    texts = [
+        item.get("text") or ""
+        for item in (data.get("items") or [])
+        if item.get("type") == "assistant_message"
+    ]
+    return updated, texts
+
+
+def shell_quote(text: str) -> str:
+    """Return text as one shell word."""
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+
+def gate_verdict(
+    receipts: dict[str, str], repo: str, number: int, head: str, deadline: float
+) -> str:
+    """Return the gate verdict for one pull request head.
+
+    The receipt names the head the gate looked at, so a gate for an older
+    head is not a verdict for this one. A receipt without a verdict is no
+    verdict: the shift never calls a pull request gate PASS it cannot read
+    from the gate itself."""
+    if not head:
+        return ""
+    thread_id = receipts.get(f"gate:{repo}#{number}:{head}")
+    if not thread_id:
+        return ""
+    return read_gate_report(thread_id, deadline, head)[0]
+
+
+def blockers_for(
+    body: str,
+    repo: str,
+    key: str,
+    open_numbers: dict[str, set[int]],
+    closed_numbers: dict[str, set[int]],
+    closed_keys: dict[str, set[str]],
+    board_by_key: dict[str, dict],
+) -> list[str]:
+    """Return the blockers of a ticket that are not met yet.
+
+    A blocker is met when its issue is closed, so it is neither on the
+    open issue list nor missing from the closed one. A blocker that
+    cannot be checked is not a met blocker: the shift does not treat work
+    as free it cannot prove."""
+    text = blocked_by_text(body or "")
+    if not text:
+        return []
+    first = text.splitlines()[0].strip().lower().rstrip(".:")
+    if first in ("none", "n/a", "nil", "-"):
+        return []
+    open_here = open_numbers.get(repo, set())
+    closed_here = closed_numbers.get(repo, set())
+    closed_key_here = closed_keys.get(repo, set())
+    blockers: list[str] = []
+    masked = BLOCK_REPO.sub(" ", text)
+    for match in BLOCK_REPO.finditer(text):
+        target_repo, number = match.group(1), int(match.group(2))
+        if target_repo.lower() != repo.lower():
+            blockers.append(f"{target_repo}#{number} (not checked)")
+        elif number in open_here:
+            blockers.append(f"{target_repo}#{number} is still open")
+        elif number not in closed_here:
+            blockers.append(f"{target_repo}#{number} could not be read")
+    for match in BLOCK_KEY.finditer(masked):
+        label = f"{match.group(1).upper()}-{match.group(2)}"
+        if not label.startswith((key or " ").upper()):
+            continue
+        if label in closed_key_here:
+            continue
+        ticket = board_by_key.get(label)
+        if ticket is None:
+            blockers.append(f"{label} could not be read")
+        elif ticket.get("number") in open_here:
+            blockers.append(f"{label} (#{ticket.get('number')}) is still open")
+    for match in BLOCK_BARE.finditer(masked):
+        number = int(match.group(1))
+        if number in open_here:
+            blockers.append(f"{repo}#{number} is still open")
+        elif number not in closed_here:
+            blockers.append(f"{repo}#{number} could not be read")
+    return blockers
+
+
+def order_key(item: dict) -> tuple:
+    """Return the sort key of one item of the ordered list.
+
+    Priority comes first: Shyam steers the night through the priority
+    label. A blocked item waits for its blocker, so it follows the items
+    that are ready. The repository and the issue number break the tie, so
+    the same board always produces the same list. A blocked item is not
+    left out: it stays in its group and is marked, so the night sees it
+    and knows why it waits."""
+    priority = item.get("priority")
+    number = priority if isinstance(priority, int) else 99
+    return (number, 1 if item.get("blockers") else 0, item.get("repo") or "",
+            item.get("number") or 0)
+
+
+def summarize(counts: dict[str, dict]) -> str:
+    """Return the one-line summary of the order, per repository and state.
+
+    Every state the order knows is counted, so the line says how many
+    items are failing, gate-pass, split, unsplit, in flight and not
+    ready. A count that could not be checked is written as UNVERIFIED by
+    the caller, never as a zero."""
+    parts = []
+    for repo in sorted(counts):
+        row = counts[repo]
+        if not (row["total"] or row["in_flight"] or row["backlog"]):
+            continue
+        parts.append(
+            f"{repo} {row['total']} (failing {row['failing']}, "
+            f"gate-pass {row['gate']}, split {row['split']}, "
+            f"unsplit {row['unsplit']}, in-flight {row['in_flight']}, "
+            f"not-ready {row['backlog']})"
+        )
+    return "; ".join(parts) if parts else "no items"
+
+
+def write_shift_line(root: Path, line: str) -> Path:
+    """Append one line to the shift log and return the file.
+
+    The shift log is the night's record, one line per event. It holds no
+    list: the board is the list."""
+    if not root.is_dir():
+        die(
+            f"the overnight folder {root} does not exist, so the shift log "
+            "cannot be written"
+        )
+    path = root / "run" / "shift-log.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
+    append_record(path, f"{stamp} | {line}\n")
+    return path
+
+
+def read_all_checks(
+    pairs: list[tuple[str, int]], deadline: float
+) -> dict[tuple[str, int], tuple[list[dict], str]]:
+    """Return the checks of every pull request, read at once.
+
+    One call reads one pull request's checks and the board holds many open
+    pull requests, so the calls run together: the board is read in
+    seconds, not in minutes."""
+    results: dict[tuple[str, int], tuple[list[dict], str]] = {}
+    if not pairs:
+        return results
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            pair: pool.submit(read_checks, pair[0], pair[1], deadline)
+            for pair in pairs
+        }
+        for pair, future in futures.items():
+            try:
+                results[pair] = future.result()
+            except RepoError as exc:
+                results[pair] = ([], str(exc))
+    return results
+
+
+def collect_items(
+    deadline: float,
+    repos: list[tuple[str, str]],
+    issues: list[dict],
+    bodies: dict[tuple[str, int], str],
+    open_numbers: dict[str, set[int]],
+    drops: list[tuple[dict, str]],
+    receipts: dict[str, str],
+) -> dict:
+    """Return the board's items in the order the shift works them.
+
+    This is the one order: `order` prints it and `board` returns it, so
+    the day tick and the night shift work the same list. Every pull
+    request carries its head, the gate that looked at it and the builder
+    that holds it, and every ready ticket carries the one action the
+    coordinator may take on it now, so no caller has to look a second
+    time."""
+    allowed = {repo for repo, _ in repos}
+    keys = {repo: key for repo, key in repos}
+    pull_requests: dict[str, list[dict]] = {}
+    pr_error = ""
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            repo: pool.submit(read_pull_requests, repo, deadline)
+            for repo, _key in repos
+        }
+        for repo, future in futures.items():
+            try:
+                rows, cut = future.result()
+            except RepoError as exc:
+                pr_error = f"{repo}: {exc}"
+                break
+            pull_requests[repo] = rows
+            if cut:
+                pr_error = f"{repo}: more than {PR_LIMIT} open pull requests"
+                break
+    if pr_error:
+        return {"pr_error": pr_error}
+
+    board_repos = sorted({issue.get("repo") or "" for issue in issues})
+    closed_numbers, closed_keys, closed_unread = read_closed_issues(
+        [(repo, "") for repo in board_repos], deadline
+    )
+    records = build_records(issues, pull_requests)
+    dropped = {
+        (issue.get("repo") or "", issue.get("number")) for issue, _reason in drops
+    }
+    board_by_key = {
+        (issue.get("key") or "").upper(): issue
+        for issue in issues
+        if issue.get("key")
+    }
+    queue_state = read_queue_state()
+    gated_heads = queue_state["gatedHeads"]
+    queued_tickets = queue_state["queuedTickets"]
+    live = read_live_threads(deadline)
+
+    pairs: list[tuple[str, int]] = []
+    for repo in sorted(allowed):
+        for record in records.get(repo, []):
+            if (record.get("repo"), record.get("number")) in dropped:
+                continue
+            prs = (
+                [record]
+                if record["kind"] == "pr"
+                else (record.get("prs") or [])
+            )
+            for pull in prs:
+                pairs.append((repo, pull["number"]))
+    checks = read_all_checks(pairs, deadline)
+
+    failing: list[dict] = []
+    gate_pass: list[dict] = []
+    split_items: list[dict] = []
+    unsplit_items: list[dict] = []
+    in_flight: list[dict] = []
+    backlog: list[dict] = []
+    counts: dict[str, dict] = {}
+    unverified_prs: list[str] = []
+
+    def count_for(repo: str) -> dict:
+        return counts.setdefault(
+            repo,
+            {
+                "total": 0,
+                "failing": 0,
+                "gate": 0,
+                "split": 0,
+                "unsplit": 0,
+                "in_flight": 0,
+                "backlog": 0,
+            },
+        )
+
+    for repo in sorted(allowed):
+        bucket = records.get(repo, [])
+        for record in bucket:
+            if (record.get("repo"), record.get("number")) in dropped:
+                continue
+            prs = (
+                [record]
+                if record["kind"] == "pr"
+                else (record.get("prs") or [])
+            )
+            if prs:
+                for pull in prs:
+                    item = {
+                        "kind": "pull-request",
+                        "repo": repo,
+                        "number": pull.get("number"),
+                        "key": record.get("key") or "",
+                        "title": pull.get("title") or "",
+                        "url": pull.get("url") or "",
+                        "priority": record.get("priority"),
+                        "ticket": ""
+                        if record["kind"] == "pr"
+                        else record.get("number"),
+                        "standalone": record["kind"] == "pr",
+                        "head": pull.get("headRefOid") or "",
+                        "isDraft": bool(pull.get("isDraft")),
+                        "action": "none",
+                        "actionReason": "",
+                        "actionCommand": "",
+                    }
+                    if item["isDraft"]:
+                        item["reason"] = "draft pull request"
+                        item["actionReason"] = "draft pull request"
+                        in_flight.append(item)
+                        count_for(repo)["in_flight"] += 1
+                        continue
+                    rows, unknown = checks.get(
+                        (repo, pull["number"]), ([], "the checks were not read")
+                    )
+                    if unknown:
+                        item["reason"] = unknown
+                        unverified_prs.append(f"{repo}#{pull['number']}: {unknown}")
+                        in_flight.append(item)
+                        count_for(repo)["in_flight"] += 1
+                        continue
+                    blocked = apply_checks(item, rows, keys.get(repo, ""))
+                    failed = (item.get("checks") or {}).get("failed") or []
+                    external = item.get("externalChecks") or []
+                    if blocked:
+                        item["reason"] = "failing check: " + ", ".join(failed)
+                        item["actionReason"] = "a check is failing"
+                        failing.append(item)
+                        count_for(repo)["failing"] += 1
+                        count_for(repo)["total"] += 1
+                        continue
+                    head = item["head"]
+                    request_id = f"gate:{repo}#{pull['number']}:{head}"
+                    thread_id = receipts.get(request_id, "")
+                    verdict = ""
+                    report = ""
+                    gate_updated = ""
+                    if thread_id:
+                        verdict, report, gate_updated = read_gate_report(
+                            thread_id, deadline, head
+                        )
+                    status = "none"
+                    if verdict == "PASS":
+                        status = "pass"
+                    elif verdict == "FAIL":
+                        status = "fail"
+                    elif thread_id:
+                        status = "running"
+                    if status == "none" and request_id in gated_heads:
+                        status = "queued"
+                    issue_number = refs_issue(pull.get("body") or "")
+                    builder, attempt = (
+                        builder_thread(receipts, repo, issue_number)
+                        if issue_number
+                        else ("", 0)
+                    )
+                    item["gate"] = {
+                        "status": status,
+                        "requestId": request_id,
+                        "threadId": thread_id,
+                        "updatedAt": gate_updated,
+                    }
+                    item["builder"] = {
+                        "threadId": builder,
+                        "attempt": attempt,
+                        "live": bool(builder and builder in live["ids"]),
+                    }
+                    item["issue"] = issue_number
+                    if status == "fail":
+                        if not builder:
+                            item["actionReason"] = (
+                                "no builder thread is known for this ticket"
+                            )
+                        else:
+                            builder_updated, builder_texts = read_thread_messages(
+                                builder, deadline
+                            )
+                            item["builder"]["updatedAt"] = builder_updated
+                            mark = (report or "")[:200]
+                            if mark and any(mark in text for text in builder_texts):
+                                item["actionReason"] = (
+                                    "the builder already has these findings"
+                                )
+                            else:
+                                item["action"] = "fix"
+                                item["actionCommand"] = fix_command(
+                                    repo,
+                                    pull["number"],
+                                    head,
+                                    builder,
+                                    report,
+                                )
+                    elif status == "none":
+                        if item["isDraft"]:
+                            item["actionReason"] = "draft pull request"
+                        elif not issue_number:
+                            item["actionReason"] = (
+                                "no board ticket names this pull request"
+                            )
+                        elif not builder_check_passes(pull, rows, head):
+                            item["actionReason"] = (
+                                "the builder check does not name this head"
+                            )
+                        else:
+                            item["action"] = "gate"
+                            item["actionCommand"] = (
+                                f"coordq gate {repo}#{pull['number']}"
+                            )
+                    else:
+                        item["actionReason"] = {
+                            "pass": "gate PASS",
+                            "running": "the gate is running",
+                            "queued": "a gate for this head is on its way",
+                        }.get(status, "")
+                    if verdict == "PASS":
+                        item["reason"] = "gate PASS"
+                        if external:
+                            item["reason"] += (
+                                "; external checks failing: "
+                                + ", ".join(external)
+                            )
+                        gate_pass.append(item)
+                        count_for(repo)["gate"] += 1
+                        count_for(repo)["total"] += 1
+                        continue
+                    if verdict == "FAIL":
+                        item["reason"] = "gate FAIL"
+                    else:
+                        item["reason"] = (
+                            "open pull request, no failing check and no gate "
+                            "verdict"
+                        )
+                    if external:
+                        item["reason"] += (
+                            "; external checks failing: " + ", ".join(external)
+                        )
+                    in_flight.append(item)
+                    count_for(repo)["in_flight"] += 1
+                continue
+            # A ticket with no open pull request.
+            item = {
+                "kind": "ticket",
+                "repo": repo,
+                "number": record.get("number"),
+                "key": record.get("key") or "",
+                "title": record.get("title") or "",
+                "url": record.get("url") or "",
+                "priority": record.get("priority"),
+                "stage": record.get("stage"),
+                "ticket": record.get("number"),
+                "action": "none",
+                "actionReason": "",
+                "actionCommand": "",
+            }
+            if record.get("stage") != READY_STAGE:
+                item["reason"] = f"stage {record.get('stage') or 'unknown'}"
+                item["actionReason"] = "the board stage is not todo"
+                backlog.append(item)
+                count_for(repo)["backlog"] += 1
+                continue
+            body = bodies.get((repo, record.get("number"))) or ""
+            item["blockers"] = blockers_for(
+                body,
+                repo,
+                keys.get(repo, ""),
+                open_numbers,
+                closed_numbers,
+                closed_keys,
+                board_by_key,
+            )
+            split = bool(SPLIT_MARK.search(body))
+            item["split"] = split
+            if split:
+                item["reason"] = "already a 5-minute part"
+                split_items.append(item)
+                count_for(repo)["split"] += 1
+                count_for(repo)["total"] += 1
+            else:
+                item["reason"] = "split first, then add the parts"
+                unsplit_items.append(item)
+                count_for(repo)["unsplit"] += 1
+                count_for(repo)["total"] += 1
+            key = (record.get("key") or "").upper()
+            queued = [
+                request
+                for request in queued_tickets
+                if request.startswith(f"ticket:{repo}#{record.get('number')}:")
+            ]
+            if item["blockers"]:
+                item["actionReason"] = (
+                    "blocked: " + "; ".join(item["blockers"])
+                )
+            elif key and key in live["keys"]:
+                item["actionReason"] = "a builder thread for this ticket is live"
+            elif queued:
+                item["actionReason"] = "the ticket is already queued"
+            elif record.get("problems"):
+                item["actionReason"] = "the board labels need a fix: " + ", ".join(
+                    record["problems"]
+                )
+            else:
+                item["action"] = "start"
+                item["actionCommand"] = f"ticket start {repo}#{record.get('number')}"
+                item["dryRunCommand"] = (
+                    f"ticket start {repo}#{record.get('number')} --dry-run"
+                )
+
+    failing.sort(key=order_key)
+    gate_pass.sort(key=order_key)
+    split_items.sort(key=order_key)
+    unsplit_items.sort(key=order_key)
+    return {
+        "failing": failing,
+        "gate_pass": gate_pass,
+        "split": split_items,
+        "unsplit": unsplit_items,
+        "in_flight": in_flight,
+        "backlog": backlog,
+        "counts": counts,
+        "unverified": unverified_prs,
+        "closed_unread": closed_unread,
+        "queue": queue_state,
+        "live": live,
+    }
+
+
+def builder_check_passes(pull: dict, rows: list[dict], head: str) -> bool:
+    """Return True when the builder's check names this head.
+
+    The check is the line the builder wrote in the pull request body,
+    `Builder check: PASS <head>`, or the agent check the repository
+    publishes on the head. A trailing note after the head (the command
+    that produced it) does not change the verdict. A check that does not
+    name the head is no check for that head, so the head is not gated:
+    a gate that cannot read the diff would only report the check."""
+    if not head:
+        return False
+    for line in (pull.get("body") or "").splitlines():
+        if line.strip().startswith(f"Builder check: PASS {head}"):
+            return True
+    for row in rows or []:
+        if str(row.get("name") or "") != AGENT_CHECK:
+            continue
+        state = str(row.get("bucket") or row.get("state") or "").upper()
+        if state in ("PASS", "SUCCESS"):
+            return True
+    return False
+
+
+def refs_issue(body: str) -> int:
+    """Return the issue a pull request body names, or 0 when it names none.
+
+    The coordinator's own queue reads a "Refs #<n>" line, so this reads
+    the same line: a pull request that names no ticket is one the
+    coordinator has no task for."""
+    for line in (body or "").splitlines():
+        match = REFS_ISSUE.search(line)
+        if match:
+            return int(match.group(1))
+    return 0
+
+
+def fix_command(repo: str, number: int, head: str, builder: str, report: str) -> str:
+    """Return the command that sends a failed gate's findings to the builder.
+
+    The command is short on purpose: the queue reads the gate's own
+    report and the builder thread, so the tick carries one line per item
+    and not the whole report."""
+    return f"coordq fix {repo}#{number}"
+
+
+def policy_repos(cfg: dict, override: object) -> list[tuple[str, str]]:
+    """Return the repositories a command may work in.
+
+    The shift works under the allow list in its policy snapshot, so a
+    command that is handed that list reads only those repositories and
+    drops the rest. The board config still holds the key of each
+    repository. Without the list, the board config's own list is the
+    contract."""
+    config_repos = allowed_repos(cfg)
+    if not override:
+        return config_repos
+    keys_of = {repo: key for repo, key in config_repos}
+    return [(repo, keys_of.get(repo, "")) for repo in override]
+
+
+def cmd_order(args: argparse.Namespace) -> int:
+    """Order the whole board and write one summary line to the shift log.
+
+    The order is the spec's: the pull requests that are already open and
+    failing a check, then the pull requests with a gate PASS, then the
+    ready tickets that are already split into 5-minute parts, then the
+    ready tickets that are not split yet. There is no cap and no list
+    file: the board is the list, and the only file this command writes
+    is one line of the shift log."""
+    deadline = time.monotonic() + args.deadline
+    cfg = load_config()
+    repos = policy_repos(cfg, getattr(args, "allowed", None))
+    allowed = {repo for repo, _ in repos}
+    flagged = ascend_flags(cfg)
+    if not repos:
+        die("the board config names no repositories")
+    issues, stale = read_board(deadline)
+    emit("Overnight order - dry run (read only)")
+    if stale:
+        emit("REFUSED: the board list is stale, so the order cannot be trusted.")
+        emit("The ticket CLI could not reach GitHub and fell back to its cache.")
+        return 1
+    bodies, unread, open_numbers = read_bodies(issues, deadline)
+    path, lines = read_decisions()
+    problems: list[str] = []
+    if unread:
+        problems.append(
+            "the ticket text of these repositories could not be read: "
+            + ", ".join(unread)
+        )
+    if not lines:
+        problems.append(f"the decisions log {path} could not be read")
+    kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
+    if problems:
+        for problem in problems:
+            emit(f"REFUSED: {problem}")
+        emit("REFUSED: the order cannot return a list it could not fully check.")
+        return 1
+
+    receipts, receipt_error = read_receipts()
+    result = collect_items(
+        deadline, repos, issues, bodies, open_numbers, drops, receipts
+    )
+    if result.get("pr_error"):
+        emit(f"REFUSED: {result['pr_error']}")
+        emit("REFUSED: the order cannot return a list it could not fully check.")
+        return 1
+    failing = result["failing"]
+    gate_pass = result["gate_pass"]
+    split_items = result["split"]
+    unsplit_items = result["unsplit"]
+    in_flight = result["in_flight"]
+    backlog = result["backlog"]
+    counts = result["counts"]
+    unverified_prs = result["unverified"]
+    gate_error = receipt_error
+
+    def show(title: str, items: list[dict], start: int) -> int:
+        emit()
+        emit(f"{title} ({len(items)})")
+        for offset, item in enumerate(items):
+            blockers = ""
+            if item.get("blockers"):
+                blockers = " [blocked: " + "; ".join(item["blockers"]) + "]"
+            emit(
+                f"  {start + offset}. {item['repo']}#{item['number']} "
+                f"{item.get('key') or '-'} {item['title']} - {item.get('reason', '')}"
+                f"{blockers}"
+            )
+        return start + len(items)
+
+    planned = len(failing) + len(gate_pass) + len(split_items) + len(unsplit_items)
+    emit(f"Board: {len(issues)} tickets")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit(f"Decisions log: {path}")
+    emit(f"Dropped by the filter: {len(drops)}")
+    emit(f"Planned items: {planned}")
+    if gate_error:
+        emit(
+            "The gate dispatches could not be read, so no pull request is "
+            f"called gate PASS: {gate_error}"
+        )
+    if unverified_prs:
+        for note in unverified_prs:
+            emit(f"UNVERIFIED: {note}")
+    if result.get("closed_unread"):
+        emit(
+            "UNVERIFIED: the closed issues of these repositories could not be "
+            "read, so a blocker in them is not known to be met: "
+            + ", ".join(result["closed_unread"])
+        )
+    index = 1
+    index = show("Failing pull requests", failing, index)
+    index = show("Pull requests with a gate PASS", gate_pass, index)
+    index = show("Ready tickets already split into 5-minute parts", split_items, index)
+    index = show("Ready tickets not yet split", unsplit_items, index)
+    index = show("Not work items: a pull request is open", in_flight, index)
+    show("Not ready: the board stage is not todo", backlog, index)
+    line = f"planned {planned} items | {summarize(counts)}"
+    if gate_error:
+        line += " | gate-pass UNVERIFIED"
+    if unverified_prs:
+        line += f" | checks UNVERIFIED {len(unverified_prs)}"
+    log = write_shift_line(report_root(args.root), line)
+    emit()
+    emit(f"Summary line written to {log}")
+    emit(f"  {line}")
+    emit(
+        "No list file is written: the board is the list, and this run wrote "
+        "one line of the shift log and nothing else."
+    )
+    return 0
+
+
+
+# --- The attended first night (spec part T13) ------------------------------
+
+# The types the attended night may work: one small part. These are the
+# board's own types. A ticket Shyam holds never reaches the list, because
+# the ticket CLI keeps it out, so the night needs no second hold rule.
+SMALL_TYPES = {"chore", "standard"}
+# The gate's verdict line, as the gate writes it.
+GATE_VERDICT = re.compile(r"VERDICT:\s*(?P<verdict>PASS|FAIL)", re.I)
+# The keys of the Ascend repositories. The allow list leaves them out; the
+# check is here so the shift can say that it left them out.
+ASCEND_KEYS = {"AUH", "MCP", "OPS", "DBT", "OMN"}
+# The folders the attended night writes.
+ATTEND_DIRS = ("run", "receipts", "inbox", "staging")
+
+
+def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
+    """Run a read-only command and return its exit code and its output.
+
+    A read-only command that fails is not fatal: the shift keeps the exit
+    code and what it saw, and the receipt says so. Nothing here merges,
+    pushes or writes to a repository."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        die("the attended night ran out of time before the next command could run")
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(timeout, int(left))),
+            check=False,
+        )
+    except FileNotFoundError:
+        die(f"{argv[0]} is not on PATH")
+    except subprocess.TimeoutExpired:
+        return 124, f"{' '.join(argv)} timed out"
+    return result.returncode, (result.stdout or "") + (result.stderr or "")
+
+
+def slot_cap() -> int | None:
+    """Return the queue's slot cap, read only.
+
+    The shift never writes this file and never raises the cap. When the
+    file cannot be read the cap is unknown, and the policy says so."""
+    try:
+        with open(SLOT_CAP_FILE) as stream:
+            value = json.load(stream).get("cap")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def select_items(issues: list[dict], allowed: set[str], limit: int) -> list[dict]:
+    """Return the small board items the attended night may work.
+
+    The board is the list. The attended night takes the first items the
+    board shows that are small: on the todo stage, in an allowed
+    repository, and of a type that is one small part. A ticket Shyam holds
+    is not in the list at all, so the night never takes one. The Ascend
+    keys are never taken."""
+    picked: list[dict] = []
+    for issue in issues:
+        if len(picked) >= limit:
+            break
+        if issue.get("stage") != "todo":
+            continue
+        if issue.get("repo") not in allowed:
+            continue
+        key = (issue.get("key") or "").upper()
+        if key.split("-")[0] in ASCEND_KEYS:
+            continue
+        if (issue.get("type") or "").lower() not in SMALL_TYPES:
+            continue
+        picked.append(issue)
+    return picked
+
+
+def pull_request_gate_verdict(repo: str, number: int, deadline: float) -> str:
+    """Return the gate's verdict on a pull request: PASS, FAIL or UNKNOWN.
+
+    The gate writes its verdict on the pull request, as a comment or as a
+    review. When the shift cannot read one, the verdict is UNKNOWN, and a
+    receipt with an UNKNOWN gate is never counted as passed.
+
+    The name says which verdict this is: the one the gate wrote on the
+    pull request. The module's other `gate_verdict` reads the gate's own
+    receipts for a head, and the two are not the same read."""
+    code, out = run_read(
+        [GH, "pr", "view", str(number), "-R", repo, "--json", "comments,reviews"],
+        GH_TIMEOUT,
+        deadline,
+    )
+    if code != 0:
+        return "UNKNOWN"
+    found = GATE_VERDICT.findall(out)
+    if not found:
+        return "UNKNOWN"
+    return str(found[-1]).upper()
+
+
+def observe_pull_request(repo: str, number: int, deadline: float) -> dict:
+    """Return what a pull request really shows.
+
+    Every command here is read only. Each exit code is kept, because a
+    check counts as run only when it names its command and its exit code."""
+    checks_code, checks_out = run_read(
+        [GH, "pr", "checks", str(number), "-R", repo], GH_TIMEOUT, deadline
+    )
+    files_code, files_out = run_read(
+        [GH, "pr", "view", str(number), "-R", repo, "--json", "files"],
+        GH_TIMEOUT,
+        deadline,
+    )
+    files = 0
+    if files_code == 0:
+        try:
+            rows = json.loads(files_out)
+            if isinstance(rows, dict):
+                rows = rows.get("files") or []
+            files = len(rows) if isinstance(rows, list) else 0
+        except ValueError:
+            files = 0
+    # "no checks reported" is not a failed check: the pull request has no
+    # checks yet, and the receipt says that instead of claiming a failure.
+    no_checks = "no checks reported" in checks_out.lower()
+    return {
+        "checks_exit": checks_code,
+        "checks_out": checks_out,
+        "no_checks": no_checks,
+        "files": files,
+        "gate": pull_request_gate_verdict(repo, number, deadline),
+    }
+
+
+def receipt_text(issue: dict, state: str, pr: dict | None, observation: dict | None,
+                 observed: int, stopped: str, nxt: str) -> str:
+    """Return one receipt of the attended night.
+
+    The receipt holds what the shift really saw. A check that did not run
+    has no exit code, and a gate that could not be read says UNKNOWN. No
+    builder ran, so the builder time is zero and the time the shift spent
+    looking is recorded apart from it."""
+    fields = issue.get("title") or ""
+    lines = [f"# {issue.get('key') or issue.get('number')}", ""]
+    lines.append(f"- Item: {fields}")
+    lines.append(f"- Repo: {issue.get('repo', '')}")
+    lines.append(f"- Ticket: {issue.get('key', '')} (#{issue.get('number')})")
+    lines.append(f"- State: {state}")
+    if pr:
+        lines.append(f"- PR: {pr.get('url', '')}")
+    if observation:
+        command = f"gh pr checks {pr.get('number')} -R {issue.get('repo', '')}"
+        lines.append(f"- Checks: `{command}` exit {observation['checks_exit']}")
+        lines.append(f"- Gate: {observation['gate']}")
+        lines.append(f"- Files: {observation['files']}")
+    lines.append("- Time used: 0 min")
+    lines.append(f"- Observed: {observed} s")
+    lines.append(f"- Stopped because: {stopped}")
+    lines.append(f"- Next: {nxt}")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_attend(args: argparse.Namespace) -> int:
+    """Run the attended first night.
+
+    This is the command a person runs when they sit down to watch the
+    night. The shift arms itself in the folder it is given, reads the
+    board, takes the small items the board shows and observes each one for
+    real: the pull request it has, the checks it runs, the gate's verdict
+    and the files it touches. It writes one receipt per item, the shift log
+    and then the morning report.
+
+    The night runs no merge, no push and no builder. The tick part (T5) is
+    not built yet, so the attended night observes and records what it
+    really saw, and every receipt says what stopped it."""
+    deadline = time.monotonic() + args.deadline
+    cfg = load_config()
+    repos = allowed_repos(cfg)
+    allowed = {repo for repo, _key in repos}
+    if not allowed:
+        die("the board config names no repositories")
+    issues, stale = read_board(deadline)
+    items = select_items(issues, allowed, args.items)
+    if len(items) < args.items:
+        die(
+            f"the board shows only {len(items)} small items, and the "
+            f"attended night was asked for {args.items}"
+        )
+    root = Path(args.root).expanduser() if args.root else report_root(None) / (
+        f"attended-{args.date or datetime.now(PT).strftime('%Y-%m-%d')}"
+    )
+    if args.dry_run:
+        emit("Overnight attended night - dry run (read only)")
+        emit(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+        emit(f"Run by: {args.run_by}")
+        emit(f"Planned items: {len(items)}")
+        for issue in items:
+            emit(
+                f"- {issue.get('key')} (#{issue.get('number')}) "
+                f"{issue.get('title', '')} [{issue.get('type')}] {issue.get('repo')}"
+            )
+        emit("A dry run writes no record and starts no work.")
+        return 0
+    for name in ATTEND_DIRS:
+        (root / name).mkdir(parents=True, exist_ok=True)
+    start = datetime.now(PT)
+    close = start + timedelta(minutes=args.minutes)
+    shift_id = f"attended-{start.strftime('%Y%m%d-%H%M')}"
+    write_record(
+        root / "run" / "armed",
+        f"shift: {shift_id}\n"
+        f"start: {pt_clock(start)}\n"
+        f"run by: {args.run_by}\n"
+        f"items: {len(items)}\n",
+    )
+    write_record(root / "run" / "deadline", f"{close.timestamp()}\n")
+    policy = build_policy()
+    policy.update(
+        {
+            "allowance_used_percent": None,
+            "run_by": args.run_by,
+            "window_minutes": args.minutes,
+        }
+    )
+    write_policy(root, policy)
+    log_lines = [
+        f"{start.strftime('%Y-%m-%d %H:%M %Z')} | attended night | started, "
+        f"run by {args.run_by}, planned {len(items)} items",
+        f"{start.strftime('%Y-%m-%d %H:%M %Z')} | attended night | the shift "
+        f"runs read-only commands only: no merge, no push, no builder",
+    ]
+    # The log exists from the start, so a night that stops early still
+    # leaves a record of what it did.
+    log_path = root / "run" / "shift-log.md"
+    write_record(log_path, "\n".join(log_lines) + "\n")
+    pr_cache: dict[str, list[dict]] = {}
+    for issue in items:
+        item_start = time.monotonic()
+        repo = issue.get("repo", "")
+        # The issue numbers of one repository are its own, so the board
+        # maps are built per repository.
+        by_number = {
+            other["number"]: other
+            for other in issues
+            if other.get("repo") == repo and other.get("number")
+        }
+        by_key = {
+            (other.get("key") or "").upper(): other
+            for other in issues
+            if other.get("repo") == repo and other.get("key")
+        }
+        if repo not in pr_cache:
+            try:
+                rows, _cut = read_pull_requests(repo, deadline)
+            except RepoError as exc:
+                rows = []
+                emit(f"overnight: {repo}: {exc}", err=True)
+            pr_cache[repo] = rows
+        linked = []
+        for row in pr_cache[repo]:
+            target, _signal = linked_ticket(row, by_number, by_key)
+            if target is not None and target.get("number") == issue.get("number"):
+                linked.append(row)
+        pr = linked[0] if linked else None
+        observation = None
+        if pr:
+            observation = observe_pull_request(repo, pr["number"], deadline)
+            checks_code = observation["checks_exit"]
+            gate = observation["gate"]
+            if observation["no_checks"]:
+                state = "stuck"
+                stopped = "the pull request has no checks yet"
+                nxt = "the builder runs the checks for this pull request"
+            elif checks_code != 0:
+                state = "stuck"
+                stopped = (
+                    f"the checks on the pull request did not pass "
+                    f"(exit {checks_code})"
+                )
+                nxt = "the builder fixes the failing check and the gate runs again"
+            elif gate != "PASS":
+                state = "stuck"
+                stopped = f"the gate did not pass (gate {gate})"
+                nxt = "the gate runs again on the pull request"
+            else:
+                state = "ready"
+                stopped = (
+                    "the shift has no merge right for this repository, so the "
+                    "pull request waits for Shyam"
+                )
+                nxt = "Shyam merges the pull request in the morning"
+        else:
+            state = "stuck"
+            stopped = "no pull request is open for this ticket"
+            nxt = (
+                "the tick part (T5) starts the builder for this item; the "
+                "attended night only observes"
+            )
+        elapsed = time.monotonic() - item_start
+        observed = int(elapsed + 0.5)
+        receipt = root / "receipts" / f"{issue.get('key')}.md"
+        write_record(
+            receipt,
+            receipt_text(issue, state, pr, observation, observed, stopped, nxt),
+        )
+        detail = (
+            f"`gh pr checks {pr['number']} -R {repo}` exit {observation['checks_exit']}"
+            f"{' (no checks yet)' if observation['no_checks'] else ''}, "
+            f"gate {observation['gate']}"
+            if observation
+            else "no pull request is open"
+        )
+        log_lines.append(
+            f"{datetime.now(PT).strftime('%Y-%m-%d %H:%M %Z')} | item "
+            f"{issue.get('key')} (#{issue.get('number')}) | {state} | {detail}"
+        )
+    if args.wait:
+        # The human is watching: the shift holds the door until its window
+        # closes. It waits the whole window, so the night never ends early
+        # and claims the deadline.
+        remaining = close.timestamp() - time.time()
+        while remaining > 0:
+            time.sleep(min(remaining, 60))
+            remaining = close.timestamp() - time.time()
+    if (root / "run" / "STOP").exists():
+        end = "ended: STOP"
+    elif datetime.now(PT) >= close:
+        end = "ended: deadline"
+    else:
+        end = "ended: the items were observed and the window is still open"
+    log_lines.append(
+        f"{datetime.now(PT).strftime('%Y-%m-%d %H:%M %Z')} | attended night | "
+        f"{end}"
+    )
+    write_record(log_path, "\n".join(log_lines) + "\n")
+    emit(f"overnight: attended night {shift_id} wrote {len(items)} receipts")
+    for issue in items:
+        emit(f"  - {issue.get('key')} (#{issue.get('number')})")
+    return cmd_report(
+        argparse.Namespace(root=str(root), date=args.date, dry_run=False)
+    )
+
+
+# --- Part T5b: the receipt per item state change ---------------------------
+#
+# A receipt is the only proof the shift has. It is written on every state
+# change of an item, and it is built from what the pull requests and the
+# threads really hold: the checks that ran and their exit codes, the gate's
+# own verdict, the files the pull request touches and the builder's own
+# times. A model claim is never a field: the receipt says what it read.
+
+
+def receipt_path(root: Path, item: dict) -> Path:
+    """Return the receipt file of one item.
+
+    The receipt is named after the item: the board key when the item has
+    one, and the repository and the number when it does not."""
+    key = (item.get("key") or "").strip()
+    if key:
+        name = key
+    else:
+        repo = (item.get("repo") or "unknown").split("/")[-1]
+        name = f"{repo}-{item.get('number')}"
+    return root / "receipts" / f"{name}.md"
+
+
+def receipt_items(result: dict) -> list[dict]:
+    """Return the items a receipt can be about, in the shift's order.
+
+    A receipt is about an item the shift works: the failing pull requests,
+    the pull requests with a gate PASS, the ready tickets (split or not)
+    and the pull requests that are in flight. A ticket that is not ready is
+    not work, so it gets no receipt."""
+    items: list[dict] = []
+    for name in ("failing", "gate_pass", "split", "unsplit", "in_flight"):
+        items.extend(result.get(name) or [])
+    return items
+
+
+def parse_moment(value: str) -> datetime | None:
+    """Return an ISO time as a moment, or None when it cannot be read."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def minutes_between(start: str, end: str) -> int:
+    """Return the minutes between two ISO times, or 0 when they cannot be read.
+
+    The builder time is measured from the thread's own times, so it is a
+    number the shift read and not a number a model claimed."""
+    first = parse_moment(start)
+    last = parse_moment(end)
+    if first is None or last is None:
+        return 0
+    seconds = (last - first).total_seconds()
+    if seconds <= 0:
+        return 0
+    return int(seconds // 60)
+
+
+def read_thread_facts(thread_id: str, deadline: float) -> dict:
+    """Return what a thread really holds: its times, its status and its verdict.
+
+    The verdict is the last line of the thread's own last message, so a
+    receipt carries the gate's verdict and not a claim about it."""
+    facts = {"createdAt": "", "updatedAt": "", "status": "", "verdict": ""}
+    if not thread_id:
+        return facts
+    payload = json.dumps({"threadId": thread_id, "maxCharsPerItem": 20000})
+    try:
+        raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
+    except RepoError:
+        return facts
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return facts
+    thread = data.get("thread") or {}
+    facts["createdAt"] = str(thread.get("createdAt") or "")
+    facts["updatedAt"] = str(thread.get("updatedAt") or "")
+    facts["status"] = str(thread.get("status") or "")
+    texts = [
+        item.get("text") or ""
+        for item in (data.get("items") or [])
+        if item.get("type") == "assistant_message"
+    ]
+    for text in reversed(texts):
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            continue
+        found = GATE_VERDICT.search(lines[-1])
+        if found:
+            facts["verdict"] = found.group("verdict").upper()
+        break
+    return facts
+
+
+def check_head_holds(repo: str, number: int, deadline: float) -> int:
+    """Return what a pull request's head carries: 0, 1 or 2.
+
+    0: a check ran on the head and passed. 1: a check ran on the head and
+    did not pass. 2: no check ran on the head, or the head could not be
+    read.
+
+    Only a published check counts. The builder's own line in the pull
+    request body, `Builder check: PASS <head>`, is a claim about the
+    check and not the check, so it never makes a head pass. A repository
+    that publishes no checks (CI is agent checks only, as in mac-ops) has
+    no evidence on its heads, and the shift says so."""
+    code, out = run_read(
+        [
+            GH,
+            "pr",
+            "checks",
+            str(number),
+            "-R",
+            repo,
+            "--json",
+            "name,state,bucket",
+        ],
+        GH_TIMEOUT,
+        deadline,
+    )
+    if code != 0:
+        return 2
+    try:
+        rows = json.loads(out or "[]")
+    except ValueError:
+        return 2
+    if not isinstance(rows, list) or not rows:
+        return 2
+    failed = [
+        row
+        for row in rows
+        if str(row.get("bucket") or row.get("state") or "").upper()
+        not in ("PASS", "SUCCESS")
+    ]
+    return 1 if failed else 0
+
+
+def check_line(repo: str, number: int, deadline: float) -> str:
+    """Return the receipt's check line: the command the shift ran, and its exit.
+
+    A check counts as run only when the receipt names the command and its
+    exit code, so the line holds the command that really ran: the shift
+    asks `overnight check-head` what the pull request's head carries, and
+    the command it records is the command it ran."""
+    argv = [
+        OVERNIGHT_BIN,
+        "check-head",
+        "--repo",
+        repo,
+        "--number",
+        str(number),
+    ]
+    code, _out = run_read(argv, GH_TIMEOUT, deadline)
+    return f"`{' '.join(argv)}` exit {code}"
+
+
+def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
+    """Return what one item really shows, from its pull request and its threads.
+
+    Every field here is read: the checks with their exit code, the gate's
+    own verdict, the files the pull request touches and the builder's own
+    times. Nothing is taken from what a model said about the work."""
+    facts = {
+        "state": STATE_STUCK,
+        "pr": "",
+        "checks": "",
+        "failing": [],
+        "gate": "UNKNOWN",
+        "files": 0,
+        "minutes": 0,
+        "builder": "",
+        "why": "",
+        "next": "",
+    }
+    repo = item.get("repo") or ""
+    number = item.get("number")
+    if item.get("kind") != "pull-request":
+        facts["why"] = "no pull request is open for this ticket"
+        facts["next"] = (
+            "the tick starts the builder for this item and the receipt is "
+            "rewritten when the pull request appears"
+        )
+        thread, _attempt = builder_thread(receipts, repo, int(number or 0))
+        facts["builder"] = thread
+        if thread:
+            builder = read_thread_facts(thread, deadline)
+            facts["minutes"] = minutes_between(
+                builder["createdAt"], builder["updatedAt"]
+            )
+            if builder["status"] in ("running", "starting", "preparing", "queued"):
+                facts["why"] = (
+                    f"the builder thread {thread} is still working on this ticket"
+                )
+                facts["next"] = "the builder finishes and the gate runs"
+        return facts
+
+    facts["pr"] = item.get("url") or ""
+    facts["checks"] = check_line(repo, number, deadline)
+    failed = (item.get("checks") or {}).get("failed") or []
+    facts["failing"] = [str(name) for name in failed]
+
+    merged = ""
+    view_code, view_out = run_read(
+        [
+            GH,
+            "pr",
+            "view",
+            str(number),
+            "-R",
+            repo,
+            "--json",
+            "files,mergedAt",
+        ],
+        GH_TIMEOUT,
+        deadline,
+    )
+    # A pull request whose view cannot be read is not a pull request that
+    # did not merge. The receipt says the view could not be read, so the
+    # item is never counted as done on a guess.
+    view_error = ""
+    if view_code != 0:
+        view_error = "the pull request's view could not be read"
+    else:
+        try:
+            view = json.loads(view_out)
+        except ValueError:
+            view = {}
+            view_error = "the pull request's view could not be parsed"
+        else:
+            files = view.get("files") or []
+            facts["files"] = len(files) if isinstance(files, list) else 0
+            merged = str(view.get("mergedAt") or "")
+
+    verdict = ""
+    gate_thread = (item.get("gate") or {}).get("threadId") or ""
+    if gate_thread:
+        verdict = read_thread_facts(gate_thread, deadline)["verdict"]
+    if not verdict:
+        verdict = pull_request_gate_verdict(repo, number, deadline)
+    facts["gate"] = verdict or "UNKNOWN"
+
+    builder_thread_id = (item.get("builder") or {}).get("threadId") or ""
+    facts["builder"] = builder_thread_id
+    if builder_thread_id:
+        builder = read_thread_facts(builder_thread_id, deadline)
+        facts["minutes"] = minutes_between(
+            builder["createdAt"], builder["updatedAt"]
+        )
+
+    if view_error:
+        facts["state"] = STATE_STUCK
+        facts["why"] = view_error
+        facts["next"] = "the shift reads the pull request again on the next cycle"
+    elif failed:
+        facts["state"] = STATE_STUCK
+        facts["why"] = "a check is failing: " + ", ".join(facts["failing"])
+        facts["next"] = "the builder fixes the failing check and the gate runs again"
+    elif merged:
+        # The spec's evidence rule (part T6): the merge alone is not the
+        # proof. The receipt has to hold the command, its exit code and
+        # the gate's PASS before the item counts as done, so a receipt
+        # never claims a done item it cannot show.
+        holds, reason = evidence_holds(
+            {"gate": facts["gate"]}, parse_check_text(facts["checks"])
+        )
+        if holds:
+            facts["state"] = STATE_DONE
+            facts["why"] = "the pull request merged on GitHub"
+            facts["next"] = "the ticket closes on the merge"
+        else:
+            facts["state"] = STATE_STUCK
+            facts["why"] = (
+                "the pull request merged, but the receipt does not hold the "
+                f"evidence that makes the item done: {reason}"
+            )
+            facts["next"] = (
+                "the checks and the gate verdict are read again on the next cycle"
+            )
+    elif facts["gate"] == "PASS":
+        facts["state"] = STATE_READY
+        facts["why"] = (
+            "the gate passed and the shift has no merge right for this "
+            "repository"
+        )
+        facts["next"] = "Shyam merges the pull request in the morning"
+    elif facts["gate"] == "FAIL":
+        facts["state"] = STATE_STUCK
+        facts["why"] = "the gate did not pass"
+        facts["next"] = "the builder fixes the gate findings and the gate runs again"
+    else:
+        facts["state"] = STATE_STUCK
+        facts["why"] = "no gate verdict was read for this pull request"
+        facts["next"] = "the gate runs on this pull request head"
+    return facts
+
+
+def issue_number(item: dict) -> object:
+    """Return the number of the ticket's issue, or nothing when it has none.
+
+    The board numbers its issues and GitHub numbers its pull requests in
+    different counters, so an item that is a pull request carries the
+    issue number in `ticket` and its own number in `number`. A pull
+    request with no linked ticket has no issue to close, so it has no
+    issue number here: the receipt leaves the number out and the close
+    step finds no receipt for it."""
+    ticket = item.get("ticket")
+    if ticket:
+        return ticket
+    if item.get("kind") == "pull-request":
+        return ""
+    return item.get("number")
+
+
+def ticket_text(number: object) -> str:
+    """Return the issue number as a receipt's Ticket line writes it."""
+    return f" (#{number})" if number else ""
+
+
+def receipt_body(item: dict, facts: dict, observed: int) -> str:
+    """Return the text of one receipt.
+
+    The fields are the report's own fields, so the morning report reads the
+    receipt without guessing what a line means."""
+    title = " ".join(str(item.get("title") or "").split())
+    label = item.get("key") or item.get("number")
+    lines = [f"# {label}", ""]
+    lines.append(f"- Item: {title}")
+    lines.append(f"- Repo: {item.get('repo') or ''}")
+    lines.append(f"- Ticket: {item.get('key') or ''}{ticket_text(issue_number(item))}")
+    lines.append(f"- State: {facts['state']}")
+    if item.get("kind") != "pull-request" and item.get("url"):
+        lines.append(f"- Issue: {item['url']}")
+    if facts["pr"]:
+        lines.append(f"- PR: {facts['pr']}")
+    if facts["checks"]:
+        lines.append(f"- Checks: {facts['checks']}")
+    if facts["failing"]:
+        lines.append(f"- Failing checks: {', '.join(facts['failing'])}")
+    lines.append(f"- Gate: {facts['gate']}")
+    lines.append(f"- Files: {facts['files']}")
+    if facts["builder"]:
+        lines.append(f"- Builder thread: {facts['builder']}")
+    lines.append(f"- Time used: {facts['minutes']} min")
+    lines.append(f"- Observed: {observed} s")
+    lines.append(f"- Stopped because: {facts['why']}")
+    lines.append(f"- Next: {facts['next']}")
+    return "\n".join(lines) + "\n"
+
+
+def without_observed(text: str) -> str:
+    """Return the receipt text without the observed line.
+
+    The observed line is how long the shift looked, so it changes every
+    cycle. Without it two receipts of the same item and the same state are
+    the same receipt, and the shift writes nothing."""
+    return "\n".join(
+        line for line in text.splitlines() if not line.startswith("- Observed:")
+    )
+
+
+def write_receipt(root: Path, item: dict, body: str) -> str:
+    """Write one receipt and return what happened: wrote, unchanged or failed.
+
+    A receipt is rewritten when the item's state changed and when the
+    evidence changed. A receipt that says the same thing is left alone, so
+    the folder holds the record of the state changes and not a copy of the
+    same state every cycle. The receipt is redacted before it is written
+    and before it is compared, so the comparison is between what is on
+    disk and what would be written."""
+    safe = redact(body)
+    path = receipt_path(root, item)
+    if path.exists() and without_observed(read_text(path)) == without_observed(safe):
+        return "unchanged"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # The receipt is written to a scratch name and moved into place, so
+        # a run that dies mid-write never leaves a half receipt for the
+        # morning report to read.
+        scratch = path.with_name(path.name + ".tmp")
+        write_record(scratch, safe)
+        os.replace(scratch, path)
+    except OSError as exc:
+        return f"failed: {exc}"
+    return "wrote"
+
+
+def find_receipt(root: Path, repo: str, number: int) -> Path | None:
+    """Return the receipt file of one ticket, or None when there is none.
+
+    The receipt is named after the board key, so the ticket is found by
+    the fields the receipt holds: the repository and the issue number in
+    its `Ticket` line. The folder holds the receipts themselves, so the
+    shift keeps no second list of what it did."""
+    folder = root / "receipts"
+    if not folder.is_dir():
+        return None
+    for path in sorted(folder.glob("*.md")):
+        if not RECEIPT_FILE.match(path.name):
+            continue
+        fields = parse_receipt(path)["fields"]
+        if (fields.get("repo") or "").strip().lower() != repo.strip().lower():
+            continue
+        found = re.search(r"#(\d+)\s*\)?\s*$", (fields.get("ticket") or "").strip())
+        if found and int(found.group(1)) == number:
+            return path
+    return None
+
+
+def run_write(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
+    """Run a command that writes and return its exit code and its output.
+
+    This is the one write the shift makes outside its own folder: it
+    closes a ticket's issue, and only when the receipt holds the
+    evidence. Every other command the shift runs is a read."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        die("the deadline passed before the next command could run")
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(timeout, int(left))),
+            check=False,
+        )
+    except FileNotFoundError:
+        die(f"{argv[0]} is not on PATH")
+    except subprocess.TimeoutExpired:
+        return 124, f"{' '.join(argv)} timed out"
+    return result.returncode, (result.stdout or "") + (result.stderr or "")
+
+
+def cmd_check_head(args: argparse.Namespace) -> int:
+    """Check a pull request's head against the checks that ran on it.
+
+    A repository that publishes checks is checked with `gh pr checks`. A
+    repository that publishes none (CI is agent checks only, as in
+    mac-ops) has no check on its heads, so the shift knows that and says
+    so. The builder's own line in the pull request body is a claim about
+    the check and not the check, so it never counts.
+
+    Exit 0: a check ran on the head and passed. Exit 1: a check ran on
+    the head and did not pass. Exit 2: no check ran on the head, or the
+    head could not be read, which is a refusal."""
+    deadline = time.monotonic() + args.deadline
+    code = check_head_holds(args.repo, args.number, deadline)
+    if code == 0:
+        emit(
+            f"overnight: {args.repo}#{args.number} carries a check that ran "
+            "and passed"
+        )
+    elif code == 1:
+        emit(
+            f"overnight: {args.repo}#{args.number} carries a check that ran "
+            "and did not pass",
+            err=True,
+        )
+    else:
+        emit(
+            f"overnight: REFUSED: no check ran on the head of "
+            f"{args.repo}#{args.number}, so the check is unknown",
+            err=True,
+        )
+    return code
+
+
+def cmd_close(args: argparse.Namespace) -> int:
+    """Close a ticket's issue when its receipt holds the evidence.
+
+    The spec's rule (part T6): an item counts as done, and the
+    coordinator closes its issue, only when the receipt records a
+    command, its exit code and a gate PASS on the pull request. The
+    receipt is the proof, so a receipt that holds a claim without an
+    exit code leaves the issue open, and the command says which record
+    is missing."""
+    deadline = time.monotonic() + args.deadline
+    root = report_root(args.root)
+    path = find_receipt(root, args.repo, args.number)
+    if path is None:
+        emit(
+            f"overnight: REFUSED: no receipt for {args.repo}#{args.number}, "
+            "so there is no evidence to close on",
+            err=True,
+        )
+        return 1
+    receipt = parse_receipt(path)
+    fields = receipt["fields"]
+    state = (fields.get("state") or "").strip().lower()
+    holds, reason = evidence_holds(fields, receipt["checks"])
+    if state != STATE_DONE:
+        holds = False
+        reason = f"the receipt says {state or 'no state'}, not done"
+    if not holds:
+        emit(
+            f"overnight: REFUSED: {path.name} does not hold the evidence: {reason}",
+            err=True,
+        )
+        emit("overnight: the issue stays open.", err=True)
+        return 1
+    pull = (fields.get("pr") or "").strip()
+    comment = (
+        "Done. The receipt records the check command, its exit code and the "
+        f"gate PASS on {pull}."
+        if pull
+        else "Done. The receipt records the check command, its exit code and "
+        "the gate PASS."
+    )
+    argv = [
+        GH,
+        "issue",
+        "close",
+        str(args.number),
+        "-R",
+        args.repo,
+        "--comment",
+        comment,
+    ]
+    if args.dry_run:
+        emit(f"overnight: {path.name} holds the evidence:")
+        emit(f"  state: {state}")
+        for check in receipt["checks"]:
+            emit(f"  check: {check['raw']}")
+        emit(f"  gate: {fields.get('gate')}")
+        emit("overnight: the close would run:")
+        emit("  " + " ".join(argv))
+        return 0
+    code, out = run_write(argv, GH_TIMEOUT, deadline)
+    if code != 0:
+        emit(
+            f"overnight: the close failed ({code}): {out.strip()}",
+            err=True,
+        )
+        return 1
+    emit(
+        f"overnight: closed {args.repo}#{args.number}; the receipt holds the "
+        "evidence."
+    )
+    return 0
+
+
+def cmd_receipt(args: argparse.Namespace) -> int:
+    """Write the receipt of every item whose state the shift can see.
+
+    The command reads the board and the open pull requests, then writes one
+    receipt per item: the state, the pull request, the checks and their
+    exit codes, the gate's verdict, the files it touches, the builder's
+    own time and why the item stopped. Everything in a receipt is read
+    from GitHub, the queue or a thread, so a receipt never carries a model
+    claim where a proof belongs.
+
+    With `--repo` and `--number` it writes the receipt of that one item.
+    With `--items` it writes the receipts of the first items of the shift's
+    order."""
+    deadline = time.monotonic() + args.deadline
+    items, receipts, error = read_work_items(
+        deadline, getattr(args, "allowed", None)
+    )
+    if error:
+        emit(f"overnight: REFUSED: {error}", err=True)
+        return 1
+    if bool(args.repo) != bool(args.number):
+        die(
+            "the receipt of one item needs both --repo and --number; without "
+            "both the command would write the receipt of every item"
+        )
+    if args.repo and args.number:
+        picked = [
+            item
+            for item in items
+            if item.get("repo") == args.repo
+            and int(item.get("number") or 0) == args.number
+        ]
+        if not picked:
+            emit(
+                f"overnight: {args.repo}#{args.number} is not an item the shift "
+                "works, so it has no receipt",
+                err=True,
+            )
+            return 1
+        items = picked
+    elif args.items > 0:
+        items = items[: args.items]
+    if not items:
+        emit("overnight: the board shows no item to write a receipt for")
+        return 0
+    root = report_root(args.root)
+    emit(f"Overnight receipts - {len(items)} item(s)")
+    write_receipts(root, items, receipts, deadline, dry_run=args.dry_run)
+    if args.dry_run:
+        emit()
+        emit("A dry run writes no receipt.")
+    return 0
+
+
+def read_work_items(
+    deadline: float, allowed: list[str] | None
+) -> tuple[list[dict], dict[str, str], str]:
+    """Return the items the shift works, the queue's receipts and an error.
+
+    The board is read with the same helpers the rest of the module uses, so
+    the receipts are about the items of the shift's own order and the shift
+    keeps no second queue. A board that cannot be trusted is an error, not
+    an empty list: a receipt about a board nobody could read is a claim."""
+    cfg = load_config()
+    repos = policy_repos(cfg, allowed)
+    flagged = ascend_flags(cfg)
+    if not repos:
+        return [], {}, "the board config names no repositories"
+    issues, stale = read_board(deadline)
+    if stale:
+        return [], {}, "the board list is stale, so the receipts cannot be trusted"
+    bodies, unread, open_numbers = read_bodies(issues, deadline)
+    decisions_path, lines = read_decisions()
+    problems: list[str] = []
+    if unread:
+        problems.append(
+            "the ticket text of these repositories could not be read: "
+            + ", ".join(unread)
+        )
+    if not lines:
+        problems.append(f"the decisions log {decisions_path} could not be read")
+    _kept, drops = filter_issues(
+        issues, {r for r, _k in repos}, flagged, bodies, lines
+    )
+    if problems:
+        return [], {}, "; ".join(problems)
+    receipts, _receipt_error = read_receipts()
+    result = collect_items(
+        deadline, repos, issues, bodies, open_numbers, drops, receipts
+    )
+    if result.get("pr_error"):
+        return [], {}, str(result["pr_error"])
+    return receipt_items(result), receipts, ""
+
+
+def write_receipts(
+    root: Path,
+    items: list[dict],
+    receipts: dict[str, str],
+    deadline: float,
+    dry_run: bool = False,
+) -> int:
+    """Write the receipt of every item and return how many were written.
+
+    A receipt is rewritten when the item's state or its evidence changed.
+    A receipt that says the same thing is left alone, so the folder holds
+    the record of the state changes and not a copy of the same state every
+    cycle. The shift log names every write and every state change."""
+    written = 0
+    for item in items:
+        started = time.monotonic()
+        facts = item_facts(item, receipts, deadline)
+        observed = int(time.monotonic() - started + 0.5)
+        body = receipt_body(item, facts, observed)
+        path = receipt_path(root, item)
+        label = item.get("key") or f"{item.get('repo')}#{item.get('number')}"
+        if dry_run:
+            emit()
+            emit(f"--- {label} (dry run, nothing written) ---")
+            emit(body, end="")
+            continue
+        # The state the receipt held before this run, read before the file
+        # is written: a receipt read after the write holds the new state
+        # and would never show a change.
+        previous = ""
+        if path.exists():
+            previous = (parse_receipt(path)["fields"].get("state") or "").strip()
+        outcome = write_receipt(root, item, body)
+        change = bool(previous) and previous != facts["state"]
+        emit(
+            f"  {label} | {facts['state']} | gate {facts['gate']} | "
+            f"{outcome}"
+            + (f" | state {previous} -> {facts['state']}" if change else "")
+        )
+        if outcome.startswith("failed"):
+            emit(f"overnight: {outcome}", err=True)
+            continue
+        written += 1
+        write_shift_line(
+            root,
+            f"receipt {label} | {facts['state']} | {outcome}"
+            + (f" | state {previous} -> {facts['state']}" if change else ""),
+        )
+    return written
+
+
+def board_item(order: int, group: str, item: dict) -> dict:
+    """Return one board item for the tick, with the action it needs.
+
+    The item is small on purpose: the tick reads the whole board in one
+    command, so the list has to fit in what a tool result holds. The
+    detail a caller needs to act (the head, the gate, the builder) is
+    here; the detail nobody acts on is not."""
+    action = item.get("action") or "none"
+    row = {
+        "order": order,
+        "group": group,
+        "kind": item.get("kind"),
+        "repo": item.get("repo"),
+        "number": item.get("number"),
+        "key": item.get("key") or "",
+        "title": item.get("title") or "",
+        "action": action,
+        "actionReason": item.get("actionReason") or "",
+        "actionCommand": item.get("actionCommand") or "",
+    }
+    if action != "none" and item.get("reason"):
+        row["reason"] = item["reason"]
+    if item.get("blockers"):
+        row["blockers"] = item["blockers"]
+    if item.get("kind") == "pull-request":
+        row["head"] = item.get("head") or ""
+        row["issue"] = item.get("issue") or 0
+        row["draft"] = bool(item.get("isDraft"))
+        row["failed"] = (item.get("checks") or {}).get("failed") or []
+        if item.get("externalChecks"):
+            row["externalChecks"] = list(item["externalChecks"])
+        gate = item.get("gate") or {}
+        row["gate"] = gate.get("status") or "none"
+        if gate.get("threadId"):
+            row["gateThread"] = gate["threadId"]
+        builder = item.get("builder") or {}
+        if builder.get("threadId"):
+            row["builder"] = builder["threadId"]
+    if item.get("split") is not None:
+        row["split"] = bool(item.get("split"))
+    return row
+
+
+BOARD_RULES = {
+    "start": (
+        "run the dry run first: <actionCommand> --dry-run, and start for "
+        "real only when the dry run says 'checks passed'. The ticket CLI "
+        "refuses a ticket it may not start, and a refusal starts nothing."
+    ),
+    "gate": (
+        "the queue gates the head and records it, so a head is never gated "
+        "twice. A head whose builder check does not name it is not gated."
+    ),
+    "fix": (
+        "the queue reads the gate's own report and sends it to the thread "
+        "that built the pull request."
+    ),
+}
+
+
+def cmd_board(args: argparse.Namespace) -> int:
+    """Return the whole board for the tick, as JSON.
+
+    The command reads only: it writes no file and keeps no list. The board
+    is the list. Every item carries the one action the coordinator may
+    take on it now, so the tick works the whole board instead of a window
+    of it: it starts the ready work, queues a gate for every open pull
+    request head that has none, and sends a failed gate's findings back to
+    the builder that holds the pull request."""
+    deadline = time.monotonic() + args.deadline
+    cfg = load_config()
+    repos = policy_repos(cfg, getattr(args, "allowed", None))
+    allowed = {repo for repo, _ in repos}
+    flagged = ascend_flags(cfg)
+    if not repos:
+        die("the board config names no repositories")
+    issues, stale = read_board(deadline)
+    if stale:
+        emit(
+            "overnight: REFUSED: the board list is stale, so the board "
+            "cannot be trusted.",
+            err=True,
+        )
+        return 1
+    bodies, unread, open_numbers = read_bodies(issues, deadline)
+    decisions_path, lines = read_decisions()
+    problems: list[str] = []
+    if unread:
+        problems.append(
+            "the ticket text of these repositories could not be read: "
+            + ", ".join(unread)
+        )
+    if not lines:
+        problems.append(f"the decisions log {decisions_path} could not be read")
+    kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
+    if problems:
+        for problem in problems:
+            emit(f"overnight: REFUSED: {problem}", err=True)
+        return 1
+    receipts, receipt_error = read_receipts()
+    result = collect_items(
+        deadline, repos, issues, bodies, open_numbers, drops, receipts
+    )
+    if result.get("pr_error"):
+        emit(f"overnight: REFUSED: {result['pr_error']}", err=True)
+        return 1
+    groups = (
+        ("failing", result["failing"]),
+        ("gate-pass", result["gate_pass"]),
+        ("ready-split", result["split"]),
+        ("ready-unsplit", result["unsplit"]),
+        ("in-flight", result["in_flight"]),
+        ("backlog", result["backlog"]),
+    )
+    items: list[dict] = []
+    order = 0
+    for name, bucket in groups:
+        for item in bucket:
+            order += 1
+            row = board_item(order, name, item)
+            if args.action and row["action"] == "none":
+                continue
+            items.append(row)
+    actions = {"start": 0, "gate": 0, "fix": 0, "none": 0}
+    for item in items:
+        actions[item["action"]] = actions.get(item["action"], 0) + 1
+    pull_requests = sum(1 for item in items if item["kind"] == "pull-request")
+    no_gate = [
+        item
+        for item in items
+        if item["kind"] == "pull-request" and item.get("gate") == "none"
+    ]
+    queue = result["queue"]
+    live = result["live"]
+    payload = {
+        "command": "overnight board",
+        "generatedAt": datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z"),
+        "rules": BOARD_RULES,
+        "board": {
+            "tickets": len(issues),
+            "repositories": len(repos),
+            "dropped": len(drops),
+            "openPullRequests": pull_requests,
+            "pullRequestsWithoutAGate": len(no_gate),
+        },
+        "actions": actions,
+        "groups": {name: len(bucket) for name, bucket in groups},
+        "gates": {
+            "queuedHeads": len(queue["gatedHeads"]),
+            "queuedTickets": len(queue["queuedTickets"]),
+            "queueError": queue["error"],
+            "receiptsError": receipt_error,
+        },
+        "live": {
+            "threads": len(live["ids"]),
+            "keys": len(live["keys"]),
+            "error": live["error"],
+        },
+        "items": items,
+    }
+    emit(json.dumps(payload, separators=(",", ":")))
     return 0
 
 
@@ -350,6 +4705,282 @@ def main() -> int:
         help=f"seconds the whole intake may take (default {DEFAULT_DEADLINE})",
     )
     intake.set_defaults(func=cmd_intake)
+
+    filt = sub.add_parser(
+        "filter",
+        help="drop the Ascend, held and needs-Shyam work from the board",
+    )
+    filt.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read only; nothing is written (the only mode in this part)",
+    )
+    filt.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole filter may take (default {DEFAULT_DEADLINE})",
+    )
+    filt.set_defaults(func=cmd_filter)
+    check = sub.add_parser(
+        "check-pr",
+        help="refuse any pull request that is Ascend work",
+    )
+    check.add_argument("--repo", required=True, help="the repository of the pull request")
+    check.add_argument("--number", required=True, type=int, help="the pull request number")
+    check.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the check may take (default {DEFAULT_DEADLINE})",
+    )
+    check.set_defaults(func=cmd_check_pr)
+    order = sub.add_parser(
+        "order",
+        help="order the whole board and write one summary line to the shift log",
+    )
+    order.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read only; the one shift-log line is the record of the night",
+    )
+    order.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    order.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole order may take (default {DEFAULT_DEADLINE})",
+    )
+    order.set_defaults(func=cmd_order)
+    board = sub.add_parser(
+        "board",
+        help="return the whole board, ordered, with the action each item needs",
+    )
+    board.add_argument(
+        "--json",
+        action="store_true",
+        help="print JSON (the only format this command writes)",
+    )
+    board.add_argument(
+        "--action",
+        action="store_true",
+        help="keep only the items that carry an action, for a tick that works them",
+    )
+    board.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole board may take (default {DEFAULT_DEADLINE})",
+    )
+    board.set_defaults(func=cmd_board)
+    report = sub.add_parser(
+        "report",
+        help="render the morning report from the shift's records",
+    )
+    report.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the report and write no file (the file is the report)",
+    )
+    report.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    report.add_argument(
+        "--date",
+        default=None,
+        type=report_day,
+        help="the night of the report, as YYYY-MM-DD (default today, PT)",
+    )
+    report.set_defaults(func=cmd_report)
+    shift = sub.add_parser(
+        "shift",
+        help="run one shift cycle (the command the launchd job fires)",
+    )
+    shift.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="do no work: the cycle reads the board and writes the cycle's line",
+    )
+    shift.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    shift.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole cycle may take (default {DEFAULT_DEADLINE})",
+    )
+    shift.add_argument(
+        "--report",
+        action="store_true",
+        help="write the day's morning report after the cycle",
+    )
+    shift.set_defaults(func=cmd_shift)
+    policy = sub.add_parser(
+        "policy",
+        help="write the policy snapshot the shift reads on every cycle",
+    )
+    policy.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    policy.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read only; the snapshot is not written",
+    )
+    policy.set_defaults(func=cmd_policy)
+    attend = sub.add_parser(
+        "attend",
+        help="run the attended first night: a human watches, three small items",
+    )
+    attend.add_argument(
+        "--items",
+        type=int,
+        default=3,
+        help="how many small board items the night works (default 3)",
+    )
+    attend.add_argument(
+        "--minutes",
+        type=int,
+        default=60,
+        help="how many minutes the human watches (default 60)",
+    )
+    attend.add_argument(
+        "--run-by",
+        default="the operator",
+        help="who runs the night (default: the operator)",
+    )
+    attend.add_argument(
+        "--wait",
+        action="store_true",
+        help="hold the door until the window closes before the night ends",
+    )
+    attend.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    attend.add_argument(
+        "--date",
+        default=None,
+        type=report_day,
+        help="the night of the report, as YYYY-MM-DD (default today, PT)",
+    )
+    attend.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read the board and write no record",
+    )
+    attend.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole night may take (default {DEFAULT_DEADLINE})",
+    )
+    attend.set_defaults(func=cmd_attend)
+    receipt = sub.add_parser(
+        "receipt",
+        help="write the receipt of every item whose state the shift can see",
+    )
+    receipt.add_argument(
+        "--repo",
+        default=None,
+        help="the repository of the one item the receipt is about",
+    )
+    receipt.add_argument(
+        "--number",
+        default=None,
+        type=int,
+        help="the number of the one item the receipt is about",
+    )
+    receipt.add_argument(
+        "--items",
+        type=int,
+        default=0,
+        help="how many items of the shift's order to write (0: every item)",
+    )
+    receipt.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    receipt.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the receipt and write no file",
+    )
+    receipt.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole run may take (default {DEFAULT_DEADLINE})",
+    )
+    receipt.set_defaults(func=cmd_receipt)
+    close = sub.add_parser(
+        "close",
+        help="close a ticket's issue when its receipt holds the evidence",
+    )
+    close.add_argument("--repo", required=True, help="the repository of the ticket")
+    close.add_argument(
+        "--number", required=True, type=int, help="the number of the ticket's issue"
+    )
+    close.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    close.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="say what the close would do and close nothing",
+    )
+    close.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole close may take (default {DEFAULT_DEADLINE})",
+    )
+    close.set_defaults(func=cmd_close)
+    head = sub.add_parser(
+        "check-head",
+        help="check a pull request's head against the checks that ran on it",
+    )
+    head.add_argument("--repo", required=True, help="the repository of the pull request")
+    head.add_argument(
+        "--number", required=True, type=int, help="the number of the pull request"
+    )
+    head.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole check may take (default {DEFAULT_DEADLINE})",
+    )
+    head.set_defaults(func=cmd_check_head)
+    redact_cmd = sub.add_parser(
+        "redact",
+        help="print a text with every secret pattern redacted",
+    )
+    redact_cmd.add_argument(
+        "--text",
+        default=None,
+        help="the text to redact (default: standard input)",
+    )
+    redact_cmd.add_argument(
+        "--file",
+        default=None,
+        help="the file to read and redact (default: standard input)",
+    )
+    redact_cmd.set_defaults(func=cmd_redact)
     args = parser.parse_args()
     return args.func(args)
 

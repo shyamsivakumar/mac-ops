@@ -15,6 +15,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -174,7 +175,7 @@ class TestPiCoordinatorFiles(unittest.TestCase):
             self.assertEqual(mode, 0o644)
 
     def test_launchers_map_to_the_local_bin_directory(self):
-        for name in ("coord-pi", "coord-ask", "coord-phone"):
+        for name in ("coord-pi", "coord-ask", "coord-phone", "coord-tick", "kpane", "kshow"):
             source, mode = self.plan[self.home / ".local/bin" / name]
             self.assertEqual(source, CHECKOUT / "coordinator/pi/bin" / name)
             self.assertEqual(mode, 0o755)
@@ -209,43 +210,70 @@ class TestPiCoordinatorFiles(unittest.TestCase):
 
 
 class TestTickJob(unittest.TestCase):
-    """The tick job runs the headless tick every thirty minutes."""
+    """The tick job is back (MO-250, mac-ops #267): the plist is in the
+    repository, it runs on DeepSeek, and the installer leaves it alone."""
 
     def setUp(self):
         self.home = Path("/Users/example")
         rendered = install_coordinator.render_plists(CHECKOUT, self.home)
         self.rendered = {target.name: data for data, target in rendered}
 
-    def test_job_is_rendered_with_the_home_token_resolved(self):
+    def test_the_tick_plist_is_rendered(self):
         self.assertIn("dev.coordinator.tick.plist", self.rendered)
-        data = self.rendered["dev.coordinator.tick.plist"]
-        self.assertNotIn(b"@HOME@", data)
-        parsed = plistlib.loads(data)
+
+    def test_the_repository_holds_the_tick_plist(self):
+        self.assertTrue(
+            (CHECKOUT / "coordinator/launchd/dev.coordinator.tick.plist").exists()
+        )
+
+    def test_the_tick_job_is_not_in_the_installers_retired_set(self):
+        self.assertNotIn("dev.coordinator.tick", install_coordinator.RETIRED_JOBS)
+
+    def test_the_installer_leaves_an_installed_tick_plist_alone(self):
+        with temp_home() as td:
+            home = Path(td)
+            agents = home / "Library" / "LaunchAgents"
+            agents.mkdir(parents=True)
+            tick = agents / "dev.coordinator.tick.plist"
+            tick.write_text("<plist></plist>")
+            notes = install_coordinator.retire_jobs(home)
+            self.assertTrue(tick.exists())
+            self.assertEqual(notes, [])
+
+    def test_a_home_without_a_tick_plist_is_left_alone(self):
+        with temp_home() as td:
+            home = Path(td)
+            self.assertEqual(install_coordinator.retire_jobs(home), [])
+
+    def test_the_tick_job_runs_the_tick_launcher_every_30_minutes(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
         self.assertEqual(parsed["Label"], "dev.coordinator.tick")
-
-    def test_job_runs_the_tick_launcher_every_thirty_minutes(self):
-        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
-        self.assertEqual(
-            parsed["ProgramArguments"], ["/Users/example/.local/bin/coord-tick"]
-        )
         self.assertEqual(parsed["StartInterval"], 1800)
+        self.assertEqual(
+            parsed["ProgramArguments"],
+            ["/Users/example/.local/bin/coord-tick"],
+        )
 
-    def test_job_does_not_run_a_tick_at_load(self):
-        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
-        self.assertIsNot(parsed.get("RunAtLoad"), True)
-
-    def test_job_logs_into_the_coordinator_log_directory(self):
+    def test_the_tick_job_runs_on_deepseek(self):
         parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
         self.assertEqual(
-            parsed["StandardOutPath"],
-            "/Users/example/Library/Logs/coordinator/tick.log",
+            parsed["EnvironmentVariables"]["COORD_TICK_MODEL"],
+            "deepseek/deepseek-flash",
         )
-        self.assertEqual(parsed["StandardErrorPath"], parsed["StandardOutPath"])
 
-    def test_log_dirs_cover_the_tick_job(self):
-        rendered = install_coordinator.render_plists(CHECKOUT, self.home)
-        dirs = install_coordinator.log_dirs(rendered)
-        self.assertIn(Path("/Users/example/Library/Logs/coordinator"), dirs)
+    def test_the_overnight_job_fires_on_a_fixed_interval_every_day(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.overnight.plist"])
+        self.assertEqual(parsed["Label"], "dev.coordinator.overnight")
+        self.assertEqual(parsed["StartInterval"], 300)
+        self.assertNotIn("StartCalendarInterval", parsed)
+        self.assertNotIn("RunAtLoad", parsed)
+
+    def test_the_overnight_job_runs_real_shift_cycles(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.overnight.plist"])
+        self.assertEqual(
+            parsed["ProgramArguments"],
+            ["/Users/example/.local/bin/overnight", "shift"],
+        )
 
 
 class TestTickLauncher(unittest.TestCase):
@@ -372,6 +400,179 @@ class TestTickLauncher(unittest.TestCase):
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=10)
+
+
+class TestLaunchdReload(unittest.TestCase):
+    """An install reloads the launchd jobs whose plist it changed.
+
+    launchd reads a plist only when the job is bootstrapped, so a correct
+    install that leaves the old job running is not a correct install."""
+
+    def launcher(self, calls):
+        """A fake launchctl that records every call and starts nothing."""
+
+        def fake_status(argv, *, capture_error=None):
+            calls.append(list(argv))
+            if argv[1] == "print":
+                # launchd has let the job go.
+                return 1
+            return 0
+
+        def fake_quiet(argv):
+            calls.append(list(argv))
+            return None
+
+        return fake_status, fake_quiet
+
+    def test_a_temporary_home_never_starts_launchctl(self):
+        with temp_home() as td:
+            home = Path(td)
+            agents = home / "Library" / "LaunchAgents"
+            agents.mkdir(parents=True)
+            (agents / "dev.coordinator.turncap.plist").write_bytes(
+                plistlib.dumps(
+                    {"Label": "dev.coordinator.turncap", "ProgramArguments": ["/bin/true"]}
+                )
+            )
+            calls: list[list[str]] = []
+            fake_status, fake_quiet = self.launcher(calls)
+            out = StringIO()
+            with mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(out):
+                    install_coordinator.install(CHECKOUT, False, home)
+            self.assertEqual([c for c in calls if c[0] == "launchctl"], [])
+            self.assertIn("Skipped the reload of dev.coordinator.turncap", out.getvalue())
+            self.assertIn("not the real home", out.getvalue())
+
+    def test_a_changed_job_is_reloaded_with_bootout_then_bootstrap(self):
+        with temp_home() as td:
+            home = Path(td)
+            calls: list[list[str]] = []
+            fake_status, fake_quiet = self.launcher(calls)
+            # The first install writes every file and touches no job: the
+            # home is not the real one.
+            with mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(StringIO()):
+                    install_coordinator.install(CHECKOUT, False, home)
+            self.assertEqual([c for c in calls if c[0] == "launchctl"], [])
+            # One installed plist drifts from the checkout. Only that job
+            # is a job to reload.
+            plist = home / "Library/LaunchAgents/dev.coordinator.turncap.plist"
+            parsed = plistlib.loads(plist.read_bytes())
+            parsed["EnvironmentVariables"] = dict(
+                parsed.get("EnvironmentVariables", {}), MAC_OPS_PROOF="1"
+            )
+            plist.write_bytes(plistlib.dumps(parsed))
+            calls.clear()
+            out = StringIO()
+            with mock.patch.object(Path, "home", return_value=home), \
+                    mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(out):
+                    install_coordinator.install(CHECKOUT, False, home)
+            uid = os.getuid()
+            self.assertEqual(
+                [c for c in calls if c[0] == "launchctl"],
+                [
+                    ["launchctl", "bootout", f"gui/{uid}/dev.coordinator.turncap"],
+                    ["launchctl", "print", f"gui/{uid}/dev.coordinator.turncap"],
+                    ["launchctl", "bootstrap", f"gui/{uid}", str(plist)],
+                ],
+            )
+            self.assertIn("Reloaded the launchd job dev.coordinator.turncap", out.getvalue())
+
+    def test_an_unchanged_plist_leaves_every_job_running(self):
+        with temp_home() as td:
+            home = Path(td)
+            calls: list[list[str]] = []
+            fake_status, fake_quiet = self.launcher(calls)
+            with mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(StringIO()):
+                    install_coordinator.install(CHECKOUT, False, home)
+            calls.clear()
+            with mock.patch.object(Path, "home", return_value=home), \
+                    mock.patch.object(install_coordinator, "run_status", fake_status), \
+                    mock.patch.object(install_coordinator, "run_quiet", fake_quiet):
+                with redirect_stdout(StringIO()):
+                    install_coordinator.install(CHECKOUT, False, home)
+            self.assertEqual([c for c in calls if c[0] == "launchctl"], [])
+
+    def test_a_refused_reload_is_reported_with_the_text_launchctl_wrote(self):
+        with temp_home() as td:
+            home = Path(td)
+            calls: list[list[str]] = []
+
+            def fake_status(argv, *, capture_error=None):
+                calls.append(list(argv))
+                if argv[1] == "bootout":
+                    if capture_error is not None:
+                        capture_error.append("Boot-out failed: 5: Input/output error")
+                    return 5
+                if argv[1] == "list":
+                    return 0
+                return 0
+
+            with mock.patch.object(install_coordinator, "run_status", fake_status):
+                note = install_coordinator.reload_job(
+                    "dev.coordinator.turncap", home / "x.plist", os.getuid()
+                )
+            self.assertIn("Refused to reload", note)
+            self.assertIn("Input/output error", note)
+            self.assertEqual([c[1] for c in calls], ["bootout", "list"])
+
+    def test_a_refused_bootstrap_is_reported_and_the_job_is_said_to_be_down(self):
+        with temp_home() as td:
+            home = Path(td)
+            calls: list[list[str]] = []
+
+            def fake_status(argv, *, capture_error=None):
+                calls.append(list(argv))
+                if argv[1] == "bootstrap":
+                    if capture_error is not None:
+                        capture_error.append(
+                            "Bootstrap failed: 5: Input/output error"
+                        )
+                    return 5
+                if argv[1] == "print":
+                    return 1
+                if argv[1] == "list":
+                    return 1
+                return 0
+
+            with mock.patch.object(install_coordinator, "run_status", fake_status):
+                note = install_coordinator.reload_job(
+                    "dev.coordinator.turncap", home / "x.plist", os.getuid()
+                )
+            self.assertIn("Refused to reload", note)
+            self.assertIn("Input/output error", note)
+            self.assertIn("not loaded now", note)
+
+    def test_a_job_launchd_loaded_itself_counts_as_reloaded(self):
+        with temp_home() as td:
+            home = Path(td)
+
+            def fake_status(argv, *, capture_error=None):
+                if argv[1] == "bootstrap":
+                    if capture_error is not None:
+                        capture_error.append(
+                            "Bootstrap failed: 37: Operation already in progress"
+                        )
+                    return 37
+                if argv[1] == "print":
+                    return 1
+                if argv[1] == "list":
+                    return 0
+                return 0
+
+            with mock.patch.object(install_coordinator, "run_status", fake_status):
+                note = install_coordinator.reload_job(
+                    "dev.coordinator.turncap", home / "x.plist", os.getuid()
+                )
+            self.assertIn("Reloaded the launchd job dev.coordinator.turncap", note)
+            self.assertIn("launchd had loaded the new plist itself", note)
 
 
 class TestInstallPath(unittest.TestCase):
