@@ -25,7 +25,7 @@ There is no list file. The board is the list.
 | Group | Rule | Source |
 | --- | --- | --- |
 | Failing pull requests | `gh pr checks` on each open pull request. A check in a failed bucket or a failed state makes the pull request a failing one. A pull request with no checks at all is not a failure. | Spec section 7, step 3(a). |
-| Pull requests with a gate PASS | The coordinator's dispatch receipts (`gate:<repo>#<pr>:<head>`) name the gate thread for a pull request head. The gate's own message must end with `VERDICT: PASS`. | Spec section 7, step 3(b). |
+| Pull requests with a gate PASS | The coordinator's dispatch receipts (`gate:<repo>#<pr>:<head>`) name the gate thread for a pull request head. The gate's own last message in the thread's latest run must end with `VERDICT: PASS` and carry `CHECK: PASS <head>`. | Spec section 7, step 3(b). |
 | Ready tickets already split into 5-minute parts | The ticket's own text says it is a bounded slice: a light build slice, a light chore, or a part that says how many minutes it takes. | Spec section 7, step 3(c). |
 | Ready tickets not yet split | Every other ready ticket. The shift splits it first, then adds the parts. | Spec section 7, step 3(d). |
 
@@ -35,10 +35,14 @@ Decisions worth naming:
   The receipt key carries the full head sha, so the order only reads the
   gate of the head the pull request has now. A pull request whose head
   moved is not called gate PASS.
-- **The gate verdict is read from the gate, not guessed.** The thread
-  must end with `VERDICT: PASS`. A thread that cannot be read, or that
-  ends with anything else, is no verdict, so the pull request falls into
-  the in-flight list with the reason.
+- **The gate verdict is read from the gate, not guessed.** The last
+  message of the thread's latest run must end with `VERDICT: PASS` and
+  carry the line `CHECK: PASS <head>`. The queue dispatches a gate for
+  the same head under the same request id, so one thread can hold two
+  runs: only the latest run speaks. A thread that cannot be read, a
+  latest run with no message, and a message that ends with anything
+  else, are all no verdict, so the pull request falls into the in-flight
+  list with the reason.
 - **A mark is the marked form.** The board says "light build slice" and
   "light chore" for a slice it has already cut, and says "budget 3 to 5
   minutes" or "one 5-minute part" in the body. A ticket that says none of
@@ -46,12 +50,16 @@ Decisions worth naming:
 - **Ready means the board's stage is `todo`.** A ticket in another stage
   is not work for the night. It is listed as "not ready", not dropped.
 - **A blocker is met when its issue is closed.** The open issue list of
-  the repository says which issues are still open. A blocker that cannot
-  be checked counts as unmet, so the shift does not start work whose
-  order it cannot prove.
+  the repository says which issues are still open, and the closed issue
+  list says which are done, so a blocker whose ticket has left the board
+  is met rather than unknown. A blocker that cannot be checked counts as
+  unmet, so the shift does not treat work as free it cannot prove.
+- **A blocked item is not left out.** It stays in its group, is marked
+  with the blocker that holds it, and is ordered after the items that
+  are ready. The order never drops work; it says why work waits.
 - **Inside a group the board decides.** Priority label first, then the
-  items whose blockers are met, then the board's own order, so the same
-  board always gives the same list.
+  items whose blockers are met, then the repository and the issue
+  number, so the same board always gives the same list.
 
 ## The summary line
 
@@ -166,6 +174,24 @@ Both pass. The result is in the pull request body.
   rules are now one shared function, which both use.
 - `install_coordinator.py` needed no change: the module is one file and
   the installer already installs it.
+
+## The reviewer round
+
+The in-session reviewer read the merged change and found real defects.
+Each one is fixed in this follow-up, on top of the parts that landed
+after the merge.
+
+| Finding | Fix |
+| --- | --- |
+| The `Blocked by` section was never read: the pattern matched nothing, so the blocked-by steering was inert. | The section is read the way the coordinator's own reader reads it: a heading of any level or a `Blocked by:` line, with `<details>` skipped. 35 items on today's board now carry their blocker. |
+| A blocker whose ticket had left the board was reported as unmet. | The closed issues of each repository are read, so a closed blocker is met and an unreadable one says "could not be read". |
+| The gate verdict was taken from the last verdict-bearing message, so an earlier run's PASS survived a later run. | Only the latest run of the thread speaks, and a PASS has to carry `CHECK: PASS <head>`. A verdict for another head is no verdict. |
+| The README and this file claimed the shift does not start work whose order it cannot prove, and that the tiebreak is the board's own order. | Both texts now say what the code does: a blocked item stays in its group and is marked, and the tiebreak is the repository and the issue number. |
+| `gh pr checks` was described as exiting non-zero for a failed check; it exits 0 with `--json`. | The docstring says what gh does, and a read that fails for any other reason is a refusal for that one pull request, not a failure and not the end of the run. |
+| A timeout in the checks aborted the whole order. | One unreadable pull request is now one unreadable pull request; the rest of the list and the summary line are still written. |
+| `CANCELLED` counted as a failing check. | A cancelled check is inconclusive, so it is not a failure. |
+| The summary line wrote a count that could not be checked as a zero. | The line counts every state (failing, gate PASS, split, unsplit, in flight, not ready) and writes `UNVERIFIED` for the counts the shift could not check. |
+| A draft pull request was ordered as work, and a standalone pull request carried its own number as a ticket number. | A draft is in flight with the reason "draft pull request", and a pull request that names no ticket carries no ticket number. |
 
 ## Open points
 
