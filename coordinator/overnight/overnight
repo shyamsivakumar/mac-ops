@@ -2493,25 +2493,13 @@ def refs_issue(body: str) -> int:
     return 0
 
 
-def fix_command(
-    repo: str, number: int, head: str, builder: str, report: str
-) -> str:
+def fix_command(repo: str, number: int, head: str, builder: str, report: str) -> str:
     """Return the command that sends a failed gate's findings to the builder.
 
-    The command is one shell word per argument, so the tick can run it as
-    it is written."""
-    message = (
-        f"The Opus gate on PR #{number} at {head} returned VERDICT: FAIL. "
-        "Fix every critical and major finding below (minors if small), run "
-        "the check, push, update the PR body's Builder check line to the new "
-        "head, and report.\n\n" + (report or "")[-6000:]
-    )
-    payload = {"threadId": builder, "message": message}
-    return (
-        "coordq start "
-        + shell_quote(json.dumps(payload))
-        + " --tool t3_thread_send --priority 300"
-    )
+    The command is short on purpose: the queue reads the gate's own
+    report and the builder thread, so the tick carries one line per item
+    and not the whole report."""
+    return f"coordq fix {repo}#{number}"
 
 
 def cmd_order(args: argparse.Namespace) -> int:
@@ -2961,7 +2949,13 @@ def cmd_attend(args: argparse.Namespace) -> int:
 
 
 def board_item(order: int, group: str, item: dict) -> dict:
-    """Return one board item for the tick, with the action it needs."""
+    """Return one board item for the tick, with the action it needs.
+
+    The item is small on purpose: the tick reads the whole board in one
+    command, so the list has to fit in what a tool result holds. The
+    detail a caller needs to act (the head, the gate, the builder) is
+    here; the detail nobody acts on is not."""
+    action = item.get("action") or "none"
     row = {
         "order": order,
         "group": group,
@@ -2969,29 +2963,47 @@ def board_item(order: int, group: str, item: dict) -> dict:
         "repo": item.get("repo"),
         "number": item.get("number"),
         "key": item.get("key") or "",
-        "ticket": item.get("ticket"),
         "title": item.get("title") or "",
-        "url": item.get("url") or "",
-        "priority": item.get("priority"),
-        "stage": item.get("stage"),
-        "reason": item.get("reason") or "",
-        "blockers": item.get("blockers") or [],
-        "action": item.get("action") or "none",
+        "action": action,
         "actionReason": item.get("actionReason") or "",
         "actionCommand": item.get("actionCommand") or "",
     }
-    if item.get("dryRunCommand"):
-        row["dryRunCommand"] = item["dryRunCommand"]
+    if action != "none" and item.get("reason"):
+        row["reason"] = item["reason"]
+    if item.get("blockers"):
+        row["blockers"] = item["blockers"]
     if item.get("kind") == "pull-request":
         row["head"] = item.get("head") or ""
-        row["isDraft"] = bool(item.get("isDraft"))
         row["issue"] = item.get("issue") or 0
-        row["checks"] = item.get("checks") or {"failed": []}
-        row["gate"] = item.get("gate") or {}
-        row["builder"] = item.get("builder") or {}
+        row["draft"] = bool(item.get("isDraft"))
+        row["failed"] = (item.get("checks") or {}).get("failed") or []
+        gate = item.get("gate") or {}
+        row["gate"] = gate.get("status") or "none"
+        if gate.get("threadId"):
+            row["gateThread"] = gate["threadId"]
+        builder = item.get("builder") or {}
+        if builder.get("threadId"):
+            row["builder"] = builder["threadId"]
     if item.get("split") is not None:
         row["split"] = bool(item.get("split"))
     return row
+
+
+BOARD_RULES = {
+    "start": (
+        "run the dry run first: <actionCommand> --dry-run, and start for "
+        "real only when the dry run says 'checks passed'. The ticket CLI "
+        "refuses a ticket it may not start, and a refusal starts nothing."
+    ),
+    "gate": (
+        "the queue gates the head and records it, so a head is never gated "
+        "twice. A head whose builder check does not name it is not gated."
+    ),
+    "fix": (
+        "the queue reads the gate's own report and sends it to the thread "
+        "that built the pull request."
+    ),
+}
 
 
 def cmd_board(args: argparse.Namespace) -> int:
@@ -3053,7 +3065,10 @@ def cmd_board(args: argparse.Namespace) -> int:
     for name, bucket in groups:
         for item in bucket:
             order += 1
-            items.append(board_item(order, name, item))
+            row = board_item(order, name, item)
+            if args.action and row["action"] == "none":
+                continue
+            items.append(row)
     actions = {"start": 0, "gate": 0, "fix": 0, "none": 0}
     for item in items:
         actions[item["action"]] = actions.get(item["action"], 0) + 1
@@ -3061,14 +3076,14 @@ def cmd_board(args: argparse.Namespace) -> int:
     no_gate = [
         item
         for item in items
-        if item["kind"] == "pull-request"
-        and item.get("gate", {}).get("status") == "none"
+        if item["kind"] == "pull-request" and item.get("gate") == "none"
     ]
     queue = result["queue"]
     live = result["live"]
     payload = {
         "command": "overnight board",
         "generatedAt": datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z"),
+        "rules": BOARD_RULES,
         "board": {
             "tickets": len(issues),
             "repositories": len(repos),
@@ -3091,7 +3106,7 @@ def cmd_board(args: argparse.Namespace) -> int:
         },
         "items": items,
     }
-    print(json.dumps(payload, indent=1))
+    print(json.dumps(payload, separators=(",", ":")))
     return 0
 
 
@@ -3175,6 +3190,11 @@ def main() -> int:
         "--json",
         action="store_true",
         help="print JSON (the only format this command writes)",
+    )
+    board.add_argument(
+        "--action",
+        action="store_true",
+        help="keep only the items that carry an action, for a tick that works them",
     )
     board.add_argument(
         "--deadline",
