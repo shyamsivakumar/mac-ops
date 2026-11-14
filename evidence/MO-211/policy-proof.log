@@ -1,21 +1,62 @@
-== a fresh folder, no snapshot: a real cycle refuses ==
+== 1. a fresh folder, no snapshot: a real cycle refuses ==
+overnight: the shift has no usable policy snapshot: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json does not exist. Run `overnight policy` to write it.
 exit=1
 
-== a dry cycle without a snapshot reads the board only ==
+== 2. a dry cycle without a snapshot reads the board only ==
 overnight: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json does not exist; a dry run reads the board only
-overnight: 2026-11-13 17:14 PST shift start (dry run, read only)
+overnight: 2026-11-13 23:31 PST shift start (dry run, read only)
 Overnight intake - dry run (read only)
-Board: 111 tickets
+Board: 110 tickets
+Allowed repositories: 15
 
-== the snapshot is written ==
-overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json
-Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+repository                                     tickets   prs  linked  records
+digitized/Concerning                                 8     3       3        8
+shyamsivakumar/CineJar                               0     0       0        0
+shyamsivakumar/cairn                                 0     5       0        5
+shyamsivakumar/catalouge                             9     1       1        9
+shyamsivakumar/fantasy-football-toolkit             22     8       4       26
+shyamsivakumar/mac-ops                              11     1       1       11
+shyamsivakumar/openscan                              0     0       0        0
+shyamsivakumar/qabot                                 0     0       0        0
+shyamsivakumar/recoup                                0     0       0        0
+shyamsivakumar/sams-llm-wiki                         0     1       0        1
+shyamsivakumar/scrapers                              0     0       0        0
+shyamsivakumar/scripture-scroll                      1     0       0        1
+shyamsivakumar/strata                                0     1       0        1
+shyamsivakumar/strategy-replay-workbench            59    12       8       63
+shyamsivakumar/tunerise                              0     1       0        1
 
-== run/STOP stops the next working cycle ==
-overnight: 2026-11-13 17:14 PST run/STOP exists, so the shift stops at this cycle
+Total: 126 records across 15 repositories
+A pull request that a board ticket names is part of that ticket's record, so it adds no record of its own. A pull request that names no ticket the board shows stays a record of its own.
 exit=0
 
-== the report still runs with STOP in place ==
-overnight: 2026-11-13 17:14 PST morning report
+== 3. the snapshot is written ==
+overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json
+Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+Slot cap: 6 (read only, from the coordq config; never raised)
+Stall cap: 3 cycles with no new work
+Retry cap: 2 fix tries per item, then it is parked
+Verify level: balanced
+No item cap and no allowance stop: the whole backlog is in scope and model use is never a stop condition.
+The shift reads this snapshot on every cycle. It is never unarmed, it has no deadline, and run/STOP still stops it at the next cycle.
+exit=0
+
+== 4. a snapshot with a field removed is not a contract ==
+overnight: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json is not a contract: its slot cap is not a number; a dry run reads the board only
+overnight: 2026-11-13 23:31 PST shift start (dry run, read only)
+exit=0
+
+== 5. the snapshot is written again, and the cap cannot be read ==
+overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/run/policy.json
+Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+overnight: the queue's slot cap cannot be read from /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-no-queue/config.json, so the shift's contract cannot be written without it
+exit=1
+
+== 6. run/STOP stops the next working cycle ==
+overnight: 2026-11-13 23:32 PST run/STOP exists, so the shift stops at this cycle
+exit=0
+
+== 7. the report still runs with STOP in place ==
+overnight: 2026-11-13 23:32 PST morning report
 overnight: wrote /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/overnight-policy-fix/receipts/morning-2026-11-13.md
 exit=0

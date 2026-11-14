@@ -1,31 +1,33 @@
-overnight: 2026-11-13 17:12 PST shift cycle under /Users/shyamsivakumar/Code/coordinator/.overnight/run/policy.json
+overnight: 2026-11-13 23:32 PST shift cycle under /Users/shyamsivakumar/Code/coordinator/.overnight/run/policy.json
 Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
 Slot cap: 6 (read only, from the coordq config; never raised)
 Stall cap: 3 cycles with no new work
 Retry cap: 2 fix tries per item, then it is parked
 Verify level: balanced
 No item cap and no allowance stop: the whole backlog is in scope and model use is never a stop condition.
-overnight: 2026-11-13 17:12 PST shift start (dry run, read only)
+The snapshot names 1 Ascend repository, and the shift never reads Ascend work.
+overnight: 2026-11-13 23:32 PST shift start (dry run, read only)
 Overnight intake - dry run (read only)
 Board: 110 tickets
-Allowed repositories: 15
+Allowed repositories: 14
 
 repository                                     tickets   prs  linked  records
-digitized/Concerning                                 1     2       0        3
-shyamsivakumar/CineJar                               0     1       0        1
+shyamsivakumar/CineJar                               0     0       0        0
 shyamsivakumar/cairn                                 0     5       0        5
-shyamsivakumar/catalouge                             4     0       0        4
-shyamsivakumar/fantasy-football-toolkit             30     6       4       32
-shyamsivakumar/mac-ops                               9     3       0       12
+shyamsivakumar/catalouge                             9     1       1        9
+shyamsivakumar/fantasy-football-toolkit             22     8       4       26
+shyamsivakumar/mac-ops                              11     1       1       11
 shyamsivakumar/openscan                              0     0       0        0
 shyamsivakumar/qabot                                 0     0       0        0
 shyamsivakumar/recoup                                0     0       0        0
 shyamsivakumar/sams-llm-wiki                         0     1       0        1
-shyamsivakumar/scrapers                              0     1       0        1
-shyamsivakumar/scripture-scroll                      0     0       0        0
+shyamsivakumar/scrapers                              0     0       0        0
+shyamsivakumar/scripture-scroll                      1     0       0        1
 shyamsivakumar/strata                                0     1       0        1
-shyamsivakumar/strategy-replay-workbench            66    11       5       72
+shyamsivakumar/strategy-replay-workbench            59    12       8       63
 shyamsivakumar/tunerise                              0     1       0        1
+digitized/Concerning                                 8   n/a     n/a        8  (not allowed)
 
-Total: 133 records across 15 repositories
+Total: 118 records across 14 repositories
+8 more records in 1 repository outside the allow list, counted above and marked 'not allowed'.
 A pull request that a board ticket names is part of that ticket's record, so it adds no record of its own. A pull request that names no ticket the board shows stays a record of its own.
