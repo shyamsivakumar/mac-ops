@@ -35,8 +35,11 @@ External-owner repositories and the named Ascend repositories stop at verdict.
 Additional Ascend entries can set `ascend: true`.
 
 Queued heads are saved in queue.json's gatedHeads map in the same atomic write
-as their queue item. Keep that map across restarts. A failed or dropped gate is
-not automatically requeued for the same head. A new head can receive a gate.
+as their queue item. Keep that map across restarts. A recorded gate whose thread is failed, interrupted, or completed without a
+final `VERDICT: PASS` or `VERDICT: FAIL` is queued again on the next run.
+The old receipt is cleared under the queue lock. Each head is retried at most
+once per run. Live gates, gates with verdicts, and missing receipts stay deduplicated.
+Dry-run reports `regating` without writing state. A new head can receive a gate.
 Dry-run still reads GitHub and builder runs. API or malformed-data errors fail
 visibly. This command never merges; the reviewer brief permits merge only after
 CHECK and VERDICT pass for the exact head, using --match-head-commit.
