@@ -3226,7 +3226,12 @@ def write_receipt(root: Path, item: dict, body: str) -> str:
         return "unchanged"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
+        # The receipt is written to a scratch name and moved into place, so
+        # a run that dies mid-write never leaves a half receipt for the
+        # morning report to read.
+        scratch = path.with_name(path.name + ".tmp")
+        scratch.write_text(body, encoding="utf-8")
+        os.replace(scratch, path)
     except OSError as exc:
         return f"failed: {exc}"
     return "wrote"
@@ -3283,6 +3288,11 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         print(f"overnight: REFUSED: {result['pr_error']}", file=sys.stderr)
         return 1
     items = receipt_items(result)
+    if bool(args.repo) != bool(args.number):
+        die(
+            "the receipt of one item needs both --repo and --number; without "
+            "both the command would write the receipt of every item"
+        )
     if args.repo and args.number:
         picked = [
             item
@@ -3318,11 +3328,14 @@ def cmd_receipt(args: argparse.Namespace) -> int:
             print(f"--- {label} (dry run, nothing written) ---")
             print(body, end="")
             continue
-        outcome = write_receipt(root, item, body)
+        # The state the receipt held before this run, read before the file
+        # is written: a receipt read after the write holds the new state
+        # and would never show a change.
         previous = ""
         if path.exists():
             previous = (parse_receipt(path)["fields"].get("state") or "").strip()
-        change = previous and previous != facts["state"]
+        outcome = write_receipt(root, item, body)
+        change = bool(previous) and previous != facts["state"]
         print(
             f"  {label} | {facts['state']} | gate {facts['gate']} | "
             f"{outcome}"
