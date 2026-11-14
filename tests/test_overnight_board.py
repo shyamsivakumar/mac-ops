@@ -147,6 +147,39 @@ class FailingCheckTests(unittest.TestCase):
         self.assertEqual(state["external"], [])
         self.assertFalse(state["blocks"])
 
+
+class PullRequestActionMetricsTests(unittest.TestCase):
+    def setUp(self):
+        self.overnight = load_overnight()
+
+    def test_states_count_actions_and_choose_oldest_per_state(self):
+        rows = [
+            {"state": "draft", "action": "finish", "repo": "a/r", "number": 1,
+             "head": "h1", "updatedAt": "2026-11-13"},
+            {"state": "draft", "action": "finish", "repo": "a/r", "number": 2,
+             "head": "h2", "updatedAt": "2026-11-14"},
+            {"state": "gate-live", "action": "none", "repo": "a/r", "number": 3,
+             "head": "h3", "updatedAt": "2026-11-12"},
+        ]
+        states, no_action, oldest = self.overnight.pr_state_metrics(rows)
+        self.assertEqual(states, {"draft": 2, "gate-live": 1})
+        self.assertEqual(no_action, 1)
+        self.assertEqual(oldest["draft"]["number"], 1)
+
+    def test_dispatch_runs_only_pull_request_action_commands(self):
+        from unittest.mock import patch
+        rows = [
+            {"kind": "ticket", "action": "start", "actionCommand": "ticket start x"},
+            {"kind": "pull-request", "action": "finish", "repo": "a/r", "number": 4,
+             "actionCommand": "coordq pr-action finish a/r#4 --head abc"},
+            {"kind": "pull-request", "action": "needs-you", "repo": "a/r", "number": 5},
+        ]
+        with patch.object(self.overnight.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "queued\n"
+            self.assertTrue(self.overnight.dispatch_shift_actions(rows, 10**12))
+            run.assert_called_once()
+
     def test_a_passing_agent_check_does_not_block(self):
         rows = self.overnight.check_rows(
             [status_row("srw/agent-check", "SUCCESS")]

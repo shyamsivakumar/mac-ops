@@ -54,6 +54,9 @@ STAGE = "stage:todo"
 STUCK_COUNT = 3
 STUCK_FILE = "gatekeep-stuck.txt"
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+# The ticket reference the board reads, so the refusal path accepts exactly
+# the line the board accepted.
+REFS_ISSUE = re.compile(r"\brefs?\s+#(\d+)", re.I)
 REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
 ROUTER_SOURCE = os.path.expanduser("~/.pi/agent/extensions/task-router.ts")
 
@@ -929,6 +932,8 @@ def cmd_fix(a):
     if pr.get("state") != "open":
         die(f"refused: {repo}#{number} is not open")
     head = pr["head"]["sha"]
+    if getattr(a, "head", None) and head != a.head:
+        die("refused: pull request head changed since the board read")
     key = f"fix:{repo}#{number}:{head}"
     # The findings of one head go back once. The gate and the tick may both
     # ask for the same fix, and a builder that already fixed them must not
@@ -994,6 +999,154 @@ def cmd_fix(a):
     print(f"queued a finding for {repo}#{number} -> builder {builder}")
 
 
+def cmd_pr_action(a):
+    repo, number = parse_ref(a.ref)
+    result = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
+                            capture_output=True, text=True, timeout=40)
+    if result.returncode:
+        die(f"refused: {repo}#{number} could not be read")
+    pr = json.loads(result.stdout)
+    if pr.get("state") != "open" or pr.get("head", {}).get("sha") != a.head:
+        die(f"refused: {repo}#{number} is closed or its head changed")
+    config = json.load(open(TICKETS_CONFIG))
+    settings = (config.get("repos") or {}).get(repo)
+    blocked = (repo.split("/")[0] != "shyamsivakumar" or not settings
+               or settings.get("ascend") or any(x in repo for x in
+               ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni")))
+    if blocked:
+        die(f"refused: {repo} is outside the non-Ascend board")
+    if a.action == "finish" and not pr.get("draft"):
+        die(f"refused: {repo}#{number} is not a draft")
+    if a.action == "link" and REFS_ISSUE.search(pr.get("body") or ""):
+        die(f"refused: {repo}#{number} already has a ticket reference")
+    if a.action == "rebase" and not (pr.get("mergeable") is False or pr.get("mergeable_state") == "dirty"):
+        die(f"refused: {repo}#{number} no longer conflicts with main")
+    try:
+        receipts = load_receipts()
+    except Exception:
+        die("refused: dispatch receipts could not be read")
+    issue_match = REFS_ISSUE.search(pr.get("body") or "")
+    issue = a.issue or (int(issue_match.group(1)) if issue_match else 0)
+    if not issue and a.action == "link":
+        key_match = TITLE_KEY.match(pr.get("title") or "") or TITLE_KEY.search(pr.get("head", {}).get("ref") or "")
+        key = key_match.group(0) if key_match else ""
+        if key:
+            rows = gh_json(f"repos/{repo}/issues?state=all&per_page=100")
+            match = next((r for r in rows if TITLE_KEY.match(r.get("title") or "")
+                          and TITLE_KEY.match(r.get("title") or "").group(0).lower() == key.lower()), None)
+            issue = int(match["number"]) if match else 0
+    if not issue:
+        die(f"refused: {repo}#{number} has no builder ticket reference")
+    issue_result = subprocess.run(["gh", "api", f"repos/{repo}/issues/{issue}"], capture_output=True, text=True, timeout=40)
+    if issue_result.returncode:
+        die(f"refused: linked ticket {repo}#{issue} could not be read")
+    issue_data = json.loads(issue_result.stdout)
+    labels = {str(label.get("name") or "").lower() for label in issue_data.get("labels", [])}
+    if labels.intersection({"hold", "held", "needs-shyam", "needs-you"}):
+        die(f"refused: linked ticket {repo}#{issue} is held")
+    prefix = f"ticket:{repo}#{issue}:a"
+    builder, latest_attempt = "", 0
+    for receipt_key, thread_id in receipts.items():
+        if receipt_key.startswith(prefix):
+            try:
+                attempt = int(receipt_key[len(prefix):])
+            except ValueError:
+                continue
+            if attempt > latest_attempt:
+                builder, latest_attempt = thread_id, attempt
+    if not builder:
+        builder = builder_thread_for_issue(repo, issue)
+    if not builder:
+        die(f"refused: no builder thread is known for {repo}#{issue}")
+    key = f"{a.action}:{repo}#{number}:{a.head}"
+    if a.dry_run:
+        print(f"dry run: would queue {key} to {builder}")
+        return
+    text = {
+        "finish": f"Coordinator: finish PR #{number} and mark it ready when complete. Run the required check and report the new head.",
+        "link": f"Coordinator: add `Refs #{issue}` to PR #{number} and report when done.",
+        "check": f"Coordinator: PR #{number} at {a.head} has no passing check for this head or its check failed. Run or fix the check, update `Builder check: PASS <full head sha>`, and report.",
+        "rebase": f"Coordinator: PR #{number} conflicts with main. Merge origin/main into your branch, resolve conflicts, rerun the check, and report.",
+        "merge-fix": f"Coordinator: the gate passed PR #{number}. Merge origin/main into your branch, resolve conflicts, rerun the check, and report; do not open another PR.",
+    }.get(a.action)
+    if a.action == "regate":
+        gate_thread = receipts.get(f"gate:{repo}#{number}:{a.head}")
+        if not gate_thread:
+            die(f"refused: no gate thread is known for {repo}#{number} at this head")
+        rekey = f"{repo}#{number}:{a.head}"
+        with Lock(True):
+            queue = load()
+            stages = queue.setdefault("regateHeads", {})
+            prior = stages.get(rekey)
+            if not prior:
+                message = f"Coordinator: your review of PR #{number} at {a.head} ended without a verdict. Complete the review now and end with VERDICT: PASS or VERDICT: FAIL."
+                item = {"id": queue["next"], "tool": "t3_thread_send",
+                        "args": {"threadId": gate_thread, "message": message},
+                        "title": f"{repo}#{number} finish gate", "priority": 300}
+                queue["next"] += 1
+                queue["items"].append(item)
+                stages[rekey] = {"stage": "asked", "id": item["id"]}
+                save(queue)
+                print(f"queued gate follow-up for {repo}#{number}")
+                return
+        if prior and prior.get("stage") == "asked":
+            with Lock(True):
+                pending = any(item.get("id") == prior.get("id") for item in load().get("items", []))
+            if pending:
+                die(f"refused: gate follow-up for {repo}#{number} is still queued")
+            code, thread_out = call("t3_thread_read", {"threadId": gate_thread, "maxCharsPerItem": 2000})
+            if code:
+                die("refused: gate thread status could not be checked")
+            try:
+                gate_data = json.loads(thread_out)
+            except ValueError:
+                die("refused: gate thread status could not be checked")
+            if (gate_data.get("thread") or {}).get("status") in LIVE_STATUSES:
+                die("refused: gate thread is still live")
+            config = json.load(open(TICKETS_CONFIG))
+            settings = config["repos"].get(repo)
+            if not settings:
+                die(f"refused: {repo} is not on the board")
+            login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True, timeout=40)
+            if login_run.returncode:
+                die("refused: authenticated GitHub user is unknown")
+            found = gate_request(repo, pr, settings, config, receipts, login_run.stdout.strip())
+            if not found:
+                die("refused: a fresh gate cannot be formed from current evidence")
+            key, args = found
+            fresh_key = f"{key}:regate:{prior['id']}"
+            args["clientRequestId"] = fresh_key
+            with Lock(True):
+                queue = load()
+                if (queue.setdefault("regateHeads", {}).get(rekey) or {}).get("stage") == "queued":
+                    die(f"refused: a fresh gate for {repo}#{number} is already queued")
+                heads = queue.setdefault("gatedHeads", {})
+                item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
+                        "title": args["title"], "priority": 5000}
+                queue["next"] += 1
+                queue["items"].append(item)
+                heads[fresh_key] = item["id"]
+                queue["regateHeads"][rekey] = {"stage": "queued", "id": item["id"]}
+                save(queue)
+            print(f"queued fresh gate for {repo}#{number}")
+            return
+    if not text:
+        die(f"refused: unknown pull request action {a.action}")
+    with Lock(True):
+        queue = load()
+        sent = queue.setdefault("actionHeads", {})
+        if key in sent:
+            die(f"refused: {key} was already queued as coordq #{sent[key]}")
+        item = {"id": queue["next"], "tool": "t3_thread_send",
+                "args": {"threadId": builder, "message": text},
+                "title": f"{repo}#{number} {a.action}", "priority": 300}
+        queue["next"] += 1
+        queue["items"].append(item)
+        sent[key] = item["id"]
+        save(queue)
+    print(f"queued {a.action} for {repo}#{number}")
+
+
 def backstop_model(thread, runs):
     """The gate model for a builder whose executed model is not known.
 
@@ -1016,13 +1169,13 @@ def check_names_head(body, head, publisher, checks):
 
     The check is the line the builder wrote in the pull request body,
     `Builder check: PASS <head>`, or the agent check the repository
-    publishes on the head. A trailing note after the head (the command
-    that produced it) does not change the verdict."""
-    for line in (body or "").splitlines():
-        if line.strip().startswith(f"Builder check: PASS {head}"):
-            return True
+    publishes on the head. The board reads the same two forms, so the
+    board and the refusal path agree on a head."""
+    if any(re.fullmatch(r"Builder check: PASS " + re.escape(head) + r"(?:\s.*)?", line.strip())
+           for line in (body or "").splitlines()):
+        return True
     if publisher:
-        return bool(checks) and checks[0]["state"] == "success"
+        return bool(checks) and checks[0].get("state") == "success"
     return False
 
 
@@ -1083,6 +1236,8 @@ def cmd_gate(a):
     if pr.get("draft"):
         die(f"refused: {repo}#{number} is a draft")
     head = pr["head"]["sha"]
+    if getattr(a, "head", None) and head != a.head:
+        die("refused: pull request head changed since the board read")
     key = f"gate:{repo}#{number}:{head}"
     with Lock(True):
         heads = load().setdefault("gatedHeads", {})
@@ -1145,10 +1300,19 @@ def main():
     o = sub.add_parser("gate")
     o.add_argument("ref", help="the pull request to gate, as owner/repo#number")
     o.add_argument("--config", default=os.path.expanduser("~/.coordinator/tickets.json"))
+    o.add_argument("--head")
     o.set_defaults(fn=cmd_gate)
     f = sub.add_parser("fix")
     f.add_argument("ref", help="the pull request whose findings go back, as owner/repo#number")
+    f.add_argument("--head")
     f.set_defaults(fn=cmd_fix)
+    pa = sub.add_parser("pr-action")
+    pa.add_argument("action", choices=["finish", "link", "check", "rebase", "regate", "merge-fix"])
+    pa.add_argument("ref")
+    pa.add_argument("--head", required=True)
+    pa.add_argument("--issue", type=int, default=0)
+    pa.add_argument("--dry-run", action="store_true")
+    pa.set_defaults(fn=cmd_pr_action)
     a = p.parse_args()
     a.fn(a)
 

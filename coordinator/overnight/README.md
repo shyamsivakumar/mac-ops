@@ -147,9 +147,9 @@ overnight receipt --items 3
 
 A cycle writes the receipts: a real `overnight shift` cycle reads the
 board under the policy snapshot, writes the receipt of every item it sees
-and writes one line per receipt to the shift log. It still starts no
-builder and works no board item, so a cycle that cannot start work still
-leaves the record of what it saw. A dry run writes no receipt.
+and writes one line per receipt to the shift log. It dispatches each eligible
+pull request action through coordq, which records the action and full head
+before queued work runs. A dry run queues no work and writes no receipt.
 
 Every field is read, never claimed:
 

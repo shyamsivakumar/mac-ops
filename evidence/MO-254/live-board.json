@@ -1,0 +1,73 @@
+{
+  "generatedAt": "2026-11-14 (live `overnight board --json`, read only, after the review fixes)",
+  "command": "coordinator/overnight/overnight board --json",
+  "board": {
+    "tickets": 97,
+    "repositories": 12,
+    "dropped": 21,
+    "openPullRequests": 14,
+    "pullRequestsWithoutAGate": 9
+  },
+  "actions": {
+    "start": 35,
+    "none": 33,
+    "regate": 3,
+    "check": 8,
+    "fix": 2,
+    "needs-you": 1
+  },
+  "noAction": 0,
+  "states": {
+    "gate-ended-no-verdict": 3,
+    "check-missing": 8,
+    "gate-fail": 2,
+    "needs-you": 1
+  },
+  "oldestByState": {
+    "gate-ended-no-verdict": {
+      "repo": "shyamsivakumar/catalouge",
+      "number": 120,
+      "head": "79b0e1fb8f4d72eef0a376b7d57e418b11010093",
+      "updatedAt": "2026-11-14T09:45:28Z"
+    },
+    "check-missing": {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "number": 425,
+      "head": "0f16f5ae92af4de0518107ccb6cd0f2695f2b3c0",
+      "updatedAt": "2026-11-14T00:24:18Z"
+    },
+    "gate-fail": {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "number": 443,
+      "head": "9f0265a13e9d4052799ec03898738a17a327fdd9",
+      "updatedAt": "2026-11-14T09:02:22Z"
+    },
+    "needs-you": {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "number": 855,
+      "head": "18b76cf7e4fa0ecf07f86bd26d89b7bd6abe04fd",
+      "updatedAt": "2026-11-14T06:46:05Z"
+    }
+  },
+  "perPullRequest": [
+    "catalouge#117 gate-ended-no-verdict -> regate",
+    "catalouge#120 gate-ended-no-verdict -> regate",
+    "fantasy-football-toolkit#423 check-missing -> check",
+    "fantasy-football-toolkit#444 check-missing -> check",
+    "fantasy-football-toolkit#443 gate-fail -> fix",
+    "fantasy-football-toolkit#425 check-missing -> check",
+    "mac-ops#301 check-missing -> check",
+    "mac-ops#300 check-missing -> check",
+    "mac-ops#299 check-missing -> check",
+    "mac-ops#291 gate-ended-no-verdict -> regate",
+    "strategy-replay-workbench#1054 check-missing -> check",
+    "strategy-replay-workbench#1052 check-missing -> check",
+    "strategy-replay-workbench#937 gate-fail -> fix",
+    "strategy-replay-workbench#855 needs-you -> needs-you (no builder thread on the ticket)"
+  ],
+  "dryRunProofs": [
+    "coordq pr-action check shyamsivakumar/mac-ops#301 --head 218c55a1718d22414c43a6d0fad0b73d1916c198 --dry-run -> 'dry run: would queue check:shyamsivakumar/mac-ops#301:218c55...' (nothing queued)",
+    "same command with --head deadbeef -> refused: shyamsivakumar/mac-ops#301 is closed or its head changed"
+  ],
+  "note": "No open pull request on the board lacks a `Refs #n` line, so the no-ticket-link/link row is reachable but not exercised live. A live gate thread stays action `none` on purpose: the state gate-live carries the wait and there is nothing to dispatch."
+}

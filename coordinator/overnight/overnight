@@ -113,6 +113,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -134,7 +135,7 @@ PR_LIMIT = 100
 # carries. The board's tickets are a small part of that list.
 ISSUE_LIMIT = 500
 PR_FIELDS = (
-    "number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body"
+    "number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body,mergeable"
 )
 # A ticket reference in a pull request body or title. Only the GitHub
 # keywords count: a bare "#123" is often a pull request, not a ticket.
@@ -1252,6 +1253,8 @@ def cmd_shift(args: argparse.Namespace) -> int:
                     err=True,
                 )
                 return 1
+            if dispatch_shift_actions(items, time.monotonic() + args.deadline):
+                emit(f"overnight: {stamp} dispatched pull request actions")
             written = write_receipts(
                 root, items, receipts, time.monotonic() + args.deadline
             )
@@ -3080,6 +3083,7 @@ def collect_items(
                         "key": record.get("key") or "",
                         "title": pull.get("title") or "",
                         "url": pull.get("url") or "",
+                        "updatedAt": pull.get("updatedAt") or "",
                         "priority": record.get("priority"),
                         "ticket": ""
                         if record["kind"] == "pr"
@@ -3091,9 +3095,22 @@ def collect_items(
                         "actionReason": "",
                         "actionCommand": "",
                     }
+                    issue_number = refs_issue(pull.get("body") or "")
+                    linked_issue = issue_number
+                    item["issue"] = issue_number
+                    item["state"] = "in-flight"
                     if item["isDraft"]:
                         item["reason"] = "draft pull request"
                         item["actionReason"] = "draft pull request"
+                        item["state"] = "draft"
+                        draft_builder, _attempt = builder_thread(receipts, repo, issue_number) if issue_number else ("", 0)
+                        if draft_builder:
+                            item["action"] = "finish"
+                            item["actionCommand"] = f"coordq pr-action finish {repo}#{pull['number']} --head {item['head']}"
+                        else:
+                            item["state"] = "needs-you"
+                            item["action"] = "needs-you"
+                            item["actionReason"] = "no builder thread is known for the draft"
                         in_flight.append(item)
                         count_for(repo)["in_flight"] += 1
                         continue
@@ -3102,6 +3119,9 @@ def collect_items(
                     )
                     if unknown:
                         item["reason"] = unknown
+                        item["state"] = "checks-unreadable"
+                        item["action"] = "needs-you"
+                        item["actionReason"] = unknown
                         unverified_prs.append(f"{repo}#{pull['number']}: {unknown}")
                         in_flight.append(item)
                         count_for(repo)["in_flight"] += 1
@@ -3109,16 +3129,72 @@ def collect_items(
                     blocked = apply_checks(item, rows, keys.get(repo, ""))
                     failed = (item.get("checks") or {}).get("failed") or []
                     external = item.get("externalChecks") or []
+                    head = item["head"]
+                    builder, attempt = (
+                        builder_thread(receipts, repo, issue_number)
+                        if issue_number
+                        else ("", 0)
+                    )
+                    if not builder and not issue_number:
+                        branch_key = next((m.group(0).upper() for m in BRANCH_KEY.finditer(pull.get("headRefName") or pull.get("title") or "")), "")
+                        issue_record = board_by_key.get(branch_key)
+                        if issue_record:
+                            issue_number = issue_record.get("number") or 0
+                            builder, attempt = builder_thread(receipts, repo, issue_number)
+                    item["builder"] = {"threadId": builder, "attempt": attempt,
+                                       "live": bool(builder and builder in live["ids"])}
+                    item["issue"] = issue_number
+                    if not builder:
+                        item["state"] = "needs-you"
+                        item["action"] = "needs-you"
+                        item["actionReason"] = (
+                            "no Refs #n line; no builder thread can be identified"
+                            if not issue_number else "no builder thread is known for the ticket"
+                        )
+                        item["reason"] = item["actionReason"]
+                        in_flight.append(item)
+                        count_for(repo)["in_flight"] += 1
+                        continue
+                    if not linked_issue:
+                        item["state"] = "no-ticket-link"
+                        item["action"] = "link"
+                        item["actionReason"] = "no Refs #n line"
+                        item["actionCommand"] = f"coordq pr-action link {repo}#{pull['number']} --head {head} --issue {issue_number}"
+                        item["reason"] = "no Refs #n line"
+                        in_flight.append(item)
+                        count_for(repo)["in_flight"] += 1
+                        continue
+                    if pull.get("mergeable") == "CONFLICTING":
+                        item["state"] = "conflicts"
+                        item["action"] = "rebase"
+                        item["actionReason"] = "conflicts with main"
+                        item["actionCommand"] = f"coordq pr-action rebase {repo}#{pull['number']} --head {head} --issue {issue_number}"
+                        item["reason"] = "conflicts with main"
+                        in_flight.append(item)
+                        count_for(repo)["in_flight"] += 1
+                        continue
                     if blocked:
+                        item["state"] = "check-failed"
                         item["reason"] = "failing check: " + ", ".join(failed)
                         item["actionReason"] = "a check is failing"
+                        item["action"] = "check"
+                        item["actionCommand"] = f"coordq pr-action check {repo}#{pull['number']} --head {head}"
                         failing.append(item)
                         count_for(repo)["failing"] += 1
                         count_for(repo)["total"] += 1
                         continue
-                    head = item["head"]
+                    if not builder_check_passes(pull, rows, head):
+                        item["state"] = "check-missing"
+                        item["action"] = "check"
+                        item["actionReason"] = "the builder check does not name this head"
+                        item["actionCommand"] = f"coordq pr-action check {repo}#{pull['number']} --head {head}"
+                        item["reason"] = item["actionReason"]
+                        in_flight.append(item)
+                        count_for(repo)["in_flight"] += 1
+                        continue
                     request_id = f"gate:{repo}#{pull['number']}:{head}"
-                    thread_id = receipts.get(request_id, "")
+                    related_gate_keys = [key for key in receipts if key == request_id or key.startswith(request_id + ":regate:")]
+                    thread_id = receipts.get(related_gate_keys[-1], "") if related_gate_keys else ""
                     verdict = ""
                     report = ""
                     gate_updated = ""
@@ -3133,27 +3209,26 @@ def collect_items(
                         status = "fail"
                     elif thread_id:
                         status = "running"
-                    if status == "none" and request_id in gated_heads:
+                    if status == "none" and any(key == request_id or key.startswith(request_id + ":regate:") for key in gated_heads):
                         status = "queued"
-                    issue_number = refs_issue(pull.get("body") or "")
-                    builder, attempt = (
-                        builder_thread(receipts, repo, issue_number)
-                        if issue_number
-                        else ("", 0)
-                    )
+                    if status == "running":
+                        if thread_id in live["ids"]:
+                            status = "live"
+                        elif report:
+                            status = "ended-no-verdict"
+                        else:
+                            status = "unreadable"
                     item["gate"] = {
                         "status": status,
                         "requestId": request_id,
                         "threadId": thread_id,
                         "updatedAt": gate_updated,
                     }
-                    item["builder"] = {
-                        "threadId": builder,
-                        "attempt": attempt,
-                        "live": bool(builder and builder in live["ids"]),
-                    }
+                    item["builder"] = {"threadId": builder, "attempt": attempt,
+                                        "live": bool(builder and builder in live["ids"])}
                     item["issue"] = issue_number
                     if status == "fail":
+                        item["state"] = "gate-fail"
                         if not builder:
                             item["actionReason"] = (
                                 "no builder thread is known for this ticket"
@@ -3176,29 +3251,46 @@ def collect_items(
                                     head,
                                     builder,
                                     report,
-                                )
+                                ) + f" --head {head}"
                     elif status == "none":
-                        if item["isDraft"]:
-                            item["actionReason"] = "draft pull request"
-                        elif not issue_number:
-                            item["actionReason"] = (
-                                "no board ticket names this pull request"
-                            )
-                        elif not builder_check_passes(pull, rows, head):
-                            item["actionReason"] = (
-                                "the builder check does not name this head"
-                            )
+                        if not builder_check_passes(pull, rows, head):
+                            item["state"] = "check-missing"
+                            item["action"] = "check"
+                            item["actionReason"] = "the builder check does not name this head"
+                            item["actionCommand"] = f"coordq pr-action check {repo}#{pull['number']} --head {head}"
                         else:
+                            item["state"] = "check-passed-no-gate"
                             item["action"] = "gate"
                             item["actionCommand"] = (
-                                f"coordq gate {repo}#{pull['number']}"
+                                f"coordq gate {repo}#{pull['number']} --head {head}"
                             )
                     else:
                         item["actionReason"] = {
                             "pass": "gate PASS",
-                            "running": "the gate is running",
+                            "live": "the gate thread is live",
                             "queued": "a gate for this head is on its way",
+                            "ended-no-verdict": "the gate ended without a verdict",
+                            "unreadable": "the gate thread could not be read",
                         }.get(status, "")
+                        item["state"] = {
+                            "pass": "gate-pass",
+                            "live": "gate-live",
+                            "queued": "gate-queued",
+                            "ended-no-verdict": "gate-ended-no-verdict",
+                            "unreadable": "gate-unreadable",
+                        }.get(status, "in-flight")
+                        if status == "queued":
+                            item["action"] = "gate"
+                            item["actionReason"] = "gate is queued"
+                        if status == "ended-no-verdict":
+                            item["action"] = "regate"
+                            item["actionCommand"] = f"coordq pr-action regate {repo}#{pull['number']} --head {head}"
+                        elif status == "unreadable":
+                            item["action"] = "needs-you"
+                        elif status == "pass":
+                            item["action"] = "fix"
+                            item["actionReason"] = "gate PASS; merge-main fix needed"
+                            item["actionCommand"] = f"coordq pr-action merge-fix {repo}#{pull['number']} --head {head}"
                     if verdict == "PASS":
                         item["reason"] = "gate PASS"
                         if external:
@@ -3353,7 +3445,7 @@ def fix_command(repo: str, number: int, head: str, builder: str, report: str) ->
     The command is short on purpose: the queue reads the gate's own
     report and the builder thread, so the tick carries one line per item
     and not the whole report."""
-    return f"coordq fix {repo}#{number}"
+    return f"coordq fix {repo}#{number} --head {head}"
 
 
 def policy_repos(cfg: dict, override: object) -> list[tuple[str, str]]:
@@ -4469,6 +4561,35 @@ def read_work_items(
     return receipt_items(result), receipts, ""
 
 
+def dispatch_shift_actions(items: list[dict], deadline: float) -> bool:
+    """Run the selected pull request commands once through coordq."""
+    worked = False
+    for item in items:
+        if item.get("kind") != "pull-request" or not item.get("actionCommand"):
+            continue
+        action = item.get("action")
+        if action not in {"gate", "fix", "finish", "link", "check", "rebase", "regate"}:
+            continue
+        command = shlex.split(item["actionCommand"])
+        left = deadline - time.monotonic()
+        if left <= 0:
+            emit("overnight: pull request action deadline passed", err=True)
+            return True
+        try:
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    timeout=max(1, min(GH_TIMEOUT, int(left))),
+                                    check=False)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            emit(f"overnight: {action} {item.get('repo')}#{item.get('number')} failed: {exc}", err=True)
+            continue
+        output = (result.stdout or result.stderr or "").strip().splitlines()
+        emit(f"overnight: {action} {item.get('repo')}#{item.get('number')}: "
+             + (output[-1][:240] if output else f"exit {result.returncode}"),
+             err=result.returncode != 0)
+        worked = True
+    return worked
+
+
 def write_receipts(
     root: Path,
     items: list[dict],
@@ -4539,6 +4660,8 @@ def board_item(order: int, group: str, item: dict) -> dict:
         "action": action,
         "actionReason": item.get("actionReason") or "",
         "actionCommand": item.get("actionCommand") or "",
+        "state": item.get("state") or (item.get("actionReason") or "in-flight"),
+        "updatedAt": item.get("updatedAt") or "",
     }
     if action != "none" and item.get("reason"):
         row["reason"] = item["reason"]
@@ -4561,6 +4684,19 @@ def board_item(order: int, group: str, item: dict) -> dict:
     if item.get("split") is not None:
         row["split"] = bool(item.get("split"))
     return row
+
+
+def pr_state_metrics(items: list[dict]) -> tuple[dict[str, int], int, dict[str, dict]]:
+    states: dict[str, int] = {}
+    oldest: dict[str, dict] = {}
+    for item in items:
+        state = item.get("state") or "in-flight"
+        states[state] = states.get(state, 0) + 1
+        current = oldest.get(state)
+        if current is None or (item.get("updatedAt") or "") < (current.get("updatedAt") or ""):
+            oldest[state] = {"repo": item.get("repo"), "number": item.get("number"),
+                             "head": item.get("head"), "updatedAt": item.get("updatedAt")}
+    return states, sum(item.get("action") == "none" for item in items), oldest
 
 
 BOARD_RULES = {
@@ -4643,10 +4779,12 @@ def cmd_board(args: argparse.Namespace) -> int:
             if args.action and row["action"] == "none":
                 continue
             items.append(row)
-    actions = {"start": 0, "gate": 0, "fix": 0, "none": 0}
+    actions: dict[str, int] = {}
     for item in items:
         actions[item["action"]] = actions.get(item["action"], 0) + 1
     pull_requests = sum(1 for item in items if item["kind"] == "pull-request")
+    pr_items = [item for item in items if item["kind"] == "pull-request"]
+    states, no_action, oldest = pr_state_metrics(pr_items)
     no_gate = [
         item
         for item in items
@@ -4666,6 +4804,9 @@ def cmd_board(args: argparse.Namespace) -> int:
             "pullRequestsWithoutAGate": len(no_gate),
         },
         "actions": actions,
+        "states": states,
+        "noAction": no_action,
+        "oldestByState": oldest,
         "groups": {name: len(bucket) for name, bucket in groups},
         "gates": {
             "queuedHeads": len(queue["gatedHeads"]),
