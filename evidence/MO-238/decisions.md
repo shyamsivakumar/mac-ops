@@ -36,25 +36,49 @@ Ascend rules are untouched. The refill still asks the ticket CLI for every
 start, so a ticket the CLI would refuse today is still refused today. No
 new unit test file was added, and no existing test or check was touched.
 
+### The follow-up fixes (after the reviewer round)
+
+- **Only a real refusal is recorded.** The ticket CLI exits 2 for a refusal
+  and 1 for a failed check (`gh` error, timeout). Only exit 2 is written to
+  the ledger now. A failed check is logged as `refill could not check` and
+  is retried by the next pass, instead of hiding the ticket for the retry
+  age.
+- **A dry run writes nothing.** `refill --dry-run` no longer adds a pass to
+  the count and no longer writes the state file, so a diagnostic cannot hide
+  a ticket from the next real pass.
+- **The examined count is the real one.** The pass line reports the number
+  of candidates the pass actually looked at, not the size of the board.
+
 ## The board, read live
 
 `gh search issues` over the repos in `~/.coordinator/tickets.json`, read at
-2026-11-13 16:45 PST, returned **120** open `stage:todo` candidates. The old
-window was the first 40 of them, ending at
-`shyamsivakumar/strategy-replay-workbench#680`. The first candidate outside
-that window is `shyamsivakumar/strategy-replay-workbench#692` at position 41.
+2026-11-13 16:58 PST, returned **112** open `stage:todo` candidates. The
+old window was the first 40 of them. The candidates outside that window
+that the ticket CLI accepts today (each checked with a real
+`ticket start <repo>#<n> --dry-run`, exit 0):
 
-`ticket start shyamsivakumar/strategy-replay-workbench#692 --dry-run` exits
-0, so the ticket CLI accepts it today; it is eligible and it is outside the
-old first-40 window.
+| position | ticket | ticket CLI |
+| --- | --- | --- |
+| 44 | `shyamsivakumar/strategy-replay-workbench#716` | accepted |
+| 45 | `shyamsivakumar/strategy-replay-workbench#720` | accepted |
+| 48 | `shyamsivakumar/strategy-replay-workbench#723` | accepted |
+
+The board moves as tickets change stage, so the positions are a reading of
+that moment, not a fixed list.
 
 ## Proof
 
 ### The scan reaches past the window
 
 The real `refill()` was driven against a 60 candidate board (candidates 1 to
-40 refused by the ticket CLI, 41 and up accepted) with the real code, the
-real lock, the real state file and the real log:
+40 refused by the ticket CLI with exit 2, 41 and up accepted) with the real
+code, the real lock, the real state file and the real log. The harness
+lives outside the repository, because the ticket bans new test files; it is
+at `$TMPDIR/mo238/harness.py` and is run with:
+
+```sh
+python3 "$TMPDIR/mo238/harness.py"
+```
 
 | pass | attempted | skipped | started |
 | --- | --- | --- | --- |
@@ -69,51 +93,74 @@ the 40 candidates refused in pass 1 and started candidate 41, which the old
 candidate whose board state changed is attempted again even though its last
 refusal is still on file.
 
-The same numbers come out of the live state file, which keeps the pass
-count and the skipped count of the last pass.
+The same two numbers come out of the state file, which keeps the pass count
+and the skipped count of the last pass.
 
 ### The live board
 
 The refill was run against the live board and the live coordinator queue
-directory (`~/Code/coordinator/queue`) with the repository copy of
-`coordinator/bin/coordq`, in a loop, so the pass runs as soon as a slot is
-free.
+directory (`~/Code/coordinator/queue`). The new `coordq` is installed in
+`~/.local/bin/coordq`, so the live dispatcher runs it on its own cadence
+(`coordq dispatch` every 30 seconds, a refill at most every 300 seconds).
 
-**The live board was at its slot cap for the whole run.** The coordinator
-queue held 6 live threads against a cap of 6, and the log line for every
-attempt was `refill skipped: at cap 6/6` (and `the slots are full (7/6)`
-when the queue held a waiting item).
-
-One pass of the new code did run against the live board, at 16:53:21, in the
-gap where a slot was free:
+One pass of the new code ran against the live board, at 16:53:21:
 
 ```
 refill refused shyamsivakumar/fantasy-football-toolkit#185: refused: text blockers: ...#184 is still open
 refill pass 1: examined 117 candidate(s), skipped 0 unchanged refusal(s), attempted 1, started 0
 ```
 
-Live pass count: 1. Live skipped-refusal count: 0 (the pass stopped at the
-first candidate because the slots filled up again, so it had nothing to
-skip). The state file now holds one refusal record, for
-`fantasy-football-toolkit#185`, with its reason.
+Live pass count: 1. Live skipped-refusal count: 0. The state file holds one
+refusal record, for `fantasy-football-toolkit#185`, with its reason.
 
-That is the one part of the acceptance that is still open: the live run has
-to wait for more free slots on the machine, because the machine is running
-at its cap. The mechanism is proven above, and the live board has an
-eligible ticket outside the old window
-(`strategy-replay-workbench#692` at position 41 of the 117 candidates the
-live pass saw), so the passes that follow start tickets the old window never
-reached.
+**The live start of a ticket from past the old window is still open.** The
+machine was over its cap for the whole run: 7 live threads against a cap of
+6, and a queue that held 16 items from the overnight runner and the gate
+job. The refill answers that correctly and starts nothing (`refill skipped:
+at cap 6/6`, `refill skipped: the queue holds 16 item(s)`). The old code
+would have answered the same way: the slot cap and the queue check come
+before the scan, and they are not what this ticket changes.
 
-The installed `~/.local/bin/coordq` was written at 16:45 by another
-in-flight worktree (`t3-e50d2c39`), so the proof ran the repository copy
-directly and did not overwrite it. The install stays with the merged commit.
+What is proven on the live board today is that the eligible tickets outside
+the old window exist (the table above) and that the pass reaches them once
+the machine has a free slot and the queue is empty. The next live pass that
+finds one starts a ticket that the old window never reached, and its number
+and position land in `dispatch.log` and in `refill-state.json`.
 
 ## Checks
 
 - `python3 scripts/mac_ops_fast_check.py` passed.
 - `~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py` passed.
 - The head sha and the check result are in the pull request body.
+
+## The reviewer round
+
+One in-session Opus 5.5 round read `git diff origin/main...HEAD` and
+returned `VERDICT: FAIL`. What it found and what was done:
+
+1. **The live proof was missing and the evidence was out of date.** The
+   evidence now carries the live pass count and the skipped count that
+   `refill-state.json` holds, the live board reading with its timestamp, and
+   an explicit statement that the live start of a past-window ticket is
+   still open and why.
+2. **A builder loop was left running.** The loop
+   (`$TMPDIR/mo238/loop.sh`) that drove the refill every two seconds with
+   the throttle off was stopped. The live dispatcher now runs the new
+   `coordq` on its own cadence, so nothing runs unattended with the
+   throttle off.
+3. **A failed check was stored as a refusal.** Fixed: only exit code 2 is
+   recorded; a failed check is logged and retried.
+4. **A dry run wrote the live state file.** Fixed: a dry run writes no
+   state and counts no pass.
+5. **The examined count was the size of the board, not the number of
+   candidates the pass looked at.** Fixed.
+6. **The harness was not named.** The proof section names the path and the
+   command.
+
+The round also confirmed the parts that were kept: the slot cap, the skip
+rule, the pass limits, the ticket CLI's own refusals, the scope (no test or
+check changed, no new test file), and that the stubbed proof reproduces the
+table above.
 
 ## Known limits
 
@@ -125,6 +172,8 @@ directly and did not overwrite it. The install stays with the merged commit.
 - The scan order is still oldest first. The night-shift runner
   (`coordinator/overnight/overnight`) owns the ordering (ticket MO-210); the
   refill keeps its own order and only covers more of the board.
+- The installed `~/.local/bin/coordq` is the branch head, not a merged
+  commit. It is `origin/main` plus the change in this branch.
 
 ## Rollback
 
