@@ -27,6 +27,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
 | `overnight shift --dry-run` | The command the launchd job fires. Every run is one cycle: it reads the policy snapshot, reads the board under the snapshot's allow list, orders it and writes the cycle's line to `run/shift-log.md`. The shift runs 24x7, so there is no night window and no part of the night, and the shift is never armed. The morning report is on demand (`overnight report`), not something the job writes. |
 | `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
+| `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order. `--dry-run` prints the receipt and writes no file. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
@@ -109,6 +110,46 @@ purpose. `overnight report --dry-run` prints the report and writes no
 file. `overnight shift --dry-run` does no work on the board and writes
 only the cycle's line in the shift log, because that line is the cycle's
 record, not work.
+
+## The receipt per item
+
+A receipt is the only proof the shift has, so it is written on every state
+change of an item and is rewritten when the item's state or its evidence
+changes. A receipt that says the same thing is left alone, so the folder
+holds the record of the state changes and not a copy of the same state
+every cycle.
+
+```sh
+overnight receipt --repo shyamsivakumar/mac-ops --number 181
+overnight receipt --items 3
+```
+
+A cycle writes the receipts: a real `overnight shift` cycle reads the
+board under the policy snapshot, writes the receipt of every item it sees
+and writes one line per receipt to the shift log. It still starts no
+builder and works no board item, so a cycle that cannot start work still
+leaves the record of what it saw. A dry run writes no receipt.
+
+Every field is read, never claimed:
+
+| Field | Where it comes from |
+| --- | --- |
+| `State` | What the pull request and the gate really show: `done` when GitHub says the pull request merged, `ready` when the gate passed and the shift has no merge right, `stuck` for everything else. |
+| `PR` | The pull request the board links to the item. |
+| `Checks` | `gh pr checks <n> -R <repo>` and its exit code. A check counts as run only when the receipt names the command and its exit code. |
+| `Failing checks` | The checks that failed, as GitHub names them. |
+| `Gate` | The gate's own last line (`VERDICT: PASS` or `VERDICT: FAIL`) read from the gate thread of that head, or from the pull request's own review when there is no gate thread. `UNKNOWN` when neither can be read. |
+| `Files` | How many files the pull request touches. |
+| `Builder thread` | The thread the coordinator built the pull request in. |
+| `Time used` | The builder's own time: the minutes between the thread's own created and updated times. A night that ran no builder says `0 min`. |
+| `Observed` | How long the shift spent looking at the item, in seconds. |
+| `Stopped because` | Why the item stopped, derived from the evidence above. |
+| `Next` | The next step, derived from the evidence above. |
+
+The receipt never carries a model claim where a proof belongs: the gate
+verdict comes from the gate, the checks come from the command that ran
+them and the builder time comes from the thread's own times. The cycle
+writes the receipt, so no agent writes one by hand.
 
 ## What the filter drops
 
@@ -258,7 +299,7 @@ revision 3 changes them.
 | `run/armed` | The attended first night only | Shift id and start time of the rehearsal. The shift is always armed (revision 3). |
 | `run/deadline` | The attended first night only | UNIX epoch the rehearsal ends at. The shift has no deadline (revision 3). |
 | `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
-| `receipts/<item>.md` | A cycle | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
+| `receipts/<item>.md` | A cycle (`overnight receipt`) | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
 | `inbox/parking-lot.md` | A cycle | Decisions the shift could not make. Each with a default and a recommendation. |
 | `inbox/snag-log.md` | A cycle | Problems found (flaky test, conflict, dialog) and what the shift did. |
 | `run/shift-log.md` | All steps | One line per event, with PT time. It also states how the night ended (`ended: deadline`, `ended: all done`, `ended: STOP` or `ended: stall`). |
