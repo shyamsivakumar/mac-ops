@@ -380,7 +380,27 @@ def changed_launchd_jobs(
     return jobs
 
 
-def reload_job(label: str, plist: Path, uid: int) -> str:
+def job_released(label: str, uid: int, timeout: float = 15.0) -> bool:
+    """Wait until launchd lets go of the label, and say whether it did.
+
+    launchd keeps the old service for a moment after the bootout. A
+    bootstrap that arrives while the old service is still winding down is
+    refused with "Operation already in progress", so waiting for the
+    release belongs to the reload: the bootout and the bootstrap still run
+    once each, and nothing is retried with other flags."""
+    deadline = time.monotonic() + timeout
+    while True:
+        code = run_status(["launchctl", "print", f"gui/{uid}/{label}"])
+        if code is None:
+            return False
+        if code != 0:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
+def reload_job(label: str, plist: Path, uid: int, timeout: float = 15.0) -> str:
     """Reload one launchd job and report what launchctl said.
 
     The job is booted out first, then bootstrapped from the written plist.
@@ -395,12 +415,22 @@ def reload_job(label: str, plist: Path, uid: int) -> str:
             f"Refused to reload the launchd job {label}: launchctl bootout "
             f"gui/{uid}/{label} failed: {error}"
         )
+    if not job_released(label, uid, timeout):
+        return (
+            f"Refused to reload the launchd job {label}: launchd kept the job "
+            f"after the bootout, so the new plist was not loaded."
+        )
     code, error = run_status_text(["launchctl", "bootstrap", f"gui/{uid}", str(plist)])
     if code == 0:
         return f"Reloaded the launchd job {label}."
+    if job_loaded(label):
+        return (
+            f"Reloaded the launchd job {label}: launchd had loaded the new "
+            f"plist itself."
+        )
     return (
         f"Refused to reload the launchd job {label}: launchctl bootstrap "
-        f"gui/{uid} {plist} failed: {error}"
+        f"gui/{uid} {plist} failed: {error} The job is not loaded now."
     )
 
 
