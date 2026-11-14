@@ -33,6 +33,14 @@ REFILL_BUDGET = float(os.environ.get("COORDQ_REFILL_BUDGET", "120"))
 REFILL_MAX = int(os.environ.get("COORDQ_REFILL_MAX", "40"))
 REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "200"))
 STAGE = "stage:todo"
+# The gate keeps a PR that it cannot gate on a report file, so the coordinator
+# tick can see it. A PR that is skipped on the same head this many times is
+# stuck; a new head starts the count again.
+STUCK_COUNT = 3
+STUCK_FILE = "gatekeep-stuck.txt"
+TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
+ROUTER_SOURCE = os.path.expanduser("~/.pi/agent/extensions/task-router.ts")
 
 
 def path(name):
@@ -263,6 +271,14 @@ def cmd_start(a):
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
         queue["next"] += 1
         queue["items"].append(item)
+        # A gate request takes its head with it, so gatekeep does not queue
+        # a second gate for the same head.
+        request_id = str(args.get("clientRequestId") or "")
+        if request_id.startswith("gate:"):
+            heads = queue.setdefault("gatedHeads", {})
+            if request_id in heads:
+                die(f"refused: a gate for this head is already recorded as coordq #{heads[request_id]}")
+            heads[request_id] = item["id"]
         save(queue)
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
@@ -462,7 +478,10 @@ def cmd_drop(a):
 
 
 def cmd_status(a):
-    print(json.dumps({"cap": cap(), "live": live(), "queued": len(load()["items"])}))
+    stuck = [f"{pr} {value['head']} {value['reason']}"
+             for pr, value in sorted(load_counts().items())
+             if value.get("count", 0) >= STUCK_COUNT]
+    print(json.dumps({"cap": cap(), "live": live(), "queued": len(load()["items"]), "stuck": stuck}))
 
 
 
@@ -472,17 +491,133 @@ def gh_json(endpoint):
     if run.returncode:
         raise RuntimeError(f"GitHub request failed: {endpoint}")
     pages = json.loads(run.stdout)
-    return [row for page in pages for row in page]
+    rows = []
+    for page in pages if isinstance(pages, list) else [pages]:
+        if isinstance(page, list):
+            rows.extend(page)
+        else:
+            rows.append(page)
+    return rows
+
+
+def load_receipts():
+    try:
+        with open(path("dispatch-receipts.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def issue_key(repo, number):
+    """The ticket key of an issue, taken from its title ('MO-233 · ...').
+
+    The key number is not the issue number: issue 226 of mac-ops is the
+    ticket MO-233.
+    """
+    rows = gh_json(f"repos/{repo}/issues/{number}")
+    if not rows:
+        return None
+    match = TITLE_KEY.match(rows[0].get("title") or "")
+    return match.group(0) if match else None
+
+
+def builder_thread_for_key(key):
+    code, out = call("t3_thread_list", {"allProjects": True, "titleContains": f"{key} ·", "limit": 100})
+    if code:
+        raise RuntimeError(f"cannot list the threads of {key}")
+    threads = [t for t in json.loads(out).get("threads", [])
+               if not REVIEW_TITLE.search(t.get("title") or "")]
+    if not threads:
+        return None
+    newest = max(threads, key=lambda t: (t.get("createdAt") or "", t.get("threadId") or ""))
+    return newest.get("threadId")
+
+
+def builder_thread_for_issue(repo, issue):
+    """The builder thread of an issue, found through the ticket key.
+
+    A build that no `ticket start` receipt covers has no receipt to read.
+    """
+    key = issue_key(repo, issue)
+    if not key:
+        return None
+    return builder_thread_for_key(key)
+
+
+def router_chain(route):
+    """The fallback chain of a pi task route, in the order the router tries it."""
+    try:
+        with open(ROUTER_SOURCE) as f:
+            source = f.read()
+    except OSError:
+        return None
+    routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
+    name = route.removeprefix("task/")
+    chain = re.search(r"^\s*" + re.escape(name) + r":\s*\[([^\]]*)\]", routes[1], re.M) if routes and route.startswith("task/") else None
+    if not chain:
+        return None
+    try:
+        entries = json.loads("[" + chain[1].rstrip().rstrip(",") + "]")
+    except ValueError:
+        return None
+    if not entries or not all(isinstance(m, str) and "/" in m for m in entries):
+        return None
+    return entries
+
+
+def read_builder_thread(thread_id):
+    code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1, "runLimit": 5})
+    if code:
+        raise RuntimeError("cannot read builder run")
+    result = json.loads(out)
+    return result.get("thread", {}), result.get("recentRuns", [])
+
+
+def is_anthropic(model):
+    lowered = model.lower()
+    return "claude" in lowered or "anthropic" in lowered
+
+
+def builder_models(thread, runs):
+    """The models the builder run executed.
+
+    The run reports the model it executed. A run that reports none gives no
+    evidence, and a router route is no evidence either: its chain says what
+    the router would run, not what it ran. A block that expired since the
+    build hides which model the router fell back to, so a route that can run
+    an Anthropic model gives no evidence at all.
+    """
+    models = executed_models(runs[0]) if runs else []
+    if models:
+        return models
+    instance, stored = thread.get("providerInstanceId"), thread.get("model")
+    if instance == "router" or (isinstance(stored, str) and stored.startswith("task/")):
+        entries = router_chain(stored if isinstance(stored, str) else "")
+        if not entries or any(is_anthropic(m) for m in entries):
+            return []
+        return entries
+    if not isinstance(stored, str) or not stored or not instance:
+        return []
+    return ["claude" if instance == "claudeAgent" else stored]
+
+
+def reviewer_model(models):
+    """A Claude builder gets Sol; every other builder gets Opus."""
+    return SOL_MODEL if any(is_anthropic(m) for m in models) else OPUS_MODEL
 
 
 def gate_candidates(config):
+    """The gate candidates and the skips of one gatekeep run.
+
+    Every event carries the pull request it belongs to, so the caller can
+    count the skips of a pull request and report the ones it cannot gate.
+    """
     login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
                                capture_output=True, text=True, timeout=40)
     if login_run.returncode:
         raise RuntimeError("cannot identify authenticated GitHub user")
     login = login_run.stdout.strip()
-    with open(path("dispatch-receipts.json")) as f:
-        receipts = json.load(f)
+    receipts = load_receipts()
     skipped = set()
     for repo, settings in config["repos"].items():
         for pr in gh_json(f"repos/{repo}/pulls?state=open&per_page=100"):
@@ -505,44 +640,25 @@ def gate_candidates(config):
                 intents = [e for e in ledger if e.get("kind") == "intent"]
                 if intents and max(e["attempt"] for e in intents) != receipt["attempt"]:
                     continue
-                thread_id = receipts.get(receipt["requestId"])
+                # The receipt names the builder run. A build that no receipt
+                # covers is found through the ticket key of the issue.
+                thread_id = receipts.get(receipt["requestId"]) or builder_thread_for_issue(repo, issue)
                 if not thread_id:
-                    print(f"skip {repo}#{number}: builder dispatch receipt unavailable", file=sys.stderr)
+                    if (repo, number) not in skipped:
+                        print(f"skip {repo}#{number}: builder run not found", file=sys.stderr)
+                        skipped.add((repo, number))
+                        yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                               "reason": "builder run not found"}
                     continue
-                code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1})
-                if code:
-                    raise RuntimeError("cannot read builder run")
-                result = json.loads(out)
-                runs = result.get("recentRuns", [])
-                models = executed_models(runs[0]) if runs else []
+                thread, runs = read_builder_thread(thread_id)
+                models = builder_models(thread, runs)
                 if not models:
-                    thread = result.get("thread", {})
-                    instance, stored = thread.get("providerInstanceId"), thread.get("model")
-                    reason = None
-                    if not isinstance(stored, str) or not stored or not instance:
-                        reason = "stored builder model unavailable"
-                    elif instance == "router":
-                        try:
-                            with open(os.path.expanduser("~/.pi/agent/extensions/task-router.ts")) as f:
-                                source = f.read()
-                            routes = re.search(r"const ROUTES: Record<string, string\[\]> = \{(.*?)\n\};", source, re.S)
-                            chain = re.search(r"^\s*" + re.escape(stored.removeprefix("task/")) + r":\s*\[([^\]]*)\]", routes[1], re.M) if routes and stored.startswith("task/") else None
-                            entries = json.loads("[" + chain[1].rstrip().rstrip(",") + "]") if chain else []
-                            if not entries or not all(isinstance(m, str) and "/" in m for m in entries):
-                                reason = "router chain unavailable"
-                            elif any("claude" in m.lower() or "anthropic" in m.lower() for m in entries):
-                                reason = "router chain includes Claude"
-                            else:
-                                models = entries
-                        except (OSError, ValueError):
-                            reason = "router chain unavailable"
-                    else:
-                        models = ["claude" if instance == "claudeAgent" else stored]
-                    if reason:
-                        if (repo, number) not in skipped:
-                            print(f"skip {repo}#{number}: {reason}", file=sys.stderr)
-                            skipped.add((repo, number))
-                        continue
+                    reason = "executed model unavailable"
+                    if (repo, number) not in skipped:
+                        print(f"skip {repo}#{number}: {reason}", file=sys.stderr)
+                        skipped.add((repo, number))
+                        yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head, "reason": reason}
+                    continue
                 statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
                 checks = [x for x in statuses if x["context"] == "srw/agent-check"]
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -552,11 +668,13 @@ def gate_candidates(config):
                     passed = f"Builder check: PASS {head}" in body.splitlines()
                 if not passed:
                     continue
-                model = SOL_MODEL if any("claude" in m.lower() for m in models) else OPUS_MODEL
+                model = reviewer_model(models)
                 key = f"gate:{repo}#{number}:{head}"
                 ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
                 merge = ("Ascend repo: do not merge; stop at the verdict." if ascend else
                          f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
+                close = (" Ascend repo: do not close the issue." if ascend else
+                         f" Only when that merge produced a merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
                 check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
                          if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
                 message = f"""{settings['key']}-{issue} review and merge · #{number} {head}
@@ -565,10 +683,11 @@ Read the ticket and diff only: `git fetch origin && git diff origin/main...{head
 {check} Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
-{merge} Never call emp. Never print secrets."""
-                yield key, {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
-                            "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
-                            "clientRequestId": key, "message": message}
+{merge}{close} Never call emp. Never print secrets."""
+                yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
+                       "args": {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
+                                "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+                                "clientRequestId": key, "message": message}}
                 break
 
 
@@ -585,13 +704,29 @@ def cmd_gatekeep(a):
     with open(a.config) as f:
         config = json.load(f)
     try:
-        for key, args in gate_candidates(config):
+        counts = load_counts()
+        seen = set()
+        stuck = []
+        for event in gate_candidates(config):
+            if event["kind"] == "skip":
+                pr = event["pr"]
+                previous = counts.get(pr)
+                count = previous["count"] + 1 if previous and previous.get("head") == event["head"] else 1
+                counts[pr] = {"head": event["head"], "count": count, "reason": event["reason"]}
+                seen.add(pr)
+                if count >= STUCK_COUNT:
+                    stuck.append((pr, event["head"], event["reason"]))
+                continue
+            counts.pop(event["pr"], None)
+            key, args = event["key"], event["args"]
             with Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
                 if key in heads:
                     continue
-                print(("would queue " if a.dry_run else "queued ") + key, flush=True)
+                print(("would queue " if a.dry_run else "queued ") + key
+                      + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
+                      flush=True)
                 if a.dry_run:
                     continue
                 item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
@@ -600,8 +735,36 @@ def cmd_gatekeep(a):
                 queue["items"].append(item)
                 heads[key] = item["id"]
                 save(queue)
+        write_counts(counts, seen, stuck, a.dry_run)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
         die(f"gatekeep stopped: {e}")
+
+
+def load_counts():
+    counts = load().get("gatekeepSkips")
+    return counts if isinstance(counts, dict) else {}
+
+
+def write_counts(counts, seen, stuck, dry_run):
+    """Keep the skip counts and write the report of the stuck pull requests.
+
+    The file is written from scratch every run, so a pull request that is
+    gated or gone leaves it.
+    """
+    for pr, head, reason in stuck:
+        print(f"stuck {pr} {head} {reason}", file=sys.stderr)
+    if dry_run:
+        return
+    kept = {pr: value for pr, value in counts.items() if pr in seen}
+    with Lock(True):
+        queue = load()
+        queue["gatekeepSkips"] = kept
+        save(queue)
+    lines = [f"{pr} {head} {reason}" for pr, head, reason in sorted(stuck)]
+    tmp = path(STUCK_FILE + ".tmp")
+    with open(tmp, "w") as f:
+        f.write("".join(line + "\n" for line in lines))
+    os.replace(tmp, path(STUCK_FILE))
 
 
 def main():

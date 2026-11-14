@@ -1,0 +1,109 @@
+# MO-223 reviewer round
+
+One in-session reviewer round (Claude Opus 5.5, `claude-opus-5-5`) read
+`git diff origin/main...HEAD` against MO-223 and returned `VERDICT: PASS`
+with no blocking findings and seven minor findings. Every finding is
+fixed here. The probes below are the runs that show each fix.
+
+## 1. The decisions file pointed at a file that did not exist. Fixed.
+
+The file said the reviewer findings were in this log, and the log did not
+exist yet.
+
+- **Probe**: this file, and `evidence/MO-223/decisions.md`, which names
+  it.
+
+## 2. The hour rule and launchd read different clocks. Fixed.
+
+`shift_phase` read the hour in `America/Los_Angeles` while launchd fires
+`StartCalendarInterval` on the Mac's local clock. On this Mac they are the
+same, but a Mac that changed time zone would have printed "outside the
+overnight window" on every run and exited 0, so nothing would ever run
+and nothing would ever fail.
+
+- **Fix**: the dispatch reads the Mac's local clock, the clock launchd
+  fires on. The report and the log still say Pacific time, and a Mac that
+  is not on Pacific time is told so in the log.
+- **Probe**: the phase rule run below.
+
+## 3. A late wake skipped the morning report. Fixed.
+
+launchd fires a missed calendar event when the Mac wakes. A wake at 07:05
+was hour 7, which was "outside", so the report was not written.
+
+- **Fix**: the windows are an hour wide. The start window is 22:00–23:59
+  and the report window is 06:00–07:29.
+- **Probe**: the phase rule run below.
+
+## 4. The `--dry-run` flag meant two things. Fixed in the words.
+
+`report --dry-run` prints the report and writes no file. `shift --dry-run`
+writes the morning report, because the report is the record of the night,
+not work. The code was right; the words did not say so.
+
+- **Fix**: the module docstring, the command table and the README now say
+  this in one place each, so whoever builds T4 and T5 does not read the
+  same flag two ways.
+
+## 5. The report proof did not run the command the job runs. Fixed.
+
+The log ran `shift --at report` without `--dry-run`; the job passes
+`--dry-run`.
+
+- **Fix**: `evidence/MO-223/dry-run-report.log` runs the job's own
+  command, `overnight shift --at report --dry-run`. It writes only
+  `receipts/morning-2026-11-13.md`.
+
+## 6. The install message gave an incomplete load command. Fixed.
+
+The message printed `launchctl bootstrap` only, and a job that is already
+loaded fails that with "already loaded".
+
+- **Fix**: the message now says to bootout first (a job that is not
+  loaded says so) and then bootstrap.
+
+## 7. Two comments restated the code, and the README said "seconds". Fixed.
+
+- **Fix**: the comments above `OVERNIGHT_JOB` and above the shift windows
+  that only repeated the code are gone. The README no longer says the job
+  "runs for seconds": the start has a nine minute deadline, and the reason
+  no lock is needed is that launchd never starts a second copy of a
+  running job and the two runs are eight hours apart.
+
+## Probes
+
+The phase rule, over the windows the README names:
+
+```
+2026-11-13 22:00 start   2026-11-13 22:30 start   2026-11-13 23:59 start
+2026-11-14 06:30 report  2026-11-14 07:05 report  2026-11-14 07:29 report
+2026-11-14 05:59 outside 2026-11-14 07:30 outside 2026-11-14 12:00 outside
+2026-11-14 00:30 outside 2026-11-14 21:59 outside
+```
+
+Every case matched the window it belongs to.
+
+The job's own command, on this Mac:
+
+```
+$ ~/.local/bin/overnight shift --at report --dry-run
+overnight: 2026-11-13 14:15 PST morning report
+overnight: wrote /Users/shyamsivakumar/Code/coordinator/.overnight/receipts/morning-2026-11-13.md
+```
+
+After it, `run/`, `inbox/` and `staging/` were empty and `receipts/` held
+that one file (`evidence/MO-223/dry-run-report.log`).
+
+The loaded job:
+
+```
+$ launchctl print gui/$(id -u)/dev.coordinator.overnight
+runs = 3
+last exit code = 0
+```
+
+(`evidence/MO-223/launchctl-print.log`, `evidence/MO-223/kickstart-run.log`.)
+
+The checks after the fixes: `python3 scripts/mac_ops_fast_check.py` and
+`~/.local/bin/heavy python3 -m unittest discover -s tests -t .`, both in
+the pull request body.

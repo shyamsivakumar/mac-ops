@@ -1,0 +1,63 @@
+{
+ "shyamsivakumar/mac-ops": [
+  {
+   "number": 900,
+   "title": "MO-900 \u00b7 A clean ticket",
+   "body": "Do the work."
+  },
+  {
+   "number": 901,
+   "title": "MO-901 \u00b7 A held ticket",
+   "body": "HOLD: wait for the census chain."
+  },
+  {
+   "number": 902,
+   "title": "MO-902 \u00b7 A ticket that needs Shyam",
+   "body": "Nothing to add. Needs Shyam: pick one of the two."
+  },
+  {
+   "number": 903,
+   "title": "MO-903 \u00b7 A ticket that needs a design",
+   "body": "design needed before any code is written."
+  },
+  {
+   "number": 904,
+   "title": "AUH-1 \u00b7 An Ascend key in a personal repo",
+   "body": "Ascend work."
+  },
+  {
+   "number": 907,
+   "title": "MO-907 \u00b7 A ticket with a parked question",
+   "body": "Work."
+  },
+  {
+   "number": 908,
+   "title": "MO-908 \u00b7 A ticket with an OPEN question",
+   "body": "Work."
+  },
+  {
+   "number": 909,
+   "title": "MO-909 \u00b7 A ticket with a Q: question",
+   "body": "Work."
+  },
+  {
+   "number": 910,
+   "title": "MO-910 \u00b7 A ticket Shyam was asked about",
+   "body": "Work."
+  }
+ ],
+ "slash-eureka/dbt": [
+  {
+   "number": 905,
+   "title": "DBT-9 \u00b7 An Ascend repository",
+   "body": "Ascend work."
+  }
+ ],
+ "shyamsivakumar/not-on-the-list": [
+  {
+   "number": 906,
+   "title": "NTL-1 \u00b7 A repository off the allow list",
+   "body": "Work."
+  }
+ ]
+}

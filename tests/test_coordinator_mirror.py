@@ -24,15 +24,20 @@ BUN = shutil.which("bun")
 
 PROBE = """
 import { mirrorText } from "%(extension)s";
+const paste = Array.from({length: 100}, (_, i) => `line ${i} of the pasted alert block`).join("\\n");
 const cases = [
-  ["mirror test, reply OK", "OK"],
-  ["From Shyam (phone): Testing from phone", "a reply"],
-  ["Tick (auto-wake). Run one tick", "NOOP"],
-  ["Tick (auto-wake). Run one tick", "ALERT: something"],
-  ["what is left?", ""],
-  ["what is left?", "line one\\n- bullet\\n| a | b |"],
+  ["mirror test, reply OK", "OK", undefined],
+  ["From Shyam (phone): Testing from phone", "a reply", undefined],
+  ["Tick (auto-wake). Run one tick", "NOOP", undefined],
+  ["Tick (auto-wake). Run one tick", "ALERT: something", undefined],
+  ["what is left?", "", undefined],
+  ["what is left?", "line one\\n- bullet\\n| a | b |", undefined],
+  ["short typed message", "reply to it", undefined],
+  [paste, "reply to the paste", undefined],
+  ["", "reply to an event run", "GitHub bot note"],
+  ["", "reply to a run with no custom message", undefined],
 ];
-console.log(JSON.stringify(cases.map(([p, r]) => mirrorText(p, r))));
+console.log(JSON.stringify(cases.map(([p, r, c]) => mirrorText(p, r, c))));
 """
 
 # The event probe drives the extension itself: the mirror handlers are
@@ -70,10 +75,15 @@ await emit("input", { text: "and lane 4 as well", source: "interactive" }, tui);
 await emit("message_end", assistant("answer two"), tui);
 await emit("agent_settled", {}, tui);
 
-// A phone turn is mirrored too, labelled phone.
+// A phone turn is mirrored too, labelled phone, with Shyam's own words.
 await emit("input", { text: "From Shyam (phone): Okay so what's left", source: "interactive" }, tui);
 await emit("before_agent_start", { messageType: "user", prompt: "From Shyam (phone): Okay so what's left" }, tui);
 await emit("message_end", assistant("phone answer"), tui);
+await emit("agent_settled", {}, tui);
+
+// A run with no prompt of its own is mirrored too, labelled event.
+await emit("before_agent_start", { messageType: "custom", message: { content: [{ type: "text", text: "GitHub bot note" }] } }, tui);
+await emit("message_end", assistant("event answer"), tui);
 await emit("agent_settled", {}, tui);
 
 // A NOOP tick says nothing on the phone.
@@ -121,7 +131,7 @@ esac
 exit 0
 """
 
-DESKTOP, PHONE, NOOP_TICK, TICK, NO_REPLY, MULTILINE = range(6)
+DESKTOP, PHONE, NOOP_TICK, TICK, NO_REPLY, MULTILINE, SHORT, BIG_PASTE, EVENT_CUSTOM, EVENT_PLAIN = range(10)
 
 STUB_HC = """#!/bin/sh
 # A stub hc for the send tests. $HC_STUB_MODE says what the core reports.
@@ -181,16 +191,22 @@ class TestCoordinatorMirrorRules(unittest.TestCase):
         cls.results = json.loads(out.stdout.strip().splitlines()[-1])
 
     def test_a_desktop_turn_is_mirrored_with_its_prompt_and_reply(self):
-        self.assertEqual(self.results[DESKTOP], "Mirror: mirror test, reply OK\nOK")
+        self.assertEqual(
+            self.results[DESKTOP],
+            "Mirror: you\n> mirror test, reply OK\n\nOK",
+        )
 
     def test_a_phone_turn_is_mirrored_as_phone(self):
-        self.assertEqual(self.results[PHONE], "Mirror: phone\na reply")
+        self.assertEqual(
+            self.results[PHONE],
+            "Mirror: phone\n> Testing from phone\n\na reply",
+        )
 
     def test_a_noop_tick_is_not_mirrored(self):
         self.assertEqual(self.results[NOOP_TICK], "")
 
     def test_a_tick_with_output_is_mirrored_as_a_tick(self):
-        self.assertEqual(self.results[TICK], "Mirror: tick\nALERT: something")
+        self.assertEqual(self.results[TICK], "Mirror: tick\n\nALERT: something")
 
     def test_a_turn_without_a_reply_is_not_mirrored(self):
         self.assertEqual(self.results[NO_REPLY], "")
@@ -198,7 +214,34 @@ class TestCoordinatorMirrorRules(unittest.TestCase):
     def test_the_reply_keeps_its_line_breaks_and_bullets(self):
         self.assertEqual(
             self.results[MULTILINE],
-            "Mirror: what is left?\nline one\n- bullet\n| a | b |",
+            "Mirror: you\n> what is left?\n\nline one\n- bullet\n| a | b |",
+        )
+
+    def test_a_short_typed_message_is_quoted_above_the_reply(self):
+        self.assertEqual(
+            self.results[SHORT],
+            "Mirror: you\n> short typed message\n\nreply to it",
+        )
+
+    def test_a_long_paste_is_quoted_in_lines_and_cut_at_600_characters(self):
+        paste = "\n".join(f"line {i} of the pasted alert block" for i in range(100))
+        quoted = "\n".join("> " + line for line in paste[:599].split("\n")) + "…"
+        self.assertEqual(
+            self.results[BIG_PASTE],
+            f"Mirror: you\n{quoted}\n\nreply to the paste",
+        )
+        self.assertGreater(len(paste), 3000)
+
+    def test_a_run_with_no_prompt_is_mirrored_as_an_event(self):
+        self.assertEqual(
+            self.results[EVENT_CUSTOM],
+            "Mirror: event\n> GitHub bot note\n\nreply to an event run",
+        )
+
+    def test_an_event_with_no_custom_message_has_no_quote(self):
+        self.assertEqual(
+            self.results[EVENT_PLAIN],
+            "Mirror: event\n\nreply to a run with no custom message",
         )
 
 
@@ -253,15 +296,19 @@ class TestCoordinatorMirrorEvents(unittest.TestCase):
         self.assertEqual(
             self.sends,
             [
-                "Mirror: first question\nanswer one",
-                "Mirror: and lane 4 as well\nanswer two",
-                "Mirror: phone\nphone answer",
-                "Mirror: after the relay failed\nstill mirrored",
+                "Mirror: you\n> first question\n\nanswer one",
+                "Mirror: you\n> and lane 4 as well\n\nanswer two",
+                "Mirror: phone\n> Okay so what's left\n\nphone answer",
+                "Mirror: event\n> GitHub bot note\n\nevent answer",
+                "Mirror: you\n> after the relay failed\n\nstill mirrored",
             ],
         )
 
     def test_a_phone_turn_is_mirrored_with_the_phone_label(self):
-        self.assertIn("Mirror: phone\nphone answer", self.sends)
+        self.assertIn("Mirror: phone\n> Okay so what's left\n\nphone answer", self.sends)
+
+    def test_a_run_with_no_prompt_is_mirrored_as_an_event(self):
+        self.assertIn("Mirror: event\n> GitHub bot note\n\nevent answer", self.sends)
 
     def test_a_noop_tick_and_a_headless_run_are_not_mirrored(self):
         self.assertNotIn("NOOP", "\n".join(self.sends))
@@ -273,7 +320,7 @@ class TestCoordinatorMirrorEvents(unittest.TestCase):
     def test_a_dead_relay_costs_that_mirror_and_nothing_else(self):
         self.assertEqual(
             [status for status, _ in self.records],
-            ["ok", "ok", "ok", "fail", "ok"],
+            ["ok", "ok", "ok", "ok", "fail", "ok"],
         )
 
 
