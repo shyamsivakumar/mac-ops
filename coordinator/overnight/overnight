@@ -38,11 +38,15 @@ passed unless the records say it ran.
 
     overnight report --dry-run
 
-`overnight shift` (spec T12) is the command the launchd job fires. One job
-runs at 22:30 and again at 06:30, so the command decides which part of the
-night it is: the start reads the board, and the report writes the
-morning report. In dry-run mode the shift does no work, so the only file
-the night writes is the morning report.
+`overnight shift` (spec T12) is the command the launchd job fires. The job
+fires it on a fixed interval, every day: the shift runs 24x7, so there is
+no night window and no part of the night. Every run is one cycle: it reads
+the policy snapshot, reads the board under the snapshot's allow list,
+orders it and writes the cycle's line to the shift log. The shift is never
+armed and never unarmed. The morning report is on demand now
+(`overnight report`), so the job does not write it. In dry-run mode the
+shift does no work, so the cycle's line in the shift log is the only file
+it writes.
 
     overnight shift --dry-run
 
@@ -237,12 +241,10 @@ PLANNED = re.compile(r"planned\s+(?P<count>\d+)\s+items?\b", re.I)
 RECEIPT_FILE = re.compile(r"^(?!morning-).+\.md$")
 # The shift log records the end of the shift with the word "stall".
 STALL = re.compile(r"\bstall\b", re.I)
-# The launchd job fires at 22:30 and 06:30 (spec part T12). The clock is
-# the Mac's local clock, the clock launchd itself uses, so a run that
-# fires always matches the part it is for. The windows are wider than one
-# minute, so a Mac that wakes late still writes the report.
-START_WINDOW = (22 * 60, 24 * 60 - 1)
-REPORT_WINDOW = (6 * 60, 7 * 60 + 29)
+# The launchd job fires the shift on a fixed interval, every day (spec
+# part T12, revision 3). There is no night window and no part of the
+# night: every cycle is the same cycle, and the shift is never unarmed.
+# The job's own interval lives in the plist.
 # The shift log states how the night ended, in one of the four ways the
 # spec allows. The report reads that statement, but only when the records
 # support it: a claim is never a proof.
@@ -704,20 +706,6 @@ def cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
-def shift_phase(now: datetime) -> str:
-    """Return the part of the night a moment belongs to.
-
-    The job fires at 22:30 and 06:30, and a Mac that wakes late fires the
-    report after 06:30, so the windows are an hour wide rather than a
-    minute."""
-    minutes = now.hour * 60 + now.minute
-    if START_WINDOW[0] <= minutes <= START_WINDOW[1]:
-        return "start"
-    if REPORT_WINDOW[0] <= minutes <= REPORT_WINDOW[1]:
-        return "report"
-    return "outside"
-
-
 def cmd_shift(args: argparse.Namespace) -> int:
     """Run one cycle of the shift.
 
@@ -726,75 +714,98 @@ def cmd_shift(args: argparse.Namespace) -> int:
     policy snapshot on every cycle, and `run/STOP` still stops it at the
     next cycle.
 
-    The job fires at 22:30 and 06:30, and the clock picks the part. The
-    start reads the board under the snapshot's allow list, and the report
-    writes the morning report, which is the only file a dry night writes.
-    Outside the two windows there is nothing to do.
+    The job fires the shift on a fixed interval, every day, so there is
+    no night window and no part of the night: every run is one cycle. The
+    morning report is on demand now (`overnight report`), so the job does
+    not write it.
 
     The clock is the Mac's local clock, the clock launchd fires on. The
-    report and the log still say Pacific time, and a Mac that is not on
-    Pacific time is told so."""
+    shift log still says Pacific time, and a Mac that is not on Pacific
+    time is told so."""
     now_local = datetime.now().astimezone()
     now_pt = datetime.now(PT)
-    phase = args.at if args.at != "auto" else shift_phase(now_local)
     stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
     root = report_root(args.root)
-    if phase == "outside":
-        print(f"overnight: {stamp} is outside the overnight window; nothing to do")
-        return 0
     if now_local.utcoffset() != now_pt.utcoffset():
         print(
             "overnight: the Mac's clock is not on Pacific time, so the job "
-            "fires at the Mac's local 22:30 and 06:30, not Pacific time",
+            "fires on the Mac's local clock, not Pacific time",
             file=sys.stderr,
         )
+    # STOP wins over every other rule: the shift ends at the next cycle.
+    if (root / "run" / "STOP").exists():
+        print(
+            f"overnight: {stamp} run/STOP exists, so the shift stops at "
+            "this cycle"
+        )
+        return 0
     # The shift reads its contract on every cycle.
     policy, policy_error = load_policy(root)
-    if phase == "start":
-        # STOP wins over every other rule: the shift ends at the next
-        # cycle. The report still runs: it is the record of the night, and
-        # it says that the night ended with STOP.
-        if (root / "run" / "STOP").exists():
-            print(
-                f"overnight: {stamp} run/STOP exists, so the shift stops at "
-                "this cycle"
-            )
-            return 0
-        allowed = None
-        if policy is None:
-            if not args.dry_run:
-                die(
-                    f"the shift has no policy snapshot: {policy_error}. Run "
-                    "`overnight policy` to write it."
-                )
-            print(
-                f"overnight: {policy_error}; a dry run reads the board only",
-                file=sys.stderr,
-            )
-        else:
-            allowed = policy_allow(policy)
-            if not allowed:
-                die(
-                    f"the policy snapshot {policy_path(root)} names no "
-                    "repositories, so the shift has nothing it may work"
-                )
-            print(f"overnight: {stamp} shift cycle under {policy_path(root)}")
-            for line in policy_lines(policy):
-                print(line)
+    allowed = None
+    if policy is None:
         if not args.dry_run:
             die(
-                "the shift's board work is not built yet (spec part T5); "
-                "refusing to start a real shift"
+                f"the shift has no policy snapshot: {policy_error}. Run "
+                "`overnight policy` to write it."
             )
-        print(f"overnight: {stamp} shift start (dry run, read only)")
-        return cmd_intake(
+        print(
+            f"overnight: {policy_error}; a dry run reads the board only",
+            file=sys.stderr,
+        )
+    else:
+        allowed = policy_allow(policy)
+        if not allowed:
+            die(
+                f"the policy snapshot {policy_path(root)} names no "
+                "repositories, so the shift has nothing it may work"
+            )
+        print(f"overnight: {stamp} shift cycle under {policy_path(root)}")
+        for line in policy_lines(policy):
+            print(line)
+    if not args.dry_run:
+        # A real cycle writes the receipts of the items it sees: the
+        # receipt is the cycle's record, and it is written on every state
+        # change. The cycle still starts no builder and works no board
+        # item: that part of the spec (T5) is not built, and the cycle
+        # says so instead of pretending it works.
+        print(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
+        code = cmd_order(
             argparse.Namespace(
-                dry_run=True, deadline=args.deadline, allowed=allowed
+                dry_run=True,
+                root=args.root,
+                deadline=args.deadline,
+                allowed=allowed,
             )
         )
-    print(f"overnight: {stamp} morning report")
-    return cmd_report(
-        argparse.Namespace(root=args.root, date=args.date, dry_run=False)
+        if code != 0:
+            return code
+        items, receipts, error = read_work_items(
+            time.monotonic() + args.deadline, allowed
+        )
+        if error:
+            print(
+                f"overnight: REFUSED: {error}; the cycle wrote no receipt",
+                file=sys.stderr,
+            )
+            return 1
+        written = write_receipts(root, items, receipts, time.monotonic() + args.deadline)
+        print(
+            f"overnight: {stamp} shift cycle wrote {written} receipts of "
+            f"{len(items)} items"
+        )
+        print(
+            "overnight: the shift starts no builder and works no board item "
+            "yet (spec part T5); it writes the receipts of what it saw"
+        )
+        return 0
+    print(f"overnight: {stamp} shift cycle (dry run, read only)")
+    return cmd_order(
+        argparse.Namespace(
+            dry_run=True,
+            root=args.root,
+            deadline=args.deadline,
+            allowed=allowed,
+        )
     )
 
 
@@ -2513,6 +2524,21 @@ def fix_command(repo: str, number: int, head: str, builder: str, report: str) ->
     return f"coordq fix {repo}#{number}"
 
 
+def policy_repos(cfg: dict, override: object) -> list[tuple[str, str]]:
+    """Return the repositories a command may work in.
+
+    The shift works under the allow list in its policy snapshot, so a
+    command that is handed that list reads only those repositories and
+    drops the rest. The board config still holds the key of each
+    repository. Without the list, the board config's own list is the
+    contract."""
+    config_repos = allowed_repos(cfg)
+    if not override:
+        return config_repos
+    keys_of = {repo: key for repo, key in config_repos}
+    return [(repo, keys_of.get(repo, "")) for repo in override]
+
+
 def cmd_order(args: argparse.Namespace) -> int:
     """Order the whole board and write one summary line to the shift log.
 
@@ -2524,7 +2550,7 @@ def cmd_order(args: argparse.Namespace) -> int:
     is one line of the shift log."""
     deadline = time.monotonic() + args.deadline
     cfg = load_config()
-    repos = allowed_repos(cfg)
+    repos = policy_repos(cfg, getattr(args, "allowed", None))
     allowed = {repo for repo, _ in repos}
     flagged = ascend_flags(cfg)
     if not repos:
@@ -3247,47 +3273,16 @@ def cmd_receipt(args: argparse.Namespace) -> int:
     from GitHub, the queue or a thread, so a receipt never carries a model
     claim where a proof belongs.
 
-    With `--repo` and `--number` it writes the receipt of that one item,
-    which is what the tick does for the item it just acted on. With
-    `--items` it writes the receipts of the first items of the shift's
+    With `--repo` and `--number` it writes the receipt of that one item.
+    With `--items` it writes the receipts of the first items of the shift's
     order."""
     deadline = time.monotonic() + args.deadline
-    cfg = load_config()
-    repos = allowed_repos(cfg)
-    flagged = ascend_flags(cfg)
-    if not repos:
-        die("the board config names no repositories")
-    issues, stale = read_board(deadline)
-    if stale:
-        print(
-            "overnight: REFUSED: the board list is stale, so the receipts "
-            "cannot be trusted.",
-            file=sys.stderr,
-        )
-        return 1
-    bodies, unread, open_numbers = read_bodies(issues, deadline)
-    decisions_path, lines = read_decisions()
-    problems: list[str] = []
-    if unread:
-        problems.append(
-            "the ticket text of these repositories could not be read: "
-            + ", ".join(unread)
-        )
-    if not lines:
-        problems.append(f"the decisions log {decisions_path} could not be read")
-    _kept, drops = filter_issues(issues, {r for r, _k in repos}, flagged, bodies, lines)
-    if problems:
-        for problem in problems:
-            print(f"overnight: REFUSED: {problem}", file=sys.stderr)
-        return 1
-    receipts, receipt_error = read_receipts()
-    result = collect_items(
-        deadline, repos, issues, bodies, open_numbers, drops, receipts
+    items, receipts, error = read_work_items(
+        deadline, getattr(args, "allowed", None)
     )
-    if result.get("pr_error"):
-        print(f"overnight: REFUSED: {result['pr_error']}", file=sys.stderr)
+    if error:
+        print(f"overnight: REFUSED: {error}", file=sys.stderr)
         return 1
-    items = receipt_items(result)
     if bool(args.repo) != bool(args.number):
         die(
             "the receipt of one item needs both --repo and --number; without "
@@ -3297,7 +3292,8 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         picked = [
             item
             for item in items
-            if item.get("repo") == args.repo and int(item.get("number") or 0) == args.number
+            if item.get("repo") == args.repo
+            and int(item.get("number") or 0) == args.number
         ]
         if not picked:
             print(
@@ -3314,8 +3310,68 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         return 0
     root = report_root(args.root)
     print(f"Overnight receipts - {len(items)} item(s)")
-    if receipt_error:
-        print(f"overnight: {receipt_error}", file=sys.stderr)
+    write_receipts(root, items, receipts, deadline, dry_run=args.dry_run)
+    if args.dry_run:
+        print()
+        print("A dry run writes no receipt.")
+    return 0
+
+
+def read_work_items(
+    deadline: float, allowed: list[str] | None
+) -> tuple[list[dict], dict[str, str], str]:
+    """Return the items the shift works, the queue's receipts and an error.
+
+    The board is read with the same helpers the rest of the module uses, so
+    the receipts are about the items of the shift's own order and the shift
+    keeps no second queue. A board that cannot be trusted is an error, not
+    an empty list: a receipt about a board nobody could read is a claim."""
+    cfg = load_config()
+    repos = policy_repos(cfg, allowed)
+    flagged = ascend_flags(cfg)
+    if not repos:
+        return [], {}, "the board config names no repositories"
+    issues, stale = read_board(deadline)
+    if stale:
+        return [], {}, "the board list is stale, so the receipts cannot be trusted"
+    bodies, unread, open_numbers = read_bodies(issues, deadline)
+    decisions_path, lines = read_decisions()
+    problems: list[str] = []
+    if unread:
+        problems.append(
+            "the ticket text of these repositories could not be read: "
+            + ", ".join(unread)
+        )
+    if not lines:
+        problems.append(f"the decisions log {decisions_path} could not be read")
+    _kept, drops = filter_issues(
+        issues, {r for r, _k in repos}, flagged, bodies, lines
+    )
+    if problems:
+        return [], {}, "; ".join(problems)
+    receipts, _receipt_error = read_receipts()
+    result = collect_items(
+        deadline, repos, issues, bodies, open_numbers, drops, receipts
+    )
+    if result.get("pr_error"):
+        return [], {}, str(result["pr_error"])
+    return receipt_items(result), receipts, ""
+
+
+def write_receipts(
+    root: Path,
+    items: list[dict],
+    receipts: dict[str, str],
+    deadline: float,
+    dry_run: bool = False,
+) -> int:
+    """Write the receipt of every item and return how many were written.
+
+    A receipt is rewritten when the item's state or its evidence changed.
+    A receipt that says the same thing is left alone, so the folder holds
+    the record of the state changes and not a copy of the same state every
+    cycle. The shift log names every write and every state change."""
+    written = 0
     for item in items:
         started = time.monotonic()
         facts = item_facts(item, receipts, deadline)
@@ -3323,7 +3379,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         body = receipt_body(item, facts, observed)
         path = receipt_path(root, item)
         label = item.get("key") or f"{item.get('repo')}#{item.get('number')}"
-        if args.dry_run:
+        if dry_run:
             print()
             print(f"--- {label} (dry run, nothing written) ---")
             print(body, end="")
@@ -3344,15 +3400,13 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         if outcome.startswith("failed"):
             print(f"overnight: {outcome}", file=sys.stderr)
             continue
+        written += 1
         write_shift_line(
             root,
             f"receipt {label} | {facts['state']} | {outcome}"
             + (f" | state {previous} -> {facts['state']}" if change else ""),
         )
-    if args.dry_run:
-        print()
-        print("A dry run writes no receipt.")
-    return 0
+    return written
 
 
 def board_item(order: int, group: str, item: dict) -> dict:
@@ -3424,7 +3478,7 @@ def cmd_board(args: argparse.Namespace) -> int:
     the builder that holds the pull request."""
     deadline = time.monotonic() + args.deadline
     cfg = load_config()
-    repos = allowed_repos(cfg)
+    repos = policy_repos(cfg, getattr(args, "allowed", None))
     allowed = {repo for repo, _ in repos}
     flagged = ascend_flags(cfg)
     if not repos:
@@ -3633,18 +3687,12 @@ def main() -> int:
     report.set_defaults(func=cmd_report)
     shift = sub.add_parser(
         "shift",
-        help="run the part of the night the launchd job fires",
+        help="run one shift cycle (the command the launchd job fires)",
     )
     shift.add_argument(
         "--dry-run",
         action="store_true",
-        help="do no work: the start reads the board and writes nothing",
-    )
-    shift.add_argument(
-        "--at",
-        choices=("auto", "start", "report"),
-        default="auto",
-        help="which part of the night to run (default: the PT clock decides)",
+        help="do no work: the cycle reads the board and writes the cycle's line",
     )
     shift.add_argument(
         "--root",
@@ -3652,16 +3700,10 @@ def main() -> int:
         help="the folder that holds the shift's records (default the runtime folder)",
     )
     shift.add_argument(
-        "--date",
-        default=None,
-        type=report_day,
-        help="the night of the report, as YYYY-MM-DD (default today, PT)",
-    )
-    shift.add_argument(
         "--deadline",
         type=int,
         default=DEFAULT_DEADLINE,
-        help=f"seconds the whole start may take (default {DEFAULT_DEADLINE})",
+        help=f"seconds the whole cycle may take (default {DEFAULT_DEADLINE})",
     )
     shift.set_defaults(func=cmd_shift)
     policy = sub.add_parser(

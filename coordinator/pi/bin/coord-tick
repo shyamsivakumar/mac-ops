@@ -45,11 +45,8 @@ DEFAULT_PROMPT = (
     "with `overnight board --json --action`: it returns every board ticket "
     "and every open pull request the coordinator may act on, in the order "
     "the night shift works them, and every item carries the one action it "
-    "needs. After each item you act on, write its receipt with "
-    "`overnight receipt --repo <repo> --number <n>`: the command reads the "
-    "pull request and the threads and writes the proof, so never write a "
-    "receipt by hand. Keep it cheap: filter command output, act only on "
-    "what changed, reply NOOP or ALERT lines only."
+    "needs. Keep it cheap: filter command output, act only on what changed, "
+    "reply NOOP or ALERT lines only."
 )
 LOCK_NAME = "coord-tick.lock"
 CHILD_PATH = ":".join(

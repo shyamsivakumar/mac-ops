@@ -1,11 +1,32 @@
-$ overnight receipt --items 3 --root $TMPDIR/mo213-proof
+# MO-213 · the real command, on the live board
+
+The overnight runner spec's part T5b, proved by running the command.
+The scratch folder is the task TMPDIR, so nothing touched the live records.
+
+$ overnight receipt --items 3 --root $TMPDIR/mo213-proof3
 Overnight receipts - 3 item(s)
   FFBT-24 | stuck | gate UNKNOWN | wrote
   FFBT-35 | stuck | gate UNKNOWN | wrote
   FFBT-34 | stuck | gate UNKNOWN | wrote
 
---- receipts written ---
-== /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo213-proof/receipts/FFBT-24.md
+$ overnight receipt --items 3 --root $TMPDIR/mo213-proof3   # again: same state, same evidence
+Overnight receipts - 3 item(s)
+  FFBT-24 | stuck | gate UNKNOWN | unchanged
+  FFBT-35 | stuck | gate UNKNOWN | unchanged
+  FFBT-34 | stuck | gate UNKNOWN | unchanged
+
+$ sed -i '' 's/- State: stuck/- State: ready/' $TMPDIR/mo213-proof3/receipts/FFBT-24.md   # an earlier state
+Overnight receipts - 3 item(s)
+  FFBT-9 | stuck | gate UNKNOWN | wrote
+  FFBT-24 | stuck | gate UNKNOWN | wrote | state ready -> stuck
+  FFBT-35 | stuck | gate UNKNOWN | unchanged
+
+$ overnight receipt --repo shyamsivakumar/strategy-replay-workbench --number 987 --root $TMPDIR/mo213-proof3   # a pull request the gate looked at
+Overnight receipts - 1 item(s)
+  SRW-1077 | stuck | gate FAIL | wrote
+
+--- the receipts ---
+== FFBT-24.md
 # FFBT-24
 
 - Item: docs: FFBT-24 bounded live observation, authenticated success path still held (Refs #281)
@@ -21,7 +42,7 @@ Overnight receipts - 3 item(s)
 - Observed: 2 s
 - Stopped because: a check is failing: Vercel (FAILURE)
 - Next: the builder fixes the failing check and the gate runs again
-== /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo213-proof/receipts/FFBT-34.md
+== FFBT-34.md
 # FFBT-34
 
 - Item: docs: record the #230 Draft Aide read-only window (run a4, USER_COORDINATION_REQUIRED)
@@ -37,7 +58,7 @@ Overnight receipts - 3 item(s)
 - Observed: 2 s
 - Stopped because: a check is failing: Vercel (FAILURE)
 - Next: the builder fixes the failing check and the gate runs again
-== /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo213-proof/receipts/FFBT-35.md
+== FFBT-35.md
 # FFBT-35
 
 - Item: FFBT-35: inventory approved current-news and development sources
@@ -53,17 +74,85 @@ Overnight receipts - 3 item(s)
 - Observed: 2 s
 - Stopped because: a check is failing: Vercel (FAILURE)
 - Next: the builder fixes the failing check and the gate runs again
+== FFBT-9.md
+# FFBT-9
 
-$ overnight receipt --items 3 --root $TMPDIR/mo213-proof   # again, same state
-Overnight receipts - 3 item(s)
-  FFBT-24 | stuck | gate UNKNOWN | unchanged
-  FFBT-35 | stuck | gate UNKNOWN | unchanged
-  FFBT-34 | stuck | gate UNKNOWN | unchanged
+- Item: ci: replace Woodpecker verification with local check
+- Repo: shyamsivakumar/fantasy-football-toolkit
+- Ticket: FFBT-9 (#412)
+- State: stuck
+- PR: https://github.com/shyamsivakumar/fantasy-football-toolkit/pull/412
+- Checks: `gh pr checks 412 -R shyamsivakumar/fantasy-football-toolkit` exit 1
+- Failing checks: Vercel (FAILURE)
+- Gate: UNKNOWN
+- Files: 20
+- Time used: 0 min
+- Observed: 2 s
+- Stopped because: a check is failing: Vercel (FAILURE)
+- Next: the builder fixes the failing check and the gate runs again
+== SRW-1077.md
+# SRW-1077
+
+- Item: SRW-1077: add isolated census worker contract harness
+- Repo: shyamsivakumar/strategy-replay-workbench
+- Ticket: SRW-1077 (#987)
+- State: stuck
+- PR: https://github.com/shyamsivakumar/strategy-replay-workbench/pull/987
+- Checks: `gh pr checks 987 -R shyamsivakumar/strategy-replay-workbench` exit 0
+- Gate: FAIL
+- Files: 3
+- Builder thread: mcp:launch:072b2239cd6201e7f564a957590530d48475448945778bbb6f7e38e23f304086
+- Time used: 375 min
+- Observed: 1 s
+- Stopped because: the gate did not pass
+- Next: the builder fixes the gate findings and the gate runs again
 
 --- shift log ---
-2026-11-13 06:53 PM PT | receipt FFBT-24 | stuck | wrote
-2026-11-13 06:53 PM PT | receipt FFBT-35 | stuck | wrote
-2026-11-13 06:53 PM PT | receipt FFBT-34 | stuck | wrote
-2026-11-13 06:54 PM PT | receipt FFBT-24 | stuck | unchanged
-2026-11-13 06:54 PM PT | receipt FFBT-35 | stuck | unchanged
-2026-11-13 06:54 PM PT | receipt FFBT-34 | stuck | unchanged
+2026-11-13 07:29 PM PT | receipt FFBT-24 | stuck | wrote
+2026-11-13 07:29 PM PT | receipt FFBT-35 | stuck | wrote
+2026-11-13 07:29 PM PT | receipt FFBT-34 | stuck | wrote
+2026-11-13 07:30 PM PT | receipt FFBT-24 | stuck | unchanged
+2026-11-13 07:30 PM PT | receipt FFBT-35 | stuck | unchanged
+2026-11-13 07:30 PM PT | receipt FFBT-34 | stuck | unchanged
+2026-11-13 07:30 PM PT | receipt FFBT-9 | stuck | wrote
+2026-11-13 07:30 PM PT | receipt FFBT-24 | stuck | wrote | state ready -> stuck
+2026-11-13 07:30 PM PT | receipt FFBT-35 | stuck | unchanged
+2026-11-13 07:30 PM PT | receipt SRW-1077 | stuck | wrote
+
+## The shift's own cycle
+
+A real cycle (not a dry run) under a scratch policy snapshot that allows one
+repository. It reads the board, writes the receipt of every item it sees and
+writes one line per receipt to the shift log. It starts no builder.
+
+$ overnight shift --root $TMPDIR/mo213-cycle
+  FFBT-12 | stuck | gate UNKNOWN | wrote
+  FFBT-13 | stuck | gate UNKNOWN | wrote
+  FFBT-15 | stuck | gate UNKNOWN | wrote
+  FFBT-16 | stuck | gate UNKNOWN | wrote
+  FFBT-18 | stuck | gate UNKNOWN | wrote
+  FFBT-19 | stuck | gate UNKNOWN | wrote
+  FFBT-21 | stuck | gate UNKNOWN | wrote
+  FFBT-22 | stuck | gate UNKNOWN | wrote
+  shyamsivakumar/fantasy-football-toolkit#363 | stuck | gate UNKNOWN | wrote
+  shyamsivakumar/fantasy-football-toolkit#362 | stuck | gate UNKNOWN | wrote
+overnight: 2026-11-13 19:32 PST shift cycle wrote 27 receipts of 27 items
+overnight: the shift starts no builder and works no board item yet (spec part T5); it writes the receipts of what it saw
+
+--- the shift log ---
+2026-11-13 07:32 PM PT | receipt FFBT-18 | stuck | wrote
+2026-11-13 07:32 PM PT | receipt FFBT-19 | stuck | wrote
+2026-11-13 07:32 PM PT | receipt FFBT-21 | stuck | wrote
+2026-11-13 07:32 PM PT | receipt FFBT-22 | stuck | wrote
+2026-11-13 07:32 PM PT | receipt shyamsivakumar/fantasy-football-toolkit#363 | stuck | wrote
+2026-11-13 07:33 PM PT | receipt shyamsivakumar/fantasy-football-toolkit#362 | stuck | wrote
+--- the receipts written ---
+FFBT-10.md
+FFBT-11.md
+FFBT-12.md
+FFBT-13.md
+FFBT-14.md
+FFBT-15.md
+FFBT-16.md
+FFBT-17.md
+(total: 27 receipts)
