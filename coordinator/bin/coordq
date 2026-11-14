@@ -38,15 +38,9 @@ STAGE = "stage:todo"
 # stuck; a new head starts the count again.
 STUCK_COUNT = 3
 STUCK_FILE = "gatekeep-stuck.txt"
-# The ticket key of an issue, taken from its title ('MO-233 · ...').
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
-# A review thread is never the builder of a pull request.
 REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
-# The pi task routes and the models they fall back to. The router runs the
-# first entry of a chain that is not blocked, so the first entry is the model
-# a router build executed.
 ROUTER_SOURCE = os.path.expanduser("~/.pi/agent/extensions/task-router.ts")
-ROUTER_BLOCKS = os.path.expanduser("~/.pi/agent/task-router-blocks.json")
 
 
 def path(name):
@@ -499,7 +493,6 @@ def gh_json(endpoint):
 
 
 def load_receipts():
-    """The dispatch receipts of the builder threads, empty when there are none."""
     try:
         with open(path("dispatch-receipts.json")) as f:
             return json.load(f)
@@ -508,7 +501,11 @@ def load_receipts():
 
 
 def issue_key(repo, number):
-    """The ticket key of an issue, taken from its title ('MO-233 · ...')."""
+    """The ticket key of an issue, taken from its title ('MO-233 · ...').
+
+    The key number is not the issue number: issue 226 of mac-ops is the
+    ticket MO-233.
+    """
     rows = gh_json(f"repos/{repo}/issues/{number}")
     if not rows:
         return None
@@ -517,7 +514,6 @@ def issue_key(repo, number):
 
 
 def builder_thread_for_key(key):
-    """The newest thread of a ticket key that is not a review thread."""
     code, out = call("t3_thread_list", {"allProjects": True, "titleContains": f"{key} ·", "limit": 100})
     if code:
         raise RuntimeError(f"cannot list the threads of {key}")
@@ -532,8 +528,7 @@ def builder_thread_for_key(key):
 def builder_thread_for_issue(repo, issue):
     """The builder thread of an issue, found through the ticket key.
 
-    A build that no `ticket start` receipt covers has no receipt to read, so
-    the thread is found by the key of the issue the pull request references.
+    A build that no `ticket start` receipt covers has no receipt to read.
     """
     key = issue_key(repo, issue)
     if not key:
@@ -562,32 +557,7 @@ def router_chain(route):
     return entries
 
 
-def router_blocks():
-    """The models the router cannot use right now."""
-    try:
-        with open(ROUTER_BLOCKS) as f:
-            blocks = json.load(f)
-    except (OSError, ValueError):
-        return set()
-    now = time.time() * 1000
-    return {key for key, value in blocks.items()
-            if isinstance(value, dict) and value.get("until", 0) > now}
-
-
-def router_model(route):
-    """The model a router route executes: its first entry that is not blocked."""
-    entries = router_chain(route)
-    if not entries:
-        return None
-    blocked = router_blocks()
-    for entry in entries:
-        if entry.rsplit(":", 1)[0] not in blocked:
-            return entry
-    return entries[0]
-
-
 def read_builder_thread(thread_id):
-    """The builder thread and its recent runs."""
     code, out = call("t3_thread_read", {"threadId": thread_id, "limit": 1, "runLimit": 5})
     if code:
         raise RuntimeError("cannot read builder run")
@@ -595,29 +565,37 @@ def read_builder_thread(thread_id):
     return result.get("thread", {}), result.get("recentRuns", [])
 
 
-def builder_models(thread, runs):
-    """The models the builder run executed, as evidence strings.
+def is_anthropic(model):
+    lowered = model.lower()
+    return "claude" in lowered or "anthropic" in lowered
 
-    The executed model of the run comes first. A run that reports none falls
-    back to the model of its thread, and a router thread falls back to the
-    model its route runs.
+
+def builder_models(thread, runs):
+    """The models the builder run executed.
+
+    The run reports the model it executed. A run that reports none gives no
+    evidence, and a router route is no evidence either: its chain says what
+    the router would run, not what it ran. A block that expired since the
+    build hides which model the router fell back to, so a route that can run
+    an Anthropic model gives no evidence at all.
     """
     models = executed_models(runs[0]) if runs else []
     if models:
         return models
     instance, stored = thread.get("providerInstanceId"), thread.get("model")
     if instance == "router" or (isinstance(stored, str) and stored.startswith("task/")):
-        model = router_model(stored if isinstance(stored, str) else "")
-        return [model] if model else []
+        entries = router_chain(stored if isinstance(stored, str) else "")
+        if not entries or any(is_anthropic(m) for m in entries):
+            return []
+        return entries
     if not isinstance(stored, str) or not stored or not instance:
         return []
     return ["claude" if instance == "claudeAgent" else stored]
 
 
 def reviewer_model(models):
-    """The reviewer of a builder run. A Claude builder gets Sol, every other
-    builder gets Opus, so the reviewer never shares the builder's vendor."""
-    return SOL_MODEL if any("claude" in m.lower() for m in models) else OPUS_MODEL
+    """A Claude builder gets Sol; every other builder gets Opus."""
+    return SOL_MODEL if any(is_anthropic(m) for m in models) else OPUS_MODEL
 
 
 def gate_candidates(config):
@@ -753,7 +731,6 @@ def cmd_gatekeep(a):
 
 
 def load_counts():
-    """The skip counts of the pull requests, kept in the queue file."""
     counts = load().get("gatekeepSkips")
     return counts if isinstance(counts, dict) else {}
 
@@ -761,9 +738,8 @@ def load_counts():
 def write_counts(counts, seen, stuck, dry_run):
     """Keep the skip counts and write the report of the stuck pull requests.
 
-    The report holds one line per pull request that was skipped on the same
-    head too often, and only the pull requests that are still stuck. A pull
-    request that is gated or gone leaves the file.
+    The file is written from scratch every run, so a pull request that is
+    gated or gone leaves it.
     """
     for pr, head, reason in stuck:
         print(f"stuck {pr} {head} {reason}", file=sys.stderr)
