@@ -95,12 +95,13 @@ wake prompt were left alone: the coordinator scoped this change to the
 launchd folder, the installer and the overnight module. Nothing runs the
 launcher any more, because no job points at it.
 
-### 7. The rebase onto origin/main
+### 7. Merging origin/main
 
 The first head could not be merged: `main` had moved on (MO-211, the T4
-policy snapshot, and the attended first night). The branch is rebased
-onto `origin/main` and the conflicts are resolved by keeping both sides of
-the contract:
+policy snapshot, and the attended first night). The branch now merges
+`origin/main` (c0a41df) into it, so the push is a fast-forward and no
+force push was needed. The conflicts are resolved by keeping both sides
+of the contract:
 
 - The T4 policy work stays: the cycle reads `run/policy.json`, prints the
   policy's lines, refuses to work when the snapshot names no repository,
