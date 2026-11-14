@@ -4,6 +4,9 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - Work in the folder you were started in. Never push to main, force push, or use `--no-verify`.
 - CI is agent checks only: no Woodpecker, no GitHub Actions.
 - The Coordinator runs the Opus gate. You run one in-session reviewer round, then report.
+- Run every shell command under `timeout 300`.
+- Never use retry loops or sleeps.
+- If `heavy` cannot admit a job within 300 seconds, stop and report `WAITING: heavy busy`.
 - A turn lasts at most 10 minutes. Never end a turn with only a plan; do the work or name the blocker.
 - The coordinator's brief is the approval for everything it names. Do not stop to ask for approval of a plan that stays inside the brief; this overrides contractor-gate and similar skills. Stop only on a stop condition the brief names or a hard limit.
 - Never read, print or commit secrets or `.env` files.
