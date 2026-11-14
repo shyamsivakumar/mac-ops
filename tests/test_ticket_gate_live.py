@@ -63,17 +63,13 @@ class GateLiveTest(unittest.TestCase):
     def write(self, name, payload):
         (Path(self.queue_dir) / name).write_text(json.dumps(payload))
 
-    def test_the_page_size_is_the_schema_maximum(self):
+    def test_the_pre_check_never_asks_for_more_than_the_schema_maximum(self):
         self.assertIsNone(ticket.gate_live(TITLE, GATE_ID))
         listed = [args for tool, args in self.calls if tool == "t3_thread_list"]
         self.assertEqual(len(listed), 1)
+        for args in listed:
+            self.assertLessEqual(args["limit"], T3_THREAD_LIST_MAX_LIMIT)
         self.assertEqual(listed[0]["limit"], T3_THREAD_LIST_MAX_LIMIT)
-
-    def test_the_page_size_never_exceeds_the_schema_maximum(self):
-        self.assertIsNone(ticket.gate_live(TITLE, GATE_ID))
-        for tool, args in self.calls:
-            if tool == "t3_thread_list":
-                self.assertLessEqual(args["limit"], T3_THREAD_LIST_MAX_LIMIT)
 
     def test_a_live_thread_with_the_same_title_refuses(self):
         self.threads = [{"threadId": "T1", "status": "running", "title": TITLE}]
