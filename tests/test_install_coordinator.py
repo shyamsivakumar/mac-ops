@@ -208,44 +208,55 @@ class TestPiCoordinatorFiles(unittest.TestCase):
             )
 
 
-class TestTickJob(unittest.TestCase):
-    """The tick job runs the headless tick every thirty minutes."""
+class TestRetiredTickJob(unittest.TestCase):
+    """The tick job is retired: no plist in the repository, none installed,
+    and no job loaded."""
 
     def setUp(self):
         self.home = Path("/Users/example")
         rendered = install_coordinator.render_plists(CHECKOUT, self.home)
         self.rendered = {target.name: data for data, target in rendered}
 
-    def test_job_is_rendered_with_the_home_token_resolved(self):
-        self.assertIn("dev.coordinator.tick.plist", self.rendered)
-        data = self.rendered["dev.coordinator.tick.plist"]
-        self.assertNotIn(b"@HOME@", data)
-        parsed = plistlib.loads(data)
-        self.assertEqual(parsed["Label"], "dev.coordinator.tick")
+    def test_no_tick_plist_is_rendered(self):
+        self.assertNotIn("dev.coordinator.tick.plist", self.rendered)
 
-    def test_job_runs_the_tick_launcher_every_thirty_minutes(self):
-        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
-        self.assertEqual(
-            parsed["ProgramArguments"], ["/Users/example/.local/bin/coord-tick"]
+    def test_the_repository_holds_no_tick_plist(self):
+        self.assertFalse(
+            (CHECKOUT / "coordinator/launchd/dev.coordinator.tick.plist").exists()
         )
+
+    def test_the_tick_job_is_in_the_installers_retired_set(self):
+        self.assertIn("dev.coordinator.tick", install_coordinator.RETIRED_JOBS)
+
+    def test_the_installer_removes_an_installed_tick_plist(self):
+        with temp_home() as td:
+            home = Path(td)
+            agents = home / "Library" / "LaunchAgents"
+            agents.mkdir(parents=True)
+            tick = agents / "dev.coordinator.tick.plist"
+            tick.write_text("<plist></plist>")
+            notes = install_coordinator.retire_jobs(home)
+            self.assertFalse(tick.exists())
+            self.assertTrue(any("dev.coordinator.tick" in note for note in notes))
+
+    def test_a_home_without_a_tick_plist_is_left_alone(self):
+        with temp_home() as td:
+            home = Path(td)
+            self.assertEqual(install_coordinator.retire_jobs(home), [])
+
+    def test_the_overnight_job_fires_on_a_fixed_interval_every_day(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.overnight.plist"])
+        self.assertEqual(parsed["Label"], "dev.coordinator.overnight")
         self.assertEqual(parsed["StartInterval"], 1800)
+        self.assertNotIn("StartCalendarInterval", parsed)
+        self.assertNotIn("RunAtLoad", parsed)
 
-    def test_job_does_not_run_a_tick_at_load(self):
-        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
-        self.assertIsNot(parsed.get("RunAtLoad"), True)
-
-    def test_job_logs_into_the_coordinator_log_directory(self):
-        parsed = plistlib.loads(self.rendered["dev.coordinator.tick.plist"])
+    def test_the_overnight_job_runs_the_shift_in_dry_run_mode(self):
+        parsed = plistlib.loads(self.rendered["dev.coordinator.overnight.plist"])
         self.assertEqual(
-            parsed["StandardOutPath"],
-            "/Users/example/Library/Logs/coordinator/tick.log",
+            parsed["ProgramArguments"],
+            ["/Users/example/.local/bin/overnight", "shift", "--dry-run"],
         )
-        self.assertEqual(parsed["StandardErrorPath"], parsed["StandardOutPath"])
-
-    def test_log_dirs_cover_the_tick_job(self):
-        rendered = install_coordinator.render_plists(CHECKOUT, self.home)
-        dirs = install_coordinator.log_dirs(rendered)
-        self.assertIn(Path("/Users/example/Library/Logs/coordinator"), dirs)
 
 
 class TestTickLauncher(unittest.TestCase):

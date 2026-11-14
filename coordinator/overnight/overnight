@@ -29,21 +29,25 @@ passed unless the records say it ran.
 
     overnight report --dry-run
 
-`overnight shift` (spec T12) is the command the launchd job fires. One job
-runs at 22:30 and again at 06:30, so the command decides which part of the
-night it is: the start reads the board, and the report writes the
-morning report. In dry-run mode the shift does no work, so the only file
-the night writes is the morning report.
+`overnight shift` (spec T12) is the command the launchd job fires. The job
+fires it on a fixed interval, every day: the shift runs 24x7, so there is
+no night window and no part of the night. Every cycle reads the board and
+orders it, and the cycle's line goes to the shift log. The shift is never
+armed and never unarmed: `run/armed` does not gate it. The morning report
+is on demand now (`overnight report`), so the job does not write it. In
+dry-run mode the shift does no work, so the cycle's line in the shift log
+is the only file it writes.
 
     overnight shift --dry-run
 
 The clock is the Mac's local clock, the clock launchd fires on. The
-report and the log say Pacific time.
+shift log says Pacific time. The job's own interval lives in
+`coordinator/launchd/dev.coordinator.overnight.plist`.
 
 The board is the list. Intake reads `ticket list --fresh --json` for the
 tickets and `gh pr list` for each allowed repository, and holds the records
-in memory for the run. The later parts of the spec (ordering, arming and
-the tick) build on the same records.
+in memory for the run. The later parts of the spec (arming and the work
+parts) build on the same records.
 """
 
 from __future__ import annotations
@@ -175,12 +179,10 @@ PLANNED = re.compile(r"planned\s+(?P<count>\d+)\s+items?\b", re.I)
 RECEIPT_FILE = re.compile(r"^(?!morning-).+\.md$")
 # The shift log records the end of the shift with the word "stall".
 STALL = re.compile(r"\bstall\b", re.I)
-# The launchd job fires at 22:30 and 06:30 (spec part T12). The clock is
-# the Mac's local clock, the clock launchd itself uses, so a run that
-# fires always matches the part it is for. The windows are wider than one
-# minute, so a Mac that wakes late still writes the report.
-START_WINDOW = (22 * 60, 24 * 60 - 1)
-REPORT_WINDOW = (6 * 60, 7 * 60 + 29)
+# The launchd job fires the shift on a fixed interval, every day (spec
+# part T12, revision 3). There is no night window and no part of the
+# night: every cycle is the same cycle, and the shift is never unarmed.
+# The job's own interval lives in the plist.
 # The states a receipt can name.
 STATE_DONE = "done"
 STATE_READY = "ready"
@@ -509,54 +511,34 @@ def cmd_intake(args: argparse.Namespace) -> int:
     return 1 if unread else 0
 
 
-def shift_phase(now: datetime) -> str:
-    """Return the part of the night a moment belongs to.
-
-    The job fires at 22:30 and 06:30, and a Mac that wakes late fires the
-    report after 06:30, so the windows are an hour wide rather than a
-    minute."""
-    minutes = now.hour * 60 + now.minute
-    if START_WINDOW[0] <= minutes <= START_WINDOW[1]:
-        return "start"
-    if REPORT_WINDOW[0] <= minutes <= REPORT_WINDOW[1]:
-        return "report"
-    return "outside"
-
-
 def cmd_shift(args: argparse.Namespace) -> int:
-    """Run the part of the night the launchd job fires.
+    """Run one shift cycle.
 
-    The start reads the board and writes nothing. The report writes the
-    morning report, which is the only file a dry night writes. Outside the
-    two windows there is nothing to do.
+    The shift runs every day, all day: there is no night window, no
+    22:30 start and no 06:00 deadline, so a cycle is a cycle whatever the
+    clock says. The shift is never armed and never unarmed: every cycle
+    reads the board.
 
-    The clock is the Mac's local clock, the clock launchd fires on. The
-    report and the log still say Pacific time, and a Mac that is not on
+    The clock is the Mac's local clock, the clock launchd fires on, and
+    the shift log still says Pacific time, and a Mac that is not on
     Pacific time is told so."""
     now_local = datetime.now().astimezone()
     now_pt = datetime.now(PT)
-    phase = args.at if args.at != "auto" else shift_phase(now_local)
     stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
-    if phase == "outside":
-        print(f"overnight: {stamp} is outside the overnight window; nothing to do")
-        return 0
     if now_local.utcoffset() != now_pt.utcoffset():
         print(
             "overnight: the Mac's clock is not on Pacific time, so the job "
-            "fires at the Mac's local 22:30 and 06:30, not Pacific time",
+            "fires on the Mac's local clock, not Pacific time",
             file=sys.stderr,
         )
-    if phase == "start":
-        if not args.dry_run:
-            die(
-                "the shift start is not built yet (spec parts T4 and T5); "
-                "refusing to start a real shift"
-            )
-        print(f"overnight: {stamp} shift start (dry run, read only)")
-        return cmd_intake(argparse.Namespace(dry_run=True, deadline=args.deadline))
-    print(f"overnight: {stamp} morning report")
-    return cmd_report(
-        argparse.Namespace(root=args.root, date=args.date, dry_run=False)
+    if not args.dry_run:
+        die(
+            "the shift's work parts are not built yet (spec parts T4 and "
+            "T5); refusing to start a real shift"
+        )
+    print(f"overnight: {stamp} shift cycle (dry run, read only)")
+    return cmd_order(
+        argparse.Namespace(dry_run=True, root=args.root, deadline=args.deadline)
     )
 
 
@@ -2057,18 +2039,12 @@ def main() -> int:
     report.set_defaults(func=cmd_report)
     shift = sub.add_parser(
         "shift",
-        help="run the part of the night the launchd job fires",
+        help="run one shift cycle (the command the launchd job fires)",
     )
     shift.add_argument(
         "--dry-run",
         action="store_true",
-        help="do no work: the start reads the board and writes nothing",
-    )
-    shift.add_argument(
-        "--at",
-        choices=("auto", "start", "report"),
-        default="auto",
-        help="which part of the night to run (default: the PT clock decides)",
+        help="do no work: the cycle reads the board and writes the cycle's line",
     )
     shift.add_argument(
         "--root",
@@ -2076,16 +2052,10 @@ def main() -> int:
         help="the folder that holds the shift's records (default the runtime folder)",
     )
     shift.add_argument(
-        "--date",
-        default=None,
-        type=report_day,
-        help="the night of the report, as YYYY-MM-DD (default today, PT)",
-    )
-    shift.add_argument(
         "--deadline",
         type=int,
         default=DEFAULT_DEADLINE,
-        help=f"seconds the whole start may take (default {DEFAULT_DEADLINE})",
+        help=f"seconds the whole cycle may take (default {DEFAULT_DEADLINE})",
     )
     shift.set_defaults(func=cmd_shift)
     args = parser.parse_args()
