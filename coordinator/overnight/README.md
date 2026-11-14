@@ -30,6 +30,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order. `--dry-run` prints the receipt and writes no file. |
 | `overnight close --repo <repo> --number <n>` | Closes a ticket's issue, and only when the receipt holds the evidence (spec part T6): a check command, its exit code and a gate PASS on the pull request. A receipt with a claim but no exit code leaves the issue open, and the command says which record is missing. `--dry-run` says what the close would run and closes nothing. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
+| `overnight redact` | Prints a text with every secret pattern redacted (spec part T7a). It is the redaction the shift writes with, made visible: the fake key goes in and does not come out. It writes nothing. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, the policy snapshot and the work parts) build on the
@@ -181,6 +182,42 @@ open, and the refusal names the record that is missing.
 
 The close step writes nothing but the close itself. It does not merge, does
 not push and does not touch the slot cap or the Ascend rules.
+
+## The secret redaction
+
+Every record the shift writes under `.overnight/` goes through one
+redaction function, so no receipt, no shift log line and no morning
+report holds a token, a key, a cookie or a `.env` value. The pattern
+list lives in that one place (`SECRET_PATTERNS` in the module) and the
+function (`redact`) is the only thing that applies it. Every write in the
+module goes through `write_record` or `append_record`, which call it, so
+no writer has to remember the rule.
+
+The patterns, in the order they are applied:
+
+| Pattern | What it matches |
+| --- | --- |
+| `private key` | A PEM private key block, from `BEGIN` to `END`. |
+| `aws key`, `github token`, `anthropic key`, `openai key`, `slack token`, `google api key`, `huggingface token`, `npm token`, `stripe key` | The token shapes of the tools the shift's own builders use. |
+| `jwt` | A JSON web token. |
+| `authorization header`, `bearer token` | An `Authorization:` header and the token behind `Bearer`. |
+| `cookie`, `session cookie` | A `Cookie:` or `Set-Cookie:` header and a session cookie on its own. |
+| `url credentials` | The password in a URL with credentials in it. |
+| `secret field` | A `api_key=`, `password:`, `client_secret:` field, whatever the case. |
+| `.env value`, `environment secret` | The value of a `.env` line, and the value of an environment variable whose name ends in `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD` or `CREDENTIALS`. |
+
+The replacement keeps no part of the value and says what was redacted:
+`[REDACTED:github token]`. A record that says what it hid is still a
+record; a record that keeps the value is a leak. A pattern that matched
+part of a line keeps the rest of the line: `GITHUB_TOKEN=[REDACTED:github
+token]` still says which variable it was.
+
+The command shows the redaction on a fixture. It writes nothing.
+
+```sh
+overnight redact --file fixture.txt
+overnight redact --text 'GITHUB_TOKEN=ghp_...'
+```
 
 ## What the filter drops
 

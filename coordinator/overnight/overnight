@@ -80,6 +80,15 @@ condition.
 
     overnight policy
 
+`overnight redact` (spec T7a) is the one redaction the shift has. Every
+record it writes under `.overnight/` goes through it, so no receipt, no
+shift log line and no morning report holds a token, a key, a cookie or a
+`.env` value. The command shows the redaction on a fixture: the fake key
+goes in and does not come out.
+
+    overnight redact --file fixture.txt
+    overnight redact --text 'ghp_...'
+
 The clock is the Mac's local clock, the clock launchd fires on. The
 report and the log say Pacific time.
 
@@ -129,6 +138,168 @@ AGENT_CHECK = "srw/agent-check"
 # A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
 # it is a ticket key number, not a GitHub issue number.
 BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
+
+# --- Part T7a: the secret redaction ---------------------------------------
+#
+# The shift writes its records under `.overnight/`: the receipts, the
+# shift log, the parking lot, the policy snapshot and the morning report.
+# A record quotes what it read: a pull request title, a branch name, a
+# check's own output, a command line. Any of those can carry a token, a
+# key, a cookie or a value out of a `.env` file. So every write under the
+# root goes through one redaction function, and the pattern list lives in
+# that one place (spec section 5, rule 4).
+#
+# The replacement says what was redacted and keeps no part of the value:
+# `[REDACTED:github token]`. A record that says what it hid is still a
+# record. A record that keeps the value is a leak.
+
+# The pattern list. Each entry is a name and a pattern. A pattern with a
+# named group `secret` keeps the rest of the match (the name of an
+# environment variable, the header of a cookie line) and redacts only the
+# group. A pattern without one is redacted whole.
+SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "private key",
+        re.compile(
+            r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?"
+            r"-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+        ),
+    ),
+    ("aws key", re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}\b")),
+    (
+        "github token",
+        re.compile(
+            r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b"
+        ),
+    ),
+    ("anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}\b")),
+    ("openai key", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
+    ("slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("google api key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("huggingface token", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
+    ("npm token", re.compile(r"\bnpm_[A-Za-z0-9]{30,}\b")),
+    ("stripe key", re.compile(r"\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{10,}\b")),
+    (
+        "jwt",
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b"),
+    ),
+    (
+        "authorization header",
+        re.compile(
+            r"(?i)\b(?:authorization|proxy-authorization|x-api-key)[ \t]*[:=][ \t]*"
+            r"(?P<secret>[^\s\"']+(?:[ \t]+[^\s\"']+)?)"
+        ),
+    ),
+    (
+        "bearer token",
+        re.compile(r"(?i)\bbearer[ \t]+(?P<secret>[A-Za-z0-9._~+/-]{8,}=*)"),
+    ),
+    (
+        "cookie",
+        re.compile(r"(?i)\b(?:set-)?cookie[ \t]*[:=][ \t]*(?P<secret>[^\s;]+)"),
+    ),
+    (
+        "session cookie",
+        re.compile(
+            r"(?i)\b(?:session|sessionid|sid|jsessionid|phpsessid|csrf|xsrf)"
+            r"[ \t]*=[ \t]*(?P<secret>[^\s;]+)"
+        ),
+    ),
+    (
+        "url credentials",
+        re.compile(r"://[^/\s:@]+:(?P<secret>[^/\s@]+)@"),
+    ),
+    (
+        "secret field",
+        re.compile(
+            r"(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token"
+            r"|secret[_-]?key|client[_-]?secret|password|passwd|passphrase)"
+            r"[ \t]*[:=][ \t]*[\"']?(?P<secret>[^\s\"',;]+)"
+        ),
+    ),
+    (
+        ".env value",
+        re.compile(
+            r"(?m)^[ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*[ \t]*=[ \t]*"
+            r"(?P<secret>\S+)"
+        ),
+    ),
+    (
+        "environment secret",
+        re.compile(
+            r"(?m)^[ \t]*(?:export[ \t]+)?(?:[A-Za-z0-9]+_)*"
+            r"(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIALS?)[A-Za-z0-9_]*"
+            r"[ \t]*=[ \t]*(?P<secret>\S+)"
+        ),
+    ),
+)
+
+
+def redact(text: str) -> str:
+    """Return the text with every secret pattern replaced.
+
+    One function, one pattern list, one replacement shape. Every record
+    the shift writes under `.overnight/` goes through this function, so a
+    receipt, a shift log line and the morning report cannot hold a token,
+    a key, a cookie or a `.env` value. The replacement names the pattern
+    and keeps no part of the value.
+
+    Every pattern is matched against the text as it came in, never
+    against the text another pattern already changed: a replacement is
+    not a secret, and a replacement that a later pattern reads again
+    would leave half a secret behind. The spans that match are merged
+    and the merged span is replaced once, under the name of the pattern
+    that comes first in the list."""
+    spans: list[tuple[int, int, int, str]] = []
+    for priority, (name, pattern) in enumerate(SECRET_PATTERNS):
+        for match in pattern.finditer(text):
+            if "secret" in pattern.groupindex:
+                start, end = match.span("secret")
+            else:
+                start, end = match.span()
+            if end > start:
+                spans.append((start, end, priority, name))
+    if not spans:
+        return text
+    spans.sort(key=lambda span: (span[0], span[2], span[1]))
+    merged: list[list] = []
+    for start, end, priority, name in spans:
+        if merged and start <= merged[-1][1]:
+            current = merged[-1]
+            current[1] = max(current[1], end)
+        else:
+            merged.append([start, end, priority, name])
+    out: list[str] = []
+    last = 0
+    for start, end, _priority, name in merged:
+        out.append(text[last:start])
+        out.append(f"[REDACTED:{name}]")
+        last = end
+    out.append(text[last:])
+    return "".join(out)
+
+
+def write_record(path: Path, text: str) -> Path:
+    """Write a record under the overnight root and return the path.
+
+    Every write under `.overnight/` goes through this function, so the
+    redaction is not a rule each writer has to remember: it happens here,
+    once, for the receipt, the shift log, the parking lot, the policy
+    snapshot and the morning report alike."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(redact(text), encoding="utf-8")
+    return path
+
+
+def append_record(path: Path, text: str) -> Path:
+    """Append to a record under the overnight root and return the path.
+
+    The append is a write like any other, so it is redacted the same way."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(redact(text))
+    return path
+
 
 # --- Part T4: the policy snapshot constants -------------------------------
 #
@@ -635,7 +806,7 @@ def write_policy(root: Path, policy: dict) -> Path:
     """Write the policy snapshot and return the path it went to."""
     path = policy_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(policy, indent=2) + "\n")
+    write_record(path, json.dumps(policy, indent=2) + "\n")
     return path
 
 
@@ -717,6 +888,31 @@ def cmd_policy(args: argparse.Namespace) -> int:
         "The shift reads this snapshot on every cycle. It is never unarmed, it "
         "has no deadline, and run/STOP still stops it at the next cycle."
     )
+    return 0
+
+
+def cmd_redact(args: argparse.Namespace) -> int:
+    """Print a text with every secret pattern redacted.
+
+    The command is the redaction itself, made visible: it reads a fixture
+    (a string, a file or standard input) and prints what a record under
+    `.overnight/` would hold. It writes nothing.
+
+    The fixture is the proof the ticket asks for: a fake key goes in and
+    the key does not come out."""
+    if args.text is not None:
+        text = args.text
+    elif args.file:
+        path = Path(args.file).expanduser()
+        text = read_text(path)
+        if not text:
+            die(f"the fixture {path} is empty or cannot be read")
+    else:
+        text = sys.stdin.read()
+    redacted = redact(text)
+    if redacted and not redacted.endswith("\n"):
+        redacted += "\n"
+    print(redacted, end="")
     return 0
 
 
@@ -1426,7 +1622,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         return 0
     out = receipts_dir / f"morning-{day.strftime('%Y-%m-%d')}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(report)
+    write_record(out, report)
     print(f"overnight: wrote {out}")
     return 0
 
@@ -2216,8 +2412,7 @@ def write_shift_line(root: Path, line: str) -> Path:
     path = root / "run" / "shift-log.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"{stamp} | {line}\n")
+    append_record(path, f"{stamp} | {line}\n")
     return path
 
 
@@ -2934,13 +3129,14 @@ def cmd_attend(args: argparse.Namespace) -> int:
     start = datetime.now(PT)
     close = start + timedelta(minutes=args.minutes)
     shift_id = f"attended-{start.strftime('%Y%m%d-%H%M')}"
-    (root / "run" / "armed").write_text(
+    write_record(
+        root / "run" / "armed",
         f"shift: {shift_id}\n"
         f"start: {pt_clock(start)}\n"
         f"run by: {args.run_by}\n"
-        f"items: {len(items)}\n"
+        f"items: {len(items)}\n",
     )
-    (root / "run" / "deadline").write_text(f"{close.timestamp()}\n")
+    write_record(root / "run" / "deadline", f"{close.timestamp()}\n")
     policy = build_policy()
     policy.update(
         {
@@ -2959,7 +3155,7 @@ def cmd_attend(args: argparse.Namespace) -> int:
     # The log exists from the start, so a night that stops early still
     # leaves a record of what it did.
     log_path = root / "run" / "shift-log.md"
-    log_path.write_text("\n".join(log_lines) + "\n")
+    write_record(log_path, "\n".join(log_lines) + "\n")
     pr_cache: dict[str, list[dict]] = {}
     for issue in items:
         item_start = time.monotonic()
@@ -3026,8 +3222,9 @@ def cmd_attend(args: argparse.Namespace) -> int:
         elapsed = time.monotonic() - item_start
         observed = int(elapsed + 0.5)
         receipt = root / "receipts" / f"{issue.get('key')}.md"
-        receipt.write_text(
-            receipt_text(issue, state, pr, observation, observed, stopped, nxt)
+        write_record(
+            receipt,
+            receipt_text(issue, state, pr, observation, observed, stopped, nxt),
         )
         detail = (
             f"`gh pr checks {pr['number']} -R {repo}` exit {observation['checks_exit']}"
@@ -3058,7 +3255,7 @@ def cmd_attend(args: argparse.Namespace) -> int:
         f"{datetime.now(PT).strftime('%Y-%m-%d %H:%M %Z')} | attended night | "
         f"{end}"
     )
-    log_path.write_text("\n".join(log_lines) + "\n")
+    write_record(log_path, "\n".join(log_lines) + "\n")
     print(f"overnight: attended night {shift_id} wrote {len(items)} receipts")
     for issue in items:
         print(f"  - {issue.get('key')} (#{issue.get('number')})")
@@ -3357,7 +3554,10 @@ def write_receipt(root: Path, item: dict, body: str) -> str:
     A receipt is rewritten when the item's state changed and when the
     evidence changed. A receipt that says the same thing is left alone, so
     the folder holds the record of the state changes and not a copy of the
-    same state every cycle."""
+    same state every cycle. The receipt is redacted before it is written
+    and before it is compared, so the comparison is between what is on
+    disk and what would be written."""
+    body = redact(body)
     path = receipt_path(root, item)
     if path.exists() and without_observed(read_text(path)) == without_observed(body):
         return "unchanged"
@@ -3367,7 +3567,7 @@ def write_receipt(root: Path, item: dict, body: str) -> str:
         # a run that dies mid-write never leaves a half receipt for the
         # morning report to read.
         scratch = path.with_name(path.name + ".tmp")
-        scratch.write_text(body, encoding="utf-8")
+        write_record(scratch, body)
         os.replace(scratch, path)
     except OSError as exc:
         return f"failed: {exc}"
@@ -4078,6 +4278,21 @@ def main() -> int:
         help=f"seconds the whole close may take (default {DEFAULT_DEADLINE})",
     )
     close.set_defaults(func=cmd_close)
+    redact_cmd = sub.add_parser(
+        "redact",
+        help="print a text with every secret pattern redacted",
+    )
+    redact_cmd.add_argument(
+        "--text",
+        default=None,
+        help="the text to redact (default: standard input)",
+    )
+    redact_cmd.add_argument(
+        "--file",
+        default=None,
+        help="the file to read and redact (default: standard input)",
+    )
+    redact_cmd.set_defaults(func=cmd_redact)
     args = parser.parse_args()
     return args.func(args)
 
