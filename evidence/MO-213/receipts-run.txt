@@ -1,0 +1,69 @@
+$ overnight receipt --items 3 --root $TMPDIR/mo213-proof
+Overnight receipts - 3 item(s)
+  FFBT-24 | stuck | gate UNKNOWN | wrote
+  FFBT-35 | stuck | gate UNKNOWN | wrote
+  FFBT-34 | stuck | gate UNKNOWN | wrote
+
+--- receipts written ---
+== /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo213-proof/receipts/FFBT-24.md
+# FFBT-24
+
+- Item: docs: FFBT-24 bounded live observation, authenticated success path still held (Refs #281)
+- Repo: shyamsivakumar/fantasy-football-toolkit
+- Ticket: FFBT-24 (#423)
+- State: stuck
+- PR: https://github.com/shyamsivakumar/fantasy-football-toolkit/pull/423
+- Checks: `gh pr checks 423 -R shyamsivakumar/fantasy-football-toolkit` exit 1
+- Failing checks: Vercel (FAILURE)
+- Gate: UNKNOWN
+- Files: 2
+- Time used: 0 min
+- Observed: 2 s
+- Stopped because: a check is failing: Vercel (FAILURE)
+- Next: the builder fixes the failing check and the gate runs again
+== /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo213-proof/receipts/FFBT-34.md
+# FFBT-34
+
+- Item: docs: record the #230 Draft Aide read-only window (run a4, USER_COORDINATION_REQUIRED)
+- Repo: shyamsivakumar/fantasy-football-toolkit
+- Ticket: FFBT-34 (#426)
+- State: stuck
+- PR: https://github.com/shyamsivakumar/fantasy-football-toolkit/pull/426
+- Checks: `gh pr checks 426 -R shyamsivakumar/fantasy-football-toolkit` exit 1
+- Failing checks: Vercel (FAILURE)
+- Gate: UNKNOWN
+- Files: 1
+- Time used: 0 min
+- Observed: 2 s
+- Stopped because: a check is failing: Vercel (FAILURE)
+- Next: the builder fixes the failing check and the gate runs again
+== /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/mo213-proof/receipts/FFBT-35.md
+# FFBT-35
+
+- Item: FFBT-35: inventory approved current-news and development sources
+- Repo: shyamsivakumar/fantasy-football-toolkit
+- Ticket: FFBT-35 (#425)
+- State: stuck
+- PR: https://github.com/shyamsivakumar/fantasy-football-toolkit/pull/425
+- Checks: `gh pr checks 425 -R shyamsivakumar/fantasy-football-toolkit` exit 1
+- Failing checks: Vercel (FAILURE)
+- Gate: UNKNOWN
+- Files: 12
+- Time used: 0 min
+- Observed: 2 s
+- Stopped because: a check is failing: Vercel (FAILURE)
+- Next: the builder fixes the failing check and the gate runs again
+
+$ overnight receipt --items 3 --root $TMPDIR/mo213-proof   # again, same state
+Overnight receipts - 3 item(s)
+  FFBT-24 | stuck | gate UNKNOWN | unchanged
+  FFBT-35 | stuck | gate UNKNOWN | unchanged
+  FFBT-34 | stuck | gate UNKNOWN | unchanged
+
+--- shift log ---
+2026-11-13 06:53 PM PT | receipt FFBT-24 | stuck | wrote
+2026-11-13 06:53 PM PT | receipt FFBT-35 | stuck | wrote
+2026-11-13 06:53 PM PT | receipt FFBT-34 | stuck | wrote
+2026-11-13 06:54 PM PT | receipt FFBT-24 | stuck | unchanged
+2026-11-13 06:54 PM PT | receipt FFBT-35 | stuck | unchanged
+2026-11-13 06:54 PM PT | receipt FFBT-34 | stuck | unchanged

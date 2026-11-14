@@ -46,6 +46,17 @@ the night writes is the morning report.
 
     overnight shift --dry-run
 
+`overnight receipt` (spec T5b) writes the receipt of every item whose state
+the shift can see: the state, the pull request, the checks and their exit
+codes, the gate's own verdict, the files the pull request touches, the
+builder's own time and why the item stopped. Every field is read from
+GitHub, the queue or a thread, so a receipt never carries a model claim
+where a proof belongs. The receipt is written on every state change of an
+item and is rewritten when the item's state or its evidence changes.
+
+    overnight receipt --repo shyamsivakumar/mac-ops --number 181
+    overnight receipt --items 3
+
 `overnight policy` (spec T4, revision 3) writes the policy snapshot the
 shift reads on every cycle: `run/policy.json`. The shift is never unarmed
 and has no deadline, so the snapshot is the whole contract. It holds the
@@ -2948,6 +2959,389 @@ def cmd_attend(args: argparse.Namespace) -> int:
     )
 
 
+# --- Part T5b: the receipt per item state change ---------------------------
+#
+# A receipt is the only proof the shift has. It is written on every state
+# change of an item, and it is built from what the pull requests and the
+# threads really hold: the checks that ran and their exit codes, the gate's
+# own verdict, the files the pull request touches and the builder's own
+# times. A model claim is never a field: the receipt says what it read.
+
+
+def receipt_path(root: Path, item: dict) -> Path:
+    """Return the receipt file of one item.
+
+    The receipt is named after the item: the board key when the item has
+    one, and the repository and the number when it does not."""
+    key = (item.get("key") or "").strip()
+    if key:
+        name = key
+    else:
+        repo = (item.get("repo") or "unknown").split("/")[-1]
+        name = f"{repo}-{item.get('number')}"
+    return root / "receipts" / f"{name}.md"
+
+
+def receipt_items(result: dict) -> list[dict]:
+    """Return the items a receipt can be about, in the shift's order.
+
+    A receipt is about an item the shift works: the failing pull requests,
+    the pull requests with a gate PASS, the ready tickets (split or not)
+    and the pull requests that are in flight. A ticket that is not ready is
+    not work, so it gets no receipt."""
+    items: list[dict] = []
+    for name in ("failing", "gate_pass", "split", "unsplit", "in_flight"):
+        items.extend(result.get(name) or [])
+    return items
+
+
+def parse_moment(value: str) -> datetime | None:
+    """Return an ISO time as a moment, or None when it cannot be read."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def minutes_between(start: str, end: str) -> int:
+    """Return the minutes between two ISO times, or 0 when they cannot be read.
+
+    The builder time is measured from the thread's own times, so it is a
+    number the shift read and not a number a model claimed."""
+    first = parse_moment(start)
+    last = parse_moment(end)
+    if first is None or last is None:
+        return 0
+    seconds = (last - first).total_seconds()
+    if seconds <= 0:
+        return 0
+    return int(seconds // 60)
+
+
+def read_thread_facts(thread_id: str, deadline: float) -> dict:
+    """Return what a thread really holds: its times, its status and its verdict.
+
+    The verdict is the last line of the thread's own last message, so a
+    receipt carries the gate's verdict and not a claim about it."""
+    facts = {"createdAt": "", "updatedAt": "", "status": "", "verdict": ""}
+    if not thread_id:
+        return facts
+    payload = json.dumps({"threadId": thread_id, "maxCharsPerItem": 20000})
+    try:
+        raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
+    except RepoError:
+        return facts
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return facts
+    thread = data.get("thread") or {}
+    facts["createdAt"] = str(thread.get("createdAt") or "")
+    facts["updatedAt"] = str(thread.get("updatedAt") or "")
+    facts["status"] = str(thread.get("status") or "")
+    texts = [
+        item.get("text") or ""
+        for item in (data.get("items") or [])
+        if item.get("type") == "assistant_message"
+    ]
+    for text in reversed(texts):
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            continue
+        found = GATE_VERDICT.search(lines[-1])
+        if found:
+            facts["verdict"] = found.group("verdict").upper()
+        break
+    return facts
+
+
+def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
+    """Return what one item really shows, from its pull request and its threads.
+
+    Every field here is read: the checks with their exit code, the gate's
+    own verdict, the files the pull request touches and the builder's own
+    times. Nothing is taken from what a model said about the work."""
+    facts = {
+        "state": STATE_STUCK,
+        "pr": "",
+        "checks": "",
+        "failing": [],
+        "gate": "UNKNOWN",
+        "files": 0,
+        "minutes": 0,
+        "builder": "",
+        "why": "",
+        "next": "",
+    }
+    repo = item.get("repo") or ""
+    number = item.get("number")
+    if item.get("kind") != "pull-request":
+        facts["why"] = "no pull request is open for this ticket"
+        facts["next"] = (
+            "the tick starts the builder for this item and the receipt is "
+            "rewritten when the pull request appears"
+        )
+        thread, _attempt = builder_thread(receipts, repo, int(number or 0))
+        facts["builder"] = thread
+        if thread:
+            builder = read_thread_facts(thread, deadline)
+            facts["minutes"] = minutes_between(
+                builder["createdAt"], builder["updatedAt"]
+            )
+            if builder["status"] in ("running", "starting", "preparing", "queued"):
+                facts["why"] = (
+                    f"the builder thread {thread} is still working on this ticket"
+                )
+                facts["next"] = "the builder finishes and the gate runs"
+        return facts
+
+    facts["pr"] = item.get("url") or ""
+    code, _out = run_read(
+        [GH, "pr", "checks", str(number), "-R", repo], GH_TIMEOUT, deadline
+    )
+    facts["checks"] = f"`gh pr checks {number} -R {repo}` exit {code}"
+    failed = (item.get("checks") or {}).get("failed") or []
+    facts["failing"] = [str(name) for name in failed]
+
+    merged = ""
+    view_code, view_out = run_read(
+        [
+            GH,
+            "pr",
+            "view",
+            str(number),
+            "-R",
+            repo,
+            "--json",
+            "files,mergedAt",
+        ],
+        GH_TIMEOUT,
+        deadline,
+    )
+    if view_code == 0:
+        try:
+            view = json.loads(view_out)
+        except ValueError:
+            view = {}
+        files = view.get("files") or []
+        facts["files"] = len(files) if isinstance(files, list) else 0
+        merged = str(view.get("mergedAt") or "")
+
+    verdict = ""
+    gate_thread = (item.get("gate") or {}).get("threadId") or ""
+    if gate_thread:
+        verdict = read_thread_facts(gate_thread, deadline)["verdict"]
+    if not verdict:
+        verdict = pull_request_gate_verdict(repo, number, deadline)
+    facts["gate"] = verdict or "UNKNOWN"
+
+    builder_thread_id = (item.get("builder") or {}).get("threadId") or ""
+    facts["builder"] = builder_thread_id
+    if builder_thread_id:
+        builder = read_thread_facts(builder_thread_id, deadline)
+        facts["minutes"] = minutes_between(
+            builder["createdAt"], builder["updatedAt"]
+        )
+
+    if failed:
+        facts["state"] = STATE_STUCK
+        facts["why"] = "a check is failing: " + ", ".join(facts["failing"])
+        facts["next"] = "the builder fixes the failing check and the gate runs again"
+    elif merged:
+        facts["state"] = STATE_DONE
+        facts["why"] = "the pull request merged on GitHub"
+        facts["next"] = "the ticket closes on the merge"
+    elif facts["gate"] == "PASS":
+        facts["state"] = STATE_READY
+        facts["why"] = (
+            "the gate passed and the shift has no merge right for this "
+            "repository"
+        )
+        facts["next"] = "Shyam merges the pull request in the morning"
+    elif facts["gate"] == "FAIL":
+        facts["state"] = STATE_STUCK
+        facts["why"] = "the gate did not pass"
+        facts["next"] = "the builder fixes the gate findings and the gate runs again"
+    else:
+        facts["state"] = STATE_STUCK
+        facts["why"] = "no gate verdict was read for this pull request"
+        facts["next"] = "the gate runs on this pull request head"
+    return facts
+
+
+def receipt_body(item: dict, facts: dict, observed: int) -> str:
+    """Return the text of one receipt.
+
+    The fields are the report's own fields, so the morning report reads the
+    receipt without guessing what a line means."""
+    title = " ".join(str(item.get("title") or "").split())
+    label = item.get("key") or item.get("number")
+    lines = [f"# {label}", ""]
+    lines.append(f"- Item: {title}")
+    lines.append(f"- Repo: {item.get('repo') or ''}")
+    lines.append(f"- Ticket: {item.get('key') or ''} (#{item.get('number')})")
+    lines.append(f"- State: {facts['state']}")
+    if item.get("kind") != "pull-request" and item.get("url"):
+        lines.append(f"- Issue: {item['url']}")
+    if facts["pr"]:
+        lines.append(f"- PR: {facts['pr']}")
+    if facts["checks"]:
+        lines.append(f"- Checks: {facts['checks']}")
+    if facts["failing"]:
+        lines.append(f"- Failing checks: {', '.join(facts['failing'])}")
+    lines.append(f"- Gate: {facts['gate']}")
+    lines.append(f"- Files: {facts['files']}")
+    if facts["builder"]:
+        lines.append(f"- Builder thread: {facts['builder']}")
+    lines.append(f"- Time used: {facts['minutes']} min")
+    lines.append(f"- Observed: {observed} s")
+    lines.append(f"- Stopped because: {facts['why']}")
+    lines.append(f"- Next: {facts['next']}")
+    return "\n".join(lines) + "\n"
+
+
+def without_observed(text: str) -> str:
+    """Return the receipt text without the observed line.
+
+    The observed line is how long the shift looked, so it changes every
+    cycle. Without it two receipts of the same item and the same state are
+    the same receipt, and the shift writes nothing."""
+    return "\n".join(
+        line for line in text.splitlines() if not line.startswith("- Observed:")
+    )
+
+
+def write_receipt(root: Path, item: dict, body: str) -> str:
+    """Write one receipt and return what happened: wrote, unchanged or failed.
+
+    A receipt is rewritten when the item's state changed and when the
+    evidence changed. A receipt that says the same thing is left alone, so
+    the folder holds the record of the state changes and not a copy of the
+    same state every cycle."""
+    path = receipt_path(root, item)
+    if path.exists() and without_observed(read_text(path)) == without_observed(body):
+        return "unchanged"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        return f"failed: {exc}"
+    return "wrote"
+
+
+def cmd_receipt(args: argparse.Namespace) -> int:
+    """Write the receipt of every item whose state the shift can see.
+
+    The command reads the board and the open pull requests, then writes one
+    receipt per item: the state, the pull request, the checks and their
+    exit codes, the gate's verdict, the files it touches, the builder's
+    own time and why the item stopped. Everything in a receipt is read
+    from GitHub, the queue or a thread, so a receipt never carries a model
+    claim where a proof belongs.
+
+    With `--repo` and `--number` it writes the receipt of that one item,
+    which is what the tick does for the item it just acted on. With
+    `--items` it writes the receipts of the first items of the shift's
+    order."""
+    deadline = time.monotonic() + args.deadline
+    cfg = load_config()
+    repos = allowed_repos(cfg)
+    flagged = ascend_flags(cfg)
+    if not repos:
+        die("the board config names no repositories")
+    issues, stale = read_board(deadline)
+    if stale:
+        print(
+            "overnight: REFUSED: the board list is stale, so the receipts "
+            "cannot be trusted.",
+            file=sys.stderr,
+        )
+        return 1
+    bodies, unread, open_numbers = read_bodies(issues, deadline)
+    decisions_path, lines = read_decisions()
+    problems: list[str] = []
+    if unread:
+        problems.append(
+            "the ticket text of these repositories could not be read: "
+            + ", ".join(unread)
+        )
+    if not lines:
+        problems.append(f"the decisions log {decisions_path} could not be read")
+    _kept, drops = filter_issues(issues, {r for r, _k in repos}, flagged, bodies, lines)
+    if problems:
+        for problem in problems:
+            print(f"overnight: REFUSED: {problem}", file=sys.stderr)
+        return 1
+    receipts, receipt_error = read_receipts()
+    result = collect_items(
+        deadline, repos, issues, bodies, open_numbers, drops, receipts
+    )
+    if result.get("pr_error"):
+        print(f"overnight: REFUSED: {result['pr_error']}", file=sys.stderr)
+        return 1
+    items = receipt_items(result)
+    if args.repo and args.number:
+        picked = [
+            item
+            for item in items
+            if item.get("repo") == args.repo and int(item.get("number") or 0) == args.number
+        ]
+        if not picked:
+            print(
+                f"overnight: {args.repo}#{args.number} is not an item the shift "
+                "works, so it has no receipt",
+                file=sys.stderr,
+            )
+            return 1
+        items = picked
+    elif args.items > 0:
+        items = items[: args.items]
+    if not items:
+        print("overnight: the board shows no item to write a receipt for")
+        return 0
+    root = report_root(args.root)
+    print(f"Overnight receipts - {len(items)} item(s)")
+    if receipt_error:
+        print(f"overnight: {receipt_error}", file=sys.stderr)
+    for item in items:
+        started = time.monotonic()
+        facts = item_facts(item, receipts, deadline)
+        observed = int(time.monotonic() - started + 0.5)
+        body = receipt_body(item, facts, observed)
+        path = receipt_path(root, item)
+        label = item.get("key") or f"{item.get('repo')}#{item.get('number')}"
+        if args.dry_run:
+            print()
+            print(f"--- {label} (dry run, nothing written) ---")
+            print(body, end="")
+            continue
+        outcome = write_receipt(root, item, body)
+        previous = ""
+        if path.exists():
+            previous = (parse_receipt(path)["fields"].get("state") or "").strip()
+        change = previous and previous != facts["state"]
+        print(
+            f"  {label} | {facts['state']} | gate {facts['gate']} | "
+            f"{outcome}"
+            + (f" | state {previous} -> {facts['state']}" if change else "")
+        )
+        if outcome.startswith("failed"):
+            print(f"overnight: {outcome}", file=sys.stderr)
+            continue
+        write_shift_line(
+            root,
+            f"receipt {label} | {facts['state']} | {outcome}"
+            + (f" | state {previous} -> {facts['state']}" if change else ""),
+        )
+    if args.dry_run:
+        print()
+        print("A dry run writes no receipt.")
+    return 0
+
+
 def board_item(order: int, group: str, item: dict) -> dict:
     """Return one board item for the tick, with the action it needs.
 
@@ -3321,6 +3715,44 @@ def main() -> int:
         help=f"seconds the whole night may take (default {DEFAULT_DEADLINE})",
     )
     attend.set_defaults(func=cmd_attend)
+    receipt = sub.add_parser(
+        "receipt",
+        help="write the receipt of every item whose state the shift can see",
+    )
+    receipt.add_argument(
+        "--repo",
+        default=None,
+        help="the repository of the one item the receipt is about",
+    )
+    receipt.add_argument(
+        "--number",
+        default=None,
+        type=int,
+        help="the number of the one item the receipt is about",
+    )
+    receipt.add_argument(
+        "--items",
+        type=int,
+        default=0,
+        help="how many items of the shift's order to write (0: every item)",
+    )
+    receipt.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    receipt.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the receipt and write no file",
+    )
+    receipt.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole run may take (default {DEFAULT_DEADLINE})",
+    )
+    receipt.set_defaults(func=cmd_receipt)
     args = parser.parse_args()
     return args.func(args)
 
