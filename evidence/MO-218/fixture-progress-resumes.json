@@ -1,0 +1,18 @@
+{
+  "cap": 3,
+  "note": "MO-999 is idle for three ticks and is parked as a stall; MO-1000 gets a new head on the second tick, so its count resets and it is never parked. The board shows progress on ticks 2 and 3, so the board is not a stall and there is no alert.",
+  "ticks": [
+    {
+      "MO-999": "head-a|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 301` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/301|thread-a",
+      "MO-1000": "head-b|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-a"
+    },
+    {
+      "MO-999": "head-a|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 301` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/301|thread-a",
+      "MO-1000": "head-c|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-b"
+    },
+    {
+      "MO-999": "head-a|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 301` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/301|thread-a",
+      "MO-1000": "head-d|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-b"
+    }
+  ]
+}

@@ -29,6 +29,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
 | `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order, and `--fixture` writes the receipt of a fixture item (the budget proof). `--dry-run` prints the receipt and writes no file. |
 | `overnight budget` | Shows what the per-item budget does with one item (spec part T8a): within the budget, over the soft budget, stopped at the hard budget, or parked for want of fix tries. It reads one item (`--repo` and `--number`) or a fixture (`--fixture`), and it writes nothing: the cycle writes the receipt, and this command shows the stop before the night does it. |
+| `overnight stall` | Shows what the stall rule does with a board that stopped moving (spec part T8b). With `--fixture` it runs the ticks the fixture describes through the real rule and prints the stall line of every item that is parked, the board's own stall line and the alert; without it, it prints the count in `run/progress.json` that the next cycle works from. It writes nothing. |
 | `overnight close --repo <repo> --number <n>` | Closes a ticket's issue, and only when the receipt holds the evidence (spec part T6): a check command, its exit code and a gate PASS on the pull request. A receipt with a claim but no exit code leaves the issue open, and the command says which record is missing. `--dry-run` says what the close would run and closes nothing. |
 | `overnight check-head --repo <repo> --number <n>` | Checks a pull request's head against the checks that ran on it, and exits 0 only when such a check ran and passed. It is the command a receipt records. Exit 1 means a check ran and did not pass; exit 2 means no check ran on the head (or the head could not be read), which is a refusal. The builder's own line in the pull request body is a claim about the check, so it never counts. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
@@ -60,7 +61,7 @@ overnight policy
 | --- | --- |
 | `allow` | The repositories the shift may touch, from the board config (`coordinator/config/tickets.json`). The cycle reads and orders only these repositories. |
 | `slot_cap` | The queue's own slot cap, read from the coordq config (`$COORDQ_DIR/config.json`). It is read only and never raised. |
-| `stall_cap` | Cycles with no new work before the shift ends as a stall. |
+| `stall_cap` | Ticks with no new evidence before an item in play is parked as a stall, and before a board that stopped moving is swept again and alerted. It never ends the shift. |
 | `retry_cap` | Fix tries per item before the item is parked. |
 | `soft_budget_minutes` | The soft builder-time budget per item. The builder is asked to wrap up when it is over it. |
 | `hard_budget_minutes` | The hard builder-time budget per item. The item is stopped and written up when it is over it. It can never be above the ten-minute turn cap. |
@@ -297,6 +298,73 @@ item through the real writer, so the budget can be shown on the real path:
 an item over its hard budget is written up as `parked`, and the morning
 report reads it like any other receipt.
 
+## The stall rule
+
+An item that stops moving is parked as a stall and the shift moves on,
+and a board that stops moving is logged as a stall, swept again and
+alerted to Shyam (spec part T8b). A stall never ends the shift: the shift
+runs until every item is done or parked, and it starts the count again
+the moment anything moves.
+
+A **tick** is one `overnight shift` cycle. The tick job is retired, so the
+cycle the launchd job fires every five minutes is the look at the board a
+tick used to be.
+
+| Case | What the shift does |
+| --- | --- |
+| An item in play with new evidence | Its count drops back to one tick. |
+| An item in play with no new commit and no new receipt for the stall cap | Its receipt says `parked` and why, a `stall <item>` line goes in the shift log, and the shift moves on to the next item. |
+| Every item in play with no new evidence for the stall cap | A `stall` line goes in the shift log, the board sweep runs again under the same policy snapshot, and Shyam is alerted. The cycle carries on. |
+| The board moves again | The board's count drops back to one tick, and the next stall alerts again. |
+
+The evidence is what the shift can see move: the pull request's head,
+its state, its checks and their exit codes, its gate verdict, the files it
+touches and the builder that holds it. Two cycles with the same evidence
+are two cycles in which the item produced no new commit and no new
+receipt. The rule lives in one place in the module (`advance_tick`), and
+the cycle and the `stall` command both read it.
+
+Only an item **in play** is counted: an item with an open pull request or
+a builder thread. A ticket nobody has started has nothing to stall, and
+parking the whole backlog after three quiet cycles would park work that
+was never begun; starting it is the queue's own job. So a board with no
+item in play is never a stall.
+
+The count lives in `run/progress.json`, the shift's own record of what it
+saw: one entry per item in play, with the evidence it saw and how many
+ticks that evidence has stayed the same, and the board's own count. It is
+not a second queue: it names no work, sets no order and decides nothing,
+and an item that leaves the board leaves the record. It is written once a
+cycle, atomically, and a record that cannot be read starts a new count
+and says so instead of stopping the cycle.
+
+The alert is three things: the shift log names the line, the parking lot
+holds the decision so the morning report puts it under "Decisions for
+you" with a default and a recommendation, and a desktop notification
+tries to reach Shyam now. The notification is best effort, because a
+headless job may not be allowed to post one; the cycle says whether it
+landed and never fails on it. The two records stand either way.
+
+The shift log's `stall` line is why the morning report can say the shift
+stalled: a stalled board is reported as a stall even though the cycles
+keep running, because a report that said "all done" over a board nobody
+could move would be the one lie the report must not tell.
+
+```sh
+overnight stall --fixture evidence/MO-218/fixture-three-idle-ticks.json
+overnight stall --root "$SCRATCH"
+```
+
+The fixture is a JSON file: the cap (optional, three by default) and the
+ticks, one mapping per tick from an item's label to the evidence it had
+on that tick. The command runs the real rule over the ticks, so the proof
+is the code the cycle runs and not a story about it. Two fixtures ship
+with it: `fixture-three-idle-ticks.json` (two items, three idle ticks:
+two parked items, the board stall and the alert) and
+`fixture-progress-resumes.json` (one idle item, one that gets a new head
+every tick: the idle item is parked, the board is not a stall and there is
+no alert).
+
 ## The secret redaction
 
 Every record the shift writes under `.overnight/` goes through one
@@ -496,7 +564,7 @@ work. A pull request that names neither is a record of its own.
 
 | Folder | What it holds |
 | --- | --- |
-| `run/` | The shift contract: the policy snapshot, and the STOP file that ends the shift. |
+| `run/` | The shift contract: the policy snapshot, the progress record and the STOP file that ends the shift. |
 | `receipts/` | One receipt per item, plus the morning report. Receipts are the only proof a cycle writes. |
 | `inbox/` | What the shift could not decide or could not fix: the parking lot and the snag log. |
 | `staging/` | Scratch for work in flight (worktree path, branch, builder notes). It is scratch, not a queue: an empty shift leaves it empty. |
@@ -509,6 +577,7 @@ revision 3 changes them.
 | File | Who writes | What it holds |
 | --- | --- | --- |
 | `run/policy.json` | `overnight policy` (and the attended first night) | Snapshot: allow list, slot cap (read only), stall cap, retry cap, verify level. No item cap and no allowance stop. |
+| `run/progress.json` | A cycle (`overnight shift`) | The stall count: the evidence each item in play showed and how many ticks it has stayed the same, and the board's own count. It names no work and keeps no queue (part T8b). |
 | `run/armed` | The attended first night only | Shift id and start time of the rehearsal. The shift is always armed (revision 3). |
 | `run/deadline` | The attended first night only | UNIX epoch the rehearsal ends at. The shift has no deadline (revision 3). |
 | `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
@@ -528,6 +597,9 @@ receipts sit beside it.
   gate PASS. A model claim alone never counts.
 - No secrets. Receipts, logs and the morning report never hold a token, key,
   cookie or `.env` value.
+- A stall never ends the shift. An item in play with no new commit and no new
+  receipt for the stall cap is parked, and a board that stops moving is logged,
+  swept again and alerted; the shift keeps running either way.
 - The folder is scratch for one shift. Nothing here changes merge, push, the
   slot cap or the Ascend rules.
 

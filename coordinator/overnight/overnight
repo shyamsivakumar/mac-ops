@@ -973,11 +973,12 @@ def build_policy() -> dict:
 
     The allow list is the board config's list of repositories. The slot
     cap is the queue's own cap, read from the coordq config and never
-    written. The stall cap ends a shift that stops making progress, the
-    retry cap parks an item that keeps failing and the verify level says
-    how much each item is checked. There is no item cap and no allowance
-    stop: the whole backlog is in scope and model use is never a stop
-    condition."""
+    written. The stall cap is the number of ticks with no new work before
+    an item in play is parked as a stall and a board that stopped moving
+    is swept again and alerted (part T8b), the retry cap parks an item
+    that keeps failing and the verify level says how much each item is
+    checked. There is no item cap and no allowance stop: the whole backlog
+    is in scope and model use is never a stop condition."""
     cfg = load_config()
     repos = allowed_repos(cfg)
     if not repos:
@@ -1043,7 +1044,8 @@ def policy_lines(policy: dict) -> list[str]:
     return [
         f"Allow list: {len(names)} repositories{allow_text}",
         f"Slot cap: {cap_text} (read only, from the coordq config; never raised)",
-        f"Stall cap: {policy.get('stall_cap')} cycles with no new work",
+        f"Stall cap: {policy.get('stall_cap')} ticks with no new work, then "
+        "the item is parked as a stall and a stalled board is swept and alerted",
         f"Retry cap: {policy.get('retry_cap')} fix tries per item, then it is parked",
         f"Builder-time budget: soft {budget['soft']} min, hard {budget['hard']} min "
         f"(inside the {TURN_CAP_MINUTES} minute turn cap)",
@@ -1174,6 +1176,389 @@ def apply_budget(facts: dict, fix_tries: int, budget: dict) -> dict:
         facts["why"] = (facts["why"] + "; " if facts["why"] else "") + verdict["why"]
         facts["next"] = verdict["next"] or facts["next"]
     return facts
+
+
+# --- Part T8b: the stall rule ---------------------------------------------
+#
+# The ticket's rule: an item with no new commit and no new receipt for
+# three ticks is parked as a stall and the shift moves on, and a board
+# that shows no progress for three ticks is logged as a stall, swept again
+# and alerted to Shyam. The shift itself keeps running: a stall never ends
+# the shift, it ends an item and writes a line in the record.
+#
+# A tick is one `overnight shift` cycle. The tick job is retired, so the
+# cycle the launchd job fires every five minutes is the look at the board
+# a tick used to be.
+#
+# The count lives in `run/progress.json`, the shift's own record of what
+# it saw. It is not a second queue: it names no work, sets no order and
+# decides nothing. It only counts the cycles an item's own evidence (its
+# pull request head, its gate, its checks, its builder) stayed the same.
+PROGRESS_FILE = "progress.json"
+# The desktop alert's own title, so a notification from the shift says who
+# sent it.
+ALERT_TITLE = "Coordinator overnight: the board stalled"
+
+
+def progress_path(root: Path) -> Path:
+    """Return the path of the shift's progress record."""
+    return root / "run" / PROGRESS_FILE
+
+
+def stall_cap(policy: dict | None) -> int:
+    """Return the stall cap the snapshot names, or the spec's three.
+
+    The cap is the number of ticks with no new evidence before an item is
+    parked and the board is alerted. A snapshot that names none keeps the
+    spec's number, so a snapshot written before this part keeps working."""
+    value = (policy or {}).get("stall_cap")
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return STALL_CAP
+
+
+def empty_progress() -> dict:
+    """Return an empty progress record: no tick counted yet."""
+    return {"board": {"idle": 0, "alerted": False}, "items": {}}
+
+
+def load_progress(root: Path) -> tuple[dict, str]:
+    """Return the shift's progress record and the reason it could not be read.
+
+    A record that cannot be read is not a reason to stop working: the
+    shift starts a new one and says so. A lost record costs the count of
+    ticks, while a refusal would cost the cycle."""
+    path = progress_path(root)
+    text = read_text(path)
+    if not text.strip():
+        return empty_progress(), ""
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        return empty_progress(), (
+            f"the progress record {path} is not JSON ({exc}), so a new count starts"
+        )
+    if not isinstance(data, dict):
+        return empty_progress(), (
+            f"the progress record {path} is not an object, so a new count starts"
+        )
+    progress = empty_progress()
+    board = data.get("board")
+    if isinstance(board, dict):
+        idle = board.get("idle")
+        if isinstance(idle, int) and not isinstance(idle, bool) and idle >= 0:
+            progress["board"]["idle"] = idle
+        progress["board"]["alerted"] = bool(board.get("alerted"))
+    items = data.get("items")
+    if isinstance(items, dict):
+        for label, entry in items.items():
+            if not isinstance(entry, dict):
+                continue
+            idle = entry.get("idle")
+            if not isinstance(idle, int) or isinstance(idle, bool) or idle < 0:
+                idle = 0
+            progress["items"][str(label)] = {
+                "fingerprint": str(entry.get("fingerprint") or ""),
+                "idle": idle,
+            }
+    return progress, ""
+
+
+def save_progress(root: Path, progress: dict) -> Path:
+    """Write the progress record and return the path it went to.
+
+    The write is atomic, so a cycle that reads while the record is being
+    written reads the old count or the new one, never half of one."""
+    path = progress_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f"{path.name}.tmp"
+    write_record(tmp, json.dumps(progress, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+    return path
+
+
+def progress_label(item: dict) -> str:
+    """Return the name the progress record counts an item under."""
+    return (
+        item.get("key") or f"{item.get('repo')}#{item.get('number')}"
+    ).strip()
+
+
+def progress_fingerprint(item: dict, facts: dict) -> str:
+    """Return one item's own evidence, as one string.
+
+    The fingerprint is what the shift can see move: the pull request's
+    head, its state, its checks and their exit code, its gate verdict, the
+    files it touches and the builder that holds it. Two cycles with the
+    same fingerprint are two cycles in which the item produced no new
+    commit and no new receipt."""
+    parts = [
+        str(item.get("head") or ""),
+        str(facts.get("state") or ""),
+        str(facts.get("gate") or ""),
+        str(facts.get("checks") or ""),
+        ",".join(str(name) for name in (facts.get("failing") or [])),
+        str(facts.get("files") or 0),
+        str(facts.get("pr") or ""),
+        str(facts.get("builder") or ""),
+    ]
+    return "|".join(parts)
+
+
+def in_play(item: dict, facts: dict) -> bool:
+    """Return whether the shift is working this item, so a stall is a stall.
+
+    An item in play has an open pull request or a builder thread: the
+    shift has put it in motion and can see it move. A ticket nobody has
+    started has nothing to stall, and parking the whole backlog after
+    three quiet cycles would park work that was never begun; starting it
+    is the queue's own job (spec part T5)."""
+    return item.get("kind") == "pull-request" or bool(facts.get("builder"))
+
+
+def advance_tick(entry: dict | None, fingerprint: str, cap: int) -> dict:
+    """Return the next progress entry of one item.
+
+    A tick is one look at the board, and the look that first sees an item
+    is the item's first tick: three ticks with no new commit and no new
+    receipt is three looks whose evidence was the same, so an item first
+    seen on tick one is a stall on tick three. The count goes up while the
+    evidence stays the same and drops back to one the moment it changes: a
+    new commit, a new check, a new gate verdict, a new builder. The rule
+    lives here, so the cycle and the `stall` command read the same one and
+    cannot disagree."""
+    previous = str((entry or {}).get("fingerprint") or "")
+    idle = int((entry or {}).get("idle") or 0)
+    if previous and previous == fingerprint:
+        idle += 1
+        changed = False
+    else:
+        idle = 1
+        changed = True
+    return {
+        "fingerprint": fingerprint,
+        "idle": idle,
+        "changed": changed,
+        "parked": idle >= cap,
+    }
+
+
+def stall_line(label: str, idle: int, cap: int) -> str:
+    """Return the shift-log line of one item the stall rule parked."""
+    return (
+        f"stall {label} | no new commit and no new receipt in {idle} of {cap} "
+        "ticks | parked, the shift moves on"
+    )
+
+
+def board_stall_line(idle: int, cap: int) -> str:
+    """Return the shift-log line of a board that stopped moving."""
+    return (
+        f"stall | the whole board showed no progress in {idle} of {cap} ticks | "
+        "the board sweep runs again and Shyam is alerted"
+    )
+
+
+def apply_stall(facts: dict, idle: int, cap: int) -> dict:
+    """Park an item the stall rule has counted out.
+
+    The stall stops work, so it says nothing about work that is finished:
+    a merged item, an item that waits for Shyam's merge and an item the
+    budget already parked keep their state and their reason."""
+    if idle < cap:
+        return facts
+    if facts.get("state") in (STATE_DONE, STATE_READY, STATE_PARKED):
+        return facts
+    facts["state"] = STATE_PARKED
+    facts["why"] = (
+        f"no new commit and no new receipt in {idle} ticks (the stall cap is "
+        f"{cap}), so the item was parked as a stall"
+    )
+    facts["next"] = (
+        "Shyam decides whether to restart the item, to split it into a "
+        "5-minute part or to close it"
+    )
+    return facts
+
+
+def alert_shyam(root: Path, message: str) -> str:
+    """Alert Shyam that the whole board stopped moving.
+
+    Two records and one push: the shift log names the line, the parking
+    lot holds the decision so the morning report puts it under "Decisions
+    for you", and a desktop notification tries to reach Shyam now. The
+    notification is best effort (a headless job may not be allowed to post
+    one), so it is reported and never fails the cycle; the two records
+    stand either way."""
+    append_record(
+        root / "inbox" / "parking-lot.md",
+        "\n## The board showed no progress for the stall cap\n\n"
+        f"{message}\n\n"
+        "- Default: the shift keeps running and sweeps the board again\n"
+        "- Recommend: read the board, then restart or close what is stuck\n",
+    )
+    text = " ".join(message.split()).replace("\\", " ").replace('"', "'")
+    if len(text) > 200:
+        text = text[:197] + "..."
+    script = f'display notification "{text}" with title "{ALERT_TITLE}"'
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return f"no desktop alert ({exc}); the parking lot and the shift log hold it"
+    except subprocess.TimeoutExpired:
+        return "the desktop alert timed out; the parking lot and the shift log hold it"
+    if result.returncode != 0:
+        tail = " ".join((result.stderr or "").split())[:120]
+        return (
+            f"no desktop alert (osascript exit {result.returncode} {tail}); "
+            "the parking lot and the shift log hold it"
+        )
+    return "alerted Shyam: a desktop notification, the parking lot and the shift log"
+
+
+def read_stall_fixture(path: str) -> tuple[int, list[dict]]:
+    """Return the cap and the ticks a stall fixture describes.
+
+    A fixture is a JSON file: the cap (optional) and the ticks, one
+    mapping per tick from an item's label to the fingerprint its evidence
+    had on that tick. The command runs the real rule over the ticks, so
+    the proof is the code the cycle runs and not a story about it.
+
+        {
+          "cap": 3,
+          "ticks": [
+            {"MO-999": "head1|stuck|..."},
+            {"MO-999": "head1|stuck|..."},
+            {"MO-999": "head1|stuck|..."}
+          ]
+        }
+    """
+    file = Path(path).expanduser()
+    text = read_text(file)
+    if not text.strip():
+        die(f"the fixture {file} is empty or cannot be read")
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        die(f"the fixture {file} is not JSON: {exc}")
+    if not isinstance(data, dict):
+        die(f"the fixture {file} is not a JSON object")
+    cap = data.get("cap", STALL_CAP)
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+        die(f"the fixture {file} has no stall cap number")
+    ticks = data.get("ticks")
+    if not isinstance(ticks, list) or not ticks:
+        die(f"the fixture {file} has no ticks list")
+    cleaned: list[dict] = []
+    for tick in ticks:
+        if not isinstance(tick, dict) or not tick:
+            die(f"the fixture {file} has a tick that names no item")
+        cleaned.append({str(k): str(v) for k, v in tick.items()})
+    return cap, cleaned
+
+
+def run_ticks(cap: int, ticks: list[dict]) -> list[dict]:
+    """Run the ticks through the stall rule and return what each one shows.
+
+    An item is counted out when its fingerprint has not changed for the
+    cap. The board is counted out the same way: a tick in which no item's
+    fingerprint changed is a tick in which the board made no progress."""
+    entries: dict[str, dict] = {}
+    board_idle = 0
+    rows: list[dict] = []
+    for number, tick in enumerate(ticks, start=1):
+        changed = False
+        items: list[dict] = []
+        for label in sorted(tick):
+            step = advance_tick(entries.get(label), tick[label], cap)
+            entries[label] = {
+                "fingerprint": step["fingerprint"],
+                "idle": step["idle"],
+            }
+            changed = changed or step["changed"]
+            items.append(
+                {"label": label, "idle": step["idle"], "parked": step["parked"]}
+            )
+        board_idle = 1 if changed else board_idle + 1
+        rows.append({"tick": number, "board_idle": board_idle, "items": items})
+    return rows
+
+
+def cmd_stall(args: argparse.Namespace) -> int:
+    """Show what the stall rule does with a board that stopped moving.
+
+    With `--fixture` it runs the ticks the fixture describes through the
+    real rule and prints what each tick did: the item that is parked as a
+    stall, the board line and the alert. Without it, it reads the shift's
+    own progress record and prints the count the next cycle works from.
+    It writes nothing: the cycle writes the record.
+
+    The rule is the ticket's (spec part T8b): an item with no new commit
+    and no new receipt for three ticks is parked as a stall and the shift
+    moves on, and a board with no progress for three ticks is logged as a
+    stall, swept again and alerted. The shift keeps running either way.
+    """
+    if args.fixture:
+        cap, ticks = read_stall_fixture(args.fixture)
+        emit(f"Overnight stall - fixture (read only), cap {cap} ticks")
+        rows = run_ticks(cap, ticks)
+        for row in rows:
+            emit(
+                f"Tick {row['tick']}: board idle {row['board_idle']} of {cap} | "
+                + " | ".join(
+                    f"{item['label']} idle {item['idle']} of {cap}"
+                    + (", parked as a stall" if item["parked"] else "")
+                    for item in row["items"]
+                )
+            )
+        last = rows[-1]
+        emit()
+        for item in last["items"]:
+            if item["parked"]:
+                emit(stall_line(item["label"], item["idle"], cap))
+        if last["board_idle"] >= cap:
+            emit(board_stall_line(last["board_idle"], cap))
+            emit(
+                "overnight: the board sweep would run again under the same "
+                "policy snapshot, and Shyam would be alerted: a desktop "
+                "notification, the parking lot and the shift log"
+            )
+        else:
+            emit(
+                "the board moved inside the cap, so it is not a stall: no "
+                "sweep and no alert"
+            )
+        emit()
+        emit("This command writes nothing: the cycle writes the record.")
+        return 0
+    root = report_root(args.root)
+    progress, problem = load_progress(root)
+    if problem:
+        emit(f"overnight: {problem}", err=True)
+    cap = stall_cap(policy_snapshot(root))
+    emit(f"Overnight stall - the progress record (read only), cap {cap} ticks")
+    if not progress["items"]:
+        emit("The record counts no item yet: the next cycle starts the count.")
+    for label in sorted(progress["items"]):
+        entry = progress["items"][label]
+        emit(
+            f"{label}: idle {entry['idle']} of {cap}"
+            + (", parked as a stall" if entry["idle"] >= cap else "")
+        )
+    board = progress["board"]
+    emit(
+        f"Board: idle {board['idle']} of {cap} | "
+        + ("alerted" if board["alerted"] else "not alerted")
+    )
+    emit()
+    emit("This command writes nothing: the cycle writes the record.")
+    return 0
 
 
 def cmd_policy(args: argparse.Namespace) -> int:
@@ -1354,6 +1739,9 @@ def cmd_shift(args: argparse.Namespace) -> int:
     # no budget gets the turn cap's budget, so a snapshot written before
     # this part keeps the shift working.
     budget = budget_of(policy or {})
+    # The stall cap the board is counted against (part T8b). A snapshot
+    # that names none keeps the spec's three ticks.
+    stall_ticks = stall_cap(policy or {})
     allowed = None
     if policy is None:
         if not args.dry_run:
@@ -1428,12 +1816,17 @@ def cmd_shift(args: argparse.Namespace) -> int:
                     err=True,
                 )
                 return 1
+            progress, progress_problem = load_progress(root)
+            if progress_problem:
+                emit(f"overnight: {progress_problem}", err=True)
             written = write_receipts(
                 root,
                 items,
                 receipts,
                 time.monotonic() + args.deadline,
                 budget=budget,
+                progress=progress,
+                cap=stall_ticks,
             )
             emit(
                 f"overnight: {stamp} shift cycle wrote {written} receipts of "
@@ -1448,6 +1841,62 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 root,
                 f"planned {len(items)} items | the cycle worked {len(items)} items",
             )
+            # The stall rule (part T8b). The count is the shift's own
+            # record: it goes up on a tick in which no item in play showed
+            # new evidence and drops to zero the moment one does. A board
+            # that stayed still for the stall cap is logged as a stall,
+            # swept again under the same snapshot and alerted to Shyam. The
+            # shift itself keeps running: a stall is never its end.
+            board = progress["board"]
+            if not board["in_play"]:
+                board["idle"] = 0
+                board["alerted"] = False
+            elif board["changed"]:
+                board["idle"] = 1
+                board["alerted"] = False
+            else:
+                board["idle"] = int(board["idle"] or 0) + 1
+            stalled = (
+                board["in_play"] > 0
+                and board["idle"] >= stall_ticks
+                and not board["alerted"]
+            )
+            if stalled:
+                board["alerted"] = True
+            save_progress(root, progress)
+            if stalled:
+                message = (
+                    f"the whole board showed no progress in {board['idle']} of "
+                    f"{stall_ticks} ticks ({board['in_play']} items in play), "
+                    "so the board sweep ran again"
+                )
+                line = board_stall_line(board["idle"], stall_ticks)
+                emit(f"overnight: {stamp} {line}")
+                write_shift_line(root, line)
+                again, _again_receipts, again_error = read_work_items(
+                    time.monotonic() + min(args.deadline, 180), allowed, budget
+                )
+                if again_error:
+                    emit(
+                        "overnight: REFUSED: the stall sweep could not read the "
+                        f"board: {again_error}",
+                        err=True,
+                    )
+                    write_shift_line(root, f"stall sweep refused: {again_error}")
+                else:
+                    write_shift_line(
+                        root, f"stall sweep: the board shows {len(again)} items"
+                    )
+                    emit(
+                        "overnight: the stall sweep read the board again and it "
+                        f"shows {len(again)} items"
+                    )
+                emit(f"overnight: {alert_shyam(root, message)}")
+            else:
+                emit(
+                    f"overnight: {stamp} the board is idle {board['idle']} of "
+                    f"{stall_ticks} ticks"
+                )
             emit(
                 "overnight: the shift starts no builder and works no board item "
                 "yet (spec part T5); it writes the receipts of what it saw"
@@ -4930,6 +5379,8 @@ def write_receipts(
     deadline: float,
     dry_run: bool = False,
     budget: dict | None = None,
+    progress: dict | None = None,
+    cap: int = STALL_CAP,
 ) -> int:
     """Write the receipt of every item and return how many were written.
 
@@ -4941,8 +5392,19 @@ def write_receipts(
     The budget is applied to every receipt (part T8a), so an item over its
     hard builder-time budget, or out of fix tries, is written up as
     parked. The fix tries come from the queue's own record of the fixes
-    it sent, so the shift keeps no count of its own."""
+    it sent, so the shift keeps no count of its own.
+
+    The stall rule is applied too (part T8b): an item in play whose own
+    evidence has not changed for the stall cap is parked as a stall and
+    the shift moves on. The count is read from the shift's progress record
+    and, when the caller passes one, written back by the caller: this
+    function never decides when a tick starts."""
     budget = normalise_budget(budget if budget is not None else budget_of(policy_snapshot(root)))
+    if progress is None:
+        progress, _problem = load_progress(root)
+    progress["board"]["changed"] = False
+    progress["board"]["in_play"] = 0
+    seen: set[str] = set()
     queue_state = read_queue_state()
     written = 0
     for item in items:
@@ -4953,10 +5415,28 @@ def write_receipts(
             else 0
         )
         facts = item_facts(item, receipts, deadline, budget, tries)
+        label = progress_label(item)
+        play = in_play(item, facts)
+        first_park = False
+        if play:
+            entry = advance_tick(
+                progress["items"].get(label),
+                progress_fingerprint(item, facts),
+                cap,
+            )
+            progress["items"][label] = {
+                "fingerprint": entry["fingerprint"],
+                "idle": entry["idle"],
+            }
+            seen.add(label)
+            progress["board"]["in_play"] += 1
+            if entry["changed"]:
+                progress["board"]["changed"] = True
+            first_park = entry["parked"] and entry["idle"] == cap
+            facts = apply_stall(facts, entry["idle"], cap)
         observed = int(time.monotonic() - started + 0.5)
         body = receipt_body(item, facts, observed)
         path = receipt_path(root, item)
-        label = item.get("key") or f"{item.get('repo')}#{item.get('number')}"
         if dry_run:
             emit()
             emit(f"--- {label} (dry run, nothing written) ---")
@@ -4984,6 +5464,11 @@ def write_receipts(
             f"receipt {label} | {facts['state']} | {outcome}"
             + (f" | state {previous} -> {facts['state']}" if change else ""),
         )
+        if first_park:
+            write_shift_line(root, stall_line(label, cap, cap))
+    progress["items"] = {
+        label: entry for label, entry in progress["items"].items() if label in seen
+    }
     return written
 
 
@@ -5446,6 +5931,21 @@ def main() -> int:
         help=f"seconds the whole command may take (default {DEFAULT_DEADLINE})",
     )
     budget_cmd.set_defaults(func=cmd_budget)
+    stall_cmd = sub.add_parser(
+        "stall",
+        help="show what the stall rule does with a board that stopped moving",
+    )
+    stall_cmd.add_argument(
+        "--fixture",
+        default=None,
+        help="a JSON file that describes the ticks (the stall proof)",
+    )
+    stall_cmd.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    stall_cmd.set_defaults(func=cmd_stall)
     close = sub.add_parser(
         "close",
         help="close a ticket's issue when its receipt holds the evidence",
