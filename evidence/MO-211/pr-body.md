@@ -64,9 +64,9 @@ $ python3 scripts/mac_ops_fast_check.py
 fast-check: passed; selected checks are not the full suite
 
 $ ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
-Ran 190 tests in 2.898s
+Ran 190 tests in 3.213s
 
 OK
 ```
 
-Builder check: PASS b39556a66330a1ddf30579fe827505ed8f5ad2d8
+Builder check: PASS 829b36fd80fd4863ede2f534b0da4f5ba3ef4689
