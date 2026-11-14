@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, json, os, re, subprocess, sys, time
+import argparse, fcntl, json, os, re, signal, subprocess, sys, time
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -32,7 +32,7 @@ TICKETS_CONFIG = os.environ.get("COORDQ_TICKETS_CONFIG", os.path.expanduser("~/.
 REFILL_INTERVAL = int(os.environ.get("COORDQ_REFILL_INTERVAL", "300"))
 REFILL_BUDGET = float(os.environ.get("COORDQ_REFILL_BUDGET", "120"))
 REFILL_MAX = int(os.environ.get("COORDQ_REFILL_MAX", "40"))
-REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "200"))
+REFILL_LIMIT = int(os.environ.get("COORDQ_REFILL_LIMIT", "1000"))
 # The file that holds the refusals of the earlier passes. A candidate whose
 # board state has not changed since its last refusal is skipped, so the scan
 # walks past it and reaches the tickets further down the board.
@@ -408,6 +408,17 @@ def search_stage_todo(owner):
     return json.loads(run.stdout)
 
 
+def stage_todo(candidate):
+    """True when the ticket carries the one stage label the board means.
+
+    A ticket whose stage label is spelled another way, or that carries two
+    stage labels, is one the ticket CLI refuses, so the scan skips it.
+    """
+    names = [label["name"] if isinstance(label, dict) else str(label)
+             for label in candidate.get("labels") or []]
+    return [name for name in names if name.startswith("stage:")] == [STAGE]
+
+
 def board_candidates():
     """The open stage:todo issues of the repos in tickets.json, oldest first."""
     with open(TICKETS_CONFIG) as f:
@@ -418,7 +429,7 @@ def board_candidates():
     for owner in owners:
         for row in search_stage_todo(owner):
             repo = row["repository"]["nameWithOwner"]
-            if repo in repos:
+            if repo in repos and stage_todo(row):
                 found[(repo, row["number"])] = row
     return sorted(found.values(),
                   key=lambda r: (r["createdAt"], r["repository"]["nameWithOwner"], r["number"]))
@@ -429,15 +440,34 @@ def ticket_start(repo, number, dry_run):
     changes nothing, so a refusal is a skip and not a start. The ticket CLI
     exits 2 for a refusal and for a usage error, and 1 for a failed check,
     so the exit code alone does not say which one it was; `is_refusal` reads
-    the answer out of the output."""
+    the answer out of the output.
+
+    The ticket CLI starts the queue entry itself, so a timeout has to take
+    that child with it: the whole process group is killed, or the start
+    keeps running after the dispatcher gave up on it."""
     command = [TICKET_BIN, "start", f"{repo}#{number}"]
     if dry_run:
         command.append("--dry-run")
     try:
-        run = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=True)
+    except OSError as e:
+        return 1, f"ticket start could not run: {e}"
+    try:
+        stdout, stderr = process.communicate(timeout=240)
     except subprocess.TimeoutExpired:
-        return 1, "ticket start timed out"
-    return run.returncode, ((run.stdout or "") + (run.stderr or "")).strip()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
+        process.communicate()
+        return 1, "ticket start timed out after 240s"
+    return process.returncode, ((stdout or "") + (stderr or "")).strip()
+
+
+def one_line(text):
+    """The output of the ticket CLI on one line, so a log entry stays a line."""
+    return " ".join(text.split())
 
 
 def is_refusal(code, out):
@@ -591,22 +621,22 @@ def refill(a):
             examined += 1
             if code != 0:
                 if is_refusal(code, out):
-                    refusals[key] = {"state": board_state, "reason": out[:200],
+                    refusals[key] = {"state": board_state, "reason": one_line(out)[:200],
                                      "at": time.time(), "pass": pass_no}
-                    pass_refusals.append({"key": key, "reason": out[:200]})
-                    log(f"refill refused {key}: {out[:200]}")
+                    pass_refusals.append({"key": key, "reason": one_line(out)[:200]})
+                    log(f"refill refused {key}: {one_line(out)[:200]}")
                 else:
                     # A failure of the check is not a refusal of the ticket.
                     # It is not recorded, so the next pass tries the ticket
                     # again instead of hiding it for the retry age.
-                    log(f"refill could not check {key}: {out[:200]}")
+                    log(f"refill could not check {key}: {one_line(out)[:200]}")
                 continue
             filled += 1
             refusals.pop(key, None)
             if a.dry_run:
                 log(f"refill would start {key}")
             elif out.startswith("queued"):
-                log(f"refill queued {key}: {out[:120]}")
+                log(f"refill queued {key}: {one_line(out)[:120]}")
             else:
                 log(f"refill started {key}")
         # A candidate that left the board keeps no refusal, so the file holds
@@ -626,22 +656,26 @@ def refill(a):
             f"skipped {skipped} unchanged refusal(s), attempted {attempted}, started {filled}")
 
 
+def safe_refill(a):
+    try:
+        refill(a)
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        log(f"refill failed: {e}")
+
+
 def cmd_dispatch(a):
     with open(path("dispatch.last"), "w") as f:
         f.write(str(int(time.time())))
     if a.dry_run:
         log("dry run: the queue is left alone")
-        refill(a)
+        safe_refill(a)
         return
     with Lock(False) as lock:
         if lock is None:
             log("lock held by another run, skipping")
             return
         drain()
-    try:
-        refill(a)
-    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as e:
-        log(f"refill failed: {e}")
+    safe_refill(a)
 
 
 def cmd_create(a):
