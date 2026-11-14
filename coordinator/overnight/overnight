@@ -135,6 +135,7 @@ PR_LIMIT = 100
 ISSUE_LIMIT = 500
 PR_FIELDS = (
     "number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body"
+    ",statusCheckRollup"
 )
 # A ticket reference in a pull request body or title. Only the GitHub
 # keywords count: a bare "#123" is often a pull request, not a ticket.
@@ -145,6 +146,14 @@ REFS_ISSUE = re.compile(r"\brefs?\s+#(\d+)", re.I)
 # The check a repository publishes on a head. The builder's own line in the
 # pull request body is the other form of the same check.
 AGENT_CHECK = "srw/agent-check"
+# The builder's own check line, such as "Builder check: PASS 3ff45c76". The
+# verdict is what the board reads: the head after it is the head the line is
+# a check for.
+BUILDER_CHECK_LINE = re.compile(r"Builder check:\s*(.*)")
+# The drop label the filter writes for its own housekeeping note. A ticket
+# dropped for any other reason (a hold, a question for Shyam, a design that
+# is not settled, an Ascend repository) still holds its pull request back.
+INFORMATIONAL_DROP = "open item in the decisions log"
 # A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
 # it is a ticket key number, not a GitHub issue number.
 BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
@@ -755,6 +764,7 @@ def build_records(
                 "headRefOid": row.get("headRefOid") or "",
                 "updatedAt": row.get("updatedAt"),
                 "body": row.get("body") or "",
+                "statusCheckRollup": row.get("statusCheckRollup") or [],
             }
             target, signal = linked_ticket(row, by_number, by_key)
             if target is not None:
@@ -773,6 +783,7 @@ def build_records(
                     "headRefOid": row.get("headRefOid") or "",
                     "updatedAt": row.get("updatedAt"),
                     "body": row.get("body") or "",
+                    "statusCheckRollup": row.get("statusCheckRollup") or [],
                 }
             )
     return records
@@ -2232,7 +2243,7 @@ def decision_reason(
     if DECISION_HOLD.search(last):
         return "hold in the decisions log", clip(last)
     if DECISION_OPEN.search(last):
-        return "open item in the decisions log", clip(last)
+        return INFORMATIONAL_DROP, clip(last)
     if DECISION_STRONG.search(last):
         return "open question in the decisions log", clip(last)
     if DECISION_ASKS.search(last):
@@ -2595,60 +2606,6 @@ def read_closed_issues(
     return closed_numbers, closed_keys, unread
 
 
-def read_checks(repo: str, number: int, deadline: float) -> tuple[list[dict], str]:
-    """Return the checks of one pull request and the reason none are known.
-
-    `gh pr view` reads the checks of a pull request as a rollup. A commit
-    status carries its context, and a check run carries the app that ran
-    it. The board keeps both, because an agent check is named by the
-    repository's own publisher and every other check is external.
-
-    A pull request that carries no checks at all is not a failing pull
-    request: the rollup is empty and that is an answer. A read that fails
-    is a refusal, never a failure."""
-    left = deadline - time.monotonic()
-    if left <= 0:
-        return [], "the deadline passed before the checks could be read"
-    try:
-        result = subprocess.run(
-            [
-                GH,
-                "pr",
-                "view",
-                str(number),
-                "-R",
-                repo,
-                "--json",
-                "statusCheckRollup",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=max(1, min(GH_TIMEOUT, int(left))),
-            check=False,
-        )
-    except FileNotFoundError:
-        return [], f"{GH} is not on PATH"
-    except subprocess.TimeoutExpired:
-        return [], f"gh pr view {repo}#{number} timed out"
-    out = (result.stdout or "").strip()
-    err = (result.stderr or "").strip()
-    if result.returncode != 0:
-        return [], (
-            f"gh pr view {repo}#{number} failed ({result.returncode}): "
-            + (err or out)[-200:]
-        )
-    try:
-        payload = json.loads(out or "{}")
-    except ValueError as exc:
-        return [], f"gh pr view did not return JSON for {repo}#{number}: {exc}"
-    entries = (
-        payload.get("statusCheckRollup") if isinstance(payload, dict) else None
-    )
-    if not isinstance(entries, list):
-        return [], f"gh pr view returned no check rollup for {repo}#{number}"
-    return check_rows(entries), ""
-
-
 def check_rows(entries: list) -> list[dict]:
     """Return the rollup of a pull request as check rows.
 
@@ -2858,6 +2815,12 @@ def fix_tries(queue_state: dict, repo: str, number: object) -> int:
     heads = queue_state.get("fixedHeads") or {}
     prefix = f"fix:{repo}#{number}:"
     return sum(1 for key in heads if str(key).startswith(prefix))
+
+
+def fix_sent(queue_state: dict, repo: str, number: object, head: str) -> bool:
+    """Return True when the findings of this head were already sent."""
+    heads = queue_state.get("fixedHeads") or {}
+    return f"fix:{repo}#{number}:{head}" in heads
 
 
 def builder_thread(receipts: dict[str, str], repo: str, number: int) -> tuple[str, int]:
@@ -3151,30 +3114,6 @@ def write_shift_line(root: Path, line: str) -> Path:
     return path
 
 
-def read_all_checks(
-    pairs: list[tuple[str, int]], deadline: float
-) -> dict[tuple[str, int], tuple[list[dict], str]]:
-    """Return the checks of every pull request, read at once.
-
-    One call reads one pull request's checks and the board holds many open
-    pull requests, so the calls run together: the board is read in
-    seconds, not in minutes."""
-    results: dict[tuple[str, int], tuple[list[dict], str]] = {}
-    if not pairs:
-        return results
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {
-            pair: pool.submit(read_checks, pair[0], pair[1], deadline)
-            for pair in pairs
-        }
-        for pair, future in futures.items():
-            try:
-                results[pair] = future.result()
-            except RepoError as exc:
-                results[pair] = ([], str(exc))
-    return results
-
-
 def collect_items(
     deadline: float,
     repos: list[tuple[str, str]],
@@ -3184,6 +3123,7 @@ def collect_items(
     drops: list[tuple[dict, str]],
     receipts: dict[str, str],
     budget: dict | None = None,
+    flagged: frozenset[str] = frozenset(),
 ) -> dict:
     """Return the board's items in the order the shift works them.
 
@@ -3193,6 +3133,12 @@ def collect_items(
     that holds it, and every ready ticket carries the one action the
     coordinator may take on it now, so no caller has to look a second
     time.
+
+    Every open pull request of a board repository is an item, whether or
+    not a board ticket names it: a pull request that a dropped ticket
+    named is still work that is stuck, and the board is where the tick
+    sees it. The Ascend repositories are not board repositories, so their
+    pull requests are not items.
 
     The budget is the per-item builder-time budget (part T8a). It holds
     the work back here: an item that used its fix tries, or that is over
@@ -3221,13 +3167,19 @@ def collect_items(
     if pr_error:
         return {"pr_error": pr_error}
 
+    pull_requests = {
+        repo: rows
+        for repo, rows in pull_requests.items()
+        if not ascend_reason(repo, "", repo in flagged)
+    }
     board_repos = sorted({issue.get("repo") or "" for issue in issues})
     closed_numbers, closed_keys, closed_unread = read_closed_issues(
         [(repo, "") for repo in board_repos], deadline
     )
     records = build_records(issues, pull_requests)
     dropped = {
-        (issue.get("repo") or "", issue.get("number")) for issue, _reason in drops
+        (issue.get("repo") or "", issue.get("number")): reason
+        for issue, reason in drops
     }
     board_by_key = {
         (issue.get("key") or "").upper(): issue
@@ -3238,20 +3190,6 @@ def collect_items(
     gated_heads = queue_state["gatedHeads"]
     queued_tickets = queue_state["queuedTickets"]
     live = read_live_threads(deadline)
-
-    pairs: list[tuple[str, int]] = []
-    for repo in sorted(allowed):
-        for record in records.get(repo, []):
-            if (record.get("repo"), record.get("number")) in dropped:
-                continue
-            prs = (
-                [record]
-                if record["kind"] == "pr"
-                else (record.get("prs") or [])
-            )
-            for pull in prs:
-                pairs.append((repo, pull["number"]))
-    checks = read_all_checks(pairs, deadline)
 
     failing: list[dict] = []
     gate_pass: list[dict] = []
@@ -3279,13 +3217,16 @@ def collect_items(
     for repo in sorted(allowed):
         bucket = records.get(repo, [])
         for record in bucket:
-            if (record.get("repo"), record.get("number")) in dropped:
-                continue
+            drop_reason = dropped.get(
+                (record.get("repo"), record.get("number")), ""
+            )
             prs = (
                 [record]
                 if record["kind"] == "pr"
                 else (record.get("prs") or [])
             )
+            if not prs and drop_reason:
+                continue
             if prs:
                 for pull in prs:
                     item = {
@@ -3306,15 +3247,22 @@ def collect_items(
                         "actionReason": "",
                         "actionCommand": "",
                     }
+                    if drop_reason:
+                        # The item stays on the board because the pull request
+                        # is stuck work. The drop still decides whether the
+                        # tick may act on it.
+                        item["ticketDropped"] = drop_reason
                     if item["isDraft"]:
                         item["reason"] = "draft pull request"
                         item["actionReason"] = "draft pull request"
                         in_flight.append(item)
                         count_for(repo)["in_flight"] += 1
                         continue
-                    rows, unknown = checks.get(
-                        (repo, pull["number"]), ([], "the checks were not read")
-                    )
+                    rollup = pull.get("statusCheckRollup")
+                    if isinstance(rollup, list):
+                        rows, unknown = check_rows(rollup), ""
+                    else:
+                        rows, unknown = [], "the checks were not in the listing"
                     if unknown:
                         item["reason"] = unknown
                         unverified_prs.append(f"{repo}#{pull['number']}: {unknown}")
@@ -3326,7 +3274,16 @@ def collect_items(
                     external = item.get("externalChecks") or []
                     if blocked:
                         item["reason"] = "failing check: " + ", ".join(failed)
-                        item["actionReason"] = "a check is failing"
+                        if fix_sent(queue_state, repo, pull["number"], item["head"]):
+                            item["actionReason"] = (
+                                "the findings for this head were already sent"
+                            )
+                        else:
+                            item["action"] = "fix"
+                            item["actionReason"] = (
+                                "the check on this head failed: "
+                                + ", ".join(failed)
+                            )
                         failing.append(item)
                         count_for(repo)["failing"] += 1
                         count_for(repo)["total"] += 1
@@ -3406,6 +3363,9 @@ def collect_items(
                                     )
                                 else:
                                     item["action"] = "fix"
+                                    item["actionReason"] = (
+                                        "the gate returned FAIL on this head"
+                                    )
                                     item["actionCommand"] = fix_command(
                                         repo,
                                         pull["number"],
@@ -3420,15 +3380,17 @@ def collect_items(
                             item["actionReason"] = (
                                 "no board ticket names this pull request"
                             )
-                        elif not builder_check_passes(pull, rows, head):
-                            item["actionReason"] = (
-                                "the builder check does not name this head"
-                            )
-                        else:
+                        elif builder_check_passes(pull, rows, head):
                             item["action"] = "gate"
                             item["actionCommand"] = (
                                 f"coordq gate {repo}#{pull['number']}"
                             )
+                        else:
+                            # No gate looked at this head and the builder's
+                            # check does not name it, so the head is the
+                            # builder's to fix before a gate can read it.
+                            item["action"] = "fix"
+                            item["actionReason"] = builder_check_reason(pull, head)
                     else:
                         item["actionReason"] = {
                             "pass": "gate PASS",
@@ -3452,6 +3414,16 @@ def collect_items(
                         item["reason"] = (
                             "open pull request, no failing check and no gate "
                             "verdict"
+                        )
+                    if drop_reason and not drop_reason.startswith(
+                        INFORMATIONAL_DROP
+                    ):
+                        # The drop holds the work back, so the pull request
+                        # stays visible and the tick takes no action on it.
+                        item["action"] = "none"
+                        item["actionCommand"] = ""
+                        item["actionReason"] = (
+                            "its ticket is dropped: " + drop_reason
                         )
                     if external:
                         item["reason"] += (
@@ -3570,6 +3542,41 @@ def builder_check_passes(pull: dict, rows: list[dict], head: str) -> bool:
     return False
 
 
+def builder_check_reason(pull: dict, head: str) -> str:
+    """Return why the builder's check does not cover this head.
+
+    The board offers a gate only to a head the check names, so every other
+    answer is the builder's to fix: a check line that is missing, that
+    names another head, that says FAIL or PENDING, or that says any word
+    other than PASS."""
+    for line in (pull.get("body") or "").splitlines():
+        match = BUILDER_CHECK_LINE.search(line)
+        if not match:
+            continue
+        verdict = builder_check_verdict(match.group(1))
+        if verdict != "PASS":
+            return f"its Builder check says {verdict}"
+        return "its Builder check does not name this head"
+    return "its description carries no Builder check line"
+
+
+def builder_check_verdict(rest: str) -> str:
+    """Return the words a check line says before the head it names.
+
+    The verdict is the leading run of upper-case words: "PASS", "FAIL",
+    "PENDING", and "NOT RUN". The head after it is not part of it, so a
+    line that says PASS and then names another head still reads PASS."""
+    words: list[str] = []
+    for word in rest.replace("`", " ").split():
+        word = word.strip(".,;:")
+        if not word.isalpha() or not word.isupper():
+            break
+        words.append(word)
+        if len(words) == 2:
+            break
+    return " ".join(words)
+
+
 def refs_issue(body: str) -> int:
     """Return the issue a pull request body names, or 0 when it names none.
 
@@ -3649,7 +3656,15 @@ def cmd_order(args: argparse.Namespace) -> int:
 
     receipts, receipt_error = read_receipts()
     result = collect_items(
-        deadline, repos, issues, bodies, open_numbers, drops, receipts, budget
+        deadline,
+        repos,
+        issues,
+        bodies,
+        open_numbers,
+        drops,
+        receipts,
+        budget,
+        frozenset(flagged),
     )
     if result.get("pr_error"):
         emit(f"REFUSED: {result['pr_error']}")
@@ -4916,7 +4931,15 @@ def read_work_items(
         return [], {}, "; ".join(problems)
     receipts, _receipt_error = read_receipts()
     result = collect_items(
-        deadline, repos, issues, bodies, open_numbers, drops, receipts, budget
+        deadline,
+        repos,
+        issues,
+        bodies,
+        open_numbers,
+        drops,
+        receipts,
+        budget,
+        frozenset(flagged),
     )
     if result.get("pr_error"):
         return [], {}, str(result["pr_error"])
@@ -5046,9 +5069,25 @@ BOARD_RULES = {
     ),
     "fix": (
         "the queue reads the gate's own report and sends it to the thread "
-        "that built the pull request."
+        "that built the pull request. A fix item with no actionCommand has "
+        "no gate report to send: its actionReason says what the builder "
+        "has to put right first, and the builder's own thread sends it."
     ),
 }
+
+
+def open_pull_requests(groups: tuple) -> int:
+    """Return how many pull requests are open on the board.
+
+    The count is over the board and not over the list `--action` printed:
+    a pull request that needs nothing today is still open, and a draft is
+    not work the board may gate."""
+    return sum(
+        1
+        for _name, bucket in groups
+        for item in bucket
+        if item["kind"] == "pull-request" and not item.get("isDraft")
+    )
 
 
 def cmd_board(args: argparse.Namespace) -> int:
@@ -5093,7 +5132,15 @@ def cmd_board(args: argparse.Namespace) -> int:
         return 1
     receipts, receipt_error = read_receipts()
     result = collect_items(
-        deadline, repos, issues, bodies, open_numbers, drops, receipts, budget
+        deadline,
+        repos,
+        issues,
+        bodies,
+        open_numbers,
+        drops,
+        receipts,
+        budget,
+        frozenset(flagged),
     )
     if result.get("pr_error"):
         emit(f"overnight: REFUSED: {result['pr_error']}", err=True)
@@ -5118,7 +5165,7 @@ def cmd_board(args: argparse.Namespace) -> int:
     actions = {"start": 0, "gate": 0, "fix": 0, "none": 0}
     for item in items:
         actions[item["action"]] = actions.get(item["action"], 0) + 1
-    pull_requests = sum(1 for item in items if item["kind"] == "pull-request")
+    pull_requests = open_pull_requests(groups)
     no_gate = [
         item
         for item in items
