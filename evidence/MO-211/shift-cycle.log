@@ -1,31 +1,144 @@
-overnight: 2026-11-13 17:12 PST shift cycle under /Users/shyamsivakumar/Code/coordinator/.overnight/run/policy.json
+overnight: 2026-11-14 00:09 PST shift cycle under /Users/shyamsivakumar/Code/coordinator/.overnight/run/policy.json
 Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
 Slot cap: 6 (read only, from the coordq config; never raised)
 Stall cap: 3 cycles with no new work
 Retry cap: 2 fix tries per item, then it is parked
 Verify level: balanced
 No item cap and no allowance stop: the whole backlog is in scope and model use is never a stop condition.
-overnight: 2026-11-13 17:12 PST shift start (dry run, read only)
-Overnight intake - dry run (read only)
+The snapshot names 1 Ascend repository, and the shift never reads Ascend work.
+overnight: 2026-11-14 00:09 PST shift cycle (dry run, read only)
+Overnight order - dry run (read only)
 Board: 110 tickets
-Allowed repositories: 15
+Allowed repositories: 14
+Decisions log: /Users/shyamsivakumar/Code/coordinator/loop/decisions.md
+Dropped by the filter: 13
+Planned items: 85
 
-repository                                     tickets   prs  linked  records
-digitized/Concerning                                 1     2       0        3
-shyamsivakumar/CineJar                               0     1       0        1
-shyamsivakumar/cairn                                 0     5       0        5
-shyamsivakumar/catalouge                             4     0       0        4
-shyamsivakumar/fantasy-football-toolkit             30     6       4       32
-shyamsivakumar/mac-ops                               9     3       0       12
-shyamsivakumar/openscan                              0     0       0        0
-shyamsivakumar/qabot                                 0     0       0        0
-shyamsivakumar/recoup                                0     0       0        0
-shyamsivakumar/sams-llm-wiki                         0     1       0        1
-shyamsivakumar/scrapers                              0     1       0        1
-shyamsivakumar/scripture-scroll                      0     0       0        0
-shyamsivakumar/strata                                0     1       0        1
-shyamsivakumar/strategy-replay-workbench            66    11       5       72
-shyamsivakumar/tunerise                              0     1       0        1
+Failing pull requests (6)
+  1. shyamsivakumar/fantasy-football-toolkit#423 FFBT-24 docs: FFBT-24 bounded live observation, authenticated success path still held (Refs #281) - failing check: Vercel (FAILURE)
+  2. shyamsivakumar/fantasy-football-toolkit#425 FFBT-35 FFBT-35: inventory approved current-news and development sources - failing check: Vercel (FAILURE)
+  3. shyamsivakumar/fantasy-football-toolkit#426 FFBT-34 docs: record the #230 Draft Aide read-only window (run a4, USER_COORDINATION_REQUIRED) - failing check: Vercel (FAILURE)
+  4. shyamsivakumar/fantasy-football-toolkit#430 FFBT-7 docs: define day-one feedback capture contract - failing check: Vercel (FAILURE)
+  5. shyamsivakumar/fantasy-football-toolkit#412 - ci: replace Woodpecker verification with local check - failing check: Vercel (FAILURE)
+  6. shyamsivakumar/fantasy-football-toolkit#442 - fix: keep Trade Block block state consistent with unavailable evidence (Refs #414) - failing check: Vercel (FAILURE)
 
-Total: 133 records across 15 repositories
-A pull request that a board ticket names is part of that ticket's record, so it adds no record of its own. A pull request that names no ticket the board shows stays a record of its own.
+Pull requests with a gate PASS (0)
+
+Ready tickets already split into 5-minute parts (12)
+  7. shyamsivakumar/strategy-replay-workbench#891 SRW-1054 SRW-1054 · Converge native and control sell submission - already a 5-minute part
+  8. shyamsivakumar/strategy-replay-workbench#892 SRW-1055 SRW-1055 · Integrate executor sell recovery - already a 5-minute part
+  9. shyamsivakumar/mac-ops#185 MO-217 MO-217 · Overnight T8a: Per-item time budget and retry cap - already a 5-minute part
+  10. shyamsivakumar/mac-ops#186 MO-218 MO-218 · Overnight T8b: Stall detection - already a 5-minute part
+  11. shyamsivakumar/mac-ops#187 MO-219 MO-219 · Overnight T9: STOP file and clock-out gate - already a 5-minute part
+  12. shyamsivakumar/mac-ops#188 MO-220 MO-220 · Overnight T10: Parking lot and snag log - already a 5-minute part
+  13. shyamsivakumar/strategy-replay-workbench#911 SRW-1062 SRW-1062 · Activate FIFO protective dispatch and routine yielding - already a 5-minute part
+  14. shyamsivakumar/strategy-replay-workbench#912 SRW-1063 SRW-1063 · Thread cancellation through queued facade calls - already a 5-minute part
+  15. shyamsivakumar/strategy-replay-workbench#913 SRW-1064 SRW-1064 · Recheck delayed send authorization and uncertain outcomes - already a 5-minute part
+  16. shyamsivakumar/strategy-replay-workbench#914 SRW-1065 SRW-1065 · Store pending exit admission outside advance serialization - already a 5-minute part
+  17. shyamsivakumar/strategy-replay-workbench#915 SRW-1066 SRW-1066 · Abort stale executor admission and retain saturated intent - already a 5-minute part
+  18. shyamsivakumar/strategy-replay-workbench#916 SRW-1067 SRW-1067 · Protect essential exit and owned price/fill reads - already a 5-minute part
+
+Ready tickets not yet split (67)
+  19. shyamsivakumar/mac-ops#250 MO-242 MO-242 · Install the merged coordinator changes on this Mac - split first, then add the parts
+  20. shyamsivakumar/mac-ops#272 MO-253 MO-253 · The board is the queue: every ready ticket starts within one cycle - split first, then add the parts
+  21. shyamsivakumar/mac-ops#277 MO-254 MO-254 · Every open pull request has a next action and the shift runs it - split first, then add the parts
+  22. shyamsivakumar/mac-ops#278 MO-255 MO-255 · A ticket whose builder stopped is resent, resumed or parked - split first, then add the parts
+  23. shyamsivakumar/mac-ops#279 MO-256 MO-256 · The shift runs every 5 minutes - split first, then add the parts
+  24. shyamsivakumar/mac-ops#280 MO-257 MO-257 · Every open issue has a state and one action, in every repo - split first, then add the parts
+  25. shyamsivakumar/strategy-replay-workbench#893 SRW-1056 SRW-1056 · Record fake-broker sell acceptance evidence - split first, then add the parts
+  26. shyamsivakumar/strategy-replay-workbench#899 SRW-1057 SRW-1057 · Proof runner discovers cases so new proofs never edit it - split first, then add the parts
+  27. shyamsivakumar/strategy-replay-workbench#924 SRW-1072 SRW-1072 · SRW-1016 step 2b: exit path keeps the soft save - split first, then add the parts
+  28. shyamsivakumar/strategy-replay-workbench#1031 SRW-1125 SRW-1125 · Decide the census writer contract before route wiring - split first, then add the parts
+  29. shyamsivakumar/catalouge#43 CTL-25 CTL-25 · Spec: Catalogue cross-domain Object Studio programme - split first, then add the parts
+  30. shyamsivakumar/catalouge#44 CTL-26 CTL-26 · Spec: Catalogue cross-domain Object Studio programme - split first, then add the parts
+  31. shyamsivakumar/catalouge#49 CTL-28 CTL-28 · M4: Run the private owner wardrobe-import pilot - split first, then add the parts
+  32. shyamsivakumar/catalouge#50 CTL-29 CTL-29 · M5: Verify consented domain preferences and learned reads - split first, then add the parts
+  33. shyamsivakumar/catalouge#51 CTL-30 CTL-30 · M6: Verify Wardrobe planning, trips, and non-generative Composer - split first, then add the parts
+  34. shyamsivakumar/catalouge#52 CTL-31 CTL-31 · M7: Activate cross-domain flows and Tools Spaces - split first, then add the parts
+  35. shyamsivakumar/catalouge#53 CTL-32 CTL-32 · M8: Validate owner pilot, export, and progressive rollout - split first, then add the parts
+  36. shyamsivakumar/fantasy-football-toolkit#184 FFBT-25 FFBT-25 · Wayfinder: League Command Center - split first, then add the parts
+  37. shyamsivakumar/fantasy-football-toolkit#195 FFBT-8 FFBT-8 · Spec: Shared Decision Evidence - split first, then add the parts
+  38. shyamsivakumar/fantasy-football-toolkit#196 FFBT-32 FFBT-32 · M21: Command Center decision agenda - split first, then add the parts
+  39. shyamsivakumar/fantasy-football-toolkit#197 FFBT-11 FFBT-11 · Spec: Matchup Strategy workspace - split first, then add the parts
+  40. shyamsivakumar/fantasy-football-toolkit#198 FFBT-14 FFBT-14 · Spec: Acquisition Intelligence workspace - split first, then add the parts
+  41. shyamsivakumar/fantasy-football-toolkit#199 FFBT-17 FFBT-17 · Spec: Roster and Cap Planning workspace - split first, then add the parts
+  42. shyamsivakumar/fantasy-football-toolkit#200 FFBT-20 FFBT-20 · Spec: League Intelligence workspace - split first, then add the parts
+  43. shyamsivakumar/fantasy-football-toolkit#224 FFBT-33 FFBT-33 · Spec: Draft Society parity for dynasty, redraft, and current news - split first, then add the parts
+  44. shyamsivakumar/fantasy-football-toolkit#246 FFBT-36 FFBT-36 · Write the expanded dynasty/redraft/news implementation and release contract - split first, then add the parts
+  45. shyamsivakumar/fantasy-football-toolkit#415 FFBT-12 FFBT-12 · Matchup Strategy workspace — decision path - split first, then add the parts
+  46. shyamsivakumar/fantasy-football-toolkit#416 FFBT-13 FFBT-13 · Matchup Strategy workspace — consumer and proof - split first, then add the parts
+  47. shyamsivakumar/fantasy-football-toolkit#417 FFBT-15 FFBT-15 · Acquisition Intelligence workspace — decision path - split first, then add the parts
+  48. shyamsivakumar/fantasy-football-toolkit#418 FFBT-16 FFBT-16 · Acquisition Intelligence workspace — consumer and proof - split first, then add the parts
+  49. shyamsivakumar/fantasy-football-toolkit#419 FFBT-18 FFBT-18 · Roster and Cap Planning workspace — decision path - split first, then add the parts
+  50. shyamsivakumar/fantasy-football-toolkit#420 FFBT-19 FFBT-19 · Roster and Cap Planning workspace — consumer and proof - split first, then add the parts
+  51. shyamsivakumar/fantasy-football-toolkit#421 FFBT-21 FFBT-21 · League Intelligence workspace — decision path - split first, then add the parts
+  52. shyamsivakumar/fantasy-football-toolkit#422 FFBT-22 FFBT-22 · League Intelligence workspace — consumer and proof - split first, then add the parts
+  53. shyamsivakumar/strategy-replay-workbench#472 SRW-761 SRW-761 · Lane 2 previous-day bias and 15m check (shadow first) - split first, then add the parts
+  54. shyamsivakumar/strategy-replay-workbench#703 SRW-974 SRW-974 · Census 4: Append native drop and decision evidence through the same owner - split first, then add the parts
+  55. shyamsivakumar/strategy-replay-workbench#704 SRW-975 SRW-975 · Census 5: Reconcile existing executor broker facts by exact card identity - split first, then add the parts
+  56. shyamsivakumar/strategy-replay-workbench#705 SRW-976 SRW-976 · Census 6: Expiry and trigger-evidence reduction - split first, then add the parts
+  57. shyamsivakumar/strategy-replay-workbench#706 SRW-977 SRW-977 · Census 7: Coverage manifest and fixed-head export - split first, then add the parts
+  58. shyamsivakumar/strategy-replay-workbench#707 SRW-978 SRW-978 · Census 8: Attach the projection to the existing daily export read - split first, then add the parts
+  59. shyamsivakumar/strategy-replay-workbench#708 SRW-979 SRW-979 · Census 9: Identity join and disposition-aware miss population in the scorecard - split first, then add the parts
+  60. shyamsivakumar/strategy-replay-workbench#709 SRW-980 SRW-980 · Census 10: Integration proof only: sanitized restart and deploy replay - split first, then add the parts
+  61. shyamsivakumar/strategy-replay-workbench#721 SRW-989 SRW-989 · Bot 1: dashboard-forwarded resume carries the owner identity - split first, then add the parts
+  62. shyamsivakumar/strategy-replay-workbench#722 SRW-990 SRW-990 · Bot 1: Telegram and Discord supply the sender identity for owner commands - split first, then add the parts
+  63. shyamsivakumar/strategy-replay-workbench#724 SRW-992 SRW-992 · Census 3b: attachment and retry coverage for card observations - split first, then add the parts
+  64. shyamsivakumar/strategy-replay-workbench#807 SRW-1019 SRW-1019 · T1 M00a: constants (order poll and sell timing) - split first, then add the parts
+  65. shyamsivakumar/strategy-replay-workbench#808 SRW-1020 SRW-1020 · T1 M00b: constants (price recovery and reconcile budgets) - split first, then add the parts
+  66. shyamsivakumar/strategy-replay-workbench#809 SRW-1021 SRW-1021 · T1 M00c: constants (spreads, terminal states, outcome limits) - split first, then add the parts
+  67. shyamsivakumar/strategy-replay-workbench#810 SRW-1022 SRW-1022 · T1 M01a: session helpers (ny time parts) - split first, then add the parts
+  68. shyamsivakumar/strategy-replay-workbench#811 SRW-1023 SRW-1023 · T1 M01b: session helpers (session end and next session) - split first, then add the parts
+  69. shyamsivakumar/strategy-replay-workbench#812 SRW-1024 SRW-1024 · T1 M02: sizing helpers - split first, then add the parts
+  70. shyamsivakumar/strategy-replay-workbench#813 SRW-1025 SRW-1025 · T1 M03: order identity helpers - split first, then add the parts
+  71. shyamsivakumar/strategy-replay-workbench#844 SRW-1116 SRW-1116 · Prove stop cadence and request budget - split first, then add the parts
+  72. shyamsivakumar/strategy-replay-workbench#941 SRW-1078 SRW-1078 · Isolated census chain owner module - split first, then add the parts
+  73. shyamsivakumar/strategy-replay-workbench#942 SRW-1079 SRW-1079 · Bounded census owner API: accepted, rejected and durable credits - split first, then add the parts
+  74. shyamsivakumar/strategy-replay-workbench#943 SRW-1080 SRW-1080 · Census failure latching and conservative epoch coverage - split first, then add the parts
+  75. shyamsivakumar/strategy-replay-workbench#944 SRW-1081 SRW-1081 · Census shutdown drain deadline and clean epoch marker - split first, then add the parts
+  76. shyamsivakumar/strategy-replay-workbench#945 SRW-1082 SRW-1082 · Nonblocking census submission API and worker health, no route activation - split first, then add the parts
+  77. shyamsivakumar/strategy-replay-workbench#951 SRW-1088 SRW-1088 · Lane 2 15m check from the 15D-chart TradingView alert - split first, then add the parts
+  78. shyamsivakumar/strategy-replay-workbench#952 SRW-1089 SRW-1089 · Log a complete HTF evaluation for every Lane 2 entry candidate - split first, then add the parts
+  79. shyamsivakumar/strategy-replay-workbench#953 SRW-1090 SRW-1090 · Document the TradingView 1D and 15m alert setup for the Lane 2 bias - split first, then add the parts
+  80. shyamsivakumar/strategy-replay-workbench#980 SRW-1104 SRW-1104 · Lane 3 five-minute bars and shared request budget - split first, then add the parts
+  81. shyamsivakumar/strategy-replay-workbench#983 SRW-1106 SRW-1106 · Deliver Bot 2 quotes over the account-scoped channel - split first, then add the parts
+  82. shyamsivakumar/strategy-replay-workbench#984 SRW-1107 SRW-1107 · Deliver Bot 2 order events over the channel and serialize them with the trade tick - split first, then add the parts
+  83. shyamsivakumar/strategy-replay-workbench#985 SRW-1108 SRW-1108 · Integrated offline gate for Bot 2 streaming - split first, then add the parts
+  84. shyamsivakumar/strategy-replay-workbench#596 SRW-893 SRW-893 · Split thala_v2_executor.js under its size budget (pure move) - split first, then add the parts
+  85. shyamsivakumar/strategy-replay-workbench#1018 SRW-1121 SRW-1121: History view with readable charts, week states and per-metric coverage - split first, then add the parts
+
+Not work items: a pull request is open (25)
+  86. shyamsivakumar/cairn#74 - Research: combined Cairn and Strata positioning - open pull request, no failing check and no gate verdict
+  87. shyamsivakumar/cairn#73 - CRN-19: Design durable fix runs on Postgres - open pull request, no failing check and no gate verdict
+  88. shyamsivakumar/cairn#72 - Cairn and Strata: November 13 product go/no-go - open pull request, no failing check and no gate verdict
+  89. shyamsivakumar/cairn#70 - CRN-19: Design durable fix runs on Postgres - open pull request, no failing check and no gate verdict
+  90. shyamsivakumar/cairn#69 - CRN-19: Archive not-planned durable fix-run design - open pull request, no failing check and no gate verdict
+  91. shyamsivakumar/catalouge#118 CTL-27 docs(evidence): CTL-27 M3 physical-device install and capture receipt - open pull request, no failing check and no gate verdict
+  92. shyamsivakumar/catalouge#117 CTL-33 docs(evidence): CTL-33 M4 physical-device evidence receipt (device run blocked on locked handset) - gate FAIL
+  93. shyamsivakumar/fantasy-football-toolkit#363 - M36: integrate guarded Draft Room release path - open pull request, no failing check and no gate verdict
+  94. shyamsivakumar/fantasy-football-toolkit#362 - Draft Room: add FFT standard model fallback with exact-ID authority - open pull request, no failing check and no gate verdict
+  95. shyamsivakumar/mac-ops#282 MO-245 MO-245 · The shift checks tool health and board drift every cycle (Refs #255) - open pull request, no failing check and no gate verdict
+  96. shyamsivakumar/sams-llm-wiki#181 - wiki: session review 2026-11-12-1830 - open pull request, no failing check and no gate verdict
+  97. shyamsivakumar/scripture-scroll#29 STS-3 feat(memorize): due verses lead the feed with cue, reveal and grade - gate FAIL
+  98. shyamsivakumar/strata#3 - Prepare strata-orchestrator for npm publishing - open pull request, no failing check and no gate verdict
+  99. shyamsivakumar/strategy-replay-workbench#987 SRW-1077 SRW-1077: add isolated census worker contract harness - gate FAIL
+  100. shyamsivakumar/strategy-replay-workbench#878 SRW-1115 SRW-1016: independent feed-wide stop assessment - open pull request, no failing check and no gate verdict
+  101. shyamsivakumar/strategy-replay-workbench#1041 SRW-1103 SRW-1103: signed Lane 3 settings and the execution path that consumes them - gate FAIL
+  102. shyamsivakumar/strategy-replay-workbench#937 SRW-1061 SRW-1061: compute combined protective budget eligibility - gate FAIL
+  103. shyamsivakumar/strategy-replay-workbench#1044 SRW-1122 SRW-1122: open risk dollars, one refusal vocabulary and the merged Activity feed - gate FAIL
+  104. shyamsivakumar/strategy-replay-workbench#1042 SRW-1120 Book one closed-trade outcome per trade, on the flat day (Refs #1017) - gate FAIL
+  105. shyamsivakumar/strategy-replay-workbench#1043 SRW-1118 SRW-1118: Overview names the worst real state of each bot (Refs #1015) - gate FAIL
+  106. shyamsivakumar/strategy-replay-workbench#1026 - RCA: staging Bot 1 readiness flapping - open pull request, no failing check and no gate verdict
+  107. shyamsivakumar/strategy-replay-workbench#1001 - Document interim November 13 paper skip investigation - open pull request, no failing check and no gate verdict
+  108. shyamsivakumar/strategy-replay-workbench#993 - docs: define safe pooled test premium exclusion - gate FAIL
+  109. shyamsivakumar/strategy-replay-workbench#855 - SRW-1038: dashboard redesign design, teardown and static mock - open pull request, no failing check and no gate verdict
+  110. shyamsivakumar/tunerise#20 - TNR-21: replace Woodpecker with agent checks - open pull request, no failing check and no gate verdict
+
+Not ready: the board stage is not todo (3)
+  111. shyamsivakumar/strategy-replay-workbench#716 SRW-984 SRW-984 · Bot 2: restart and request-rate proof for two lanes - stage backlog
+  112. shyamsivakumar/strategy-replay-workbench#720 SRW-988 SRW-988 · Bot 1: owner-only rearm and resume at the execution boundary - stage backlog
+  113. shyamsivakumar/strategy-replay-workbench#492 SRW-791 SRW-791 · Bot 1: stale, crossed or untimed quotes never trigger entries or price exits - stage backlog
+
+Summary line written to /Users/shyamsivakumar/Code/coordinator/.overnight/run/shift-log.md
+  planned 85 items | shyamsivakumar/catalouge 7 (failing 0, gate-pass 0, split 0, unsplit 7); shyamsivakumar/fantasy-football-toolkit 23 (failing 6, gate-pass 0, split 0, unsplit 17); shyamsivakumar/mac-ops 10 (failing 0, gate-pass 0, split 4, unsplit 6); shyamsivakumar/strategy-replay-workbench 45 (failing 0, gate-pass 0, split 8, unsplit 37)
+No list file is written: the board is the list, and this run wrote one line of the shift log and nothing else.

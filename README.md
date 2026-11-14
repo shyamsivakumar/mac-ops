@@ -243,6 +243,14 @@ install with `./install.sh coordinator`. Config installs to `~/.coordinator`.
 Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 
+When live plus queued work is below the cap, `coordq dispatch` also refills
+from the board: at most once every five minutes it starts the oldest open
+`stage:todo` issues of the repos in `tickets.json` through the `ticket` CLI,
+until the running threads and the waiting queue reach the cap. The ticket CLI
+decides whether an issue may start. Refusals are cached while the board state
+is unchanged, with an expiry that allows another attempt. `coordq dispatch --dry-run` reports what a cycle would do and
+starts nothing.
+
 The pi coordinator's own files live under `coordinator/pi/` and install with
 the same command: the guard extension and its sandbox profile, the pi
 settings, the phone relay note and the `coord-pi`, `coord-ask`,
@@ -276,23 +284,22 @@ this job now covers that step. The job appends one line per poll pass to
 `~/Library/Logs/coordinator/turncap.log`. The dispatch job logs into the
 coordinator checkout's own `queue/` directory, which that repository owns.
 
-The `dev.coordinator.tick` job is retired (overnight runner spec, revision 3):
-the shift is the one loop that decides work. No tick plist is in the
-repository, the installer removes an installed one and unloads the running
-job, and the shift's own launchd job (`dev.coordinator.overnight`) fires the
-shift on a fixed interval, every day, and is never unarmed. The shift's
-runbook is `coordinator/overnight/README.md` in this checkout, and
-`loop/tick.md` is no longer the runbook for board work. The launcher
-(`~/.local/bin/coord-tick`) is still installed as a tool: it runs one
+The `dev.coordinator.tick` job runs again (MO-250, mac-ops #267): it fires
+the tick every 30 minutes, on DeepSeek, and the installer leaves it alone
+(the retired set is empty). The tick reads the whole board but starts no
+tickets: the shift and `coordq`'s refill own board intake, so there is one
+intake owner. The tick decides, gates, routes failures and reports drift.
+The shift's own launchd job (`dev.coordinator.overnight`) fires the shift on
+a fixed interval, every day, and is never unarmed. The shift's runbook is
+`coordinator/overnight/README.md` in this checkout. The launcher
+(`~/.local/bin/coord-tick`) is installed as a tool too: it runs one
 ephemeral headless pi (`pi --no-session`, so it never becomes the newest
 session that `coord-ask`, the phone relay or the Herdr panel read), it takes
 a lock at `~/.local/state/mac-ops/coord-tick.lock` so two ticks never
-overlap, and a run over ten minutes is killed. Why it stays: the ticket
-retires the job and its runbook, not the launcher. The launcher is the one
-part of the tick that is not the job, it is the only way a person can still
-run a tick by hand, and it lives in `coordinator/pi/`, which this ticket
-does not change. No plist points at it any more, so nothing runs it every 30
-minutes; removing it is a separate cleanup.
+overlap, and a run over ten minutes is killed. The job's plist pins the
+model with `COORD_TICK_MODEL=deepseek/deepseek-flash`, so a tick costs
+DeepSeek credits and not Claude plan credits; the launcher's default model
+is the same one, and `COORD_TICK_MODEL` overrides it for a manual run.
 Only the `ALERT:` lines of a
 tick reply are sent to the live pi coordinator terminal; a `NOOP` reply sends
 nothing. `coord-pi` exports `COORD_WAKE=0`, so the coordinator session's own
