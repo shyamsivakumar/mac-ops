@@ -285,20 +285,24 @@ def tickets_config_path():
 
 
 def gh_search(args):
-    run = subprocess.run(["gh", "search", "issues"] + args, capture_output=True, text=True, timeout=40)
+    try:
+        run = subprocess.run(["gh", "search", "issues"] + args, capture_output=True, text=True, timeout=40)
+    except OSError as e:
+        raise RuntimeError(f"GitHub search could not run: {e}") from e
     if run.returncode:
         raise RuntimeError(f"GitHub search failed: {run.stderr.strip()[:200]}")
     return json.loads(run.stdout)
 
 
 def search_stage(owner):
-    limit = 100
-    while True:
-        rows = gh_search(["--owner", owner, "--state", "open", "--label", TODO_STAGE,
-                          "--limit", str(limit), "--json", "repository,number,title,createdAt"])
-        if len(rows) < limit or limit >= 1000:
-            return rows
-        limit = min(limit * 2, 1000)
+    """The owner's todo-stage issues, oldest first, in one search request.
+
+    The search API sorts by creation date, so one page already holds the
+    oldest issues, which are the ones a refill starts.
+    """
+    return gh_search(["--owner", owner, "--state", "open", "--label", TODO_STAGE,
+                      "--sort", "created", "--order", "asc", "--limit", "100",
+                      "--json", "repository,number,title,createdAt"])
 
 
 def refill_candidates(config):
@@ -323,9 +327,13 @@ def refill_state():
         state = {}
     if not isinstance(state, dict):
         state = {}
-    state.setdefault("at", 0)
-    if not isinstance(state.get("refused"), dict):
-        state["refused"] = {}
+    at = state.get("at")
+    state["at"] = at if isinstance(at, (int, float)) and not isinstance(at, bool) else 0
+    refused = state.get("refused")
+    if not isinstance(refused, dict):
+        refused = {}
+    state["refused"] = {ref: at for ref, at in refused.items()
+                        if isinstance(at, (int, float)) and not isinstance(at, bool)}
     return state
 
 
@@ -362,7 +370,9 @@ def refill(dry_run=False):
     The board is the list of work. One cycle starts the oldest todo-stage
     issues through the ticket CLI until the running threads and the waiting
     queue reach the cap. A cycle runs at most every five minutes, and an
-    issue the ticket CLI refuses is not tried again for an hour.
+    issue the ticket CLI refuses is not tried again for an hour. A dry run
+    keeps its refusals to itself, so looking at the board does not put any
+    issue on a cooldown.
     """
     state = refill_state()
     now = time.time()
@@ -375,13 +385,13 @@ def refill(dry_run=False):
     except (OSError, ValueError) as e:
         log(f"refill skipped: cannot read {config_file}: {e}")
         return
-    try:
-        candidates = refill_candidates(config)
-    except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
-        log(f"refill skipped: cannot read the board: {e}")
-        return
     state["at"] = now
     save_refill_state(state)
+    try:
+        candidates = refill_candidates(config)
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+        log(f"refill skipped: cannot read the board: {e}")
+        return
     refused = state["refused"]
     simulated = 0
     attempts = 0
@@ -405,9 +415,13 @@ def refill(dry_run=False):
             if dry_run:
                 simulated += 1
             log(f"refill {'would start' if dry_run else 'started'} {repo}#{number} {title!r}")
+            if not dry_run and len(load()["items"]) > queued:
+                log("refill stopped: the start waited in the queue, the board is at the cap")
+                break
             continue
         if code == 2:
-            refused[ref] = now
+            if not dry_run:
+                refused[ref] = now
             log(f"refill refused {repo}#{number} {title!r}: {message}")
             continue
         log(f"refill stopped at {repo}#{number}: {message}")
