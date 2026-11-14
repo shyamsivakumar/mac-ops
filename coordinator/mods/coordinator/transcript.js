@@ -229,7 +229,19 @@ export function blocksOf(text) {
   return out;
 }
 
-const newParser = () => ({ turns: [], open: new Map(), tools: new Map(), pending: null, tokens: 0 });
+const newParser = () => ({ turns: [], open: new Map(), tools: new Map(), pending: null, tokens: 0, model: "", errored: false });
+
+const TEMPLATE_MARK = /\]<\][^\[\]]*\[>\[\w*/g;
+const ERROR_MESSAGE = /"message"\s*:\s*"([^"]*)"/;
+const ERROR_MAX = 140;
+
+const stripMarks = (text) => text.replace(TEMPLATE_MARK, "");
+
+function errorLine(m) {
+  const raw = String(m.errorMessage ?? "").trim();
+  const message = (ERROR_MESSAGE.exec(raw)?.[1] ?? raw).replace(/\s*\(\d{3}\)\s*$/, "").replace(/\.$/, "");
+  return `${m.provider ?? "model"} error: ${clip(message || "unknown error", ERROR_MAX)}. The turn stopped.`;
+}
 
 function lastTurn(p, at) {
   if (p.turns.at(-1)?.role !== "coordinator") p.turns.push({ role: "coordinator", at, items: [] });
@@ -241,6 +253,8 @@ function lastTurn(p, at) {
 function feedAssistant(p, m, at) {
   const u = m.usage;
   if (u) p.tokens = (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+  if (m.model) p.model = m.model;
+  p.errored = m.stopReason === "error";
   const turn = lastTurn(p, at);
   for (const b of blocks(m.content)) {
     if (b.type === "toolCall") {
@@ -250,11 +264,18 @@ function feedAssistant(p, m, at) {
       p.open.set(b.id, { id: b.id, name: b.name, arguments: b.arguments ?? {}, at });
       p.pending = [...p.open.values()].at(-1);
     }
-    if (b.type === "text" && b.text.trim()) {
-      turn.items.push({ k: "text", text: b.text.trim() });
+    const text = b.type === "text" ? stripMarks(b.text).trim() : "";
+    if (text) {
+      turn.items.push({ k: "text", text });
       turn.at = at;
     }
   }
+  if (p.errored) turn.items.push({ k: "event", error: true, text: errorLine(m) });
+}
+
+function feedModel(p, rec, at) {
+  p.model = rec.modelId;
+  lastTurn(p, at).items.push({ k: "event", text: `Switched to ${rec.modelId} (${rec.provider})` });
 }
 
 const HC_FROM = /^<hc\s+from="([^"]*)"/;
@@ -280,6 +301,7 @@ function feedUser(p, m, at) {
   p.open.clear();
   p.tools.clear();
   p.pending = null;
+  p.errored = false;
   p.turns.push({
     role: hc && !composed(text, at) ? "session" : "you",
     from: hc?.[1] ?? "",
@@ -289,6 +311,7 @@ function feedUser(p, m, at) {
 }
 
 function feedResult(p, m) {
+  p.errored = false;
   const item = p.tools.get(m.toolCallId);
   if (item) {
     item.result = resultOf(m);
@@ -309,9 +332,10 @@ function feed(p, text) {
     } catch {
       continue;
     }
+    const at = Date.parse(rec.timestamp) || rec.message?.timestamp || 0;
+    if (rec.type === "model_change" && rec.modelId) feedModel(p, rec, at);
     if (rec.type !== "message" || !rec.message) continue;
     const m = rec.message;
-    const at = Date.parse(rec.timestamp) || m.timestamp || 0;
     if (m.role === "assistant") feedAssistant(p, m, at);
     else if (m.role === "user") feedUser(p, m, at);
     else if (m.role === "toolResult") feedResult(p, m);
@@ -428,6 +452,8 @@ function snapshot() {
     activity: pending ? summary(pending) : "",
     activityAt: pending?.at ?? 0,
     tokens: live.parser.tokens,
+    model: live.parser.model,
+    errored: live.parser.errored,
     lastReplyAt: turns.filter((t) => t.role === "coordinator").at(-1)?.at ?? 0,
   };
 }
