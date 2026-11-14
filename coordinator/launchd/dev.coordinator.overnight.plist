@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The overnight shift (spec part T12). One job fires twice a night: at
-     22:30 it starts the shift, at 06:30 it writes the morning report. The
-     shift runs in dry-run mode until the arm and tick parts (T4, T5) land,
-     so the job reads the board and writes the morning report, and nothing
-     else. No RunAtLoad: a night does not start at every boot. -->
+<!-- The overnight shift (spec parts T12 and T14). One job fires twice a
+     night: at 22:30 it starts the shift, at 06:30 it writes the morning
+     report. The shift runs the unattended night: the whole backlog, no
+     item cap, over the full window (22:30 to 06:00 PT). It reads the
+     board, coordq and T3 and keeps no second queue, and it runs no merge
+     and no push. No RunAtLoad: a night does not start at every boot. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -13,7 +14,6 @@
     <array>
         <string>@HOME@/.local/bin/overnight</string>
         <string>shift</string>
-        <string>--dry-run</string>
     </array>
     <key>StartCalendarInterval</key>
     <array>

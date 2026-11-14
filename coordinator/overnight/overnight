@@ -241,6 +241,9 @@ STATE_DONE = "done"
 STATE_READY = "ready"
 STATE_STUCK = "stuck"
 STATE_PARKED = "parked"
+# The item is under way: the builder holds it and it has no pull request
+# yet. It is not stuck and it is not a decision for Shyam.
+STATE_WAITING = "waiting"
 STATE_UNREADABLE = "unreadable"
 # The word the report uses for a count it cannot check.
 UNVERIFIED = "UNVERIFIED"
@@ -771,9 +774,20 @@ def cmd_shift(args: argparse.Namespace) -> int:
             for line in policy_lines(policy):
                 print(line)
         if not args.dry_run:
-            die(
-                "the shift's board work is not built yet (spec part T5); "
-                "refusing to start a real shift"
+            # The real shift: the whole backlog, no item cap, over the
+            # full window, with nobody watching. The night reads the
+            # board under the snapshot and leaves the morning report.
+            print(f"overnight: {stamp} shift start (unattended night)")
+            return cmd_night(
+                argparse.Namespace(
+                    root=str(root),
+                    date=args.date,
+                    minutes=0,
+                    cycles=0,
+                    interval=NIGHT_CYCLE_SECONDS,
+                    cycle_deadline=NIGHT_CYCLE_DEADLINE,
+                    dry_run=False,
+                )
             )
         print(f"overnight: {stamp} shift start (dry run, read only)")
         return cmd_intake(
@@ -891,7 +905,13 @@ def classify(receipt: dict) -> tuple[str, str]:
     passed unless it ran."""
     fields = receipt["fields"]
     state = (fields.get("state") or "").strip().lower()
-    if state not in (STATE_DONE, STATE_READY, STATE_STUCK, STATE_PARKED):
+    if state not in (
+        STATE_DONE,
+        STATE_READY,
+        STATE_STUCK,
+        STATE_PARKED,
+        STATE_WAITING,
+    ):
         return STATE_UNREADABLE, "the receipt does not name a state"
     if state in (STATE_DONE, STATE_READY):
         missing = unrun_checks(receipt)
@@ -1067,12 +1087,19 @@ def render_report(snapshot: dict) -> str:
     receipts = snapshot["receipts"]
     log = snapshot["log"]
     planned = log["planned"]
-    counts = {STATE_DONE: 0, STATE_READY: 0, STATE_STUCK: 0, STATE_PARKED: 0}
+    counts = {
+        STATE_DONE: 0,
+        STATE_READY: 0,
+        STATE_STUCK: 0,
+        STATE_PARKED: 0,
+        STATE_WAITING: 0,
+    }
     unreadable = 0
     merged: list[dict] = []
     ready: list[dict] = []
     stuck: list[dict] = []
     parked: list[dict] = []
+    waiting: list[dict] = []
     for receipt in receipts:
         state, reason = classify(receipt)
         fields = receipt["fields"]
@@ -1093,6 +1120,9 @@ def render_report(snapshot: dict) -> str:
         elif state == STATE_PARKED:
             counts[STATE_PARKED] += 1
             parked.append(receipt)
+        elif state == STATE_WAITING:
+            counts[STATE_WAITING] += 1
+            waiting.append(receipt)
 
     lines: list[str] = []
     day = snapshot["date"]
@@ -1106,7 +1136,8 @@ def render_report(snapshot: dict) -> str:
         planned_text = str(planned)
     counts_text = (
         f"{counts[STATE_DONE]} done, {counts[STATE_READY]} ready, "
-        f"{counts[STATE_STUCK]} stuck, {counts[STATE_PARKED]} parked"
+        f"{counts[STATE_STUCK]} stuck, {counts[STATE_PARKED]} parked, "
+        f"{counts[STATE_WAITING]} waiting"
     )
     if unreadable:
         counts_text += f", {unreadable} {UNVERIFIED}"
@@ -1149,6 +1180,17 @@ def render_report(snapshot: dict) -> str:
             reason = entry["reason"] or fields.get("stopped because") or "the shift stopped it"
             nxt = fields.get("next") or "unknown"
             lines.append(f"- {item_label(receipt)}. Stopped: {reason}. Next: {nxt}.")
+    else:
+        lines.append("- None.")
+    lines.append("")
+
+    lines.append("## Still running (the builder holds it, no pull request yet)")
+    lines.append("")
+    if waiting:
+        for receipt in waiting:
+            fields = receipt["fields"]
+            nxt = fields.get("next") or "unknown"
+            lines.append(f"- {item_label(receipt)}. Next: {nxt}.")
     else:
         lines.append("- None.")
     lines.append("")
@@ -2732,23 +2774,45 @@ def observe_pull_request(repo: str, number: int, deadline: float) -> dict:
     # "no checks reported" is not a failed check: the pull request has no
     # checks yet, and the receipt says that instead of claiming a failure.
     no_checks = "no checks reported" in checks_out.lower()
+    state_code, state_out = run_read(
+        [GH, "pr", "view", str(number), "-R", repo, "--json", "state,mergedAt"],
+        GH_TIMEOUT,
+        deadline,
+    )
+    merged = ""
+    pull_state = ""
+    if state_code == 0:
+        try:
+            data = json.loads(state_out)
+            pull_state = str(data.get("state") or "")
+            merged_at = str(data.get("mergedAt") or "")
+            if merged_at:
+                merged = pt_clock(
+                    datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+                )
+        except ValueError:
+            pass
     return {
         "checks_exit": checks_code,
         "checks_out": checks_out,
         "no_checks": no_checks,
         "files": files,
         "gate": pull_request_gate_verdict(repo, number, deadline),
+        "state": pull_state,
+        "merged": merged,
     }
 
 
 def receipt_text(issue: dict, state: str, pr: dict | None, observation: dict | None,
-                 observed: int, stopped: str, nxt: str) -> str:
-    """Return one receipt of the attended night.
+                 observed: int, stopped: str, nxt: str, merged: str = "",
+                 time_used: str = "0 min") -> str:
+    """Return one receipt of the shift.
 
     The receipt holds what the shift really saw. A check that did not run
-    has no exit code, and a gate that could not be read says UNKNOWN. No
-    builder ran, so the builder time is zero and the time the shift spent
-    looking is recorded apart from it."""
+    has no exit code, and a gate that could not be read says UNKNOWN. The
+    attended night runs no builder, so its builder time is zero; the
+    unattended night does not know the builder's time, so it says
+    UNVERIFIED and records the time it spent looking apart from it."""
     fields = issue.get("title") or ""
     lines = [f"# {issue.get('key') or issue.get('number')}", ""]
     lines.append(f"- Item: {fields}")
@@ -2757,16 +2821,308 @@ def receipt_text(issue: dict, state: str, pr: dict | None, observation: dict | N
     lines.append(f"- State: {state}")
     if pr:
         lines.append(f"- PR: {pr.get('url', '')}")
+    if merged:
+        lines.append(f"- Merged: {merged}")
     if observation:
         command = f"gh pr checks {pr.get('number')} -R {issue.get('repo', '')}"
         lines.append(f"- Checks: `{command}` exit {observation['checks_exit']}")
         lines.append(f"- Gate: {observation['gate']}")
         lines.append(f"- Files: {observation['files']}")
-    lines.append("- Time used: 0 min")
+    lines.append(f"- Time used: {time_used}")
     lines.append(f"- Observed: {observed} s")
     lines.append(f"- Stopped because: {stopped}")
     lines.append(f"- Next: {nxt}")
     return "\n".join(lines) + "\n"
+
+
+# --- Part T14: the first unattended night -----------------------------------
+#
+# The attended night (T13) was a rehearsal: a human watched, three small
+# items, one hour. The unattended night is the real thing: the whole
+# backlog, no item cap, over the full window, with nobody watching.
+#
+# The night reads the board under the policy snapshot, so it keeps no
+# second queue: the board is the list. GitHub, coordq and T3 are the source
+# of truth, and the night only looks at them.
+#
+# The window is the spec's: the night starts at 22:30 PT and closes at
+# 06:00 PT. The cycle is the tick's cadence, 30 minutes, so the night
+# reads the board as often as the tick does.
+
+NIGHT_DIRS = ("run", "receipts", "inbox", "staging")
+NIGHT_CYCLE_SECONDS = 1800
+NIGHT_CYCLE_DEADLINE = 300
+
+
+def night_close(start: datetime) -> datetime:
+    """Return when the night closes: 06:00 PT.
+
+    The night starts when it starts and ends at the window's close, so a
+    night that starts late still ends at 06:00 PT."""
+    close = start.replace(hour=6, minute=0, second=0, microsecond=0)
+    if close <= start:
+        close += timedelta(days=1)
+    return close
+
+
+def item_pull_request(
+    issue: dict, issues: list[dict], pr_cache: dict[str, list[dict]], deadline: float
+) -> dict | None:
+    """Return the pull request that belongs to one board item, or None.
+
+    A pull request that belongs to a ticket is part of that ticket's
+    record and not a record of its own, so the ticket's pull request is
+    found by the same two signals the intake uses: a keyword reference and
+    a branch that carries the ticket's key."""
+    repo = issue.get("repo") or ""
+    number = issue.get("number")
+    if repo not in pr_cache:
+        try:
+            rows, _cut = read_pull_requests(repo, deadline)
+        except RepoError as exc:
+            rows = []
+            print(f"overnight: {repo}: {exc}", file=sys.stderr)
+        pr_cache[repo] = rows
+    by_number = {
+        other["number"]: other
+        for other in issues
+        if other.get("repo") == repo and other.get("number")
+    }
+    by_key = {
+        (other.get("key") or "").upper(): other
+        for other in issues
+        if other.get("repo") == repo and other.get("key")
+    }
+    for row in pr_cache[repo]:
+        target, _signal = linked_ticket(row, by_number, by_key)
+        if target is not None and target.get("number") == number:
+            return row
+    return None
+
+
+def night_item_state(
+    issue: dict, pr: dict | None, observation: dict | None
+) -> tuple[str, str, str]:
+    """Return the state of one item, why it stopped there and its next step.
+
+    The states are the report's own: done, ready, stuck and parked. An
+    item whose builder has not opened a pull request yet is parked: the
+    work is under way and the builder still holds it. A pull request whose
+    checks failed or whose gate failed is stuck, and it says which."""
+    if pr is None:
+        return (
+            STATE_WAITING,
+            "the builder has not opened a pull request yet",
+            "the queue starts the item when it has a free slot and the "
+            "builder opens the pull request",
+        )
+    if observation is None:
+        return (
+            STATE_STUCK,
+            "the pull request could not be read",
+            "the night reads it again on the next cycle",
+        )
+    if observation.get("merged"):
+        return STATE_DONE, "", "the pull request merged"
+    if observation["no_checks"]:
+        return (
+            STATE_STUCK,
+            "the pull request has no checks yet",
+            "the builder runs the checks for this pull request",
+        )
+    if observation["checks_exit"] != 0:
+        return (
+            STATE_STUCK,
+            f"the checks on the pull request did not pass "
+            f"(exit {observation['checks_exit']})",
+            "the builder fixes the failing check and the gate runs again",
+        )
+    if observation["gate"] != "PASS":
+        return (
+            STATE_STUCK,
+            f"the gate did not pass (gate {observation['gate']})",
+            "the gate runs again on the pull request",
+        )
+    return (
+        STATE_READY,
+        "the shift has no merge right for this repository, so the pull "
+        "request waits for Shyam",
+        "Shyam merges the pull request in the morning",
+    )
+
+
+def cmd_night(args: argparse.Namespace) -> int:
+    """Run the first unattended night.
+
+    The attended night (T13) was a rehearsal with a human in it and three
+    small items. This is the real thing: the whole backlog, no item cap,
+    over the full window, with nobody watching.
+
+    The night reads the board under the policy snapshot, so it keeps no
+    second queue: the board is the list, and GitHub, coordq and T3 are the
+    source of truth. Every cycle it reads the whole board, looks at what
+    each item really shows and writes a receipt when the item's state
+    changed. When the window closes it leaves one morning report.
+
+    The night starts no builder and runs no merge and no push: the queue
+    and the tick do that work, under the rules that apply today, and the
+    night records what they really did. A cycle that cannot read the
+    board, the ticket text or the decisions log refuses itself and says
+    so in the log, rather than reporting from half the truth."""
+    root = Path(args.root).expanduser() if args.root else report_root(None)
+    policy, policy_error = load_policy(root)
+    if policy is None:
+        die(
+            f"the night has no policy snapshot: {policy_error}. Run "
+            "`overnight policy` to write it."
+        )
+    allowed = policy_allow(policy)
+    if not allowed:
+        die(
+            f"the policy snapshot {policy_path(root)} names no repositories, "
+            "so the night has nothing it may work"
+        )
+    cfg = load_config()
+    flagged = ascend_flags(cfg)
+    if not allowed_repos(cfg):
+        die("the board config names no repositories")
+    start = datetime.now(PT)
+    close = night_close(start)
+    if args.minutes:
+        close = start + timedelta(minutes=args.minutes)
+    night_date = args.date or start.strftime("%Y-%m-%d")
+    if args.dry_run:
+        issues, stale = read_board(time.monotonic() + args.cycle_deadline)
+        print("Overnight unattended night - dry run (read only)")
+        print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+        print(f"Window: closes {pt_clock(close)}")
+        print("Whole backlog, no item cap. A dry run writes no record.")
+        return 0
+    for name in NIGHT_DIRS:
+        (root / name).mkdir(parents=True, exist_ok=True)
+    shift_id = f"night-{start.strftime('%Y%m%d-%H%M')}"
+    (root / "run" / "armed").write_text(
+        f"shift: {shift_id}\n"
+        f"start: {pt_clock(start)}\n"
+        "run by: the coordinator (unattended)\n"
+    )
+    (root / "run" / "deadline").write_text(f"{close.timestamp()}\n")
+    log_path = root / "run" / "shift-log.md"
+    log_lines = [
+        f"{start.strftime('%Y-%m-%d %H:%M %Z')} | night | started, "
+        f"unattended, whole backlog, no item cap, window closes "
+        f"{pt_clock(close)}",
+        f"{start.strftime('%Y-%m-%d %H:%M %Z')} | night | the shift runs "
+        f"read-only commands only: no merge, no push, no builder",
+    ]
+    log_path.write_text("\n".join(log_lines) + "\n")
+    pr_cache: dict[str, list[dict]] = {}
+    cycle = 0
+    planned = 0
+    while True:
+        cycle += 1
+        stamp = datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z")
+        cycle_deadline = time.monotonic() + args.cycle_deadline
+        issues, stale = read_board(cycle_deadline)
+        if stale:
+            log_lines.append(
+                f"{stamp} | night | cycle {cycle} | REFUSED: the board list "
+                "is stale, so the night cannot trust the backlog"
+            )
+        else:
+            bodies, unread, _open = read_bodies(issues, cycle_deadline)
+            _decisions_path, lines = read_decisions()
+            if unread:
+                log_lines.append(
+                    f"{stamp} | night | cycle {cycle} | REFUSED: the ticket "
+                    f"text of {', '.join(unread)} could not be read"
+                )
+            elif not lines:
+                log_lines.append(
+                    f"{stamp} | night | cycle {cycle} | REFUSED: the "
+                    "decisions log could not be read"
+                )
+            else:
+                kept, drops = filter_issues(
+                    issues, allowed, flagged, bodies, lines
+                )
+                planned = len(kept)
+                log_lines.append(
+                    f"{stamp} | night | cycle {cycle} | planned {planned} "
+                    f"items, {len(drops)} dropped"
+                )
+                for issue in kept:
+                    item_start = time.monotonic()
+                    pr = item_pull_request(
+                        issue, issues, pr_cache, cycle_deadline
+                    )
+                    observation = None
+                    if pr is not None:
+                        observation = observe_pull_request(
+                            issue.get("repo") or "", pr["number"], cycle_deadline
+                        )
+                    state, stopped, nxt = night_item_state(
+                        issue, pr, observation
+                    )
+                    merged = (observation or {}).get("merged") or ""
+                    observed = int(time.monotonic() - item_start + 0.5)
+                    receipt_path = root / "receipts" / f"{issue.get('key')}.md"
+                    if receipt_path.exists():
+                        existing = parse_receipt(receipt_path)
+                        fields = existing["fields"]
+                        if (
+                            (fields.get("state") or "").lower() == state
+                            and (fields.get("merged") or "") == merged
+                        ):
+                            continue
+                    receipt_path.write_text(
+                        receipt_text(
+                            issue,
+                            state,
+                            pr,
+                            observation,
+                            observed,
+                            stopped,
+                            nxt,
+                            merged,
+                            "UNVERIFIED",
+                        )
+                    )
+                    detail = (
+                        f"`gh pr checks {pr['number']} -R "
+                        f"{issue.get('repo', '')}` exit "
+                        f"{observation['checks_exit']}, gate "
+                        f"{observation['gate']}"
+                        if observation
+                        else "no pull request is open"
+                    )
+                    log_lines.append(
+                        f"{stamp} | item {issue.get('key')} "
+                        f"(#{issue.get('number')}) | {state} | {detail}"
+                    )
+        log_path.write_text("\n".join(log_lines) + "\n")
+        if args.cycles and cycle >= args.cycles:
+            break
+        now = datetime.now(PT)
+        if now >= close:
+            break
+        time.sleep(max(min((close - now).total_seconds(), args.interval), 1))
+    end_stamp = datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z")
+    if (root / "run" / "STOP").exists():
+        end = "STOP"
+    elif datetime.now(PT) >= close:
+        end = "deadline"
+    else:
+        end = "all done"
+    log_lines.append(f"{end_stamp} | night | ended: {end}")
+    log_path.write_text("\n".join(log_lines) + "\n")
+    print(
+        f"overnight: unattended night {shift_id} wrote {planned} receipts "
+        f"over {cycle} cycles and ended: {end}"
+    )
+    return cmd_report(
+        argparse.Namespace(root=str(root), date=night_date, dry_run=False)
+    )
 
 
 def cmd_attend(args: argparse.Namespace) -> int:
@@ -3321,6 +3677,51 @@ def main() -> int:
         help=f"seconds the whole night may take (default {DEFAULT_DEADLINE})",
     )
     attend.set_defaults(func=cmd_attend)
+    night = sub.add_parser(
+        "night",
+        help="run the first unattended night: the whole backlog, no item cap",
+    )
+    night.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    night.add_argument(
+        "--date",
+        default=None,
+        type=report_day,
+        help="the night of the report, as YYYY-MM-DD (default today, PT)",
+    )
+    night.add_argument(
+        "--minutes",
+        type=int,
+        default=0,
+        help="minutes the window closes after the start (0: the full window)",
+    )
+    night.add_argument(
+        "--cycles",
+        type=int,
+        default=0,
+        help="how many cycles the night runs (0: until the window closes)",
+    )
+    night.add_argument(
+        "--interval",
+        type=int,
+        default=NIGHT_CYCLE_SECONDS,
+        help=f"seconds between cycles (default {NIGHT_CYCLE_SECONDS})",
+    )
+    night.add_argument(
+        "--cycle-deadline",
+        type=int,
+        default=NIGHT_CYCLE_DEADLINE,
+        help=f"seconds one cycle may take (default {NIGHT_CYCLE_DEADLINE})",
+    )
+    night.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read the board and write no record",
+    )
+    night.set_defaults(func=cmd_night)
     args = parser.parse_args()
     return args.func(args)
 
