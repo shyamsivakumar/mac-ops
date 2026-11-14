@@ -20,6 +20,24 @@
       },
       "openai/gpt-6-astra": {
         "reserveTokens": 32000
+      },
+      "minimax/MiniMax-M3.1-Flash": {
+        "reserveTokens": 32000
+      },
+      "minimax/MiniMax-M3": {
+        "reserveTokens": 32000
+      },
+      "minimax/MiniMax-M2.7": {
+        "reserveTokens": 32000
+      },
+      "deepseek/deepseek-flash": {
+        "reserveTokens": 32000
+      },
+      "deepseek/deepseek-v4-pro": {
+        "reserveTokens": 32000
+      },
+      "zai/glm-5.3": {
+        "reserveTokens": 32000
       }
     }
   },
