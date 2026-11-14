@@ -2192,20 +2192,25 @@ SPLIT_MARK = re.compile(
 FAILED_CHECK = frozenset(
     {
         "FAILURE",
+        "FAIL",
         "ERROR",
         "TIMED_OUT",
         "ACTION_REQUIRED",
         "STARTUP_FAILURE",
-        "CANCELLED",
     }
 )
 # The board's stage labels. A ready ticket is one the board says may be
 # worked now.
 READY_STAGE = "todo"
-# The "Blocked by" section of a ticket's own text.
-BLOCKED_SECTION = re.compile(
-    r"(?mi)^##[ \t]*blocked by[ \t]*$(.*?)(?=^##[ \t]|\Z)"
+# The "Blocked by" section of a ticket's own text. The section is a
+# heading of any level (`## Blocked by`) or a `Blocked by:` line with the
+# list under it, the same markers the coordinator's own reader accepts.
+BLOCKED_HEADING = re.compile(
+    r"(?i)^(?P<hashes>#{1,6})[ \t]*blocked by\b[ \t]*:?[ \t]*(?P<rest>.*)$"
 )
+HEADING_LINE = re.compile(r"^#{1,6}[ \t]")
+# The key of an issue, taken from its title: "SRW-1055 · ..." is SRW-1055.
+TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 # A reference in a blocker section: a board key of this repository, a
 # reference to another repository's issue, or a bare issue number.
 BLOCK_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
@@ -2213,15 +2218,121 @@ BLOCK_REPO = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
 BLOCK_BARE = re.compile(r"(?<![A-Za-z0-9_/-])#(\d+)\b")
 
 
+def blocked_by_text(body: str) -> str:
+    """Return the text of the ticket's own "Blocked by" section.
+
+    The section is a heading of any level (`## Blocked by`) with the text
+    under it, or a `Blocked by:` line with the list under the line. A
+    section inside a `<details>` block is skipped, the way the
+    coordinator's own reader skips it, because the board keeps a
+    preserved contract in there."""
+    cleaned = re.sub(r"(?is)<details\b.*?</details>", "", body or "")
+    lines = cleaned.splitlines()
+    for index, line in enumerate(lines):
+        heading = BLOCKED_HEADING.match(line)
+        if not heading:
+            continue
+        level = len(heading.group("hashes") or "")
+        rest = (heading.group("rest") or "").strip()
+        content = [rest] if rest else []
+        for follow in lines[index + 1 :]:
+            if level:
+                if HEADING_LINE.match(follow):
+                    break
+                content.append(follow)
+                continue
+            text = follow.strip()
+            if not text:
+                content.append(follow)
+                continue
+            if not (follow[:1].isspace() or text[0] in "-*+"):
+                break
+            content.append(follow)
+        body_text = re.sub(r"<!--.*?-->", "", "\n".join(content), flags=re.S)
+        return body_text.strip()
+    return ""
+
+
+def issue_title_key(title: str) -> str:
+    """Return the board key an issue title starts with, or nothing."""
+    found = TITLE_KEY.match(title or "")
+    if not found:
+        return ""
+    return f"{found.group(1).upper()}-{found.group(2)}"
+
+
+def read_closed_issues(
+    repos: list[tuple[str, str]], deadline: float
+) -> tuple[dict[str, set[int]], dict[str, set[str]], list[str]]:
+    """Return the closed issue numbers and the closed issue keys of each
+    repository, and the repositories that could not be read.
+
+    A blocker is met when its issue is closed, so the shift needs the
+    closed issues as much as the open ones. A repository whose closed
+    issues cannot be read leaves its blockers unchecked, and an unchecked
+    blocker is not a met blocker."""
+    closed_numbers: dict[str, set[int]] = {}
+    closed_keys: dict[str, set[str]] = {}
+    unread: list[str] = []
+    for repo, _key in repos:
+        try:
+            raw = run(
+                [
+                    GH,
+                    "issue",
+                    "list",
+                    "-R",
+                    repo,
+                    "--state",
+                    "closed",
+                    "--limit",
+                    str(ISSUE_LIMIT),
+                    "--json",
+                    "number,title",
+                ],
+                GH_TIMEOUT,
+                deadline,
+            )
+            rows = json.loads(raw)
+        except (RepoError, ValueError) as exc:
+            unread.append(repo)
+            emit(f"overnight: {repo}: {exc}", err=True)
+            continue
+        if not isinstance(rows, list):
+            unread.append(repo)
+            continue
+        if len(rows) >= ISSUE_LIMIT:
+            unread.append(repo)
+            emit(
+                f"overnight: {repo}: the closed issue list was cut off at "
+                f"{ISSUE_LIMIT}, so the blockers are not known",
+                err=True,
+            )
+            continue
+        numbers = closed_numbers.setdefault(repo, set())
+        keys = closed_keys.setdefault(repo, set())
+        for row in rows:
+            number = row.get("number")
+            if isinstance(number, int):
+                numbers.add(number)
+            key = issue_title_key(row.get("title") or "")
+            if key:
+                keys.add(key)
+    return closed_numbers, closed_keys, unread
+
+
 def read_checks(repo: str, number: int, deadline: float) -> tuple[list[dict], str]:
     """Return the checks of one pull request and the reason none are known.
 
-    `gh pr checks` exits non-zero when a check failed and when the pull
-    request has no checks at all. Both are answers, not refusals, so this
-    reads the command itself and tells the two apart by its message."""
+    `gh pr checks` prints the checks as JSON and exits 0 even when a
+    check failed, so the failure is in the rows, not in the exit code.
+    It exits 1 with `no checks reported` when the pull request carries no
+    checks at all, which is an answer too: a pull request with no checks
+    is not a failing pull request. A read that fails for any other reason
+    is a refusal, never a failure."""
     left = deadline - time.monotonic()
     if left <= 0:
-        die("the deadline passed before the pull request checks could be read")
+        return [], "the deadline passed before the checks could be read"
     try:
         result = subprocess.run(
             [
@@ -2240,29 +2351,30 @@ def read_checks(repo: str, number: int, deadline: float) -> tuple[list[dict], st
             check=False,
         )
     except FileNotFoundError:
-        die(f"{GH} is not on PATH")
+        return [], f"{GH} is not on PATH"
     except subprocess.TimeoutExpired:
-        die(f"gh pr checks {repo}#{number} timed out")
+        return [], f"gh pr checks {repo}#{number} timed out"
     out = (result.stdout or "").strip()
     err = (result.stderr or "").strip()
     if result.returncode == 0:
         try:
             rows = json.loads(out or "[]")
         except ValueError as exc:
-            raise RepoError(
-                f"gh pr checks did not return JSON for {repo}#{number}: {exc}"
-            )
+            return [], f"gh pr checks did not return JSON for {repo}#{number}: {exc}"
         return (rows if isinstance(rows, list) else []), ""
     if "no checks reported" in err or "no checks reported" in out:
         return [], ""
-    raise RepoError(
+    return [], (
         f"gh pr checks {repo}#{number} failed ({result.returncode}): "
         + (err or out)[-200:]
     )
 
 
 def failing_checks(rows: list[dict]) -> list[str]:
-    """Return the checks of a pull request that failed."""
+    """Return the checks of a pull request that failed.
+
+    A cancelled check is inconclusive, not a failure, so it does not put
+    the pull request in the failing group."""
     failed = []
     for row in rows:
         state = str(row.get("state") or "").upper()
@@ -2352,13 +2464,44 @@ def builder_thread(receipts: dict[str, str], repo: str, number: int) -> tuple[st
     return thread, attempt
 
 
-def read_gate_report(thread_id: str, deadline: float) -> tuple[str, str, str]:
+def latest_run_id(data: dict) -> str:
+    """Return the id of the thread's latest run, or nothing.
+
+    The queue dispatches a gate for the same head under the same request
+    id, so one thread can hold more than one run. The verdict of a thread
+    is the verdict of its latest run: an earlier run's verdict does not
+    survive a later one."""
+    best = None
+    for run in data.get("recentRuns") or []:
+        if not isinstance(run, dict):
+            continue
+        ordinal = run.get("ordinal")
+        if not isinstance(ordinal, int):
+            continue
+        if best is None or ordinal > best.get("ordinal", -1):
+            best = run
+    return str(best.get("runId") or "") if best else ""
+
+
+def check_line_passes(lines: list[str], head: str) -> bool:
+    """Return True when the gate checked this head and it passed.
+
+    The gate's own rule is `CHECK: PASS <head>` before the verdict, so a
+    verdict without that line is a verdict for a head nobody checked."""
+    return f"CHECK: PASS {head}" in lines
+
+
+def read_gate_report(
+    thread_id: str, deadline: float, head: str = ""
+) -> tuple[str, str, str]:
     """Return the verdict, the report and the update time of a gate thread.
 
-    The verdict is the last line of the gate's own message. A thread that
-    cannot be read, or that ends with anything else, is no verdict. The
-    report is that same message: it holds the findings the builder has to
-    fix."""
+    The verdict is the last line of the gate's own last message in the
+    thread's latest run. A thread that cannot be read, a latest run with
+    no message, and a message that ends with anything else, are all no
+    verdict. When the head is known, the gate must also have checked that
+    head: the line `CHECK: PASS <head>` has to be there. The report is
+    that same message: it holds the findings the builder has to fix."""
     payload = json.dumps({"threadId": thread_id, "maxCharsPerItem": 20000})
     try:
         raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
@@ -2371,21 +2514,26 @@ def read_gate_report(thread_id: str, deadline: float) -> tuple[str, str, str]:
     thread = data.get("thread") or {}
     updated = str(thread.get("updatedAt") or "")
     items = data.get("items") or []
+    run_id = latest_run_id(data)
     texts = [
         item.get("text") or ""
         for item in items
         if item.get("type") == "assistant_message"
+        and (not run_id or str(item.get("runId") or "") == run_id)
     ]
-    report = ""
-    for text in reversed(texts):
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if not lines:
-            continue
-        report = text
-        if lines[-1] == "VERDICT: PASS":
-            return "PASS", report, updated
-        if lines[-1] == "VERDICT: FAIL":
-            return "FAIL", report, updated
+    if not texts:
+        return "", "", updated
+    text = texts[-1]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    report = text
+    if not lines:
+        return "", report, updated
+    if lines[-1] == "VERDICT: PASS":
+        if head and not check_line_passes(lines, head):
+            return "", report, updated
+        return "PASS", report, updated
+    if lines[-1] == "VERDICT: FAIL":
+        return "FAIL", report, updated
     return "", report, updated
 
 
@@ -2468,7 +2616,7 @@ def gate_verdict(
     thread_id = receipts.get(f"gate:{repo}#{number}:{head}")
     if not thread_id:
         return ""
-    return read_verdict(thread_id, deadline)
+    return read_gate_report(thread_id, deadline, head)[0]
 
 
 def blockers_for(
@@ -2476,45 +2624,52 @@ def blockers_for(
     repo: str,
     key: str,
     open_numbers: dict[str, set[int]],
+    closed_numbers: dict[str, set[int]],
+    closed_keys: dict[str, set[str]],
     board_by_key: dict[str, dict],
 ) -> list[str]:
     """Return the blockers of a ticket that are not met yet.
 
-    A blocker is met when its issue is closed, so it is not on the open
-    issue list of its repository. A blocker that cannot be checked is
-    treated as unmet: the shift does not start work whose order it cannot
-    prove."""
-    found = BLOCKED_SECTION.search(body or "")
-    if not found:
-        return []
-    text = re.sub(r"<!--.*?-->", "", found.group(1), flags=re.S).strip()
+    A blocker is met when its issue is closed, so it is neither on the
+    open issue list nor missing from the closed one. A blocker that
+    cannot be checked is not a met blocker: the shift does not treat work
+    as free it cannot prove."""
+    text = blocked_by_text(body or "")
     if not text:
         return []
     first = text.splitlines()[0].strip().lower().rstrip(".:")
     if first in ("none", "n/a", "nil", "-"):
         return []
     open_here = open_numbers.get(repo, set())
+    closed_here = closed_numbers.get(repo, set())
+    closed_key_here = closed_keys.get(repo, set())
     blockers: list[str] = []
     masked = BLOCK_REPO.sub(" ", text)
     for match in BLOCK_REPO.finditer(text):
         target_repo, number = match.group(1), int(match.group(2))
         if target_repo.lower() != repo.lower():
             blockers.append(f"{target_repo}#{number} (not checked)")
-            continue
-        if number in open_here:
-            blockers.append(f"{repo}#{number} is still open")
+        elif number in open_here:
+            blockers.append(f"{target_repo}#{number} is still open")
+        elif number not in closed_here:
+            blockers.append(f"{target_repo}#{number} could not be read")
     for match in BLOCK_KEY.finditer(masked):
         label = f"{match.group(1).upper()}-{match.group(2)}"
-        if label.startswith((key or " ").upper()):
-            ticket = board_by_key.get(label)
-            if ticket is None:
-                blockers.append(f"{label} (not on the board)")
-            elif ticket.get("number") in open_here:
-                blockers.append(f"{label} (#{ticket.get('number')}) is still open")
+        if not label.startswith((key or " ").upper()):
+            continue
+        if label in closed_key_here:
+            continue
+        ticket = board_by_key.get(label)
+        if ticket is None:
+            blockers.append(f"{label} could not be read")
+        elif ticket.get("number") in open_here:
+            blockers.append(f"{label} (#{ticket.get('number')}) is still open")
     for match in BLOCK_BARE.finditer(masked):
         number = int(match.group(1))
         if number in open_here:
             blockers.append(f"{repo}#{number} is still open")
+        elif number not in closed_here:
+            blockers.append(f"{repo}#{number} could not be read")
     return blockers
 
 
@@ -2523,8 +2678,10 @@ def order_key(item: dict) -> tuple:
 
     Priority comes first: Shyam steers the night through the priority
     label. A blocked item waits for its blocker, so it follows the items
-    that are ready. The board's own order breaks the tie, so the same
-    board always produces the same list."""
+    that are ready. The repository and the issue number break the tie, so
+    the same board always produces the same list. A blocked item is not
+    left out: it stays in its group and is marked, so the night sees it
+    and knows why it waits."""
     priority = item.get("priority")
     number = priority if isinstance(priority, int) else 99
     return (number, 1 if item.get("blockers") else 0, item.get("repo") or "",
@@ -2532,16 +2689,22 @@ def order_key(item: dict) -> tuple:
 
 
 def summarize(counts: dict[str, dict]) -> str:
-    """Return the one-line summary of the order, per repository and state."""
+    """Return the one-line summary of the order, per repository and state.
+
+    Every state the order knows is counted, so the line says how many
+    items are failing, gate-pass, split, unsplit, in flight and not
+    ready. A count that could not be checked is written as UNVERIFIED by
+    the caller, never as a zero."""
     parts = []
     for repo in sorted(counts):
         row = counts[repo]
-        if not row["total"]:
+        if not (row["total"] or row["in_flight"] or row["backlog"]):
             continue
         parts.append(
             f"{repo} {row['total']} (failing {row['failing']}, "
             f"gate-pass {row['gate']}, split {row['split']}, "
-            f"unsplit {row['unsplit']})"
+            f"unsplit {row['unsplit']}, in-flight {row['in_flight']}, "
+            f"not-ready {row['backlog']})"
         )
     return "; ".join(parts) if parts else "no items"
 
@@ -2626,6 +2789,10 @@ def collect_items(
     if pr_error:
         return {"pr_error": pr_error}
 
+    board_repos = sorted({issue.get("repo") or "" for issue in issues})
+    closed_numbers, closed_keys, closed_unread = read_closed_issues(
+        [(repo, "") for repo in board_repos], deadline
+    )
     records = build_records(issues, pull_requests)
     dropped = {
         (issue.get("repo") or "", issue.get("number")) for issue, _reason in drops
@@ -2697,7 +2864,9 @@ def collect_items(
                         "title": pull.get("title") or "",
                         "url": pull.get("url") or "",
                         "priority": record.get("priority"),
-                        "ticket": record.get("number"),
+                        "ticket": ""
+                        if record["kind"] == "pr"
+                        else record.get("number"),
                         "standalone": record["kind"] == "pr",
                         "head": pull.get("headRefOid") or "",
                         "isDraft": bool(pull.get("isDraft")),
@@ -2705,10 +2874,17 @@ def collect_items(
                         "actionReason": "",
                         "actionCommand": "",
                     }
+                    if item["isDraft"]:
+                        item["reason"] = "draft pull request"
+                        item["actionReason"] = "draft pull request"
+                        in_flight.append(item)
+                        count_for(repo)["in_flight"] += 1
+                        continue
                     rows, unknown = checks.get(
                         (repo, pull["number"]), ([], "the checks were not read")
                     )
-                    if unknown and "could not be read" in unknown:
+                    if unknown:
+                        item["reason"] = unknown
                         unverified_prs.append(f"{repo}#{pull['number']}: {unknown}")
                         in_flight.append(item)
                         count_for(repo)["in_flight"] += 1
@@ -2730,7 +2906,7 @@ def collect_items(
                     gate_updated = ""
                     if thread_id:
                         verdict, report, gate_updated = read_gate_report(
-                            thread_id, deadline
+                            thread_id, deadline, head
                         )
                     status = "none"
                     if verdict == "PASS":
@@ -2813,8 +2989,6 @@ def collect_items(
                         continue
                     if verdict == "FAIL":
                         item["reason"] = "gate FAIL"
-                    elif unknown:
-                        item["reason"] = unknown
                     else:
                         item["reason"] = (
                             "open pull request, no failing check and no gate "
@@ -2846,7 +3020,13 @@ def collect_items(
                 continue
             body = bodies.get((repo, record.get("number"))) or ""
             item["blockers"] = blockers_for(
-                body, repo, keys.get(repo, ""), open_numbers, board_by_key
+                body,
+                repo,
+                keys.get(repo, ""),
+                open_numbers,
+                closed_numbers,
+                closed_keys,
+                board_by_key,
             )
             split = bool(SPLIT_MARK.search(body))
             item["split"] = split
@@ -2898,6 +3078,7 @@ def collect_items(
         "backlog": backlog,
         "counts": counts,
         "unverified": unverified_prs,
+        "closed_unread": closed_unread,
         "queue": queue_state,
         "live": live,
     }
@@ -3048,6 +3229,12 @@ def cmd_order(args: argparse.Namespace) -> int:
     if unverified_prs:
         for note in unverified_prs:
             emit(f"UNVERIFIED: {note}")
+    if result.get("closed_unread"):
+        emit(
+            "UNVERIFIED: the closed issues of these repositories could not be "
+            "read, so a blocker in them is not known to be met: "
+            + ", ".join(result["closed_unread"])
+        )
     index = 1
     index = show("Failing pull requests", failing, index)
     index = show("Pull requests with a gate PASS", gate_pass, index)
@@ -3056,6 +3243,10 @@ def cmd_order(args: argparse.Namespace) -> int:
     index = show("Not work items: a pull request is open", in_flight, index)
     show("Not ready: the board stage is not todo", backlog, index)
     line = f"planned {planned} items | {summarize(counts)}"
+    if gate_error:
+        line += " | gate-pass UNVERIFIED"
+    if unverified_prs:
+        line += f" | checks UNVERIFIED {len(unverified_prs)}"
     log = write_shift_line(report_root(args.root), line)
     emit()
     emit(f"Summary line written to {log}")
