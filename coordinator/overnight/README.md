@@ -25,7 +25,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight order --dry-run` | Orders the whole board and prints the full ordered list: the failing pull requests, then the pull requests with a gate PASS, then the ready tickets that are already 5-minute parts, then the ready tickets that are not split yet. It writes one summary line to `run/shift-log.md` and no list file. |
 | `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. It fails closed: a pull request it cannot read is refused, not passed. |
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
-| `overnight shift --dry-run` | The command the launchd job fires. Every run is one cycle: it reads the policy snapshot, reads the board under the snapshot's allow list, orders it and writes the cycle's line to `run/shift-log.md`. The shift runs 24x7, so there is no night window and no part of the night, and the shift is never armed. The morning report is on demand (`overnight report`), not something the job writes. |
+| `overnight shift` | The command the launchd job fires. Every run is one cycle: it reads the policy snapshot, reads the whole board under the snapshot's allow list, works it (there is no item cap and no allowance stop) and writes a receipt for every item whose state changed. The shift runs 24x7, so there is no night window and no part of the night, and the shift is never armed. The first cycle of the morning writes the day's morning report, so Shyam reads one report in the morning; `--report` writes it on demand, and `--dry-run` does no work on the board. |
 | `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
 | `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order. `--dry-run` prints the receipt and writes no file. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
@@ -194,7 +194,8 @@ cycle is the same cycle.
 
 | Every 30 minutes | What runs |
 | --- | --- |
-| Any time of day | One shift cycle. It reads the policy snapshot, reads the board, orders it and writes the cycle's line to `run/shift-log.md`. |
+| Any time of day | One shift cycle. It reads the policy snapshot, reads the whole board, works it and writes the receipt of every item whose state changed. |
+| 06:00 to 07:29 PT | The same cycle, and it writes the day's morning report. The report is written once a day: the first morning cycle writes it and a later cycle leaves it alone. |
 
 The interval lives in the plist (`StartInterval`), not in the command, so
 one place owns it. The job has no `RunAtLoad`, so the first cycle lands
@@ -206,16 +207,20 @@ The Mac must run on Pacific time for the shift log to say Pacific time.
 If the Mac's clock is not on Pacific time, the job still fires, and it
 says so in the log.
 
-The job runs in dry-run mode (`shift --dry-run`) until the work part (T5)
-lands. A dry cycle does no work, so the cycle's line in the shift log is
-the only file it writes. A real shift is not started by the job yet:
-without `--dry-run` the shift refuses and says so, rather than pretending
-to work. The policy snapshot (T4) is read on every cycle, and a cycle that
-finds no snapshot refuses to work.
+The job runs real cycles (spec part T14): a cycle reads the board under
+the policy snapshot, works it with no item cap and writes a receipt for
+every item whose state changed. It still starts no builder and runs no
+merge and no push: the queue starts the work, under the rules that apply
+today, and the shift records what it really saw. The policy snapshot (T4)
+is read on every cycle, and a cycle that finds no snapshot refuses to
+work.
 
 The shift is never armed: `run/armed` does not gate it, and every cycle
-reads the board. The morning report is on demand now (`overnight report`),
-so the job has no calendar entry for it.
+reads the board. The morning report has a time even though the shift does
+not: the first cycle of the morning writes the day's report, so Shyam
+reads one report in the morning. `run/STOP` still stops the shift at the
+next cycle, and the report still runs when it does: the report says the
+shift ended with STOP.
 
 ## The attended first night
 
