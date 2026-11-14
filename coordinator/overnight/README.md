@@ -197,20 +197,29 @@ The patterns, in the order they are applied:
 
 | Pattern | What it matches |
 | --- | --- |
-| `private key` | A PEM private key block, from `BEGIN` to `END`. |
-| `aws key`, `github token`, `anthropic key`, `openai key`, `slack token`, `google api key`, `huggingface token`, `npm token`, `stripe key` | The token shapes of the tools the shift's own builders use. |
+| `private key` | A PEM private key block, from `BEGIN` to `END`, and a block that was cut short (the check's own output often ends in the middle of the key). |
+| `aws key`, `github token`, `gitlab token`, `anthropic key`, `openai key`, `slack token`, `google api key`, `huggingface token`, `npm token`, `stripe key` | The token shapes of the tools the shift's own builders use. |
 | `jwt` | A JSON web token. |
 | `authorization header`, `bearer token` | An `Authorization:` header and the token behind `Bearer`. |
-| `cookie`, `session cookie` | A `Cookie:` or `Set-Cookie:` header and a session cookie on its own. |
+| `cookie`, `session cookie` | A `Cookie:` or `Set-Cookie:` header, and a session cookie on its own when it sits in a cookie context and is long enough to be a token. |
 | `url credentials` | The password in a URL with credentials in it. |
-| `secret field` | A `api_key=`, `password:`, `client_secret:` field, whatever the case. |
-| `.env value`, `environment secret` | The value of a `.env` line, and the value of an environment variable whose name ends in `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD` or `CREDENTIALS`. |
+| `secret field` | A `api_key=`, `password:`, `client_secret:` field, in JSON, in YAML or in a command line, quoted or not. |
+| `environment secret` | An environment variable whose name ends in `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD`, `PASSPHRASE` or `CREDENTIALS`, anywhere in the line. |
+| `.env value` | A `.env` line: an environment variable's name and its value, and nothing else on the line. |
 
 The replacement keeps no part of the value and says what was redacted:
 `[REDACTED:github token]`. A record that says what it hid is still a
 record; a record that keeps the value is a leak. A pattern that matched
 part of a line keeps the rest of the line: `GITHUB_TOKEN=[REDACTED:github
 token]` still says which variable it was.
+
+The redaction of a text is the same text: a value that is already
+redacted is not redacted again. So a receipt that is written on two
+cycles is the same receipt, and the receipt writer's own comparison (the
+receipt on disk against the body it would write) still holds.
+
+The patterns leave prose alone. `STATE=merged`, `session = 3 of 5` and
+`Secret: unknown` are records, not secrets, and they stay readable.
 
 The command shows the redaction on a fixture. It writes nothing.
 
