@@ -808,8 +808,7 @@ def gate_candidates(config):
                     model = reviewer_model(models)
                 else:
                     # A build whose executed model is not known is still
-                    # gated, on the backstop reviewer: the gate that waits
-                    # for the model to appear never comes. The check below
+                    # gated, on the backstop reviewer. The check below
                     # still decides whether the pull request is gated.
                     model = backstop_model(thread, runs)
                     if (repo, number) not in noted:
