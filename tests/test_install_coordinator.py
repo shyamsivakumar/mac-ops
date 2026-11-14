@@ -174,7 +174,7 @@ class TestPiCoordinatorFiles(unittest.TestCase):
             self.assertEqual(mode, 0o644)
 
     def test_launchers_map_to_the_local_bin_directory(self):
-        for name in ("coord-pi", "coord-ask", "coord-phone"):
+        for name in ("coord-pi", "coord-ask", "coord-phone", "coord-tick", "kpane", "kshow"):
             source, mode = self.plan[self.home / ".local/bin" / name]
             self.assertEqual(source, CHECKOUT / "coordinator/pi/bin" / name)
             self.assertEqual(mode, 0o755)

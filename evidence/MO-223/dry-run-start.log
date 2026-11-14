@@ -1,0 +1,26 @@
+# overnight shift --at start --dry-run (the installed command, read only)
+overnight: 2026-11-13 14:15 PST shift start (dry run, read only)
+Overnight intake - dry run (read only)
+Board: 120 tickets
+Allowed repositories: 15
+
+repository                                     tickets   prs  linked  records
+digitized/Concerning                                 6     2       0        8
+shyamsivakumar/CineJar                               0     1       0        1
+shyamsivakumar/cairn                                 0     5       0        5
+shyamsivakumar/catalouge                             7     0       0        7
+shyamsivakumar/fantasy-football-toolkit             37     4       1       40
+shyamsivakumar/mac-ops                              18     4       3       19
+shyamsivakumar/openscan                              0     0       0        0
+shyamsivakumar/qabot                                 0     0       0        0
+shyamsivakumar/recoup                                0     0       0        0
+shyamsivakumar/sams-llm-wiki                         0     3       0        3
+shyamsivakumar/scrapers                              0     1       0        1
+shyamsivakumar/scripture-scroll                      0     1       0        1
+shyamsivakumar/strata                                0     1       0        1
+shyamsivakumar/strategy-replay-workbench            52    15       6       61
+shyamsivakumar/tunerise                              0     1       0        1
+
+Total: 148 records across 15 repositories
+A pull request that a board ticket names is part of that ticket's record, so it adds no record of its own. A pull request that names no ticket the board shows stays a record of its own.
+exit=0

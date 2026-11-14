@@ -128,6 +128,11 @@ function backup(p: string, cwd: string) {
 const MIRROR_TERMINAL = "pi-coord-phone";
 const PHONE_MARKER = "From Shyam (phone):";
 const TICK_MARKER = "Tick (";
+// How much of Shyam's own message the phone shows above the reply, and
+// how much of a custom message starts a run with no prompt of its own.
+// Both are counts of characters, and both end in an ellipsis.
+const MIRROR_QUOTE_MAX = 600;
+const EVENT_QUOTE_MAX = 300;
 const HC = process.env.COORD_HC_BIN || path.join(HOME, ".local/bin/hc");
 
 function runHc(args: string[]): Promise<string> {
@@ -149,30 +154,82 @@ function assistantText(m: any): string {
     .join("\n");
 }
 
-// The label of one mirror: "phone", "tick", or the user's own words.
-export function mirrorLabel(input: string): string {
-  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
-  const t = flat(input);
+const flat = (s: string) => (s || "").replace(/\s+/g, " ").trim();
+
+// The text of a custom message that starts a run: a string, or the text
+// blocks of an array content.
+// A custom message that starts a run: a string, or a message whose
+// content is a string or a list of blocks.
+type CustomMessage = string | { content?: string | Array<{ type?: string; text?: string }> } | undefined;
+
+function customText(message: CustomMessage): string {
+  if (!message) return "";
+  if (typeof message === "string") return message;
+  const c = message.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  return c
+    .filter((x) => x && x.type === "text" && typeof x.text === "string")
+    .map((x) => x.text as string)
+    .join("\n");
+}
+
+// Shyam's own message as quoted lines: one "> " per line, the line breaks
+// kept, so the phone can tell his words from the reply. A message longer
+// than max is cut and ends with an ellipsis. The cut counts characters,
+// not code units, so an emoji is never split in half.
+function quoteText(text: string, max: number): string {
+  const t = (text || "").replace(/\r\n?/g, "\n").trim();
   if (!t) return "";
+  const chars = Array.from(t);
+  const cut = chars.length > max ? chars.slice(0, max - 1).join("") + "…" : t;
+  return cut
+    .split("\n")
+    .map((line) => (line.trim() ? "> " + line : ">"))
+    .join("\n");
+}
+
+// The phone marker goes, so the quote holds Shyam's words and not the
+// relay's wrapper.
+function stripPhone(input: string): string {
+  const s = input || "";
+  const i = s.indexOf(PHONE_MARKER);
+  if (i < 0) return s.trim();
+  return (s.slice(0, i) + " " + s.slice(i + PHONE_MARKER.length)).trim();
+}
+
+// The kind of one mirror: "you" (typed here), "phone", "tick" or "event".
+// A run with no prompt of its own is an event: its reply is still the
+// coordinator talking, so it belongs on the phone.
+export function mirrorLabel(input: string): string {
+  const t = flat(input);
+  if (!t) return "event";
   // A phone turn is labelled, not skipped: the relay forwards Shyam's
   // message but never sees the reply, so the phone needs the mirror.
   if (t.includes(PHONE_MARKER)) return "phone";
   if (t.startsWith(TICK_MARKER)) return "tick";
-  return t;
+  return "you";
 }
 
 // The mirror text for one assistant message, or "" when it is not mirrored.
-// The label sits on its own first line and the reply keeps its line breaks,
-// bullets and table rows: the phone reads a paragraph otherwise.
-export function mirrorText(input: string, reply: string): string {
-  const label = mirrorLabel(input);
+// The kind sits on its own first line, Shyam's own message is quoted under
+// it, and the reply keeps its line breaks, bullets and table rows: the
+// phone reads a paragraph otherwise.
+export function mirrorText(input: string, reply: string, custom?: CustomMessage): string {
   // A carriage return would act as an Enter in the relay's terminal, so it
   // goes; the trailing blank lines go; every other line break stays.
   const body = (reply || "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
-  if (!label || !body.trim()) return "";
+  if (!body.trim()) return "";
+  const kind = mirrorLabel(input);
   // A tick that found nothing to do says so and stays off the phone.
-  if (label === "tick" && body.trim() === "NOOP") return "";
-  return `Mirror: ${label}\n${body}`;
+  if (kind === "tick" && body.trim() === "NOOP") return "";
+  // A tick has no message of Shyam's to quote, so it shows only its kind.
+  let quote = "";
+  if (kind === "you") quote = quoteText(input, MIRROR_QUOTE_MAX);
+  else if (kind === "phone") quote = quoteText(stripPhone(input), MIRROR_QUOTE_MAX);
+  else if (kind === "event") quote = quoteText(customText(custom), EVENT_QUOTE_MAX);
+  const head = `Mirror: ${kind}`;
+  return quote ? `${head}\n${quote}\n\n${body}` : `${head}\n\n${body}`;
 }
 
 // Sends one mirror message to the relay. A missing or dead relay is skipped.
@@ -238,6 +295,8 @@ export default function (pi: any) {
   // label of a reply is the input it answers.
   let latestInput = "";
   let runPrompt = "";
+  // The custom message that started a run with no prompt of its own.
+  let runCustom: CustomMessage = undefined;
   pi.on("input", (event: any) => {
     if (typeof event?.text === "string" && event.text.trim()) latestInput = event.text;
   });
@@ -245,14 +304,23 @@ export default function (pi: any) {
     if (event?.messageType === "user" && typeof event.prompt === "string" && event.prompt.trim()) {
       runPrompt = event.prompt;
       latestInput = event.prompt;
+      runCustom = undefined;
       return;
     }
-    // A run that no user message started (a custom message, a
-    // continuation) has no label of its own: the previous run's input must
-    // not name it.
+    // A run that no user message started (a custom message such as a
+    // GitHub-bot note, a continuation) has no label of its own: the
+    // previous run's input must not name it. The custom message is
+    // quoted when it carries text.
+    if (event?.messageType === "custom") {
+      runPrompt = "";
+      latestInput = "";
+      runCustom = event.message as CustomMessage;
+      return;
+    }
     if (event?.messageType) {
       runPrompt = "";
       latestInput = "";
+      runCustom = undefined;
     }
   });
 
@@ -263,7 +331,7 @@ export default function (pi: any) {
     // Only the interactive coordinator session mirrors. A headless tick run
     // (pi -p) is not a coordinator turn Shyam is watching.
     if (ctx?.mode && ctx.mode !== "tui") return;
-    const mirror = mirrorText(latestInput || runPrompt, text);
+    const mirror = mirrorText(latestInput || runPrompt, text, runCustom);
     if (!mirror) return;
     // Fire and forget: the turn never waits on the relay.
     enqueueMirror(mirror);
