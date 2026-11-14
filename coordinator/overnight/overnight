@@ -422,6 +422,22 @@ STALL_CAP = 3
 # The retry cap: two fix tries, then the item is parked (spec section 10).
 RETRY_CAP = 2
 
+# --- Part T8a: the per-item builder-time budget ---------------------------
+#
+# The spec gives every item a soft and a hard budget of builder time and
+# at most two fix tries (section 10). Revision 2 keeps the time limits
+# inside the ten-minute turn cap that the coordinator's own turncap job
+# enforces (`loop/turn_cap.py`), so the budget is smaller than the turn:
+# the shift can stop an item and write it up before the turn itself ends.
+#
+# The soft budget is where the builder is asked to wrap up. The hard
+# budget is where the item is stopped and written up. The retry cap is
+# the number of fix tries after a failed check, and the item is parked
+# when it has used them.
+TURN_CAP_MINUTES = 10
+SOFT_BUDGET_MINUTES = 5
+HARD_BUDGET_MINUTES = 8
+
 # --- Part T3b: the filter -------------------------------------------------
 #
 # The Ascend rule is the one the merge gate already uses (coordinator/bin/
@@ -909,6 +925,22 @@ def load_policy(root: Path) -> tuple[dict | None, str]:
     return loaded, ""
 
 
+def policy_snapshot(root: Path) -> dict:
+    """Return the policy snapshot as a mapping, or an empty one.
+
+    A snapshot that is missing, that is not JSON or that is not an object
+    is no snapshot. The budget falls back to the turn cap's budget then,
+    and the shift that needs a contract says so on its own."""
+    text = read_text(policy_path(root))
+    if not text.strip():
+        return {}
+    try:
+        loaded = json.loads(text)
+    except ValueError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def policy_problem(policy: dict) -> str:
     """Return why a snapshot is not a contract, or an empty string.
 
@@ -929,6 +961,18 @@ def policy_problem(policy: dict) -> str:
     level = policy.get("verify_level")
     if not isinstance(level, str) or not level.strip():
         return "its verify level is not a name"
+    soft = policy.get("soft_budget_minutes", SOFT_BUDGET_MINUTES)
+    hard = policy.get("hard_budget_minutes", HARD_BUDGET_MINUTES)
+    for name, value in (("soft", soft), ("hard", hard)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return f"its {name} builder-time budget is not a number"
+    if soft > hard:
+        return "its soft builder-time budget is above its hard one"
+    if hard > TURN_CAP_MINUTES:
+        return (
+            f"its hard builder-time budget is above the {TURN_CAP_MINUTES} "
+            "minute turn cap"
+        )
     return ""
 
 
@@ -970,6 +1014,8 @@ def build_policy() -> dict:
         "slot_cap": cap,
         "stall_cap": STALL_CAP,
         "retry_cap": RETRY_CAP,
+        "soft_budget_minutes": SOFT_BUDGET_MINUTES,
+        "hard_budget_minutes": HARD_BUDGET_MINUTES,
         "verify_level": VERIFY_LEVEL,
         "written_at": datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z"),
     }
@@ -1009,6 +1055,7 @@ def cycle_allow(policy: dict) -> list[str]:
 def policy_lines(policy: dict) -> list[str]:
     """Return the lines that say what the snapshot says."""
     names = policy_allow(policy)
+    budget = budget_of(policy)
     cap = policy.get("slot_cap")
     cap_text = (
         str(cap) if isinstance(cap, int) and not isinstance(cap, bool) else "unknown"
@@ -1019,10 +1066,135 @@ def policy_lines(policy: dict) -> list[str]:
         f"Slot cap: {cap_text} (read only, from the coordq config; never raised)",
         f"Stall cap: {policy.get('stall_cap')} cycles with no new work",
         f"Retry cap: {policy.get('retry_cap')} fix tries per item, then it is parked",
+        f"Builder-time budget: soft {budget['soft']} min, hard {budget['hard']} min "
+        f"(inside the {TURN_CAP_MINUTES} minute turn cap)",
         f"Verify level: {policy.get('verify_level')}",
         "No item cap and no allowance stop: the whole backlog is in scope and "
         "model use is never a stop condition.",
     ]
+
+
+def normalise_budget(budget: dict | None) -> dict:
+    """Return a budget with its three numbers, whatever shape it came in.
+
+    A number that is not a number is replaced by the turn cap's number,
+    so a budget that cannot be read is never a limit of zero and never a
+    limit nobody set."""
+    budget = budget or {}
+
+    def number(value: object, fallback: int) -> int:
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return fallback
+
+    return {
+        "soft": number(budget.get("soft"), SOFT_BUDGET_MINUTES),
+        "hard": number(budget.get("hard"), HARD_BUDGET_MINUTES),
+        "retry_cap": number(budget.get("retry_cap"), RETRY_CAP),
+    }
+
+
+def budget_of(policy: dict) -> dict:
+    """Return the budget the shift works under.
+
+    The snapshot may name a soft and a hard builder-time budget and the
+    retry cap. A snapshot that names none of them gets the turn cap's
+    budget, so a snapshot written before this part keeps working: the
+    24x7 shift must not stop at the next install. A snapshot that names a
+    budget outside the turn cap is refused by `policy_problem`, so a hand
+    edited snapshot cannot widen the limit."""
+    return normalise_budget(
+        {
+            "soft": policy.get("soft_budget_minutes"),
+            "hard": policy.get("hard_budget_minutes"),
+            "retry_cap": policy.get("retry_cap"),
+        }
+    )
+
+
+# The verdicts the budget rule can return.
+BUDGET_WITHIN = "within the budget"
+BUDGET_SOFT = "over the soft budget"
+BUDGET_HARD = "over the hard budget"
+BUDGET_FIXES = "out of fix tries"
+
+
+def budget_verdict(minutes: int, fix_tries: int, budget: dict) -> dict:
+    """Return what the shift does with an item under the budget.
+
+    The spec's rule (section 10): every item has a soft and a hard
+    builder-time budget and at most two fix tries after a failed check.
+    Over the soft budget the builder is asked to wrap up. At the hard
+    budget the item is stopped and written up. Out of fix tries the item
+    is parked.
+
+    The rule lives in one function, so the receipt writer, the board and
+    the budget command read the same rule and never disagree about when
+    an item stops."""
+    soft = budget["soft"]
+    hard = budget["hard"]
+    cap = budget["retry_cap"]
+    reasons: list[str] = []
+    if minutes >= hard:
+        reasons.append(
+            f"the builder used {minutes} min of its {hard} min hard budget"
+        )
+    if fix_tries >= cap:
+        reasons.append(f"the item used its {cap} fix tries")
+    if reasons:
+        return {
+            "verdict": BUDGET_HARD if minutes >= hard else BUDGET_FIXES,
+            "parked": True,
+            "state": STATE_PARKED,
+            "why": " and ".join(reasons) + ", so the item was stopped and parked",
+            "next": (
+                "Shyam decides whether to give the item more time, to split it "
+                "into a 5-minute part or to close it"
+            ),
+        }
+    if minutes >= soft:
+        return {
+            "verdict": BUDGET_SOFT,
+            "parked": False,
+            "state": "",
+            "why": (
+                f"the builder used {minutes} min of its {soft} min soft budget, "
+                "so the builder wraps up"
+            ),
+            "next": "the builder finishes what it has and the gate runs",
+        }
+    return {
+        "verdict": BUDGET_WITHIN,
+        "parked": False,
+        "state": "",
+        "why": "",
+        "next": "",
+    }
+
+
+def apply_budget(facts: dict, fix_tries: int, budget: dict) -> dict:
+    """Return the facts of an item with the budget applied to them.
+
+    The budget can stop an item, so it decides the state the receipt
+    holds: an item over its hard budget, or out of fix tries, is parked.
+    An item over its soft budget keeps its state and says that the
+    builder must wrap up.
+
+    The budget stops work, so it says nothing about work that is already
+    finished: a merged item and an item that waits for Shyam's merge keep
+    their state, and the time they took stays in the receipt."""
+    verdict = budget_verdict(facts.get("minutes", 0), fix_tries, budget)
+    facts["budget"] = verdict["verdict"]
+    if facts.get("state") in (STATE_DONE, STATE_READY):
+        return facts
+    if verdict["parked"]:
+        facts["state"] = verdict["state"]
+        facts["why"] = verdict["why"] + (f" ({facts['why']})" if facts["why"] else "")
+        facts["next"] = verdict["next"]
+    elif verdict["why"]:
+        facts["why"] = (facts["why"] + "; " if facts["why"] else "") + verdict["why"]
+        facts["next"] = verdict["next"] or facts["next"]
+    return facts
 
 
 def cmd_policy(args: argparse.Namespace) -> int:
@@ -1204,6 +1376,10 @@ def cmd_shift(args: argparse.Namespace) -> int:
         return 0
     # The shift reads its contract on every cycle.
     policy, policy_error = load_policy(root)
+    # The budget the shift works under (part T8a). A snapshot that names
+    # no budget gets the turn cap's budget, so a snapshot written before
+    # this part keeps the shift working.
+    budget = budget_of(policy or {})
     allowed = None
     if policy is None:
         if not args.dry_run:
@@ -1317,7 +1493,7 @@ def cmd_shift(args: argparse.Namespace) -> int:
             if code != 0:
                 return code
             items, receipts, error = read_work_items(
-                time.monotonic() + left, allowed
+                time.monotonic() + left, allowed, budget
             )
             if error:
                 emit(
@@ -1326,7 +1502,11 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 )
                 return 1
             written = write_receipts(
-                root, items, receipts, time.monotonic() + left
+                root,
+                items,
+                receipts,
+                time.monotonic() + left,
+                budget=budget,
             )
             emit(
                 f"overnight: {stamp} shift cycle wrote {written} receipts of "
@@ -2725,7 +2905,12 @@ def read_queue_state() -> dict:
     It names every ticket it holds too, so the coordinator does not start
     a ticket that is already on its way."""
     path = Path(COORDQ_DIR) / QUEUE_FILE
-    state: dict = {"gatedHeads": set(), "queuedTickets": set(), "error": ""}
+    state: dict = {
+        "gatedHeads": set(),
+        "queuedTickets": set(),
+        "fixedHeads": {},
+        "error": "",
+    }
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError) as exc:
@@ -2744,7 +2929,23 @@ def read_queue_state() -> dict:
         request_id = str(args.get("clientRequestId") or "")
         if request_id.startswith("ticket:"):
             state["queuedTickets"].add(request_id)
+    fixed = data.get("fixedHeads")
+    if isinstance(fixed, dict):
+        state["fixedHeads"] = {
+            str(key): str(value) for key, value in fixed.items()
+        }
     return state
+
+
+def fix_tries(queue_state: dict, repo: str, number: object) -> int:
+    """Return how many times findings were sent back for one pull request.
+
+    The queue records every fix it sent under the head it was sent for, so
+    one key is one fix try. The count is the queue's own record: the shift
+    keeps no count of its own."""
+    heads = queue_state.get("fixedHeads") or {}
+    prefix = f"fix:{repo}#{number}:"
+    return sum(1 for key in heads if str(key).startswith(prefix))
 
 
 def builder_thread(receipts: dict[str, str], repo: str, number: int) -> tuple[str, int]:
@@ -2881,17 +3082,23 @@ def read_live_threads(deadline: float) -> dict:
     return state
 
 
-def read_thread_messages(thread_id: str, deadline: float) -> tuple[str, list[str]]:
-    """Return when a thread was last updated and what it said.
+def read_thread_messages(
+    thread_id: str, deadline: float
+) -> tuple[str, list[str], int]:
+    """Return when a thread was last updated, what it said and how long it ran.
 
     The texts are the thread's own messages, so a caller can tell whether
-    a message it wants to send was already sent."""
-    payload = json.dumps({"threadId": thread_id, "maxCharsPerItem": 20000})
+    a message it wants to send was already sent. The minutes are the
+    thread's own run time, from its created and updated times, so the
+    budget reads a number the coordinator measured and not a claim."""
+    payload = json.dumps(
+        {"threadId": thread_id, "maxCharsPerItem": 20000, "runLimit": 50}
+    )
     try:
         raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
         data = json.loads(raw)
     except (RepoError, ValueError):
-        return "", []
+        return "", [], 0
     thread = data.get("thread") or {}
     updated = str(thread.get("updatedAt") or "")
     texts = [
@@ -2899,7 +3106,8 @@ def read_thread_messages(thread_id: str, deadline: float) -> tuple[str, list[str
         for item in (data.get("items") or [])
         if item.get("type") == "assistant_message"
     ]
-    return updated, texts
+    minutes = builder_minutes(data)
+    return updated, texts, minutes
 
 
 def shell_quote(text: str) -> str:
@@ -3063,6 +3271,7 @@ def collect_items(
     open_numbers: dict[str, set[int]],
     drops: list[tuple[dict, str]],
     receipts: dict[str, str],
+    budget: dict | None = None,
 ) -> dict:
     """Return the board's items in the order the shift works them.
 
@@ -3071,7 +3280,13 @@ def collect_items(
     request carries its head, the gate that looked at it and the builder
     that holds it, and every ready ticket carries the one action the
     coordinator may take on it now, so no caller has to look a second
-    time."""
+    time.
+
+    The budget is the per-item builder-time budget (part T8a). It holds
+    the work back here: an item that used its fix tries, or that is over
+    its hard builder-time budget, gets no fix action, so the shift never
+    spends a third fix on it."""
+    budget = normalise_budget(budget)
     allowed = {repo for repo, _ in repos}
     keys = {repo: key for repo, key in repos}
     pull_requests: dict[str, list[dict]] = {}
@@ -3242,29 +3457,50 @@ def collect_items(
                     }
                     item["issue"] = issue_number
                     if status == "fail":
+                        tries = fix_tries(queue_state, repo, pull["number"])
+                        item["fixTries"] = tries
                         if not builder:
                             item["actionReason"] = (
                                 "no builder thread is known for this ticket"
                             )
-                        else:
-                            builder_updated, builder_texts = read_thread_messages(
-                                builder, deadline
+                        elif tries >= budget["retry_cap"]:
+                            # The item used its fix tries, so it is parked
+                            # (part T8a). The shift never sends a third fix.
+                            item["actionReason"] = (
+                                f"the item used its {budget['retry_cap']} fix "
+                                "tries, so it is parked"
                             )
+                        else:
+                            (
+                                builder_updated,
+                                builder_texts,
+                                builder_minutes,
+                            ) = read_thread_messages(builder, deadline)
                             item["builder"]["updatedAt"] = builder_updated
-                            mark = (report or "")[:200]
-                            if mark and any(mark in text for text in builder_texts):
+                            item["builder"]["minutes"] = builder_minutes
+                            if builder_minutes >= budget["hard"]:
                                 item["actionReason"] = (
-                                    "the builder already has these findings"
+                                    f"the builder used {builder_minutes} min of "
+                                    f"its {budget['hard']} min hard budget, so "
+                                    "the item is parked"
                                 )
                             else:
-                                item["action"] = "fix"
-                                item["actionCommand"] = fix_command(
-                                    repo,
-                                    pull["number"],
-                                    head,
-                                    builder,
-                                    report,
-                                )
+                                mark = (report or "")[:200]
+                                if mark and any(
+                                    mark in text for text in builder_texts
+                                ):
+                                    item["actionReason"] = (
+                                        "the builder already has these findings"
+                                    )
+                                else:
+                                    item["action"] = "fix"
+                                    item["actionCommand"] = fix_command(
+                                        repo,
+                                        pull["number"],
+                                        head,
+                                        builder,
+                                        report,
+                                    )
                     elif status == "none":
                         if item["isDraft"]:
                             item["actionReason"] = "draft pull request"
@@ -3470,6 +3706,7 @@ def cmd_order(args: argparse.Namespace) -> int:
     is one line of the shift log."""
     deadline = time.monotonic() + args.deadline
     cfg = load_config()
+    budget = budget_of(policy_snapshot(report_root(getattr(args, "root", None))))
     repos = policy_repos(cfg, getattr(args, "allowed", None))
     allowed = {repo for repo, _ in repos}
     flagged = ascend_flags(cfg)
@@ -3500,7 +3737,7 @@ def cmd_order(args: argparse.Namespace) -> int:
 
     receipts, receipt_error = read_receipts()
     result = collect_items(
-        deadline, repos, issues, bodies, open_numbers, drops, receipts
+        deadline, repos, issues, bodies, open_numbers, drops, receipts, budget
     )
     if result.get("pr_error"):
         emit(f"REFUSED: {result['pr_error']}")
@@ -3964,30 +4201,59 @@ def parse_moment(value: str) -> datetime | None:
         return None
 
 
-def minutes_between(start: str, end: str) -> int:
-    """Return the minutes between two ISO times, or 0 when they cannot be read.
+def run_seconds(runs: object) -> float:
+    """Return the seconds the thread's own runs took.
 
-    The builder time is measured from the thread's own times, so it is a
-    number the shift read and not a number a model claimed."""
-    first = parse_moment(start)
-    last = parse_moment(end)
-    if first is None or last is None:
-        return 0
-    seconds = (last - first).total_seconds()
-    if seconds <= 0:
-        return 0
-    return int(seconds // 60)
+    A run that has not finished runs until now. The time between two runs
+    is idle time, not builder time, so it does not count: a builder that
+    waited a day for its findings did not spend a day building."""
+    total = 0.0
+    now = datetime.now(timezone.utc)
+    if not isinstance(runs, list):
+        return total
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        started = parse_moment(str(run.get("startedAt") or ""))
+        if started is None:
+            continue
+        ended = parse_moment(str(run.get("completedAt") or ""))
+        if ended is None:
+            ended = now
+        seconds = (ended - started).total_seconds()
+        if seconds > 0:
+            total += seconds
+    return total
+
+
+def builder_minutes(data: dict) -> int:
+    """Return the builder's own time in minutes, from the thread's runs.
+
+    The time is the sum of the runs the builder thread really made. The
+    budget is measured against it, and the receipt reports it, so one
+    number says how long the builder worked."""
+    return int(run_seconds(data.get("recentRuns")) // 60)
 
 
 def read_thread_facts(thread_id: str, deadline: float) -> dict:
     """Return what a thread really holds: its times, its status and its verdict.
 
     The verdict is the last line of the thread's own last message, so a
-    receipt carries the gate's verdict and not a claim about it."""
-    facts = {"createdAt": "", "updatedAt": "", "status": "", "verdict": ""}
+    receipt carries the gate's verdict and not a claim about it. The
+    minutes are the thread's own run time, which is the builder time the
+    budget is measured against."""
+    facts = {
+        "createdAt": "",
+        "updatedAt": "",
+        "status": "",
+        "verdict": "",
+        "minutes": 0,
+    }
     if not thread_id:
         return facts
-    payload = json.dumps({"threadId": thread_id, "maxCharsPerItem": 20000})
+    payload = json.dumps(
+        {"threadId": thread_id, "maxCharsPerItem": 20000, "runLimit": 50}
+    )
     try:
         raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
     except RepoError:
@@ -4000,6 +4266,7 @@ def read_thread_facts(thread_id: str, deadline: float) -> dict:
     facts["createdAt"] = str(thread.get("createdAt") or "")
     facts["updatedAt"] = str(thread.get("updatedAt") or "")
     facts["status"] = str(thread.get("status") or "")
+    facts["minutes"] = builder_minutes(data)
     texts = [
         item.get("text") or ""
         for item in (data.get("items") or [])
@@ -4078,12 +4345,22 @@ def check_line(repo: str, number: int, deadline: float) -> str:
     return f"`{' '.join(argv)}` exit {code}"
 
 
-def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
+def item_facts(
+    item: dict,
+    receipts: dict[str, str],
+    deadline: float,
+    budget: dict | None = None,
+    fix_tries: int = 0,
+) -> dict:
     """Return what one item really shows, from its pull request and its threads.
 
     Every field here is read: the checks with their exit code, the gate's
     own verdict, the files the pull request touches and the builder's own
-    times. Nothing is taken from what a model said about the work."""
+    times. Nothing is taken from what a model said about the work.
+
+    The budget is applied last (part T8a), because the budget can stop an
+    item: an item over its hard builder-time budget, or out of fix tries,
+    is parked, and the receipt says why."""
     facts = {
         "state": STATE_STUCK,
         "pr": "",
@@ -4095,7 +4372,9 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
         "builder": "",
         "why": "",
         "next": "",
+        "budget": BUDGET_WITHIN,
     }
+    budget = normalise_budget(budget)
     repo = item.get("repo") or ""
     number = item.get("number")
     if item.get("kind") != "pull-request":
@@ -4108,15 +4387,13 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
         facts["builder"] = thread
         if thread:
             builder = read_thread_facts(thread, deadline)
-            facts["minutes"] = minutes_between(
-                builder["createdAt"], builder["updatedAt"]
-            )
+            facts["minutes"] = builder["minutes"]
             if builder["status"] in ("running", "starting", "preparing", "queued"):
                 facts["why"] = (
                     f"the builder thread {thread} is still working on this ticket"
                 )
                 facts["next"] = "the builder finishes and the gate runs"
-        return facts
+        return apply_budget(facts, fix_tries, budget)
 
     facts["pr"] = item.get("url") or ""
     facts["checks"] = check_line(repo, number, deadline)
@@ -4167,9 +4444,7 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
     facts["builder"] = builder_thread_id
     if builder_thread_id:
         builder = read_thread_facts(builder_thread_id, deadline)
-        facts["minutes"] = minutes_between(
-            builder["createdAt"], builder["updatedAt"]
-        )
+        facts["minutes"] = builder["minutes"]
 
     if view_error:
         facts["state"] = STATE_STUCK
@@ -4215,7 +4490,7 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
         facts["state"] = STATE_STUCK
         facts["why"] = "no gate verdict was read for this pull request"
         facts["next"] = "the gate runs on this pull request head"
-    return facts
+    return apply_budget(facts, fix_tries, budget)
 
 
 def issue_number(item: dict) -> object:
@@ -4476,8 +4751,12 @@ def cmd_receipt(args: argparse.Namespace) -> int:
     With `--items` it writes the receipts of the first items of the shift's
     order."""
     deadline = time.monotonic() + args.deadline
+    if args.fixture:
+        return cmd_fixture_receipt(args)
+    root = report_root(args.root)
+    budget = budget_of(policy_snapshot(root))
     items, receipts, error = read_work_items(
-        deadline, getattr(args, "allowed", None)
+        deadline, getattr(args, "allowed", None), budget
     )
     if error:
         emit(f"overnight: REFUSED: {error}", err=True)
@@ -4507,17 +4786,192 @@ def cmd_receipt(args: argparse.Namespace) -> int:
     if not items:
         emit("overnight: the board shows no item to write a receipt for")
         return 0
-    root = report_root(args.root)
     emit(f"Overnight receipts - {len(items)} item(s)")
-    write_receipts(root, items, receipts, deadline, dry_run=args.dry_run)
+    write_receipts(root, items, receipts, deadline, dry_run=args.dry_run, budget=budget)
     if args.dry_run:
         emit()
         emit("A dry run writes no receipt.")
     return 0
 
 
+def cmd_fixture_receipt(args: argparse.Namespace) -> int:
+    """Write the receipt of a fixture item, under the budget.
+
+    A fixture is a JSON file that describes one item: how long its
+    builder ran, how many fix tries it used and, when it names them, the
+    budget it is measured against. The receipt is written like any other
+    receipt, so the budget can be shown on the real path: an item over
+    its hard budget is written up as parked, and the morning report reads
+    it like any other receipt."""
+    root = report_root(args.root)
+    budget = budget_of(policy_snapshot(root))
+    facts, tries, budget, data = read_budget_fixture(args.fixture, budget)
+    item = {
+        "kind": "ticket",
+        "repo": str(data.get("repo") or ""),
+        "number": data.get("number") or 0,
+        "key": str(data.get("key") or ""),
+        "title": str(data.get("item") or ""),
+        "url": "",
+    }
+    body = receipt_body(item, facts, 0)
+    if args.dry_run:
+        emit("--- fixture (dry run, nothing written) ---")
+        emit(body, end="")
+        return 0
+    outcome = write_receipt(root, item, body)
+    emit(f"overnight: wrote the receipt of the fixture item ({outcome})")
+    emit(body, end="")
+    return 0
+
+
+def read_budget_fixture(path: str, fallback: dict) -> tuple[dict, int, dict, dict]:
+    """Return the facts, the fix tries, the budget and the record of a fixture.
+
+    A fixture is a JSON file that describes one item: how long its
+    builder ran, how many fix tries it used and, when it names them, the
+    budget it is measured against. A fixture that cannot be read is a
+    refusal: the command never guesses an item's time."""
+    file = Path(path).expanduser()
+    text = read_text(file)
+    if not text.strip():
+        die(f"the fixture {file} is empty or cannot be read")
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        die(f"the fixture {file} is not JSON: {exc}")
+    if not isinstance(data, dict):
+        die(f"the fixture {file} is not a JSON object")
+
+    def number(name: str, default: int) -> int:
+        value = data.get(name, default)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            die(f"the fixture {file} has no {name} number")
+        return value
+
+    minutes = number("builder_minutes", 0)
+    tries = number("fix_tries", 0)
+    budget = normalise_budget(
+        {
+            "soft": data.get("soft_budget_minutes", fallback["soft"]),
+            "hard": data.get("hard_budget_minutes", fallback["hard"]),
+            "retry_cap": data.get("retry_cap", fallback["retry_cap"]),
+        }
+    )
+    facts = {
+        "state": str(data.get("state") or STATE_STUCK),
+        "pr": "",
+        "checks": "",
+        "failing": [],
+        "gate": "UNKNOWN",
+        "files": 0,
+        "builder": "",
+        "why": str(data.get("why") or ""),
+        "next": "",
+        "minutes": minutes,
+    }
+    return apply_budget(facts, tries, budget), tries, budget, data
+
+
+def show_budget(
+    facts: dict, tries: int, budget: dict, label: str, repo: str, number: object
+) -> None:
+    """Print what the budget does with one item.
+
+    The write-up is the receipt's own lines, so what a person reads here
+    is what the morning report reads tomorrow."""
+    emit(f"Item: {label}")
+    emit(f"Repo: {repo}")
+    if number:
+        emit(f"Number: {number}")
+    emit(f"Builder time: {facts['minutes']} min")
+    emit(f"Soft budget: {budget['soft']} min")
+    emit(f"Hard budget: {budget['hard']} min")
+    emit(f"Fix tries: {tries} of {budget['retry_cap']}")
+    emit(f"Verdict: {facts.get('budget', BUDGET_WITHIN)}")
+    emit("The receipt would hold:")
+    emit(f"- State: {facts['state']}")
+    emit(f"- Stopped because: {facts['why']}")
+    emit(f"- Next: {facts['next']}")
+
+
+def cmd_budget(args: argparse.Namespace) -> int:
+    """Show what the budget does with one item.
+
+    The command reads one item (or a fixture that describes one) and says
+    what the shift does with it under the budget: within the budget, over
+    the soft budget, stopped at the hard budget, or parked for want of fix
+    tries. It writes nothing: the cycle writes the receipt, and this
+    command shows the rule on a fixture, so the stop can be seen before
+    the night does it.
+
+    A fixture is a JSON file:
+
+        {
+          "item": "MO-999 the work",
+          "repo": "shyamsivakumar/mac-ops",
+          "number": 217,
+          "builder_minutes": 9,
+          "fix_tries": 0,
+          "soft_budget_minutes": 5,
+          "hard_budget_minutes": 8,
+          "retry_cap": 2
+        }
+
+    With `--repo` and `--number` it reads the real item: the builder's
+    own time and the fix tries the queue recorded."""
+    deadline = time.monotonic() + args.deadline
+    root = report_root(args.root)
+    budget = budget_of(policy_snapshot(root))
+    if args.fixture:
+        facts, tries, budget, data = read_budget_fixture(args.fixture, budget)
+        label = str(data.get("item") or Path(args.fixture).stem)
+        repo = str(data.get("repo") or "")
+        number = data.get("number") or ""
+        emit("Overnight budget - fixture (read only)")
+    else:
+        if not args.repo or not args.number:
+            die(
+                "the budget command needs a fixture, or both --repo and "
+                "--number; without them it would look for no item"
+            )
+        items, receipts, error = read_work_items(deadline, None, budget)
+        if error:
+            emit(f"overnight: REFUSED: {error}", err=True)
+            return 1
+        picked = [
+            item
+            for item in items
+            if item.get("repo") == args.repo
+            and int(item.get("number") or 0) == args.number
+        ]
+        if not picked:
+            emit(
+                f"overnight: {args.repo}#{args.number} is not an item the "
+                "shift works, so it has no budget",
+                err=True,
+            )
+            return 1
+        item = picked[0]
+        queue_state = read_queue_state()
+        tries = fix_tries(queue_state, args.repo, args.number)
+        facts = item_facts(item, receipts, deadline, budget, tries)
+        label = item.get("key") or f"{args.repo}#{args.number}"
+        repo = args.repo
+        number = args.number
+        emit("Overnight budget - item (read only)")
+    show_budget(facts, tries, budget, label, repo, number)
+    if args.dry_run:
+        emit()
+        emit("A dry run writes no receipt.")
+    else:
+        emit()
+        emit("This command writes nothing: the cycle writes the receipt.")
+    return 0
+
+
 def read_work_items(
-    deadline: float, allowed: list[str] | None
+    deadline: float, allowed: list[str] | None, budget: dict | None = None
 ) -> tuple[list[dict], dict[str, str], str]:
     """Return the items the shift works, the queue's receipts and an error.
 
@@ -4550,7 +5004,7 @@ def read_work_items(
         return [], {}, "; ".join(problems)
     receipts, _receipt_error = read_receipts()
     result = collect_items(
-        deadline, repos, issues, bodies, open_numbers, drops, receipts
+        deadline, repos, issues, bodies, open_numbers, drops, receipts, budget
     )
     if result.get("pr_error"):
         return [], {}, str(result["pr_error"])
@@ -4563,17 +5017,30 @@ def write_receipts(
     receipts: dict[str, str],
     deadline: float,
     dry_run: bool = False,
+    budget: dict | None = None,
 ) -> int:
     """Write the receipt of every item and return how many were written.
 
     A receipt is rewritten when the item's state or its evidence changed.
     A receipt that says the same thing is left alone, so the folder holds
     the record of the state changes and not a copy of the same state every
-    cycle. The shift log names every write and every state change."""
+    cycle. The shift log names every write and every state change.
+
+    The budget is applied to every receipt (part T8a), so an item over its
+    hard builder-time budget, or out of fix tries, is written up as
+    parked. The fix tries come from the queue's own record of the fixes
+    it sent, so the shift keeps no count of its own."""
+    budget = normalise_budget(budget if budget is not None else budget_of(policy_snapshot(root)))
+    queue_state = read_queue_state()
     written = 0
     for item in items:
         started = time.monotonic()
-        facts = item_facts(item, receipts, deadline)
+        tries = (
+            fix_tries(queue_state, item.get("repo") or "", item.get("number"))
+            if item.get("kind") == "pull-request"
+            else 0
+        )
+        facts = item_facts(item, receipts, deadline, budget, tries)
         observed = int(time.monotonic() - started + 0.5)
         body = receipt_body(item, facts, observed)
         path = receipt_path(root, item)
@@ -4646,6 +5113,10 @@ def board_item(order: int, group: str, item: dict) -> dict:
         builder = item.get("builder") or {}
         if builder.get("threadId"):
             row["builder"] = builder["threadId"]
+        if builder.get("minutes") is not None:
+            row["builderMinutes"] = builder["minutes"]
+    if item.get("fixTries") is not None:
+        row["fixTries"] = item["fixTries"]
     if item.get("split") is not None:
         row["split"] = bool(item.get("split"))
     return row
@@ -4679,6 +5150,7 @@ def cmd_board(args: argparse.Namespace) -> int:
     the builder that holds the pull request."""
     deadline = time.monotonic() + args.deadline
     cfg = load_config()
+    budget = budget_of(policy_snapshot(report_root(getattr(args, "root", None))))
     repos = policy_repos(cfg, getattr(args, "allowed", None))
     allowed = {repo for repo, _ in repos}
     flagged = ascend_flags(cfg)
@@ -4709,7 +5181,7 @@ def cmd_board(args: argparse.Namespace) -> int:
         return 1
     receipts, receipt_error = read_receipts()
     result = collect_items(
-        deadline, repos, issues, bodies, open_numbers, drops, receipts
+        deadline, repos, issues, bodies, open_numbers, drops, receipts, budget
     )
     if result.get("pr_error"):
         emit(f"overnight: REFUSED: {result['pr_error']}", err=True)
@@ -4746,6 +5218,7 @@ def cmd_board(args: argparse.Namespace) -> int:
         "command": "overnight board",
         "generatedAt": datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z"),
         "rules": BOARD_RULES,
+        "budget": budget,
         "board": {
             "tickets": len(issues),
             "repositories": len(repos),
@@ -5466,6 +5939,11 @@ def main() -> int:
         default=DEFAULT_DEADLINE,
         help=f"seconds the whole board may take (default {DEFAULT_DEADLINE})",
     )
+    board.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
     board.set_defaults(func=cmd_board)
     report = sub.add_parser(
         "report",
@@ -5600,6 +6078,11 @@ def main() -> int:
         help="how many items of the shift's order to write (0: every item)",
     )
     receipt.add_argument(
+        "--fixture",
+        default=None,
+        help="a JSON file that describes one item (the budget proof)",
+    )
+    receipt.add_argument(
         "--root",
         default=None,
         help="the folder that holds the shift's records (default the runtime folder)",
@@ -5616,6 +6099,43 @@ def main() -> int:
         help=f"seconds the whole run may take (default {DEFAULT_DEADLINE})",
     )
     receipt.set_defaults(func=cmd_receipt)
+    budget_cmd = sub.add_parser(
+        "budget",
+        help="show what the per-item budget does with one item",
+    )
+    budget_cmd.add_argument(
+        "--fixture",
+        default=None,
+        help="a JSON file that describes one item (the dry run)",
+    )
+    budget_cmd.add_argument(
+        "--repo",
+        default=None,
+        help="the repository of the one item the budget is about",
+    )
+    budget_cmd.add_argument(
+        "--number",
+        default=None,
+        type=int,
+        help="the number of the one item the budget is about",
+    )
+    budget_cmd.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    budget_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="say what the receipt would hold and write nothing",
+    )
+    budget_cmd.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole command may take (default {DEFAULT_DEADLINE})",
+    )
+    budget_cmd.set_defaults(func=cmd_budget)
     close = sub.add_parser(
         "close",
         help="close a ticket's issue when its receipt holds the evidence",

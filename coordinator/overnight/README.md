@@ -27,7 +27,8 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
 | `overnight shift` | The command the launchd job fires. Every run is one cycle: it reads the policy snapshot, reads the whole board under the snapshot's allow list, works it (there is no item cap and no allowance stop) and writes a receipt for every item whose state changed. The shift runs 24x7, so there is no night window and no part of the night, and the shift is never armed. The first cycle of the morning writes the day's morning report, so Shyam reads one report in the morning; `--report` writes it on demand, and `--dry-run` does no work on the board. |
 | `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
-| `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order. `--dry-run` prints the receipt and writes no file. |
+| `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order, and `--fixture` writes the receipt of a fixture item (the budget proof). `--dry-run` prints the receipt and writes no file. |
+| `overnight budget` | Shows what the per-item budget does with one item (spec part T8a): within the budget, over the soft budget, stopped at the hard budget, or parked for want of fix tries. It reads one item (`--repo` and `--number`) or a fixture (`--fixture`), and it writes nothing: the cycle writes the receipt, and this command shows the stop before the night does it. |
 | `overnight close --repo <repo> --number <n>` | Closes a ticket's issue, and only when the receipt holds the evidence (spec part T6): a check command, its exit code and a gate PASS on the pull request. A receipt with a claim but no exit code leaves the issue open, and the command says which record is missing. `--dry-run` says what the close would run and closes nothing. |
 | `overnight check-head --repo <repo> --number <n>` | Checks a pull request's head against the checks that ran on it, and exits 0 only when such a check ran and passed. It is the command a receipt records. Exit 1 means a check ran and did not pass; exit 2 means no check ran on the head (or the head could not be read), which is a refusal. The builder's own line in the pull request body is a claim about the check, so it never counts. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
@@ -61,6 +62,8 @@ overnight policy
 | `slot_cap` | The queue's own slot cap, read from the coordq config (`$COORDQ_DIR/config.json`). It is read only and never raised. |
 | `stall_cap` | Cycles with no new work before the shift ends as a stall. |
 | `retry_cap` | Fix tries per item before the item is parked. |
+| `soft_budget_minutes` | The soft builder-time budget per item. The builder is asked to wrap up when it is over it. |
+| `hard_budget_minutes` | The hard builder-time budget per item. The item is stopped and written up when it is over it. It can never be above the ten-minute turn cap. |
 | `verify_level` | How much each item is checked. It is `balanced` for v1. |
 | `written_at` | When the snapshot was written, in Pacific time. |
 
@@ -162,7 +165,7 @@ Every field is read, never claimed:
 | `Gate` | The gate's own last line (`VERDICT: PASS` or `VERDICT: FAIL`) read from the gate thread of that head, or from the pull request's own review when there is no gate thread. `UNKNOWN` when neither can be read. |
 | `Files` | How many files the pull request touches. |
 | `Builder thread` | The thread the coordinator built the pull request in. |
-| `Time used` | The builder's own time: the minutes between the thread's own created and updated times. A night that ran no builder says `0 min`. |
+| `Time used` | The builder's own time: the sum of the minutes its thread's own runs took. The idle time between two runs is not builder time. A night that ran no builder says `0 min`. |
 | `Observed` | How long the shift spent looking at the item, in seconds. |
 | `Stopped because` | Why the item stopped, derived from the evidence above. |
 | `Next` | The next step, derived from the evidence above. |
@@ -232,6 +235,67 @@ body, `Builder check: PASS <head>`, is a claim about the check and not the
 check, so it never makes a head pass. A repository that publishes no checks
 (CI is agent checks only, as in mac-ops) therefore has no evidence on its
 heads: its items stay open, and the receipt says why.
+
+## The per-item budget
+
+Every item has a soft and a hard budget of builder time, and at most two
+fix tries after a failed check (spec section 10). The time limits stay
+inside the ten-minute turn cap the coordinator's own turncap job
+enforces, so the budget is smaller than the turn: the shift can stop an
+item and write it up before the turn itself ends.
+
+| Number | Where it comes from | What it does |
+| --- | --- | --- |
+| `soft_budget_minutes` (5) | The policy snapshot, or the turn cap's number when the snapshot names none. | Over it, the builder is asked to wrap up. The item keeps its state and the receipt says so. |
+| `hard_budget_minutes` (8) | The policy snapshot, or the turn cap's number when the snapshot names none. | Over it, the item is stopped and written up: its receipt says `parked` and why. |
+| `retry_cap` (2) | The policy snapshot. | Out of fix tries, the item is parked and the shift sends no further fix. |
+
+A snapshot that names a budget above the ten-minute turn cap is refused:
+the budget can never outlive the turn it lives in. A snapshot that names
+no budget at all keeps working, because the shift falls back to the turn
+cap's budget; the 24x7 shift must not stop at the next install.
+
+The builder time is the sum of the minutes the builder thread's own runs
+took. The idle time between two runs is not builder time, so a builder
+that waited a day for its findings did not spend a day building. The
+number is read from the thread, never claimed by a model.
+
+The budget stops work, so it says nothing about work that is finished: a
+merged item and an item that waits for Shyam's merge keep their state,
+and the time they took stays in the receipt.
+
+The fix tries come from the queue's own record: the queue writes one
+entry per fix it sent, under the head it sent it for, so one entry is one
+fix try. The shift keeps no count of its own.
+
+The rule lives in one place in the module (`budget_verdict`), and the
+receipt writer, the board and the budget command all read it.
+
+```sh
+overnight budget --fixture evidence/MO-217/fixture-over-hard-budget.json --dry-run
+overnight budget --repo shyamsivakumar/mac-ops --number 217 --dry-run
+```
+
+The fixture is a JSON file that describes one item:
+
+```json
+{
+  "key": "MO-999",
+  "item": "MO-999 a fixture item over its hard budget",
+  "repo": "shyamsivakumar/mac-ops",
+  "number": 217,
+  "builder_minutes": 9,
+  "fix_tries": 0,
+  "soft_budget_minutes": 5,
+  "hard_budget_minutes": 8,
+  "retry_cap": 2
+}
+```
+
+`overnight receipt --fixture <file>` writes the receipt of that fixture
+item through the real writer, so the budget can be shown on the real path:
+an item over its hard budget is written up as `parked`, and the morning
+report reads it like any other receipt.
 
 ## The secret redaction
 
@@ -519,7 +583,7 @@ A receipt is markdown with one `- Key: value` line per field.
 | `Checks` | One check, or several separated by semicolons. Each check is a command in backticks and its exit code: `` `cmd` exit 0 ``. |
 | `Gate` | `PASS` or `FAIL`. |
 | `Files` | How many files the item touched. |
-| `Time used` | The builder time, as `N min`. A night that ran no builder says `0 min`. |
+| `Time used` | The builder time, as `N min`. It is the sum of the thread's own runs, so the idle time between two runs does not count. A night that ran no builder says `0 min`. |
 | `Observed` | How long the shift spent looking at the item, in seconds. It is not builder time. |
 | `Stopped because` | Why the item stopped. |
 | `Next` | The next step. |
