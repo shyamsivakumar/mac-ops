@@ -906,11 +906,6 @@ def builder_models(thread, runs):
 
 
 def reviewer_model(models):
-    """Choose a reviewer from a different builder vendor."""
-    if any(is_anthropic(m) for m in models):
-        return SOL_MODEL
-    if any("gpt-" in m.lower() or "openai" in m.lower() or re.search(r"(?:^|/|:)o[0-9](?:-|$)", m.lower()) for m in models):
-        return DEEPSEEK_MODEL
     return ASTRA_MODEL
 
 
@@ -1264,15 +1259,6 @@ def cmd_fix(a):
 
 
 def backstop_model(thread, runs):
-    """Choose by executed vendor, or by the unknown builder route."""
-    models = builder_models(thread, runs)
-    if models:
-        return reviewer_model(models)
-    instance, stored = thread.get("providerInstanceId"), thread.get("model")
-    if instance == "router" or (isinstance(stored, str) and stored.startswith("task/")):
-        entries = router_chain(stored if isinstance(stored, str) else "")
-        if entries:
-            return reviewer_model(entries)
     return ASTRA_MODEL
 
 
