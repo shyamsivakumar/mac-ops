@@ -1,0 +1,36 @@
+# Cycle health - 2026-11-13 22:35 PST
+
+- Cycle: 2026-11-13 22:35 PST
+- Findings: 7
+- Check: the coordinator tools under the interpreter launchd uses
+- Ran: the interpreter /opt/homebrew/bin/python3 (from the PATH of /Users/shyamsivakumar/Library/LaunchAgents/dev.coordinator.dispatch.plist)
+- Ran: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/.local/bin/coordq status` exit 1
+- Ran: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/.local/bin/overnight --help` exit 0
+- Ran: the last 40 lines of /tmp/overnight-fixture/queue/dispatch.log
+- Ran: the last 40 lines of /tmp/overnight-fixture/queue/gatekeep.log
+- Result: 1 finding(s)
+- Finding: coordq: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/.local/bin/coordq status` failed (exit 1) under the launchd interpreter:     with open(path("config.json")) as f: |          ~~~~^^^^^^^^^^^^^^^^^^^^^ | FileNotFoundError: [Errno 2] No such file or directory: '/tmp/overnight-fixture/queue/config.json' (action: run the same command under the launchd interpreter and fix what it raises)
+- Check: the installed coordinator matches the merged main
+- Ran: `/opt/homebrew/bin/python3 /tmp/overnight-fixture/mac-ops/install_coordinator.py status` exit 0
+- Result: 1 finding(s)
+- Finding: /tmp/overnight-fixture/mac-ops/install_coordinator.py: the installed coordinator differs from the merged main: /Users/shyamsivakumar/.local/bin/coordq (action: find the branch the installed file came from, tell that builder to stop installing, and reinstall from main once the pull requests merge)
+- Check: a ticket started three or more times with no open pull request
+- Ran: the open issues of digitized/Concerning with their comments
+- Ran: the open pull requests of digitized/Concerning
+- Ran: the open issues of shyamsivakumar/catalouge with their comments
+- Ran: the open pull requests of shyamsivakumar/catalouge
+- Ran: the open issues of shyamsivakumar/fantasy-football-toolkit with their comments
+- Ran: the open pull requests of shyamsivakumar/fantasy-football-toolkit
+- Ran: the open issues of shyamsivakumar/mac-ops with their comments
+- Ran: the open pull requests of shyamsivakumar/mac-ops
+- Ran: the open issues of shyamsivakumar/strategy-replay-workbench with their comments
+- Ran: the open pull requests of shyamsivakumar/strategy-replay-workbench
+- Result: 4 finding(s)
+- Finding: shyamsivakumar/strategy-replay-workbench#716: SRW-984 was started 6 times and has no open pull request (action: read the last builder report, then reword the brief or park the ticket and open a re-spec ticket)
+- Finding: shyamsivakumar/strategy-replay-workbench#692: SRW-968 was started 10 times and has no open pull request (action: read the last builder report, then reword the brief or park the ticket and open a re-spec ticket)
+- Finding: shyamsivakumar/strategy-replay-workbench#720: SRW-988 was started 4 times and has no open pull request (action: read the last builder report, then reword the brief or park the ticket and open a re-spec ticket)
+- Finding: shyamsivakumar/strategy-replay-workbench#492: SRW-791 was started 8 times and has no open pull request (action: read the last builder report, then reword the brief or park the ticket and open a re-spec ticket)
+- Check: a text blockers refusal that names a closed issue
+- Ran: the last 400 lines of /tmp/overnight-fixture/queue/dispatch.log
+- Result: 1 finding(s)
+- Finding: shyamsivakumar/strategy-replay-workbench#807: the refusal names shyamsivakumar/strategy-replay-workbench#680, which is closed, so the text blocker is false (action: reword the body so the Blocked by section names only real blockers)
