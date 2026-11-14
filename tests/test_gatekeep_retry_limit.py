@@ -235,7 +235,10 @@ class ExplicitGateTest(RetryLimitBase):
                      "modelSelection": {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
                      "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
                      "clientRequestId": self.key, "message": "review"}
-        coordq.gate_request = lambda *a, **k: (self.key, self.gate)
+        # The gate request carries the builder's executed models, so the
+        # reviewer route follows the builder's real vendor.
+        coordq.gate_request = lambda *a, **k: (
+            self.key, self.gate, coordq.builder_models(BUILDER_THREAD, BUILDER_RUNS))
         self.pull = {"state": "open", "draft": False, "number": 7, "head": {"sha": HEAD},
                      "body": "Refs #9"}
 
