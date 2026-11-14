@@ -39,14 +39,15 @@ passed unless the records say it ran.
     overnight report --dry-run
 
 `overnight shift` (spec T12, revision 3) is the command the launchd job
-fires. The job fires it on a fixed interval, every day: the shift runs
+fires. The job fires it every five minutes, every day: the shift runs
 24x7, so there is no night window and no part of the night. Every run is
 one cycle: it reads the policy snapshot, reads the whole board under the
 snapshot's allow list, works it (there is no item cap and no allowance
 stop) and writes a receipt for every item whose state changed. The shift
 is never armed and never unarmed. The first cycle of the morning writes
 the day's morning report, so Shyam reads one report in the morning;
-`--report` writes it on demand.
+`--report` writes it on demand. A real cycle takes the shift's own lock,
+so two cycles never run at once, whatever starts them.
 
     overnight shift
     overnight shift --report
@@ -108,6 +109,7 @@ the tick) build on the same records.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -500,6 +502,11 @@ STALL = re.compile(r"\bstall\b", re.I)
 # part T12, revision 3). There is no night window and no part of the
 # night: every cycle is the same cycle, and the shift is never unarmed.
 # The job's own interval lives in the plist.
+# The shift's own lock keeps two cycles apart: the job fires every five
+# minutes and a cycle takes about a minute and a half, so the next fire
+# lands long after the cycle ended, and the lock covers the case where a
+# person starts a cycle by hand.
+SHIFT_LOCK_NAME = "overnight-shift.lock"
 # The shift log states how the night ended, in one of the four ways the
 # spec allows. The report reads that statement, but only when the records
 # support it: a claim is never a proof.
@@ -1082,6 +1089,48 @@ def write_morning_report(root: Path) -> int:
     )
 
 
+def shift_lock_path() -> Path:
+    """The shift's lock file. One path for every caller: launchd jobs and
+    shells see different TMPDIR values, so a TMPDIR lock would not exclude
+    a hand-started cycle from the scheduled one."""
+    override = os.environ.get("OVERNIGHT_SHIFT_LOCK")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".local" / "state" / "mac-ops" / SHIFT_LOCK_NAME
+
+
+def take_shift_lock() -> tuple[int | None, str]:
+    """Take the shift's lock. The pair is the descriptor and the reason it
+    could not be taken: an empty reason means the lock is held.
+
+    The lock is the shift's own, so a cycle that starts while another
+    cycle runs does no work and says so. It is never left out: a lock
+    that cannot be opened refuses the cycle, because a cycle that runs
+    unlocked is a cycle that can overlap another one."""
+    try:
+        path = shift_lock_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        return None, f"the lock file cannot be opened: {exc}"
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None, ""
+    return fd, ""
+
+
+def release_shift_lock(fd: int) -> None:
+    """Give the lock back."""
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def cmd_shift(args: argparse.Namespace) -> int:
     """Run one cycle of the shift.
 
@@ -1158,52 +1207,76 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 "shift never reads Ascend work."
             )
     if not args.dry_run:
-        # A real cycle writes the receipts of the items it sees: the
-        # receipt is the cycle's record, and it is written on every state
-        # change. The cycle still starts no builder and works no board
-        # item: that part of the spec (T5) is not built, and the cycle
-        # says so instead of pretending it works.
-        emit(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
-        code = cmd_order(
-            argparse.Namespace(
-                dry_run=True,
-                root=args.root,
-                deadline=args.deadline,
-                allowed=allowed,
-            )
-        )
-        if code != 0:
-            return code
-        items, receipts, error = read_work_items(
-            time.monotonic() + args.deadline, allowed
-        )
-        if error:
+        # The shift's own lock: two cycles never run at once, whatever
+        # starts them. The job fires every five minutes and a cycle takes
+        # about a minute and a half, so the next fire lands long after
+        # this cycle ends. The lock covers the case where a person starts
+        # a cycle by hand while the job's cycle runs.
+        lock_fd, lock_problem = take_shift_lock()
+        if lock_fd is None:
+            if lock_problem:
+                emit(
+                    f"overnight: {stamp} REFUSED: {lock_problem}; the cycle "
+                    "wrote no receipt",
+                    err=True,
+                )
+                return 1
             emit(
-                f"overnight: REFUSED: {error}; the cycle wrote no receipt",
-                err=True,
+                f"overnight: {stamp} another cycle holds the lock, so this "
+                "cycle did no work"
             )
-            return 1
-        written = write_receipts(root, items, receipts, time.monotonic() + args.deadline)
-        emit(
-            f"overnight: {stamp} shift cycle wrote {written} receipts of "
-            f"{len(items)} items"
-        )
-        # The cycle states the count it worked, so the morning report's
-        # planned count is the count of the items the report lists. The
-        # order's own line keeps its per-repository detail; the order
-        # counts the work items and the cycle counts every item it saw,
-        # including the pull requests already in flight and the backlog.
-        write_shift_line(
-            root,
-            f"planned {len(items)} items | the cycle worked {len(items)} items",
-        )
-        emit(
-            "overnight: the shift starts no builder and works no board item "
-            "yet (spec part T5); it writes the receipts of what it saw"
-        )
-        if report_cycle:
-            return write_morning_report(root)
-        return 0
+            return 0
+        try:
+            # A real cycle writes the receipts of the items it sees: the
+            # receipt is the cycle's record, and it is written on every
+            # state change. The cycle still starts no builder and works no
+            # board item: that part of the spec (T5) is not built, and the
+            # cycle says so instead of pretending it works.
+            emit(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
+            code = cmd_order(
+                argparse.Namespace(
+                    dry_run=True,
+                    root=args.root,
+                    deadline=args.deadline,
+                    allowed=allowed,
+                )
+            )
+            if code != 0:
+                return code
+            items, receipts, error = read_work_items(
+                time.monotonic() + args.deadline, allowed
+            )
+            if error:
+                emit(
+                    f"overnight: REFUSED: {error}; the cycle wrote no receipt",
+                    err=True,
+                )
+                return 1
+            written = write_receipts(
+                root, items, receipts, time.monotonic() + args.deadline
+            )
+            emit(
+                f"overnight: {stamp} shift cycle wrote {written} receipts of "
+                f"{len(items)} items"
+            )
+            # The cycle states the count it worked, so the morning report's
+            # planned count is the count of the items the report lists. The
+            # order's own line keeps its per-repository detail; the order
+            # counts the work items and the cycle counts every item it saw,
+            # including the pull requests already in flight and the backlog.
+            write_shift_line(
+                root,
+                f"planned {len(items)} items | the cycle worked {len(items)} items",
+            )
+            emit(
+                "overnight: the shift starts no builder and works no board item "
+                "yet (spec part T5); it writes the receipts of what it saw"
+            )
+            if report_cycle:
+                return write_morning_report(root)
+            return 0
+        finally:
+            release_shift_lock(lock_fd)
     emit(f"overnight: {stamp} shift cycle (dry run, read only)")
     return cmd_order(
         argparse.Namespace(

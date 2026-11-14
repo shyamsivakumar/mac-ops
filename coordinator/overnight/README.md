@@ -328,16 +328,24 @@ The job fires on a fixed interval, every day. The shift runs 24x7, so
 there is no night window, no 22:30 start and no 06:00 deadline: every
 cycle is the same cycle.
 
-| Every 30 minutes | What runs |
+| Every 5 minutes | What runs |
 | --- | --- |
 | Any time of day | One shift cycle. It reads the policy snapshot, reads the whole board, works it and writes the receipt of every item whose state changed. |
 | 06:00 to 07:29 PT | The same cycle, and it writes the day's morning report. The report is written once a day: the first morning cycle writes it and a later cycle leaves it alone. |
 
 The interval lives in the plist (`StartInterval`), not in the command, so
-one place owns it. The job has no `RunAtLoad`, so the first cycle lands
-one interval after the job loads and not at every boot. It takes no lock:
-launchd starts one copy of a job at a time, so two cycles never run at
-once.
+one place owns it: 300 seconds, so a stalled pull request waits at most
+five minutes for its next action. The job has no `RunAtLoad`, so the
+first cycle lands one interval after the job loads and not at every boot.
+
+The job takes the shift's own lock, `~/.local/state/mac-ops/overnight-shift.lock`
+(`OVERNIGHT_SHIFT_LOCK` moves it). A cycle that starts while another
+cycle holds the lock does no work and says so in the log, so two cycles
+never run at once, whatever starts them: the scheduled job, or a person
+at a shell. A lock that cannot be opened refuses the cycle, because a
+cycle that runs unlocked is a cycle that can overlap another one. A cycle
+takes about a minute and a half on the current board, well inside the
+five-minute interval.
 
 The Mac must run on Pacific time for the shift log to say Pacific time.
 If the Mac's clock is not on Pacific time, the job still fires, and it
