@@ -80,18 +80,30 @@ directory (`~/Code/coordinator/queue`) with the repository copy of
 free.
 
 **The live board was at its slot cap for the whole run.** The coordinator
-queue holds 6 live threads against a cap of 6, and the log line for every
+queue held 6 live threads against a cap of 6, and the log line for every
 attempt was `refill skipped: at cap 6/6` (and `the slots are full (7/6)`
-when the queue held a waiting item). The refill correctly started nothing,
-because nothing could be started. No pass of the new code ran against the
-live board during this run, so the live pass count is 0 and the live
-skipped-refusal count is 0.
+when the queue held a waiting item).
+
+One pass of the new code did run against the live board, at 16:53:21, in the
+gap where a slot was free:
+
+```
+refill refused shyamsivakumar/fantasy-football-toolkit#185: refused: text blockers: ...#184 is still open
+refill pass 1: examined 117 candidate(s), skipped 0 unchanged refusal(s), attempted 1, started 0
+```
+
+Live pass count: 1. Live skipped-refusal count: 0 (the pass stopped at the
+first candidate because the slots filled up again, so it had nothing to
+skip). The state file now holds one refusal record, for
+`fantasy-football-toolkit#185`, with its reason.
 
 That is the one part of the acceptance that is still open: the live run has
-to wait for a free slot on the machine. The mechanism is proven above and
-the live board has an eligible ticket outside the old window
-(`strategy-replay-workbench#692` at position 41 of 120), so the first pass
-that finds a free slot starts a ticket that the old window never reached.
+to wait for more free slots on the machine, because the machine is running
+at its cap. The mechanism is proven above, and the live board has an
+eligible ticket outside the old window
+(`strategy-replay-workbench#692` at position 41 of the 117 candidates the
+live pass saw), so the passes that follow start tickets the old window never
+reached.
 
 The installed `~/.local/bin/coordq` was written at 16:45 by another
 in-flight worktree (`t3-e50d2c39`), so the proof ran the repository copy
