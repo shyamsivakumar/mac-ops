@@ -8,8 +8,10 @@ and a stub `t3mcp`. It shows:
    the builder thread of its ticket key,
 2. the reviewer comes from the executed model of the builder run, so the
    reviewer never shares the vendor of the builder,
-3. a head that is already in `gatedHeads` is not gated twice,
-4. a pull request that is skipped on the same head three times is written to
+3. a router route that can run an Anthropic model gives no evidence, so the
+   pull request is skipped and reported instead of guessed,
+4. a head that is already in `gatedHeads` is not gated twice,
+5. a pull request that is skipped on the same head three times is written to
    `queue/gatekeep-stuck.txt`, one line, and the file keeps only the pull
    requests that are still stuck.
 
@@ -70,8 +72,8 @@ else:
 '''
 
 ROUTER = '''const ROUTES: Record<string, string[]> = {
+\tstandard: ["minimax/MiniMax-M3.1-Flash:medium", "deepseek/deepseek-flash:medium", "openai/gpt-6.1-terra:medium"],
 \tui: ["minimax/MiniMax-M3.1-Flash:medium", "pi-claude-cli/claude-sonnet-5-5:medium"],
-\tstandard: ["minimax/MiniMax-M3.1-Flash:medium", "openai/gpt-6.1-terra:medium"],
 };
 '''
 
@@ -101,11 +103,13 @@ def build_fixture():
             pull(7, "head7", 70),
             pull(8, "head8", 80),
             pull(9, "head9", 90),
+            pull(11, "head11", 110),
         ],
         "issues": {
             "70": {"title": "WID-70 · the router build", "comments": [receipt("req-70")]},
             "80": {"title": "WID-80 · the claude build", "comments": [receipt("req-80")]},
             "90": {"title": "WID-90 · the build with no thread", "comments": [receipt("req-90")]},
+            "110": {"title": "WID-110 · the ui route", "comments": [receipt("req-110")]},
         },
         "statuses": [],
     }
@@ -116,12 +120,12 @@ def build_threads():
         "list": [
             {"threadId": "th-70", "title": "WID-70 · the router build", "createdAt": "2026-01-01T00:00:00Z"},
             {"threadId": "th-80", "title": "WID-80 · the claude build", "createdAt": "2026-01-02T00:00:00Z"},
-            {"threadId": "th-110", "title": "WID-110 · the blocked route", "createdAt": "2026-01-03T00:00:00Z"},
-            {"threadId": "th-70-old", "title": "WID-70 · an older build", "createdAt":  "2025-12-01T00:00:00Z"},
+            {"threadId": "th-110", "title": "WID-110 · the ui route", "createdAt": "2026-01-03T00:00:00Z"},
+            {"threadId": "th-70-old", "title": "WID-70 · an older build", "createdAt": "2025-12-01T00:00:00Z"},
             {"threadId": "th-gate", "title": "WID-70 review #7 head7", "createdAt": "2026-01-04T00:00:00Z"},
         ],
         "read": {
-            "th-70": {"thread": {"providerInstanceId": "router", "model": "task/ui"},
+            "th-70": {"thread": {"providerInstanceId": "router", "model": "task/standard"},
                       "recentRuns": [{"executedModel": None}]},
             "th-80": {"thread": {"providerInstanceId": "claudeAgent", "model": "claude-opus-5-5"},
                       "recentRuns": [{"executedModel": "claude-opus-5-5"}]},
@@ -140,6 +144,12 @@ def write(path, text, mode=0o644):
 def run_gatekeep(env, cwd):
     return subprocess.run([sys.executable, str(COORDQ), "gatekeep"], env=env,
                           capture_output=True, text=True, cwd=str(cwd))
+
+
+def gates_of(queue):
+    items = json.loads((queue / "queue.json").read_text())["items"]
+    return {item["args"]["title"].split(" review #")[1].split(" ")[0]: item
+            for item in items if item["tool"] == "t3_thread_launch"}
 
 
 def main():
@@ -169,12 +179,11 @@ def main():
     }
 
     run = run_gatekeep(env, ROOT)
-    items = json.loads((queue / "queue.json").read_text())["items"]
-    gates = {item["args"]["title"].split(" review #")[1].split(" ")[0]: item
-             for item in items if item["tool"] == "t3_thread_launch"}
+    gates = gates_of(queue)
     check("the receipt-less router build is gated", "7" in gates, run.stdout.strip() + run.stderr.strip())
     check("the claude build is gated", "8" in gates)
     check("the build with no thread is not gated", "9" not in gates)
+    check("a route that can run claude is not gated", "11" not in gates)
     reviewer7 = gates.get("7", {}).get("args", {}).get("modelSelection", {})
     reviewer8 = gates.get("8", {}).get("args", {}).get("modelSelection", {})
     check("a non-claude builder gets Opus", reviewer7 == {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
@@ -184,19 +193,21 @@ def main():
     check("the builder thread of the ticket key is used", "th-70" in (queue / "calls.log").read_text())
 
     run = run_gatekeep(env, ROOT)
-    items = json.loads((queue / "queue.json").read_text())["items"]
+    gates = gates_of(queue)
     check("a head in gatedHeads is not gated twice",
-          len([i for i in items if i["args"]["title"].startswith("WID-70 review #7")]) == 1)
+          len([i for i in json.loads((queue / "queue.json").read_text())["items"]
+               if i["args"]["title"].startswith("WID-70 review #7")]) == 1)
 
     stuck_file = queue / "gatekeep-stuck.txt"
     for _ in range(2):
         run_gatekeep(env, ROOT)
     lines = stuck_file.read_text().splitlines() if stuck_file.exists() else []
     check("a pull request skipped three times on one head is stuck once",
-          lines == ["acme/widgets#9 head9 builder run not found"], str(lines))
+          lines == ["acme/widgets#11 head11 executed model unavailable",
+                    "acme/widgets#9 head9 builder run not found"], str(lines))
     status = json.loads(subprocess.run([sys.executable, str(COORDQ), "status"], env=env,
                                         capture_output=True, text=True).stdout)
-    check("coordq status reports the stuck pull request", status.get("stuck") == lines, json.dumps(status))
+    check("coordq status reports the stuck pull requests", status.get("stuck") == lines, json.dumps(status))
 
     # The builder thread of the stuck pull request appears: it is gated and it
     # leaves the stuck file.
@@ -204,29 +215,27 @@ def main():
     threads["list"].append({"threadId": "th-90", "title": "WID-90 · the build with no thread",
                             "createdAt": "2026-01-05T00:00:00Z"})
     threads["read"]["th-90"] = {"thread": {"providerInstanceId": "codex", "model": "gpt-6.1-sol"},
-                                "recentRuns": [{"executedModel": None}]}
+                                  "recentRuns": [{"executedModel": None}]}
     write(queue / "threads.json", json.dumps(threads))
     run_gatekeep(env, ROOT)
-    items = json.loads((queue / "queue.json").read_text())["items"]
-    check("the pull request is gated once its builder thread appears",
-          len([i for i in items if i["args"]["title"].startswith("WID-90 review #9")]) == 1)
-    lines = stuck_file.read_text().splitlines() if stuck_file.exists() else []
-    check("a gated pull request leaves the stuck file", lines == [], str(lines))
+    gates = gates_of(queue)
+    check("a pull request whose builder thread appears is gated", "9" in gates, run.stdout.strip())
+    check("the gate of that pull request names the reviewer",
+          gates.get("9", {}).get("args", {}).get("modelSelection") == {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
+          json.dumps(gates.get("9", {}).get("args", {}).get("modelSelection", {})))
 
-    # A blocked route runs the next model of the chain, so the reviewer moves
-    # to the other vendor.
+    run_gatekeep(env, ROOT)
+    lines = stuck_file.read_text().splitlines() if stuck_file.exists() else []
+    check("a gated pull request leaves the stuck file", lines == ["acme/widgets#11 head11 executed model unavailable"],
+          str(lines))
+
+    # A blocked model does not change the answer: the route is not evidence.
     blocks = home / ".pi" / "agent" / "task-router-blocks.json"
     write(blocks, json.dumps({"minimax/MiniMax-M3.1-Flash": {"until": 4102444800000, "reason": "proof"}}))
-    fixture = build_fixture()
-    fixture["pulls"].append(pull(11, "head11", 110))
-    fixture["issues"]["110"] = {"title": "WID-110 · the blocked route", "comments": [receipt("req-110")]}
-    write(queue / "gh-fixture.json", json.dumps(fixture))
     run_gatekeep(env, ROOT)
-    items = json.loads((queue / "queue.json").read_text())["items"]
-    reviewer11 = [i for i in items if i["args"]["title"].startswith("WID-110 review #11")]
-    check("a blocked route runs the claude model and gets Sol",
-          bool(reviewer11) and reviewer11[0]["args"]["modelSelection"] == {"instanceId": "codex", "model": "gpt-6.1-sol"},
-          json.dumps(reviewer11[0]["args"]["modelSelection"]) if reviewer11 else "not gated")
+    lines = stuck_file.read_text().splitlines() if stuck_file.exists() else []
+    check("a blocked model does not guess an executed model",
+          lines == ["acme/widgets#11 head11 executed model unavailable"], str(lines))
 
     print(f"\n{'PASS' if not FAILURES else 'FAIL'}: {len(FAILURES)} failed check(s)")
     sys.exit(1 if FAILURES else 0)
