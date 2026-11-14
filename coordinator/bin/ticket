@@ -51,6 +51,11 @@ RESTART_PATTERN = re.compile(r"(?i)\b(restart|redo|again|reopen|rework|retry|fix
 # still on an unmerged branch, and that reference must not read as delivery.
 DOC_PATH_PREFIXES = ("evidence/", "docs/")
 DOC_PATH_SUFFIXES = (".md",)
+# Some Markdown files are runtime inputs, not documentation: the agent rules,
+# the reviewer prompts and the skills. A merge that changed only one of those
+# delivered work, so it keeps refusing the start.
+RULE_PATH_PREFIXES = (".agents/", "coordinator/config/", "runtime/")
+RULE_FILE_NAMES = ("agents.md", "claude.md", "skill.md")
 CLOSE_VERDICT_PASS = re.compile(r"VERDICT: PASS\.\s*Merged via #(\d+)\b")
 RUN_ID_CUE = re.compile(r"run[\s-]?id", re.I)
 RUN_ID_GAP = re.compile(r"^[\s`'\"()\[\]:,-]*$")
@@ -557,6 +562,7 @@ def referencing_pulls(repo, number):
             "merged": bool(pull.get("merged")),
             "mergedAt": pull.get("merged_at"),
             "createdAt": pull.get("created_at"),
+            "changedFiles": pull.get("changed_files"),
         }
     return sorted(found.values(), key=lambda pull: pull["number"])
 
@@ -588,25 +594,38 @@ def coordinator_restart_time(issue):
     return newest
 
 
-def pull_files(repo, number):
+def pull_files(repo, number, changed_files=None):
     """The paths a pull request changed, or None when GitHub cannot say.
 
     None means the start cannot tell whether the merge delivered anything, so
     the merge keeps counting as delivery. Only a known list of documentation
-    paths takes a merge out of the delivery count.
+    paths takes a merge out of the delivery count. A list shorter than the
+    pull request's own `changed_files` count is a truncated read, and a
+    truncated read is not a known list.
     """
     try:
         files = gh_json(["api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
-    except GhError:
+    except (GhError, ValueError):
         return None
     if not isinstance(files, list):
         return None
-    return [entry.get("filename") or "" for entry in files if isinstance(entry, dict)]
+    entries = [entry for entry in files if isinstance(entry, dict)]
+    if isinstance(changed_files, int) and len(entries) < changed_files:
+        return None
+    paths = []
+    for entry in entries:
+        paths.append(entry.get("filename") or "")
+        if entry.get("previous_filename"):
+            paths.append(entry["previous_filename"])
+    return paths
 
 
 def delivers_ticket(path):
     """True when a changed path is outside the plan and documentation paths."""
     lowered = path.lower()
+    name = lowered.rsplit("/", 1)[-1]
+    if lowered.startswith(RULE_PATH_PREFIXES) or name in RULE_FILE_NAMES:
+        return True
     return not (lowered.startswith(DOC_PATH_PREFIXES) or lowered.endswith(DOC_PATH_SUFFIXES))
 
 
@@ -651,7 +670,7 @@ def pull_guard_reasons(repo, issue, notices=None):
         merged_at = iso_time(pull["mergedAt"])
         if restart is not None and merged_at is not None and merged_at <= restart:
             continue
-        files = pull_files(repo, pull["number"])
+        files = pull_files(repo, pull["number"], pull.get("changedFiles"))
         if files and not any(delivers_ticket(name) for name in files) and not gate_merge_comment(issue, pull["number"]):
             notices.append(f"merged PR #{pull['number']} changed only docs; not treated as delivery")
             continue
@@ -875,10 +894,10 @@ def validate_start(cfg, repo, issue, check_text=True):
     # names the pull request that already carries the issue.
     pull_notices = []
     pull_reasons = pull_guard_reasons(repo, issue, pull_notices)
-    for notice in pull_notices:
-        print(notice, file=sys.stderr)
     if pull_reasons:
         raise Refuse(pull_reasons[0])
+    for notice in pull_notices:
+        print(notice, file=sys.stderr)
     # A hold is Shyam's own block. It is checked before the state, key and
     # label rules, so a held ticket says that it waits for Shyam, whatever
     # else it is missing.

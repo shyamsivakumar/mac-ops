@@ -268,7 +268,7 @@ def stub_pull_files(test, files=("coordinator/bin/ticket",)):
     it: by default a changed code file, which is a merge that delivered.
     """
     saved = ticket.pull_files
-    ticket.pull_files = lambda repo, number: list(files)
+    ticket.pull_files = lambda repo, number, changed_files=None: list(files)
     test.addCleanup(lambda: setattr(ticket, "pull_files", saved))
 
 
@@ -503,16 +503,43 @@ class DocsOnlyDeliveryTest(unittest.TestCase):
         self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
 
     def test_every_documentation_path_counts_as_docs(self):
-        for path in ("evidence/x/plan.md", "docs/design.md", "README.md", "AGENTS.md", "docs/x.png"):
+        for path in ("evidence/x/plan.md", "docs/design.md", "README.md", "docs/x.png"):
             with self.subTest(path=path):
                 stub_pull_files(self, [path])
                 self.assertEqual(self.guard(), [])
 
+    def test_an_agent_rule_file_is_delivery(self):
+        for path in ("AGENTS.md", "coordinator/config/AGENT-RULES.md",
+                     ".agents/skills/x/SKILL.md", "coordinator/pi/phone-relay/CLAUDE.md"):
+            with self.subTest(path=path):
+                stub_pull_files(self, [path])
+                self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+
+    def test_a_renamed_code_file_is_delivery(self):
+        saved = ticket.gh_json
+        self.addCleanup(lambda: setattr(ticket, "gh_json", saved))
+        ticket.gh_json = lambda args: [{"filename": "docs/x.md", "previous_filename": "coordinator/bin/x"}]
+        self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+
+    def test_a_truncated_file_list_still_refuses(self):
+        saved = ticket.gh_json
+        self.addCleanup(lambda: setattr(ticket, "gh_json", saved))
+        ticket.gh_json = lambda args: [{"filename": "evidence/SRW-761/plan.md"}]
+        self.pulls[0]["changedFiles"] = 2
+        self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+
     def test_an_unknown_file_list_still_refuses(self):
         saved = ticket.pull_files
         self.addCleanup(lambda: setattr(ticket, "pull_files", saved))
-        ticket.pull_files = lambda repo, number: None
+        ticket.pull_files = lambda repo, number, changed_files=None: None
         self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+
+    def test_bad_json_still_refuses(self):
+        saved = ticket.gh_json
+        self.addCleanup(lambda: setattr(ticket, "gh_json", saved))
+        ticket.gh_json = lambda args: (_ for _ in ()).throw(ValueError("bad json"))
+        self.assertEqual(self.guard(), ["already merged via #1038; close the issue"])
+        self.assertEqual(self.notices, [])
 
     def test_an_empty_file_list_still_refuses(self):
         stub_pull_files(self, [])
