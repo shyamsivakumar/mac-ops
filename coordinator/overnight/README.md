@@ -25,12 +25,47 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight order --dry-run` | Orders the whole board and prints the full ordered list: the failing pull requests, then the pull requests with a gate PASS, then the ready tickets that are already 5-minute parts, then the ready tickets that are not split yet. It writes one summary line to `run/shift-log.md` and no list file. |
 | `overnight check-pr --repo <repo> --number <n>` | The second check: refuses any Ascend pull request before work starts on it. Read only. It fails closed: a pull request it cannot read is refused, not passed. |
 | `overnight report --dry-run` | Renders the morning report from the shift's own records: the receipts, the parking lot, the shift log and the policy snapshot. It reads no board and keeps no list of its own. Without `--dry-run` it writes `receipts/morning-YYYY-MM-DD.md` and prints where it wrote it. |
-| `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the Mac's local clock: the start (22:00–23:59) reads the board and writes nothing, the report (06:00–07:29) writes the morning report, and any other time does nothing. `--at start` or `--at report` forces a part, for a manual run. |
+| `overnight shift --dry-run` | The command the launchd job fires. It decides which part of the night it is from the Mac's local clock: the start (22:00–23:59) reads the board under the policy snapshot and writes nothing, the report (06:00–07:29) writes the morning report, and any other time does nothing. `--at start` or `--at report` forces a part, for a manual run. |
+| `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
-(filtering, ordering, arming, the tick and the morning report) build on the
-same records, in the same module.
+(filtering, ordering, the policy snapshot, the tick and the morning report)
+build on the same records, in the same module.
+
+## The policy snapshot
+
+The shift runs 24x7 and is never unarmed (spec revision 3). There is no
+`run/armed` and no `run/deadline`, and the shift always runs. What is left
+of the arm step is the policy snapshot, and it is the whole contract:
+
+```sh
+overnight policy
+```
+
+| Field | What it holds |
+| --- | --- |
+| `allow` | The repositories the shift may touch, from the board config (`coordinator/config/tickets.json`). |
+| `slot_cap` | The queue's own slot cap, read from the coordq config (`$COORDQ_DIR/config.json`). It is read only and never raised. It is `null` when the cap cannot be read. |
+| `stall_cap` | Cycles with no new work before the shift ends as a stall. |
+| `retry_cap` | Fix tries per item before the item is parked. |
+| `verify_level` | How much each item is checked. It is `balanced` for v1. |
+| `written_at` | When the snapshot was written, in Pacific time. |
+
+There is no item cap and no allowance stop: the whole backlog is in scope
+and model use is never a stop condition. A reader that looks for a cap on
+the items or on the model finds none, and that is the rule.
+
+The shift reads the snapshot on every cycle. A cycle that would work the
+board and finds no snapshot refuses and says so: a cycle with no contract
+does no work. A dry run reads the board without one and says that it did.
+`run/STOP` still stops the shift at the next cycle, and it wins over every
+other rule. The morning report still runs: it is the record of the night,
+and it says that the night ended with STOP.
+
+Writing the snapshot again replaces it with the same contract, so the
+command can run on every boot. It never writes the queue's config, and it
+never touches the merge, push, slot cap or Ascend rules.
 
 ## The order
 
@@ -121,10 +156,12 @@ The Mac must run on Pacific time for these to be the spec's 22:30 and
 the right part, because the dispatch reads the same clock launchd fires
 on, and it says so in the log.
 
-The job runs in dry-run mode (`shift --dry-run`) until the arm and tick
-parts (T4, T5) land. A dry night does no work, so the morning report is the
-only file it writes. A real shift is not started by the job yet: without
-`--dry-run` the start refuses and says so, rather than pretending to work.
+The job runs in dry-run mode (`shift --dry-run`) until the tick part (T5)
+lands. A dry night does no work, so the morning report is the only file it
+writes. A real shift is not started by the job yet: without `--dry-run` the
+start refuses and says so, rather than pretending to work. The policy
+snapshot (T4) is read on every cycle, and a cycle that finds no snapshot
+refuses to work.
 
 The job has no `RunAtLoad`, so a night does not start at every boot. It
 takes no lock: launchd never starts a second copy of a running job, and
@@ -146,8 +183,10 @@ overnight attend --items 3 --minutes 60 --run-by Shyam --wait
   the night never takes one, and the Ascend keys are never taken.
 - It arms the shift in the folder it is given: `run/armed`,
   `run/deadline` and `run/policy.json`. The policy records the allow
-  list, the queue's slot cap (read only, never raised) and the verify
-  level.
+  list, the queue's slot cap (read only, never raised), the stall cap, the
+  retry cap and the verify level. The rehearsal keeps its own window
+  (`run/armed` and `run/deadline`) because it is a rehearsal with a human
+  in it; the shift itself has neither and always runs.
 - It observes each item for real, with read-only commands only: the open
   pull request for the ticket, the checks on it, the gate's verdict on it
   and the files it touches. It runs no merge, no push and no builder.
@@ -194,21 +233,22 @@ work. A pull request that names neither is a record of its own.
 
 | Folder | What it holds |
 | --- | --- |
-| `run/` | The shift contract: when the shift is armed, when it must stop, and what it is allowed to do. |
+| `run/` | The shift contract: the policy snapshot, and the STOP file that ends the shift. |
 | `receipts/` | One receipt per item, plus the morning report. Receipts are the only proof a tick writes. |
 | `inbox/` | What the shift could not decide or could not fix: the parking lot and the snag log. |
 | `staging/` | Scratch for work in flight (worktree path, branch, builder notes). It is scratch, not a queue: an empty shift leaves it empty. |
 
 ## Files
 
-The names come from the overnight runner spec, section 6 (revision 2).
+The names come from the overnight runner spec, section 6 (revision 2), as
+revision 3 changes them.
 
 | File | Who writes | What it holds |
 | --- | --- | --- |
-| `run/armed` | Arm step | Shift id and start time. Its presence means "on shift". |
-| `run/deadline` | Arm step | UNIX epoch for quitting time (default 06:00 PT). |
-| `run/policy.json` | Arm step | Snapshot: allow list, slot cap (read only), budget %, stall cap, verify level. |
-| `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next tick. |
+| `run/policy.json` | `overnight policy` (and the attended first night) | Snapshot: allow list, slot cap (read only), stall cap, retry cap, verify level. No item cap and no allowance stop. |
+| `run/armed` | The attended first night only | Shift id and start time of the rehearsal. The shift is always armed (revision 3). |
+| `run/deadline` | The attended first night only | UNIX epoch the rehearsal ends at. The shift has no deadline (revision 3). |
+| `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
 | `receipts/<item>.md` | Tick | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
 | `inbox/parking-lot.md` | Tick | Decisions the shift could not make. Each with a default and a recommendation. |
 | `inbox/snag-log.md` | Tick | Problems found (flaky test, conflict, dialog) and what the shift did. |
@@ -239,7 +279,7 @@ else. It never invents a count and it never upgrades a claim into proof.
 | `inbox/parking-lot.md` | The decisions the shift could not make, each with a default and a recommendation. |
 | `run/shift-log.md` | How many items were in scope (`planned N items`), whether the full suite ran and with which exit code, whether the shift stalled, and how the night ended (`ended: deadline`, `ended: all done`, `ended: STOP` or `ended: stall`). |
 | `run/policy.json` | The verify level and `allowance_used_percent`, the share of the plan allowance the night used. |
-| `run/armed`, `run/deadline` | The window of the night, in PT. |
+| `run/armed`, `run/deadline` | The window of the attended rehearsal, in PT. A shift that is always armed and has no deadline has no window, so the report writes the window as UNVERIFIED. |
 | `run/STOP` | Its presence means the shift was stopped. |
 
 ### The receipt fields

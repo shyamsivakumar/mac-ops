@@ -1,0 +1,31 @@
+overnight: 2026-11-13 17:12 PST shift cycle under /Users/shyamsivakumar/Code/coordinator/.overnight/run/policy.json
+Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+Slot cap: 6 (read only, from the coordq config; never raised)
+Stall cap: 3 cycles with no new work
+Retry cap: 2 fix tries per item, then it is parked
+Verify level: balanced
+No item cap and no allowance stop: the whole backlog is in scope and model use is never a stop condition.
+overnight: 2026-11-13 17:12 PST shift start (dry run, read only)
+Overnight intake - dry run (read only)
+Board: 110 tickets
+Allowed repositories: 15
+
+repository                                     tickets   prs  linked  records
+digitized/Concerning                                 1     2       0        3
+shyamsivakumar/CineJar                               0     1       0        1
+shyamsivakumar/cairn                                 0     5       0        5
+shyamsivakumar/catalouge                             4     0       0        4
+shyamsivakumar/fantasy-football-toolkit             30     6       4       32
+shyamsivakumar/mac-ops                               9     3       0       12
+shyamsivakumar/openscan                              0     0       0        0
+shyamsivakumar/qabot                                 0     0       0        0
+shyamsivakumar/recoup                                0     0       0        0
+shyamsivakumar/sams-llm-wiki                         0     1       0        1
+shyamsivakumar/scrapers                              0     1       0        1
+shyamsivakumar/scripture-scroll                      0     0       0        0
+shyamsivakumar/strata                                0     1       0        1
+shyamsivakumar/strategy-replay-workbench            66    11       5       72
+shyamsivakumar/tunerise                              0     1       0        1
+
+Total: 133 records across 15 repositories
+A pull request that a board ticket names is part of that ticket's record, so it adds no record of its own. A pull request that names no ticket the board shows stays a record of its own.

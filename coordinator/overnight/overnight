@@ -37,6 +37,16 @@ the night writes is the morning report.
 
     overnight shift --dry-run
 
+`overnight policy` (spec T4, revision 3) writes the policy snapshot the
+shift reads on every cycle: `run/policy.json`. The shift is never unarmed
+and has no deadline, so the snapshot is the whole contract. It holds the
+allow list, the queue's slot cap (read only, never raised), the stall cap,
+the retry cap and the verify level. It has no item cap and no allowance
+stop: the whole backlog is in scope and model use is never a stop
+condition.
+
+    overnight policy
+
 The clock is the Mac's local clock, the clock launchd fires on. The
 report and the log say Pacific time.
 
@@ -79,6 +89,31 @@ TICKET_REF = re.compile(r"\b(refs|fixes|closes|resolves)\s+#(\d+)\b", re.I)
 # A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
 # it is a ticket key number, not a GitHub issue number.
 BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
+
+# --- Part T4: the policy snapshot constants -------------------------------
+#
+# Revision 3 of the spec: the shift runs 24x7 and is never unarmed. There
+# is no `run/armed` and no `run/deadline`, and the shift always runs. What
+# is left of the arm step is the policy snapshot: the contract the shift
+# reads on every cycle.
+#
+# The snapshot holds the repositories the shift may touch, the queue's own
+# slot cap (read only, from the coordq config), the caps that end an item
+# and the verify level. It has no item cap and no allowance stop.
+#
+# The queue's own folder, the one coordq reads. The shift reads the cap
+# from the same place coordq reads it and never writes it.
+COORDQ_DIR = Path(
+    os.environ.get("COORDQ_DIR", str(Path.home() / "Code" / "coordinator" / "queue"))
+)
+# The queue's own slot cap file. The shift reads it and never writes it.
+SLOT_CAP_FILE = COORDQ_DIR / "config.json"
+# The verify level for v1 is balanced (spec section 9).
+VERIFY_LEVEL = "balanced"
+# The stall cap: three cycles with no new work end the shift (spec section 10).
+STALL_CAP = 3
+# The retry cap: two fix tries, then the item is parked (spec section 10).
+RETRY_CAP = 2
 
 # --- Part T3b: the filter -------------------------------------------------
 #
@@ -438,10 +473,17 @@ def cmd_intake(args: argparse.Namespace) -> int:
         )
         return 2
     deadline = time.monotonic() + args.deadline
-    cfg = load_config()
-    repos = allowed_repos(cfg)
-    if not repos:
-        die("the board config names no repositories")
+    override = getattr(args, "allowed", None)
+    if override:
+        # The shift works under the allow list in its policy snapshot, so
+        # the cycle reads the board under the snapshot and not under a
+        # second list of its own.
+        repos = [(repo, "") for repo in override]
+    else:
+        cfg = load_config()
+        repos = allowed_repos(cfg)
+        if not repos:
+            die("the board config names no repositories")
     issues, stale = read_board(deadline)
     pull_requests: dict[str, list[dict]] = {}
     unread: dict[str, str] = {}
@@ -513,6 +555,126 @@ def cmd_intake(args: argparse.Namespace) -> int:
     return 1 if unread else 0
 
 
+# --- Part T4: the policy snapshot ------------------------------------------
+#
+# The shift is never unarmed and has no deadline (spec revision 3), so the
+# policy snapshot is the whole contract. `overnight policy` writes it and
+# the shift reads it on every cycle.
+
+
+def policy_path(root: Path) -> Path:
+    """Return the path of the policy snapshot."""
+    return root / "run" / "policy.json"
+
+
+def load_policy(root: Path) -> tuple[dict | None, str]:
+    """Return the policy snapshot and the reason it could not be read.
+
+    A missing snapshot and a snapshot that is not a JSON object are both
+    failures: the shift has no contract to work under without one, so it
+    says which one it found and stops."""
+    path = policy_path(root)
+    text = read_text(path)
+    if not text.strip():
+        return None, f"{path} does not exist"
+    try:
+        loaded = json.loads(text)
+    except ValueError as exc:
+        return None, f"{path} is not JSON: {exc}"
+    if not isinstance(loaded, dict):
+        return None, f"{path} is not a JSON object"
+    return loaded, ""
+
+
+def write_policy(root: Path, policy: dict) -> Path:
+    """Write the policy snapshot and return the path it went to."""
+    path = policy_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(policy, indent=2) + "\n")
+    return path
+
+
+def build_policy() -> dict:
+    """Return the policy snapshot the shift works under.
+
+    The allow list is the board config's list of repositories. The slot
+    cap is the queue's own cap, read from the coordq config and never
+    written. The stall cap ends a shift that stops making progress, the
+    retry cap parks an item that keeps failing and the verify level says
+    how much each item is checked. There is no item cap and no allowance
+    stop: the whole backlog is in scope and model use is never a stop
+    condition."""
+    cfg = load_config()
+    repos = allowed_repos(cfg)
+    if not repos:
+        die("the board config names no repositories")
+    return {
+        "allow": sorted(repo for repo, _key in repos),
+        "slot_cap": slot_cap(),
+        "stall_cap": STALL_CAP,
+        "retry_cap": RETRY_CAP,
+        "verify_level": VERIFY_LEVEL,
+        "written_at": datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z"),
+    }
+
+
+def policy_allow(policy: dict) -> list[str]:
+    """Return the repositories the snapshot allows."""
+    allow = policy.get("allow")
+    if not isinstance(allow, list):
+        return []
+    return [str(name) for name in allow if str(name)]
+
+
+def policy_lines(policy: dict) -> list[str]:
+    """Return the lines that say what the snapshot says."""
+    names = policy_allow(policy)
+    cap = policy.get("slot_cap")
+    cap_text = (
+        str(cap) if isinstance(cap, int) and not isinstance(cap, bool) else "unknown"
+    )
+    allow_text = f" ({', '.join(names)})" if names else ""
+    return [
+        f"Allow list: {len(names)} repositories{allow_text}",
+        f"Slot cap: {cap_text} (read only, from the coordq config; never raised)",
+        f"Stall cap: {policy.get('stall_cap')} cycles with no new work",
+        f"Retry cap: {policy.get('retry_cap')} fix tries per item, then it is parked",
+        f"Verify level: {policy.get('verify_level')}",
+        "No item cap and no allowance stop: the whole backlog is in scope and "
+        "model use is never a stop condition.",
+    ]
+
+
+def cmd_policy(args: argparse.Namespace) -> int:
+    """Write the policy snapshot the shift reads on every cycle.
+
+    The shift is never unarmed and has no deadline, so the snapshot is the
+    whole contract: the repositories the shift may touch, the queue's slot
+    cap (read only), the caps that end an item and the verify level. The
+    command writes no `run/armed` and no `run/deadline`, and it never
+    writes the queue's config.
+
+    Writing it again replaces the snapshot with the same contract, so the
+    command can run on every boot."""
+    root = report_root(args.root)
+    policy = build_policy()
+    if args.dry_run:
+        print("Overnight policy - dry run (nothing written)")
+        for line in policy_lines(policy):
+            print(line)
+        print(f"The snapshot would be written to {policy_path(root)}")
+        return 0
+    path = write_policy(root, policy)
+    print(f"overnight: wrote {path}")
+    for line in policy_lines(policy):
+        print(line)
+    print(
+        "The shift reads this snapshot on every cycle. It is never unarmed, it "
+        "has no deadline, and run/STOP still stops it at the next cycle."
+    )
+    return 0
+
+
 def shift_phase(now: datetime) -> str:
     """Return the part of the night a moment belongs to.
 
@@ -528,11 +690,17 @@ def shift_phase(now: datetime) -> str:
 
 
 def cmd_shift(args: argparse.Namespace) -> int:
-    """Run the part of the night the launchd job fires.
+    """Run one cycle of the shift.
 
-    The start reads the board and writes nothing. The report writes the
-    morning report, which is the only file a dry night writes. Outside the
-    two windows there is nothing to do.
+    The shift is never unarmed and has no deadline (spec revision 3), so a
+    cycle never waits for an arm and never ends on a clock. It reads the
+    policy snapshot on every cycle, and `run/STOP` still stops it at the
+    next cycle.
+
+    The job fires at 22:30 and 06:30, and the clock picks the part. The
+    start reads the board under the snapshot's allow list, and the report
+    writes the morning report, which is the only file a dry night writes.
+    Outside the two windows there is nothing to do.
 
     The clock is the Mac's local clock, the clock launchd fires on. The
     report and the log still say Pacific time, and a Mac that is not on
@@ -541,6 +709,7 @@ def cmd_shift(args: argparse.Namespace) -> int:
     now_pt = datetime.now(PT)
     phase = args.at if args.at != "auto" else shift_phase(now_local)
     stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
+    root = report_root(args.root)
     if phase == "outside":
         print(f"overnight: {stamp} is outside the overnight window; nothing to do")
         return 0
@@ -550,14 +719,50 @@ def cmd_shift(args: argparse.Namespace) -> int:
             "fires at the Mac's local 22:30 and 06:30, not Pacific time",
             file=sys.stderr,
         )
+    # The shift reads its contract on every cycle.
+    policy, policy_error = load_policy(root)
     if phase == "start":
+        # STOP wins over every other rule: the shift ends at the next
+        # cycle. The report still runs: it is the record of the night, and
+        # it says that the night ended with STOP.
+        if (root / "run" / "STOP").exists():
+            print(
+                f"overnight: {stamp} run/STOP exists, so the shift stops at "
+                "this cycle"
+            )
+            return 0
+        allowed = None
+        if policy is None:
+            if not args.dry_run:
+                die(
+                    f"the shift has no policy snapshot: {policy_error}. Run "
+                    "`overnight policy` to write it."
+                )
+            print(
+                f"overnight: {policy_error}; a dry run reads the board only",
+                file=sys.stderr,
+            )
+        else:
+            allowed = policy_allow(policy)
+            if not allowed:
+                die(
+                    f"the policy snapshot {policy_path(root)} names no "
+                    "repositories, so the shift has nothing it may work"
+                )
+            print(f"overnight: {stamp} shift cycle under {policy_path(root)}")
+            for line in policy_lines(policy):
+                print(line)
         if not args.dry_run:
             die(
-                "the shift start is not built yet (spec parts T4 and T5); "
+                "the shift's board work is not built yet (spec part T5); "
                 "refusing to start a real shift"
             )
         print(f"overnight: {stamp} shift start (dry run, read only)")
-        return cmd_intake(argparse.Namespace(dry_run=True, deadline=args.deadline))
+        return cmd_intake(
+            argparse.Namespace(
+                dry_run=True, deadline=args.deadline, allowed=allowed
+            )
+        )
     print(f"overnight: {stamp} morning report")
     return cmd_report(
         argparse.Namespace(root=args.root, date=args.date, dry_run=False)
@@ -2009,8 +2214,6 @@ GATE_VERDICT = re.compile(r"VERDICT:\s*(?P<verdict>PASS|FAIL)", re.I)
 # The keys of the Ascend repositories. The allow list leaves them out; the
 # check is here so the shift can say that it left them out.
 ASCEND_KEYS = {"AUH", "MCP", "OPS", "DBT", "OMN"}
-# The queue's own slot cap file. The shift reads it and never writes it.
-SLOT_CAP_FILE = Path.home() / "Code" / "coordinator" / "queue" / "config.json"
 # The folders the attended night writes.
 ATTEND_DIRS = ("run", "receipts", "inbox", "staging")
 
@@ -2215,17 +2418,15 @@ def cmd_attend(args: argparse.Namespace) -> int:
         f"items: {len(items)}\n"
     )
     (root / "run" / "deadline").write_text(f"{close.timestamp()}\n")
-    policy = {
-        "allow": sorted(allowed),
-        "slot_cap": slot_cap(),
-        "verify_level": "balanced",
-        "stall_cap": 3,
-        "budget_percent": None,
-        "allowance_used_percent": None,
-        "run_by": args.run_by,
-        "window_minutes": args.minutes,
-    }
-    (root / "run" / "policy.json").write_text(json.dumps(policy, indent=2) + "\n")
+    policy = build_policy()
+    policy.update(
+        {
+            "allowance_used_percent": None,
+            "run_by": args.run_by,
+            "window_minutes": args.minutes,
+        }
+    )
+    write_policy(root, policy)
     log_lines = [
         f"{start.strftime('%Y-%m-%d %H:%M %Z')} | attended night | started, "
         f"run by {args.run_by}, planned {len(items)} items",
@@ -2469,6 +2670,21 @@ def main() -> int:
         help=f"seconds the whole start may take (default {DEFAULT_DEADLINE})",
     )
     shift.set_defaults(func=cmd_shift)
+    policy = sub.add_parser(
+        "policy",
+        help="write the policy snapshot the shift reads on every cycle",
+    )
+    policy.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    policy.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read only; the snapshot is not written",
+    )
+    policy.set_defaults(func=cmd_policy)
     attend = sub.add_parser(
         "attend",
         help="run the attended first night: a human watches, three small items",
