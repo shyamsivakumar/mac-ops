@@ -1,0 +1,8 @@
+overnight: wrote /Users/shyamsivakumar/Code/coordinator/.overnight/run/policy.json
+Allow list: 15 repositories (digitized/Concerning, shyamsivakumar/CineJar, shyamsivakumar/cairn, shyamsivakumar/catalouge, shyamsivakumar/fantasy-football-toolkit, shyamsivakumar/mac-ops, shyamsivakumar/openscan, shyamsivakumar/qabot, shyamsivakumar/recoup, shyamsivakumar/sams-llm-wiki, shyamsivakumar/scrapers, shyamsivakumar/scripture-scroll, shyamsivakumar/strata, shyamsivakumar/strategy-replay-workbench, shyamsivakumar/tunerise)
+Slot cap: 6 (read only, from the coordq config; never raised)
+Stall cap: 3 cycles with no new work
+Retry cap: 2 fix tries per item, then it is parked
+Verify level: balanced
+No item cap and no allowance stop: the whole backlog is in scope and model use is never a stop condition.
+The shift reads this snapshot on every cycle. It is never unarmed, it has no deadline, and run/STOP still stops it at the next cycle.
