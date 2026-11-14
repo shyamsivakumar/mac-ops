@@ -103,3 +103,34 @@ class CapacityTests(unittest.TestCase):
             self.q.drain()
         self.assertEqual(len(self.q.load()["reserved"]), 1)
         self.assertEqual(set(self.q.load()["reservedThreads"].values()), {"pre"})
+
+    def queue_launch(self):
+        self.q.save({"next": 2, "items": [
+            {"id": 7, "tool": "t3_thread_launch", "args": {}, "priority": 0,
+             "title": "launch"}]})
+        self.q.live = lambda: 0
+
+    def test_successful_launch_releases_its_reservation(self):
+        # A gate launch thread finishes in about 20 seconds, so no later drain
+        # pass ever sees it live. The slot must not stay reserved until the
+        # ten-minute expiry.
+        self.queue_launch()
+        reply = json.dumps({"threadId": "mcp:launch:one"})
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "call", return_value=(0, reply)):
+            self.q.drain()
+        queue = self.q.load()
+        self.assertEqual(queue["reserved"], {})
+        self.assertEqual(queue["reservedThreads"]["7"], "mcp:launch:one")
+        self.assertEqual(queue["items"], [])
+
+    def test_launch_without_thread_id_keeps_its_reservation(self):
+        self.queue_launch()
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "call", return_value=(0, "{}")):
+            self.q.drain()
+        queue = self.q.load()
+        self.assertIn("7", queue["reserved"])
+        from pathlib import Path
+        log = Path(self.tmp.name, "dispatch.log").read_text()
+        self.assertIn("reservation #7 retained", log)
