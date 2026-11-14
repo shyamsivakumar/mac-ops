@@ -38,17 +38,18 @@ passed unless the records say it ran.
 
     overnight report --dry-run
 
-`overnight shift` (spec T12) is the command the launchd job fires. The job
-fires it on a fixed interval, every day: the shift runs 24x7, so there is
-no night window and no part of the night. Every run is one cycle: it reads
-the policy snapshot, reads the board under the snapshot's allow list,
-orders it and writes the cycle's line to the shift log. The shift is never
-armed and never unarmed. The morning report is on demand now
-(`overnight report`), so the job does not write it. In dry-run mode the
-shift does no work, so the cycle's line in the shift log is the only file
-it writes.
+`overnight shift` (spec T12, revision 3) is the command the launchd job
+fires. The job fires it on a fixed interval, every day: the shift runs
+24x7, so there is no night window and no part of the night. Every run is
+one cycle: it reads the policy snapshot, reads the whole board under the
+snapshot's allow list, works it (there is no item cap and no allowance
+stop) and writes a receipt for every item whose state changed. The shift
+is never armed and never unarmed. The first cycle of the morning writes
+the day's morning report, so Shyam reads one report in the morning;
+`--report` writes it on demand.
 
-    overnight shift --dry-run
+    overnight shift
+    overnight shift --report
 
 `overnight receipt` (spec T5b) writes the receipt of every item whose state
 the shift can see: the state, the pull request, the checks and their exit
@@ -78,6 +79,22 @@ stop: the whole backlog is in scope and model use is never a stop
 condition.
 
     overnight policy
+
+`overnight redact` (spec T7a) is the one redaction the shift has. Every
+record it writes under `.overnight/` goes through it, so no receipt, no
+shift log line and no morning report holds a token, a key, a cookie or a
+`.env` value. The command shows the redaction on a fixture: the fake key
+goes in and does not come out.
+
+    overnight redact --file fixture.txt
+    overnight redact --text 'ghp_...'
+
+The console is a writer as well (spec T7b). Launchd writes everything the
+module prints to the job's own log, and a printed line can carry a secret:
+a gate thread's report, a command's own output tail, a pull request title.
+So every line the module prints goes through the same redaction function
+(`emit`), and the job log holds no more than the records under
+`.overnight/` do.
 
 The clock is the Mac's local clock, the clock launchd fires on. The
 report and the log say Pacific time.
@@ -129,6 +146,235 @@ AGENT_CHECK = "srw/agent-check"
 # A board key in a branch name, such as "mo-208" or "ffbt-9". The number in
 # it is a ticket key number, not a GitHub issue number.
 BRANCH_KEY = re.compile(r"\b([A-Za-z]{2,5})-(\d+)\b")
+
+# --- Part T7a: the secret redaction ---------------------------------------
+#
+# The shift writes its records under `.overnight/`: the receipts, the
+# shift log, the parking lot, the policy snapshot and the morning report.
+# A record quotes what it read: a pull request title, a branch name, a
+# check's own output, a command line. Any of those can carry a token, a
+# key, a cookie or a value out of a `.env` file. So every write under the
+# root goes through one redaction function, and the pattern list lives in
+# that one place (spec section 5, rule 4).
+#
+# The replacement says what was redacted and keeps no part of the value:
+# `[REDACTED:github token]`. A record that says what it hid is still a
+# record. A record that keeps the value is a leak.
+
+# The pattern list. Each entry is a name and a pattern. A pattern with a
+# named group `secret` keeps the rest of the match (the name of an
+# environment variable, the header of a cookie line) and redacts only the
+# group. A pattern without one is redacted whole.
+#
+# Every group starts with `(?!\[REDACTED:)`, so a value that is already
+# redacted is not redacted again: the redaction of a text is the same
+# text, and a record that is written twice is not damaged.
+SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "private key",
+        re.compile(
+            r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?"
+            r"-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+        ),
+    ),
+    (
+        # A key block that was cut short: the check's own output often
+        # ends in the middle of the key. It runs to the end of the text,
+        # unless an END marker follows it.
+        "private key",
+        re.compile(
+            r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+            r"(?:(?!-----END)[\s\S])*$"
+        ),
+    ),
+    ("aws key", re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}\b")),
+    (
+        "github token",
+        re.compile(
+            r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b"
+        ),
+    ),
+    ("gitlab token", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")),
+    ("anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}\b")),
+    (
+        "openai key",
+        re.compile(r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}"),
+    ),
+    ("slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("google api key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("huggingface token", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
+    ("npm token", re.compile(r"\bnpm_[A-Za-z0-9]{30,}\b")),
+    ("stripe key", re.compile(r"\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{10,}\b")),
+    (
+        "jwt",
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b"),
+    ),
+    (
+        "authorization header",
+        re.compile(
+            r"(?i)\b(?:authorization|proxy-authorization|x-api-key)[ \t]*[:=][ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)[^\s\"']+"
+            r"(?:[ \t]+(?!\[REDACTED:)[^\s\"']+)?)"
+        ),
+    ),
+    (
+        "bearer token",
+        re.compile(
+            r"(?i)\bbearer[ \t]+(?P<secret>(?!\[REDACTED:)[A-Za-z0-9._~+/-]{8,}=*)"
+        ),
+    ),
+    (
+        "cookie",
+        re.compile(
+            r"(?i)\b(?:set-)?cookie[ \t]*[:=][ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)[^\s;]+)"
+        ),
+    ),
+    (
+        # A session cookie on its own. It needs a cookie context (the
+        # start of a line, a space or a `;`) and a value that is long
+        # enough to be a token, so prose like "session = 3 of 5" is left
+        # alone.
+        "session cookie",
+        re.compile(
+            r"(?i)(?:^|[;\s])(?:session|sessionid|sid|jsessionid|phpsessid|csrf"
+            r"|xsrf)[ \t]*=[ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)[A-Za-z0-9._~+/-]{8,})"
+        ),
+    ),
+    (
+        "url credentials",
+        re.compile(
+            r"://[^/\s:@]*:(?P<secret>(?!\[REDACTED:)[^/\s@]+(?:\@[^/\s@]*)?)@"
+        ),
+    ),
+    (
+        # A field that names a secret, in JSON, in YAML or in a command
+        # line. The name may be quoted, and the value may be quoted.
+        "secret field",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_])[\"']?"
+            r"(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token"
+            r"|gh[_-]?token|secret[_-]?key|client[_-]?secret|password|passwd"
+            r"|passphrase|token|secret)"
+            r"[\"']?[ \t]*[:=][ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+))"
+        ),
+    ),
+    (
+        # An environment variable whose name ends in a secret word. The
+        # name has an underscore, so prose like "the token: expired" is
+        # left alone.
+        "environment secret",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_])(?:export[ \t]+)?[A-Za-z0-9]+_[A-Za-z0-9_]*"
+            r"(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?)"
+            r"[ \t]*[:=][ \t]*(?P<secret>(?!\[REDACTED:)[^\s]+)"
+        ),
+    ),
+    (
+        # The same, for a name that is the secret word itself. The name
+        # has to be followed by `=`, so a heading that says "Secret:" is
+        # left alone.
+        "environment secret",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_])(?:export[ \t]+)?"
+            r"(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?)"
+            r"[ \t]*=[ \t]*(?P<secret>(?!\[REDACTED:)[^\s]+)"
+        ),
+    ),
+    (
+        # A `.env` line: the name is an environment variable's name and
+        # the line holds nothing else.
+        ".env value",
+        re.compile(
+            r"(?m)^[ \t]*(?:export[ \t]+)?[A-Z][A-Z0-9_]*_[A-Z0-9_]*[ \t]*=[ \t]*"
+            r"(?P<secret>(?!\[REDACTED:)\S+)[ \t]*$"
+        ),
+    ),
+)
+
+
+def redact(text: str) -> str:
+    """Return the text with every secret pattern replaced.
+
+    One function, one pattern list, one replacement shape. Every record
+    the shift writes under `.overnight/` goes through this function, so a
+    receipt, a shift log line and the morning report cannot hold a token,
+    a key, a cookie or a `.env` value. The replacement names the pattern
+    and keeps no part of the value.
+
+    Every pattern is matched against the text as it came in, never
+    against the text another pattern already changed: a replacement is
+    not a secret, and a replacement that a later pattern reads again
+    would leave half a secret behind. The spans that match are merged
+    and the merged span is replaced once, under the name of the pattern
+    that comes first in the list."""
+    spans: list[tuple[int, int, int, str]] = []
+    for priority, (name, pattern) in enumerate(SECRET_PATTERNS):
+        for match in pattern.finditer(text):
+            if "secret" in pattern.groupindex:
+                start, end = match.span("secret")
+            else:
+                start, end = match.span()
+            if end > start:
+                spans.append((start, end, priority, name))
+    if not spans:
+        return text
+    spans.sort(key=lambda span: (span[0], span[2], span[1]))
+    merged: list[list] = []
+    for start, end, priority, name in spans:
+        if merged and start <= merged[-1][1]:
+            current = merged[-1]
+            current[1] = max(current[1], end)
+        else:
+            merged.append([start, end, priority, name])
+    out: list[str] = []
+    last = 0
+    for start, end, _priority, name in merged:
+        out.append(text[last:start])
+        out.append(f"[REDACTED:{name}]")
+        last = end
+    out.append(text[last:])
+    return "".join(out)
+
+
+def emit(text: str = "", err: bool = False, end: str = "\n") -> None:
+    """Print the shift's own output with every secret redacted.
+
+    The console is a writer too. Launchd writes everything the module
+    prints to the job's own log, and a printed line can carry a secret:
+    a gate thread's report, a command's own output tail, a pull request
+    title, a receipt body. So the console goes through the same redaction
+    function as the records under `.overnight/`, and the job log holds no
+    more than the records do.
+
+    The whole text is redacted at once, not line by line, so a secret
+    that spans lines (a private key block) is redacted as one thing."""
+    print(redact(text), file=sys.stderr if err else sys.stdout, end=end)
+
+
+def write_record(path: Path, text: str) -> Path:
+    """Write a record under the overnight root and return the path.
+
+    Every write under `.overnight/` goes through this function, so the
+    redaction is not a rule each writer has to remember: it happens here,
+    once, for the receipt, the shift log, the parking lot, the policy
+    snapshot and the morning report alike."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(redact(text), encoding="utf-8")
+    return path
+
+
+def append_record(path: Path, text: str) -> Path:
+    """Append to a record under the overnight root and return the path.
+
+    The append is a write like any other, so it is redacted the same way."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(redact(text))
+    return path
+
 
 # --- Part T4: the policy snapshot constants -------------------------------
 #
@@ -257,6 +503,11 @@ STALL = re.compile(r"\bstall\b", re.I)
 # The shift log states how the night ended, in one of the four ways the
 # spec allows. The report reads that statement, but only when the records
 # support it: a claim is never a proof.
+# The shift runs 24x7 and never ends, so it has no window. The morning
+# report has a time: the first cycle that lands in this window writes the
+# day's report. The window is an hour and a half wide, so a Mac that wakes
+# late still writes it.
+REPORT_WINDOW = (6 * 60, 7 * 60 + 29)
 ENDED = re.compile(r"(?:^|\|)\s*ended:\s*(?P<how>deadline|all done|stop|stall)\s*$", re.I)
 # The states a receipt can name.
 STATE_DONE = "done"
@@ -280,7 +531,7 @@ class RepoError(Exception):
 
 
 def die(message: str, code: int = 1) -> NoReturn:
-    print(f"overnight: {message}", file=sys.stderr)
+    emit(f"overnight: {message}", err=True)
     raise SystemExit(code)
 
 
@@ -362,11 +613,11 @@ def read_board(deadline: float) -> tuple[list[dict], bool]:
         die(f"the ticket CLI did not return JSON: {exc}")
     issues = data.get("issues") or []
     if data.get("stale"):
-        print(
+        emit(
             "overnight: the board list is stale ("
             + str((data.get("error") or {}).get("message", "unknown error"))
             + ")",
-            file=sys.stderr,
+            err=True,
         )
     return issues, bool(data.get("stale"))
 
@@ -506,10 +757,10 @@ def build_records(
 
 def cmd_intake(args: argparse.Namespace) -> int:
     if not args.dry_run:
-        print(
+        emit(
             "overnight: intake in this part reads only. Run "
             "`overnight intake --dry-run`.",
-            file=sys.stderr,
+            err=True,
         )
         return 2
     deadline = time.monotonic() + args.deadline
@@ -532,23 +783,23 @@ def cmd_intake(args: argparse.Namespace) -> int:
             rows, cut = read_pull_requests(repo, deadline)
         except RepoError as exc:
             unread[repo] = str(exc)
-            print(f"overnight: {repo}: {exc}", file=sys.stderr)
+            emit(f"overnight: {repo}: {exc}", err=True)
             continue
         pull_requests[repo] = rows
         if cut:
             unread[repo] = f"more than {PR_LIMIT} open pull requests"
-            print(
+            emit(
                 f"overnight: {repo}: the pull request list was cut off at "
                 f"{PR_LIMIT}, so the counts are not known",
-                file=sys.stderr,
+                err=True,
             )
     records = build_records(issues, pull_requests)
     outside = sorted(set(records) - {repo for repo, _ in repos})
-    print("Overnight intake - dry run (read only)")
-    print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
-    print(f"Allowed repositories: {len(repos)}")
-    print()
-    print(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
+    emit("Overnight intake - dry run (read only)")
+    emit(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit()
+    emit(f"{'repository':<45}{'tickets':>9}{'prs':>6}{'linked':>8}{'records':>9}")
     total = 0
     clean = 0
     outside_total = 0
@@ -558,11 +809,11 @@ def cmd_intake(args: argparse.Namespace) -> int:
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
         linked = sum(len(r["prs"]) for r in bucket if r["kind"] == "ticket")
         if repo in unread:
-            print(f"{repo:<45}{tickets:>9}{'ERR':>6}{'ERR':>8}{'ERR':>9}")
+            emit(f"{repo:<45}{tickets:>9}{'ERR':>6}{'ERR':>8}{'ERR':>9}")
             continue
         clean += 1
         total += len(bucket)
-        print(
+        emit(
             f"{repo:<45}{tickets:>9}{len(pull_requests.get(repo, [])):>6}"
             f"{linked:>8}{len(bucket):>9}"
         )
@@ -571,23 +822,23 @@ def cmd_intake(args: argparse.Namespace) -> int:
         tickets = sum(1 for r in bucket if r["kind"] == "ticket")
         outside_total += len(bucket)
         outside_repos += 1
-        print(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
-    print()
+        emit(f"{repo:<45}{tickets:>9}{'n/a':>6}{'n/a':>8}{len(bucket):>9}  (not allowed)")
+    emit()
     if unread:
-        print(
+        emit(
             f"Total: UNVERIFIED. {total} records from the {clean} repositories "
             f"that read cleanly; {len(unread)} repositories could not be read "
             f"fully: " + ", ".join(sorted(unread))
         )
     else:
-        print(f"Total: {total} records across {clean} repositories")
+        emit(f"Total: {total} records across {clean} repositories")
     if outside_repos:
-        print(
+        emit(
             f"{outside_total} more records in {outside_repos} "
             f"{plural(outside_repos, 'repository', 'repositories')} outside the "
             f"allow list, counted above and marked 'not allowed'."
         )
-    print(
+    emit(
         "A pull request that a board ticket names is part of that ticket's "
         "record, so it adds no record of its own. A pull request that names "
         "no ticket the board shows stays a record of its own."
@@ -630,7 +881,7 @@ def write_policy(root: Path, policy: dict) -> Path:
     """Write the policy snapshot and return the path it went to."""
     path = policy_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(policy, indent=2) + "\n")
+    write_record(path, json.dumps(policy, indent=2) + "\n")
     return path
 
 
@@ -699,20 +950,75 @@ def cmd_policy(args: argparse.Namespace) -> int:
     root = report_root(args.root)
     policy = build_policy()
     if args.dry_run:
-        print("Overnight policy - dry run (nothing written)")
+        emit("Overnight policy - dry run (nothing written)")
         for line in policy_lines(policy):
-            print(line)
-        print(f"The snapshot would be written to {policy_path(root)}")
+            emit(line)
+        emit(f"The snapshot would be written to {policy_path(root)}")
         return 0
     path = write_policy(root, policy)
-    print(f"overnight: wrote {path}")
+    emit(f"overnight: wrote {path}")
     for line in policy_lines(policy):
-        print(line)
-    print(
+        emit(line)
+    emit(
         "The shift reads this snapshot on every cycle. It is never unarmed, it "
         "has no deadline, and run/STOP still stops it at the next cycle."
     )
     return 0
+
+
+def cmd_redact(args: argparse.Namespace) -> int:
+    """Print a text with every secret pattern redacted.
+
+    The command is the redaction itself, made visible: it reads a fixture
+    (a string, a file or standard input) and prints what a record under
+    `.overnight/` would hold. It writes nothing.
+
+    The fixture is the proof the ticket asks for: a fake key goes in and
+    the key does not come out."""
+    if args.text is not None:
+        text = args.text
+    elif args.file:
+        path = Path(args.file).expanduser()
+        text = read_text(path)
+        if not text:
+            die(f"the fixture {path} is empty or cannot be read")
+    else:
+        text = sys.stdin.read()
+    redacted = redact(text)
+    if redacted and not redacted.endswith("\n"):
+        redacted += "\n"
+    emit(redacted, end="")
+    return 0
+
+
+def report_window(now: datetime) -> bool:
+    """Return True when a moment belongs to the morning report window.
+
+    The shift has no window and never ends. The report has a time: it is
+    written by the first cycle of the morning, so Shyam reads one report a
+    day."""
+    minutes = now.hour * 60 + now.minute
+    return REPORT_WINDOW[0] <= minutes <= REPORT_WINDOW[1]
+
+
+def write_morning_report(root: Path) -> int:
+    """Write the day's morning report, once a day.
+
+    The report is the record of the day the shift worked: what merged, what
+    is ready, what is stuck and which decisions wait for Shyam. The first
+    cycle that lands in the morning window writes it, and a later cycle
+    leaves it alone, so a day has one report.
+
+    The report is rendered by the report code, from the shift's own
+    records, and it invents nothing."""
+    day = datetime.now(PT).strftime("%Y-%m-%d")
+    out = root / "receipts" / f"morning-{day}.md"
+    if out.exists():
+        emit(f"overnight: today's morning report {out} is already written")
+        return 0
+    return cmd_report(
+        argparse.Namespace(root=str(root), date=day, dry_run=False)
+    )
 
 
 def cmd_shift(args: argparse.Namespace) -> int:
@@ -725,8 +1031,13 @@ def cmd_shift(args: argparse.Namespace) -> int:
 
     The job fires the shift on a fixed interval, every day, so there is
     no night window and no part of the night: every run is one cycle. The
-    morning report is on demand now (`overnight report`), so the job does
-    not write it.
+    cycle works the whole board: there is no item cap and no allowance
+    stop. It writes a receipt for every item whose state changed.
+
+    The morning report has a time even though the shift does not. The
+    first cycle that lands in the morning window writes the day's report,
+    so a day has one report and Shyam reads one thing in the morning.
+    `--report` writes it on demand.
 
     The clock is the Mac's local clock, the clock launchd fires on. The
     shift log still says Pacific time, and a Mac that is not on Pacific
@@ -736,17 +1047,24 @@ def cmd_shift(args: argparse.Namespace) -> int:
     stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
     root = report_root(args.root)
     if now_local.utcoffset() != now_pt.utcoffset():
-        print(
+        emit(
             "overnight: the Mac's clock is not on Pacific time, so the job "
             "fires on the Mac's local clock, not Pacific time",
-            file=sys.stderr,
+            err=True,
         )
+    # The report cycle: the one cycle of the day that also leaves the
+    # morning report. The shift has no window; the report has a time.
+    report_cycle = report_window(now_local) or bool(getattr(args, "report", False))
     # STOP wins over every other rule: the shift ends at the next cycle.
     if (root / "run" / "STOP").exists():
-        print(
+        emit(
             f"overnight: {stamp} run/STOP exists, so the shift stops at "
             "this cycle"
         )
+        # The report still runs: it is the record of the day, and it says
+        # that the shift ended with STOP.
+        if report_cycle and not args.dry_run:
+            return write_morning_report(root)
         return 0
     # The shift reads its contract on every cycle.
     policy, policy_error = load_policy(root)
@@ -757,9 +1075,9 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 f"the shift has no policy snapshot: {policy_error}. Run "
                 "`overnight policy` to write it."
             )
-        print(
+        emit(
             f"overnight: {policy_error}; a dry run reads the board only",
-            file=sys.stderr,
+            err=True,
         )
     else:
         allowed = policy_allow(policy)
@@ -768,16 +1086,16 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 f"the policy snapshot {policy_path(root)} names no "
                 "repositories, so the shift has nothing it may work"
             )
-        print(f"overnight: {stamp} shift cycle under {policy_path(root)}")
+        emit(f"overnight: {stamp} shift cycle under {policy_path(root)}")
         for line in policy_lines(policy):
-            print(line)
+            emit(line)
     if not args.dry_run:
         # A real cycle writes the receipts of the items it sees: the
         # receipt is the cycle's record, and it is written on every state
         # change. The cycle still starts no builder and works no board
         # item: that part of the spec (T5) is not built, and the cycle
         # says so instead of pretending it works.
-        print(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
+        emit(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
         code = cmd_order(
             argparse.Namespace(
                 dry_run=True,
@@ -792,22 +1110,33 @@ def cmd_shift(args: argparse.Namespace) -> int:
             time.monotonic() + args.deadline, allowed
         )
         if error:
-            print(
+            emit(
                 f"overnight: REFUSED: {error}; the cycle wrote no receipt",
-                file=sys.stderr,
+                err=True,
             )
             return 1
         written = write_receipts(root, items, receipts, time.monotonic() + args.deadline)
-        print(
+        emit(
             f"overnight: {stamp} shift cycle wrote {written} receipts of "
             f"{len(items)} items"
         )
-        print(
+        # The cycle states the count it worked, so the morning report's
+        # planned count is the count of the items the report lists. The
+        # order's own line keeps its per-repository detail; the order
+        # counts the work items and the cycle counts every item it saw,
+        # including the pull requests already in flight and the backlog.
+        write_shift_line(
+            root,
+            f"planned {len(items)} items | the cycle worked {len(items)} items",
+        )
+        emit(
             "overnight: the shift starts no builder and works no board item "
             "yet (spec part T5); it writes the receipts of what it saw"
         )
+        if report_cycle:
+            return write_morning_report(root)
         return 0
-    print(f"overnight: {stamp} shift cycle (dry run, read only)")
+    emit(f"overnight: {stamp} shift cycle (dry run, read only)")
     return cmd_order(
         argparse.Namespace(
             dry_run=True,
@@ -946,7 +1275,7 @@ def evidence_holds(fields: dict, checks: list[dict]) -> tuple[bool, str]:
     if missing:
         names = ", ".join(check["raw"] for check in missing)
         return False, f"a check has no exit code, so it did not run ({names})"
-    failed = [check for check in checks if check["exit"] not in (0,)]
+    failed = [check for check in checks if check["exit"] != 0]
     if failed:
         unknown = [check for check in failed if check["exit"] == 2]
         if unknown:
@@ -1368,12 +1697,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     }
     report = render_report(snapshot)
     if args.dry_run:
-        print(report)
+        emit(report)
         return 0
     out = receipts_dir / f"morning-{day.strftime('%Y-%m-%d')}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(report)
-    print(f"overnight: wrote {out}")
+    write_record(out, report)
+    emit(f"overnight: wrote {out}")
     return 0
 
 
@@ -1476,15 +1805,15 @@ def read_bodies(
             rows = json.loads(raw)
         except (RepoError, ValueError) as exc:
             unread.append(repo)
-            print(f"overnight: {repo}: {exc}", file=sys.stderr)
+            emit(f"overnight: {repo}: {exc}", err=True)
             continue
         rows = rows if isinstance(rows, list) else []
         if len(rows) >= ISSUE_LIMIT:
             unread.append(repo)
-            print(
+            emit(
                 f"overnight: {repo}: the open issue list was cut off at "
                 f"{ISSUE_LIMIT}, so the ticket text is not known",
-                file=sys.stderr,
+                err=True,
             )
             continue
         numbers = open_numbers.setdefault(repo, set())
@@ -1654,9 +1983,9 @@ def cmd_filter(args: argparse.Namespace) -> int:
         die("the board config names no repositories")
     issues, stale = read_board(deadline)
     if stale:
-        print("Overnight filter - dry run (read only)")
-        print("REFUSED: the board list is stale, so the filter cannot be trusted.")
-        print("The ticket CLI could not reach GitHub and fell back to its cache.")
+        emit("Overnight filter - dry run (read only)")
+        emit("REFUSED: the board list is stale, so the filter cannot be trusted.")
+        emit("The ticket CLI could not reach GitHub and fell back to its cache.")
         return 1
     bodies, unread, _open = read_bodies(issues, deadline)
     path, lines = read_decisions()
@@ -1669,26 +1998,26 @@ def cmd_filter(args: argparse.Namespace) -> int:
     if not lines:
         problems.append(f"the decisions log {path} could not be read")
     kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
-    print("Overnight filter - dry run (read only)")
-    print(f"Board: {len(issues)} tickets")
-    print(f"Allowed repositories: {len(repos)}")
-    print(f"Decisions log: {path}" + ("" if lines else " (not found)"))
+    emit("Overnight filter - dry run (read only)")
+    emit(f"Board: {len(issues)} tickets")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit(f"Decisions log: {path}" + ("" if lines else " (not found)"))
     for problem in problems:
-        print(f"REFUSED: {problem}")
-    print()
-    print(f"Kept: {len(kept)}")
-    print(f"Dropped: {len(drops)}")
+        emit(f"REFUSED: {problem}")
+    emit()
+    emit(f"Kept: {len(kept)}")
+    emit(f"Dropped: {len(drops)}")
     outside = sorted({issue.get("repo") or "" for issue in issues} - allowed)
-    print(f"Board repositories outside the allow list: {len(outside)}")
+    emit(f"Board repositories outside the allow list: {len(outside)}")
     if drops:
-        print()
-        print("Drops (each with its reason)")
+        emit()
+        emit("Drops (each with its reason)")
         for issue, reason in drops:
             key = issue.get("key") or "-"
-            print(
+            emit(
                 f"  DROP {issue.get('repo')}#{issue.get('number')} {key} - {reason}"
             )
-    print()
+    emit()
     survived = [
         issue
         for issue in kept
@@ -1698,14 +2027,14 @@ def cmd_filter(args: argparse.Namespace) -> int:
             (issue.get("repo") or "") in flagged,
         )
     ]
-    print(f"Ascend items kept: {len(survived)}")
+    emit(f"Ascend items kept: {len(survived)}")
     if survived:
         for issue in survived:
-            print(f"  FAIL {issue.get('repo')}#{issue.get('number')}")
-        print("FAIL: an Ascend item survived the filter.")
+            emit(f"  FAIL {issue.get('repo')}#{issue.get('number')}")
+        emit("FAIL: an Ascend item survived the filter.")
         return 1
     if problems:
-        print("REFUSED: the filter cannot return a list it could not fully check.")
+        emit("REFUSED: the filter cannot return a list it could not fully check.")
         return 1
     return 0
 
@@ -1723,7 +2052,7 @@ def cmd_check_pr(args: argparse.Namespace) -> int:
     cfg = load_config()
     reason = ascend_reason(repo, None, repo in ascend_flags(cfg))
     if reason:
-        print(f"REFUSED: {repo}#{number}: {reason}")
+        emit(f"REFUSED: {repo}#{number}: {reason}")
         return 1
     try:
         raw = run(
@@ -1742,8 +2071,8 @@ def cmd_check_pr(args: argparse.Namespace) -> int:
         )
         pull = json.loads(raw) or {}
     except (RepoError, ValueError) as exc:
-        print(f"overnight: {repo}#{number}: {exc}", file=sys.stderr)
-        print(
+        emit(f"overnight: {repo}#{number}: {exc}", err=True)
+        emit(
             f"REFUSED: {repo}#{number}: the pull request could not be read, "
             "so the check cannot be trusted."
         )
@@ -1755,11 +2084,11 @@ def cmd_check_pr(args: argparse.Namespace) -> int:
         if key not in keys:
             keys.append(key)
     if keys:
-        print(f"REFUSED: {repo}#{number}: Ascend key {keys[0]}")
+        emit(f"REFUSED: {repo}#{number}: Ascend key {keys[0]}")
         if branch:
-            print(f"  branch {branch}")
+            emit(f"  branch {branch}")
         return 1
-    print(f"OK: {repo}#{number} is not an Ascend pull request")
+    emit(f"OK: {repo}#{number} is not an Ascend pull request")
     return 0
 
 # --- Part T3c: the order --------------------------------------------------
@@ -2162,8 +2491,7 @@ def write_shift_line(root: Path, line: str) -> Path:
     path = root / "run" / "shift-log.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"{stamp} | {line}\n")
+    append_record(path, f"{stamp} | {line}\n")
     return path
 
 
@@ -2584,10 +2912,10 @@ def cmd_order(args: argparse.Namespace) -> int:
     if not repos:
         die("the board config names no repositories")
     issues, stale = read_board(deadline)
-    print("Overnight order - dry run (read only)")
+    emit("Overnight order - dry run (read only)")
     if stale:
-        print("REFUSED: the board list is stale, so the order cannot be trusted.")
-        print("The ticket CLI could not reach GitHub and fell back to its cache.")
+        emit("REFUSED: the board list is stale, so the order cannot be trusted.")
+        emit("The ticket CLI could not reach GitHub and fell back to its cache.")
         return 1
     bodies, unread, open_numbers = read_bodies(issues, deadline)
     path, lines = read_decisions()
@@ -2602,8 +2930,8 @@ def cmd_order(args: argparse.Namespace) -> int:
     kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
     if problems:
         for problem in problems:
-            print(f"REFUSED: {problem}")
-        print("REFUSED: the order cannot return a list it could not fully check.")
+            emit(f"REFUSED: {problem}")
+        emit("REFUSED: the order cannot return a list it could not fully check.")
         return 1
 
     receipts, receipt_error = read_receipts()
@@ -2611,8 +2939,8 @@ def cmd_order(args: argparse.Namespace) -> int:
         deadline, repos, issues, bodies, open_numbers, drops, receipts
     )
     if result.get("pr_error"):
-        print(f"REFUSED: {result['pr_error']}")
-        print("REFUSED: the order cannot return a list it could not fully check.")
+        emit(f"REFUSED: {result['pr_error']}")
+        emit("REFUSED: the order cannot return a list it could not fully check.")
         return 1
     failing = result["failing"]
     gate_pass = result["gate_pass"]
@@ -2625,13 +2953,13 @@ def cmd_order(args: argparse.Namespace) -> int:
     gate_error = receipt_error
 
     def show(title: str, items: list[dict], start: int) -> int:
-        print()
-        print(f"{title} ({len(items)})")
+        emit()
+        emit(f"{title} ({len(items)})")
         for offset, item in enumerate(items):
             blockers = ""
             if item.get("blockers"):
                 blockers = " [blocked: " + "; ".join(item["blockers"]) + "]"
-            print(
+            emit(
                 f"  {start + offset}. {item['repo']}#{item['number']} "
                 f"{item.get('key') or '-'} {item['title']} - {item.get('reason', '')}"
                 f"{blockers}"
@@ -2639,19 +2967,19 @@ def cmd_order(args: argparse.Namespace) -> int:
         return start + len(items)
 
     planned = len(failing) + len(gate_pass) + len(split_items) + len(unsplit_items)
-    print(f"Board: {len(issues)} tickets")
-    print(f"Allowed repositories: {len(repos)}")
-    print(f"Decisions log: {path}")
-    print(f"Dropped by the filter: {len(drops)}")
-    print(f"Planned items: {planned}")
+    emit(f"Board: {len(issues)} tickets")
+    emit(f"Allowed repositories: {len(repos)}")
+    emit(f"Decisions log: {path}")
+    emit(f"Dropped by the filter: {len(drops)}")
+    emit(f"Planned items: {planned}")
     if gate_error:
-        print(
+        emit(
             "The gate dispatches could not be read, so no pull request is "
             f"called gate PASS: {gate_error}"
         )
     if unverified_prs:
         for note in unverified_prs:
-            print(f"UNVERIFIED: {note}")
+            emit(f"UNVERIFIED: {note}")
     index = 1
     index = show("Failing pull requests", failing, index)
     index = show("Pull requests with a gate PASS", gate_pass, index)
@@ -2661,10 +2989,10 @@ def cmd_order(args: argparse.Namespace) -> int:
     show("Not ready: the board stage is not todo", backlog, index)
     line = f"planned {planned} items | {summarize(counts)}"
     log = write_shift_line(report_root(args.root), line)
-    print()
-    print(f"Summary line written to {log}")
-    print(f"  {line}")
-    print(
+    emit()
+    emit(f"Summary line written to {log}")
+    emit(f"  {line}")
+    emit(
         "No list file is written: the board is the list, and this run wrote "
         "one line of the shift log and nothing else."
     )
@@ -2864,29 +3192,30 @@ def cmd_attend(args: argparse.Namespace) -> int:
         f"attended-{args.date or datetime.now(PT).strftime('%Y-%m-%d')}"
     )
     if args.dry_run:
-        print("Overnight attended night - dry run (read only)")
-        print(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
-        print(f"Run by: {args.run_by}")
-        print(f"Planned items: {len(items)}")
+        emit("Overnight attended night - dry run (read only)")
+        emit(f"Board: {len(issues)} tickets{' (stale)' if stale else ''}")
+        emit(f"Run by: {args.run_by}")
+        emit(f"Planned items: {len(items)}")
         for issue in items:
-            print(
+            emit(
                 f"- {issue.get('key')} (#{issue.get('number')}) "
                 f"{issue.get('title', '')} [{issue.get('type')}] {issue.get('repo')}"
             )
-        print("A dry run writes no record and starts no work.")
+        emit("A dry run writes no record and starts no work.")
         return 0
     for name in ATTEND_DIRS:
         (root / name).mkdir(parents=True, exist_ok=True)
     start = datetime.now(PT)
     close = start + timedelta(minutes=args.minutes)
     shift_id = f"attended-{start.strftime('%Y%m%d-%H%M')}"
-    (root / "run" / "armed").write_text(
+    write_record(
+        root / "run" / "armed",
         f"shift: {shift_id}\n"
         f"start: {pt_clock(start)}\n"
         f"run by: {args.run_by}\n"
-        f"items: {len(items)}\n"
+        f"items: {len(items)}\n",
     )
-    (root / "run" / "deadline").write_text(f"{close.timestamp()}\n")
+    write_record(root / "run" / "deadline", f"{close.timestamp()}\n")
     policy = build_policy()
     policy.update(
         {
@@ -2905,7 +3234,7 @@ def cmd_attend(args: argparse.Namespace) -> int:
     # The log exists from the start, so a night that stops early still
     # leaves a record of what it did.
     log_path = root / "run" / "shift-log.md"
-    log_path.write_text("\n".join(log_lines) + "\n")
+    write_record(log_path, "\n".join(log_lines) + "\n")
     pr_cache: dict[str, list[dict]] = {}
     for issue in items:
         item_start = time.monotonic()
@@ -2927,7 +3256,7 @@ def cmd_attend(args: argparse.Namespace) -> int:
                 rows, _cut = read_pull_requests(repo, deadline)
             except RepoError as exc:
                 rows = []
-                print(f"overnight: {repo}: {exc}", file=sys.stderr)
+                emit(f"overnight: {repo}: {exc}", err=True)
             pr_cache[repo] = rows
         linked = []
         for row in pr_cache[repo]:
@@ -2972,8 +3301,9 @@ def cmd_attend(args: argparse.Namespace) -> int:
         elapsed = time.monotonic() - item_start
         observed = int(elapsed + 0.5)
         receipt = root / "receipts" / f"{issue.get('key')}.md"
-        receipt.write_text(
-            receipt_text(issue, state, pr, observation, observed, stopped, nxt)
+        write_record(
+            receipt,
+            receipt_text(issue, state, pr, observation, observed, stopped, nxt),
         )
         detail = (
             f"`gh pr checks {pr['number']} -R {repo}` exit {observation['checks_exit']}"
@@ -3004,10 +3334,10 @@ def cmd_attend(args: argparse.Namespace) -> int:
         f"{datetime.now(PT).strftime('%Y-%m-%d %H:%M %Z')} | attended night | "
         f"{end}"
     )
-    log_path.write_text("\n".join(log_lines) + "\n")
-    print(f"overnight: attended night {shift_id} wrote {len(items)} receipts")
+    write_record(log_path, "\n".join(log_lines) + "\n")
+    emit(f"overnight: attended night {shift_id} wrote {len(items)} receipts")
     for issue in items:
-        print(f"  - {issue.get('key')} (#{issue.get('number')})")
+        emit(f"  - {issue.get('key')} (#{issue.get('number')})")
     return cmd_report(
         argparse.Namespace(root=str(root), date=args.date, dry_run=False)
     )
@@ -3122,8 +3452,8 @@ def check_head_holds(repo: str, number: int, deadline: float) -> int:
     Only a published check counts. The builder's own line in the pull
     request body, `Builder check: PASS <head>`, is a claim about the
     check and not the check, so it never makes a head pass. A repository
-    that publishes no checks (CI is agent checks only, as in mac-ops)
-    therefore has no evidence on its heads, and the shift says so."""
+    that publishes no checks (CI is agent checks only, as in mac-ops) has
+    no evidence on its heads, and the shift says so."""
     code, out = run_read(
         [
             GH,
@@ -3234,14 +3564,22 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
         GH_TIMEOUT,
         deadline,
     )
-    if view_code == 0:
+    # A pull request whose view cannot be read is not a pull request that
+    # did not merge. The receipt says the view could not be read, so the
+    # item is never counted as done on a guess.
+    view_error = ""
+    if view_code != 0:
+        view_error = "the pull request's view could not be read"
+    else:
         try:
             view = json.loads(view_out)
         except ValueError:
             view = {}
-        files = view.get("files") or []
-        facts["files"] = len(files) if isinstance(files, list) else 0
-        merged = str(view.get("mergedAt") or "")
+            view_error = "the pull request's view could not be parsed"
+        else:
+            files = view.get("files") or []
+            facts["files"] = len(files) if isinstance(files, list) else 0
+            merged = str(view.get("mergedAt") or "")
 
     verdict = ""
     gate_thread = (item.get("gate") or {}).get("threadId") or ""
@@ -3259,11 +3597,19 @@ def item_facts(item: dict, receipts: dict[str, str], deadline: float) -> dict:
             builder["createdAt"], builder["updatedAt"]
         )
 
-    if failed:
+    if view_error:
+        facts["state"] = STATE_STUCK
+        facts["why"] = view_error
+        facts["next"] = "the shift reads the pull request again on the next cycle"
+    elif failed:
         facts["state"] = STATE_STUCK
         facts["why"] = "a check is failing: " + ", ".join(facts["failing"])
         facts["next"] = "the builder fixes the failing check and the gate runs again"
     elif merged:
+        # The spec's evidence rule (part T6): the merge alone is not the
+        # proof. The receipt has to hold the command, its exit code and
+        # the gate's PASS before the item counts as done, so a receipt
+        # never claims a done item it cannot show.
         holds, reason = evidence_holds(
             {"gate": facts["gate"]}, parse_check_text(facts["checks"])
         )
@@ -3316,7 +3662,7 @@ def issue_number(item: dict) -> object:
 
 
 def ticket_text(number: object) -> str:
-    """Return the issue number as it is written in a receipt's Ticket line."""
+    """Return the issue number as a receipt's Ticket line writes it."""
     return f" (#{number})" if number else ""
 
 
@@ -3368,9 +3714,12 @@ def write_receipt(root: Path, item: dict, body: str) -> str:
     A receipt is rewritten when the item's state changed and when the
     evidence changed. A receipt that says the same thing is left alone, so
     the folder holds the record of the state changes and not a copy of the
-    same state every cycle."""
+    same state every cycle. The receipt is redacted before it is written
+    and before it is compared, so the comparison is between what is on
+    disk and what would be written."""
+    safe = redact(body)
     path = receipt_path(root, item)
-    if path.exists() and without_observed(read_text(path)) == without_observed(body):
+    if path.exists() and without_observed(read_text(path)) == without_observed(safe):
         return "unchanged"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3378,7 +3727,7 @@ def write_receipt(root: Path, item: dict, body: str) -> str:
         # a run that dies mid-write never leaves a half receipt for the
         # morning report to read.
         scratch = path.with_name(path.name + ".tmp")
-        scratch.write_text(body, encoding="utf-8")
+        write_record(scratch, safe)
         os.replace(scratch, path)
     except OSError as exc:
         return f"failed: {exc}"
@@ -3432,31 +3781,35 @@ def run_write(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]
 
 
 def cmd_check_head(args: argparse.Namespace) -> int:
-    """Check a pull request's head against the check the gate reads.
+    """Check a pull request's head against the checks that ran on it.
 
-    A repository that publishes checks is checked by `gh pr checks`. A
+    A repository that publishes checks is checked with `gh pr checks`. A
     repository that publishes none (CI is agent checks only, as in
-    mac-ops) carries the builder's own line, `Builder check: PASS <head>`,
-    in the pull request body. This command answers for both, so a shift
-    has a command with an exit code to record in a receipt.
+    mac-ops) has no check on its heads, so the shift knows that and says
+    so. The builder's own line in the pull request body is a claim about
+    the check and not the check, so it never counts.
 
-    Exit 0: the head carries a passing check. Exit 1: it does not. Exit 2:
-    the head or its checks could not be read, which is a refusal."""
+    Exit 0: a check ran on the head and passed. Exit 1: a check ran on
+    the head and did not pass. Exit 2: no check ran on the head, or the
+    head could not be read, which is a refusal."""
     deadline = time.monotonic() + args.deadline
     code = check_head_holds(args.repo, args.number, deadline)
     if code == 0:
-        print(f"overnight: {args.repo}#{args.number} carries a check that ran and passed")
+        emit(
+            f"overnight: {args.repo}#{args.number} carries a check that ran "
+            "and passed"
+        )
     elif code == 1:
-        print(
-            f"overnight: {args.repo}#{args.number} carries a check that ran and did "
-            "not pass",
-            file=sys.stderr,
+        emit(
+            f"overnight: {args.repo}#{args.number} carries a check that ran "
+            "and did not pass",
+            err=True,
         )
     else:
-        print(
+        emit(
             f"overnight: REFUSED: no check ran on the head of "
             f"{args.repo}#{args.number}, so the check is unknown",
-            file=sys.stderr,
+            err=True,
         )
     return code
 
@@ -3474,10 +3827,10 @@ def cmd_close(args: argparse.Namespace) -> int:
     root = report_root(args.root)
     path = find_receipt(root, args.repo, args.number)
     if path is None:
-        print(
+        emit(
             f"overnight: REFUSED: no receipt for {args.repo}#{args.number}, "
             "so there is no evidence to close on",
-            file=sys.stderr,
+            err=True,
         )
         return 1
     receipt = parse_receipt(path)
@@ -3488,11 +3841,11 @@ def cmd_close(args: argparse.Namespace) -> int:
         holds = False
         reason = f"the receipt says {state or 'no state'}, not done"
     if not holds:
-        print(
+        emit(
             f"overnight: REFUSED: {path.name} does not hold the evidence: {reason}",
-            file=sys.stderr,
+            err=True,
         )
-        print("overnight: the issue stays open.", file=sys.stderr)
+        emit("overnight: the issue stays open.", err=True)
         return 1
     pull = (fields.get("pr") or "").strip()
     comment = (
@@ -3513,22 +3866,22 @@ def cmd_close(args: argparse.Namespace) -> int:
         comment,
     ]
     if args.dry_run:
-        print(f"overnight: {path.name} holds the evidence:")
-        print(f"  state: {state}")
+        emit(f"overnight: {path.name} holds the evidence:")
+        emit(f"  state: {state}")
         for check in receipt["checks"]:
-            print(f"  check: {check['raw']}")
-        print(f"  gate: {fields.get('gate')}")
-        print("overnight: the close would run:")
-        print("  " + " ".join(argv))
+            emit(f"  check: {check['raw']}")
+        emit(f"  gate: {fields.get('gate')}")
+        emit("overnight: the close would run:")
+        emit("  " + " ".join(argv))
         return 0
     code, out = run_write(argv, GH_TIMEOUT, deadline)
     if code != 0:
-        print(
+        emit(
             f"overnight: the close failed ({code}): {out.strip()}",
-            file=sys.stderr,
+            err=True,
         )
         return 1
-    print(
+    emit(
         f"overnight: closed {args.repo}#{args.number}; the receipt holds the "
         "evidence."
     )
@@ -3553,7 +3906,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         deadline, getattr(args, "allowed", None)
     )
     if error:
-        print(f"overnight: REFUSED: {error}", file=sys.stderr)
+        emit(f"overnight: REFUSED: {error}", err=True)
         return 1
     if bool(args.repo) != bool(args.number):
         die(
@@ -3568,24 +3921,24 @@ def cmd_receipt(args: argparse.Namespace) -> int:
             and int(item.get("number") or 0) == args.number
         ]
         if not picked:
-            print(
+            emit(
                 f"overnight: {args.repo}#{args.number} is not an item the shift "
                 "works, so it has no receipt",
-                file=sys.stderr,
+                err=True,
             )
             return 1
         items = picked
     elif args.items > 0:
         items = items[: args.items]
     if not items:
-        print("overnight: the board shows no item to write a receipt for")
+        emit("overnight: the board shows no item to write a receipt for")
         return 0
     root = report_root(args.root)
-    print(f"Overnight receipts - {len(items)} item(s)")
+    emit(f"Overnight receipts - {len(items)} item(s)")
     write_receipts(root, items, receipts, deadline, dry_run=args.dry_run)
     if args.dry_run:
-        print()
-        print("A dry run writes no receipt.")
+        emit()
+        emit("A dry run writes no receipt.")
     return 0
 
 
@@ -3652,9 +4005,9 @@ def write_receipts(
         path = receipt_path(root, item)
         label = item.get("key") or f"{item.get('repo')}#{item.get('number')}"
         if dry_run:
-            print()
-            print(f"--- {label} (dry run, nothing written) ---")
-            print(body, end="")
+            emit()
+            emit(f"--- {label} (dry run, nothing written) ---")
+            emit(body, end="")
             continue
         # The state the receipt held before this run, read before the file
         # is written: a receipt read after the write holds the new state
@@ -3664,13 +4017,13 @@ def write_receipts(
             previous = (parse_receipt(path)["fields"].get("state") or "").strip()
         outcome = write_receipt(root, item, body)
         change = bool(previous) and previous != facts["state"]
-        print(
+        emit(
             f"  {label} | {facts['state']} | gate {facts['gate']} | "
             f"{outcome}"
             + (f" | state {previous} -> {facts['state']}" if change else "")
         )
         if outcome.startswith("failed"):
-            print(f"overnight: {outcome}", file=sys.stderr)
+            emit(f"overnight: {outcome}", err=True)
             continue
         written += 1
         write_shift_line(
@@ -3757,10 +4110,10 @@ def cmd_board(args: argparse.Namespace) -> int:
         die("the board config names no repositories")
     issues, stale = read_board(deadline)
     if stale:
-        print(
+        emit(
             "overnight: REFUSED: the board list is stale, so the board "
             "cannot be trusted.",
-            file=sys.stderr,
+            err=True,
         )
         return 1
     bodies, unread, open_numbers = read_bodies(issues, deadline)
@@ -3776,14 +4129,14 @@ def cmd_board(args: argparse.Namespace) -> int:
     kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
     if problems:
         for problem in problems:
-            print(f"overnight: REFUSED: {problem}", file=sys.stderr)
+            emit(f"overnight: REFUSED: {problem}", err=True)
         return 1
     receipts, receipt_error = read_receipts()
     result = collect_items(
         deadline, repos, issues, bodies, open_numbers, drops, receipts
     )
     if result.get("pr_error"):
-        print(f"overnight: REFUSED: {result['pr_error']}", file=sys.stderr)
+        emit(f"overnight: REFUSED: {result['pr_error']}", err=True)
         return 1
     groups = (
         ("failing", result["failing"]),
@@ -3839,7 +4192,7 @@ def cmd_board(args: argparse.Namespace) -> int:
         },
         "items": items,
     }
-    print(json.dumps(payload, separators=(",", ":")))
+    emit(json.dumps(payload, separators=(",", ":")))
     return 0
 
 
@@ -3977,6 +4330,11 @@ def main() -> int:
         default=DEFAULT_DEADLINE,
         help=f"seconds the whole cycle may take (default {DEFAULT_DEADLINE})",
     )
+    shift.add_argument(
+        "--report",
+        action="store_true",
+        help="write the day's morning report after the cycle",
+    )
     shift.set_defaults(func=cmd_shift)
     policy = sub.add_parser(
         "policy",
@@ -4107,7 +4465,7 @@ def main() -> int:
     close.set_defaults(func=cmd_close)
     head = sub.add_parser(
         "check-head",
-        help="check a pull request's head against the check the gate reads",
+        help="check a pull request's head against the checks that ran on it",
     )
     head.add_argument("--repo", required=True, help="the repository of the pull request")
     head.add_argument(
@@ -4120,6 +4478,21 @@ def main() -> int:
         help=f"seconds the whole check may take (default {DEFAULT_DEADLINE})",
     )
     head.set_defaults(func=cmd_check_head)
+    redact_cmd = sub.add_parser(
+        "redact",
+        help="print a text with every secret pattern redacted",
+    )
+    redact_cmd.add_argument(
+        "--text",
+        default=None,
+        help="the text to redact (default: standard input)",
+    )
+    redact_cmd.add_argument(
+        "--file",
+        default=None,
+        help="the file to read and redact (default: standard input)",
+    )
+    redact_cmd.set_defaults(func=cmd_redact)
     args = parser.parse_args()
     return args.func(args)
 
