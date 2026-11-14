@@ -111,38 +111,44 @@ class CapacityTests(unittest.TestCase):
         self.q.live = lambda: 0
 
     def test_successful_launch_holds_its_slot_until_the_thread_is_visible(self):
-        # The thread list lags a launch by seconds, so the slot is held until
-        # the thread is seen live instead of being freed at once.
         self.queue_launch()
         reply = json.dumps({"threadId": "mcp:launch:one"})
         with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="running"), patch.object(
                 self.q, "call", return_value=(0, reply)):
             self.q.drain()
         queue = self.q.load()
         self.assertIn("7", queue["reserved"])
-        self.assertEqual(queue["reservedThreads"]["7"], "mcp:launch:one")
+        self.assertEqual(queue["reservedThreads"]["7"], "launch:mcp:launch:one")
         self.assertEqual(queue["items"], [])
 
-    def test_launch_that_finished_before_it_was_seen_releases_its_slot(self):
-        # A gate launch thread lives about twenty seconds and drain runs every
-        # thirty, so no pass ever sees it live. The slot must come back within
-        # the grace, not at the ten-minute expiry.
+    def test_terminal_thread_releases_a_launch_slot_that_was_never_seen_live(self):
         self.q.save({"next": 2, "items": [],
-                     "reserved": {"7": self.q.time.time() - self.q.UNSEEN_GRACE - 1},
-                     "reservedThreads": {"7": "mcp:launch:one"}})
+                     "reserved": {"7": self.q.time.time()},
+                     "reservedThreads": {"7": "launch:mcp:launch:one"}})
         self.q.live = lambda: 0
-        with patch.object(self.q, "active_thread_ids", return_value=set()):
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="completed"):
             self.q.drain()
         queue = self.q.load()
         self.assertEqual(queue["reserved"], {})
         self.assertEqual(queue["reservedThreads"], {})
         from pathlib import Path
         log = Path(self.tmp.name, "dispatch.log").read_text()
-        self.assertIn("released reservation #7: thread mcp:launch:one is not live", log)
+        self.assertIn("released reservation #7: thread mcp:launch:one is completed", log)
+
+    def test_unfinished_thread_keeps_a_launch_slot_that_was_never_seen_live(self):
+        # Elapsed time alone must not free the slot: only a terminal status does.
+        self.q.save({"next": 2, "items": [],
+                     "reserved": {"7": self.q.time.time() - 300},
+                     "reservedThreads": {"7": "launch:mcp:launch:one"}})
+        self.q.live = lambda: 0
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="waiting"):
+            self.q.drain()
+        self.assertIn("7", self.q.load()["reserved"])
 
     def test_launch_burst_does_not_overshoot_the_cap_with_a_lagging_count(self):
-        # The thread list lags a launch, so live() can still say 0 while six
-        # launches are out. The reservations, not the stale count, hold the cap.
         self.q.save({"next": 40, "items": [
             {"id": n, "tool": "t3_thread_launch", "args": {}, "priority": 0,
              "title": "burst"} for n in range(1, 31)]})
@@ -152,6 +158,7 @@ class CapacityTests(unittest.TestCase):
             calls.append(args)
             return 0, json.dumps({"threadId": f"mcp:launch:{len(calls)}"})
         with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="running"), patch.object(
                 self.q, "call", side_effect=start):
             self.q.drain()
         self.assertEqual(len(calls), 6)
