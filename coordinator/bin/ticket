@@ -1249,7 +1249,11 @@ def gate_live(title, gate_id):
             return f"queued as coordq #{item['id']}"
     heads = queue.get("gatedHeads") or {}
     if gate_id in heads:
-        return f"a gate for this head is already recorded as coordq #{heads[gate_id]}"
+        # A head records its queue item, or the record that also carries the
+        # retry count once a gate for it died without a verdict.
+        entry = heads[gate_id]
+        item = entry.get("id") if isinstance(entry, dict) else entry
+        return f"a gate for this head is already recorded as coordq #{item}"
     try:
         with open(os.path.join(QUEUE_DIR, "dispatch-receipts.json")) as f:
             receipts = json.load(f)
