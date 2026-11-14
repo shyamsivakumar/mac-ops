@@ -28,6 +28,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight shift --dry-run` | The command the launchd job fires. Every run is one cycle: it reads the policy snapshot, reads the board under the snapshot's allow list, orders it and writes the cycle's line to `run/shift-log.md`. The shift runs 24x7, so there is no night window and no part of the night, and the shift is never armed. The morning report is on demand (`overnight report`), not something the job writes. |
 | `overnight policy` | Writes the policy snapshot the shift reads on every cycle: `run/policy.json`. The allow list, the queue's slot cap (read only, never raised), the stall cap, the retry cap and the verify level. There is no item cap and no allowance stop. It writes no `run/armed` and no `run/deadline`, and it can run again at any time. |
 | `overnight receipt` | Writes the receipt of every item whose state the shift can see (spec part T5b): the state, the pull request, the checks and their exit codes, the gate's verdict, the files it touches, the builder's own time and why the item stopped. It reads GitHub, the queue and the threads, so a receipt never carries a model claim. `--repo` and `--number` write the receipt of one item, `--items N` writes the receipts of the first N items of the shift's order. `--dry-run` prints the receipt and writes no file. |
+| `overnight close --repo <repo> --number <n>` | Closes a ticket's issue, and only when the receipt holds the evidence (spec part T6): a check command, its exit code and a gate PASS on the pull request. A receipt with a claim but no exit code leaves the issue open, and the command says which record is missing. `--dry-run` says what the close would run and closes nothing. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
@@ -150,6 +151,36 @@ The receipt never carries a model claim where a proof belongs: the gate
 verdict comes from the gate, the checks come from the command that ran
 them and the builder time comes from the thread's own times. The cycle
 writes the receipt, so no agent writes one by hand.
+
+## The evidence rule for a done item
+
+An item counts as done, and the coordinator closes its issue, only when the
+receipt records a command, its exit code and a gate PASS on the pull
+request. A model claim alone never counts.
+
+The rule lives in one place in the module (`evidence_holds`), and three
+things read it:
+
+| Reader | What it does with the rule |
+| --- | --- |
+| The receipt writer | A pull request that merged is `done` only when the receipt holds the evidence. When it does not, the receipt says `stuck` and says which record is missing: "a check has no exit code, so it did not run" or "the gate did not pass". A receipt never claims a done item it cannot show. |
+| The morning report | The report keeps the rule it already held: a check that did not run leaves the item stuck, whatever the receipt's own state says. |
+| `overnight close` | The close step. It reads the receipt of the ticket and closes the issue only when the receipt holds the evidence. |
+
+```sh
+overnight close --repo shyamsivakumar/mac-ops --number 182
+overnight close --repo shyamsivakumar/mac-ops --number 182 --dry-run
+```
+
+The close step finds the receipt by the fields it holds (the repository and
+the issue number in its `Ticket` line), so the folder of receipts stays the
+only record of what the shift did. It refuses with a non-zero exit when the
+receipt holds no check, a check with no exit code, a check that failed, a
+gate that did not pass, or a state that is not `done`. The issue then stays
+open, and the refusal names the record that is missing.
+
+The close step writes nothing but the close itself. It does not merge, does
+not push and does not touch the slot cap or the Ascend rules.
 
 ## What the filter drops
 
