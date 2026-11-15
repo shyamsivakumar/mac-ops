@@ -910,7 +910,30 @@ def reviewer_model(models):
 
 
 def quota_failure(value):
-    return any(word in str(value).lower() for word in (
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return False
+    if not isinstance(value, dict):
+        return False
+    if "thread" in value:
+        thread = value.get("thread") or {}
+        runs = value.get("recentRuns") or []
+        failure = next((run for run in runs
+                        if run.get("runId") == thread.get("latestRunId")), thread)
+        if failure.get("status") != "failed":
+            return False
+    else:
+        failure = value
+    error = failure.get("error")
+    if isinstance(error, dict):
+        text = " ".join(str(error.get(field) or "") for field in ("code", "message"))
+    elif isinstance(error, str):
+        text = error
+    else:
+        return False
+    return any(word in text.lower() for word in (
         "spend limit", "usage limit", "quota exhausted", "quota exceeded",
         "insufficient_quota", "exceeded your current quota"))
 
