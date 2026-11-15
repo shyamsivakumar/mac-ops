@@ -110,11 +110,46 @@ Only path prefixes were rewritten; no test output, exit status or count was
 changed. Nothing credential-bearing is captured: the suite reads no `.env`,
 keychain or provider token.
 
-So the full local suite is red on origin/main for the same four tests. No PASS
-is claimed for the full check, and the failures were not fixed here: they are
-unrelated to #345, and repairing them would be a production and test change
-outside this ticket's scope. A separate script-shaped check ticket is the
-route for that repair under lane.md section 5.
+So the full local suite was red on origin/main for the same four tests. No PASS
+was claimed for the full check in the turn that recorded it, and the failures
+were not fixed there. The gate on head 80c53a8d6758480465bc1b10d5846d0628577127
+required a passing full check, so the repair is below.
+
+### Gate fix: stale gate-model fixture (test-only)
+
+Finding: "The required full-suite pass remains unresolved... #357 explicitly
+requires successful fast and full checks." The four failing tests asserted the
+retry and give-up lines that `cmd_gatekeep` prints for a dead gate. They failed
+because their fixture `DEAD_GATE` recorded a failed thread with no model, while
+c61f660 requires `{"instanceId": thread.providerInstanceId, "model":
+thread.model}` to equal `ASTRA_MODEL` before a dead gate is retried. A real gate
+thread is launched by `coordq` on that model, so the fixture, not the guard,
+was stale.
+
+Change, confined to `tests/test_gatekeep_retry_limit.py`:
+
+- `DEAD_GATE` now records the Astra gate model, and `setUpModule` fails loudly
+  if that fixture and `coordq.ASTRA_MODEL` ever diverge.
+- Every assertion in the four previously failing tests is unchanged; no check
+  was weakened, skipped or removed, and no production source was edited.
+- One test is added, `NonAstraGateTest.test_a_dead_opus_gate_is_not_requeued`,
+  which pins the #340 contract the fixture change relies on: a dead gate that
+  did not run on the Astra model is left alone, with no retry line and no
+  queued launch. Coverage of the guard increases rather than decreases.
+
+Result at this head, 2026-11-15, through `heavy` with a 300-second timeout:
+
+    timeout 300 ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
+    288 tests, OK, exit 0
+
+    timeout 300 ~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py
+    fast-check: passed; selected checks are not the full suite, exit 0
+
+Exclusions: none among local checks. Device, handset, live-service, launchd
+activation and owner testing remain WAIVED by Shyam's 2026-11-14 instruction
+("no testing is needed lets just finish backlog building everything"), not
+failed. The earlier baseline receipts stay in this directory because they are
+the attribution record for the pre-existing failures.
 
 ## Gate fix: missing isolated acceptance receipts
 
