@@ -119,6 +119,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
+from tick_health import tick_alarm
+
 from typing import NoReturn
 
 TICKET = os.environ.get("OVERNIGHT_TICKET", "ticket")
@@ -1948,6 +1952,9 @@ def render_report(snapshot: dict) -> str:
         model_use = f"{UNVERIFIED} (the allowance was not readable)"
     lines.append(f"- Builder time: {builder}. Model use: {model_use}.")
     lines.append("")
+    alarm = tick_alarm()
+    if alarm:
+        lines.append(alarm)
     return "\n".join(lines)
 
 
@@ -5128,6 +5135,7 @@ def cmd_board(args: argparse.Namespace) -> int:
     live = result["live"]
     payload = {
         "command": "overnight board",
+        "tickAlarm": tick_alarm(),
         "generatedAt": datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z"),
         "rules": BOARD_RULES,
         "budget": budget,
