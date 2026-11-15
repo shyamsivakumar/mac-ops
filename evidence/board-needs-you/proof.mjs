@@ -47,6 +47,8 @@ check("C plain done turn stays done", classify([grp("done", [thread("done")])]).
 console.log("how a turn ends:");
 check("question", endsWithAsk("Shall I run the migration now?"), true);
 check("waiting line", endsWithAsk("I need the Railway token.\n\nWAITING: Railway token"), true);
+check("waiting word alone", endsWithAsk("Rechecked: no longer WAITING on anything"), false);
+check("bold waiting status", endsWithAsk("Status: **WAITING** on the owner-side signing profile."), false);
 check("bold question", endsWithAsk("... bring it level?**"), true);
 check("list question", endsWithAsk("- Is the frame allowed to reboot?"), true);
 check("statement", endsWithAsk("Merged. Nothing else needs you."), false);
@@ -70,6 +72,12 @@ for (const g of board.groups) {
 console.log(`live board, ${((Date.now() - started) / 1000).toFixed(1)}s, decisions items: ${decisions.length}`);
 console.log(`  ${board.groups.length} groups; columns ${JSON.stringify(cols)}; failed+stopped cards ${board.failed}; dead cards ${board.dead}`);
 for (const line of needs) console.log(`  needs: ${line}`);
+const askGroups = board.groups.filter((g) => g.kind === "ask");
+check("live ask groups", askGroups.length, decisions.length);
+for (const g of askGroups) console.log(`  ask group key=${g.key} at=${g.at} project=${g.project} task=${JSON.stringify(g.task)}`);
+check("live ask keys", askGroups.every((g) => g.key.startsWith("ask:")), true);
+check("live ask times", askGroups.every((g) => Number.isFinite(g.at) && Number.isFinite(g.primary.at)), true);
+check("live ask titles kept", askGroups.every((g) => decisions.some((item) => item.title === g.title)), true);
 
 if (fail.length) {
   console.log(`FAILED ${fail.length}: ${fail.join(", ")}`);
