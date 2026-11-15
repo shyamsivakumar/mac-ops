@@ -246,6 +246,39 @@ def gate_pipeline():
             failures.append(f"{name}: {exc}")
     if failures:
         raise AssertionError("; ".join(failures))
+    completion_boundary()
+
+
+def completion_boundary():
+    from argparse import Namespace
+    ticket = load_ticket()
+    head = "a" * 40
+    proof = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
+    merged = dict(state="MERGED", headRefOid=head, body="Refs #10", mergeCommit={"oid": "b" * 40})
+    cases = [(merged, proof, True), (dict(merged, state="OPEN"), proof, False),
+             (dict(merged, headRefOid="c" * 40), proof, False),
+             (dict(merged, body="Refs #11"), proof, False),
+             (dict(merged, mergeCommit=None), proof, False),
+             (merged, proof.replace("PROVIDES: PASS", "PROVIDES: FAIL"), False),
+             (merged, proof.replace("CHECK: PASS", "CHECK: FAIL"), False),
+             (merged, proof.replace("VERDICT: PASS", "VERDICT: FAIL"), False)]
+    for pull, reply, allowed in cases:
+        actions = []
+        args = Namespace(ref="shyamsivakumar/mac-ops#10", pr=20, head=head, gate_thread="gate")
+        def close(cmd):
+            exact(cmd[:3], ["issue", "close", "10"])
+            actions.append("close")
+            return "closed"
+        with patch.object(ticket, "gh_json", return_value=pull), \
+             patch.object(ticket, "t3_call", return_value={"items": [dict(type="assistant_message", text=reply)]}), \
+             patch.object(ticket, "gh", side_effect=close):
+            try:
+                ticket.cmd_close(args)
+            except ticket.Refuse:
+                exact(allowed, False)
+            else:
+                exact(allowed, True)
+        exact(actions, ["close"] if allowed else [])
 
 
 def no_parking(status="interrupted"):

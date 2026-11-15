@@ -6,6 +6,7 @@ import time
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
+OPUS = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
 CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DRY = False
@@ -72,7 +73,7 @@ ORDER = {
 def run(cmd, timeout=150):
     if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list")):
         require_api_budget()
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=True)
     return (p.stdout + p.stderr).strip()
 
 
@@ -175,6 +176,8 @@ def park(repo, number, issue, head, reply, ledger):
 
 
 def act_on_pr(repo, number, ledger):
+    if repo not in LANE_REPOS:
+        return None
     pr = next((p for p in SNAPSHOT["repos"][repo]["prs"] if p["number"] == number), {})
     if pr.get("state") != "OPEN":
         return None
@@ -201,7 +204,16 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
-        return f"skip #{number}: gate PASS but still open (merge refused or digitized); for Shyam"
+        if repo == "digitized/Concerning":
+            return f"skip #{number}: gate PASS, manual merge"
+        if DRY:
+            return f"DRY merge #{number} {head}"
+        run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+        if issue:
+            run(["ticket", "close", f"{repo}#{issue}", "--pr", str(number), "--head", head,
+                 "--gate-thread", gate["threadId"]])
+        run(["git", "-C", "/Users/shyamsivakumar/Code/" + PATHS[repo], "pull", "--ff-only", "origin", "main"])
+        return f"#{number}: merged {head}"
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
         if status in ("completed", "interrupted", "failed"):
@@ -215,18 +227,24 @@ def act_on_pr(repo, number, ledger):
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}")
-    if True:
-        return None
+    tag = "regate" if verdict == "none" else "gate"
+    model = ASTRA
+    if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
+        if "astra" in reply.lower() and "quota" in reply.lower() and "exhaust" in reply.lower():
+            tag, model = "opusgate", OPUS
+        else:
+            ledger[f"needs-you:{repo}#{number}:{head}"] = "gate ended without verdict after retry"
+            return f"#{number}: needs-you, gate ended without verdict after retry"
     brief = run(["ticket", "gate", f"{repo}#{number}", "--print-brief"])
     if head not in brief:
         return f"#{number}: no gate brief ({brief[-120:]})"
+    brief += ("\nLane override: review only. Do not merge or close issues; the lane owns completion. "
+              f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
+              f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
     key = CFG[repo]["key"]
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} (Astra)", "modelSelection": ASTRA,
-            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"gate:{repo}#{number}:{head}:lane",
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "modelSelection": model,
+            "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
-    tag = "regate" if verdict == "none" else "gate"
-    if verdict == "none" and sum(1 for k in ledger if (k.startswith(f"gate:{repo}#{number}:") or k.startswith(f"regate:{repo}#{number}:"))) >= 3:
-        return "skip " + park(repo, number, issue, head, reply, ledger)
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
 
 
