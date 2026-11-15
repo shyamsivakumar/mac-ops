@@ -74,7 +74,12 @@ with tempfile.TemporaryDirectory(prefix="mo-1006-") as temporary:
     cycle("unknown start", 2300, [])
     log.write_text("rate limit " + marker + "\nTraceback (most recent call last): " + marker + "\n")
     cycle("log alarms", 2300, ["EVENT rate-limit", "EVENT traceback runtime.log"])
-    cycle("restart log dedup", 2300, [])
+    legacy = json.loads(state.read_text())
+    legacy["logOffsets"][str(log)].pop("generation")
+    state.write_text(json.dumps(legacy))
+    cycle("legacy state restart log dedup", 2300, [])
+    require(json.loads(state.read_text())["logOffsets"][str(log)]["generation"] == 0,
+            "legacy state did not migrate to generation zero")
     with log.open("a") as stream:
         stream.write("rate-limit " + marker)
     cycle("partial line silent", 2300, [])
@@ -88,6 +93,27 @@ with tempfile.TemporaryDirectory(prefix="mo-1006-") as temporary:
     log.write_text("rate limit\n")
     cycle("copy truncate", 2300, ["EVENT rate-limit"])
     cycle("truncate restart dedup", 2300, [])
+
+    with log.open("a") as stream:
+        stream.write("ordinary padding before truncation\n")
+    cycle("same-prefix before truncation", 2300, [])
+    old_log_state = json.loads(state.read_text())["logOffsets"][str(log)]
+    old_generation = old_log_state.get("generation", 0)
+    log.write_text("rate limit\n")
+    cycle("identical-line copy truncate", 2300, ["EVENT rate-limit"])
+    new_log_state = json.loads(state.read_text())["logOffsets"][str(log)]
+    require(new_log_state["identity"] == old_log_state["identity"], "copy truncation changed inode")
+    require(new_log_state["generation"] == old_generation + 1, "truncation did not advance generation")
+    cycle("identical-line truncation restart dedup", 2300, [])
+    with log.open("a") as stream:
+        stream.write("old padding\n")
+    cycle("anchor before regrow", 2300, [])
+    old_generation = json.loads(state.read_text())["logOffsets"][str(log)]["generation"]
+    log.write_text("rate limit\nreplacement padding longer than previous log\n")
+    cycle("anchor-detected truncate and regrow", 2300, ["EVENT rate-limit"])
+    require(json.loads(state.read_text())["logOffsets"][str(log)]["generation"] == old_generation + 1,
+            "anchor mismatch did not advance generation")
+    cycle("anchor truncation restart dedup", 2300, [])
 
     spec = importlib.util.spec_from_file_location("installer", ROOT / "install_coordinator.py")
     installer = importlib.util.module_from_spec(spec)

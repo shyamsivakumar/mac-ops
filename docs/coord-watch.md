@@ -53,8 +53,12 @@ logs, live mode reads the queue's dispatch.log. Each cycle consumes at most
 64 KiB per log, retains byte offsets and device/inode identity, and detects
 replacement or truncation. Complete lines containing rate-limit or traceback
 markers emit `EVENT rate-limit` or `EVENT traceback <basename>`. No raw log
-line is printed or persisted. Event identities use inode, byte offset and a
-line hash; state survives restart. Partial lines wait for completion; oversized
+line is printed or persisted. Event identities use inode, persisted generation, byte offset and a
+line hash; state survives restart. File replacement, detected shrinkage, or a
+changed saved boundary increments the generation before rereading, so an
+identical alarm at the same byte offset can fire for the new log contents.
+Existing state without a generation starts at zero and preserves its old event
+identities until a replacement or truncation is detected. Partial lines wait for completion; oversized
 lines are discarded. Rotation reads the new file from zero; unread bytes in
 the old file are not recovered. A truncate-and-regrow operation with an
 identical saved boundary cannot be distinguished from append.

@@ -82,3 +82,30 @@ out of scope. All command subprocesses have 15-second timeouts.
 Observed result: replay exit 0; every listed case PASS. Device, handset and
 live-service cases are WAIVED, not failed. No production process started.
 This is a proof-only gate fix; runtime and installer source are unchanged.
+
+## Gate fix: identical-line copy truncation
+
+The major finding at e3a3917530c7d48252d468cd560bf98254f867ac is
+resolved by persisting logOffsets[path].generation and including nonzero
+generations in event identities. Detected shrinkage or a changed saved boundary
+increments it before resetting the offset. File replacement also increments
+it. Legacy state starts at zero and retains existing event identity formatting,
+so upgrading does not repeat already-seen alarms. Normal append/restart keeps
+the generation unchanged.
+
+Before the fix, the extended real-command replay failed with
+`identical-line copy truncate: unexpected events []`. After the fix, the same
+case emits exactly one rate-limit event, verifies the inode is unchanged and
+the generation increments once, then restarts with no duplicate event. The
+replay also verifies a truncate/regrow boundary mismatch increments generation
+and emits the repeated prefix alarm once; another restart stays silent. A
+legacy-state case removes the generation field and verifies silent migration
+to zero. Existing threshold, rotation, installed-executable and privacy cases
+continue to pass. Reproduce with the replay command above; replay.out captures
+the completed result.
+
+Device, handset and live-service cases remain WAIVED, not failed. No live
+runtime changes or activation occurred. The inherent identical truncate/regrow
+boundary detection limit remains documented. Diff review used the existing
+standard-library hash and state model, added no dependencies, comments or
+suppressions, and preserved all existing checks.
