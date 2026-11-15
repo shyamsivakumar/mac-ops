@@ -17,8 +17,8 @@ export function endsWithAsk(text) {
 // The column a group of threads belongs to. Decisions and asked turns need Shyam; dead runs do not.
 export function columnOf(group) {
   if (group.kind === "ask" || group.kind === "wait") return NEEDS;
-  if (group.kind === "run") return "run";
   if (group.threads.some((thread) => thread.ask)) return NEEDS;
+  if (group.kind === "run") return "run";
   if (group.kind === "fail" || group.kind === "stop") return DEAD;
   return "done";
 }
