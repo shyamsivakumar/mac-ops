@@ -31,6 +31,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bin"))
+from tick_health import tick_alarm
+
 HOME = Path.home()
 COORD_DIR = HOME / "Code/coordinator"
 PI_DIR = HOME / ".pi/agent-coordinator"
@@ -282,6 +285,9 @@ def take_lock() -> int:
 
 
 def main() -> int:
+    alarm = tick_alarm()
+    if alarm:
+        print(alarm, flush=True)
     env = child_env()
     signal.signal(signal.SIGTERM, stop_on_signal)
     signal.signal(signal.SIGINT, stop_on_signal)
