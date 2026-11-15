@@ -8,9 +8,9 @@ Missing fields are null or `unknown`. Source completeness is explicit. A failed 
 
 ## Bounds and request budget
 
-One invocation is one cycle. GitHub reads are cached in the command's own state file for at least 300 seconds, including failed attempts. Each refresh reads at most 40 configured repositories, three pages of 100 open issues and three pages of 100 open PRs per repository. There are no per-ticket API calls or application retries. The worst case is 40 × 6 × 12 = 2,880 GitHub requests per hour across cycles sharing a state file, including failures. That leaves 2,120 of a standard authenticated 5,000-request hourly allowance for other work. It is not a reservation of the shared account quota. Repositories beyond 40 and lists reaching the page cap remain unknown. A cold start adds at most 240 calls to a rolling-hour boundary, for 3,120. Repeatedly deleting or switching state files defeats the cache budget.
+`--once` performs one cycle; the default invocation keeps one foreground loop running. GitHub reads are cached in the command's own state file for at least 300 seconds, including failed attempts. Each refresh reads at most 40 configured repositories, three pages of 100 open issues and three pages of 100 open PRs per repository. There are no per-ticket API calls or application retries. The worst case is 40 × 6 × 12 = 2,880 GitHub requests per hour across cycles sharing a state file, including failures. That leaves 2,120 of a standard authenticated 5,000-request hourly allowance for other work. It is not a reservation of the shared account quota. Repositories beyond 40 and lists reaching the page cap remain unknown. A cold start adds at most 240 calls to a rolling-hour boundary, for 3,120. Repeatedly deleting or switching state files defeats the cache budget.
 
-T3 is read through `t3mcp call t3_thread_list -`, at most three pages per cycle. Each subprocess has a 15-second timeout, and all network collection shares a 120-second deadline. Cached GitHub rows retain only board fields and PR references, rather than issue bodies. Queue JSON sources are capped at 8 MiB; only the last 64 KiB of `dispatch.log` is read. The command writes only its state file, default `~/.coordinator/coord-watch.json`; the parent directory is created if needed. The file is exclusively locked during a cycle. An interrupted state write can require restoring that file; there is no activation or queue recovery action.
+T3 is read through `t3mcp call t3_thread_list -`, at most three pages per cycle. Each subprocess has a 15-second timeout, and all network collection shares a 120-second deadline. Cached GitHub rows retain only board fields and PR references, rather than issue bodies. Queue JSON sources are capped at 8 MiB; only the last 64 KiB of `dispatch.log` is read. The command writes only its state file, default `~/.coordinator/coord-watch.json`; the parent directory must already exist. The file is exclusively locked for the process lifetime. An interrupted state write can require restoring that file; there is no activation or queue recovery action.
 
 ## Reproduce the source proof
 
@@ -33,4 +33,36 @@ Gate observation reuses `overnight.read_gate_report` and dispatch receipt keys `
 
 Idle requires ready (`todo`) or orphaned (unstaged or `started`, without PR) work, no queued repository request and no active known builder or gate. Unknown thread status blocks idle. Every recorded gate thread must appear in the T3 listing with an explicit terminal status before an idle cycle can count; a missing gate thread also blocks idle. Two consecutive complete invocations are required; partial sources reset the count. GitHub observations may be cached within the existing five-minute TTL. A cycle is an invocation, not a freshness guarantee. Events are deduplicated in the state file; a new head has a new gate event identity. Idle can emit again after activity or an incomplete cycle breaks the idle streak. Builder identity is issue plus thread.
 
-Reproduce the isolated command receipts with `timeout 300 python3 evidence/MO-1005/replay.py`. See `evidence/MO-1005/replay.out` for observed events. State loss can repeat events, and an interrupted write can require recovery. No scheduler or live installation is added.
+Reproduce the isolated command receipts with `timeout 300 python3 evidence/MO-1005/replay.py`. See `evidence/MO-1005/replay.out` for observed events. State loss can repeat events, and an interrupted write can require recovery. No lane scheduler or live installation is added.
+
+## Runtime alarms and foreground loop
+
+The default command repeats collection every 30 seconds. `--interval 5..300`
+sets the delay; failed cycles use exponential backoff capped at 300 seconds.
+SIGINT and SIGTERM stop the loop, releasing its lifetime state lock. A signal
+during collection takes effect after the bounded collection finishes (up to
+120 seconds). No daemon, dispatch or lane action is installed or activated.
+
+`EVENT run-long <thread> <minutes>` fires once per active run after strictly
+more than 20 minutes. The collector reads the latest run for running threads
+using bounded `t3_thread_read` calls within the shared deadline. Missing run
+start times remain unknown. Waiting and queued time do not trigger alarms.
+
+`--log <path>` adds a runtime log, repeatable up to 16 times. Without explicit
+logs, live mode reads the queue's dispatch.log. Each cycle consumes at most
+64 KiB per log, retains byte offsets and device/inode identity, and detects
+replacement or truncation. Complete lines containing rate-limit or traceback
+markers emit `EVENT rate-limit` or `EVENT traceback <basename>`. No raw log
+line is printed or persisted. Event identities use inode, byte offset and a
+line hash; state survives restart. Partial lines wait for completion; oversized
+lines are discarded. Rotation reads the new file from zero; unread bytes in
+the old file are not recovered. A truncate-and-regrow operation with an
+identical saved boundary cannot be distinguished from append.
+
+State is persisted before output to avoid duplicate alarms after restart;
+a crash between persistence and printing can lose an event. State-file loss
+can repeat events. Event history remains bounded by the existing 8 MiB state
+limit: reaching it fails the cycle visibly rather than dropping identities.
+Log errors are skipped without printing source content. Reads never write logs.
+Device, live-service and owner testing were waived for #345. The required
+repository check remains `timeout 300 python3 scripts/mac_ops_fast_check.py`.
