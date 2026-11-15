@@ -702,7 +702,12 @@ verification and assigns merge ownership to the lane. The fixture exercises
 the actual close handler with valid proof and refusals for unmerged or wrong
 heads, wrong issue references, missing merge commits and failed proof lines.
 Provides facts remain a reviewer attestation, not an independent machine proof.
-The final local update uses git pull --ff-only on the canonical repository.
+The final local update reads git worktree list --porcelain -z, finds the
+worktree holding refs/heads/main, verifies its branch, and runs git pull
+--ff-only there. If main is not checked out, it fetches origin main:main
+without changing the canonical checkout branch. Invalid listings or changed
+branches refuse the update. Fixtures cover a canonical feature branch with
+main elsewhere, an unchecked-out main, paths with spaces, and refusal cases.
 Command failures now raise rather than being recorded as successful sends.
 No runtime is installed and live checks remain waived.
 

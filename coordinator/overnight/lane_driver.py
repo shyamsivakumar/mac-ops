@@ -212,7 +212,7 @@ def act_on_pr(repo, number, ledger):
         if issue:
             run(["ticket", "close", f"{repo}#{issue}", "--pr", str(number), "--head", head,
                  "--gate-thread", gate["threadId"]])
-        run(["git", "-C", "/Users/shyamsivakumar/Code/" + PATHS[repo], "pull", "--ff-only", "origin", "main"])
+        fast_forward_main(repo)
         return f"#{number}: merged {head}"
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
@@ -251,6 +251,24 @@ def act_on_pr(repo, number, ledger):
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
          "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalouge",
          "digitized/Concerning": "concerning"}
+
+
+def fast_forward_main(repo):
+    canonical = "/Users/shyamsivakumar/Code/" + PATHS[repo]
+    listing = run(["git", "-C", canonical, "worktree", "list", "--porcelain", "-z"])
+    records = [record.split("\0") for record in listing.split("\0\0") if record]
+    if not records or any(not record[0].startswith("worktree ") for record in records):
+        raise RuntimeError("invalid worktree listing; main update refused")
+    main_paths = [record[0][len("worktree "):] for record in records if "branch refs/heads/main" in record]
+    if len(main_paths) > 1:
+        raise RuntimeError("multiple main worktrees; main update refused")
+    if main_paths:
+        path = main_paths[0]
+        if run(["git", "-C", path, "symbolic-ref", "--quiet", "HEAD"]) != "refs/heads/main":
+            raise RuntimeError("main worktree branch changed; main update refused")
+        run(["git", "-C", path, "pull", "--ff-only", "origin", "main"])
+    else:
+        run(["git", "-C", canonical, "fetch", "origin", "main:main"])
 
 
 def drift_ff(ledger):

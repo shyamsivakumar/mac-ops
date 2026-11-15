@@ -200,6 +200,11 @@ def gate_pipeline():
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
                 return "merged"
+            if cmd[0] == "git" and "worktree" in cmd:
+                return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
+            if cmd[0] == "git" and "symbolic-ref" in cmd:
+                exact(cmd[2], "/fixture/main")
+                return "refs/heads/main"
             if cmd[0] == "git" and "--ff-only" in cmd:
                 actions.append("ff")
                 return "updated"
@@ -247,6 +252,43 @@ def gate_pipeline():
     if failures:
         raise AssertionError("; ".join(failures))
     completion_boundary()
+    main_update_boundary()
+
+
+def main_update_boundary():
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    canonical = "/Users/shyamsivakumar/Code/mac-ops"
+    feature = f"worktree {canonical}\0HEAD old\0branch refs/heads/feature\0\0"
+    main = "worktree /fixture/main worktree\0HEAD old\0branch refs/heads/main\0\0"
+    listing_cmd = ["git", "-C", canonical, "worktree", "list", "--porcelain", "-z"]
+    verify_cmd = ["git", "-C", "/fixture/main worktree", "symbolic-ref", "--quiet", "HEAD"]
+    pull_cmd = ["git", "-C", "/fixture/main worktree", "pull", "--ff-only", "origin", "main"]
+    fetch_cmd = ["git", "-C", canonical, "fetch", "origin", "main:main"]
+    for listing, branch, expected, refused in [
+        (feature + main, "refs/heads/main", [listing_cmd, verify_cmd, pull_cmd], False),
+        (feature, "", [listing_cmd, fetch_cmd], False),
+        (feature + main, "refs/heads/feature", [listing_cmd, verify_cmd], True),
+        ("", "", [listing_cmd], True),
+    ]:
+        commands = []
+        def command(cmd, timeout=150):
+            commands.append(cmd)
+            if cmd == listing_cmd:
+                return listing
+            if cmd == verify_cmd:
+                return branch
+            if cmd not in (pull_cmd, fetch_cmd):
+                raise AssertionError(f"unexpected main update command: {cmd}")
+            return "updated"
+        with patch.object(lane, "run", command):
+            try:
+                lane.fast_forward_main(repo)
+            except RuntimeError:
+                exact(refused, True)
+            else:
+                exact(refused, False)
+        exact(commands, expected)
 
 
 def completion_boundary():
