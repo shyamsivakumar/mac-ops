@@ -8,6 +8,7 @@ import contextlib
 import json
 import os
 import plistlib
+import pwd
 import stat
 import subprocess
 import sys
@@ -245,8 +246,21 @@ def monitor_pids(output: str) -> list[int]:
     return pids
 
 
+def require_real_home() -> None:
+    actual = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    configured = os.environ.get("HOME")
+    home = Path(configured).resolve() if configured else None
+    temporary = home is not None and any(
+        home.is_relative_to(root) for root in (Path("/tmp").resolve(), Path("/private/tmp"))
+    )
+    if home != actual or temporary:
+        raise RuntimeError("Refusing coordinator install or launchctl: HOME must be the real user home and outside /tmp")
+
+
 def run_quiet(argv: list[str]) -> str | None:
     """Run a command and return its output, or None when it cannot run."""
+    if argv and Path(argv[0]).name == "launchctl":
+        require_real_home()
     try:
         result = subprocess.run(
             argv, capture_output=True, text=True, timeout=15, check=False
@@ -261,6 +275,8 @@ def run_status(argv: list[str], *, capture_error: list[str] | None = None) -> in
 
     When capture_error is given, the text the command refused with is
     appended to it, so a refusal can be reported as it was written."""
+    if argv and Path(argv[0]).name == "launchctl":
+        require_real_home()
     try:
         result = subprocess.run(
             argv, capture_output=True, text=True, timeout=15, check=False
@@ -631,6 +647,7 @@ def install(
     home: Path | None = None,
     coordinator: Path | None = None,
 ) -> None:
+    require_real_home()
     home = home or Path.home()
     coordinator = coordinator or coordinator_dir(home)
     pending = changes(checkout, home, coordinator)
