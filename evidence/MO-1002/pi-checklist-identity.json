@@ -1,0 +1,33 @@
+{
+  "name": "pi-checklist",
+  "version": "3.3.0",
+  "dist": {
+    "shasum": "4ac3002be908a50bce36c42c8f18a274d2f70121",
+    "tarball": "https://registry.npmjs.org/pi-checklist/-/pi-checklist-3.3.0.tgz",
+    "fileCount": 19,
+    "integrity": "sha512-cxyPN+wqVMHY15hwFODHYMlC72jhosVSdwjTWH/DJVITW1tcteURDnEOIJOdSfwIz3oPOWO+sxGJ8okV9cKMnQ==",
+    "signatures": [
+      {
+        "sig": "MEQCIDBM5/p3FiBLph66+5T9/3H/Co+1B/CRL34UzV96q09oAiAm9+WTWgW0l/2dv2Ybh8+kpJ4AuK0mdQGMmwdQlmeuww==",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "sig": "MEUCIQDSTwyq9aHF9ZpgAl8VbM3wa9+jvZuPBds+DxYyivBH4wIgf8nJwq+Uroe14LhUfxtLzMtUw8jPE9WQwmeTpQ1tHJE=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/pi-checklist@3.3.0",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    },
+    "unpackedSize": 179644
+  },
+  "repository": {
+    "url": "git+https://github.com/championswimmer/pi-checklist.git",
+    "type": "git"
+  },
+  "gitHead": "9ce75e21915275743631b2199419d8ccfbc424b0",
+  "verifiedIntegrity": "sha512-cxyPN+wqVMHY15hwFODHYMlC72jhosVSdwjTWH/DJVITW1tcteURDnEOIJOdSfwIz3oPOWO+sxGJ8okV9cKMnQ=="
+}

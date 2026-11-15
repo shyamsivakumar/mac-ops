@@ -1,0 +1,3 @@
+pi-background-monitor 1.0.1 sha512-SlIPt6sM9uNm9r/uCJgwnRGsgp/BXmMe35rp8dmnuQF0XiabKaqGYMyjUT9nHqKxezHb1QBt5Vc9/q9g0RFKRQ== 607f115b2b5d5b4da68c6bb52702ff88f4b3dfd1
+pi-checklist 3.3.0 sha512-cxyPN+wqVMHY15hwFODHYMlC72jhosVSdwjTWH/DJVITW1tcteURDnEOIJOdSfwIz3oPOWO+sxGJ8okV9cKMnQ== 9ce75e21915275743631b2199419d8ccfbc424b0
+pi-subagent-manager 1.9.0 sha512-4sxwF+n2p24Ngzp4/+zH/VHZ4Ogxalqj8c3O3rCBLvQ5kSoC4DXPQa5y0jNgjXNvdg/H46Or73NWd1BcmgZlxA== 6f036d758742229c6b155a41c96880c523597921
