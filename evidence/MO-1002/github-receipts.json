@@ -1,0 +1,17 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/championswimmer/pi-subagent-manager/6f036d758742229c6b155a41c96880c523597921/src/index.ts",
+    "sha256": "6cba4415e350fb017ff052df0e4269aea6373d1ad5e21f16e81e14f45e3c4ee8",
+    "matchesTarball": true
+  },
+  {
+    "url": "https://raw.githubusercontent.com/championswimmer/pi-background-monitor/607f115b2b5d5b4da68c6bb52702ff88f4b3dfd1/src/index.ts",
+    "sha256": "86b3ec3d98f987e76d3ecec6873feaacc3ddad2afe31e03cb8c3ccd41bf170e3",
+    "matchesTarball": true
+  },
+  {
+    "url": "https://raw.githubusercontent.com/championswimmer/pi-checklist/9ce75e21915275743631b2199419d8ccfbc424b0/dist/index.js",
+    "sha256": "2dc2ec03b3e3c28ca66efaca3e8c2dc861e15c20a9d344ec426a32827b80468c",
+    "matchesTarball": true
+  }
+]

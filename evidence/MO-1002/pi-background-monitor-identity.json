@@ -1,0 +1,33 @@
+{
+  "name": "pi-background-monitor",
+  "version": "1.0.1",
+  "dist": {
+    "shasum": "45566a0d47f55a026a39c419f0a76a40a61976fb",
+    "tarball": "https://registry.npmjs.org/pi-background-monitor/-/pi-background-monitor-1.0.1.tgz",
+    "fileCount": 19,
+    "integrity": "sha512-SlIPt6sM9uNm9r/uCJgwnRGsgp/BXmMe35rp8dmnuQF0XiabKaqGYMyjUT9nHqKxezHb1QBt5Vc9/q9g0RFKRQ==",
+    "signatures": [
+      {
+        "sig": "MEYCIQCprv/ym0y2o2iMlrllr0ii2OJC+BR4PNn/4vypyd1LjAIhAKQWVwpK6/2aofo3iDrgb4YjRl4+F4hgtIH/oMV5nNx4",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "sig": "MEYCIQCHHhCcyJGKRDVPODlCcICdGvNkrsROFxRET8/kJ5VvDwIhAKxHw04nDuzUg3/EEa7LpaiUVzay9S0NZ/8GqKvnfifl",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/pi-background-monitor@1.0.1",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    },
+    "unpackedSize": 177373
+  },
+  "repository": {
+    "url": "git+https://github.com/championswimmer/pi-background-monitor.git",
+    "type": "git"
+  },
+  "gitHead": "607f115b2b5d5b4da68c6bb52702ff88f4b3dfd1",
+  "verifiedIntegrity": "sha512-SlIPt6sM9uNm9r/uCJgwnRGsgp/BXmMe35rp8dmnuQF0XiabKaqGYMyjUT9nHqKxezHb1QBt5Vc9/q9g0RFKRQ=="
+}

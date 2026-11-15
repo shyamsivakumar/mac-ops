@@ -1,0 +1,92 @@
+evidence/MO-1002/sources/pi-checklist/package/dist/index.d.ts:6: * session-JSONL persistence (tool result details + appendEntry,
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.d.ts:7:    name: "open";
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.d.ts:9:    name: "show";
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.d.ts:11:    name: "hide";
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.d.ts:13:    name: "clear";
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.d.ts:15:    name: "add";
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.d.ts:18:    name: "settings";
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.d.ts:26:    name: "help";
+evidence/MO-1002/sources/pi-checklist/package/dist/prefs.js:13:import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+evidence/MO-1002/sources/pi-checklist/package/dist/prefs.js:74:        mkdirSync(dir, { recursive: true });
+evidence/MO-1002/sources/pi-checklist/package/dist/prefs.js:77:        writeFileSync(tmp, JSON.stringify({ v: 1, ...prefs }, null, 2) + "\n", "utf-8");
+evidence/MO-1002/sources/pi-checklist/package/dist/tools.d.ts:15:    /** True when the checklist changed and the caller should appendEntry + refresh UI. */
+evidence/MO-1002/sources/pi-subagent-manager/package/src/index.ts:75:    costLedger.settle(thread, (record) => pi.appendEntry(COST_ENTRY, record));
+evidence/MO-1002/sources/pi-subagent-manager/package/src/index.ts:241:  const registryWriter = new RegistryWriter((customType, data) => pi.appendEntry(customType, data));
+evidence/MO-1002/sources/pi-subagent-manager/package/src/index.ts:503:        pi.appendEntry(ROOT_MAILBOX_ENTRY, notification);
+evidence/MO-1002/sources/pi-subagent-manager/package/src/index.ts:728:  // Finish old-thread cancellation while appendEntry still points to the old branch/session.
+evidence/MO-1002/sources/pi-subagent-manager/package/src/index.ts:772:      await current.scope("/root").spawn({ path, type: typeName, task, wait: false });
+evidence/MO-1002/sources/pi-background-monitor/package/src/index.ts:53:      persist: (locator) => pi.appendEntry(ENTRY, { session, locator }),
+evidence/MO-1002/sources/pi-background-monitor/package/src/index.ts:109:    name: "bgmon_start",
+evidence/MO-1002/sources/pi-background-monitor/package/src/index.ts:131:    name: "bgmon_inspect",
+evidence/MO-1002/sources/pi-background-monitor/package/src/index.ts:167:    name: "bgmon_control",
+evidence/MO-1002/sources/pi-background-monitor/package/src/index.ts:199:    name: "bgmon_watch",
+evidence/MO-1002/sources/pi-background-monitor/package/src/index.ts:291:    name: "bgmon_events",
+evidence/MO-1002/sources/pi-background-monitor/package/src/index.ts:420:            pi.appendEntry(SETTINGS, { session: current.session, limits });
+evidence/MO-1002/sources/pi-checklist/package/dist/index.js:80:            pi.appendEntry(CUSTOM_TYPE, snapshot);
+evidence/MO-1002/sources/pi-checklist/package/dist/index.js:139:        name: "checklist_create",
+evidence/MO-1002/sources/pi-checklist/package/dist/index.js:154:        name: "checklist_read",
+evidence/MO-1002/sources/pi-checklist/package/dist/index.js:168:        name: "checklist_update",
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/manager.ts:172:      spawn: (args, signal) => this.spawn(caller, args, signal),
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/manager.ts:300:  async spawn(
+evidence/MO-1002/sources/pi-subagent-manager/package/src/types.ts:218:  spawn(
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/checklist-integration.ts:40:    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:75:        return { name: "open" };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:77:        return { name: "show" };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:79:        return { name: "hide" };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:81:        return { name: "clear" };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:85:        return title === "" ? { name: "add" } : { name: "add", title };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:90:            return { name: "settings" };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:128:            return { name: "help" };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:131:            return { name: "help" };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:133:        return { name: "settings", displayMode, statusStyle, iconSet, usage, subtasksEnabled, metaEnabled };
+evidence/MO-1002/sources/pi-checklist/package/dist/commands.js:135:    return { name: "help" };
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/tools.ts:102:      async (params, signal) => result(compact(await threads().spawn(params, signal))),
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/runtime.ts:5:import { mkdir, readFile, realpath } from "node:fs/promises";
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/runtime.ts:295:    await mkdir(sessionDir, { recursive: true });
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/runtime.ts:308:      sessionManager = SessionManager.open(path.resolve(options.sessionFile), sessionDir, ctx.cwd);
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/runtime.ts:315:      sessionManager = SessionManager.create(
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/runtime.ts:553:                ? { name: "child-codemode", factory: createCodemodeExtension(), replaceable: true }
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/runtime.ts:561:                    name: "child-tool-search",
+evidence/MO-1002/sources/pi-subagent-manager/package/src/orch/runtime.ts:627:                appendEntry: (customType, data) =>
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/import-discovery.ts:331:  const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m.exec(content);
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/agent-import.ts:1:import { constants, lstatSync, mkdirSync, openSync, closeSync, writeFileSync } from "node:fs";
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/agent-import.ts:54:      mkdirSync(path);
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/agent-import.ts:85:    writeFileSync(fd, "Onboarding offered. Use /agents import to choose agents again.\n");
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/settings.ts:8:  mkdirSync,
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/settings.ts:13:  writeFileSync,
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/settings.ts:404:      mkdirSync(directory);
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/settings.ts:441:      writeFileSync(fd, content);
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/config.ts:3:  mkdirSync,
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/config.ts:8:  writeFileSync,
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/config.ts:128:  const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m.exec(content);
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/config.ts:940:    mkdirSync(directory, { recursive: true });
+evidence/MO-1002/sources/pi-subagent-manager/package/src/prefs/config.ts:943:      writeFileSync(temporary, content, { flag: "wx", mode: 0o600 });
+evidence/MO-1002/sources/pi-background-monitor/package/src/proof.ts:2:import { rename, rm, writeFile } from "node:fs/promises";
+evidence/MO-1002/sources/pi-background-monitor/package/src/proof.ts:35:    await writeFile(tmp, JSON.stringify(proof), { mode: 0o600, flag: "wx" });
+evidence/MO-1002/sources/pi-subagent-manager/package/src/ui/agent-loader.ts:44:  // https://github.com/sindresorhus/cli-spinners/blob/main/spinners.json
+evidence/MO-1002/sources/pi-background-monitor/package/src/storage.ts:2:import { lstat, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
+evidence/MO-1002/sources/pi-background-monitor/package/src/storage.ts:14:    await mkdir(path, { mode: 0o700 }).catch((e) => {
+evidence/MO-1002/sources/pi-background-monitor/package/src/storage.ts:36:    await mkdir(join(this.root, ".."), { recursive: true, mode: 0o700 });
+evidence/MO-1002/sources/pi-background-monitor/package/src/storage.ts:48:        await mkdir(join(this.root, "slots", String(i)), { mode: 0o700 });
+evidence/MO-1002/sources/pi-background-monitor/package/src/storage.ts:67:      await mkdir(dir, { mode: 0o700 });
+evidence/MO-1002/sources/pi-background-monitor/package/src/storage.ts:70:      await writeFile(join(dir, "log.json"), info, { mode: 0o600, flag: "wx" });
+evidence/MO-1002/sources/pi-background-monitor/package/src/storage.ts:71:      await writeFile(join(this.root, "slots", String(slot), "reservation.json"), info, {
+evidence/MO-1002/sources/pi-background-monitor/package/src/tmux.ts:3:import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+evidence/MO-1002/sources/pi-background-monitor/package/src/tmux.ts:21:    const child = spawn("tmux", args, { env, stdio: ["ignore", "pipe", "pipe"] });
+evidence/MO-1002/sources/pi-background-monitor/package/src/tmux.ts:78:  const v = /tmux (\d+)\.(\d+)/.exec(r.stdout);
+evidence/MO-1002/sources/pi-background-monitor/package/src/tmux.ts:88:  await writeFile(
+evidence/MO-1002/sources/pi-background-monitor/package/src/tmux.ts:190:    await writeFile(path, "", { mode: 0o600, flag: "wx" });
+evidence/MO-1002/sources/pi-background-monitor/package/src/tmux.ts:249:      await writeFile(
+evidence/MO-1002/sources/pi-background-monitor/package/src/tmux.ts:254:      await writeFile(
+evidence/MO-1002/sources/pi-background-monitor/package/src/manager.ts:2:import { lstat, readFile, rm, stat, writeFile } from "node:fs/promises";
+evidence/MO-1002/sources/pi-background-monitor/package/src/manager.ts:188:      await writeFile(script, command, { mode: 0o600, flag: "wx" });
+evidence/MO-1002/sources/pi-background-monitor/package/src/manager.ts:197:      await writeFile(runtime, source, { mode: 0o600, flag: "wx" });
+evidence/MO-1002/sources/pi-background-monitor/package/src/manager.ts:198:      await writeFile(join(dir, "text.mjs"), textSource, { mode: 0o600, flag: "wx" });
+evidence/MO-1002/sources/pi-background-monitor/package/src/manager.ts:224:          await writeFile(
+evidence/MO-1002/sources/pi-subagent-manager/package/src/ui/tool-picker.ts:56:  return MCP_TOOL.exec(name)?.[1];
+evidence/MO-1002/sources/pi-subagent-manager/package/src/ui/settings-ui.ts:575:            help: "Experimental: reload selected user/trusted-project extension hooks, including auto-discovered .ts/.js files and subdirectory entry points, in separate subagent sessions (not CLI-only or inline extensions). Bugs and unintended consequences may occur if hooks assume main-session state.\nRead limitations: https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/subagent-extension-limitations.md\nSelect individual extensions in the submenu. None by default. Save and apply affects newly opened sessions, not already-open agents.",
+evidence/MO-1002/sources/pi-subagent-manager/package/src/ui/ui.ts:3:import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+evidence/MO-1002/sources/pi-subagent-manager/package/src/ui/ui.ts:590:    await writeFile(file, text, "utf8");
+evidence/MO-1002/sources/pi-subagent-manager/package/src/ui/ui.ts:886:  name: "Name",
+evidence/MO-1002/sources/pi-subagent-manager/package/src/ui/ui.ts:908:  name: "Unique type identifier. Renaming retains the original file.",
+evidence/MO-1002/sources/pi-subagent-manager/package/src/ui/ui.ts:1128:      : { name: "new-agent", description: "New agent", systemPrompt: "" };
