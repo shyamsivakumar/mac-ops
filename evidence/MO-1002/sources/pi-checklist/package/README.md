@@ -1,0 +1,163 @@
+# pi-checklist
+
+A [pi](https://github.com/earendil-works/pi-coding-agent) extension that gives the coding agent a **session-scoped task checklist**.
+
+The agent can:
+
+- create a list of tasks for the current coding session
+- read the current list
+- move tasks through `planned` → `ongoing` → `done` / `cancelled`
+- declare `dependsOn` so blocked work is obvious
+- render the list in the TUI after each turn so you can see what is done and what is left
+
+## Preview
+
+![/checklist dialog](https://raw.githubusercontent.com/championswimmer/pi-checklist/main/docs/checklist-dialog.png)
+
+The `/checklist` dialog (above) shows every task. Session checklists hold at most 10 tasks; the live widget shows the top 5 by priority and the `☑ n/m` footer tracks overall progress.
+
+## Check out my other Pi extensions
+
+- [![pi-auto-theme](https://img.shields.io/badge/🎨_pi--auto--theme-blue?style=flat-square)](https://github.com/championswimmer/pi-auto-theme) — Auto-syncs Pi theme with OS dark/light mode.
+- [![pi-cache-graph](https://img.shields.io/badge/📊_pi--cache--graph-orange?style=flat-square)](https://github.com/championswimmer/pi-cache-graph) — Real-time prompt cache hit rates and token metrics.
+- [![pi-checklist](https://img.shields.io/badge/✅_pi--checklist-teal?style=flat-square)](https://github.com/championswimmer/pi-checklist) — Session task checklist with dependencies and a TUI renderer.
+- [![pi-context-prune](https://img.shields.io/badge/✂️_pi--context--prune-green?style=flat-square)](https://github.com/championswimmer/pi-context-prune) — Prunes verbose tool outputs from context while preserving history.
+- [![pi-context-usage](https://img.shields.io/badge/🪟_pi--context--usage-purple?style=flat-square)](https://github.com/championswimmer/pi-context-usage) — Dot-grid visualization of context window token usage.
+- [![pi-gauge](https://img.shields.io/badge/⚡_pi--gauge-yellow?style=flat-square)](https://github.com/championswimmer/pi-gauge) — Live tokens/sec and TTFT in the status bar.
+- [![pi-subscription-meter](https://img.shields.io/badge/💳_pi--subscription--meter-red?style=flat-square)](https://github.com/championswimmer/pi-subscription-meter) — Tracks subscription quotas and rate limits across AI providers.
+
+## Status
+
+Implemented; see the usage and development sections below.
+
+## Usage
+
+The agent gets three tools:
+
+| Tool | Purpose |
+|---|---|
+| `checklist_create` | Create (or replace/append) the session task list |
+| `checklist_read` | Read tasks, statuses, and which items are blocked |
+| `checklist_update` | Move tasks through `planned` / `ongoing` / `done` / `cancelled` |
+
+Each task gets a **3-character alphanumeric id** (FNV-1a hash of the title, e.g. `k7q`). `dependsOn` names those ids. A task cannot become `ongoing` (or shortcut to `done`) until every dependency is `done`.
+
+Status machine: `planned` → `ongoing` / `done` / `cancelled`, `ongoing` → `done` / `cancelled` / `planned`, `cancelled` → `planned`. `done` is terminal in v1.
+
+A session checklist holds at most **10 tasks**. The live TUI widget shows the **top 5** prioritized tasks (with an overflow hint when needed) plus a `☑ n/m` footer; `/checklist` (or `/checklist show`) opens a centered dialog with **all** tasks (`/checklist clear` empties the list, `/checklist add` adds a task by hand — see below). `/checklist settings` opens one screen for every display preference (with a live preview), or quick-set them inline, e.g. `/checklist settings end-of-turn pill emoji moderate`:
+
+Display controls: **Statusbar widget** and **Status footer** can each be switched on or off independently in `/checklist settings`. Both are on by default. The widget appears below the input box; the footer shows only the compact summary. Both off hides the display without affecting `/checklist`.
+
+The legacy quick-set modes remain available: `statusbar` (both), `widget-only` (widget only), `status-minimal` (footer only), `hidden` (neither), and `end-of-turn` (widget above the input box when the turn settles, plus footer). Changing either toggle from `end-of-turn` uses the normal below-editor widget placement.
+
+Both summaries use a checkmark, done/total ratio, then icon counts for done, ongoing, ready, blocked and cancelled, e.g. `☑️ 2/5 ✅ 2 🔄 3`. Zero-count states are hidden. They honor your Nerd Font / emoji setting regardless of task-row style; the footer omits the checklist title. Cancelled tasks don't count toward the progress denominator.
+
+The footer summary colors each icon and count using the active Pi theme (done: success, ongoing: warning, blocked: error, ready: text, cancelled: dim). It is published with `ctx.ui.setStatus` under the key `checklist`. In [pi-footer](https://github.com/wobondar/pi-footer), add a **Pi Extension Status** widget with key `checklist` in `/footer`, or enable its **Pi extensions** status row; choose one to avoid duplicates. Leave widget color and bold overrides unset to preserve the summary's colors. This uses extension status, not pi-footer event widgets. The status clears when the checklist is empty or hidden.
+
+Progress status style:
+
+- `color` — rows are only color-coded, no status word.
+- `pill` — the status word is a pill: text on a colored background (default).
+- `icon` — status is a leading progress icon only, no status word.
+
+Progress icons (for compact summaries and the `icon` task-row style):
+
+- `nerd-font` — Nerd Font Octicons: sync / play / blocked / check-circle / x-circle (needs a Nerd Font patched font — get one at nerdfonts.com; default).
+- `emoji` — 🔄 ▶️ ⛔ ✅ ❌ (works anywhere).
+
+Usage guidance (how strongly the agent is steered toward the checklist):
+
+- `moderate` — the injected hint asks for the checklist on long-running / multi-step work (refactors, audits, multi-part features); quick one-shot questions go untracked (default).
+- `aggressive` — the hint asks for the checklist on almost every task, even small ones; only trivial single-step questions go untracked.
+
+Usage guidance is baked into the system prompt, so it is captured once when the extension loads — after changing it, run `/reload` or start a new pi session for it to take effect. The display settings above apply immediately.
+
+Subtasks (preview):
+
+- Enable with `/checklist settings subtasks` (off with `/checklist settings no-subtasks`); the settings screen has a matching `Subtasks (preview)` toggle.
+- Each task holds at most **3 subtasks** (fixed cap, like the 10-task limit). Subtasks are born `planned` and run the same status machine as tasks.
+- A subtask's `dependsOn` may name only **siblings inside the same parent task**.
+- In the `/checklist` dialog, tasks open **collapsed**; press **→** (or `l`) on a task with subtasks to expand it and **←** (or `h`) to collapse (works from a subtask row too).
+- State primitives: a parent cannot finish (`→ done`) while any subtask is still open (`planned`/`ongoing` — `cancelled` counts as resolved); starting a subtask pulls a `planned` parent to `ongoing` automatically; a subtask cannot start while its parent is blocked (it inherits the parent's block); cancelling a parent cascade-cancels its open subtasks; finish parent + subtasks together in **one** `checklist_update` entry.
+
+Task meta (preview):
+
+- Free-form key/value facts on a task or subtask — e.g. `{ "agent": "impl-auth", "pr": 42 }` — so the agent (or another extension driving the same tools) can tag work. No namespaces, claims or special API: it is just a flat `meta` object.
+- Enable with `/checklist settings meta` (off with `/checklist settings no-meta`); the settings screen has a matching `Task meta (preview)` toggle. It persists like the other settings and applies immediately; while it is on, the system prompt tells the agent how to use meta.
+- **Create:** `checklist_create` tasks (and subtasks) accept `meta: { key: value }`.
+- **Update:** `checklist_update` entries (and subtask patches) take `meta`, which is **merged** into the existing meta — listed keys are set/overwritten, unlisted keys stay, and `key: null` deletes that key. Deleting the last key removes `meta`.
+- Values are `string` (≤ 200 chars), finite `number` or `boolean`; keys are 1–40 chars; at most 10 keys per task. Anything else (objects, arrays) is rejected. `null` only means "delete" in updates (it is skipped on create).
+- Gating matches subtasks: a non-empty `meta` is rejected while the preview is off. Meta already stored is kept (just hidden) if you switch it off. Done tasks stay frozen, meta included.
+- `checklist_read` lists each task's meta when the feature is on. In the TUI, **only the `/checklist` dialog** shows it: aligned `key: value` rows under each task (and under expanded subtasks) that has meta. The widget, footer and status line never show meta, and the rows are not selectable, so navigation and expand/collapse are unchanged. The dialog scrolls with the selection to fit short terminals (borders and key hint stay visible; the header shows `rows a–b of n`), and a task whose meta alone is taller than the dialog shows `… +N more`.
+
+`/checklist hide` is shorthand for hidden mode.
+
+### Adding tasks by hand
+
+`/checklist add` opens a dialog so you can add a task yourself (the agent keeps its own tools; manually added tasks are ordinary tasks and show up in the widget, the footer and the agent's next turn):
+
+- **ID** — an autogenerated, free 3-character id (`a–z`, `0–9`). Edit it if you like, or press `Ctrl+R` for another random one.
+- **Task** — the task text.
+- **Depends on** — a checkbox picker over the tasks already in the checklist (optional).
+
+Keys: the dialog opens on **Task**. `Tab` / `Shift+Tab` (or `↑` / `↓`) move between the fields; in the picker `↑` / `↓` (or `j` / `k`) move and `Space` (or `x`) toggles; `Enter` adds the task from any field; `Esc` / `Ctrl+C` cancels. Problems (bad or duplicate id, empty text, full checklist) show inline and the dialog stays open.
+
+Validation is deliberately basic: the id must be 3 characters from `a–z` / `0–9` and unique among all tasks *and subtasks* (`all` is reserved), the text must not be empty, dependencies must be existing tasks, and the checklist must have room (at most 10 tasks). It does **not** check dependency or blocking state — a new `planned` task may depend on tasks that are unfinished, ongoing, done or cancelled; it just stays blocked until they are done.
+
+`/checklist add <text>` pre-fills the task text. Without a TUI (print mode) the dialog is unavailable, so `/checklist add <text>` adds the task directly with an autogenerated id and no dependencies.
+
+State lives in the session JSONL (tool-result `details` + `pi.appendEntry`), so it survives `/resume`, `/branch`, `/undo`, and compaction. Display settings (`displayMode` / `statusStyle` / `iconSet` / `usage` / `subtasksEnabled` / `metaEnabled`) additionally persist globally in `<agentDir>/pi-checklist.json` (agent dir = `$PI_CODING_AGENT_DIR` or `~/.pi/agent`), so they carry across sessions; the task list itself stays session-scoped.
+
+## Install
+
+**From npm (release):**
+
+```sh
+pi install npm:pi-checklist
+```
+
+**From git:**
+
+```sh
+pi install git:github.com/championswimmer/pi-checklist
+```
+
+**Quick one-off test (built output — this is what ships):**
+
+```sh
+npm run build
+pi -e ./dist/index.js
+```
+
+**Development (symlink sources for hot-reload, no rebuild needed):**
+
+```sh
+mkdir -p ~/.pi/agent/extensions
+ln -s "$(pwd)/src/index.ts" ~/.pi/agent/extensions/pi-checklist.ts
+```
+
+Hot-reload inside pi with `/reload`.
+
+## Developing / releasing
+
+- Sources live in `src/`; the published + git-installed entry is the
+  built output `dist/index.js` (`npm run build`, TypeScript). Run `npm test`
+  for the permanent Node built-in test suite (it rebuilds `dist/` first).
+- `dist/` is intentionally committed: pi installs git packages with
+  `npm install --omit=dev` and no build step, so the built files must
+  exist in the clone. Rebuild (`npm run build`) before every commit
+  that touches `src/`.
+- The npm tarball is a whitelist (`files` in package.json: `dist`,
+  `README.md`, `LICENSE`) plus `.npmignore` as backup — no `.ts`
+  sources ship, so pi loads plain JS without jiti transpiling.
+- Release flow: bump `version` in package.json → `npm run build` →
+  commit (including `dist/`) → `git tag vX.Y.Z && git push origin vX.Y.Z`.
+  Pushing the tag triggers `.github/workflows/release.yml`, which verifies
+  the tag matches `package.json`, builds, and publishes to npm via
+  [trusted publishing](https://docs.npmjs.com/trusted-publishers/) (GitHub
+  OIDC — no `NPM_TOKEN` needed). One-time setup: on
+  npmjs.com/package/pi-checklist → Settings → Trusted Publisher, add GitHub
+  Actions publisher `championswimmer` / `pi-checklist` / `release.yml`.
+- Maintainers cut releases with `node scripts/release.mjs <major|minor|patch>`
+  (see `.agents/skills/release/SKILL.md`) — it bumps, rebuilds `dist/`,
+  commits, tags `vX.Y.Z`, and pushes, and the tag push publishes to npm.
