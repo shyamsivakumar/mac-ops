@@ -301,13 +301,19 @@ def log_events(paths, previous, seen):
                 if not stat.S_ISREG(info.st_mode):
                     continue
                 identity = f"{info.st_dev}:{info.st_ino}"
-                offset = old.get("offset", 0) if old.get("identity") == identity else 0
+                same_file = old.get("identity") == identity
+                generation = old.get("generation", 0)
+                if old and not same_file:
+                    generation += 1
+                offset = old.get("offset", 0) if same_file else 0
                 anchor = old.get("anchor")
                 if offset > info.st_size:
+                    generation += 1
                     offset = 0
                 if offset and anchor:
                     source.seek(max(0, offset - 128))
                     if hashlib.sha256(source.read(min(offset, 128))).hexdigest() != anchor:
+                        generation += 1
                         offset = 0
                 source.seek(offset)
                 chunk = source.read(65536)
@@ -315,8 +321,9 @@ def log_events(paths, previous, seen):
                 consumed = complete or (len(chunk) if len(chunk) == 65536 else 0)
                 skipping = bool(old.get("skipping")) if offset else False
                 position = offset
+                event_identity = identity if generation == 0 else f"{identity}:generation={generation}"
                 for line in chunk[:complete].splitlines(keepends=True):
-                    event_key = f"log:{identity}:{position}:" + hashlib.sha256(line).hexdigest()
+                    event_key = f"log:{event_identity}:{position}:" + hashlib.sha256(line).hexdigest()
                     if not skipping and event_key not in seen:
                         if re.search(rb"rate[ -]?limit|too many requests|HTTP[/ ](?:[0-9.]+ )?429", line, re.I):
                             events.append("EVENT rate-limit")
@@ -329,7 +336,8 @@ def log_events(paths, previous, seen):
                 next_offset = offset + consumed
                 source.seek(max(0, next_offset - 128))
                 anchor = hashlib.sha256(source.read(min(next_offset, 128))).hexdigest()
-                offsets[key] = {"identity": identity, "offset": next_offset, "anchor": anchor,
+                offsets[key] = {"identity": identity, "generation": generation,
+                                "offset": next_offset, "anchor": anchor,
                                 "skipping": not complete and (skipping or consumed > 0)}
         except OSError:
             continue
