@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Emit one read-only BOARD snapshot; invoke again for the next cycle."""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import runpy
+import subprocess
+import time
+
+MAX_REPOS = 40
+MAX_PAGES = 3
+TTL = 300
+MAX_BYTES = 8 * 1024 * 1024
+
+
+def read_json(path):
+    with open(path) as stream:
+        raw = stream.read(MAX_BYTES + 1)
+    if len(raw) > MAX_BYTES:
+        raise ValueError("source exceeds byte limit")
+    return json.loads(raw)
+
+
+def command(argv, deadline, data=None):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ValueError("cycle deadline exhausted")
+    result = subprocess.run(argv, input=data, capture_output=True, text=True,
+                            timeout=min(15, remaining))
+    if result.returncode:
+        raise ValueError("source command failed")
+    if len(result.stdout) > MAX_BYTES:
+        raise ValueError("source exceeds byte limit")
+    return json.loads(result.stdout)
+
+
+def pages(repo, kind, deadline):
+    rows = []
+    for page in range(1, MAX_PAGES + 1):
+        batch = command(["gh", "api", f"repos/{repo}/{kind}?state=open&per_page=100&page={page}"], deadline)
+        if not isinstance(batch, list):
+            raise ValueError("expected GitHub list")
+        for row in batch:
+            if kind == "pulls":
+                references = " ".join(re.findall(r"\b(?:refs|fixes|closes|resolves)\s+#\d+\b",
+                                                   row.get("body") or "", re.I))
+                rows.append({"number": row["number"], "title": row.get("title", ""),
+                             "body": references, "head": row.get("head", {})})
+            else:
+                rows.append({key: row[key] for key in
+                             ("number", "title", "labels", "updated_at", "html_url", "pull_request")
+                             if key in row})
+        if len(batch) < 100:
+            return rows, True
+    return rows, False
+
+
+def threads(deadline):
+    rows, cursor = [], None
+    for _ in range(MAX_PAGES):
+        args = {"allProjects": True, "limit": 100, "includeSubagents": False}
+        if cursor is not None:
+            args["cursor"] = cursor
+        result = command(["t3mcp", "call", "t3_thread_list", "-"], deadline, json.dumps(args))
+        batch = result["threads"]
+        if not isinstance(batch, list):
+            raise ValueError("expected T3 threads")
+        rows.extend(batch)
+        next_cursor = result.get("nextCursor")
+        if next_cursor is None:
+            return rows, True
+        if next_cursor == cursor:
+            raise ValueError("T3 cursor did not advance")
+        cursor = next_cursor
+    return rows, False
+
+
+def queue_sources(root):
+    result = {}
+    for name in ("queue.json", "dispatch-receipts.json"):
+        try:
+            result[name] = read_json(root / name)
+        except (OSError, ValueError):
+            result[name] = None
+    try:
+        with open(root / "dispatch.log", "rb") as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 65536))
+            result["log"] = stream.read(65536).decode("utf-8", errors="replace")
+    except OSError:
+        result["log"] = None
+    return result
+
+
+def collect(cfg, previous, deadline, now):
+    sources = {}
+    for repo in list(cfg["repos"])[:MAX_REPOS]:
+        old = previous.get("github", {}).get(repo, {})
+        if 0 <= now - old.get("checkedAt", 0) < TTL:
+            sources[repo] = old
+            continue
+        entry = {"checkedAt": now, "issues": old.get("issues", []),
+                 "pulls": old.get("pulls", []), "complete": False}
+        try:
+            issues, issues_complete = pages(repo, "issues", deadline)
+            pulls, pulls_complete = pages(repo, "pulls", deadline)
+            entry.update(issues=issues, pulls=pulls, complete=issues_complete and pulls_complete)
+        except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+            pass
+        sources[repo] = entry
+    try:
+        live, complete = threads(deadline)
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        live, complete = [], False
+    return {"github": sources, "threads": live, "threadsComplete": complete,
+            "queue": queue_sources(Path(os.environ.get("COORDQ_DIR", str(Path.home() / "Code/coordinator/queue"))))}
+
+
+def snapshot(cfg, raw, previous, normalize, link):
+    items = {}
+    statuses = {}
+    queue = raw.get("queue") or {}
+    receipts = queue.get("dispatch-receipts.json")
+    receipts = receipts if isinstance(receipts, dict) else {}
+    for repo in cfg["repos"]:
+        source = raw.get("github", {}).get(repo, {})
+        complete = source.get("complete") is True
+        statuses[repo] = "complete" if complete else "unknown"
+        by_number, by_key = {}, {}
+        for issue in source.get("issues", []):
+            if "pull_request" in issue:
+                continue
+            normalized = normalize(cfg, repo, {**issue, "url": issue.get("html_url", ""),
+                                               "updatedAt": issue.get("updated_at", "")})
+            number = normalized["number"]
+            row = {"repo": repo, "issue": number, "stage": normalized["stage"] if complete else "unknown",
+                   "thread": None, "pr": None, "head": None, "attempt": None,
+                   "threadStatus": "unknown"}
+            items[f"{repo}#{number}"] = row
+            by_number[number] = normalized
+            if normalized.get("key"):
+                by_key[normalized["key"]] = normalized
+        if not complete:
+            for old in previous.get("items", []):
+                if old["repo"] == repo:
+                    key = f"{repo}#{old['issue']}"
+                    items.setdefault(key, {**old, "stage": "unknown", "pr": None, "head": None,
+                                           "threadStatus": "unknown"})
+        for pull in source.get("pulls", []) if complete else []:
+            target, _ = link({**pull, "headRefName": pull.get("head", {}).get("ref", "")}, by_number, by_key)
+            if target:
+                row = items[f"{repo}#{target['number']}"]
+                if row["pr"] is None or pull["number"] > row["pr"]:
+                    row.update(pr=pull["number"], head=pull.get("head", {}).get("sha"))
+    for key, row in items.items():
+        attempts = []
+        for request, thread in receipts.items():
+            match = re.fullmatch(r"ticket:" + re.escape(key) + r":a(\d+)", request)
+            if match and isinstance(thread, str):
+                attempts.append((int(match[1]), thread))
+        pending = queue.get("queue.json") or {}
+        for entry in pending.get("items", []):
+            request = entry.get("args", {}).get("clientRequestId", "")
+            match = re.fullmatch(r"ticket:" + re.escape(key) + r":a(\d+)", request)
+            if match:
+                attempts.append((int(match[1]), entry.get("args", {}).get("threadId")))
+        if attempts:
+            attempt = max(a for a, _ in attempts)
+            row.update(attempt=attempt, thread=next((t for a, t in attempts if a == attempt and t), None))
+        for thread in raw.get("threads", []):
+            if row["thread"] and thread.get("threadId") == row["thread"]:
+                row["threadStatus"] = thread.get("status") or "unknown"
+    return {"schema": 1, "items": sorted(items.values(), key=lambda r: (r["repo"], r["issue"])),
+            "sources": {"github": statuses, "t3": "complete" if raw.get("threadsComplete") is True else "unknown",
+                        "queue": "complete" if all(queue.get(k) is not None for k in
+                            ("queue.json", "dispatch-receipts.json", "log")) else "unknown"}}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--once", action="store_true", help="collect one cycle (also the default)")
+    parser.add_argument("--fake-input", type=Path, help="JSON source envelope; no calls or writes")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--state", type=Path, default=Path.home() / ".coordinator/coord-watch.json")
+    args = parser.parse_args()
+    here = Path(__file__).resolve().parent
+    ticket = runpy.run_path(str(here / "ticket"))
+    overnight = here / "overnight"
+    if not overnight.exists():
+        overnight = here.parent / "overnight/overnight"
+    adapter = runpy.run_path(str(overnight))
+    cfg = read_json(args.config) if args.config else ticket["load_config"]()
+    if args.fake_input:
+        envelope = read_json(args.fake_input)
+        board = snapshot(cfg, envelope, envelope.get("previous", {}), ticket["normalize_issue"], adapter["linked_ticket"])
+    else:
+        with open(args.state, "a+") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            stream.seek(0)
+            content = stream.read(MAX_BYTES + 1)
+            if len(content) > MAX_BYTES:
+                raise ValueError("state exceeds byte limit")
+            previous = json.loads(content) if content else {}
+            now = time.time()
+            raw = collect(cfg, previous, time.monotonic() + 120, now)
+            board = snapshot(cfg, raw, previous, ticket["normalize_issue"], adapter["linked_ticket"])
+            state = {"github": raw["github"], "items": board["items"]}
+            stream.seek(0)
+            json.dump(state, stream)
+            stream.truncate()
+    print("BOARD " + json.dumps(board, separators=(",", ":")))
+
+
+if __name__ == "__main__":
+    main()
