@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 register("./loader.mjs", import.meta.url);
 
-const { columnOf, endsWithAsk } = await import("../../coordinator/mods/cockpit/asks.js");
+const { place, endsWithAsk } = await import("../../coordinator/mods/cockpit/asks.js");
 const { load } = await import("../../coordinator/mods/cockpit/hub.js");
 
 const fail = [];
@@ -19,9 +19,11 @@ const check = (name, got, want) => {
 
 const thread = (kind, ask = false, i = 0) => ({ key: `${kind}${ask ? "ask" : ""}${i}`, kind, ask, at: 0 });
 const grp = (kind, threads) => ({ kind, threads, at: 0 });
+// The board's own placement: mergeCandidate first is what the column code used to do.
+const openPr = (g) => g.threads.some((t) => t.prs?.some((p) => p.state === "open"));
 const classify = (groups) => {
-  const cols = { needs: 0, dead: 0, done: 0, run: 0 };
-  for (const g of groups) cols[columnOf(g)] += 1;
+  const cols = { needs: 0, dead: 0, done: 0, run: 0, ready: 0 };
+  for (const g of groups) cols[place(g, openPr(g) && !g.threads.some((t) => ["run", "wait", "fail", "stop"].includes(t.kind)))] += 1;
   return cols;
 };
 
@@ -44,6 +46,16 @@ check("C asked turn needs", classify([...deadRuns, grp("fail", [thread("fail", t
 check("C asked done turn needs", classify([grp("done", [thread("done", true)])]).needs, 1);
 check("C plain done turn stays done", classify([grp("done", [thread("done")])]).done, 1);
 
+console.log("board placement: a real ask beats a mergeable PR");
+const prOpen = { state: "open" };
+const doneAsking = { ...thread("done", true), prs: [prOpen] };
+const doneQuiet = { ...thread("done"), prs: [prOpen] };
+check("asking done with an open PR", place(grp("done", [doneAsking]), true), "needs");
+check("quiet done with an open PR", place(grp("done", [doneQuiet]), true), "ready");
+check("quiet done with no PR", place(grp("done", [doneQuiet]), false), "done");
+check("dead run with no PR", place(grp("fail", [thread("fail")]), false), "dead");
+check("pending request with an open PR", place(grp("wait", [{ ...thread("wait"), prs: [prOpen] }]), false), "needs");
+
 console.log("how a turn ends:");
 check("question", endsWithAsk("Shall I run the migration now?"), true);
 check("waiting line", endsWithAsk("I need the Railway token.\n\nWAITING: Railway token"), true);
@@ -65,7 +77,7 @@ const board = await load();
 const cols = {};
 const needs = [];
 for (const g of board.groups) {
-  const col = columnOf(g);
+  const col = place(g, openPr(g) && !g.threads.some((t) => ["run", "wait", "fail", "stop"].includes(t.kind)));
   cols[col] = (cols[col] ?? 0) + 1;
   if (col === "needs") needs.push(`${g.task || g.title} [${g.kind}] project=${g.project} — ${g.primary.context}`);
 }
@@ -78,6 +90,8 @@ for (const g of askGroups) console.log(`  ask group key=${g.key} at=${g.at} proj
 check("live ask keys", askGroups.every((g) => g.key.startsWith("ask:")), true);
 check("live ask times", askGroups.every((g) => Number.isFinite(g.at) && Number.isFinite(g.primary.at)), true);
 check("live ask titles kept", askGroups.every((g) => decisions.some((item) => item.title === g.title)), true);
+
+check("no asked group sits in ready", board.groups.filter((g) => place(g, openPr(g)) === "ready" && g.threads.some((t) => t.ask)).length, 0);
 
 if (fail.length) {
   console.log(`FAILED ${fail.length}: ${fail.join(", ")}`);
