@@ -1,0 +1,45 @@
+{
+  "github": {
+    "example/project": {
+      "complete": true,
+      "issues": [
+        {
+          "number": 343,
+          "title": "DEMO-1 \u00b7 Watch",
+          "labels": [
+            {
+              "name": "stage:started"
+            }
+          ]
+        }
+      ],
+      "pulls": [
+        {
+          "number": 350,
+          "body": "Refs #343",
+          "head": {
+            "ref": "demo-1",
+            "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
+    }
+  },
+  "threads": [
+    {
+      "threadId": "builder-343",
+      "status": "running"
+    }
+  ],
+  "threadsComplete": true,
+  "queue": {
+    "queue.json": {
+      "items": []
+    },
+    "dispatch-receipts.json": {
+      "ticket:example/project#343:a1": "old",
+      "ticket:example/project#343:a2": "builder-343"
+    },
+    "log": "started #1"
+  }
+}

@@ -340,3 +340,5 @@ blocks, and loop percentiles. Shadow replay uses live `reviewer.instructions`
 
 The [automatic ticket gate](docs/coordq-gatekeep.md) queues checked PR heads through coordq.
 The [one pull request gate](docs/ticket-gate.md) (`ticket gate owner/repo#number`) builds the same brief by hand for one pull request.
+
+The [coordinator board snapshot command](docs/coord-watch.md) collects bounded read-only events for the lane.

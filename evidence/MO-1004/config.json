@@ -1,0 +1,20 @@
+{
+  "repos": {
+    "example/project": {
+      "key": "DEMO"
+    }
+  },
+  "labels": {
+    "stage": [
+      "todo",
+      "started"
+    ],
+    "priority": [
+      "1"
+    ],
+    "type": [
+      "chore"
+    ]
+  },
+  "models": {}
+}

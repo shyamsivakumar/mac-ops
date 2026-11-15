@@ -21,6 +21,7 @@ RECEIPT_NAME = "coordinator-installation.json"
 HOME_TOKEN = "@HOME@"
 BIN_FILES = (
     "coordq",
+    "coord-watch",
     "coordinator-refresh",
     "coordstart",
     "ticket",
