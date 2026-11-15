@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import fcntl
 import json
@@ -19,6 +20,7 @@ from typing import Any
 DEFAULT_CODE_ROOT = Path.home() / "Code"
 DEFAULT_STATE_ROOT = Path.home() / ".local/state/mac-ops/worktree-cleaner"
 T3_WORKTREE_ROOT = Path.home() / ".t3/worktrees"
+ARCHIVE_ROOT = Path.home() / ".local/state/archive/worktrees"
 
 SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycache__", "DerivedData"}
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -558,7 +560,7 @@ def write_daily_report(code_root: Path, rows: list[dict[str, Any]], summary: dic
     return path
 
 
-def append_removal(state_root: Path, row: dict[str, Any], event: str) -> None:
+def append_removal(state_root: Path, row: dict[str, Any], event: str, extra: dict[str, Any] | None = None) -> None:
     path = state_root.parent / "worktree-cleaner.log"
     if path.is_symlink():
         raise SafetyError("unsafe_removal_log")
@@ -568,6 +570,7 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str) -> None:
         "repo": row["repo"], "path": row["path"], "branch": row["branch"],
         "head": row["head"], "pull_request": row["pull_request"],
         "reason": "clean, remote commit verified, no live T3 thread, and closed PR or detached idle for 24 hours",
+        **(extra or {}),
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
@@ -578,8 +581,8 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str) -> None:
         os.fsync(output.fileno())
 
 
-def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, prune: bool = False) -> dict[str, Any]:
-    state_root = secure_state_dir(state_root)
+@contextlib.contextmanager
+def cleaner_lock(state_root: Path):
     lock_path = state_root / "cleaner.lock"
     if lock_path.is_symlink():
         raise SafetyError("unsafe_lock_file")
@@ -589,6 +592,12 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise SafetyError("cleaner_already_running") from exc
+        yield
+
+
+def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, prune: bool = False) -> dict[str, Any]:
+    state_root = secure_state_dir(state_root)
+    with cleaner_lock(state_root):
         initial_state = T3State()
         github = GitHub()
         rows, excluded, excluded_rows = inventory(code_root, github, initial_state)
@@ -722,6 +731,93 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
         return summary
 
 
+def registrations(code_root: Path, github: GitHub) -> dict[str, tuple[Path, dict[str, Any]]]:
+    found: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for repo_root in discover_repositories(code_root):
+        if excluded_repo(repo_root, github.repo(repo_root)):
+            continue
+        for record in worktrees(repo_root):
+            found.setdefault(canonical(record["path"]), (repo_root, record))
+    return found
+
+
+def pin_head(repo_root: Path, name: str, checkout: Path) -> tuple[str, str]:
+    head = git(checkout, "rev-parse", "HEAD").strip()
+    ref = f"refs/archive/worktrees/{re.sub(r'[^A-Za-z0-9._-]', '-', name)}-{head[:12]}"
+    git(repo_root, "update-ref", ref, head)
+    return head, ref
+
+
+def archive_one(code_root: Path, state_root: Path, github: GitHub, repo_root: Path, raw: str, day_dir: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    current = next((r for r in worktrees(repo_root) if canonical(r["path"]) == canonical(raw)), None)
+    if current is None:
+        return None, {"path": raw, "repo": str(repo_root), "reasons": ["worktree_not_registered"]}
+    path = Path(current["path"])
+    row = evaluate(repo_root, current, code_root, github, T3State(), refresh=True)
+    row["category"] = categorize(row)
+    refusal = {"path": raw, "repo": str(repo_root), "branch": row["branch"]}
+    if row["category"] != "look":
+        return None, {**refusal, "reasons": row["reasons"] if row["category"] == "protected" else ["not_needs_a_look"]}
+    if row["gone"]:
+        return None, {**refusal, "reasons": ["worktree_missing_or_prunable"]}
+    if path.is_symlink():
+        return None, {**refusal, "reasons": ["worktree_is_symlink"]}
+    destination = day_dir / repo_root.name / path.name
+    if destination.exists() or destination.is_symlink():
+        return None, {**refusal, "reasons": ["archive_target_exists"]}
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.parent.stat().st_dev != path.stat().st_dev:
+        return None, {**refusal, "reasons": ["archive_on_another_filesystem"]}
+    row["head"], ref = pin_head(repo_root, path.name, path)
+    row["archive_path"] = str(destination)
+    row["archive_ref"] = ref
+    details = {
+        "reason": "archived from Needs a look, folder moved and commit pinned, nothing deleted",
+        "archive_path": row["archive_path"], "archive_ref": ref,
+        "uncommitted": row["uncommitted"], "unpushed": row["unpushed"],
+    }
+    append_removal(state_root, row, "archive_attempted", details)
+    try:
+        os.rename(path, destination)
+    except OSError:
+        append_removal(state_root, row, "archive_failed", details)
+        return None, {**refusal, "reasons": ["archive_move_failed"]}
+    moved_head, moved_ref = pin_head(repo_root, path.name, destination)
+    if moved_head != row["head"]:
+        row["head"], row["archive_ref"] = moved_head, moved_ref
+        details["archive_ref"] = moved_ref
+    stale = {canonical(item["path"]) for item in worktrees(repo_root) if item.get("prunable")}
+    row["registration_pruned"] = stale == {canonical(path)}
+    if row["registration_pruned"]:
+        git(repo_root, "worktree", "prune")
+    append_removal(state_root, row, "archived", details)
+    return row, None
+
+
+def archive(code_root: Path, state_root: Path, paths: list[Path]) -> dict[str, Any]:
+    state_root = secure_state_dir(state_root)
+    day_dir = ARCHIVE_ROOT / report_day()
+    with cleaner_lock(state_root):
+        github = GitHub()
+        found = registrations(code_root, github)
+        archived: list[dict[str, Any]] = []
+        refused: list[dict[str, Any]] = []
+        for raw in paths:
+            entry = found.get(canonical(raw))
+            if entry is None:
+                refused.append({"path": os.fspath(raw), "reasons": ["worktree_not_registered"]})
+                continue
+            try:
+                row, refusal = archive_one(code_root, state_root, github, entry[0], os.fspath(raw), day_dir)
+            except (SafetyError, OSError) as exc:
+                row, refusal = None, {"path": os.fspath(raw), "repo": str(entry[0]), "reasons": [str(exc)]}
+            if row:
+                archived.append(row)
+            if refusal:
+                refused.append(refusal)
+        return {"mode": "archive", "archive_dir": str(day_dir), "archived": archived, "refused": refused}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Safely review and remove eligible Git worktrees under repositories in ~/Code.")
     parser.add_argument("--code-root", type=Path, default=DEFAULT_CODE_ROOT)
@@ -729,11 +825,15 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="remove only worktrees that pass every safety check")
     mode.add_argument("--dry-run", action="store_false", dest="apply", help="report counts without removing worktrees")
+    mode.add_argument("--archive", nargs="+", type=Path, metavar="PATH", help="move Needs-a-look worktrees to the archive, pin their commit, keep their branch")
     parser.add_argument("--prune", action="store_true", help="with --apply, also drop registrations whose folder is gone and that pass every prune check")
     parser.add_argument("--no-report", action="store_true", help="skip writing the daily kept-worktrees report")
     parser.set_defaults(apply=False)
     args = parser.parse_args(argv)
     try:
+        if args.archive:
+            print(json.dumps(archive(args.code_root.expanduser(), args.state_root.expanduser(), args.archive), sort_keys=True))
+            return 0
         result = scan(args.code_root.expanduser(), args.state_root.expanduser(), args.apply, not args.no_report, args.prune)
     except SafetyError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
