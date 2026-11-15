@@ -237,6 +237,8 @@ PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-wo
 
 def drift_ff(ledger):
     for repo, name in PATHS.items():
+        if repo not in LANE_REPOS:
+            continue
         d = "/Users/shyamsivakumar/Code/" + name
         out = run(["git", "-C", d, "rev-parse", "main", "origin/main"], timeout=60)
         ids = out.split()
