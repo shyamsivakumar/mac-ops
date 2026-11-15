@@ -86,7 +86,7 @@ const countText = (key, col, state) => {
   const load = `${col.total}/${limitOf(key)}`;
   return col.count === col.total ? load : `${col.count} · ${load}`;
 };
-const limitTip = (key, col) => (limitOf(key) === undefined ? "" : overLimit(key, col) ? `Over the limit of ${limitOf(key)}: review before more work finishes${col.count === col.total ? "" : ` (${col.total} on the board, filters ignored)`}` : `Limit of ${limitOf(key)}`);
+const limitTip = (key, col) => (limitOf(key) === undefined ? "" : overLimit(key, col) ? `Over the limit of ${limitOf(key)}: review before more work finishes${col.count === col.total ? "" : ` (${col.total} on the board, filters and snoozes ignored)`}` : `Limit of ${limitOf(key)}`);
 
 export function columnHead(t, key, col, state, cb) {
   const [, label, tone, short] = COLUMNS.find((c) => c[0] === key);
@@ -101,7 +101,12 @@ export function columnHead(t, key, col, state, cb) {
     : key === "ready" && col.count > 0
     ? { id: "approve-all", hint: "M", label: state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, run: (cx) => cb.approveAll(cx), tip: state.approvable ? `Approve all ${state.approvable} (M)` : `${state.nothing} (M)`, dim: state.approvable === 0 }
     : null;
-  const buttons = [settleReviewed, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
+  const extra = key === "needs" && state.failed > 0
+    ? { id: "retry-failed", hint: "F", label: `Retry ${state.failed}`, run: (cx) => cb.retry(cx), tip: `Retry the ${state.failed} failed cards, grouped by error (F)` }
+    : key === "ready" && state.conflicts > 0
+    ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" ? `Confirm ${state.conflicts}` : `Rebase ${state.conflicts}`, run: (cx) => cb.rebaseAll(cx), tip: `Send the ${state.conflicts} conflicting PRs back for a rebase (U)` }
+    : null;
+  const buttons = [settleReviewed, extra, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
     .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)))
     .when(Boolean(tip), (el) => el.tooltip(tip))
@@ -112,6 +117,7 @@ export function columnHead(t, key, col, state, cb) {
       .child(div().flex_none().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).when(over, (el) => el.px(tight ? 2 : 4).rounded(3).bg(t.blocked + "22")).child(count))
       .child(div().flex_1())
       .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
+      .when(Boolean(extra), (el) => el.child(action(t, extra.id, extra.hint, extra.label, extra.run, extra.tip, tight, "blocked")))
       .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5))))
       .child(state.popup ? headButton(t, "pop-close", "✕", "Close", () => cb.close()) : headButton(t, `pop-${key}`, "⤢", `Open ${label} in a pop-up`, () => cb.expand(key))))
     .child(h_flex().h(H.sub).px(10).gap(8).items_start().overflow_hidden()
@@ -143,6 +149,7 @@ function barItems(v) {
     ...failedScan,
     { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     projectItem(v),
+    ...(v.snoozed ? [{ id: "snoozed", prio: 2, label: `Snoozed ${v.snoozed}`, tip: `${v.snoozed} snoozed cards are hidden but still count toward the column limits. Click to list or wake them (Z).` }] : []),
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
 }
@@ -313,6 +320,7 @@ export function card(t, e, v, input, cb) {
   const armedHere = v.armed?.key === e.key ? v.armed.kind : null;
   const readyActions = h_flex().gap(4).h(H.foot).min_w(0).when(!refused, (el) => el.flex_1()).items_center().overflow_hidden()
     .child(action(t, `ap-${e.key}`, "a", armedHere === "approve" ? "Confirm" : "Approve merge", (cx) => cb.approve(cx), armedHere === "approve" ? "Press again to queue the merge relay" : v.blocked ? v.refusal : v.plan?.sha ? `Queue relay #${v.plan.number} ${v.plan.sha.slice(0, 8)}` : "Checking merge plan", narrow).when(v.blocked, (el) => el.opacity(0.5)))
+    .when(v.conflict, (el) => el.child(action(t, `rb-${e.key}`, "u", armedHere === "rebase" ? "Confirm" : "Rebase", (cx) => cb.rebase(cx), armedHere === "rebase" ? "Press again to send it back for a rebase" : "Send the builder back to rebase on origin/main and resolve the conflicts (u)", narrow, "blocked")))
     .child(action(t, `pr-${e.key}`, "p", "PR", () => cb.openPr(), "Open the PR (p)", narrow))
     .child(action(t, `op-${e.key}`, "o", narrow ? "Open" : "Thread", (cx) => cb.open(cx), "Open the thread (o)", narrow))
     .when(canSettle && !narrow, (el) => el.child(action(t, `se-${e.key}`, "s", "Settle", (cx) => cb.settle(cx))));
@@ -349,6 +357,8 @@ export function card(t, e, v, input, cb) {
       .when(Boolean(c.task), (el) => el.child(div().flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(c.task)))
       .when(!c.task, (el) => el.child(div().min_w(0).truncate().text_size(11).font_medium().text_color(t.muted).child(c.project ?? "thread")))
       .child(originChips(t, e, v, cb))
+      .when(v.asleep, (el) => el.child(chip(t, "snoozed", "dim", "Snoozed: hidden unless you search for it")))
+      .when(Boolean(v.sent), (el) => el.child(chip(t, v.sent, "working", "Already sent to the Coordinator. Pressing again is skipped until the card changes.")))
       .child(div().flex_1())
       .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : v.col === "run" ? div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now)) : columnAge(t, e, v)))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
@@ -676,6 +686,8 @@ export const KEY_TABLE = [
   { keys: "d", group: "Card", all: "Send back with a note: reply to the thread (Ready cards; on Needs you cards it is a plain reply)" },
   { keys: "s", group: "Card", all: "Settle the card's finished threads" },
   { keys: "p", group: "Card", all: "Open the pull request" },
+  { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (Ready cards)" },
+  { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you and Ready cards)" },
   { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards without a GitHub issue)" },
   { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then Ready, and cycle" },
   { keys: "⌥⌘N", group: "Move", all: "Jump to the next blocked agent in any space, else the next Needs you card (bind cockpit.needs)" },
@@ -686,6 +698,9 @@ export const KEY_TABLE = [
   { keys: "S", group: "Board", all: "Settle every reviewed card, press twice (Done)" },
   { keys: "A", group: "Board", all: "Settle every finished card, press twice (Done)" },
   { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (Ready)" },
+  { keys: "F", group: "Board", all: "Retry failed cards in groups by error kind (Needs you)" },
+  { keys: "U", group: "Board", all: "Send every conflicting PR back for a rebase, press twice (Ready)" },
+  { keys: "Z", group: "Board", all: "List snoozed cards, wake one or all" },
   { keys: "f", group: "Board", all: "Fold or show this column" },
   { keys: "e", group: "Board", all: "Open this column in a pop-up" },
   { keys: "b", group: "Board", all: "Fold or show Backlog" },
@@ -748,14 +763,32 @@ export const projectSheetHeight = (rows) => Math.min(DEC_CAP, 34 + 20 + rows * P
 export function projectSheet(t, chooser, chosen, cb) {
   return v_flex().size_full().min_h(0)
     .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
-      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Show project"))
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child(chooser.title))
       .child(headButton(t, "project-close", "✕", "Close", () => cb.close())))
     .child(v_flex().id("project-body").flex_1().min_h(0).overflow_y_scrollbar()
       .child(v_flex().w_full().flex_none().p(10).children(chooser.list.map((p, i) => h_flex().id(`project-${i}`).w_full().h(PROJECT_ROW).px(8).gap(8).items_center().rounded(4).cursor_pointer()
-        .bg(i === chosen ? t.selected : t.chrome).hover((s) => s.bg(t.raised)).on_click(() => cb.pick(p.name))
+        .bg(i === chosen ? t.selected : t.chrome).hover((s) => s.bg(t.raised)).on_click(() => cb.pick(p))
         .child(div().w(10).flex_none().text_size(11).text_color(t.done).child(p.name === chooser.current ? "✓" : ""))
         .child(div().flex_1().min_w(0).truncate().text_size(12).font_medium().text_color(t.foreground).child(p.name ?? "All projects"))
         .child(div().flex_none().text_size(11).text_color(t.dim).child(String(p.count)))))));
+}
+
+const ROW_SHEET_ROW = 50;
+export const rowSheetHeight = (rows) => Math.min(DEC_CAP, 34 + 20 + rows * ROW_SHEET_ROW);
+
+export function rowSheet(t, sheet, chosen, armed, cb) {
+  return v_flex().size_full().min_h(0)
+    .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
+      .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child(sheet.title))
+      .child(headButton(t, "rows-close", "✕", "Close", () => cb.close())))
+    .child(v_flex().id("rows-body").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().w_full().flex_none().p(10).children(sheet.rows.map((r, i) => h_flex().id(`rs-${i}`).w_full().h(ROW_SHEET_ROW).px(8).gap(10).items_center().rounded(4)
+        .bg(i === chosen ? t.selected : t.chrome)
+        .child(div().w(sheet.leadW).flex_none().truncate().text_size(12).font_semibold().text_color(t.foreground).child(r.lead))
+        .child(v_flex().id(`rs-text-${i}`).flex_1().min_w(0).gap(2).tooltip(r.sample)
+          .child(div().w_full().truncate().text_size(12).font_medium().text_color(t.foreground).child(r.label))
+          .child(div().w_full().truncate().text_size(10.5).text_color(t.muted).child(r.sample)))
+        .child(action(t, `rs-act-${i}`, "", armed?.kind === sheet.kind && armed.key === r.id ? "Confirm" : r.action, (cx) => cb.act(r, cx), r.tip, true, sheet.kind === "retry" ? "blocked" : undefined))))));
 }
 
 export const noticeHeight = (notice) => Math.min(DEC_CAP, 34 + 24 + Math.ceil(notice.text.length / 70) * 18 + notice.items.length * 56);
