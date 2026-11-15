@@ -197,7 +197,7 @@ def main():
         envelope = read_json(args.fake_input)
         board = snapshot(cfg, envelope, envelope.get("previous", {}), ticket["normalize_issue"], adapter["linked_ticket"])
     else:
-        with open(args.state, "a+") as stream:
+        with os.fdopen(os.open(args.state, os.O_RDWR | os.O_CREAT, 0o600), "r+") as stream:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
             stream.seek(0)
             content = stream.read(MAX_BYTES + 1)
