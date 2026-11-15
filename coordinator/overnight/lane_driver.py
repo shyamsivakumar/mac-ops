@@ -414,8 +414,12 @@ def run_pass(ledger):
             if not u.startswith("nothing ready"):
                 print(f"{CFG[repo]['key']:5} {u}")
         if repo == "shyamsivakumar/strategy-replay-workbench" and not done:
-            live = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"],
-                      "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20}).get("threads") or []
+            response = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"],
+                          "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20})
+            live = response.get("threads") if isinstance(response, dict) else None
+            if not isinstance(live, list) or any(not isinstance(t, dict) or not isinstance(t.get("title"), str) for t in live):
+                print(f"{CFG[repo]['key']:5} refused: invalid thread-list response")
+                continue
             excluded = {group_of(t.get("title") or "") for t in live}
             if len(live) < 3:
                 print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger, excluded))
