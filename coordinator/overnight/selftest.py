@@ -32,7 +32,7 @@ def start_routing():
              "digitized/Concerning", "fixture/sixth"]
     board = json.loads(json.dumps([
         dict(repo=repo, number=n, key=f"F-{n}", stage=stage, problems=problems,
-             priority=1, title="bot", builderAlias="implementation", body="fixture", url="fixture")
+             priority=2, title="bot", builderAlias="implementation", body="fixture", url="fixture")
         for repo in repos for n, stage, problems in
         [(1, "backlog", []), (2, "todo", ["blocked"]), (3, "todo", []), (4, "todo", [])]
     ]))
