@@ -368,7 +368,63 @@ def no_parking(status="interrupted"):
         raise AssertionError("negative control accepted parking")
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking}
+def turncap():
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import mock_open
+    path = Path.home() / "Code/coordinator/loop/turn_cap.py"
+    spec = importlib.util.spec_from_file_location("fixture_turncap", path)
+    cap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cap)
+    now = datetime(2026, 11, 15, tzinfo=timezone.utc)
+
+    class Clock:
+        @staticmethod
+        def now(tz=None):
+            return now
+
+    failures = []
+    for seconds, waiting in [(600, False), (601, False), (1200, False),
+                             (1201, False), (1800, True)]:
+        state = dict(handled=[], wrapped={}, wrapped_at={}, finalized=[])
+        thread = dict(threadId="fixture", title="ticket:fixture/repo#1:a1",
+                      status="running", message="WAITING: heavy busy" if waiting else "")
+        started = now - timedelta(seconds=seconds)
+        actions = []
+        logs = mock_open()
+        def call(cli, tool, args):
+            actions.append((tool, args))
+            return {"delivery": "started"}
+        with patch.object(cap, "datetime", Clock), \
+             patch.object(cap, "current_run", return_value=("run", 1, started, started, False)), \
+             patch.object(cap, "call", side_effect=call), \
+             patch.object(cap, "save_state"), patch.object(cap.time, "sleep"), \
+             patch.object(cap.time, "time", return_value=now.timestamp()), \
+             patch("builtins.open", logs):
+            cap.handle_thread("t3", thread, state, False)
+            cap.handle_thread("t3", thread, state, False)
+        try:
+            expected = [] if waiting or seconds <= 1200 else [
+                ("t3_thread_interrupt", {"threadId": "fixture"})]
+            exact(actions, expected)
+            lines = [entry.args[0] for entry in logs().write.call_args_list]
+            expected_lines = [] if waiting or seconds <= 600 else [
+                f"- cap mis-sized 2026-11-15T00:00Z | t3 | {thread['title']} | run | {seconds / 60:.1f} min\n"] * 2
+            exact(lines, expected_lines)
+            exact(state.get("parked", []), ["fixture"] if seconds > 1200 and not waiting else [])
+            exact(state.get("attempts", 0), 0)
+        except AssertionError as exc:
+            failures.append(f"runtime={seconds}, heavy_wait={waiting}: {exc}")
+    try:
+        exact([("t3_thread_interrupt", {})], [])
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("negative control accepted an extra interrupt")
+    if failures:
+        raise AssertionError("; ".join(failures))
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap}
 
 
 def main():
