@@ -59,8 +59,33 @@ def start_routing():
             if item["number"] != 3:
                 continue
             _, _, payload = ticket.build_start(cfg, item, 1, {})
-            exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main"})
+            exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
+    cfg["types"] = {"feature": "implementation", "chore": "maintenance", "review": "gate"}
+    cfg["models"].update({"maintenance": {"selection": {"model": "fixture-maintenance"}, "vendor": "builder"},
+                          "gate": {"selection": {"model": "fixture-review"}, "vendor": "reviewer"}})
+    cfg["models"]["implementation"]["vendor"] = "builder"
+    for kind, expected in [("feature", "fixture-implementation"), ("chore", "fixture-maintenance")]:
+        item = dict(board[3], type=kind, builder=None, reviewer=None)
+        item["builderAlias"], item["reviewerAlias"] = ticket.resolve_models(cfg, item)
+        commands = []
+        def launch(command, timeout):
+            payload = json.loads(command[2])
+            exact(payload["modelSelection"], {"model": expected})
+            exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0, "fixture receipt", "")
+        from argparse import Namespace
+        with contextlib.ExitStack() as stack:
+            for name, value in {"load_config": cfg, "repo_config": {}, "with_ticket_lock": None,
+                                "fetch_issue": {}, "validate_start": item, "authed_login": "fixture",
+                                "ledger_of": [], "assert_not_active": None, "default_branch": "main",
+                                "post_comment": None, "gh": ""}.items():
+                stack.enter_context(patch.object(ticket, name, return_value=value))
+            stack.enter_context(patch.object(ticket, "run", launch))
+            ticket.cmd_start(Namespace(ref=f"{item['repo']}#{item['number']}", force_text_blockers=False,
+                                       print_brief=False, dry_run=False))
+        exact(len(commands), 1)
     actions.clear()
     chains = [dict(repo=repos[1], number=n, key=f"F-{n}", stage="todo", problems=[],
                    priority=1, title=title) for n, title in [(10, "bot"), (11, "census"), (12, "dashboard")]]
@@ -77,6 +102,13 @@ def start_routing():
          patch.object(lane, "t3", return_value={"threads": [{"title": "bot"}]}), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False):
         lane.run_pass({})
+        for invalid in ({}, {"threads": None}, {"threads": {}}, {"threads": [None]}, {"threads": [{}]}):
+            actions.clear()
+            with patch.object(lane, "busy", return_value="unknown"), patch.object(lane, "t3", return_value=invalid):
+                lane.run_pass({})
+            exact(actions, [])
+        with patch.object(lane, "t3", return_value={"threads": [{"title": "bot"}]}):
+            lane.run_pass({})
     exact(actions, [["ticket", "start", f"{repos[1]}#11", "--dry-run"],
                     ["ticket", "start", f"{repos[1]}#11"]])
     with patch.object(lane, "SNAPSHOT", {"repos": {repos[0]: {"issues": [{"number": 9, "labels": []}], "prs": []}}}), \

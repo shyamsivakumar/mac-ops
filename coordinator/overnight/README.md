@@ -654,5 +654,8 @@ happens at lane main entry, so importing the lane module reads no live files.
 
 The adapter excludes occupied SRW chain groups and relaunches dead orphan
 receipts through ticket start. It does not install or cut over the loop.
-Live smoke, hourly tick integration, real Git fetch behavior, issue label to
-model-alias resolution and the other eleven evals remain outside this proof.
+The fixture also exercises type-to-alias resolution through cmd_start and
+checks the dispatched refresh request (`startFromOrigin: true`). Missing or
+malformed SRW thread lists refuse dispatch. Live smoke, hourly tick integration,
+T3 internal Git refresh execution, issue label parsing and the other eleven
+evals remain outside this proof.
