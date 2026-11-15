@@ -145,6 +145,27 @@ def start_routing():
             lane.run_pass({})
             exact(actions, [["ticket", "start", f"{repos[1]}#9"]])
 
+        orphan_snapshot["repos"][repos[1]]["prs"] = [{"number": 20, "isDraft": False, "body": ""}]
+        orphan_snapshot["repos"][repos[1]]["issues"][0]["title"] = "bot repair"
+        for after in ({"threads": [{"title": "bot"}]}, {},
+                      {"threads": [{"title": "bot"}, {"title": "census"}, {"title": "dashboard"}]}):
+            events = []
+            def pr_action(repo, number, ledger):
+                events.append("pr-launch")
+                return "gate launched"
+            def post_action_threads(tool, args):
+                events.append("refresh" if tool == "t3_thread_list" else "read")
+                return after if tool == "t3_thread_list" else {}
+            actions.clear()
+            ledger = {}
+            with patch.object(lane, "busy", return_value=""), \
+                 patch.object(lane, "act_on_pr", side_effect=pr_action), \
+                 patch.object(lane, "t3", side_effect=post_action_threads):
+                lane.run_pass(ledger)
+            exact(events, ["pr-launch", "refresh"])
+            exact(actions, [])
+            exact(ledger, {})
+
 
 EVALS = {"start-routing": start_routing}
 

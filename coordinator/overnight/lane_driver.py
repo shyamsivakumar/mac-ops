@@ -412,11 +412,11 @@ def run_pass(ledger):
             if result.startswith("skip "):
                 continue
             done = True
-        if done and not DRY and not b:
+        if repo != "shyamsivakumar/strategy-replay-workbench" and done and not DRY and not b:
             u = unstick(repo, ledger)
             if not u.startswith("nothing ready"):
                 print(f"{CFG[repo]['key']:5} {u}")
-        if repo == "shyamsivakumar/strategy-replay-workbench" and not done:
+        if repo == "shyamsivakumar/strategy-replay-workbench":
             response = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"],
                           "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20})
             live = response.get("threads") if isinstance(response, dict) else None
@@ -425,7 +425,11 @@ def run_pass(ledger):
                 continue
             excluded = {group_of(t.get("title") or "") for t in live}
             if len(live) < 3:
-                print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger, excluded))
+                if done:
+                    if not DRY:
+                        print(f"{CFG[repo]['key']:5} " + unstick(repo, ledger, excluded))
+                else:
+                    print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger, excluded))
         elif not done and not b:
             print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
 
