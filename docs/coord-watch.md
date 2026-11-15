@@ -66,3 +66,10 @@ limit: reaching it fails the cycle visibly rather than dropping identities.
 Log errors are skipped without printing source content. Reads never write logs.
 Device, live-service and owner testing were waived for #345. The required
 repository check remains `timeout 300 python3 scripts/mac_ops_fast_check.py`.
+
+Reproduce the runtime acceptance and temporary-HOME installation receipts with
+`timeout 300 env PYTHONDONTWRITEBYTECODE=1 python3 evidence/MO-1006/replay.py`.
+The captured result is `evidence/MO-1006/replay.out`; installer host discovery
+and activation are faked, while mapping, file writes and installed command
+execution use the real implementation. See `evidence/MO-1006/delivery.md` for
+the exact boundaries and covered cases.
