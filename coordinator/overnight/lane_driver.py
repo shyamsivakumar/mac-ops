@@ -6,7 +6,7 @@ import time
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
-CFG = json.load(open("/Users/shyamsivakumar/.coordinator/tickets.json"))["repos"]
+CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DRY = False
 SNAPSHOT = {}
@@ -267,8 +267,18 @@ def drift_ff(ledger):
         print(f"{CFG[repo]['key']:5} ff chore: {out2}")
 
 
-def start_next(repo, tickets, ledger):
-    ready = sorted((t for t in tickets if t["repo"] == repo and t.get("stage") == "todo" and not t.get("problems")),
+def group_of(title):
+    title = title.lower()
+    if "census" in title:
+        return "census"
+    if any(word in title for word in ("dashboard", "design", "document", "critique", "mock")):
+        return "docs"
+    return "bot"
+
+
+def start_next(repo, tickets, ledger, excl=frozenset()):
+    ready = sorted((t for t in tickets if t["repo"] == repo and t.get("stage") == "todo" and not t.get("problems")
+                    and group_of(t.get("title") or "") not in excl),
                    key=lambda t: (t.get("priority") or 9, t["number"]))
     import datetime as _dt
     now = _dt.datetime.now(_dt.timezone.utc)
@@ -314,7 +324,11 @@ def unstick(repo, ledger):
         if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
             continue
         if not t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread"):
-            continue
+            if DRY:
+                return f"DRY start #{n}"
+            out = run(["ticket", "start", f"{repo}#{n}"], timeout=200)
+            ledger[f"relaunch:{repo}#{n}"] = out
+            return f"start #{n}: {out}"
         if DRY:
             return f"DRY continue #{n}"
         msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
@@ -399,11 +413,20 @@ def run_pass(ledger):
             u = unstick(repo, ledger)
             if not u.startswith("nothing ready"):
                 print(f"{CFG[repo]['key']:5} {u}")
-        if not done and not b:
+        if repo == "shyamsivakumar/strategy-replay-workbench" and not done:
+            live = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"],
+                      "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20}).get("threads") or []
+            excluded = {group_of(t.get("title") or "") for t in live}
+            if len(live) < 3:
+                print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger, excluded))
+        elif not done and not b:
             print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
 
 
 def main():
+    global CFG
+    with open("/Users/shyamsivakumar/.coordinator/tickets.json") as handle:
+        CFG = json.load(handle)["repos"]
     try:
         ledger = json.load(open(LEDGER))
     except (OSError, ValueError):

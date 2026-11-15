@@ -1,0 +1,129 @@
+import contextlib
+import importlib.machinery
+import importlib.util
+import io
+import json
+from pathlib import Path
+import subprocess
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parent
+
+
+def load_ticket():
+    path = ROOT / "ticket" if (ROOT / "ticket").is_file() else ROOT.parent / "bin" / "ticket"
+    loader = importlib.machinery.SourceFileLoader("fixture_ticket", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def exact(actual, expected):
+    if actual != expected:
+        raise AssertionError(f"expected {expected!r}, got {actual!r}")
+
+
+def start_routing():
+    import lane_driver as lane
+    ticket = load_ticket()
+    repos = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench",
+             "shyamsivakumar/fantasy-football-toolkit", "shyamsivakumar/catalouge",
+             "digitized/Concerning", "fixture/sixth"]
+    board = json.loads(json.dumps([
+        dict(repo=repo, number=n, key=f"F-{n}", stage=stage, problems=problems,
+             priority=1, title="bot", builderAlias="implementation", body="fixture", url="fixture")
+        for repo in repos for n, stage, problems in
+        [(1, "backlog", []), (2, "todo", ["blocked"]), (3, "todo", []), (4, "todo", [])]
+    ]))
+    board.insert(0, dict(repo=repos[1], number=468, key="SRW-468", stage="todo", problems=[], priority=1))
+    actions = []
+
+    def run(cmd, timeout=150):
+        if cmd[:2] != ["ticket", "start"]:
+            raise AssertionError(f"unexpected subprocess: {cmd}")
+        actions.append(cmd)
+        return "ready" if cmd[-1] == "--dry-run" else "launched"
+
+    with patch.object(lane, "run", run), patch.object(lane, "DRY", False):
+        for repo in repos:
+            lane.start_next(repo, board, {})
+    exact(actions, [cmd for repo in repos for cmd in
+                    (["ticket", "start", f"{repo}#3", "--dry-run"],
+                     ["ticket", "start", f"{repo}#3"])])
+    cfg = {"repos": {repo: {"projectId": repo} for repo in repos},
+           "models": {"implementation": {"selection": {"model": "fixture-implementation"}}}}
+    with patch.object(ticket, "default_branch", return_value="main"), \
+         patch.object(ticket, "brief_reviewer", return_value="astra"):
+        for item in board:
+            if item["number"] != 3:
+                continue
+            _, _, payload = ticket.build_start(cfg, item, 1, {})
+            exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main"})
+            exact(payload["modelSelection"], {"model": "fixture-implementation"})
+    actions.clear()
+    chains = [dict(repo=repos[1], number=n, key=f"F-{n}", stage="todo", problems=[],
+                   priority=1, title=title) for n, title in [(10, "bot"), (11, "census"), (12, "dashboard")]]
+    with patch.object(lane, "run", run), patch.object(lane, "DRY", False):
+        lane.start_next(repos[1], chains, {}, {"bot"})
+    exact(actions, [["ticket", "start", f"{repos[1]}#11", "--dry-run"],
+                    ["ticket", "start", f"{repos[1]}#11"]])
+    actions.clear()
+    snapshot = {"tickets": chains, "repos": {repos[1]: {"prs": [], "issues": []}}}
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", return_value=snapshot), \
+         patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
+         patch.object(lane, "t3", return_value={"threads": [{"title": "bot"}]}), \
+         patch.object(lane, "run", run), patch.object(lane, "DRY", False):
+        lane.run_pass({})
+    exact(actions, [["ticket", "start", f"{repos[1]}#11", "--dry-run"],
+                    ["ticket", "start", f"{repos[1]}#11"]])
+    with patch.object(lane, "SNAPSHOT", {"repos": {repos[0]: {"issues": [{"number": 9, "labels": []}], "prs": []}}}), \
+         patch("builtins.open", __import__("unittest.mock", fromlist=["mock_open"]).mock_open(read_data=json.dumps({f"ticket:{repos[0]}#9:a1": "dead"}))), \
+         patch.object(lane, "t3", return_value={}), patch.object(lane, "DRY", True):
+        result = lane.unstick(repos[0], {})
+        exact(result, "DRY start #9")
+        actions.clear()
+        with patch.object(lane, "DRY", False), patch.object(lane, "run", run):
+            lane.unstick(repos[0], {})
+        exact(actions, [["ticket", "start", f"{repos[0]}#9"]])
+
+
+EVALS = {"start-routing": start_routing}
+
+
+def main():
+    failed = False
+    try:
+        exact(["unexpected"], ["expected"])
+    except AssertionError:
+        pass
+    else:
+        print("FAIL negative-control: equality accepted wrong actions")
+        return 1
+    with patch.object(subprocess, "run", side_effect=AssertionError("live subprocess forbidden")), \
+         patch.object(subprocess, "Popen", side_effect=AssertionError("live process forbidden")):
+        for name, evaluate in EVALS.items():
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    evaluate()
+                    if name == "start-routing":
+                        import lane_driver
+                        with patch.object(lane_driver, "NEVER_START", set()):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control failed to detect forbidden start")
+            except Exception as exc:
+                failed = True
+                print(f"FAIL {name}: {exc}")
+            else:
+                print(f"PASS {name}")
+    return int(failed)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

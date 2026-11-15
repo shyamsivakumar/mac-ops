@@ -637,3 +637,22 @@ Every pass logs before/after quota usage, including budget stops. The delta
 also includes concurrent account activity and may span a quota reset.
 Existing three-dry-run limits and 30-minute refusal caching remain in force.
 Live-service, device and owner testing were waived, not failed.
+
+## Fixture evals
+
+Run `python3 coordinator/overnight/overnight selftest` from the checkout.
+The command prints one PASS/FAIL line per registered eval and exits nonzero
+on any failure. Only `start-routing` is registered. Later loop tickets must
+extend this registry; unimplemented evals are never reported as passing.
+The fast check runs the same command.
+
+The fixture uses six synthetic repositories and the production lane selector,
+run-pass wiring, orphan path and ticket launch-payload builder. Subprocesses
+are denied unless replaced with fixture responses. Removing NEVER_START is
+a negative control that must make the eval fail. Configuration loading now
+happens at lane main entry, so importing the lane module reads no live files.
+
+The adapter excludes occupied SRW chain groups and relaunches dead orphan
+receipts through ticket start. It does not install or cut over the loop.
+Live smoke, hourly tick integration, real Git fetch behavior, issue label to
+model-alias resolution and the other eleven evals remain outside this proof.

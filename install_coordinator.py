@@ -52,7 +52,7 @@ RETIRED_JOBS: tuple[str, ...] = ()
 # queue here: the board is the list.
 OVERNIGHT_DIRS = ("run", "receipts", "inbox", "staging")
 OVERNIGHT_README = ("overnight", "README.md")
-OVERNIGHT_BIN_FILES = ("overnight", "lane_driver.py")
+OVERNIGHT_BIN_FILES = ("overnight", "lane_driver.py", "selftest.py")
 GITIGNORE_ENTRY = ".overnight/"
 GITIGNORE_BLOCK = (
     "# Overnight runner scratch, installed by mac-ops\n"
