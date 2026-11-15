@@ -20,13 +20,6 @@ from xml.sax.saxutils import escape
 
 RECEIPT_NAME = "coordinator-installation.json"
 HOME_TOKEN = "@HOME@"
-BIN_FILES = (
-    "coordq",
-    "coord-watch",
-    "coordinator-refresh",
-    "coordstart",
-    "ticket",
-)
 CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
@@ -76,7 +69,11 @@ MONITOR_PATTERN = r"[Pp]ython[0-9.]* .*/loop/turn_cap\.py( --[A-Za-z0-9-]+)*$"
 def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     root = checkout / "coordinator"
     items = [
-        (root / "bin" / name, home / ".local/bin" / name, 0o755) for name in BIN_FILES
+        (source, home / ".local/bin" / source.relative_to(root / "bin"),
+         0o755 if os.access(source, os.X_OK) else 0o644)
+        for source in sorted((root / "bin").rglob("*"))
+        if source.is_file() and "__pycache__" not in source.parts
+        and source.suffix != ".pyc"
     ]
     items += [
         (root / "config" / name, home / ".coordinator" / name, 0o644)
@@ -641,6 +638,65 @@ def ensure_overnight_dirs(coordinator: Path, home: Path) -> list[Path]:
     return created
 
 
+def smoke_checks(home: Path) -> list[dict]:
+    results = []
+    for name, argument in (("coordq", "status"), ("ticket", "--help"), ("overnight", "--help")):
+        command = ["/opt/homebrew/bin/python3", str(home / ".local/bin" / name), argument]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30,
+                                    env={**os.environ, "HOME": str(home)}, cwd=home)
+            error = result.stderr.strip()
+            healthy = result.returncode == 0
+            if healthy and name == "coordq":
+                try:
+                    payload = json.loads(result.stdout)
+                    healthy = isinstance(payload, dict) and "cap" in payload
+                except ValueError:
+                    healthy = False
+                if not healthy:
+                    error = "coordq status must return a JSON object with cap"
+            results.append({"command": command, "healthy": healthy,
+                            "returncode": result.returncode, "error": error})
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            results.append({"command": command, "healthy": False, "error": str(exc)})
+    return results
+
+
+def require_healthy(home: Path) -> None:
+    results = smoke_checks(home)
+    if not all(result["healthy"] for result in results):
+        raise RuntimeError("Coordinator smoke checks failed: " + json.dumps(results))
+
+
+def restore_files(backups: Path) -> None:
+    saved = read_regular(backups / "manifest.json")
+    if saved is None:
+        return
+    failures = []
+    for entry in reversed(json.loads(saved[0])["files"]):
+        target = Path(entry["path"])
+        try:
+            if entry["backup"] is None:
+                with safe_parent(target) as parent:
+                    try:
+                        os.unlink(target.name, dir_fd=parent)
+                    except FileNotFoundError:
+                        pass
+            else:
+                original = read_regular(backups / entry["backup"])
+                if original is None:
+                    raise RuntimeError("Missing backup: " + entry["backup"])
+                atomic_write(target, original[0], entry["mode"])
+                with safe_parent(target) as parent:
+                    os.utime(target.name, dir_fd=parent,
+                             ns=(entry["atime_ns"], entry["mtime_ns"]),
+                             follow_symlinks=False)
+        except (OSError, ValueError, RuntimeError) as exc:
+            failures.append(f"{target}: {exc}")
+    if failures:
+        raise RuntimeError("Rollback incomplete: " + "; ".join(failures))
+
+
 def install(
     checkout: Path,
     dry_run: bool,
@@ -692,7 +748,8 @@ def install(
             f"Stop it so only one monitor runs: kill {pid}"
         )
     if not pending:
-        print("Wrote 0 coordinator files. Already in sync.")
+        require_healthy(home)
+        print("Wrote 0 coordinator files. Already in sync and healthy.")
         return
     transaction = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex
     backups = state / "coordinator-backups" / transaction
@@ -700,15 +757,20 @@ def install(
     with safe_parent(backups / "manifest.json", create=True):
         pass
     print(f"Backup transaction: {backups}", flush=True)
-    for target, data, mode in pending:
-        write(target, data, mode, backups)
-    receipt = {
-        "checkout": str(checkout),
-        "installed_at": time.time(),
-        "written": [str(t) for t, _, _ in pending],
-        "backups": str(backups),
-    }
-    write(receipt_target, json.dumps(receipt).encode(), 0o600, backups)
+    try:
+        for target, data, mode in pending:
+            write(target, data, mode, backups)
+        receipt = {
+            "checkout": str(checkout),
+            "installed_at": time.time(),
+            "written": [str(t) for t, _, _ in pending],
+            "backups": str(backups),
+        }
+        write(receipt_target, json.dumps(receipt).encode(), 0o600, backups)
+        require_healthy(home)
+    except (OSError, ValueError, RuntimeError) as exc:
+        restore_files(backups)
+        raise RuntimeError(f"{exc}; replaced files rolled back") from exc
     print(f"Wrote {len(pending)} coordinator files. Backups: {backups}")
     for note in reload_jobs(home, changed_launchd_jobs(pending)):
         print(note)
@@ -720,10 +782,13 @@ def status(checkout: Path, coordinator: Path | None = None) -> None:
     pending = changes(checkout, home, coordinator)
     missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
     retired = [str(path) for path in retired_plists(home)]
+    checks = smoke_checks(home)
     print(
         json.dumps(
             {
                 "in_sync": not pending and not missing and not retired,
+                "healthy": all(check["healthy"] for check in checks),
+                "smoke_checks": checks,
                 "differs": [str(t) for t, _, _ in pending],
                 "overnight_root": str(overnight_root(coordinator)),
                 "overnight_missing": [str(d) for d in missing],
