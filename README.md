@@ -253,6 +253,8 @@ before any job reload. Incomplete rollback is an explicit error.
 `python3 install_coordinator.py status` reports `healthy` and per-command
 `smoke_checks` separately from file synchronization (`in_sync`).
 The real-HOME requirement and launchd behavior are unchanged.
+See the [ticket 358 acceptance receipt](docs/proofs/ticket-358-acceptance.md) for
+synthetic rollback evidence and the explicit live acceptance waiver.
 
 Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
