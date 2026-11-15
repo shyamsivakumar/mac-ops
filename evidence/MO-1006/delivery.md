@@ -23,16 +23,18 @@ mapping edit was made. The gate fix now executes the real installer in a
 temporary HOME with host discovery/activation boundaries replaced by inert
 fakes. No live installation or package execution was performed.
 
-Verification command (required agent check):
+Changed-file selector (fast check), not the full suite:
 
-    timeout 300 python3 scripts/mac_ops_fast_check.py
+    timeout 300 ~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py
 
 Device, handset, live-service and owner testing are waived by Shyam's
 2026-11-14 instruction, not failed. No new unit tests were created. The gate
 fix supplies the isolated command acceptance replay and actual temporary-HOME
 installation receipts described below.
-The fast check covers changed Python syntax and existing selected checks,
-including the HeavyQueue model, not end-to-end runtime acceptance.
+The fast check covers changed Python syntax, shell syntax, the HeavyQueue model
+and the existing Python tests that statically import the changed modules. It is
+a selector, not the full suite, and by itself does not satisfy #345. The full
+suite result and its command are recorded under "Full local check" below.
 
 Deslop review used standard-library facilities and existing installer mapping;
 no dependencies or cleanup installs. no-comments diff review: only the CLI
@@ -48,6 +50,63 @@ history exceeding 8 MiB fails visibly and requires operator intervention.
 Signal shutdown during collection can take up to the 120-second shared deadline.
 No live activation, merge or next-ticket start. Provides watch-complete remains
 subject to coordinator review and verification on merge.
+
+## Full local check
+
+Full-suite entry point. The repository has no Makefile, no `scripts/check.sh`
+and no workflow file; `scripts/mac_ops_fast_check.py` selects changed files
+only, and `formal/governor/check.sh` is the heavy lifecycle model, not the
+Python suite. The complete existing local suite is unittest discovery over
+`tests/`, which is the command recorded in `evidence/MO-240/decisions.md:313`
+and used by `evidence/MO-1002/full-check.txt`:
+
+    timeout 300 ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
+
+Coverage: every module under `tests/` (287 tests on this head), which contains
+every existing Python test in the repository. Excluded: nothing. Device,
+handset, live-service, launchd and owner testing are waived by the coordinator,
+not passed. No linter or type checker is configured in this repository.
+
+Result on head 4e9fa02277e572b769e39f67395306e2ff28ffcd, 2026-11-15T15:59:52Z
+to 16:00:02Z, exit status 1: FAIL, 287 tests run, 4 failures, all in
+`tests/test_gatekeep_retry_limit.py`:
+
+- `BackoffTest.test_a_second_retry_happens_after_the_backoff`
+- `FirstRetryTest.test_a_head_with_no_retry_yet_is_retried`
+- `FirstRetryTest.test_a_legacy_head_is_retried`
+- `GiveUpTest.test_an_odd_record_does_not_stop_the_run`
+
+The four assertions fail with empty output because `coordq.cmd_gatekeep` now
+continues silently unless the gate thread's recorded model equals
+`ASTRA_MODEL = {"instanceId": "codex", "model": "gpt-6-astra"}`
+(`coordinator/bin/coordq`, `if current != ASTRA_MODEL: continue`). The
+test fixture `DEAD_GATE` records a failed thread with no model, so the retry
+and give-up lines those tests expect are never printed. That guard was added by
+c61f660 ("Restrict gate fallback to explicit Astra quota exhaustion (#340)"),
+which updated `tests/test_gate_reviewer_quota.py` but not
+`tests/test_gatekeep_retry_limit.py`.
+
+This is pre-existing and independent of the branch. The branch changes no file
+under `tests/` and does not touch `coordinator/bin/coordq`; only
+`coordinator/bin/coord-watch`, `docs/coord-watch.md` and `evidence/MO-1006/`
+differ from the base. Receipts:
+
+- `full-check.log` - the run above at the reviewed head.
+- `full-check-fast-check.log` - the fast check at the same head, exit 0,
+  2026-11-15T15:59:44Z to 15:59:50Z.
+- `full-check-branch-base.log` - the same failing module at the branch base
+  8d6c70d4146cf857a59d0081159e784773837635, 4 failures, exit 1.
+- `full-check-baseline-main.log` - the whole suite in a clean worktree at
+  origin/main b6c34eda85c42201137713e0080ac51e6b2e6113, 4 failures, exit 1.
+  That run needs `PYTHONPATH=coordinator/bin`, because main's `coordq` imports
+  `tick_health` while `coordinator/bin` is not on the path for a repository-root
+  invocation; this head predates that import and needs no `PYTHONPATH`.
+
+So the full local suite is red on origin/main for the same four tests. No PASS
+is claimed for the full check, and the failures were not fixed here: they are
+unrelated to #345, and repairing them would be a production and test change
+outside this ticket's scope. A separate script-shaped check ticket is the
+route for that repair under lane.md section 5.
 
 ## Gate fix: missing isolated acceptance receipts
 
