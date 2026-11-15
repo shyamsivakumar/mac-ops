@@ -731,3 +731,20 @@ send receipt failure handling remain outside this fixture's proof.
 The no-parking fixture also covers completed and failed builder statuses. A
 production-path negative control replaces send with a no-op and requires the
 eval to fail, so missing fix dispatches cannot produce a passing result.
+
+
+### Turncap eval (Refs #377)
+
+`overnight turncap [--dry-run]` delegates to the canonical handler at
+`~/Code/coordinator/loop/turn_cap.py`. The repository adapter contains no
+turncap policy and does not install or modify that external runtime.
+Imports are inert until the command or fixture explicitly loads the handler.
+
+`overnight selftest` exercises that handler with intercepted T3 calls,
+filesystem writes, clock and sleep. Threshold expectations, wait/resume
+accounting and preserved attempts remain strict. The negative control mutates
+the canonical handler threshold in memory and must fail the same assertions.
+The external source is required; missing source is FAIL. The old canonical
+policy fails these expectations; no passing canonical acceptance is claimed.
+Source availability and revision are external dependencies. Device, handset
+and live-service testing are waived, not failed.
