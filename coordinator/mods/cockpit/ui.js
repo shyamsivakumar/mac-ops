@@ -6,7 +6,7 @@ import { v_flex, h_flex, Input, TextView } from "gpui-base";
 import { shortModel } from "./hub.js";
 import { changedSinceLaunch, issueRef, pickerOptions, startBlock } from "./tickets.js";
 
-export const H = { bar: 26, head: 42, sub: 16, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, chips: 18, empty: 50, folded: 44 };
+export const H = { bar: 26, search: 30, head: 42, sub: 16, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, chips: 18, empty: 50, folded: 44 };
 const TONE = { wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
@@ -18,6 +18,12 @@ const MERGE = { MERGEABLE: ["merge ✓", "done", "Mergeable"], CONFLICTING: ["me
 const DRAFT = ["Draft", "dim", "Draft PR, not ready to merge"];
 const mergeOf = (gh) => (gh?.draft ? DRAFT : MERGE[gh?.mergeable] ?? MERGE.UNKNOWN);
 export const COLUMNS = [["backlog", "Backlog", "idle", "Backlog"], ["needs", "Needs you", "blocked", "Needs"], ["run", "Running", "working", "Running"], ["ready", "Ready to merge", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"]];
+const COLUMN_NAME = Object.fromEntries(COLUMNS.map((c) => [c[0], c[3]]));
+export const COLUMN_LIMIT = { needs: 10, ready: 10 };
+const AGED_COLUMNS = new Set(["needs", "ready"]);
+const DAY = 86400000;
+const AMBER_AFTER = DAY;
+const RED_AFTER = 3 * DAY;
 const stop = (_e, cx) => cx.stop_propagation();
 const selectOnly = (key, cb) => (e, cx) => {
   cb.press(key, e, cx);
@@ -63,7 +69,7 @@ const buttonWidth = (label, bare) => label.length * 6 + 12 + (bare ? 0 : 10);
 
 export function headTitle(label, short, colW, popup, count, buttons) {
   const children = (popup ? 0 : 1) + 5 + buttons.length;
-  const used = 20 + (popup ? 0 : 10) + 7 + count.length * 7 + 18 + 6 * (children - 1) + buttons.reduce((sum, b) => sum + buttonWidth(b.label, b.bare), 0);
+  const used = 20 + (popup ? 0 : 10) + 7 + count.length * 7 + 20 + 6 * (children - 1) + buttons.reduce((sum, b) => sum + buttonWidth(b.label, b.bare), 0);
   return label.length * 6.4 <= colW - used ? label : short;
 }
 
@@ -72,11 +78,23 @@ function headButton(t, id, glyph, tip, run) {
     .cursor_pointer().hover((s) => s.bg(t.selected).text_color(t.foreground)).on_mouse_down("left", stop).on_click((_e, cx) => run(cx)).tooltip(tip).child(glyph);
 }
 
+const limitOf = (key) => COLUMN_LIMIT[key];
+const overLimit = (key, col) => limitOf(key) !== undefined && col.total > limitOf(key);
+const countText = (key, col, state) => {
+  if (key === "run") return `${state.running}/${state.cap}`;
+  if (limitOf(key) === undefined) return String(col.count);
+  const load = `${col.total}/${limitOf(key)}`;
+  return col.count === col.total ? load : `${col.count} · ${load}`;
+};
+const limitTip = (key, col) => (limitOf(key) === undefined ? "" : overLimit(key, col) ? `Over the limit of ${limitOf(key)}: review before more work finishes${col.count === col.total ? "" : ` (${col.total} on the board, filters ignored)`}` : `Limit of ${limitOf(key)}`);
+
 export function columnHead(t, key, col, state, cb) {
   const [, label, tone, short] = COLUMNS.find((c) => c[0] === key);
-  const capped = key === "run" && state.running >= state.cap;
+  const over = overLimit(key, col);
+  const capped = (key === "run" && state.running >= state.cap) || over;
   const tight = state.colW < 260;
-  const count = key === "run" ? `${state.running}/${state.cap}` : String(col.count);
+  const count = countText(key, col, state);
+  const tip = [state.popup ? "" : `${state.collapsed ? "Show" : "Hide"} ${label}`, limitTip(key, col)].filter(Boolean).join(". ");
   const settleReviewed = key === "done" && state.reviewed > 0 && !tight ? { label: state.armed?.kind === "settle" ? `Confirm ${state.reviewed}` : `Settle ${state.reviewed}` } : null;
   const bulk = key === "done" && state.done > 0
     ? { id: "settle-all", hint: "A", label: state.armed?.kind === "settle-all" ? `Confirm ${state.done}` : tight ? `Settle ${state.done}` : `Settle all ${state.done}`, run: (cx) => cb.settleAll(cx), tip: `Settle all ${state.done} (A)` }
@@ -85,12 +103,13 @@ export function columnHead(t, key, col, state, cb) {
     : null;
   const buttons = [settleReviewed, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
-    .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)).tooltip(`${state.collapsed ? "Show" : "Hide"} ${label}`))
+    .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)))
+    .when(Boolean(tip), (el) => el.tooltip(tip))
     .child(h_flex().h(H.head - H.sub).px(10).gap(6).items_center().overflow_hidden()
       .when(!state.popup, (el) => el.child(div().w(10).text_size(9).text_color(t.dim).child(state.collapsed ? "▸" : "▾")))
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
       .child(div().min_w(0).text_size(11).font_semibold().text_color(t.foreground).truncate().child(headTitle(label, short, state.colW, state.popup, count, buttons)))
-      .child(div().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).child(count))
+      .child(div().flex_none().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).when(over, (el) => el.px(tight ? 2 : 4).rounded(3).bg(t.blocked + "22")).child(count))
       .child(div().flex_1())
       .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
       .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5))))
@@ -158,11 +177,11 @@ export function toolbar(t, width, v, cb) {
 
 export function foldedColumn(t, key, col, state, cb) {
   const [, label, tone, short] = COLUMNS.find((c) => c[0] === key);
-  const capped = key === "run" && state.running >= state.cap;
+  const capped = (key === "run" && state.running >= state.cap) || overLimit(key, col);
   return v_flex().id(`col-${key}`).w(H.folded).flex_none().h_full().items_center().pt(8).gap(4).border_r(1).border_color(t.border)
-    .cursor_pointer().hover((s) => s.bg(t.raised)).on_click((_e, cx) => cb.fold(key, cx)).tooltip(`Show ${label}`)
+    .cursor_pointer().hover((s) => s.bg(t.raised)).on_click((_e, cx) => cb.fold(key, cx)).tooltip([`Show ${label}`, limitTip(key, col)].filter(Boolean).join(". "))
     .child(div().text_size(9).text_color(t.dim).child("▸"))
-    .child(div().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).child(key === "run" ? `${state.running}/${state.cap}` : String(col.count)))
+    .child(div().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).child(countText(key, col, state)))
     .child(div().text_size(8.5).text_color(t.dim).child(short));
 }
 
@@ -263,13 +282,23 @@ function prChips(t, v, fit) {
 
 function statusLine(v) {
   const { c, variant, now } = v;
-  if (variant === "backlog") {
-    const age = ago(c.created, now);
-    return `${c.issue ? "Updated" : "Created"} ${age === "now" ? "just now" : `${age} ago`}`;
-  }
+  if (variant === "backlog") return c.issue ? issueRef(c.issue) : c.context;
   if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}` : "Running";
   if (c.kind === "done") return v.reviewed ? "Ready to settle" : "Not reviewed yet";
   return c.context;
+}
+
+function ageTone(col, ms) {
+  if (!AGED_COLUMNS.has(col)) return "muted";
+  return ms >= RED_AFTER ? "blocked" : ms >= AMBER_AFTER ? "working" : "muted";
+}
+
+function columnAge(t, e, v) {
+  const ms = v.now - v.entered;
+  const age = ago(v.entered, v.now);
+  const named = v.col === "backlog" && v.c.issue ? `Updated ${elapsed(ms)} ago` : `In ${COLUMN_NAME[v.col]} for ${elapsed(ms)}`;
+  const text = v.col === "backlog" && v.c.issue ? `updated ${age}` : `in ${COLUMN_NAME[v.col]} ${age}`;
+  return div().id(`age-${e.key}`).flex_none().text_size(10).text_color(t[ageTone(v.col, ms)]).tooltip(named).child(text);
 }
 
 export function card(t, e, v, input, cb) {
@@ -321,7 +350,7 @@ export function card(t, e, v, input, cb) {
       .when(!c.task, (el) => el.child(div().min_w(0).truncate().text_size(11).font_medium().text_color(t.muted).child(c.project ?? "thread")))
       .child(originChips(t, e, v, cb))
       .child(div().flex_1())
-      .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now))))
+      .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : v.col === "run" ? div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now)) : columnAge(t, e, v)))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
     .when(Boolean(issue), (el) => el.child(issueChips(t, issue)))
     .when(reason, (el) => el.child(div().id(`err-${e.key}`).w_full().h(H.reason - 2).flex_none().overflow_hidden().text_size(10).line_height("13px").text_color(t.muted).tooltip(c.error).child(c.context)))
@@ -661,9 +690,33 @@ export const KEY_TABLE = [
   { keys: "e", group: "Board", all: "Open this column in a pop-up" },
   { keys: "b", group: "Board", all: "Fold or show Backlog" },
   { keys: "P", group: "Board", all: "Choose one project to show, or all projects" },
+  { keys: "/", group: "Board", all: "Search cards by ticket ID or title, with quick filters. Enter returns to the board, Esc clears" },
   { keys: "R", group: "Board", all: "Reload the board now" },
   { keys: "?", group: "Board", all: "Show this list" },
 ];
+
+const QUICK_FILTERS = [
+  ["p1", "P1", "Only priority 1 tickets"],
+  ["ci", "CI failing", "Only cards whose pull request has failing CI"],
+  ["conflict", "Conflict", "Only cards whose pull request has merge conflicts"],
+  ["blocked", "Blocked", "Only tickets with problems and pull requests that can't merge yet"],
+];
+
+function quickChip(t, id, label, tip, on, run) {
+  return div().id(`qf-${id}`).h(20).px(8).flex().items_center().flex_none().rounded(10).border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent + "33" : t.raised)
+    .text_size(10.5).font_medium().text_color(on ? t.foreground : t.muted).cursor_pointer().hover((s) => s.bg(t.selected))
+    .on_mouse_down("left", stop).on_click((_e, cx) => run(cx)).tooltip(tip).child(label);
+}
+
+export function searchRow(t, v, input, cb) {
+  return h_flex().id("ck-search").h(H.search).px(10).gap(6).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
+    .child(div().flex_none().text_size(10.5).font_semibold().text_color(t.muted).child("/"))
+    .child(div().flex_none().on_mouse_down("left", stop).child(Input.new(input).w(v.compact ? 120 : 220).h(22).px(8).rounded(4).border_1().border_color(v.searching ? t.accent : t.input).bg(t.background).text_size(11).text_color(t.foreground)))
+    .children(QUICK_FILTERS.map(([id, label, tip]) => quickChip(t, id, label, tip, v.quick.has(id), (cx) => cb.quick(id, cx))))
+    .child(div().flex_1())
+    .when(!v.compact, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.muted).child(`${v.shown} of ${v.total} cards`)))
+    .child(headButton(t, "search-close", "✕", "Clear the search and filters (Esc)", (cx) => cb.clearSearch(cx)));
+}
 
 function keysHint(t, cb) {
   return h_flex().id("keys-help").flex_none().gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.raised)).px(3).rounded(3).on_click((_e, cx) => cb.keys(cx))

@@ -6,7 +6,7 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, 
 import { load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -18,6 +18,7 @@ const TICK = 60000;
 const POP_FOLLOW = 600000;
 const SAVED = "board";
 const PROJECT_KEY = "project";
+const SEEN_KEY = "seen";
 const SAVED_VERSION = 4;
 const ACT_GRACE = 20000;
 const ARM_FOR = 4000;
@@ -132,6 +133,13 @@ export default class Board extends View {
     this.settled = new Map();
     this.expanded = new Set();
     this.armed = null;
+    this.seen = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}");
+    this.query = "";
+    this.quick = new Set();
+    this.searchOpen = false;
+    this.searching = false;
+    this.scope = { shown: 0, total: 0 };
+    this.visible = "";
     this.colW = MIN_COL;
     this.wt = null;
     this.slots = null;
@@ -175,6 +183,11 @@ export default class Board extends View {
     }
     if (shared("cockpit.pop")) setShared("cockpit.pop", null);
     if (shared("cockpit.notice")) dismiss();
+    this.search = InputState.new({ placeholder: "Ticket ID or title" });
+    this.search.on("change", (_e, cx) => this.setQuery(this.search.value(), cx));
+    this.search.on("submit", () => this.handle.focus());
+    this.search.on("focus", () => (this.searching = true));
+    this.search.on("blur", () => (this.searching = false));
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
     this.watchWorktrees(cx);
@@ -317,6 +330,7 @@ export default class Board extends View {
   apply(snap) {
     const own = snap.key === "backlog";
     this.applied = snap.rev;
+    this.armed = null;
     this.board = { groups: own ? [] : snap.groups, running: snap.running, at: snap.at };
     this.backlog = own ? snap.groups : [];
     this.backlogLoaded = true;
@@ -475,16 +489,21 @@ export default class Board extends View {
   }
 
   columns(t, now) {
-    const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, groups: [] }]));
+    const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, total: 0, groups: [] }]));
     const live = this.groups();
     const replaced = new Set(this.issueGroups.map((g) => g.key));
     const queued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))];
     this.projects = tally([...live, ...queued]);
-    const keep = (g) => !this.project || g.project === this.project;
-    for (const g of live.filter(keep)) {
+    const inProject = (g) => !this.project || g.project === this.project;
+    const matches = this.filterOf();
+    const keep = (g) => inProject(g) && matches(g);
+    const placed = live.map((g) => {
       g.info = this.prInfo(g);
-      cols[this.mergeCandidate(g) ? "ready" : COLUMN_OF[g.kind]].groups.push(g);
-    }
+      return [g, this.mergeCandidate(g) ? "ready" : COLUMN_OF[g.kind]];
+    });
+    for (const [, key] of placed) cols[key].total += 1;
+    if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
+    for (const [g, key] of placed) if (keep(g)) cols[key].groups.push(g);
     cols.backlog.groups.push(...queued.filter(keep));
     const reviewed = cols.done.groups.flatMap((g) => g.threads).filter((c) => c.review);
     const cb = {
@@ -527,6 +546,8 @@ export default class Board extends View {
         cx.notify();
       },
       expand: (key) => this.expand(key),
+      quick: (id, cx) => this.toggleQuick(id, cx),
+      clearSearch: (cx) => this.clearSearch(cx),
       close: () => closeOverlay(this.overlay),
       link: (url) => exec("open", [url]),
     };
@@ -546,7 +567,7 @@ export default class Board extends View {
         const block = variant === "ready" && g.info.status === "open" ? this.reviewBlock(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
-        const view = (extra) => ({ origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text ?? block, blocked: Boolean(block || refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text ?? block, blocked: Boolean(block || refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -558,6 +579,7 @@ export default class Board extends View {
       }
       col.summary = this.summary(key, col, now);
     }
+    this.scope = { shown: COLUMN_KEYS.reduce((sum, k) => sum + cols[k].count, 0), total: [...live, ...queued].filter(inProject).length };
     const open = cols.ready.groups.filter((g) => g.info.status === "open" && g.info.pr);
     const approvable = [];
     const blocked = new Map();
@@ -571,6 +593,72 @@ export default class Board extends View {
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing };
     return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
+  }
+
+  filterOf() {
+    const query = this.query.trim().toLowerCase();
+    const issues = this.quick.has("p1") ? new Map((this.issues?.issues ?? []).map((i) => [i.key, i])) : null;
+    const tests = {
+      p1: (g) => Number((g.issue ?? issues.get(g.task))?.priority) === 1,
+      ci: (g) => g.info?.gh?.ci === "fail",
+      conflict: (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.mergeable === "CONFLICTING",
+      blocked: (g) => (g.issue ? g.issue.problems.length > 0 : Boolean(g.info) && this.mergeCandidate(g) && Boolean(this.reviewBlock(g) || this.refusalOf(g))),
+    };
+    const active = [...this.quick].map((id) => tests[id]);
+    return (g) => (!query || `${g.task} ${g.title}`.toLowerCase().includes(query)) && active.every((test) => test(g));
+  }
+
+  filtering() {
+    return Boolean(this.query.trim()) || this.quick.size > 0;
+  }
+
+  setQuery(text, cx) {
+    if (text === this.query) return;
+    this.query = text;
+    this.armed = null;
+    cx.notify();
+  }
+
+  toggleQuick(id, cx) {
+    this.quick.has(id) ? this.quick.delete(id) : this.quick.add(id);
+    this.armed = null;
+    cx.notify();
+  }
+
+  openSearch(cx) {
+    this.searchOpen = true;
+    cx.timer.after(60, () => this.search.focus());
+  }
+
+  clearSearch() {
+    this.searchOpen = false;
+    this.searching = false;
+    this.query = "";
+    this.quick.clear();
+    this.armed = null;
+    this.search.set_value("");
+    this.handle.focus();
+  }
+
+  trackColumns(placed, now) {
+    const next = {};
+    let dirty = Object.keys(this.seen).length !== placed.length;
+    for (const [g, col] of placed) {
+      const prev = this.seen[g.key];
+      next[g.key] = prev?.col === col ? prev : { col, at: prev ? now : 0 };
+      dirty ||= next[g.key] !== prev;
+    }
+    if (!dirty) return;
+    this.seen = next;
+    localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+  }
+
+  enteredAt(key, g) {
+    if (key === "backlog") return g.issue ? g.at : g.primary.created;
+    if (key === "run") return g.runSince ?? g.primary.at;
+    if (key === "needs") return g.primary.at;
+    const seen = this.seen[g.key];
+    return Math.max(g.at, seen?.col === key ? seen.at : 0);
   }
 
   summary(key, col, now) {
@@ -1265,12 +1353,12 @@ export default class Board extends View {
 
   settleReviewed(cx) {
     const threads = this.layout.reviewed;
-    if (this.owns("done") && threads.length && !this.guard(false)) this.confirm("settle", "all", () => this.settleThreads(threads, cx), cx);
+    if (this.owns("done") && threads.length && !this.guard(false)) this.confirm("settle", "all", () => this.settleThreads(this.layout.reviewed, cx), cx);
   }
 
   settleAll(cx) {
     const threads = this.layout.finished;
-    if (this.owns("done") && threads.length && !this.guard(false)) this.confirm("settle-all", "all", () => this.settleThreads(threads, cx), cx);
+    if (this.owns("done") && threads.length && !this.guard(false)) this.confirm("settle-all", "all", () => this.settleThreads(this.layout.finished, cx), cx);
   }
 
   tell(text, label, cx) {
@@ -1294,7 +1382,10 @@ export default class Board extends View {
     if (this.guard(false)) return;
     const groups = this.layout.approvable.map((x) => x.group);
     if (!groups.length) return say("info", this.layout.nothing);
-    this.confirm("approve-all", "all", (seen) => this.merge(groups, cx, seen), cx, groups.map((g) => g.info.gh));
+    this.confirm("approve-all", "all", (seen) => {
+      const targets = this.layout.approvable.map((x) => x.group).filter((g) => seen.has(g.key));
+      if (targets.length) this.merge(targets, cx, targets.map((g) => seen.get(g.key)));
+    }, cx, new Map(groups.map((g) => [g.key, g.info.gh])));
   }
 
   queue(e, cx) {
@@ -1331,9 +1422,10 @@ export default class Board extends View {
 
   key(e, cx) {
     if (e.is_held && (this.dec || this.sheet || !NAV_KEYS.has(e.key))) return;
-    if (this.typing) {
+    if (this.typing || this.searching) {
       if (e.key !== "escape") return;
-      this.closeInput();
+      if (this.searching) this.clearSearch();
+      else this.closeInput();
     } else if (!(this.dec ? this.decideKey(e, cx) : this.sheet ? this.sheetKey(e) : this.browse(e, cx))) return;
     cx.stop_propagation();
     cx.notify();
@@ -1351,6 +1443,8 @@ export default class Board extends View {
     else if (k === "g") this.moveTo(this.entries(c?.col)[0]?.key);
     else if (k === "G") this.moveTo(this.entries(c?.col).at(-1)?.key);
     else if (k === "?" || (k === "/" && m.shift)) this.openKeys(cx);
+    else if (k === "/" && !this.pop) this.openSearch(cx);
+    else if (k === "escape" && this.searchOpen) this.clearSearch();
     else if (k === "right" && c?.group.threads.length > 1) this.expanded.add(c.group.key);
     else if (k === "left" && c) {
       this.expanded.delete(c.group.key);
@@ -1445,7 +1539,7 @@ export default class Board extends View {
   column(t, key, col, state, cb) {
     return v_flex().id(`col-${key}`).w(this.colW).flex_none().h_full().border_r(key === "done" ? 0 : 1).border_color(t.border)
       .child(columnHead(t, key, col, state, cb))
-      .child(this.list(t, key, col.rows, !this.board || (key === "backlog" && !this.backlogLoaded) ? (this.error ? "T3 unreachable. R to retry" : "Loading…") : key === "backlog" && this.failedSlots.has("backlog") ? "Backlog could not be loaded" : EMPTY[key]));
+      .child(this.list(t, key, col.rows, !this.board || (key === "backlog" && !this.backlogLoaded) ? (this.error ? "T3 unreachable. R to retry" : "Loading…") : key === "backlog" && this.failedSlots.has("backlog") ? "Backlog could not be loaded" : this.filtering() ? "No cards match" : EMPTY[key]));
   }
 
   lane(t, cols, state, cb) {
@@ -1511,6 +1605,11 @@ export default class Board extends View {
     const slot = before ? this.entries(before.col).findIndex((r) => r.key === this.cursor) : -1;
     const replying = this.replyKey ? this.entryOf(this.replyKey) : null;
     const { cols, cb, state } = this.columns(t, now);
+    const visible = this.keys().flatMap((k) => cols[k].groups.map((g) => g.key)).join("|");
+    if (visible !== this.visible) {
+      this.visible = visible;
+      this.armed = null;
+    }
     const all = this.keys().flatMap((k) => cols[k].rows.filter((r) => r.entry));
     if (!all.some((r) => r.key === this.cursor)) {
       const next = this.successor(all, before);
@@ -1538,6 +1637,7 @@ export default class Board extends View {
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
       .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
+      .when(this.searchOpen, (el) => el.child(searchRow(t, { quick: this.quick, searching: this.searching, compact: this.compact, ...this.scope }, this.search, cb)))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()
           .on_size_change((size, cx) => {
