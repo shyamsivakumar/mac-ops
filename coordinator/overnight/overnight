@@ -5469,6 +5469,9 @@ def main() -> int:
         help="the file to read and redact (default: standard input)",
     )
     redact_cmd.set_defaults(func=cmd_redact)
+    turncap = sub.add_parser("turncap", help="run one canonical turn cap pass")
+    turncap.add_argument("--dry-run", action="store_true")
+    turncap.set_defaults(func=lambda args: __import__("turn_cap").one_pass(args.dry_run))
     selftest = sub.add_parser("selftest", help="run isolated registered fixture evals")
     selftest.set_defaults(func=lambda args: __import__("selftest").main())
     args = parser.parse_args()
