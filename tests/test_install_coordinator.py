@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -26,11 +26,26 @@ import install_coordinator
 CHECKOUT = ROOT
 
 
+@contextmanager
 def temp_home():
-    """A home directory the installer can write. The installer pins every
-    directory below the home path without following symlinks, and the system
-    temporary directory sits under a symlinked /var, so the home path is used."""
-    return tempfile.TemporaryDirectory(dir=Path.home(), prefix="mac-ops-test-")
+    """Provide the runtime files required by installed-command smoke checks."""
+    with tempfile.TemporaryDirectory(dir=Path.home(), prefix="mac-ops-test-") as td, \
+            tempfile.TemporaryDirectory(prefix="mac-ops-runtime-") as runtime:
+        runtime_root = Path(runtime)
+        queue = runtime_root / "queue"
+        queue.mkdir(parents=True)
+        (queue / "config.json").write_text('{"cap": 6}')
+        t3 = runtime_root / "synthetic-t3mcp"
+        t3.write_text("#!/bin/sh\nprintf '%s\\n' '{\"total\": 0}'\n")
+        t3.chmod(0o755)
+        launchctl = runtime_root / "launchctl"
+        launchctl.write_text("#!/bin/sh\nexit 1\n")
+        launchctl.chmod(0o755)
+        with mock.patch.dict(os.environ, {
+            "COORDQ_DIR": str(queue), "COORDQ_T3MCP": str(t3),
+            "PATH": str(runtime_root) + os.pathsep + os.environ.get("PATH", ""),
+        }):
+            yield td
 
 
 class TestTurncapPlist(unittest.TestCase):
