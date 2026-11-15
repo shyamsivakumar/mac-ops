@@ -7,6 +7,7 @@ import { errorKind, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, merg
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { DEAD, place } from "./asks.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -26,10 +27,9 @@ const LOAD_STALE = 300000;
 const STUCK_AFTER = 25000;
 const COMPACT_BELOW = 700;
 const PROJECT_SHEET_WIDTH = 420;
-const COMPACT_ORDER = ["needs", "ready", "run", "backlog", "done"];
+const COMPACT_ORDER = ["needs", "ready", "run", "backlog", "done", "dead"];
 const MIN_COL = 164;
-const COLUMN_OF = { wait: "needs", fail: "needs", stop: "needs", run: "run", done: "done" };
-const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", run: "Nothing running", ready: "No PRs ready to merge", done: "Nothing to settle" };
+const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", run: "Nothing running", ready: "No PRs ready to merge", done: "Nothing to settle", dead: "No dead runs" };
 const COLUMN_KEYS = COLUMNS.map((c) => c[0]);
 const DECIDE_GUARD = 800;
 const CONFIRM_GAP = 400;
@@ -178,10 +178,11 @@ export default class Board extends View {
     this.queueBusy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["backlog"]'));
     this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["backlog","done"]'));
+    this.deadOpen = localStorage.getItem("dead-open") === "1";
     this.compact = false;
     this.cap = 6;
     this.area = { width: 1200, height: 260 };
-    this.scrollY = { backlog: 0, needs: 0, run: 0, ready: 0, done: 0, compact: 0 };
+    this.scrollY = { backlog: 0, needs: 0, run: 0, ready: 0, done: 0, dead: 0, compact: 0 };
     this.reveal = null;
     this.box = Object.fromEntries([...COLUMN_KEYS, "compact"].map((k) => [k, { width: 300, height: 200 }]));
     this.drawn = Date.now();
@@ -458,7 +459,7 @@ export default class Board extends View {
       }
       return !this.unchanged("tickets", [this.issues, this.ticketError]);
     }, cx, force);
-    this.background("origins", () => loadOrigins(board.groups.flatMap((g) => g.threads)), cx, force);
+    this.background("origins", () => loadOrigins(board.groups.flatMap((g) => (g.kind === "ask" ? [] : g.threads))), cx, force);
     this.background("prs", async () => {
       await refreshPrs(board.groups.filter((g) => !g.threads.some((c) => c.kind === "run")).flatMap((g) => g.prs).filter((p) => p.state === "open"));
       if (!this.unchanged("prs", this.prStamp())) {
@@ -534,7 +535,7 @@ export default class Board extends View {
     const placed = live.map((g) => {
       g.info = this.prInfo(g);
       g.asleep = Boolean(this.sleeper(g, now));
-      return [g, this.mergeCandidate(g) ? "ready" : COLUMN_OF[g.kind]];
+      return [g, place(g, this.mergeCandidate(g))];
     });
     this.asleepCount = live.filter((g) => g.asleep).length;
     this.pruneSnoozed(live, now);
@@ -708,7 +709,10 @@ export default class Board extends View {
     const seg = (n, text, tone) => (n ? [[`${n} ${text}`, tone]] : []);
     const oldest = ["oldest " + ago(Math.min(...groups.map((g) => g.at)), now), "dim"];
     if (key === "needs") {
-      return [...seg(groups.filter((g) => g.kind === "wait").length, "waiting", "blocked"), ...seg(groups.filter((g) => g.kind === "fail").length, "failed", "blocked"), ...seg(groups.filter((g) => g.kind === "stop").length, "stopped", "blocked"), oldest];
+      return [...seg(groups.filter((g) => g.kind === "ask").length, "decisions", "blocked"), ...seg(groups.filter((g) => g.kind === "wait").length, "waiting", "blocked"), ...seg(groups.filter((g) => g.kind !== "ask" && g.kind !== "wait").length, "asked", "blocked"), oldest];
+    }
+    if (key === DEAD) {
+      return [...seg(groups.filter((g) => g.kind === "fail").length, "failed", "dim"), ...seg(groups.filter((g) => g.kind === "stop").length, "stopped", "dim"), oldest];
     }
     if (key === "run") {
       const started = groups.map((g) => g.runSince).filter(Boolean);
@@ -750,6 +754,11 @@ export default class Board extends View {
   }
 
   toggleFold(key) {
+    if (key === DEAD) {
+      this.deadOpen = !this.deadOpen;
+      localStorage.setItem("dead-open", this.deadOpen ? "1" : "0");
+      return;
+    }
     const folded = this.foldSet();
     if (!this.peeked.delete(key)) {
       folded.has(key) ? folded.delete(key) : folded.add(key);
@@ -830,6 +839,7 @@ export default class Board extends View {
   }
 
   isFolded(key) {
+    if (key === DEAD) return !this.deadOpen;
     return this.foldSet().has(key) && !this.peeked.has(key);
   }
 
@@ -1085,6 +1095,7 @@ export default class Board extends View {
   }
 
   activate(e, cx) {
+    if (e?.group.kind === "ask") return run("coordinator.asks");
     if (e && !e.thread) this.openDecision(e, cx);
     else this.openEntry(e, cx);
   }
@@ -1299,6 +1310,7 @@ export default class Board extends View {
 
   openEntry(e, cx) {
     if (!e || this.opening === e.key) return;
+    if (e.group.kind === "ask") return run("coordinator.asks");
     if (e.group.issue) return exec("open", [e.group.issue.url]);
     const thread = this.threadOf(e);
     this.opening = e.key;
@@ -1318,6 +1330,7 @@ export default class Board extends View {
 
   openReply(e, cx, label = null) {
     if (!e || (e.group.issue && label !== ABANDON_LABEL)) return;
+    if (e.group.kind === "ask") return run("coordinator.asks");
     this.replyLabel = label;
     this.followed = false;
     this.cursor = e.key;
@@ -1356,6 +1369,7 @@ export default class Board extends View {
   publish(entry, cx) {
     const thread = this.threadOf(entry);
     const base = { key: thread.key, task: entry.group.task, title: entry.group.title, project: thread.project };
+    if (entry.group.kind === "ask") return setShared("task", { ...base, worktree: null, branch: null, repo: null });
     const known = this.tasks.get(thread.key);
     if (known) return setShared("task", { ...base, ...known });
     setShared("task", { ...base, worktree: null, branch: null, repo: null });
@@ -1752,7 +1766,7 @@ export default class Board extends View {
   }
 
   column(t, key, col, state, cb) {
-    return v_flex().id(`col-${key}`).w(this.colW).flex_none().h_full().border_r(key === "done" ? 0 : 1).border_color(t.border)
+    return v_flex().id(`col-${key}`).w(this.colW).flex_none().h_full().border_r(key === DEAD ? 0 : 1).border_color(t.border)
       .child(columnHead(t, key, col, state, cb))
       .child(this.list(t, key, col.rows, !this.board || (key === "backlog" && !this.backlogLoaded) ? (this.error ? "T3 unreachable. R to retry" : "Loading…") : key === "backlog" && this.failedSlots.has("backlog") ? "Backlog could not be loaded" : this.filtering() ? "No cards match" : EMPTY[key]));
   }
