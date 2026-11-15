@@ -1,0 +1,4 @@
+temp HOME exit: 1
+mac-ops: Refusing coordinator install or launchctl: HOME must be the real user home and outside /tmp
+launchctl invocations: 0; installer writes: 0
+real HOME status: exit 0; JSON identical to origin/main
