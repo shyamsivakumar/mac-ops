@@ -18,6 +18,7 @@ from typing import Any
 
 DEFAULT_CODE_ROOT = Path.home() / "Code"
 DEFAULT_STATE_ROOT = Path.home() / ".local/state/mac-ops/worktree-cleaner"
+T3_WORKTREE_ROOT = Path.home() / ".t3/worktrees"
 
 SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycache__", "DerivedData"}
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -404,7 +405,7 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         reasons.append("repository_outside_code_root")
     if result["main_checkout"] or record.get("bare"):
         reasons.append("main_checkout")
-    if not any(inside(path, root) for root in (code_root / ".worktrees", Path("/private/tmp"), Path("/tmp"))):
+    if not any(inside(path, root) for root in (code_root / ".worktrees", repo_root / ".claude/worktrees", T3_WORKTREE_ROOT, Path("/private/tmp"), Path("/tmp"))):
         reasons.append("worktree_outside_scope")
     if any(reason != "t3_thread_unfinished" for reason in reasons):
         result["reasons"] = reasons

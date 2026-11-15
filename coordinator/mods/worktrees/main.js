@@ -404,7 +404,7 @@ export default class Worktrees extends View {
         .children(result.map((r) => div().text_size(12).text_color(t.muted).child(`${base(r.repo)}  ·  ${rowName(r)}`)))))
       .child(v_flex().id("wt-list").flex_1().min_h(0).overflow_y_scroll().children(this.body(t)).children(this.excluded(t)))
       .child(h_flex().px(14).py(10).gap(12).items_center().flex_none().border_t(1).border_color(t.border)
-        .child(div().flex_1().text_size(12).line_height("17px").text_color(t.muted).child("Clean removes only worktrees that pass every check, and prunes entries whose folder is gone. Rows that need a look are never removed. Branches are kept. Nothing is forced."))
+        .child(div().flex_1().min_w(0).text_size(12).line_height("17px").text_color(t.muted).child("Clean removes only worktrees that pass every check, and prunes entries whose folder is gone. Rows that need a look are never removed. Branches are kept. Nothing is forced."))
         .child(h_flex().id("wt-clean").h(30).px(14).flex_none().items_center().rounded(6)
           .bg(armed ? t.blocked : t.solid).text_color(armed ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
           .opacity(n && idle ? 1 : 0.45).cursor_pointer()
