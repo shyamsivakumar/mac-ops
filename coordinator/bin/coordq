@@ -1120,9 +1120,11 @@ def cmd_gatekeep(a):
                         continue
                     if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
                         continue
+                    current = {"instanceId": thread.get("providerInstanceId"),
+                               "model": thread.get("model")}
+                    if current != ASTRA_MODEL:
+                        continue
                     if quota_failure(data):
-                        current = {"instanceId": thread.get("providerInstanceId"),
-                                   "model": thread.get("model")}
                         model = fallback_reviewer(queue, key, current, event.get("builderModels", []))
                         if model is None:
                             if not a.dry_run:
