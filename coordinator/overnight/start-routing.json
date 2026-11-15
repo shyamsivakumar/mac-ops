@@ -1,0 +1,388 @@
+{
+  "repos": [
+    "shyamsivakumar/mac-ops",
+    "shyamsivakumar/strategy-replay-workbench",
+    "shyamsivakumar/fantasy-football-toolkit",
+    "shyamsivakumar/catalouge",
+    "digitized/Concerning",
+    "fixture/sixth"
+  ],
+  "issues": [
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "number": 468,
+      "key": "SRW-468",
+      "stage": "todo",
+      "problems": [],
+      "priority": 1
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "number": 1,
+      "key": "F-1",
+      "stage": "backlog",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "number": 2,
+      "key": "F-2",
+      "stage": "todo",
+      "problems": [
+        "blocked"
+      ],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "number": 3,
+      "key": "F-3",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/mac-ops",
+      "number": 4,
+      "key": "F-4",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "number": 1,
+      "key": "F-1",
+      "stage": "backlog",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "number": 2,
+      "key": "F-2",
+      "stage": "todo",
+      "problems": [
+        "blocked"
+      ],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "number": 3,
+      "key": "F-3",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/strategy-replay-workbench",
+      "number": 4,
+      "key": "F-4",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "number": 1,
+      "key": "F-1",
+      "stage": "backlog",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "number": 2,
+      "key": "F-2",
+      "stage": "todo",
+      "problems": [
+        "blocked"
+      ],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "number": 3,
+      "key": "F-3",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/fantasy-football-toolkit",
+      "number": 4,
+      "key": "F-4",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "number": 1,
+      "key": "F-1",
+      "stage": "backlog",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "number": 2,
+      "key": "F-2",
+      "stage": "todo",
+      "problems": [
+        "blocked"
+      ],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "number": 3,
+      "key": "F-3",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "shyamsivakumar/catalouge",
+      "number": 4,
+      "key": "F-4",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "digitized/Concerning",
+      "number": 1,
+      "key": "F-1",
+      "stage": "backlog",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "digitized/Concerning",
+      "number": 2,
+      "key": "F-2",
+      "stage": "todo",
+      "problems": [
+        "blocked"
+      ],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "digitized/Concerning",
+      "number": 3,
+      "key": "F-3",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "digitized/Concerning",
+      "number": 4,
+      "key": "F-4",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "fixture/sixth",
+      "number": 1,
+      "key": "F-1",
+      "stage": "backlog",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "fixture/sixth",
+      "number": 2,
+      "key": "F-2",
+      "stage": "todo",
+      "problems": [
+        "blocked"
+      ],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "fixture/sixth",
+      "number": 3,
+      "key": "F-3",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    },
+    {
+      "repo": "fixture/sixth",
+      "number": 4,
+      "key": "F-4",
+      "stage": "todo",
+      "problems": [],
+      "priority": 2,
+      "title": "bot",
+      "builderAlias": "implementation",
+      "body": "fixture",
+      "url": "fixture"
+    }
+  ],
+  "expectedActions": [
+    [
+      "ticket",
+      "start",
+      "shyamsivakumar/mac-ops#3",
+      "--dry-run"
+    ],
+    [
+      "ticket",
+      "start",
+      "shyamsivakumar/mac-ops#3"
+    ],
+    [
+      "ticket",
+      "start",
+      "shyamsivakumar/strategy-replay-workbench#3",
+      "--dry-run"
+    ],
+    [
+      "ticket",
+      "start",
+      "shyamsivakumar/strategy-replay-workbench#3"
+    ],
+    [
+      "ticket",
+      "start",
+      "shyamsivakumar/fantasy-football-toolkit#3",
+      "--dry-run"
+    ],
+    [
+      "ticket",
+      "start",
+      "shyamsivakumar/fantasy-football-toolkit#3"
+    ],
+    [
+      "ticket",
+      "start",
+      "shyamsivakumar/catalouge#3",
+      "--dry-run"
+    ],
+    [
+      "ticket",
+      "start",
+      "shyamsivakumar/catalouge#3"
+    ],
+    [
+      "ticket",
+      "start",
+      "digitized/Concerning#3",
+      "--dry-run"
+    ],
+    [
+      "ticket",
+      "start",
+      "digitized/Concerning#3"
+    ],
+    [
+      "ticket",
+      "start",
+      "fixture/sixth#3",
+      "--dry-run"
+    ],
+    [
+      "ticket",
+      "start",
+      "fixture/sixth#3"
+    ]
+  ]
+}

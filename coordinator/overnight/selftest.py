@@ -27,16 +27,8 @@ def exact(actual, expected):
 def start_routing():
     import lane_driver as lane
     ticket = load_ticket()
-    repos = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench",
-             "shyamsivakumar/fantasy-football-toolkit", "shyamsivakumar/catalouge",
-             "digitized/Concerning", "fixture/sixth"]
-    board = json.loads(json.dumps([
-        dict(repo=repo, number=n, key=f"F-{n}", stage=stage, problems=problems,
-             priority=2, title="bot", builderAlias="implementation", body="fixture", url="fixture")
-        for repo in repos for n, stage, problems in
-        [(1, "backlog", []), (2, "todo", ["blocked"]), (3, "todo", []), (4, "todo", [])]
-    ]))
-    board.insert(0, dict(repo=repos[1], number=468, key="SRW-468", stage="todo", problems=[], priority=1))
+    fixture = json.loads((ROOT / "start-routing.json").read_text())
+    repos, board = fixture["repos"], fixture["issues"]
     actions = []
 
     def run(cmd, timeout=150):
@@ -48,9 +40,7 @@ def start_routing():
     with patch.object(lane, "run", run), patch.object(lane, "DRY", False):
         for repo in repos:
             lane.start_next(repo, board, {})
-    exact(actions, [cmd for repo in repos for cmd in
-                    (["ticket", "start", f"{repo}#3", "--dry-run"],
-                     ["ticket", "start", f"{repo}#3"])])
+    exact(actions, fixture["expectedActions"])
     cfg = {"repos": {repo: {"projectId": repo} for repo in repos},
            "models": {"implementation": {"selection": {"model": "fixture-implementation"}}}}
     with patch.object(ticket, "default_branch", return_value="main"), \
