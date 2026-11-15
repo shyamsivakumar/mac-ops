@@ -28,6 +28,10 @@ const REASONS = {
   worktree_status_unknown: "Could not read its Git status",
   worktree_root_mismatch: "Folder does not match its Git root",
   worktree_missing_or_prunable: "The folder is gone",
+  worktree_not_registered: "Git no longer lists this worktree",
+  not_needs_a_look: "No longer needs a look. Use Clean for safe worktrees",
+  archive_target_exists: "The archive already has a folder with this name",
+  archive_on_another_filesystem: "The archive is on another disk, so it can't be moved safely",
 };
 
 const GROUPS = [
@@ -141,9 +145,14 @@ export default class Worktrees extends View {
     this.finished = 0;
     this.scanning = false;
     this.cleaning = false;
+    this.archiving = false;
     this.error = null;
     this.result = null;
+    this.archiveResult = null;
+    this.selected = new Set();
     this.armed = null;
+    this.armedArchive = null;
+    this.pressedAt = 0;
     this.polling = false;
     this.ports = new Map();
     this.scanningPorts = false;
@@ -172,22 +181,25 @@ export default class Worktrees extends View {
     return Date.now() - this.born >= CONFIRM_GAP;
   }
 
-  start(mode, cx) {
+  start(mode, cx, paths = []) {
+    this.pressedAt = Date.now();
     this.scanning = true;
     this.error = null;
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const r = await exec("sh", [SCAN, mode]);
+        const r = await exec("sh", [SCAN, mode, "start", ...paths]);
         if (r.code !== 0) throw new Error(r.stderr.trim() || "the scan did not start");
-        if (r.stdout.trim() === "busy" && mode === "clean") {
+        if (r.stdout.trim() === "busy" && mode !== "scan") {
           this.scanning = false;
           this.cleaning = false;
-          this.error = "Another scan is running. Wait for it to finish, then press Clean again.";
+          this.archiving = false;
+          this.error = `Another scan is running. Wait for it to finish, then press ${mode === "clean" ? "Clean" : "Archive"} again.`;
         }
       } catch (error) {
         this.scanning = false;
         this.cleaning = false;
+        this.archiving = false;
         this.error = error.message;
       }
       cx.notify();
@@ -200,23 +212,30 @@ export default class Worktrees extends View {
     cx.spawn(async (cx) => {
       try {
         const status = await read("status.json");
-        if (status?.state === "running") {
-          if (Date.now() - status.at * 1000 > HANG_MS) throw new Error("The scan took too long");
+        if (status?.state === "running" || (status && status.at < Math.floor(this.pressedAt / 1000))) {
+          if (Date.now() - Math.max(status.at * 1000, this.pressedAt) > HANG_MS) throw new Error("The scan took too long");
         } else if (status?.state === "done" || status?.state === "failed") {
           this.data = await read("last.json");
           if (this.data && !this.data.categories) {
             this.data = null;
             throw new Error("cleaner out of date");
           }
+          if (this.archiving) {
+            this.archiveResult = await read("archive.json");
+            this.selected = new Set();
+          }
+          this.dropStaleSelection();
           if (status.state === "failed") throw new Error(status.error);
           if (this.cleaning) this.result = await read("clean.json");
           this.finished = status.finished * 1000;
           this.scanning = false;
           this.cleaning = false;
+          this.archiving = false;
         }
       } catch (error) {
         this.scanning = false;
         this.cleaning = false;
+        this.archiving = false;
         this.error = error.message;
       } finally {
         this.polling = false;
@@ -277,24 +296,60 @@ export default class Worktrees extends View {
     return c ? c.safe + c.prune : 0;
   }
 
-  press(cx) {
-    const n = this.cleanable();
-    if (!this.live() || this.scanning || this.cleaning || !n) return;
-    if (!this.armed) {
-      this.armed = Date.now();
+  confirmed(field, cx) {
+    if (this[field] === null) {
+      this[field] = Date.now();
       cx.timer.after(ARM_FOR, (cx) => {
-        this.armed = null;
+        this[field] = null;
         cx.notify();
       });
       cx.notify();
-      return;
+      return false;
     }
-    if (Date.now() - this.armed < CONFIRM_GAP) return;
-    this.armed = null;
+    if (Date.now() - this[field] < CONFIRM_GAP) return false;
+    this[field] = null;
+    return true;
+  }
+
+  press(cx) {
+    const n = this.cleanable();
+    if (!this.live() || this.scanning || this.cleaning || !n) return;
+    if (!this.confirmed("armed", cx)) return;
     this.shown = n;
     this.cleaning = true;
     this.result = null;
+    this.archiveResult = null;
     this.start("clean", cx);
+  }
+
+  archivable() {
+    return this.rows().filter((r) => r.category === "look" && !r.gone);
+  }
+
+  dropStaleSelection() {
+    const live = new Set(this.archivable().map((r) => r.path));
+    this.selected = new Set([...this.selected].filter((p) => live.has(p)));
+  }
+
+  chosen() {
+    return this.archivable().filter((r) => this.selected.has(r.path));
+  }
+
+  toggle(paths, cx) {
+    const all = paths.every((p) => this.selected.has(p));
+    for (const p of paths) all ? this.selected.delete(p) : this.selected.add(p);
+    this.armedArchive = null;
+    cx.notify();
+  }
+
+  pressArchive(cx) {
+    const chosen = this.chosen();
+    if (!this.live() || this.scanning || !chosen.length) return;
+    if (!this.confirmed("armedArchive", cx)) return;
+    this.archiving = true;
+    this.result = null;
+    this.archiveResult = null;
+    this.start("archive", cx, chosen.map((r) => r.path));
   }
 
   openFolder(row) {
@@ -314,14 +369,22 @@ export default class Worktrees extends View {
       .child(div().text_size(12).text_color(t.muted).child(label));
   }
 
+  checkbox(t, id, on, go) {
+    return div().id(id).size(15).flex_none().mt(2).flex().items_center().justify_center().rounded(3).border_1()
+      .border_color(on ? t.solid : t.input).bg(on ? t.solid : t.raised).text_size(11).text_color(t.solid_foreground)
+      .cursor_pointer().on_click((e, cx) => e.click_count > 1 || go(cx))
+      .child(on ? "✓" : "");
+  }
+
   row(t, r, i) {
     const group = GROUPS.find((g) => g[0] === r.category);
+    const archivable = r.category === "look" && !r.gone;
     return h_flex().id(`wt-${i}`).w_full().gap(10).py(8).px(14).items_start().border_t(1).border_color(t.border)
-      .child(div().size(7).rounded(4).flex_none().mt(5).bg(t[group[2]]))
+      .child(archivable ? this.checkbox(t, `pick-${i}`, this.selected.has(r.path), (cx) => this.toggle([r.path], cx)) : div().size(7).rounded(4).flex_none().mt(5).bg(t[group[2]]))
       .child(v_flex().flex_1().min_w(0).gap(2)
-        .child(h_flex().gap(8).flex_wrap().items_baseline()
-          .child(div().text_size(13).font_medium().text_color(t.foreground).child(rowName(r)))
-          .child(div().text_size(12).text_color(t.muted).child(r.branch ?? "detached")))
+        .child(h_flex().gap(8).min_w(0).items_baseline()
+          .child(div().min_w(0).truncate().text_size(13).font_medium().text_color(t.foreground).child(rowName(r)))
+          .child(div().min_w(0).truncate().text_size(12).text_color(t.muted).child(r.branch ?? "detached")))
         .child(div().text_size(12).line_height("17px").text_color(t.muted).child(reasonText(r)))
         .when(this.ports.has(r.path), (el) => el.child(h_flex().pt(2).gap(4).flex_wrap().items_center().children(this.chips(t, r.path, i)))))
       .child(div().text_size(12).text_color(t.dim).flex_none().w(70).child(age(r.age_seconds)))
@@ -382,7 +445,13 @@ export default class Worktrees extends View {
     const n = this.cleanable();
     const armed = this.armed !== null;
     const label = this.cleaning ? "Cleaning…" : armed ? `Press again to remove ${n}` : n ? `Clean ${n} safe` : "Nothing safe to clean";
-    const idle = !this.scanning && !this.cleaning;
+    const idle = !this.scanning && !this.cleaning && !this.archiving;
+    const look = this.archivable();
+    const chosen = this.chosen().length;
+    const armedArchive = this.armedArchive !== null;
+    const archiveLabel = this.archiving ? "Archiving…" : armedArchive ? `Press again to archive ${chosen}` : chosen ? `Archive ${chosen}` : "Archive";
+    const archived = this.archiveResult?.archived ?? [];
+    const refused = this.archiveResult?.refused ?? [];
     const result = this.result?.rows?.filter((r) => r.category === "removed") ?? [];
     return v_flex().id("wt-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
@@ -390,7 +459,7 @@ export default class Worktrees extends View {
       .child(h_flex().px(14).py(10).gap(10).items_center().flex_none().border_b(1).border_color(t.border)
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Worktrees"))
         .child(div().flex_1().text_size(12).text_color(this.error ? t.blocked : t.muted)
-          .child(this.error ? `Couldn't scan: ${this.error}` : this.scanning ? (this.cleaning ? "Cleaning, then rescanning…" : "Scanning…") : this.finished ? `Last scan ${clock(this.finished)}` : ""))
+          .child(this.error ? `Couldn't scan: ${this.error}` : this.scanning ? (this.cleaning ? "Cleaning, then rescanning…" : this.archiving ? "Archiving, then rescanning…" : "Scanning…") : this.finished ? `Last scan ${clock(this.finished)}` : ""))
         .child(this.small(t, "wt-rescan", this.scanning ? "Scanning…" : "Rescan", (cx) => idle && this.live() && this.start("scan", cx)))
         .child(this.small(t, "wt-close", "Close", () => closeOverlay(this.overlay))))
       .when(Boolean(c), (el) => el.child(h_flex().gap(10).p(14).flex_none()
@@ -402,9 +471,22 @@ export default class Worktrees extends View {
         .child(div().text_size(13).font_medium().text_color(t.done).child(`Removed ${plural(this.result.removed, "worktree")}, pruned ${plural(this.result.pruned, "entry")}`))
         .when(this.result.removed + this.result.pruned !== this.shown, (el) => el.child(div().text_size(12).text_color(t.working).child(`${this.shown} were shown as safe. ${this.result.removed + this.result.pruned} were still safe when Clean ran; the rest were skipped.`)))
         .children(result.map((r) => div().text_size(12).text_color(t.muted).child(`${base(r.repo)}  ·  ${rowName(r)}`)))))
+      .when(Boolean(this.archiveResult), (el) => el.child(v_flex().mx(14).mb(10).p(10).gap(2).flex_none().rounded(6).bg(t.raised).border_1().border_color(t.border)
+        .child(div().text_size(13).font_medium().text_color(archived.length ? t.done : t.working).child(`Archived ${archived.length} to ${this.archiveResult.archive_dir.replace(home(), "~")}`))
+        .children(archived.map((r) => div().text_size(12).text_color(t.muted).child(`${base(r.repo)}  ·  ${rowName(r)}`)))
+        .children(refused.map((r) => div().text_size(12).text_color(t.working).child(`Skipped ${r.repo ? `${base(r.repo)}  ·  ` : ""}${base(r.path)}: ${r.reasons.map((x) => REASONS[x] ?? x.replaceAll("_", " ")).join(". ")}`)))))
+      .when(look.length > 0, (el) => el.child(h_flex().id("wt-pick-all").px(14).py(6).gap(10).items_center().flex_none().border_t(1).border_color(t.border)
+        .child(this.checkbox(t, "pick-all", chosen === look.length, (cx) => this.toggle(look.map((r) => r.path), cx)))
+        .child(div().flex_1().text_size(12).text_color(t.muted).child(`Select all in Needs a look (${look.length})`))))
       .child(v_flex().id("wt-list").flex_1().min_h(0).overflow_y_scroll().children(this.body(t)).children(this.excluded(t)))
       .child(h_flex().px(14).py(10).gap(12).items_center().flex_none().border_t(1).border_color(t.border)
-        .child(div().flex_1().min_w(0).text_size(12).line_height("17px").text_color(t.muted).child("Clean removes only worktrees that pass every check, and prunes entries whose folder is gone. Rows that need a look are never removed. Branches are kept. Nothing is forced."))
+        .child(v_flex().flex_1().min_w(0).gap(4)
+          .child(div().text_size(12).line_height("17px").text_color(t.muted).child("Clean removes worktrees that pass every check. Archive moves the folder to ~/.local/state/archive, keeps the branch and pins the commit. Nothing is deleted.")))
+        .child(h_flex().id("wt-archive").h(30).px(14).flex_none().items_center().rounded(6)
+          .bg(armedArchive ? t.blocked : t.solid).text_color(armedArchive ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
+          .opacity(chosen && idle ? 1 : 0.45).cursor_pointer()
+          .on_click((e, cx) => e.click_count > 1 || this.pressArchive(cx))
+          .child(archiveLabel))
         .child(h_flex().id("wt-clean").h(30).px(14).flex_none().items_center().rounded(6)
           .bg(armed ? t.blocked : t.solid).text_color(armed ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
           .opacity(n && idle ? 1 : 0.45).cursor_pointer()
