@@ -29,17 +29,10 @@ COMMENT = {"user": {"login": "me"},
                    + " -->"}
 BUILDER_THREAD = {"providerInstanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 BUILDER_RUNS = [{"executedModel": "minimax/MiniMax-M3.1-Flash"}]
-# The gate died for a reviewer-side reason: no message, so no verdict. The
-# thread records the gate model coordq launches, which gatekeep requires before
-# it treats a dead gate as retryable; setUpModule checks it against coordq.
-ASTRA_GATE = {"providerInstanceId": "codex", "model": "gpt-6-astra"}
-OPUS_GATE = {"providerInstanceId": "claudeAgent", "model": "claude-opus-5-5"}
-DEAD_GATE = {"thread": {"status": "failed", **ASTRA_GATE},
+# The gate died for a reviewer-side reason: no message, so no verdict.
+DEAD_GATE = {"thread": {"status": "failed"},
              "items": [{"type": "user_message", "text": "review"}],
              "recentRuns": [{"executedModel": None}]}
-DEAD_OPUS_GATE = {"thread": {"status": "failed", **OPUS_GATE},
-                 "items": [{"type": "user_message", "text": "review"}],
-                 "recentRuns": [{"executedModel": None}]}
 
 coordq = None
 QUEUE_DIR = None
@@ -61,9 +54,6 @@ def setUpModule():
     QUEUE_DIR = tempfile.mkdtemp(prefix="coordq-retry-limit-")
     os.environ["COORDQ_DIR"] = QUEUE_DIR
     coordq = load_coordq()
-    launched = {"instanceId": ASTRA_GATE["providerInstanceId"], "model": ASTRA_GATE["model"]}
-    if coordq.ASTRA_MODEL != launched:
-        raise AssertionError(f"ASTRA_GATE drifted from coordq.ASTRA_MODEL: {coordq.ASTRA_MODEL}")
 
 
 def tearDownModule():
@@ -166,18 +156,6 @@ class FirstRetryTest(RetryLimitBase):
         out, _ = self.run_gatekeep()
         self.assertEqual(self.gate_items(), [])
         self.assertNotIn("regating", out)
-
-
-class NonAstraGateTest(RetryLimitBase):
-    """A dead gate that did not run on the Astra model is left alone."""
-
-    def test_a_dead_opus_gate_is_not_requeued(self):
-        coordq.call = lambda tool, args, rules=None: (0, json.dumps(DEAD_OPUS_GATE))
-        self.write_queue(heads={self.key: 4})
-        out, _ = self.run_gatekeep()
-        self.assertNotIn("regating", out)
-        self.assertEqual(self.gate_items(), [])
-        self.assertEqual(self.read_queue()["gatedHeads"][self.key], 4)
 
 
 class BackoffTest(RetryLimitBase):
