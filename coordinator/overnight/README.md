@@ -659,3 +659,11 @@ checks the dispatched refresh request (`startFromOrigin: true`). Missing or
 malformed SRW thread lists refuse dispatch. Live smoke, hourly tick integration,
 T3 internal Git refresh execution, issue label parsing and the other eleven
 evals remain outside this proof.
+
+Occupied SRW groups also filter orphan recovery, including dead-thread
+relaunches and generic unstick batches. Snapshot issue reads include titles
+for the same group classifier. A cached orphan without a title is skipped
+when groups are occupied until a refreshed snapshot supplies its group.
+The fixture exercises the full run-pass fallback with an occupied bot group:
+bot and unknown-title orphans produce no actions or ledger changes, while a
+census orphan relaunches through ticket start.
