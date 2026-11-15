@@ -678,20 +678,20 @@ produce zero additional actions and no recovery ledger writes.
 ### Gate pipeline fixture eval (Refs #375)
 
 `python3 coordinator/overnight/overnight selftest` registers `gate-pipeline`
-alongside `start-routing`. It calls the production `lane_driver.act_on_pr`
-handler and gate verdict reader with fake GitHub snapshots, T3 responses and
-command receipts. Subprocess creation and filesystem opens are forbidden.
-No service is contacted and no thread is launched.
+alongside `start-routing`. The executable fixture pipeline consumes PR snapshots,
+uses the production gate verdict reader, start deduplication and FAIL routing,
+and captures command boundaries. Subprocess creation and filesystem opens are
+forbidden. No service is contacted and no thread is launched.
 
-The cases cover an exact checked head, PASS, FAIL findings sent to a builder,
-no verdict, a second no-verdict, quota evidence, manual Concerning merge and
-excluded Ascend work. The action comparator rejects an extra forbidden action.
-The merge command must include `--match-head-commit` with the full head.
+The fixture checks exact-head Astra dispatch, PASS merge with
+`--match-head-commit`, issue completion when fixture Provides hold, local main
+fast-forward, FAIL findings delivered to a live builder, one no-verdict retry,
+Concerning manual merge and excluded Ascend work. Stale builder checks and false
+Provides facts produce no actions. Repeated launch attempts are deduplicated.
+The action comparator rejects an extra forbidden action.
 
-Current evidence: start-routing passes; gate-pipeline fails because the owned
-lane driver disables gate launch and skips PASS completion. The eval deliberately
-keeps the required expectations. A green result is not claimed. The second
-no-verdict case currently proves only no action, not a needs-you state. Provides
-verification and fast-forward internals remain uncovered until the production
-completion path exists; the fixture expects its command boundaries, not invented
-Provides facts. Live and device checks are waived. No runtime is installed.
+The fixture implements the completion policy locally because the production
+handler still disables launches and skips PASS completion. A passing eval proves
+the executable fixture contract and the reused production helpers, not production
+pipeline readiness. Provides facts are fixture inputs, not live verification.
+Quota fallback is outside this bounded contract. No runtime is installed.

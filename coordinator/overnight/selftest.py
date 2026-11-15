@@ -167,6 +167,35 @@ def start_routing():
             exact(ledger, {})
 
 
+def fixture_gate_step(lane, repo, number, ledger):
+    if repo not in lane.LANE_REPOS:
+        return
+    pr = next(p for p in lane.SNAPSHOT["repos"][repo]["prs"] if p["number"] == number)
+    head = pr["headRefOid"]
+    if f"Builder check: PASS {head}" not in pr["body"].splitlines():
+        return
+    verdict, _, reply = lane.gate_verdict(repo, number, head)
+    if verdict == "PASS":
+        if repo == "digitized/Concerning" or not lane.SNAPSHOT["repos"][repo]["issues"][0]["providesHold"]:
+            return
+        lane.run(["gh", "pr", "merge", str(number), "-R", repo,
+                  "--squash", "--match-head-commit", head])
+        lane.run(["ticket", "close", f"{repo}#10"])
+        lane.run(["git", "merge", "--ff-only", "origin/main"])
+    elif verdict == "FAIL":
+        lane.act_on_pr(repo, number, ledger)
+    elif verdict in ("absent", "none"):
+        tag = "regate" if verdict == "none" else "gate"
+        key = f"{tag}:{repo}#{number}:{head}"
+        if key in ledger:
+            return
+        brief = lane.run(["ticket", "gate", f"{repo}#{number}", "--print-brief"])
+        if head not in brief:
+            return
+        lane.start({"projectId": "fixture", "modelSelection": lane.ASTRA,
+                    "message": brief, "clientRequestId": key}, 5000, ledger, key)
+
+
 def gate_pipeline():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
@@ -175,12 +204,14 @@ def gate_pipeline():
     cases = [
         ("checked-head", repo, "absent", "", {}, ["astra"]),
         ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
+        ("provides-fail", repo, "PASS", "VERDICT: PASS", {}, []),
+        ("stale-check", repo, "absent", "", {}, []),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
         ("no-verdict", repo, "none", "interrupted", {}, ["astra"]),
         ("second-no-verdict", repo, "none", "interrupted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"]),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
         ("ascend", "ascend/fixture", "absent", "", {}, []),
     ]
@@ -188,7 +219,9 @@ def gate_pipeline():
         actions = []
         pr = dict(number=20, state="OPEN", headRefOid=head,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
-        snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+        if name == "stale-check":
+            pr["body"] = "Builder check: PASS " + "b" * 40
+        snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[], providesHold=name != "provides-fail")]}}}
 
         def command(cmd, timeout=150):
             if cmd[:2] == ["ticket", "gate"]:
@@ -212,6 +245,7 @@ def gate_pipeline():
                     actions.append("builder")
                 else:
                     exact(head in payload["message"], True)
+                    exact(payload["modelSelection"], lane.ASTRA)
                     model = payload["modelSelection"]["model"]
                     actions.append("astra" if model == "gpt-6-astra" else "opus" if "opus" in model else model)
                 return "fixture-receipt"
@@ -234,7 +268,10 @@ def gate_pipeline():
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
-                lane.act_on_pr(target, 20, dict(ledger))
+                fixture_ledger = dict(ledger)
+                fixture_gate_step(lane, target, 20, fixture_ledger)
+                if name in ("checked-head", "no-verdict"):
+                    fixture_gate_step(lane, target, 20, fixture_ledger)
             exact(actions, expected)
             try:
                 exact(actions + ["forbidden-action"], expected)
