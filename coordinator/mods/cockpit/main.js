@@ -7,7 +7,7 @@ import { load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, op
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
-import { DEAD, columnOf } from "./asks.js";
+import { DEAD, place } from "./asks.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -500,7 +500,7 @@ export default class Board extends View {
     const keep = (g) => inProject(g) && matches(g);
     const placed = live.map((g) => {
       g.info = this.prInfo(g);
-      return [g, this.mergeCandidate(g) ? "ready" : columnOf(g)];
+      return [g, place(g, this.mergeCandidate(g))];
     });
     for (const [, key] of placed) cols[key].total += 1;
     if (!this.pop && !this.unsure()) this.trackColumns(placed, now);

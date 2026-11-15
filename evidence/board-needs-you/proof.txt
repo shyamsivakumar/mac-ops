@@ -10,6 +10,12 @@ ok   C pending request needs: 1
 ok   C asked turn needs: 1
 ok   C asked done turn needs: 1
 ok   C plain done turn stays done: 1
+board placement: a real ask beats a mergeable PR
+ok   asking done with an open PR: "needs"
+ok   quiet done with an open PR: "ready"
+ok   quiet done with no PR: "done"
+ok   dead run with no PR: "dead"
+ok   pending request with an open PR: "needs"
 how a turn ends:
 ok   question: true
 ok   waiting line: true
@@ -19,13 +25,14 @@ ok   bold question: true
 ok   list question: true
 ok   statement: false
 ok   empty: false
-live board, 9.3s, decisions items: 0
-  73 groups; columns {"run":6,"dead":3,"done":63,"needs":1}; failed+stopped cards 3; dead cards 3
+live board, 5.9s, decisions items: 0
+  76 groups; columns {"run":3,"dead":3,"ready":18,"done":51,"needs":1}; failed+stopped cards 3; dead cards 3
   needs: MO-208 [done] project=mac-ops — **Local main.** My local `main` is at `6bbb4b4` and `origin/main` is at `49e594b`, so it is behind and the fetch did not pick up this merge yet. `git fetch origin main:main` refused because `main` is checked out here. Do you want me to run `git fetch origin && git merge --ff-only origin/main` to bring it level?
 ok   live ask groups: 0
 ok   live ask keys: true
 ok   live ask times: true
 ok   live ask titles kept: true
+ok   no asked group sits in ready: 0
 proof: all checks passed
 
 === state 2: one decisions.json item added ===
@@ -40,6 +47,12 @@ ok   C pending request needs: 1
 ok   C asked turn needs: 1
 ok   C asked done turn needs: 1
 ok   C plain done turn stays done: 1
+board placement: a real ask beats a mergeable PR
+ok   asking done with an open PR: "needs"
+ok   quiet done with an open PR: "ready"
+ok   quiet done with no PR: "done"
+ok   dead run with no PR: "dead"
+ok   pending request with an open PR: "needs"
 how a turn ends:
 ok   question: true
 ok   waiting line: true
@@ -49,15 +62,16 @@ ok   bold question: true
 ok   list question: true
 ok   statement: false
 ok   empty: false
-live board, 7.7s, decisions items: 1
-  74 groups; columns {"run":5,"dead":3,"done":64,"needs":2}; failed+stopped cards 3; dead cards 3
+live board, 7.5s, decisions items: 1
+  77 groups; columns {"run":3,"dead":3,"ready":18,"done":51,"needs":2}; failed+stopped cards 3; dead cards 3
   needs: MO-208 [done] project=mac-ops — **Local main.** My local `main` is at `6bbb4b4` and `origin/main` is at `49e594b`, so it is behind and the fetch did not pick up this merge yet. `git fetch origin main:main` refused because `main` is checked out here. Do you want me to run `git fetch origin && git merge --ff-only origin/main` to bring it level?
   needs: Approve the frame reboot window? (Recommended: yes) [ask] project=mac-ops — The frame needs a restart to pick up the new page.
 ok   live ask groups: 1
-  ask group key=ask:proof-1 at=1794760314097 project=mac-ops task=""
+  ask group key=ask:proof-1 at=1794760598724 project=mac-ops task=""
 ok   live ask keys: true
 ok   live ask times: true
 ok   live ask titles kept: true
+ok   no asked group sits in ready: 0
 proof: all checks passed
 
 === state 3: two decisions.json items with no task id ===
@@ -72,6 +86,12 @@ ok   C pending request needs: 1
 ok   C asked turn needs: 1
 ok   C asked done turn needs: 1
 ok   C plain done turn stays done: 1
+board placement: a real ask beats a mergeable PR
+ok   asking done with an open PR: "needs"
+ok   quiet done with an open PR: "ready"
+ok   quiet done with no PR: "done"
+ok   dead run with no PR: "dead"
+ok   pending request with an open PR: "needs"
 how a turn ends:
 ok   question: true
 ok   waiting line: true
@@ -81,15 +101,16 @@ ok   bold question: true
 ok   list question: true
 ok   statement: false
 ok   empty: false
-live board, 7.2s, decisions items: 2
-  75 groups; columns {"run":4,"dead":3,"done":65,"needs":3}; failed+stopped cards 3; dead cards 3
+live board, 7.4s, decisions items: 2
+  78 groups; columns {"run":3,"dead":3,"ready":18,"done":51,"needs":3}; failed+stopped cards 3; dead cards 3
   needs: MO-208 [done] project=mac-ops — **Local main.** My local `main` is at `6bbb4b4` and `origin/main` is at `49e594b`, so it is behind and the fetch did not pick up this merge yet. `git fetch origin main:main` refused because `main` is checked out here. Do you want me to run `git fetch origin && git merge --ff-only origin/main` to bring it level?
   needs: Approve the frame reboot window? (Recommended: yes) [ask] project=mac-ops — The frame needs a restart to pick up the new page.
   needs: Turn the merge train on? (Recommended: yes) [ask] project=srw — MO-165 merged, so it is ready.
 ok   live ask groups: 2
-  ask group key=ask:proof-1 at=1794760321874 project=mac-ops task=""
-  ask group key=ask:proof-2 at=1794760321874 project=srw task=""
+  ask group key=ask:proof-1 at=1794760606251 project=mac-ops task=""
+  ask group key=ask:proof-2 at=1794760606251 project=srw task=""
 ok   live ask keys: true
 ok   live ask times: true
 ok   live ask titles kept: true
+ok   no asked group sits in ready: 0
 proof: all checks passed

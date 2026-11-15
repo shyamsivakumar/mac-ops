@@ -11,11 +11,12 @@ collapsed **Dead runs** column, which shows their count.
 ## What changed
 
 - `coordinator/mods/cockpit/asks.js` is the classifier: `endsWithAsk` reads a
-  turn's last line, and `columnOf` decides the column for a group of threads.
+  turn's last line, `columnOf` decides the column for a group of threads, and
+  `place` gives a real ask precedence over a mergeable PR.
 - `coordinator/mods/cockpit/hub.js` reads `decisions.json` as cards, and reads
   the tail of each finished thread once per change (cached by `updatedAt`) to
   see whether that turn asked something.
-- `coordinator/mods/cockpit/main.js` places groups with the classifier and
+- `coordinator/mods/cockpit/main.js` places groups with `place` and
   adds the Dead runs column, collapsed by default (`dead-open` in local
   storage remembers a change).
 - `coordinator/mods/cockpit/ui.js` gives the column its header, the ask card
@@ -34,6 +35,10 @@ PROOF_DECISIONS_ITEMS='[]' node proof.mjs                                  # nee
 PROOF_DECISIONS_ITEMS='[{"id":"x","group":"mac-ops","title":"Approve the frame reboot window?","why":"..."}]' node proof.mjs
 PROOF_DECISIONS_ITEMS='[{"id":"x",...},{"id":"y",...}]' node proof.mjs    # two decisions, no task id: two groups
 ```
+
+It also checks placement, not only the classifier: a finished turn that asks
+with an open PR lands in Needs you, a quiet one with an open PR stays in Ready
+to merge, and no asked group on the real board sits in Ready.
 
 `proof.txt` is all three runs together. The live board showed `needs 1` (a
 finished turn asking a real question) and `dead 3`; one decision took needs to

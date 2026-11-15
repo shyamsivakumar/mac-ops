@@ -22,3 +22,10 @@ export function columnOf(group) {
   if (group.kind === "fail" || group.kind === "stop") return DEAD;
   return "done";
 }
+
+// Where a group lands: a real ask beats a mergeable PR, otherwise a mergeable PR is ready.
+export function place(group, ready) {
+  const column = columnOf(group);
+  if (column === NEEDS) return NEEDS;
+  return ready ? "ready" : column;
+}
