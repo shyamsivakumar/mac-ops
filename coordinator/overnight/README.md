@@ -736,18 +736,17 @@ eval to fail, so missing fix dispatches cannot produce a passing result.
 ### Turncap eval (Refs #377)
 
 `python3 coordinator/overnight/overnight selftest` registers `turncap`.
-It loads the canonical `~/Code/coordinator/loop/turn_cap.py` without running
-its main loop. Fake runtimes cover exactly 10 and 20 minutes, one second
-past each threshold, and a heavy wait. Calls, clock, sleep, file writes,
-and state persistence are intercepted; no thread is launched or interrupted.
-Repeated handling checks interrupt deduplication. An extra-interrupt negative
-control must be rejected.
+It exercises the versioned `turn_cap.py` handler used by the new
+`overnight turncap [--dry-run]` command. Imports are inert. Fake runtimes
+cover exactly 10 and 20 minutes, one second past each threshold, and heavy
+wait. Calls, clock, sleep, file writes and state persistence are intercepted.
+Repeated handling checks deduplication; an injected extra T3 interrupt must
+fail the same fixture assertions.
 
-The required outcomes are a mis-sized log after 10 minutes, one interrupt
-and parked-for-re-cut state after 20 minutes, and no action or attempt during
-heavy wait. The installed canonical source currently fails these expectations:
-it interrupts at 10 minutes, sends wrap-up, and lacks heavy-wait and parking
-state. This eval deliberately reports FAIL rather than accepting older policy.
-The external source is required and may change independently of this checkout;
-missing source also reports FAIL. Runtime repair and cutover remain outside
-this PR. No live verification or runtime installation was performed.
+After 10 minutes the handler logs mis-sized once. After 20 minutes it
+interrupts once and records the thread in parked state for re-cut. Heavy
+wait records a pause without consuming an attempt; elapsed wait is subtracted
+on resume. The persisted cap state is the re-cut receipt, not a GitHub label
+change or PR closure. The existing external launch agent has not been
+installed or switched; its older policy remains until a separate cutover.
+Real T3 message shape and live-service behavior remain unverified.

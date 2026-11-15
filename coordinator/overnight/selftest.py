@@ -368,10 +368,10 @@ def no_parking(status="interrupted"):
         raise AssertionError("negative control accepted parking")
 
 
-def turncap():
+def turncap(extra_interrupt=False):
     from datetime import datetime, timedelta, timezone
     from unittest.mock import mock_open
-    path = Path.home() / "Code/coordinator/loop/turn_cap.py"
+    path = ROOT / "turn_cap.py"
     spec = importlib.util.spec_from_file_location("fixture_turncap", path)
     cap = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cap)
@@ -402,6 +402,8 @@ def turncap():
              patch("builtins.open", logs):
             cap.handle_thread("t3", thread, state, False)
             cap.handle_thread("t3", thread, state, False)
+            if extra_interrupt:
+                cap.call("t3mcp", "t3_thread_interrupt", {"threadId": "fixture"})
         try:
             expected = [] if waiting or seconds <= 1200 else [
                 ("t3_thread_interrupt", {"threadId": "fixture"})]
@@ -414,12 +416,6 @@ def turncap():
             exact(state.get("attempts", 0), 0)
         except AssertionError as exc:
             failures.append(f"runtime={seconds}, heavy_wait={waiting}: {exc}")
-    try:
-        exact([("t3_thread_interrupt", {})], [])
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError("negative control accepted an extra interrupt")
     if failures:
         raise AssertionError("; ".join(failures))
 
@@ -442,6 +438,13 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "turncap":
+                        try:
+                            turncap(extra_interrupt=True)
+                        except AssertionError:
+                            pass
+                        else:
+                            raise AssertionError("negative control accepted extra interrupt")
                     if name == "no-parking":
                         import lane_driver
                         for status in ("completed", "failed"):
