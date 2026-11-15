@@ -1,3 +1,4 @@
 {
-  "modelSelection": "pick-first-scoped"
+  "modelSelection": "pick-first-scoped",
+  "toolFiltering": "allowed"
 }
