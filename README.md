@@ -240,6 +240,22 @@ durable-launcher publication paths.
 The `coordq` queue and dispatcher, the `ticket` CLI, `coordinator-refresh`,
 `coordstart`, launchd jobs, config and Herdr mods live under `coordinator/` and
 install with `./install.sh coordinator`. Config installs to `~/.coordinator`.
+
+The installer derives the command and helper manifest from `coordinator/bin/`,
+including Python modules such as `tick_health.py`. It preserves relative paths
+and excludes Python bytecode caches. Keep command-local imports in that tree.
+After writing files, and on an unchanged install, it runs the installed
+`coordq status`, `ticket --help`, and `overnight --help` with
+`/opt/homebrew/bin/python3`. Each command must exit successfully; queue status
+must be a JSON object containing `cap`. Queue configuration must already exist.
+A failure restores replaced files and removes files created by the transaction
+before any job reload. Incomplete rollback is an explicit error.
+`python3 install_coordinator.py status` reports `healthy` and per-command
+`smoke_checks` separately from file synchronization (`in_sync`).
+The real-HOME requirement and launchd behavior are unchanged.
+See the [ticket 358 acceptance receipt](docs/proofs/ticket-358-acceptance.md) for
+synthetic rollback evidence and the explicit live acceptance waiver.
+
 Agents run in T3 Code through `t3mcp`; `coordq dispatch` starts T3 threads.
 See [docs/local-tickets-design.md](docs/local-tickets-design.md).
 

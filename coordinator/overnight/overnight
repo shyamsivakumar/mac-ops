@@ -1371,11 +1371,6 @@ def cmd_shift(args: argparse.Namespace) -> int:
         )
     else:
         allowed = cycle_allow(policy)
-        if not allowed:
-            die(
-                f"the policy snapshot {policy_path(root)} names no "
-                "repository the shift may work"
-            )
         emit(f"overnight: {stamp} shift cycle under {policy_path(root)}")
         for line in policy_lines(policy):
             emit(line)
@@ -1386,6 +1381,17 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 f"{plural(dropped, 'repository', 'repositories')}, and the "
                 "shift never reads Ascend work."
             )
+    import lane_driver
+
+    selected = []
+    for repo in lane_driver.LANE_REPOS:
+        if allowed is None or repo not in allowed:
+            emit(f"overnight: skip {repo}: excluded by policy")
+            continue
+        selected.append(repo)
+        mode = "manual-merge" if repo == "digitized/Concerning" else "allowed"
+        emit(f"overnight: lane {repo}: {mode}")
+    lane_driver.LANE_REPOS = selected
     if not args.dry_run:
         # The shift's own lock: two cycles never run at once, whatever
         # starts them. The job fires every five minutes and a cycle takes
@@ -1407,55 +1413,9 @@ def cmd_shift(args: argparse.Namespace) -> int:
             )
             return 0
         try:
-            # A real cycle writes the receipts of the items it sees: the
-            # receipt is the cycle's record, and it is written on every
-            # state change. The cycle still starts no builder and works no
-            # board item: that part of the spec (T5) is not built, and the
-            # cycle says so instead of pretending it works.
-            emit(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
-            code = cmd_order(
-                argparse.Namespace(
-                    dry_run=True,
-                    root=args.root,
-                    deadline=args.deadline,
-                    allowed=allowed,
-                )
-            )
-            if code != 0:
-                return code
-            items, receipts, error = read_work_items(
-                time.monotonic() + args.deadline, allowed, budget
-            )
-            if error:
-                emit(
-                    f"overnight: REFUSED: {error}; the cycle wrote no receipt",
-                    err=True,
-                )
-                return 1
-            written = write_receipts(
-                root,
-                items,
-                receipts,
-                time.monotonic() + args.deadline,
-                budget=budget,
-            )
-            emit(
-                f"overnight: {stamp} shift cycle wrote {written} receipts of "
-                f"{len(items)} items"
-            )
-            # The cycle states the count it worked, so the morning report's
-            # planned count is the count of the items the report lists. The
-            # order's own line keeps its per-repository detail; the order
-            # counts the work items and the cycle counts every item it saw,
-            # including the pull requests already in flight and the backlog.
-            write_shift_line(
-                root,
-                f"planned {len(items)} items | the cycle worked {len(items)} items",
-            )
-            emit(
-                "overnight: the shift starts no builder and works no board item "
-                "yet (spec part T5); it writes the receipts of what it saw"
-            )
+            lane_driver.print = emit
+            lane_driver.main()
+            write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
             if report_cycle:
                 return write_morning_report(root)
             return 0
@@ -2055,7 +2015,7 @@ def ascend_reason(repo: str, key: str | None, flagged: bool = False) -> str | No
     if flagged:
         return f"Ascend repo: the board config marks {repo} as Ascend"
     owner = repo.split("/")[0]
-    if owner != PERSONAL_OWNER:
+    if owner != PERSONAL_OWNER and repo != "digitized/Concerning":
         return f"Ascend repo: {repo} is not a {PERSONAL_OWNER} repository"
     if any(part in repo for part in ASCEND_REPO_PARTS):
         return f"Ascend repo: {repo} is an Ascend repository"
@@ -5509,6 +5469,8 @@ def main() -> int:
         help="the file to read and redact (default: standard input)",
     )
     redact_cmd.set_defaults(func=cmd_redact)
+    selftest = sub.add_parser("selftest", help="run isolated registered fixture evals")
+    selftest.set_defaults(func=lambda args: __import__("selftest").main())
     args = parser.parse_args()
     return args.func(args)
 

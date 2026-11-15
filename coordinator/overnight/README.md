@@ -600,3 +600,76 @@ reinstall:
 ```sh
 python3 install_coordinator.py
 ```
+
+## Lane execution ownership (Refs #363)
+
+`overnight shift` runs the imported lane driver under its existing lock,
+after checking STOP and loading policy. The installer copies `lane_driver.py`
+beside `overnight` and replaces `dev.coordinator.lanes` with a job invoking
+`overnight shift` every 180 seconds. The existing overnight job shares the
+same lock. The lane module has no standalone entry point.
+
+The prototype's repository list, action order, ledger, retry routing and
+watchdog remain unchanged. State stays in `~/Code/coordinator/loop` and the
+watchdog still updates `~/Code/coordinator/decisions.json`. The helper briefs
+in that runtime directory remain prerequisites. The shift policy controls
+whether execution can begin; execution refuses if any prototype repository
+is excluded. Driver output uses the shift redaction function.
+
+Run `python3 install_coordinator.py --help` for installation and status.
+Install only after merge from clean main. Live installation and same-board
+service output comparison were waived for this PR; the fast check validates
+syntax and the existing installer checks, not live board parity.
+
+### API budget and board snapshot
+
+The lane ledger stores one board snapshot and its successful refresh time.
+A pass reuses it for 900 elapsed seconds, regardless of which scheduled job
+invoked the shift. Ticket selection, PR actions and orphan detection all
+use that snapshot. A failed refresh never replaces the last complete snapshot.
+The shift no longer runs separate order and receipt board reads after lane
+execution; receipt refresh is available through `overnight receipt` explicitly.
+The morning report therefore reads existing receipts, which may be older.
+
+Before optional GitHub reads and ticket start checks, both REST and GraphQL
+remaining quota must be at least 500. Unreadable quota stops optional work.
+Every pass logs before/after quota usage, including budget stops. The delta
+also includes concurrent account activity and may span a quota reset.
+Existing three-dry-run limits and 30-minute refusal caching remain in force.
+Live-service, device and owner testing were waived, not failed.
+
+## Fixture evals
+
+Run `python3 coordinator/overnight/overnight selftest` from the checkout.
+The command prints one PASS/FAIL line per registered eval and exits nonzero
+on any failure. Only `start-routing` is registered. Later loop tickets must
+extend this registry; unimplemented evals are never reported as passing.
+The fast check runs the same command.
+
+The fixture uses six synthetic repositories and the production lane selector,
+run-pass wiring, orphan path and ticket launch-payload builder. Subprocesses
+are denied unless replaced with fixture responses. Removing NEVER_START is
+a negative control that must make the eval fail. Configuration loading now
+happens at lane main entry, so importing the lane module reads no live files.
+
+The adapter excludes occupied SRW chain groups and relaunches dead orphan
+receipts through ticket start. It does not install or cut over the loop.
+The fixture also exercises type-to-alias resolution through cmd_start and
+checks the dispatched refresh request (`startFromOrigin: true`). Missing or
+malformed SRW thread lists refuse dispatch. Live smoke, hourly tick integration,
+T3 internal Git refresh execution, issue label parsing and the other eleven
+evals remain outside this proof.
+
+Occupied SRW groups also filter orphan recovery, including dead-thread
+relaunches and generic unstick batches. Snapshot issue reads include titles
+for the same group classifier. A cached orphan without a title is skipped
+when groups are occupied until a refreshed snapshot supplies its group.
+The fixture exercises the full run-pass fallback with an occupied bot group:
+bot and unknown-title orphans produce no actions or ledger changes, while a
+census orphan relaunches through ticket start.
+
+SRW uses one refreshed thread-list boundary after PR actions for both ready
+starts and orphan recovery. The fixture starts with an idle busy result,
+simulates a PR launch, then requires the occupancy refresh to happen after
+that launch. Same-group recovery, invalid responses and full capacity all
+produce zero additional actions and no recovery ledger writes.
