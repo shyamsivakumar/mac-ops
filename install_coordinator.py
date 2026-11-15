@@ -35,6 +35,13 @@ PI_FILES = (
     ("extensions/coordinator.ts", ".pi/agent-coordinator/extensions/coordinator.ts"),
     ("coordinator.sb", ".pi/agent-coordinator/coordinator.sb"),
     ("settings.json", ".pi/agent-coordinator/settings.json"),
+    ("subagent-manager/settings.json", ".pi/agent-coordinator/subagent-manager/settings.json"),
+    ("subagent-manager/agents/architect.yml", ".pi/agent-coordinator/subagent-manager/agents/architect.yml"),
+    ("subagent-manager/agents/coder.yml", ".pi/agent-coordinator/subagent-manager/agents/coder.yml"),
+    ("subagent-manager/agents/researcher.yml", ".pi/agent-coordinator/subagent-manager/agents/researcher.yml"),
+    ("subagent-manager/agents/reviewer.yml", ".pi/agent-coordinator/subagent-manager/agents/reviewer.yml"),
+    ("subagent-manager/agents/tasker.yml", ".pi/agent-coordinator/subagent-manager/agents/tasker.yml"),
+    ("subagent-manager/agents/writer.yml", ".pi/agent-coordinator/subagent-manager/agents/writer.yml"),
     ("phone-relay/CLAUDE.md", ".pi/agent-coordinator/phone-relay/CLAUDE.md"),
 )
 TURN_CAP_JOB = "dev.coordinator.turncap"
