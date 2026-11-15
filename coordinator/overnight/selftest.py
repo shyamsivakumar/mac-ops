@@ -368,7 +368,91 @@ def no_parking(status="interrupted"):
         raise AssertionError("negative control accepted parking")
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking}
+def turncap(early_interrupt=False):
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import mock_open
+    import turn_cap
+    cap = turn_cap.load_handler()
+    if early_interrupt:
+        path = Path(cap.__file__)
+        source = path.read_text()
+        exact(source.count("age > CAP_SECONDS"), 1)
+        exec(compile(source.replace("age > CAP_SECONDS", "age > 0"), str(path), "exec"), cap.__dict__)
+    now = datetime(2026, 11, 15, tzinfo=timezone.utc)
+
+    class Clock:
+        @staticmethod
+        def now(tz=None):
+            return now
+
+    failures = []
+    for seconds, waiting in [(600, False), (601, False), (1200, False),
+                             (1201, False), (1800, True)]:
+        state = dict(handled=[], wrapped={}, wrapped_at={}, finalized=[])
+        thread = dict(threadId="fixture", title="ticket:fixture/repo#1:a1",
+                      status="running", message="WAITING: heavy busy" if waiting else "")
+        started = now - timedelta(seconds=seconds)
+        actions = []
+        logs = mock_open()
+        def call(cli, tool, args):
+            actions.append((tool, args))
+            return {"delivery": "started"}
+        with patch.object(cap, "datetime", Clock), \
+             patch.object(cap, "current_run", return_value=("run", 1, started, started, False)), \
+             patch.object(cap, "call", side_effect=call), \
+             patch.object(cap, "save_state"), patch.object(cap.time, "sleep"), \
+             patch.object(cap.time, "time", return_value=now.timestamp()), \
+             patch("builtins.open", logs):
+            cap.handle_thread("t3", thread, state, False)
+            cap.handle_thread("t3", thread, state, False)
+
+        try:
+            expected = [] if waiting or seconds <= 1200 else [
+                ("t3_thread_interrupt", {"threadId": "fixture"})]
+            exact(actions, expected)
+            lines = [entry.args[0] for entry in logs().write.call_args_list]
+            expected_lines = [] if waiting or seconds <= 600 else [
+                f"- cap mis-sized 2026-11-15T00:00Z | t3 | {thread['title']} | run | {seconds / 60:.1f} min\n"] * 2
+            exact(lines, expected_lines)
+            exact(state.get("parked", []), ["fixture"] if seconds > 1200 and not waiting else [])
+            exact(state.get("attempts", 0), 0)
+        except AssertionError as exc:
+            failures.append(f"runtime={seconds}, heavy_wait={waiting}: {exc}")
+    state = dict(handled=[], wrapped={}, wrapped_at={}, finalized=[], attempts=7)
+    thread = dict(threadId="paused", title="ticket:fixture/repo#2:a1", message="")
+    origin = datetime(2026, 11, 15, tzinfo=timezone.utc)
+    actions = []
+    logs = mock_open()
+    with patch.object(cap, "datetime", Clock), \
+         patch.object(cap, "current_run", return_value=("paused-run", 1, origin, origin, False)), \
+         patch.object(cap, "call", side_effect=lambda *args: actions.append(args)), \
+         patch.object(cap, "save_state"), patch("builtins.open", logs):
+        for seconds, waiting, paused, waiting_since in [
+            (590, True, 0, origin.timestamp() + 590),
+            (2390, True, 0, origin.timestamp() + 590),
+            (2390, False, 1800, None),
+            (2400, False, 1800, None),
+            (2401, False, 1800, None),
+            (3000, False, 1800, None),
+            (3001, False, 1800, None),
+            (3002, False, 1800, None),
+        ]:
+            now = origin + timedelta(seconds=seconds)
+            thread["message"] = "WAITING: heavy busy" if waiting else ""
+            cap.handle_thread("t3", thread, state, False)
+            exact(state["clocks"]["paused:paused-run"],
+                  {"paused": paused, "waiting_since": waiting_since})
+            exact(state["attempts"], 7)
+            exact(actions, [] if seconds <= 3000 else [
+                ("t3mcp", "t3_thread_interrupt", {"threadId": "paused"})])
+            exact(state.get("parked", []), [] if seconds <= 3000 else ["paused"])
+            exact([c.args[0] for c in logs().write.call_args_list], [] if seconds <= 2400 else [
+                "- cap mis-sized 2026-11-15T00:40Z | t3 | ticket:fixture/repo#2:a1 | paused-run | 10.0 min\n"] * 2)
+    if failures:
+        raise AssertionError("; ".join(failures))
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap}
 
 
 def main():
@@ -386,6 +470,13 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "turncap":
+                        try:
+                            turncap(early_interrupt=True)
+                        except AssertionError:
+                            pass
+                        else:
+                            raise AssertionError("negative control accepted extra interrupt")
                     if name == "no-parking":
                         import lane_driver
                         for status in ("completed", "failed"):
