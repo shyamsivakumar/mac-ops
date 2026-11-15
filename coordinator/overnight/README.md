@@ -688,10 +688,46 @@ no verdict, a second no-verdict, quota evidence, manual Concerning merge and
 excluded Ascend work. The action comparator rejects an extra forbidden action.
 The merge command must include `--match-head-commit` with the full head.
 
-Current evidence: start-routing passes; gate-pipeline fails because the owned
-lane driver disables gate launch and skips PASS completion. The eval deliberately
-keeps the required expectations. A green result is not claimed. The second
-no-verdict case currently proves only no action, not a needs-you state. Provides
-verification and fast-forward internals remain uncovered until the production
-completion path exists; the fixture expects its command boundaries, not invented
-Provides facts. Live and device checks are waived. No runtime is installed.
+Current evidence: all three registered evals pass. Gate launch and PASS
+completion now use the production adapter. A no-verdict gate retries once;
+only explicit Astra quota exhaustion permits Opus fallback after that retry.
+A second infrastructure failure records needs-you without parking the PR.
+Concerning remains manual merge and Ascend is excluded.
+
+PASS completion uses an exact-head squash merge, then `ticket close` verifies
+the PR is merged on that head and references the issue. Closure also requires
+the gate's exact-head `PROVIDES: PASS`, `CHECK: PASS` and final `VERDICT: PASS`
+lines. Missing evidence refuses closure. The gate brief requests Provides
+verification and assigns merge ownership to the lane. The fixture exercises
+the actual close handler with valid proof and refusals for unmerged or wrong
+heads, wrong issue references, missing merge commits and failed proof lines.
+Provides facts remain a reviewer attestation, not an independent machine proof.
+The final local update reads git worktree list --porcelain -z, finds the
+worktree holding refs/heads/main, verifies its branch, and runs git pull
+--ff-only there. If main is not checked out, it fetches origin main:main
+without changing the canonical checkout branch. Invalid listings or changed
+branches refuse the update. Fixtures cover a canonical feature branch with
+main elsewhere, an unchecked-out main, paths with spaces, and refusal cases.
+Command failures now raise rather than being recorded as successful sends.
+No runtime is installed and live checks remain waived.
+
+### No parking fixture eval (Refs #376)
+
+The `no-parking` eval calls production `act_on_pr` and `send` with injected
+snapshots, FAIL histories, interrupted builder responses and command receipts.
+It requires another fix after two prior fix heads, one continue send per head,
+and a fresh fix and continue after the head changes. Exact actions and ledger
+keys reject parking, PR closure, extra sends and missing sends. An extra park
+action is a negative control that the comparator must reject. Subprocesses
+remain denied by the suite and filesystem opens are denied by this fixture.
+
+The production adapter removes the FAIL count parking boundary and replaces
+stopped-builder parking with a continue send keyed by repository, PR and head.
+The newer loop eval spec and coordinator notes override lane.md section 6.
+Run `python3 coordinator/overnight/overnight selftest`. All three registered evals pass.
+No runtime installation or live service proof is included. Dead thread rerouting,
+send receipt failure handling remain outside this fixture's proof.
+
+The no-parking fixture also covers completed and failed builder statuses. A
+production-path negative control replaces send with a no-op and requires the
+eval to fail, so missing fix dispatches cannot produce a passing result.

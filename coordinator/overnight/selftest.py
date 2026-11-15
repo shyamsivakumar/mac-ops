@@ -200,6 +200,11 @@ def gate_pipeline():
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
                 return "merged"
+            if cmd[0] == "git" and "worktree" in cmd:
+                return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
+            if cmd[0] == "git" and "symbolic-ref" in cmd:
+                exact(cmd[2], "/fixture/main")
+                return "refs/heads/main"
             if cmd[0] == "git" and "--ff-only" in cmd:
                 actions.append("ff")
                 return "updated"
@@ -246,9 +251,124 @@ def gate_pipeline():
             failures.append(f"{name}: {exc}")
     if failures:
         raise AssertionError("; ".join(failures))
+    completion_boundary()
+    main_update_boundary()
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline}
+def main_update_boundary():
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    canonical = "/Users/shyamsivakumar/Code/mac-ops"
+    feature = f"worktree {canonical}\0HEAD old\0branch refs/heads/feature\0\0"
+    main = "worktree /fixture/main worktree\0HEAD old\0branch refs/heads/main\0\0"
+    listing_cmd = ["git", "-C", canonical, "worktree", "list", "--porcelain", "-z"]
+    verify_cmd = ["git", "-C", "/fixture/main worktree", "symbolic-ref", "--quiet", "HEAD"]
+    pull_cmd = ["git", "-C", "/fixture/main worktree", "pull", "--ff-only", "origin", "main"]
+    fetch_cmd = ["git", "-C", canonical, "fetch", "origin", "main:main"]
+    for listing, branch, expected, refused in [
+        (feature + main, "refs/heads/main", [listing_cmd, verify_cmd, pull_cmd], False),
+        (feature, "", [listing_cmd, fetch_cmd], False),
+        (feature + main, "refs/heads/feature", [listing_cmd, verify_cmd], True),
+        ("", "", [listing_cmd], True),
+    ]:
+        commands = []
+        def command(cmd, timeout=150):
+            commands.append(cmd)
+            if cmd == listing_cmd:
+                return listing
+            if cmd == verify_cmd:
+                return branch
+            if cmd not in (pull_cmd, fetch_cmd):
+                raise AssertionError(f"unexpected main update command: {cmd}")
+            return "updated"
+        with patch.object(lane, "run", command):
+            try:
+                lane.fast_forward_main(repo)
+            except RuntimeError:
+                exact(refused, True)
+            else:
+                exact(refused, False)
+        exact(commands, expected)
+
+
+def completion_boundary():
+    from argparse import Namespace
+    ticket = load_ticket()
+    head = "a" * 40
+    proof = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
+    merged = dict(state="MERGED", headRefOid=head, body="Refs #10", mergeCommit={"oid": "b" * 40})
+    cases = [(merged, proof, True), (dict(merged, state="OPEN"), proof, False),
+             (dict(merged, headRefOid="c" * 40), proof, False),
+             (dict(merged, body="Refs #11"), proof, False),
+             (dict(merged, mergeCommit=None), proof, False),
+             (merged, proof.replace("PROVIDES: PASS", "PROVIDES: FAIL"), False),
+             (merged, proof.replace("CHECK: PASS", "CHECK: FAIL"), False),
+             (merged, proof.replace("VERDICT: PASS", "VERDICT: FAIL"), False)]
+    for pull, reply, allowed in cases:
+        actions = []
+        args = Namespace(ref="shyamsivakumar/mac-ops#10", pr=20, head=head, gate_thread="gate")
+        def close(cmd):
+            exact(cmd[:3], ["issue", "close", "10"])
+            actions.append("close")
+            return "closed"
+        with patch.object(ticket, "gh_json", return_value=pull), \
+             patch.object(ticket, "t3_call", return_value={"items": [dict(type="assistant_message", text=reply)]}), \
+             patch.object(ticket, "gh", side_effect=close):
+            try:
+                ticket.cmd_close(args)
+            except ticket.Refuse:
+                exact(allowed, False)
+            else:
+                exact(allowed, True)
+        exact(actions, ["close"] if allowed else [])
+
+
+def no_parking(status="interrupted"):
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    head = "a" * 40
+    ledger = {f"fix:{repo}#20:old1": "sent", f"fix:{repo}#20:old2": "sent"}
+    snapshot = {"repos": {repo: {"prs": [dict(number=20, state="OPEN", headRefOid=head,
+        body=f"Builder check: PASS {head}", mergeable="MERGEABLE")],
+        "issues": [dict(number=10, labels=[])]}}}
+    actions = []
+
+    def command(cmd, timeout=150):
+        exact(cmd[0:2], [lane.COORDQ, "start"])
+        exact(cmd[3:5], ["--tool", "t3_thread_send"])
+        payload = json.loads(cmd[2])
+        exact(payload["threadId"], "builder")
+        actions.append("continue" if payload["message"].startswith("Continue") else "fix")
+        return "sent"
+
+    with patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+         patch.object(lane, "CFG", {repo: {"key": "MO"}}), \
+         patch.object(lane, "builder_thread", return_value=("10", "builder")), \
+         patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
+         patch.object(lane, "run", command), \
+         patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
+         patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
+        lane.act_on_pr(repo, 20, ledger)
+        exact(actions, ["fix"])
+        lane.act_on_pr(repo, 20, ledger)
+        lane.act_on_pr(repo, 20, ledger)
+        exact(actions, ["fix", "continue"])
+        snapshot["repos"][repo]["prs"][0].update(headRefOid="b" * 40, body=f"Builder check: PASS {'b' * 40}")
+        lane.act_on_pr(repo, 20, ledger)
+        lane.act_on_pr(repo, 20, ledger)
+        lane.act_on_pr(repo, 20, ledger)
+        exact(actions, ["fix", "continue", "fix", "continue"])
+        exact(sorted(ledger), sorted([f"fix:{repo}#20:{h}" for h in ["old1", "old2", head, "b" * 40]] +
+                                    [f"continue:{repo}#20:{h}" for h in [head, "b" * 40]]))
+    try:
+        exact(actions + ["park"], ["fix", "continue", "fix", "continue"])
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("negative control accepted parking")
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking}
 
 
 def main():
@@ -266,6 +386,17 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "no-parking":
+                        import lane_driver
+                        for status in ("completed", "failed"):
+                            no_parking(status)
+                        with patch.object(lane_driver, "send", return_value="dropped"):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted a dropped fix send")
                     if name == "start-routing":
                         import lane_driver
                         with patch.object(lane_driver, "NEVER_START", set()):
