@@ -368,13 +368,18 @@ def no_parking(status="interrupted"):
         raise AssertionError("negative control accepted parking")
 
 
-def turncap(extra_interrupt=False):
+def turncap(early_interrupt=False):
     from datetime import datetime, timedelta, timezone
     from unittest.mock import mock_open
     path = ROOT / "turn_cap.py"
     spec = importlib.util.spec_from_file_location("fixture_turncap", path)
     cap = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cap)
+    if early_interrupt:
+        source = path.read_text()
+        exact(source.count("if elapsed > 1200"), 1)
+        exec(compile(source.replace("if elapsed > 1200", "if elapsed > 0"), str(path), "exec"), cap.__dict__)
+    else:
+        spec.loader.exec_module(cap)
     now = datetime(2026, 11, 15, tzinfo=timezone.utc)
 
     class Clock:
@@ -402,8 +407,7 @@ def turncap(extra_interrupt=False):
              patch("builtins.open", logs):
             cap.handle_thread("t3", thread, state, False)
             cap.handle_thread("t3", thread, state, False)
-            if extra_interrupt:
-                cap.call("t3mcp", "t3_thread_interrupt", {"threadId": "fixture"})
+
         try:
             expected = [] if waiting or seconds <= 1200 else [
                 ("t3_thread_interrupt", {"threadId": "fixture"})]
@@ -416,6 +420,36 @@ def turncap(extra_interrupt=False):
             exact(state.get("attempts", 0), 0)
         except AssertionError as exc:
             failures.append(f"runtime={seconds}, heavy_wait={waiting}: {exc}")
+    state = dict(handled=[], wrapped={}, wrapped_at={}, finalized=[], attempts=7)
+    thread = dict(threadId="paused", title="ticket:fixture/repo#2:a1", message="")
+    origin = datetime(2026, 11, 15, tzinfo=timezone.utc)
+    actions = []
+    logs = mock_open()
+    with patch.object(cap, "datetime", Clock), \
+         patch.object(cap, "current_run", return_value=("paused-run", 1, origin, origin, False)), \
+         patch.object(cap, "call", side_effect=lambda *args: actions.append(args)), \
+         patch.object(cap, "save_state"), patch("builtins.open", logs):
+        for seconds, waiting, paused, waiting_since in [
+            (590, True, 0, origin.timestamp() + 590),
+            (2390, True, 0, origin.timestamp() + 590),
+            (2390, False, 1800, None),
+            (2400, False, 1800, None),
+            (2401, False, 1800, None),
+            (3000, False, 1800, None),
+            (3001, False, 1800, None),
+            (3002, False, 1800, None),
+        ]:
+            now = origin + timedelta(seconds=seconds)
+            thread["message"] = "WAITING: heavy busy" if waiting else ""
+            cap.handle_thread("t3", thread, state, False)
+            exact(state["clocks"]["paused:paused-run"],
+                  {"paused": paused, "waiting_since": waiting_since})
+            exact(state["attempts"], 7)
+            exact(actions, [] if seconds <= 3000 else [
+                ("t3mcp", "t3_thread_interrupt", {"threadId": "paused"})])
+            exact(state.get("parked", []), [] if seconds <= 3000 else ["paused"])
+            exact([c.args[0] for c in logs().write.call_args_list], [] if seconds <= 2400 else [
+                "- cap mis-sized 2026-11-15T00:40Z | t3 | ticket:fixture/repo#2:a1 | paused-run | 10.0 min\n"] * 2)
     if failures:
         raise AssertionError("; ".join(failures))
 
@@ -440,7 +474,7 @@ def main():
                     evaluate()
                     if name == "turncap":
                         try:
-                            turncap(extra_interrupt=True)
+                            turncap(early_interrupt=True)
                         except AssertionError:
                             pass
                         else:
