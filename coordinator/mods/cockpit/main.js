@@ -426,7 +426,7 @@ export default class Board extends View {
       }
       return !this.unchanged("tickets", [this.issues, this.ticketError]);
     }, cx, force);
-    this.background("origins", () => loadOrigins(board.groups.flatMap((g) => g.threads)), cx, force);
+    this.background("origins", () => loadOrigins(board.groups.flatMap((g) => (g.kind === "ask" ? [] : g.threads))), cx, force);
     this.background("prs", async () => {
       await refreshPrs(board.groups.filter((g) => !g.threads.some((c) => c.kind === "run")).flatMap((g) => g.prs).filter((p) => p.state === "open"));
       if (!this.unchanged("prs", this.prStamp())) {
@@ -1145,6 +1145,7 @@ export default class Board extends View {
 
   openReply(e, cx, label = null) {
     if (!e || (e.group.issue && label !== ABANDON_LABEL)) return;
+    if (e.group.kind === "ask") return run("coordinator.asks");
     this.replyLabel = label;
     this.followed = false;
     this.cursor = e.key;

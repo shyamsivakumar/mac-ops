@@ -17,10 +17,10 @@ ok   bold question: true
 ok   list question: true
 ok   statement: false
 ok   empty: false
-live board, 9.4s, decisions items: 0
+live board, 8.8s, decisions items: 0
   62 groups; columns {"run":5,"dead":3,"done":52,"needs":2}; failed+stopped cards 3; dead cards 3
-  needs: MO-208 [done] **Local main.** My local `main` is at `6bbb4b4` and `origin/main` is at `49e594b`, so it is behind and the fetch did not pick up this merge yet. `git fetch origin main:main` refused because `main` is checked out here. Do you want me to run `git fetch origin && git merge --ff-only origin/main` to bring it level?
-  needs: CTL-33 [done] ```
+  needs: MO-208 [done] project=mac-ops — **Local main.** My local `main` is at `6bbb4b4` and `origin/main` is at `49e594b`, so it is behind and the fetch did not pick up this merge yet. `git fetch origin main:main` refused because `main` is checked out here. Do you want me to run `git fetch origin && git merge --ff-only origin/main` to bring it level?
+  needs: CTL-33 [done] project=catalogue — ```
 proof: all checks passed
 
 === state 2: one decisions.json item added ===
@@ -42,9 +42,9 @@ ok   bold question: true
 ok   list question: true
 ok   statement: false
 ok   empty: false
-live board, 12.0s, decisions items: 1
-  63 groups; columns {"run":5,"dead":3,"done":52,"needs":3}; failed+stopped cards 3; dead cards 3
-  needs: MO-208 [done] **Local main.** My local `main` is at `6bbb4b4` and `origin/main` is at `49e594b`, so it is behind and the fetch did not pick up this merge yet. `git fetch origin main:main` refused because `main` is checked out here. Do you want me to run `git fetch origin && git merge --ff-only origin/main` to bring it level?
-  needs: CTL-33 [done] ```
-  needs: Approve the frame reboot window? (Recommended: yes) [ask] The frame needs a restart to pick up the new page.
+live board, 8.0s, decisions items: 1
+  63 groups; columns {"run":4,"dead":3,"done":53,"needs":3}; failed+stopped cards 3; dead cards 3
+  needs: MO-208 [done] project=mac-ops — **Local main.** My local `main` is at `6bbb4b4` and `origin/main` is at `49e594b`, so it is behind and the fetch did not pick up this merge yet. `git fetch origin main:main` refused because `main` is checked out here. Do you want me to run `git fetch origin && git merge --ff-only origin/main` to bring it level?
+  needs: CTL-33 [done] project=catalogue — ```
+  needs: Approve the frame reboot window? (Recommended: yes) [ask] project=mac-ops — The frame needs a restart to pick up the new page.
 proof: all checks passed

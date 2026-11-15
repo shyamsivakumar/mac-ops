@@ -65,7 +65,7 @@ const needs = [];
 for (const g of board.groups) {
   const col = columnOf(g);
   cols[col] = (cols[col] ?? 0) + 1;
-  if (col === "needs") needs.push(`${g.task || g.title} [${g.kind}] ${g.primary.context}`);
+  if (col === "needs") needs.push(`${g.task || g.title} [${g.kind}] project=${g.project} — ${g.primary.context}`);
 }
 console.log(`live board, ${((Date.now() - started) / 1000).toFixed(1)}s, decisions items: ${decisions.length}`);
 console.log(`  ${board.groups.length} groups; columns ${JSON.stringify(cols)}; failed+stopped cards ${board.failed}; dead cards ${board.dead}`);
