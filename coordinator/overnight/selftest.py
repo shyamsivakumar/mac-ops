@@ -248,7 +248,52 @@ def gate_pipeline():
         raise AssertionError("; ".join(failures))
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline}
+def no_parking():
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    head = "a" * 40
+    ledger = {f"fix:{repo}#20:old1": "sent", f"fix:{repo}#20:old2": "sent"}
+    snapshot = {"repos": {repo: {"prs": [dict(number=20, state="OPEN", headRefOid=head,
+        body=f"Builder check: PASS {head}", mergeable="MERGEABLE")],
+        "issues": [dict(number=10, labels=[])]}}}
+    actions = []
+
+    def command(cmd, timeout=150):
+        exact(cmd[0:2], [lane.COORDQ, "start"])
+        exact(cmd[3:5], ["--tool", "t3_thread_send"])
+        payload = json.loads(cmd[2])
+        exact(payload["threadId"], "builder")
+        actions.append("continue" if payload["message"].startswith("Continue") else "fix")
+        return "sent"
+
+    with patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+         patch.object(lane, "CFG", {repo: {"key": "MO"}}), \
+         patch.object(lane, "builder_thread", return_value=("10", "builder")), \
+         patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
+         patch.object(lane, "run", command), \
+         patch.object(lane, "t3", return_value={"thread": {"status": "interrupted"}}), \
+         patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
+        lane.act_on_pr(repo, 20, ledger)
+        exact(actions, ["fix"])
+        lane.act_on_pr(repo, 20, ledger)
+        lane.act_on_pr(repo, 20, ledger)
+        exact(actions, ["fix", "continue"])
+        snapshot["repos"][repo]["prs"][0].update(headRefOid="b" * 40, body=f"Builder check: PASS {'b' * 40}")
+        lane.act_on_pr(repo, 20, ledger)
+        lane.act_on_pr(repo, 20, ledger)
+        lane.act_on_pr(repo, 20, ledger)
+        exact(actions, ["fix", "continue", "fix", "continue"])
+        exact(sorted(ledger), sorted([f"fix:{repo}#20:{h}" for h in ["old1", "old2", head, "b" * 40]] +
+                                    [f"continue:{repo}#20:{h}" for h in [head, "b" * 40]]))
+    try:
+        exact(actions + ["park"], ["fix", "continue", "fix", "continue"])
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("negative control accepted parking")
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking}
 
 
 def main():

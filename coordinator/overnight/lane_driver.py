@@ -202,12 +202,12 @@ def act_on_pr(repo, number, ledger):
         return f"#{number}: gate running"
     if verdict == "PASS":
         return f"skip #{number}: gate PASS but still open (merge refused or digitized); for Shyam"
-    if verdict == "FAIL" and sum(1 for k in ledger if k.startswith(f"fix:{repo}#{number}:")) >= 2:
-        return "skip " + park(repo, number, issue, head, reply, ledger)
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
         if status in ("completed", "interrupted", "failed"):
-            return "skip " + park(repo, number, issue, head, reply, ledger)
+            return f"#{number} continue: " + send(
+                builder, "Continue fixing the gate findings for this head. Push the fixes and report the new head.",
+                f"{CFG[repo]['key']}#{number} continue", ledger, f"continue:{repo}#{number}:{head}")
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"

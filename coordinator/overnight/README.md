@@ -695,3 +695,22 @@ no-verdict case currently proves only no action, not a needs-you state. Provides
 verification and fast-forward internals remain uncovered until the production
 completion path exists; the fixture expects its command boundaries, not invented
 Provides facts. Live and device checks are waived. No runtime is installed.
+
+### No parking fixture eval (Refs #376)
+
+The `no-parking` eval calls production `act_on_pr` and `send` with injected
+snapshots, FAIL histories, interrupted builder responses and command receipts.
+It requires another fix after two prior fix heads, one continue send per head,
+and a fresh fix and continue after the head changes. Exact actions and ledger
+keys reject parking, PR closure, extra sends and missing sends. An extra park
+action is a negative control that the comparator must reject. Subprocesses
+remain denied by the suite and filesystem opens are denied by this fixture.
+
+The production adapter removes the FAIL count parking boundary and replaces
+stopped-builder parking with a continue send keyed by repository, PR and head.
+The newer loop eval spec and coordinator notes override lane.md section 6.
+Run `python3 coordinator/overnight/overnight selftest`. Eval 3 passes; the
+pre-existing gate-pipeline failures remain visible and keep the suite nonzero.
+No runtime installation or live service proof is included. Dead thread rerouting,
+other stopped statuses, send receipt failure handling and the disabled gate
+launch path remain outside this fixture's proof.
