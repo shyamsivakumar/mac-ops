@@ -95,7 +95,7 @@ def queue_sources(root):
     return result
 
 
-def collect(cfg, previous, deadline, now):
+def collect(cfg, previous, deadline, now, read_gate):
     sources = {}
     for repo in list(cfg["repos"])[:MAX_REPOS]:
         old = previous.get("github", {}).get(repo, {})
@@ -115,8 +115,19 @@ def collect(cfg, previous, deadline, now):
         live, complete = threads(deadline)
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
         live, complete = [], False
+    queue = queue_sources(Path(os.environ.get("COORDQ_DIR", str(Path.home() / "Code/coordinator/queue"))))
+    gates = []
+    receipts = queue.get("dispatch-receipts.json") or {}
+    for repo, source in sources.items():
+        for pull in source.get("pulls", []) if source.get("complete") else []:
+            head = pull.get("head", {}).get("sha")
+            thread = receipts.get(f"gate:{repo}#{pull['number']}:{head}")
+            if isinstance(thread, str):
+                verdict, _, _ = read_gate(thread, deadline, head)
+                gates.append({"repo": repo, "pr": pull["number"], "head": head,
+                              "thread": thread, "verdict": verdict})
     return {"github": sources, "threads": live, "threadsComplete": complete,
-            "queue": queue_sources(Path(os.environ.get("COORDQ_DIR", str(Path.home() / "Code/coordinator/queue"))))}
+            "queue": queue, "gates": gates}
 
 
 def snapshot(cfg, raw, previous, normalize, link):
@@ -138,7 +149,9 @@ def snapshot(cfg, raw, previous, normalize, link):
             number = normalized["number"]
             row = {"repo": repo, "issue": number, "stage": normalized["stage"] if complete else "unknown",
                    "thread": None, "pr": None, "head": None, "attempt": None,
-                   "threadStatus": "unknown"}
+                   "threadStatus": "unknown",
+                   "parked": any(label.get("name") in {"stage:backlog", "stage:hold"}
+                                 for label in issue.get("labels", []))}
             items[f"{repo}#{number}"] = row
             by_number[number] = normalized
             if normalized.get("key"):
@@ -179,10 +192,53 @@ def snapshot(cfg, raw, previous, normalize, link):
                             ("queue.json", "dispatch-receipts.json", "log")) else "unknown"}}
 
 
+def detect(board, raw, previous):
+    seen = set(previous.get("events", []))
+    idle = dict(previous.get("idle", {}))
+    events = []
+    terminal = {"completed", "complete", "idle", "stopped", "error", "errored", "failed"}
+    for repo, status in board["sources"]["github"].items():
+        complete = (status == "complete" and board["sources"]["t3"] == "complete"
+                    and board["sources"]["queue"] == "complete")
+        if not complete:
+            idle[repo] = 0
+            seen.discard(f"EVENT lane-idle {repo}")
+            continue
+        rows = [row for row in board["items"] if row["repo"] == repo]
+        for row in rows:
+            if (not row.get("parked") and row["stage"] not in {"backlog", "hold", "unknown"} and not row["pr"]
+                    and row["thread"] and row["threadStatus"] in {"completed", "complete", "idle"}):
+                events.append(f"EVENT builder-stopped {repo}#{row['issue']} thread={row['thread']}")
+        heads = {pull["number"]: pull.get("head", {}).get("sha")
+                 for pull in raw["github"][repo].get("pulls", [])}
+        for gate in raw.get("gates", []):
+            if gate.get("repo") == repo and gate.get("head") and gate.get("verdict") == "FAIL":
+                request = f"gate:{repo}#{gate['pr']}:{gate['head']}"
+                if (heads.get(gate.get("pr")) == gate["head"] and
+                        raw["queue"]["dispatch-receipts.json"].get(request) == gate.get("thread")):
+                    events.append(f"EVENT gate-fail {repo}#{gate['pr']} {gate['head']}")
+        pending = raw["queue"]["queue.json"].get("items", [])
+        queued = any(repo in json.dumps(entry.get("args", {})) for entry in pending)
+        gate_threads = {gate.get("thread") for gate in raw.get("gates", []) if gate.get("repo") == repo}
+        gate_active = any(thread.get("threadId") in gate_threads and thread.get("status") not in terminal
+                          for thread in raw.get("threads", []))
+        active = queued or gate_active or any(row["thread"] and row["threadStatus"] not in terminal for row in rows)
+        work = any(not row.get("parked") and (row["stage"] == "todo" or
+                   (row["stage"] in {None, "started"} and not row["pr"])) for row in rows)
+        idle[repo] = idle.get(repo, 0) + 1 if work and not active else 0
+        if idle[repo] >= 2:
+            events.append(f"EVENT lane-idle {repo}")
+        else:
+            seen.discard(f"EVENT lane-idle {repo}")
+    fresh = [event for event in events if event not in seen]
+    seen.update(events)
+    return fresh, {"events": sorted(seen), "idle": idle}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="collect one cycle (also the default)")
-    parser.add_argument("--fake-input", type=Path, help="JSON source envelope; no calls or writes")
+    parser.add_argument("--fake-input", type=Path, help="JSON source envelope; no network calls; persists --state")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--state", type=Path, default=Path.home() / ".coordinator/coord-watch.json")
     args = parser.parse_args()
@@ -193,24 +249,25 @@ def main():
         overnight = here.parent / "overnight/overnight"
     adapter = runpy.run_path(str(overnight))
     cfg = read_json(args.config) if args.config else ticket["load_config"]()
-    if args.fake_input:
-        envelope = read_json(args.fake_input)
-        board = snapshot(cfg, envelope, envelope.get("previous", {}), ticket["normalize_issue"], adapter["linked_ticket"])
-    else:
-        with os.fdopen(os.open(args.state, os.O_RDWR | os.O_CREAT, 0o600), "r+") as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            stream.seek(0)
-            content = stream.read(MAX_BYTES + 1)
-            if len(content) > MAX_BYTES:
-                raise ValueError("state exceeds byte limit")
-            previous = json.loads(content) if content else {}
-            now = time.time()
-            raw = collect(cfg, previous, time.monotonic() + 120, now)
-            board = snapshot(cfg, raw, previous, ticket["normalize_issue"], adapter["linked_ticket"])
-            state = {"github": raw["github"], "items": board["items"]}
-            stream.seek(0)
-            json.dump(state, stream)
-            stream.truncate()
+    args.state.parent.mkdir(parents=True, exist_ok=True)
+    with os.fdopen(os.open(args.state, os.O_RDWR | os.O_CREAT, 0o600), "r+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        content = stream.read(MAX_BYTES + 1)
+        if len(content) > MAX_BYTES:
+            raise ValueError("state exceeds byte limit")
+        previous = json.loads(content) if content else {}
+        raw = read_json(args.fake_input) if args.fake_input else collect(
+            cfg, previous, time.monotonic() + 120, time.time(), adapter["read_gate_report"])
+        if args.fake_input and not previous:
+            previous = raw.get("previous", {})
+        board = snapshot(cfg, raw, previous, ticket["normalize_issue"], adapter["linked_ticket"])
+        events, detection = detect(board, raw, previous)
+        state = {"github": raw["github"], "items": board["items"], **detection}
+        stream.seek(0)
+        json.dump(state, stream)
+        stream.truncate()
+    for event in events:
+        print(event)
     print("BOARD " + json.dumps(board, separators=(",", ":")))
 
 
