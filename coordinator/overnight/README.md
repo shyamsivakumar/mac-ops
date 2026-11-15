@@ -731,3 +731,23 @@ send receipt failure handling remain outside this fixture's proof.
 The no-parking fixture also covers completed and failed builder statuses. A
 production-path negative control replaces send with a no-op and requires the
 eval to fail, so missing fix dispatches cannot produce a passing result.
+
+
+### Turncap eval (Refs #377)
+
+`python3 coordinator/overnight/overnight selftest` registers `turncap`.
+It loads the canonical `~/Code/coordinator/loop/turn_cap.py` without running
+its main loop. Fake runtimes cover exactly 10 and 20 minutes, one second
+past each threshold, and a heavy wait. Calls, clock, sleep, file writes,
+and state persistence are intercepted; no thread is launched or interrupted.
+Repeated handling checks interrupt deduplication. An extra-interrupt negative
+control must be rejected.
+
+The required outcomes are a mis-sized log after 10 minutes, one interrupt
+and parked-for-re-cut state after 20 minutes, and no action or attempt during
+heavy wait. The installed canonical source currently fails these expectations:
+it interrupts at 10 minutes, sends wrap-up, and lacks heavy-wait and parking
+state. This eval deliberately reports FAIL rather than accepting older policy.
+The external source is required and may change independently of this checkout;
+missing source also reports FAIL. Runtime repair and cutover remain outside
+this PR. No live verification or runtime installation was performed.
