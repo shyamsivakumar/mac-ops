@@ -115,6 +115,18 @@ export function plainError(raw) {
   return text;
 }
 
+const ERROR_KINDS = [
+  ["rate", "Rate limit", /rate.?limit|too many requests|\b429\b|overloaded/i],
+  ["router", "Router error", /local_router_error|router/i],
+  ["auth", "Auth", /\b40[13]\b|unauthori[sz]ed|forbidden|api key|authenticat|credential/i],
+  ["timeout", "Timeout", /timed? ?out|stalled|ETIMEDOUT|deadline/i],
+];
+
+export function errorKind(raw) {
+  const hit = ERROR_KINDS.find(([, , pattern]) => pattern.test(raw));
+  return hit ? { id: hit[0], label: hit[1] } : { id: "other", label: "Other" };
+}
+
 function card(thread, names) {
   const kind = RUNNING.has(thread.status) ? "run" : KIND[thread.status];
   const task = TASK_ID.exec(thread.title)?.[0] ?? "";
