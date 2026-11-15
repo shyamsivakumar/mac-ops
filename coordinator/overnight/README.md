@@ -620,3 +620,20 @@ Run `python3 install_coordinator.py --help` for installation and status.
 Install only after merge from clean main. Live installation and same-board
 service output comparison were waived for this PR; the fast check validates
 syntax and the existing installer checks, not live board parity.
+
+### API budget and board snapshot
+
+The lane ledger stores one board snapshot and its successful refresh time.
+A pass reuses it for 900 elapsed seconds, regardless of which scheduled job
+invoked the shift. Ticket selection, PR actions and orphan detection all
+use that snapshot. A failed refresh never replaces the last complete snapshot.
+The shift no longer runs separate order and receipt board reads after lane
+execution; receipt refresh is available through `overnight receipt` explicitly.
+The morning report therefore reads existing receipts, which may be older.
+
+Before optional GitHub reads and ticket start checks, both REST and GraphQL
+remaining quota must be at least 500. Unreadable quota stops optional work.
+Every pass logs before/after quota usage, including budget stops. The delta
+also includes concurrent account activity and may span a quota reset.
+Existing three-dry-run limits and 30-minute refusal caching remain in force.
+Live-service, device and owner testing were waived, not failed.
