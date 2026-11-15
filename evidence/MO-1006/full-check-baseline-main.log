@@ -1,6 +1,9 @@
 Baseline HEAD: b6c34eda85c42201137713e0080ac51e6b2e6113 (origin/main)
-Clean worktree at origin/main; no branch files.
+Worktree: <worktree:origin-main>, clean checkout, no branch files
 Command: PYTHONPATH=coordinator/bin timeout 300 python3 -m unittest discover -s tests -t .
+Start: 2026-11-15T16:03:23Z
+End: 2026-11-15T16:03:32Z
+Exit: 1
 Note: PYTHONPATH=coordinator/bin is required at main because coordinator/bin/coordq imports coordinator/bin/tick_health, which is not on sys.path for a repository-root invocation. The reviewed head predates tick_health and needs no PYTHONPATH.
 ---
 ................................................................F.......FF.F......heavy: pause requested task=new role=ordinary reason=cpu-threshold; ordinary-before-review
@@ -11,7 +14,7 @@ heavy: pause requested task=old role=ordinary reason=cpu-threshold; ordinary-bef
 FAIL: test_a_second_retry_happens_after_the_backoff (tests.test_gatekeep_retry_limit.BackoffTest)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/private/tmp/mo1006-main-baseline/tests/test_gatekeep_retry_limit.py", line 177, in test_a_second_retry_happens_after_the_backoff
+  File "<worktree:origin-main>/tests/test_gatekeep_retry_limit.py", line 177, in test_a_second_retry_happens_after_the_backoff
     self.assertIn("regating o/r#7", out)
 AssertionError: 'regating o/r#7' not found in ''
 
@@ -19,7 +22,7 @@ AssertionError: 'regating o/r#7' not found in ''
 FAIL: test_a_head_with_no_retry_yet_is_retried (tests.test_gatekeep_retry_limit.FirstRetryTest)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/private/tmp/mo1006-main-baseline/tests/test_gatekeep_retry_limit.py", line 140, in test_a_head_with_no_retry_yet_is_retried
+  File "<worktree:origin-main>/tests/test_gatekeep_retry_limit.py", line 140, in test_a_head_with_no_retry_yet_is_retried
     self.assertIn("regating o/r#7", out)
 AssertionError: 'regating o/r#7' not found in ''
 
@@ -27,7 +30,7 @@ AssertionError: 'regating o/r#7' not found in ''
 FAIL: test_a_legacy_head_is_retried (tests.test_gatekeep_retry_limit.FirstRetryTest)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/private/tmp/mo1006-main-baseline/tests/test_gatekeep_retry_limit.py", line 133, in test_a_legacy_head_is_retried
+  File "<worktree:origin-main>/tests/test_gatekeep_retry_limit.py", line 133, in test_a_legacy_head_is_retried
     self.assertIn("regating o/r#7: aaaaaaaa (gate died without a verdict)", out)
 AssertionError: 'regating o/r#7: aaaaaaaa (gate died without a verdict)' not found in ''
 
@@ -35,13 +38,12 @@ AssertionError: 'regating o/r#7: aaaaaaaa (gate died without a verdict)' not fou
 FAIL: test_an_odd_record_does_not_stop_the_run (tests.test_gatekeep_retry_limit.GiveUpTest)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/private/tmp/mo1006-main-baseline/tests/test_gatekeep_retry_limit.py", line 204, in test_an_odd_record_does_not_stop_the_run
+  File "<worktree:origin-main>/tests/test_gatekeep_retry_limit.py", line 204, in test_an_odd_record_does_not_stop_the_run
     self.assertIn("would queue " + self.key, out)
 AssertionError: 'would queue gate:o/r#7:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' not found in ''
 
 ----------------------------------------------------------------------
-Ran 287 tests in 4.380s
+Ran 287 tests in 8.635s
 
 FAILED (failures=4)
 Scorecard: 1 bundles, pairwise flip n/a, incomplete 1, recall 0.0, false blocks 0/0, loops median/p90 1.0/2.0
-Exit: 1

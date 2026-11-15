@@ -13,11 +13,11 @@ TLC2 Version 2026.10.20.183001 (rev: d2e1472)
 Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
 Running breadth-first search Model-Checking with fp 66 and seed -3414995339913131349 with 1 worker on 14 cores with 128MB heap and 64MB offheap memory [pid: 13863] (Mac OS X 27.2.1 aarch64, Homebrew 17.0.21.0.3 64bit, MSBDiskFPSet, DiskStateQueue).
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-1qpomcx2/HeavyQueue.tla
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-1qpomcx2/tlc-12231694064178645943/Naturals.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-1qpomcx2/tlc-12231694064178645943/FiniteSets.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-1qpomcx2/tlc-12231694064178645943/TLC.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
-Parsing file /private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-1qpomcx2/tlc-12231694064178645943/Sequences.tla (jar:file:/Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file <tmp>/heavy-queue-tlc/HeavyQueue.tla
+Parsing file <tmp>/heavy-queue-tlc/tlc-12231694064178645943/Naturals.tla (jar:file:~/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file <tmp>/heavy-queue-tlc/tlc-12231694064178645943/FiniteSets.tla (jar:file:~/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file <tmp>/heavy-queue-tlc/tlc-12231694064178645943/TLC.tla (jar:file:~/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file <tmp>/heavy-queue-tlc/tlc-12231694064178645943/Sequences.tla (jar:file:~/Code/llmwiki/runtime/tla/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
 Semantic processing of module Naturals
 Semantic processing of module Sequences
 Semantic processing of module FiniteSets

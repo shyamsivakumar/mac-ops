@@ -95,12 +95,20 @@ differ from the base. Receipts:
 - `full-check-fast-check.log` - the fast check at the same head, exit 0,
   2026-11-15T15:59:44Z to 15:59:50Z.
 - `full-check-branch-base.log` - the same failing module at the branch base
-  8d6c70d4146cf857a59d0081159e784773837635, 4 failures, exit 1.
+  8d6c70d4146cf857a59d0081159e784773837635, 2026-11-15T16:03:23Z, 4 failures,
+  exit 1.
 - `full-check-baseline-main.log` - the whole suite in a clean worktree at
-  origin/main b6c34eda85c42201137713e0080ac51e6b2e6113, 4 failures, exit 1.
+  origin/main b6c34eda85c42201137713e0080ac51e6b2e6113,
+  2026-11-15T16:03:23Z to 16:03:32Z, 4 failures, exit 1.
   That run needs `PYTHONPATH=coordinator/bin`, because main's `coordq` imports
   `tick_health` while `coordinator/bin` is not on the path for a repository-root
   invocation; this head predates that import and needs no `PYTHONPATH`.
+
+Local absolute paths in the four logs are replaced with `<checkout>`,
+`<worktree:branch-base>`, `<worktree:origin-main>` and `<tmp>` placeholders.
+Only path prefixes were rewritten; no test output, exit status or count was
+changed. Nothing credential-bearing is captured: the suite reads no `.env`,
+keychain or provider token.
 
 So the full local suite is red on origin/main for the same four tests. No PASS
 is claimed for the full check, and the failures were not fixed here: they are
