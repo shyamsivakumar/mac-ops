@@ -121,6 +121,30 @@ def start_routing():
             lane.unstick(repos[0], {})
         exact(actions, [["ticket", "start", f"{repos[0]}#9"]])
 
+    orphan_snapshot = {"tickets": [], "repos": {repos[1]: {"prs": [], "issues": [
+        {"number": 9, "title": "bot repair", "labels": []}]}}}
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", return_value=orphan_snapshot), \
+         patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
+         patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
+         patch("builtins.open", __import__("unittest.mock", fromlist=["mock_open"]).mock_open(
+             read_data=json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))):
+        def threads(tool, args):
+            return {"threads": [{"title": "bot"}]} if tool == "t3_thread_list" else {}
+        with patch.object(lane, "t3", side_effect=threads):
+            for title in ("bot repair", "", None):
+                orphan_snapshot["repos"][repos[1]]["issues"][0]["title"] = title
+                actions.clear()
+                ledger = {}
+                lane.run_pass(ledger)
+                exact(actions, [])
+                exact(ledger, {})
+            orphan_snapshot["repos"][repos[1]]["issues"][0]["title"] = "census repair"
+            actions.clear()
+            lane.run_pass({})
+            exact(actions, [["ticket", "start", f"{repos[1]}#9"]])
+
 
 EVALS = {"start-routing": start_routing}
 

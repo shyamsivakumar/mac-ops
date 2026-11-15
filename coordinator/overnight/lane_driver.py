@@ -54,7 +54,7 @@ def board_snapshot(ledger):
     for repo in LANE_REPOS:
         snapshot["repos"][repo] = {
             "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
-            "issues": read_json(["gh", "issue", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", "number,labels,state"]),
+            "issues": read_json(["gh", "issue", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", "number,title,labels,state"]),
         }
     snapshot["refreshed_at"] = time.time()
     ledger["_board_snapshot"] = snapshot
@@ -302,15 +302,18 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
         out = run(["ticket", "start", ref], timeout=200).splitlines()[-1]
         ledger[f"start:{ref}:{len(ledger)}"] = out
         return f"start {t['key']} #{t['number']}: {out[:60]}"
-    return unstick(repo, ledger)
+    return unstick(repo, ledger, excl)
 
 
-def unstick(repo, ledger):
+def unstick(repo, ledger, excl=frozenset()):
     issues = SNAPSHOT["repos"][repo]["issues"]
     referenced = {int(x) for pr in SNAPSHOT["repos"][repo]["prs"]
                   for x in re.findall(r"\bRefs #(\d+)", pr.get("body") or "")}
     orphans = [i["number"] for i in issues if not any(l["name"].startswith("stage:") for l in i["labels"])
-               and i["number"] not in referenced]
+               and i["number"] not in referenced
+               and (repo, i["number"]) not in NEVER_START
+               and (not excl or (isinstance(i.get("title"), str) and i["title"]
+                                 and group_of(i["title"]) not in excl))]
     if not orphans:
         return "nothing ready"
     receipts = json.load(open(RECEIPTS))
