@@ -735,18 +735,16 @@ eval to fail, so missing fix dispatches cannot produce a passing result.
 
 ### Turncap eval (Refs #377)
 
-`python3 coordinator/overnight/overnight selftest` registers `turncap`.
-It exercises the versioned `turn_cap.py` handler used by the new
-`overnight turncap [--dry-run]` command. Imports are inert. Fake runtimes
-cover exactly 10 and 20 minutes, one second past each threshold, and heavy
-wait. Calls, clock, sleep, file writes and state persistence are intercepted.
-Repeated handling checks deduplication; an injected extra T3 interrupt must
-fail the same fixture assertions.
+`overnight turncap [--dry-run]` delegates to the canonical handler at
+`~/Code/coordinator/loop/turn_cap.py`. The repository adapter contains no
+turncap policy and does not install or modify that external runtime.
+Imports are inert until the command or fixture explicitly loads the handler.
 
-After 10 minutes the handler logs mis-sized once. After 20 minutes it
-interrupts once and records the thread in parked state for re-cut. Heavy
-wait records a pause without consuming an attempt; elapsed wait is subtracted
-on resume. The persisted cap state is the re-cut receipt, not a GitHub label
-change or PR closure. The existing external launch agent has not been
-installed or switched; its older policy remains until a separate cutover.
-Real T3 message shape and live-service behavior remain unverified.
+`overnight selftest` exercises that handler with intercepted T3 calls,
+filesystem writes, clock and sleep. Threshold expectations, wait/resume
+accounting and preserved attempts remain strict. The negative control mutates
+the canonical handler threshold in memory and must fail the same assertions.
+The external source is required; missing source is FAIL. The old canonical
+policy fails these expectations; no passing canonical acceptance is claimed.
+Source availability and revision are external dependencies. Device, handset
+and live-service testing are waived, not failed.

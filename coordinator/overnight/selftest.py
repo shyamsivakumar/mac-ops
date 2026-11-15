@@ -371,15 +371,13 @@ def no_parking(status="interrupted"):
 def turncap(early_interrupt=False):
     from datetime import datetime, timedelta, timezone
     from unittest.mock import mock_open
-    path = ROOT / "turn_cap.py"
-    spec = importlib.util.spec_from_file_location("fixture_turncap", path)
-    cap = importlib.util.module_from_spec(spec)
+    import turn_cap
+    cap = turn_cap.load_handler()
     if early_interrupt:
+        path = Path(cap.__file__)
         source = path.read_text()
-        exact(source.count("if elapsed > 1200"), 1)
-        exec(compile(source.replace("if elapsed > 1200", "if elapsed > 0"), str(path), "exec"), cap.__dict__)
-    else:
-        spec.loader.exec_module(cap)
+        exact(source.count("age > CAP_SECONDS"), 1)
+        exec(compile(source.replace("age > CAP_SECONDS", "age > 0"), str(path), "exec"), cap.__dict__)
     now = datetime(2026, 11, 15, tzinfo=timezone.utc)
 
     class Clock:
