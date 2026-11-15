@@ -5469,6 +5469,8 @@ def main() -> int:
         help="the file to read and redact (default: standard input)",
     )
     redact_cmd.set_defaults(func=cmd_redact)
+    selftest = sub.add_parser("selftest", help="run isolated registered fixture evals")
+    selftest.set_defaults(func=lambda args: __import__("selftest").main())
     args = parser.parse_args()
     return args.func(args)
 
