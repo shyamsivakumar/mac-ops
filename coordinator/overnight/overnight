@@ -1407,55 +1407,19 @@ def cmd_shift(args: argparse.Namespace) -> int:
             )
             return 0
         try:
-            # A real cycle writes the receipts of the items it sees: the
-            # receipt is the cycle's record, and it is written on every
-            # state change. The cycle still starts no builder and works no
-            # board item: that part of the spec (T5) is not built, and the
-            # cycle says so instead of pretending it works.
-            emit(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
-            code = cmd_order(
-                argparse.Namespace(
-                    dry_run=True,
-                    root=args.root,
-                    deadline=args.deadline,
-                    allowed=allowed,
-                )
-            )
-            if code != 0:
-                return code
-            items, receipts, error = read_work_items(
-                time.monotonic() + args.deadline, allowed, budget
-            )
-            if error:
+            import lane_driver
+
+            excluded = set(lane_driver.LANE_REPOS) - set(allowed)
+            if excluded:
                 emit(
-                    f"overnight: REFUSED: {error}; the cycle wrote no receipt",
+                    "overnight: REFUSED: lane repositories excluded by policy: "
+                    + ", ".join(sorted(excluded)),
                     err=True,
                 )
                 return 1
-            written = write_receipts(
-                root,
-                items,
-                receipts,
-                time.monotonic() + args.deadline,
-                budget=budget,
-            )
-            emit(
-                f"overnight: {stamp} shift cycle wrote {written} receipts of "
-                f"{len(items)} items"
-            )
-            # The cycle states the count it worked, so the morning report's
-            # planned count is the count of the items the report lists. The
-            # order's own line keeps its per-repository detail; the order
-            # counts the work items and the cycle counts every item it saw,
-            # including the pull requests already in flight and the backlog.
-            write_shift_line(
-                root,
-                f"planned {len(items)} items | the cycle worked {len(items)} items",
-            )
-            emit(
-                "overnight: the shift starts no builder and works no board item "
-                "yet (spec part T5); it writes the receipts of what it saw"
-            )
+            lane_driver.print = emit
+            lane_driver.main()
+            write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
             if report_cycle:
                 return write_morning_report(root)
             return 0
