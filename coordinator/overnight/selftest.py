@@ -167,7 +167,88 @@ def start_routing():
             exact(ledger, {})
 
 
-EVALS = {"start-routing": start_routing}
+def gate_pipeline():
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    head = "a" * 40
+    failures = []
+    cases = [
+        ("checked-head", repo, "absent", "", {}, ["astra"]),
+        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
+        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
+        ("no-verdict", repo, "none", "interrupted", {}, ["astra"]),
+        ("second-no-verdict", repo, "none", "interrupted",
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+        ("quota", repo, "none", "Astra quota exhausted",
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"]),
+        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
+        ("ascend", "ascend/fixture", "absent", "", {}, []),
+    ]
+    for name, target, verdict, reply, ledger, expected in cases:
+        actions = []
+        pr = dict(number=20, state="OPEN", headRefOid=head,
+                  body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
+        snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+
+        def command(cmd, timeout=150):
+            if cmd[:2] == ["ticket", "gate"]:
+                return f"Gate exact head {head}"
+            if cmd[:2] == ["ticket", "close"]:
+                actions.append("provides")
+                return "closed"
+            if cmd[:3] == ["gh", "pr", "merge"]:
+                exact(cmd[cmd.index("--match-head-commit") + 1], head)
+                actions.append("merge")
+                return "merged"
+            if cmd[0] == "git" and "--ff-only" in cmd:
+                actions.append("ff")
+                return "updated"
+            if cmd[:2] == [lane.COORDQ, "start"]:
+                payload = json.loads(cmd[2])
+                if "threadId" in payload:
+                    exact(payload["threadId"], "live-builder")
+                    if reply not in payload["message"]:
+                        raise AssertionError("builder did not receive findings")
+                    actions.append("builder")
+                else:
+                    exact(head in payload["message"], True)
+                    model = payload["modelSelection"]["model"]
+                    actions.append("astra" if model == "gpt-6-astra" else "opus" if "opus" in model else model)
+                return "fixture-receipt"
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def threads(tool, args):
+            if tool == "t3_thread_list":
+                exact(head[:8] in args["titleContains"], True)
+                return {"threads": [] if verdict == "absent" else [
+                    dict(threadId="gate", status="completed", updatedAt="fixture")]}
+            if tool == "t3_thread_read":
+                if args["threadId"] == "live-builder":
+                    return {"thread": {"status": "running", "sendable": True}}
+                return {"items": [{"type": "assistant_message", "text": reply}]}
+            raise AssertionError(f"unexpected T3 tool: {tool}")
+
+        try:
+            with patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
+                 patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                 patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                 patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
+                 patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
+                lane.act_on_pr(target, 20, dict(ledger))
+            exact(actions, expected)
+            try:
+                exact(actions + ["forbidden-action"], expected)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("negative control accepted extra action")
+        except Exception as exc:
+            failures.append(f"{name}: {exc}")
+    if failures:
+        raise AssertionError("; ".join(failures))
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline}
 
 
 def main():
