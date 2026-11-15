@@ -667,3 +667,9 @@ when groups are occupied until a refreshed snapshot supplies its group.
 The fixture exercises the full run-pass fallback with an occupied bot group:
 bot and unknown-title orphans produce no actions or ledger changes, while a
 census orphan relaunches through ticket start.
+
+SRW uses one refreshed thread-list boundary after PR actions for both ready
+starts and orphan recovery. The fixture starts with an idle busy result,
+simulates a PR launch, then requires the occupancy refresh to happen after
+that launch. Same-group recovery, invalid responses and full capacity all
+produce zero additional actions and no recovery ledger writes.
