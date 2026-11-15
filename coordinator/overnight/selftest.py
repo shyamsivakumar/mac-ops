@@ -248,7 +248,7 @@ def gate_pipeline():
         raise AssertionError("; ".join(failures))
 
 
-def no_parking():
+def no_parking(status="interrupted"):
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
@@ -271,7 +271,7 @@ def no_parking():
          patch.object(lane, "builder_thread", return_value=("10", "builder")), \
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
          patch.object(lane, "run", command), \
-         patch.object(lane, "t3", return_value={"thread": {"status": "interrupted"}}), \
+         patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
@@ -311,6 +311,17 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "no-parking":
+                        import lane_driver
+                        for status in ("completed", "failed"):
+                            no_parking(status)
+                        with patch.object(lane_driver, "send", return_value="dropped"):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted a dropped fix send")
                     if name == "start-routing":
                         import lane_driver
                         with patch.object(lane_driver, "NEVER_START", set()):

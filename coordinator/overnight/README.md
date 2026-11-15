@@ -712,5 +712,9 @@ The newer loop eval spec and coordinator notes override lane.md section 6.
 Run `python3 coordinator/overnight/overnight selftest`. Eval 3 passes; the
 pre-existing gate-pipeline failures remain visible and keep the suite nonzero.
 No runtime installation or live service proof is included. Dead thread rerouting,
-other stopped statuses, send receipt failure handling and the disabled gate
+send receipt failure handling and the disabled gate
 launch path remain outside this fixture's proof.
+
+The no-parking fixture also covers completed and failed builder statuses. A
+production-path negative control replaces send with a no-op and requires the
+eval to fail, so missing fix dispatches cannot produce a passing result.
