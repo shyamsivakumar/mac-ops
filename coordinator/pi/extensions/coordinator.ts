@@ -277,7 +277,12 @@ export default function (pi: any) {
     const name = event.toolName;
     const input = event.input || {};
     let why: string | undefined;
-    if (name === "bash") why = checkBash(String(input.command || ""));
+    if (typeof name === "string" && name.startsWith("bgmon_")) {
+      const observation = name === "bgmon_inspect" || name === "bgmon_watch" ||
+        (name === "bgmon_events" && input.action === "list");
+      if (!observation) why = "monitor execution and control belong to the lane; only observation tools are allowed";
+    }
+    else if (name === "bash") why = checkBash(String(input.command || ""));
     else if (name === "write" || name === "edit") why = checkWrite(String(input.path || input.file_path || ""), cwd);
     else if (name === "read" && SECRET_PATH.test(abs(String(input.path || ""), cwd))) why = "secret file";
     if (why) return { block: true, reason: `Coordinator guard: ${why}. Do not work around it; route it or park it in loop/decisions.md.` };
