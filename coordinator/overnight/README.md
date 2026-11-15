@@ -600,3 +600,23 @@ reinstall:
 ```sh
 python3 install_coordinator.py
 ```
+
+## Lane execution ownership (Refs #363)
+
+`overnight shift` runs the imported lane driver under its existing lock,
+after checking STOP and loading policy. The installer copies `lane_driver.py`
+beside `overnight` and replaces `dev.coordinator.lanes` with a job invoking
+`overnight shift` every 180 seconds. The existing overnight job shares the
+same lock. The lane module has no standalone entry point.
+
+The prototype's repository list, action order, ledger, retry routing and
+watchdog remain unchanged. State stays in `~/Code/coordinator/loop` and the
+watchdog still updates `~/Code/coordinator/decisions.json`. The helper briefs
+in that runtime directory remain prerequisites. The shift policy controls
+whether execution can begin; execution refuses if any prototype repository
+is excluded. Driver output uses the shift redaction function.
+
+Run `python3 install_coordinator.py --help` for installation and status.
+Install only after merge from clean main. Live installation and same-board
+service output comparison were waived for this PR; the fast check validates
+syntax and the existing installer checks, not live board parity.

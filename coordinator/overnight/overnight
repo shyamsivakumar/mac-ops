@@ -1407,11 +1407,18 @@ def cmd_shift(args: argparse.Namespace) -> int:
             )
             return 0
         try:
-            # A real cycle writes the receipts of the items it sees: the
-            # receipt is the cycle's record, and it is written on every
-            # state change. The cycle still starts no builder and works no
-            # board item: that part of the spec (T5) is not built, and the
-            # cycle says so instead of pretending it works.
+            import lane_driver
+
+            excluded = set(lane_driver.LANE_REPOS) - set(allowed)
+            if excluded:
+                emit(
+                    "overnight: REFUSED: lane repositories excluded by policy: "
+                    + ", ".join(sorted(excluded)),
+                    err=True,
+                )
+                return 1
+            lane_driver.print = emit
+            lane_driver.main()
             emit(f"overnight: {stamp} shift cycle (real: it writes the receipts)")
             code = cmd_order(
                 argparse.Namespace(

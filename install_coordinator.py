@@ -52,9 +52,7 @@ RETIRED_JOBS: tuple[str, ...] = ()
 # queue here: the board is the list.
 OVERNIGHT_DIRS = ("run", "receipts", "inbox", "staging")
 OVERNIGHT_README = ("overnight", "README.md")
-# The overnight module's command line. It is the only new binary the module
-# adds; the installer copies it next to the other coordinator commands.
-OVERNIGHT_BIN_FILES = ("overnight",)
+OVERNIGHT_BIN_FILES = ("overnight", "lane_driver.py")
 GITIGNORE_ENTRY = ".overnight/"
 GITIGNORE_BLOCK = (
     "# Overnight runner scratch, installed by mac-ops\n"
