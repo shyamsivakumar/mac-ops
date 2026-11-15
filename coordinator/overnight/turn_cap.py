@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def load_handler():
-    path = Path(__file__).resolve().parents[1] / "loop/turn_cap.py"
+    path = Path.home() / "Code/coordinator/loop/turn_cap.py"
     spec = importlib.util.spec_from_file_location("canonical_turn_cap", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
