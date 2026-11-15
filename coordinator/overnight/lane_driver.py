@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import subprocess
 import time
@@ -249,7 +250,7 @@ def act_on_pr(repo, number, ledger):
 
 
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
-         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalouge",
+         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue",
          "digitized/Concerning": "concerning"}
 
 
@@ -276,6 +277,9 @@ def drift_ff(ledger):
         if repo not in LANE_REPOS:
             continue
         d = "/Users/shyamsivakumar/Code/" + name
+        if not os.path.isdir(d):
+            print(f"{CFG[repo]['key']:5} checkout absent: {d}; skipping")
+            continue
         out = run(["git", "-C", d, "rev-parse", "main", "origin/main"], timeout=60)
         ids = out.split()
         if len(ids) != 2 or ids[0] == ids[1]:
