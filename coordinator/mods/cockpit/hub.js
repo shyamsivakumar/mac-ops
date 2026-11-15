@@ -124,7 +124,7 @@ function card(thread, names) {
     task,
     led,
     title: led ? thread.title.slice(task.length + 3) : thread.title,
-    project: names.get(thread.projectId) ?? "No project",
+    project: kind === "ask" ? thread.project ?? "Coordinator" : names.get(thread.projectId) ?? "No project",
     projectId: thread.projectId,
     link: thread.link,
     kind,
