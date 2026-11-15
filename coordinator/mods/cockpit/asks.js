@@ -2,12 +2,12 @@
 // A failed or interrupted run that asks nothing is a dead run, not an ask.
 
 const TRAILING = /[\s>*_`"'”’)\]]+$/;
-const WAITING = /\bWAITING\b/;
+const WAITING = /\bWAITING:/;
 
 export const NEEDS = "needs";
 export const DEAD = "dead";
 
-// The last thing a turn said is a question, or a waiting line, when it ends that way.
+// The last thing a turn said is a question, or a WAITING: line, when it ends that way.
 export function endsWithAsk(text) {
   const lines = (text ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
   const last = (lines.at(-1) ?? "").replace(TRAILING, "");

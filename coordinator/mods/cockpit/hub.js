@@ -116,7 +116,7 @@ export function plainError(raw) {
 }
 
 function card(thread, names) {
-  const kind = thread.kind === "ask" ? "ask" : RUNNING.has(thread.status) ? "run" : KIND[thread.status];
+  const kind = RUNNING.has(thread.status) ? "run" : KIND[thread.status];
   const task = TASK_ID.exec(thread.title)?.[0] ?? "";
   const led = task && thread.title.startsWith(`${task} · `);
   return {
@@ -124,7 +124,7 @@ function card(thread, names) {
     task,
     led,
     title: led ? thread.title.slice(task.length + 3) : thread.title,
-    project: kind === "ask" ? thread.project ?? "Coordinator" : names.get(thread.projectId) ?? "No project",
+    project: names.get(thread.projectId) ?? "No project",
     projectId: thread.projectId,
     link: thread.link,
     kind,
@@ -136,7 +136,7 @@ function card(thread, names) {
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
     status: thread.status,
     ask: Boolean(thread.ask),
-    context: kind === "ask" ? thread.context ?? "The coordinator asks for a decision" : thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : kind === "done" && thread.askText ? thread.askText : CONTEXT[kind] ?? "",
+    context: thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : kind === "done" && thread.askText ? thread.askText : CONTEXT[kind] ?? "",
     error: kind === "fail" ? thread.lastError ?? CONTEXT.fail : undefined,
     prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state })),
   };
@@ -304,7 +304,8 @@ export async function load() {
       thread.askText = tail.text;
     }));
   }
-  const cards = [...live, ...finished, ...questionsAsked].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
+  const cards = [...live, ...finished].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
+  cards.push(...questionsAsked);
   await Promise.all(cards.filter((c) => c.kind === "wait").map(async (c) => {
     const thread = live.find((t) => t.threadId === c.key);
     c.context = await askOf(thread).catch(() => "Waiting for your answer");
