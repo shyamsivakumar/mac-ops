@@ -1,0 +1,18 @@
+{
+  "run": "ticket:shyamsivakumar/mac-ops#343:a1",
+  "result": "stopped_scope_exceeds_five_minute_builder_budget",
+  "checkout_head": "eec0d2eb69227800b5f2681f28f0dfb8e2f55a4c",
+  "origin_main": "58a20f432614e80ef187c73761050efb57c2905c",
+  "requires": "packages-pinned present in origin/main via PR #349",
+  "native_dependency": "Verified GitHub blocked_by includes #342, completed",
+  "command_exists": false,
+  "verification_commands": [
+    "git fetch origin",
+    "git log -6 --oneline origin/main",
+    "git show origin/main:coordinator/pi/settings.json",
+    "gh api repos/shyamsivakumar/mac-ops/issues/343/dependencies/blocked_by",
+    "rg --files coordinator"
+  ],
+  "changes": "Evidence receipt only. No implementation, activation, package execution or checks.",
+  "recut": "Allow one longer bounded builder turn for the same collection-only scope, including full checks and one reviewer round."
+}

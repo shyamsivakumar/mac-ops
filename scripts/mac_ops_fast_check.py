@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # The overnight runner is Python without a .py suffix, so the changed file
 # list has to name it by hand.
-SUFFIXLESS_PYTHON = ("coordinator/overnight/overnight",)
+SUFFIXLESS_PYTHON = ("coordinator/overnight/overnight", "coordinator/bin/coord-watch")
 
 
 def git(*args):
