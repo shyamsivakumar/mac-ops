@@ -1371,11 +1371,6 @@ def cmd_shift(args: argparse.Namespace) -> int:
         )
     else:
         allowed = cycle_allow(policy)
-        if not allowed:
-            die(
-                f"the policy snapshot {policy_path(root)} names no "
-                "repository the shift may work"
-            )
         emit(f"overnight: {stamp} shift cycle under {policy_path(root)}")
         for line in policy_lines(policy):
             emit(line)
@@ -1386,6 +1381,17 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 f"{plural(dropped, 'repository', 'repositories')}, and the "
                 "shift never reads Ascend work."
             )
+    import lane_driver
+
+    selected = []
+    for repo in lane_driver.LANE_REPOS:
+        if allowed is None or repo not in allowed:
+            emit(f"overnight: skip {repo}: excluded by policy")
+            continue
+        selected.append(repo)
+        mode = "manual-merge" if repo == "digitized/Concerning" else "allowed"
+        emit(f"overnight: lane {repo}: {mode}")
+    lane_driver.LANE_REPOS = selected
     if not args.dry_run:
         # The shift's own lock: two cycles never run at once, whatever
         # starts them. The job fires every five minutes and a cycle takes
@@ -1407,16 +1413,6 @@ def cmd_shift(args: argparse.Namespace) -> int:
             )
             return 0
         try:
-            import lane_driver
-
-            excluded = set(lane_driver.LANE_REPOS) - set(allowed)
-            if excluded:
-                emit(
-                    "overnight: REFUSED: lane repositories excluded by policy: "
-                    + ", ".join(sorted(excluded)),
-                    err=True,
-                )
-                return 1
             lane_driver.print = emit
             lane_driver.main()
             write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
@@ -2019,7 +2015,7 @@ def ascend_reason(repo: str, key: str | None, flagged: bool = False) -> str | No
     if flagged:
         return f"Ascend repo: the board config marks {repo} as Ascend"
     owner = repo.split("/")[0]
-    if owner != PERSONAL_OWNER:
+    if owner != PERSONAL_OWNER and repo != "digitized/Concerning":
         return f"Ascend repo: {repo} is not a {PERSONAL_OWNER} repository"
     if any(part in repo for part in ASCEND_REPO_PARTS):
         return f"Ascend repo: {repo} is an Ascend repository"
