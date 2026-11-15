@@ -150,6 +150,16 @@ Local checks at the head of this branch, both through `heavy` with a
     timeout 300 ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
     287 tests, 4 failures in tests/test_gatekeep_retry_limit.py, exit 1
 
+After merging origin/main 0a79586bc1de9732e407d596b946c7c59db3773c, the same
+canonical full command at the merged head reports 261 tests with 1 failure and
+23 errors. Those errors are a main-side path problem, not a count change in this
+branch: main's `coordinator/bin/coordq` now imports `coordinator/bin/tick_health`,
+which is not on `sys.path` for a repository-root invocation. Adding
+`PYTHONPATH=coordinator/bin` on that same head reports 287 tests with the same
+four stale-fixture failures, so the attribution is unchanged and main has not
+fixed the fixture. The fast selector passes on both heads and needs no
+`PYTHONPATH` because it selects only the changed files here.
+
 Exclusions: none among local checks. Device, handset, live-service, launchd
 activation and owner testing remain WAIVED by Shyam's 2026-11-14 instruction
 ("no testing is needed lets just finish backlog building everything"), not
