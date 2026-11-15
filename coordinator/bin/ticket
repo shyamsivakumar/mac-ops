@@ -1466,6 +1466,31 @@ def thread_for_attempt(cfg, t, ledger):
     return thread
 
 
+def cmd_close(a):
+    repo, number = parse_ref(a.ref)
+    if repo.split("/")[0] != "shyamsivakumar":
+        raise Refuse("issue completion is personal repositories only")
+    pull = gh_json(["pr", "view", str(a.pr), "-R", repo, "--json",
+                    "state,headRefOid,body,mergeCommit"])
+    if (pull.get("state") != "MERGED" or pull.get("headRefOid") != a.head
+            or refs_issue(repo, pull.get("body")) != number
+            or not (pull.get("mergeCommit") or {}).get("oid")):
+        raise Refuse("completion requires the referenced merged PR on the exact reviewed head")
+    report = t3_call("t3_thread_read", {"threadId": a.gate_thread, "view": "messages",
+                                      "limit": 80, "maxCharsPerItem": 12000})
+    replies = [item.get("text", "").rstrip() for item in report.get("items", [])
+               if item.get("type") == "assistant_message"]
+    reply = replies[-1] if replies else ""
+    if (f"PROVIDES: PASS {a.head}" not in reply.splitlines()
+            or f"CHECK: PASS {a.head}" not in reply.splitlines()
+            or not reply.endswith("VERDICT: PASS")):
+        raise Refuse("completion requires exact-head gate verification of Provides, CHECK and VERDICT")
+    merge = pull["mergeCommit"]["oid"]
+    gh(["issue", "close", str(number), "-R", repo, "--comment",
+        f"Provides verified by gate {a.gate_thread} on {a.head}; merged via #{a.pr} ({merge})."])
+    print(f"closed {repo}#{number} via {merge}")
+
+
 def cmd_abandon(a):
     cfg = load_config()
     repo, n = parse_ref(a.ref)
@@ -1626,6 +1651,12 @@ def main():
     s.add_argument("--print-brief", action="store_true",
                    help="print the gate brief this pull request would get, then stop without queueing")
     s.set_defaults(fn=cmd_gate)
+    s = sub.add_parser("close")
+    s.add_argument("ref")
+    s.add_argument("--pr", required=True, type=int)
+    s.add_argument("--head", required=True)
+    s.add_argument("--gate-thread", required=True)
+    s.set_defaults(fn=cmd_close)
     s = sub.add_parser("abandon")
     s.add_argument("ref")
     s.add_argument("--reason", required=True)
