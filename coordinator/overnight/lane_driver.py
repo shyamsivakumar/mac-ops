@@ -1,7 +1,7 @@
 import json
 import re
 import subprocess
-import sys
+import time
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
@@ -9,6 +9,56 @@ ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
 CFG = json.load(open("/Users/shyamsivakumar/.coordinator/tickets.json"))["repos"]
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DRY = False
+SNAPSHOT = {}
+API_FLOOR = 500
+REFRESH_SECONDS = 900
+
+
+class ApiBudgetExhausted(RuntimeError):
+    pass
+
+
+def api_remaining():
+    result = subprocess.run(["gh", "api", "rate_limit"], capture_output=True,
+                            text=True, timeout=60)
+    if result.returncode:
+        raise ApiBudgetExhausted("quota could not be read")
+    try:
+        resources = json.loads(result.stdout)["resources"]
+        return {name: int(resources[name]["remaining"]) for name in ("core", "graphql")}
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ApiBudgetExhausted("quota response is invalid") from exc
+
+
+def require_api_budget():
+    remaining = api_remaining()
+    if min(remaining.values()) < API_FLOOR:
+        raise ApiBudgetExhausted(f"optional reads stopped: remaining={remaining}, floor={API_FLOOR}")
+
+
+def read_json(cmd):
+    require_api_budget()
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode:
+        raise RuntimeError(f"snapshot read failed: {cmd[:3]} (exit {result.returncode})")
+    return json.loads(result.stdout)
+
+
+def board_snapshot(ledger):
+    cached = ledger.get("_board_snapshot")
+    now = time.time()
+    if isinstance(cached, dict) and 0 <= now - cached.get("refreshed_at", 0) < REFRESH_SECONDS:
+        return cached
+    snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
+    fields = "number,state,headRefOid,body,mergeable,isDraft,statusCheckRollup"
+    for repo in LANE_REPOS:
+        snapshot["repos"][repo] = {
+            "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
+            "issues": read_json(["gh", "issue", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", "number,labels,state"]),
+        }
+    snapshot["refreshed_at"] = time.time()
+    ledger["_board_snapshot"] = snapshot
+    return snapshot
 
 ORDER = {
     "shyamsivakumar/mac-ops": [],
@@ -20,6 +70,8 @@ ORDER = {
 
 
 def run(cmd, timeout=150):
+    if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list")):
+        require_api_budget()
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     return (p.stdout + p.stderr).strip()
 
@@ -123,14 +175,16 @@ def park(repo, number, issue, head, reply, ledger):
 
 
 def act_on_pr(repo, number, ledger):
-    pr = json.loads(run(["gh", "pr", "view", str(number), "-R", repo, "--json", "state,headRefOid,body,mergeable,isDraft,statusCheckRollup"]) or "{}")
+    pr = next((p for p in SNAPSHOT["repos"][repo]["prs"] if p["number"] == number), {})
     if pr.get("state") != "OPEN":
         return None
     head, body = pr["headRefOid"], pr.get("body") or ""
     issue, builder = builder_thread(repo, body)
     if issue:
-        labels = run(["gh", "issue", "view", str(issue), "-R", repo, "--json", "labels,state", "-q", '[.state] + [.labels[].name] | join(",")'])
-        if any(x in labels for x in ("stage:backlog", "stage:hold")):
+        issue_record = next((i for i in SNAPSHOT["repos"][repo]["issues"] if i["number"] == int(issue)), None)
+        if issue_record is None:
+            return None
+        if any(label["name"] in ("stage:backlog", "stage:hold") for label in issue_record["labels"]):
             return None
     agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "") and (c.get("state") or c.get("conclusion")) == "SUCCESS"
                    for c in pr.get("statusCheckRollup") or [])
@@ -240,9 +294,9 @@ def start_next(repo, tickets, ledger):
 
 
 def unstick(repo, ledger):
-    issues = json.loads(run(["gh", "issue", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", "number,labels"]) or "[]")
-    prs = run(["gh", "pr", "list", "-R", repo, "--state", "open", "--json", "body", "-q", "[.[].body] | join(\" \")"])
-    referenced = {int(x) for x in re.findall(r"\bRefs #(\d+)", prs)}
+    issues = SNAPSHOT["repos"][repo]["issues"]
+    referenced = {int(x) for pr in SNAPSHOT["repos"][repo]["prs"]
+                  for x in re.findall(r"\bRefs #(\d+)", pr.get("body") or "")}
     orphans = [i["number"] for i in issues if not any(l["name"].startswith("stage:") for l in i["labels"])
                and i["number"] not in referenced]
     if not orphans:
@@ -317,19 +371,15 @@ def watchdog():
     os.replace(p + ".tmp", p)
 
 
-def main():
-    try:
-        ledger = json.load(open(LEDGER))
-    except (OSError, ValueError):
-        ledger = {}
+def run_pass(ledger):
+    global SNAPSHOT
     watchdog()
     drift_ff(ledger)
-    ledger["_pass"] = ledger.get("_pass", 0) + 1
-    fresh = ["--fresh"] if ledger["_pass"] % 5 == 0 else []
-    tickets = json.loads(run(["ticket", "list", "--json", *fresh], timeout=300) or "{}").get("issues") or []
+    SNAPSHOT = board_snapshot(ledger)
+    tickets = SNAPSHOT["tickets"]
     for repo in LANE_REPOS:
         prs = list(ORDER.get(repo, []))
-        others = json.loads(run(["gh", "pr", "list", "-R", repo, "--state", "open", "--json", "number,isDraft"]) or "[]")
+        others = SNAPSHOT["repos"][repo]["prs"]
         prs += sorted(p["number"] for p in others if p["number"] not in prs and not p["isDraft"])
         b = busy(repo)
         if b:
@@ -349,5 +399,26 @@ def main():
                 print(f"{CFG[repo]['key']:5} {u}")
         if not done and not b:
             print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
-    if not DRY:
-        json.dump(ledger, open(LEDGER, "w"), indent=1)
+
+
+def main():
+    try:
+        ledger = json.load(open(LEDGER))
+    except (OSError, ValueError):
+        ledger = {}
+    before = None
+    try:
+        before = api_remaining()
+        run_pass(ledger)
+    except ApiBudgetExhausted as exc:
+        print(f"API BUDGET {exc}")
+    finally:
+        try:
+            after = api_remaining()
+            used = {name: max(0, before[name] - after[name]) for name in after} if before else None
+            print(f"API USAGE used={used} remaining={after} floor={API_FLOOR}")
+        except ApiBudgetExhausted as exc:
+            print(f"API USAGE unavailable: {exc}")
+        if not DRY:
+            with open(LEDGER, "w") as handle:
+                json.dump(ledger, handle, indent=1)
