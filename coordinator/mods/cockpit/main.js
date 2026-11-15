@@ -3,10 +3,10 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, verdictEntries, verdictOf } from "./hub.js";
+import { errorKind, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -41,6 +41,33 @@ const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
 
+const DAY = 86400000;
+const SNOOZED_KEY = "snoozed";
+const RETRY_NOTE = "run it again after the last failure";
+const REBASE_NOTE = "rebase the branch on origin/main, resolve the conflicts keeping both sides' intent, run the repo's local checks, push, and reply with what conflicted";
+const SNOOZE_CHOICES = [["tomorrow", "Until tomorrow 9am"], ["3d", "For 3 days"], ["monday", "Until next Monday 9am"], ["change", "Until it changes"]];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const SAMPLE_CHARS = 140;
+
+const snoozeUntil = (id, now) => {
+  if (id === "change") return null;
+  if (id === "3d") return now + 3 * DAY;
+  const d = new Date(now);
+  d.setHours(9, 0, 0, 0);
+  d.setDate(d.getDate() + (id === "tomorrow" ? 1 : (8 - d.getDay()) % 7 || 7));
+  return d.getTime();
+};
+
+const whenText = (ms) => {
+  if (ms === null) return "until it changes";
+  const d = new Date(ms);
+  return `${WEEKDAYS[d.getDay()]} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+const conflicting = (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.mergeable === "CONFLICTING";
+
+const failedIn = (cols) => cols.needs.groups.filter((g) => g.kind === "fail" && !g.asleep);
+
 const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/^Still checking/, "still checking"], [/^The review found/, "review failed"], [/^Review unreadable/, "review unreadable"]];
 const PLAN_BUCKET = "failed the merge check";
 
@@ -71,8 +98,9 @@ export default class Board extends View {
     this.overlay = props()?.overlay ?? null;
     this.dec = props()?.dec ?? null;
     this.notice = props()?.notice ?? null;
-    this.chooser = props()?.projects ?? null;
-    this.sheet = Boolean(props()?.keys || this.notice || this.chooser);
+    this.chooser = props()?.projects ?? props()?.snooze ?? null;
+    this.rows = props()?.rows ?? null;
+    this.sheet = Boolean(props()?.keys || this.notice || this.chooser || this.rows);
     this.chosen = this.chooser ? Math.max(0, this.chooser.list.findIndex((p) => p.name === this.chooser.current)) : 0;
     this.projects = [];
     this.project = this.pop || this.dec || this.sheet ? null : localStorage.getItem(PROJECT_KEY);
@@ -134,6 +162,10 @@ export default class Board extends View {
     this.expanded = new Set();
     this.armed = null;
     this.seen = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}");
+    this.snoozed = JSON.parse(localStorage.getItem(SNOOZED_KEY) ?? "{}");
+    this.asleepCount = 0;
+    this.sent = new Map();
+    this.actSeen = shared("cockpit.act")?.rev ?? 0;
     this.query = "";
     this.quick = new Set();
     this.searchOpen = false;
@@ -280,6 +312,7 @@ export default class Board extends View {
     this.deciding = `panel:${id}`;
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
     if (id === "project") return this.openProjects(cx);
+    if (id === "snoozed") return this.openSnoozed(cx);
     if (id === "wt" || id === "wtfail") return openOverlay({ mod: "worktrees", kind: "dialog", width: 900, height: Math.min(720, 280 + (this.wt?.rows ?? 8) * 62), props: {} });
     openOverlay({ mod: "ops-panels", kind: "dialog", width: 520, height: 340, props: { panel: "queue", seed: { running: this.board?.running ?? 0, cap: this.cap } } });
   }
@@ -496,11 +529,16 @@ export default class Board extends View {
     this.projects = tally([...live, ...queued]);
     const inProject = (g) => !this.project || g.project === this.project;
     const matches = this.filterOf();
-    const keep = (g) => inProject(g) && matches(g);
+    const searching = Boolean(this.query.trim());
+    const keep = (g) => inProject(g) && matches(g) && (!g.asleep || searching);
     const placed = live.map((g) => {
       g.info = this.prInfo(g);
+      g.asleep = Boolean(this.sleeper(g, now));
       return [g, this.mergeCandidate(g) ? "ready" : COLUMN_OF[g.kind]];
     });
+    this.asleepCount = live.filter((g) => g.asleep).length;
+    this.pruneSnoozed(live, now);
+    this.pruneSent(live);
     for (const [, key] of placed) cols[key].total += 1;
     if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
     for (const [g, key] of placed) if (keep(g)) cols[key].groups.push(g);
@@ -539,6 +577,9 @@ export default class Board extends View {
       settleAll: (cx) => this.settleAll(cx),
       approve: (cx) => this.approve(this.current(), cx),
       approveAll: (cx) => this.approveAll(cx),
+      retry: (cx) => this.openRetry(cx),
+      rebase: (cx) => this.rebase(this.current(), cx),
+      rebaseAll: (cx) => this.rebaseAll(cx),
       queue: (cx) => this.queue(this.current(), cx),
       openPr: () => this.openPr(this.current()),
       fold: (key, cx) => {
@@ -567,7 +608,7 @@ export default class Board extends View {
         const block = variant === "ready" && g.info.status === "open" ? this.reviewBlock(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
-        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text ?? block, blocked: Boolean(block || refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text ?? block, blocked: Boolean(block || refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "ready" && this.rebasable(g), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -580,7 +621,7 @@ export default class Board extends View {
       col.summary = this.summary(key, col, now);
     }
     this.scope = { shown: COLUMN_KEYS.reduce((sum, k) => sum + cols[k].count, 0), total: [...live, ...queued].filter(inProject).length };
-    const open = cols.ready.groups.filter((g) => g.info.status === "open" && g.info.pr);
+    const open = cols.ready.groups.filter((g) => g.info.status === "open" && g.info.pr && !g.asleep);
     const approvable = [];
     const blocked = new Map();
     for (const g of open) {
@@ -592,7 +633,7 @@ export default class Board extends View {
     const why = [...BLOCK_BUCKETS.map(([, name]) => name), PLAN_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing };
-    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
+    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: cols.ready.groups.filter((g) => this.rebasable(g) && !g.asleep).length, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
 
   filterOf() {
@@ -601,7 +642,7 @@ export default class Board extends View {
     const tests = {
       p1: (g) => Number((g.issue ?? issues.get(g.task))?.priority) === 1,
       ci: (g) => g.info?.gh?.ci === "fail",
-      conflict: (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.mergeable === "CONFLICTING",
+      conflict: conflicting,
       blocked: (g) => (g.issue ? g.issue.problems.length > 0 : Boolean(g.info) && this.mergeCandidate(g) && Boolean(this.reviewBlock(g) || this.refusalOf(g))),
     };
     const active = [...this.quick].map((id) => tests[id]);
@@ -868,7 +909,149 @@ export default class Board extends View {
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
     const list = [{ name: null, count: this.projects.reduce((sum, p) => sum + p.count, 0) }, ...this.projects];
     if (this.project && !list.some((p) => p.name === this.project)) list.push({ name: this.project, count: 0 });
-    openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: projectSheetHeight(list.length), props: { projects: { list, current: this.project } } });
+    openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: projectSheetHeight(list.length), props: { projects: { kind: "project", title: "Show project", close: "P", list, current: this.project } } });
+  }
+
+  openSnoozeChooser(e, cx) {
+    if (!e || !DECIDES.has(e.col) || this.deciding === "snooze") return;
+    this.deciding = "snooze";
+    cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
+    const now = Date.now();
+    const list = SNOOZE_CHOICES.map(([id, name]) => ({ id, name, count: id === "change" ? "on new activity" : whenText(snoozeUntil(id, now)) }));
+    openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: projectSheetHeight(list.length), props: { snooze: { kind: "snooze", title: `Snooze ${e.group.task || this.cleanTitle(e.group)}`, close: "z", key: e.group.key, list } } });
+  }
+
+  openRetry(cx) {
+    if (this.pop || this.deciding === "retry") return;
+    const failed = failedIn(this.layout.cols);
+    if (!failed.length) return say("info", "No failed cards to retry");
+    this.deciding = "retry";
+    cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
+    const byKind = new Map();
+    for (const g of failed) {
+      const kind = errorKind(g.primary.error);
+      const entry = byKind.get(kind.id) ?? { id: kind.id, label: kind.label, keys: [], sample: g.primary.error.replace(/\s+/g, " ").slice(0, SAMPLE_CHARS) };
+      entry.keys.push(g.key);
+      byKind.set(kind.id, entry);
+    }
+    const rows = [...byKind.values()].sort((a, b) => b.keys.length - a.keys.length).map((x) => ({ id: x.id, keys: x.keys, lead: String(x.keys.length), label: x.label, sample: x.sample, action: "Retry these", tip: `Press twice to retry every ${x.label.toLowerCase()} card that is still failed` }));
+    rows.push({ id: "all", all: true, keys: failed.map((g) => g.key), lead: String(failed.length), label: "All", sample: "Every failed card shown on the board", action: "Retry these", tip: "Press twice to retry every failed card that is still failed" });
+    openOverlay({ mod: "cockpit", kind: "dialog", width: 560, height: rowSheetHeight(rows.length), props: { rows: { kind: "retry", title: "Retry failed cards", close: "F", leadW: 28, rows } } });
+  }
+
+  openSnoozed(cx) {
+    if (this.pop || this.deciding === "snoozed") return;
+    const asleep = this.groups().filter((g) => this.sleeper(g, Date.now()));
+    if (!asleep.length) return say("info", "Nothing is snoozed");
+    this.deciding = "snoozed";
+    cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
+    const rows = asleep.map((g) => ({ id: g.key, lead: whenText(this.snoozed[g.key].until), label: g.task || this.cleanTitle(g), sample: g.title, action: "Wake", tip: "Show this card again" }));
+    if (rows.length > 1) rows.push({ id: "all", all: true, lead: "", label: "Wake all", sample: `${rows.length} snoozed cards`, action: "Wake all", tip: "Show every snoozed card again" });
+    openOverlay({ mod: "cockpit", kind: "dialog", width: 560, height: rowSheetHeight(rows.length), props: { rows: { kind: "wake", title: "Snoozed cards", close: "Z", leadW: 96, rows } } });
+  }
+
+  rowAction(row, cx) {
+    const send = () => {
+      setShared("cockpit.act", { kind: this.rows.kind, id: row.id, all: Boolean(row.all), keys: row.keys, rev: Date.now() });
+      closeOverlay(this.overlay);
+    };
+    if (this.rows.kind === "retry") this.confirm("retry", row.id, send, cx);
+    else send();
+  }
+
+  choose(item) {
+    if (this.chooser.kind === "project") return this.chooseProject(item.name);
+    setShared("cockpit.act", { kind: "snooze", id: this.chooser.key, until: item.id, rev: Date.now() });
+    closeOverlay(this.overlay);
+  }
+
+  runAct(act, cx) {
+    if (act.kind === "retry") return this.retryFailed(act, cx);
+    if (act.kind === "snooze") return this.snooze(act.id, act.until);
+    if (act.all) this.snoozed = {};
+    else delete this.snoozed[act.id];
+    this.saveSnoozed();
+  }
+
+  saveSnoozed() {
+    localStorage.setItem(SNOOZED_KEY, JSON.stringify(this.snoozed));
+  }
+
+  activity(g) {
+    return `${g.at}:${g.kind}`;
+  }
+
+  sleeper(g, now) {
+    const s = this.snoozed[g.key];
+    if (this.pop || !s) return null;
+    return (s.until === null ? s.stamp !== this.activity(g) : now >= s.until) ? null : s;
+  }
+
+  pruneSent(live) {
+    if (this.pop || !this.board || this.unsure()) return;
+    const byKey = new Map(live.map((g) => [g.key, g]));
+    for (const [key, sent] of this.sent) if (!byKey.has(key) || sent.stamp !== this.activity(byKey.get(key))) this.sent.delete(key);
+  }
+
+  sentAs(g, verb) {
+    const sent = this.sent.get(g.key);
+    return sent?.action === verb && sent.stamp === this.activity(g) ? sent : null;
+  }
+
+  sentText(g, now) {
+    const sent = this.sent.get(g.key);
+    if (!sent) return "";
+    const age = ago(sent.at, now);
+    return `${sent.action.toLowerCase()} sent${age === "now" ? "" : ` ${age} ago`}`;
+  }
+
+  pruneSnoozed(live, now) {
+    if (this.pop || !this.board || this.unsure()) return;
+    const byKey = new Map(live.map((g) => [g.key, g]));
+    const kept = Object.entries(this.snoozed).filter(([key]) => byKey.has(key) && this.sleeper(byKey.get(key), now));
+    if (kept.length === Object.keys(this.snoozed).length) return;
+    this.snoozed = Object.fromEntries(kept);
+    this.saveSnoozed();
+  }
+
+  snooze(key, choice) {
+    const g = this.groups().find((x) => x.key === key);
+    if (!g) return;
+    this.snoozed[key] = { until: snoozeUntil(choice, Date.now()), stamp: this.activity(g) };
+    this.saveSnoozed();
+    say("info", `Snoozed ${g.task || this.cleanTitle(g)}`, whenText(this.snoozed[key].until));
+  }
+
+  rebasable(g) {
+    return g.info.status === "open" && conflicting(g) && !g.threads.some((c) => c.kind === "run");
+  }
+
+  rebase(e, cx) {
+    if (e?.col !== "ready" || this.guard(true)) return;
+    if (!this.rebasable(e.group)) return say("info", "Nothing to rebase", "This PR has no merge conflict, or its thread is running.");
+    this.confirm("rebase", e.key, () => this.tellEach([[e.group, this.ask("Rebase", e.group, REBASE_NOTE)]], "Rebase", cx), cx);
+  }
+
+  rebaseTargets() {
+    return this.layout.cols.ready.groups.filter((g) => this.rebasable(g) && !g.asleep);
+  }
+
+  rebaseAll(cx) {
+    if (!this.owns("ready") || this.guard(false)) return;
+    const armed = new Set(this.rebaseTargets().map((g) => g.key));
+    if (!armed.size) return say("info", "No conflicting PRs to rebase");
+    this.confirm("rebase-all", "all", (seen) => {
+      const targets = this.rebaseTargets().filter((g) => seen.has(g.key));
+      if (!targets.length) return say("info", "No conflicting PRs to rebase");
+      this.tellEach(targets.map((g) => [g, this.ask("Rebase", g, REBASE_NOTE)]), "Rebase", cx);
+    }, cx, armed);
+  }
+
+  retryFailed(act, cx) {
+    if (this.guard(false)) return;
+    const targets = failedIn(this.layout.cols).filter((g) => act.keys.includes(g.key));
+    if (!targets.length) return say("info", "Nothing to retry", "No failed card is left in that group.");
+    this.tellEach(targets.map((g) => [g, this.ask("Retry", g, RETRY_NOTE)]), "Retry", cx);
   }
 
   chooseProject(name) {
@@ -884,13 +1067,15 @@ export default class Board extends View {
     else localStorage.setItem(PROJECT_KEY, chosen.name);
   }
 
-  sheetKey(e) {
-    if (this.chooser) {
-      const last = this.chooser.list.length - 1;
-      if (e.key === "j" || e.key === "down") this.chosen = Math.min(last, this.chosen + 1);
-      else if (e.key === "k" || e.key === "up") this.chosen = Math.max(0, this.chosen - 1);
-      else if (e.key === "enter") this.chooseProject(this.chooser.list[this.chosen].name);
-      else if (e.key !== "P" && !(e.key === "p" && e.modifiers.shift)) return false;
+  sheetKey(e, cx) {
+    const spec = this.chooser ?? this.rows;
+    if (spec) {
+      const k = e.modifiers.shift && /^[a-z]$/.test(e.key) ? e.key.toUpperCase() : e.key;
+      const list = spec.list ?? spec.rows;
+      if (k === "j" || k === "down") this.chosen = Math.min(list.length - 1, this.chosen + 1);
+      else if (k === "k" || k === "up") this.chosen = Math.max(0, this.chosen - 1);
+      else if (k === "enter") this.chooser ? this.choose(list[this.chosen]) : this.rowAction(list[this.chosen], cx);
+      else if (k !== spec.close) return false;
       else closeOverlay(this.overlay);
       return true;
     }
@@ -1043,8 +1228,8 @@ export default class Board extends View {
     if (this.guard(true)) return;
     if (d.primary.id === "review") return this.confirm("review", entry.key, () => this.tell(this.reviewAsk(entry.group), `Review requested for ${entry.group.task || entry.group.title}`, cx), cx);
     const verb = d.primary.label;
-    const note = verb === "Retry" ? "run it again after the last failure" : "continue the interrupted run";
-    this.confirm(d.primary.id, entry.key, () => this.tell(this.ask(verb, entry.group, note), `${verb} sent for ${entry.group.task || entry.group.title}`, cx), cx);
+    const note = verb === "Retry" ? RETRY_NOTE : "continue the interrupted run";
+    this.confirm(d.primary.id, entry.key, () => verb === "Retry" ? this.tellEach([[entry.group, this.ask(verb, entry.group, note)]], verb, cx) : this.tell(this.ask(verb, entry.group, note), `${verb} sent for ${entry.group.task || entry.group.title}`, cx), cx);
   }
 
   startIssue(entry, d, cx) {
@@ -1361,11 +1546,36 @@ export default class Board extends View {
     if (this.owns("done") && threads.length && !this.guard(false)) this.confirm("settle-all", "all", () => this.settleThreads(this.layout.finished, cx), cx);
   }
 
+  coordinator() {
+    return agents().find((a) => a.space_name === "Coordinator");
+  }
+
   tell(text, label, cx) {
-    const info = agents().find((a) => a.space_name === "Coordinator");
+    const info = this.coordinator();
     if (!info) return say("error", "The Coordinator isn't running");
     this.attempt(label, async () => {
       await hc(["send", info.address, text]);
+    }, cx);
+  }
+
+  tellEach(pairs, verb, cx) {
+    const info = this.coordinator();
+    if (!info) return say("error", "The Coordinator isn't running");
+    const fresh = pairs.filter(([g]) => !this.sentAs(g, verb));
+    const skipped = pairs.length - fresh.length ? `${pairs.length - fresh.length} skipped, already sent` : "";
+    if (!fresh.length) return say("info", `${verb} skipped`, skipped);
+    this.attempt(`${verb} sent`, async () => {
+      const failed = [];
+      for (const [g, text] of fresh) {
+        try {
+          await hc(["send", info.address, text]);
+          this.sent.set(g.key, { action: verb, stamp: this.activity(g), at: Date.now() });
+        } catch {
+          failed.push(g.task || this.cleanTitle(g));
+        }
+      }
+      const label = fresh.length === 1 ? `${verb} sent for ${fresh[0][0].task || this.cleanTitle(fresh[0][0])}` : `${verb} sent for ${fresh.length - failed.length} of ${fresh.length} cards`;
+      return { label, note: [failed.length && `${failed.length} failed to send: ${failed.join(", ")}`, skipped].filter(Boolean).join(". "), level: failed.length ? "error" : "success" };
     }, cx);
   }
 
@@ -1404,7 +1614,7 @@ export default class Board extends View {
       let ok = true;
       try {
         const done = await work();
-        say(done?.level ?? "success", label, typeof done === "string" ? done : typeof done?.note === "string" ? done.note : undefined, [], sticky);
+        say(done?.level ?? "success", done?.label ?? label, typeof done === "string" ? done : typeof done?.note === "string" ? done.note : undefined, [], sticky);
       } catch (error) {
         ok = false;
         undo?.();
@@ -1426,7 +1636,7 @@ export default class Board extends View {
       if (e.key !== "escape") return;
       if (this.searching) this.clearSearch();
       else this.closeInput();
-    } else if (!(this.dec ? this.decideKey(e, cx) : this.sheet ? this.sheetKey(e) : this.browse(e, cx))) return;
+    } else if (!(this.dec ? this.decideKey(e, cx) : this.sheet ? this.sheetKey(e, cx) : this.browse(e, cx))) return;
     cx.stop_propagation();
     cx.notify();
   }
@@ -1457,6 +1667,11 @@ export default class Board extends View {
     else if (k === "A") this.settleAll(cx);
     else if (k === "a") this.approve(c, cx);
     else if (k === "M") this.approveAll(cx);
+    else if (k === "u") this.rebase(c, cx);
+    else if (k === "U") this.rebaseAll(cx);
+    else if (k === "z" && c) this.openSnoozeChooser(c, cx);
+    else if (k === "Z") this.openSnoozed(cx);
+    else if (k === "F") this.openRetry(cx);
     else if (k === "q") this.queue(c, cx);
     else if (k === "p") this.openPr(c);
     else if (k === "n") this.jump();
@@ -1555,7 +1770,7 @@ export default class Board extends View {
     return v_flex().id("ck-keys").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(this.chooser ? projectSheet(t, this.chooser, this.chosen, { close: () => closeOverlay(this.overlay), pick: (name) => this.chooseProject(name) }) : this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
+      .child(this.chooser ? projectSheet(t, this.chooser, this.chosen, { close: () => closeOverlay(this.overlay), pick: (item) => this.choose(item) }) : this.rows ? rowSheet(t, this.rows, this.chosen, this.armed, { close: () => closeOverlay(this.overlay), act: (row, cx) => this.rowAction(row, cx) }) : this.notice ? noticeSheet(t, this.notice, { close: () => closeOverlay(this.overlay) }) : keySheet(t, { close: () => closeOverlay(this.overlay) }));
   }
 
   renderDecision(t) {
@@ -1585,6 +1800,11 @@ export default class Board extends View {
     if (this.pop && popped?.key === this.pop && popped.rev > this.applied) this.apply(popped);
     const chosen = shared("cockpit.project");
     if (!this.pop && chosen && chosen.rev > this.projectSeen) this.applyProject(chosen);
+    const act = shared("cockpit.act");
+    if (!this.pop && act && act.rev > this.actSeen) {
+      this.actSeen = act.rev;
+      this.runAct(act, cx);
+    }
     const actedAt = shared("cockpit.acted") ?? 0;
     if (actedAt > this.actedSeen) {
       this.actedSeen = actedAt;
@@ -1636,7 +1856,7 @@ export default class Board extends View {
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
+      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
       .when(this.searchOpen, (el) => el.child(searchRow(t, { quick: this.quick, searching: this.searching, compact: this.compact, ...this.scope }, this.search, cb)))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()
