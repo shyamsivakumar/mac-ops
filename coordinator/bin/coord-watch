@@ -220,8 +220,10 @@ def detect(board, raw, previous):
         pending = raw["queue"]["queue.json"].get("items", [])
         queued = any(repo in json.dumps(entry.get("args", {})) for entry in pending)
         gate_threads = {gate.get("thread") for gate in raw.get("gates", []) if gate.get("repo") == repo}
-        gate_active = any(thread.get("threadId") in gate_threads and thread.get("status") not in terminal
-                          for thread in raw.get("threads", []))
+        observed_statuses = {thread.get("threadId"): thread.get("status")
+                             for thread in raw.get("threads", [])}
+        gate_active = any(observed_statuses.get(thread_id) not in terminal
+                          for thread_id in gate_threads)
         active = queued or gate_active or any(row["thread"] and row["threadStatus"] not in terminal for row in rows)
         work = any(not row.get("parked") and (row["stage"] == "todo" or
                    (row["stage"] in {None, "started"} and not row["pr"])) for row in rows)
