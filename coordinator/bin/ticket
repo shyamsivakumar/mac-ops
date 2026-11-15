@@ -1088,7 +1088,8 @@ def build_start(cfg, t, attempt, issue):
         "projectId": rcfg["projectId"],
         "message": assemble_brief(cfg, t, request_id, issue),
         "clientRequestId": request_id,
-        "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}"},
+        "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}",
+                              "startFromOrigin": True},
         "modelSelection": cfg["models"][t["builderAlias"]]["selection"],
     }
     title_rest = t["title"][len(t["key"]):].lstrip(" ·-:·").strip()
