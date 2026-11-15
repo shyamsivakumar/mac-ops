@@ -23,4 +23,4 @@ timeout 300 python3 evidence/MO-1004/collect-proof.py
 timeout 300 python3 scripts/mac_ops_fast_check.py
 ```
 
-Fake mode uses the same snapshot transformation and adapters, makes no subprocess calls and writes no state. `complete.json` proves issue identity, PR/head association and latest attempt/thread selection. `partial.json` proves retention of the same issue with unknown sources. The captured outputs and review are in `evidence/MO-1004/`. Live-service and owner testing were waived by the coordinator. No live command was activated.
+Fake mode uses the same snapshot transformation and adapters, makes no subprocess calls and writes no state. `complete.json` proves issue identity, PR/head association and latest attempt/thread selection. `partial.json` proves retention of the same issue with unknown sources. The collection proof runs three cycles and validates persisted JSON against each BOARD result. The captured outputs and review are in `evidence/MO-1004/`. Live-service and owner testing were waived by the coordinator. No live command was activated.

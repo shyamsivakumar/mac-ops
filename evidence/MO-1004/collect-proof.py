@@ -38,13 +38,20 @@ else:
     argv = [sys.executable, str(root / "coordinator/bin/coord-watch"), "--once", "--config",
             str(evidence / "config.json"), "--state", str(home / "watch.json")]
     before = {p.name: p.read_bytes() for p in queue.iterdir()}
-    results = [subprocess.check_output(argv, env=env, text=True, timeout=150).strip() for _ in range(2)]
+    results = []
+    for cycle in range(3):
+        result = subprocess.check_output(argv, env=env, text=True, timeout=150).strip()
+        results.append(result)
+        persisted = json.loads((home / "watch.json").read_text())
+        board = json.loads(result.removeprefix("BOARD "))
+        if persisted["items"] != board["items"] or not persisted["github"]:
+            raise RuntimeError(f"cycle {cycle + 1}: persisted state does not match BOARD")
     calls = (home / "calls").read_text().splitlines()
     if sum(line.startswith("gh ") for line in calls) != 2:
-        raise RuntimeError("second cycle did not reuse GitHub cache")
+        raise RuntimeError("later cycles did not reuse GitHub cache")
     if before != {p.name: p.read_bytes() for p in queue.iterdir()}:
         raise RuntimeError("queue source changed")
-    if results[0] != results[1] or not results[0].startswith("BOARD "):
+    if any(result != results[0] for result in results) or not results[0].startswith("BOARD "):
         raise RuntimeError("snapshot unstable")
-    print("PASS: two actual command cycles, two GitHub calls total, queue unchanged, stable BOARD output")
+    print("PASS: three actual command cycles, persisted JSON valid after each, two GitHub calls total, queue unchanged, stable BOARD output")
     print(results[0])
