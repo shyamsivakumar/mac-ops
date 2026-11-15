@@ -673,3 +673,25 @@ starts and orphan recovery. The fixture starts with an idle busy result,
 simulates a PR launch, then requires the occupancy refresh to happen after
 that launch. Same-group recovery, invalid responses and full capacity all
 produce zero additional actions and no recovery ledger writes.
+
+
+### Gate pipeline fixture eval (Refs #375)
+
+`python3 coordinator/overnight/overnight selftest` registers `gate-pipeline`
+alongside `start-routing`. It calls the production `lane_driver.act_on_pr`
+handler and gate verdict reader with fake GitHub snapshots, T3 responses and
+command receipts. Subprocess creation and filesystem opens are forbidden.
+No service is contacted and no thread is launched.
+
+The cases cover an exact checked head, PASS, FAIL findings sent to a builder,
+no verdict, a second no-verdict, quota evidence, manual Concerning merge and
+excluded Ascend work. The action comparator rejects an extra forbidden action.
+The merge command must include `--match-head-commit` with the full head.
+
+Current evidence: start-routing passes; gate-pipeline fails because the owned
+lane driver disables gate launch and skips PASS completion. The eval deliberately
+keeps the required expectations. A green result is not claimed. The second
+no-verdict case currently proves only no action, not a needs-you state. Provides
+verification and fast-forward internals remain uncovered until the production
+completion path exists; the fixture expects its command boundaries, not invented
+Provides facts. Live and device checks are waived. No runtime is installed.
