@@ -1,13 +1,14 @@
 // The hub as the cockpit sees it: threads that need Shyam, grouped by project, and the calls that act on them.
 
 import { exec, home, readTextFile } from "herdr";
+import { endsWithAsk } from "./asks.js";
 
 const LIVE = ["preparing", "queued", "starting", "running", "waiting", "failed", "interrupted"];
 const RUNNING = new Set(["preparing", "queued", "starting", "running"]);
 const KIND = { waiting: "wait", failed: "fail", interrupted: "stop", completed: "done", idle: "idle" };
 const IDLE_PAGES = 4;
 const DEFAULT_CAP = 6;
-const URGENCY = { wait: 0, fail: 1, stop: 2, run: 3, done: 4, idle: 5 };
+const URGENCY = { ask: 0, wait: 1, fail: 2, stop: 3, run: 4, done: 5, idle: 6 };
 const TASK_ID = /[A-Z]{2,5}-\d+/;
 const REVIEW_TITLE = /^[A-Z]{2,5}-\d+ (?:gate )?review\b/i;
 const PAGES = 3;
@@ -115,7 +116,7 @@ export function plainError(raw) {
 }
 
 function card(thread, names) {
-  const kind = RUNNING.has(thread.status) ? "run" : KIND[thread.status];
+  const kind = thread.kind === "ask" ? "ask" : RUNNING.has(thread.status) ? "run" : KIND[thread.status];
   const task = TASK_ID.exec(thread.title)?.[0] ?? "";
   const led = task && thread.title.startsWith(`${task} · `);
   return {
@@ -134,7 +135,8 @@ function card(thread, names) {
     created: Date.parse(thread.createdAt),
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
     status: thread.status,
-    context: thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : CONTEXT[kind] ?? "",
+    ask: Boolean(thread.ask),
+    context: kind === "ask" ? thread.context ?? "The coordinator asks for a decision" : thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : kind === "done" && thread.askText ? thread.askText : CONTEXT[kind] ?? "",
     error: kind === "fail" ? thread.lastError ?? CONTEXT.fail : undefined,
     prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state })),
   };
@@ -158,7 +160,7 @@ export function group(cards) {
   });
 }
 
-const TASK_STATUS = { run: "running", wait: "waiting", fail: "failed", stop: "stopped", done: "done", idle: "idle" };
+const TASK_STATUS = { run: "running", wait: "waiting", ask: "waiting", fail: "failed", stop: "stopped", done: "done", idle: "idle" };
 
 function taskMap(cards) {
   const tasks = {};
@@ -187,42 +189,122 @@ async function runStartOf(thread) {
 }
 
 const FAILURE_TAIL = 40;
+const ASK_TAIL = 8;
+const TAIL_BATCH = 12;
+const lastLine = (text) => (text ?? "").split("\n").map((line) => line.trim()).filter(Boolean).at(-1) ?? null;
+const DECISIONS_FILE = `${home()}/Code/coordinator/decisions.json`;
+const DECISIONS_EVERY = 30000;
+const DECISIONS_RETRY = 10000;
+let asked = { at: 0, items: [], cards: [] };
 
-async function failureOf(thread) {
-  const known = failures.get(thread.threadId);
-  if (known?.stamp === thread.updatedAt) return known.text;
-  const from = thread.itemCount - FAILURE_TAIL;
+// The coordinator's own ask list, as cards on the board.
+async function questions() {
+  if (Date.now() - asked.at < (asked.ok ? DECISIONS_EVERY : DECISIONS_RETRY)) return asked.cards;
+  let file;
   try {
-    const read = await call("t3_thread_read", { threadId: thread.threadId, view: "activity", limit: 100, maxCharsPerItem: 2000, ...(from > 0 ? { afterPosition: from } : {}) });
-    const item = [...read.items].reverse().find((i) => i.type === "error");
-    const text = item?.text ?? item?.title ?? "No failure text recorded";
-    failures.set(thread.threadId, { stamp: thread.updatedAt, text });
-    return text;
+    file = JSON.parse(await readTextFile(DECISIONS_FILE));
   } catch {
-    return CONTEXT.fail;
+    asked = { at: Date.now(), ok: false, items: asked.items, cards: asked.cards };
+    return asked.cards;
+  }
+  const items = Array.isArray(file?.items) ? file.items : [];
+  const at = Date.parse(file?.updated ?? "") || Date.now();
+  const cards = items.filter((item) => item && item.id && item.title).map((item) => ({
+    key: `ask:${item.id}`,
+    task: "",
+    led: false,
+    title: String(item.title),
+    project: item.group ? String(item.group) : "Coordinator",
+    projectId: null,
+    link: null,
+    kind: "ask",
+    model: "",
+    taskType: "",
+    review: false,
+    at,
+    created: at,
+    runStarted: null,
+    status: "waiting",
+    context: item.why ? String(item.why) : "The coordinator asks for a decision",
+    prs: [],
+  }));
+  asked = { at: Date.now(), ok: true, items, cards };
+  return cards;
+}
+const TEXT_CAP = 50000;
+const TAIL_CAP = 2000;
+const TEXT_CHUNKS = 6;
+
+// The end of a long message, so an ask on the last line is not missed.
+async function endOf(thread, item) {
+  let text = item.text ?? "";
+  let offset = item.textTruncated ? item.nextTextOffset : null;
+  for (let i = 0; offset !== null && offset !== undefined && i < TEXT_CHUNKS; i++) {
+    const chunk = await call("t3_thread_read", { threadId: thread.threadId, itemId: item.itemId, textOffset: offset, maxCharsPerItem: TEXT_CAP }).catch(() => null);
+    const next = chunk?.items?.find((item) => item.type === "assistant_message");
+    if (!next) break;
+    text += next.text ?? "";
+    offset = next.textTruncated ? next.nextTextOffset : null;
+  }
+  return text;
+}
+
+// The last assistant message and error of a thread, cached until the thread changes.
+async function tailOf(thread, items) {
+  const known = failures.get(thread.threadId);
+  if (known?.stamp === thread.updatedAt) return known;
+  const from = thread.itemCount - items;
+  try {
+    const read = await call("t3_thread_read", { threadId: thread.threadId, view: "activity", limit: 100, maxCharsPerItem: TAIL_CAP, ...(from > 0 ? { afterPosition: from } : {}) });
+    const reversed = [...read.items].reverse();
+    const message = reversed.find((item) => item.type === "assistant_message");
+    const error = reversed.find((item) => item.type === "error");
+    const text = message ? await endOf(thread, message) : "";
+    const value = { stamp: thread.updatedAt, ask: Boolean(message) && endsWithAsk(text), text: lastLine(text), error: error?.text ?? error?.title ?? null };
+    failures.set(thread.threadId, value);
+    return value;
+  } catch {
+    return { unread: true, ask: false, text: null, error: null };
   }
 }
 
 export async function load() {
-  const [live, finished, names] = await Promise.all([
+  const [live, finished, names, questionsAsked] = await Promise.all([
     threads({ statuses: LIVE }),
     threads({ statuses: ["completed"], settled: false }),
     projectNames(),
+    questions(),
   ]);
   for (let offset = 0; offset < live.length; offset += 8) {
     await Promise.all(live.slice(offset, offset + 8).map(async (thread) => {
       try {
-        const pending = await call("t3_pending_request", { action: "list", threadId: thread.threadId });
-        thread.requestIds = pending.requestIds;
-        if (pending.requestIds.length) thread.status = "waiting";
+        const waiting = await call("t3_pending_request", { action: "list", threadId: thread.threadId });
+        thread.requestIds = waiting.requestIds;
+        if (waiting.requestIds.length) thread.status = "waiting";
       } catch {
         thread.pendingUnknown = true;
       }
       if (RUNNING.has(thread.status)) thread.activeRunStartedAt = await runStartOf(thread);
-      if (thread.status === "failed") thread.lastError = await failureOf(thread);
+      if (thread.status === "failed") {
+        const tail = await tailOf(thread, FAILURE_TAIL);
+        thread.lastError = tail.unread ? CONTEXT.fail : tail.error ?? "No failure text recorded";
+        thread.ask = tail.ask;
+        thread.askText = tail.text;
+      } else if (thread.status === "interrupted") {
+        const tail = await tailOf(thread, ASK_TAIL);
+        thread.ask = tail.ask;
+        thread.askText = tail.text;
+      }
     }));
   }
-  const cards = [...live, ...finished].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
+  for (let offset = 0; offset < finished.length; offset += TAIL_BATCH) {
+    await Promise.all(finished.slice(offset, offset + TAIL_BATCH).map(async (thread) => {
+      const tail = await tailOf(thread, ASK_TAIL);
+      thread.ask = tail.ask;
+      thread.askText = tail.text;
+    }));
+  }
+  const cards = [...live, ...finished, ...questionsAsked].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
   await Promise.all(cards.filter((c) => c.kind === "wait").map(async (c) => {
     const thread = live.find((t) => t.threadId === c.key);
     c.context = await askOf(thread).catch(() => "Waiting for your answer");
@@ -233,6 +315,7 @@ export async function load() {
     running: count("run"),
     waiting: count("wait"),
     failed: count("fail") + count("stop"),
+    dead: cards.filter((c) => (c.kind === "fail" || c.kind === "stop") && !c.ask).length,
     done: count("done"),
     groups: group(cards),
     tasks: taskMap(cards),

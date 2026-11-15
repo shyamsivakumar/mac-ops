@@ -7,7 +7,7 @@ import { shortModel } from "./hub.js";
 import { changedSinceLaunch, issueRef, pickerOptions, startBlock } from "./tickets.js";
 
 export const H = { bar: 26, search: 30, head: 42, sub: 16, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, chips: 18, empty: 50, folded: 44 };
-const TONE = { wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
+const TONE = { ask: "blocked", wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
 const VERDICT_MARK = { pass: "✓", fail: "✗", unknown: "?", unverified: "?", loading: "…" };
@@ -17,7 +17,7 @@ export const canMerge = (verdict) => verdict?.state === "pass" || verdict?.state
 const MERGE = { MERGEABLE: ["merge ✓", "done", "Mergeable"], CONFLICTING: ["merge ✗", "blocked", "Merge conflict"], UNKNOWN: ["merge ?", "dim", "Merge status unknown"] };
 const DRAFT = ["Draft", "dim", "Draft PR, not ready to merge"];
 const mergeOf = (gh) => (gh?.draft ? DRAFT : MERGE[gh?.mergeable] ?? MERGE.UNKNOWN);
-export const COLUMNS = [["backlog", "Backlog", "idle", "Backlog"], ["needs", "Needs you", "blocked", "Needs"], ["run", "Running", "working", "Running"], ["ready", "Ready to merge", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"]];
+export const COLUMNS = [["backlog", "Backlog", "idle", "Backlog"], ["needs", "Needs you", "blocked", "Needs"], ["run", "Running", "working", "Running"], ["ready", "Ready to merge", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"], ["dead", "Dead runs", "idle", "Dead"]];
 const COLUMN_NAME = Object.fromEntries(COLUMNS.map((c) => [c[0], c[3]]));
 export const COLUMN_LIMIT = { needs: 10, ready: 10 };
 const AGED_COLUMNS = new Set(["needs", "ready"]);
@@ -320,6 +320,8 @@ export function card(t, e, v, input, cb) {
     ? h_flex().gap(4).flex_none()
       .when(!issue, (el) => el.child(action(t, `qu-${e.key}`, "q", armedHere === "queue" ? "Confirm" : "Queue", (cx) => cb.queue(cx), armedHere === "queue" ? "Press again to queue" : "Queue this task")))
       .child(action(t, `op-${e.key}`, "o", issue ? "GitHub" : "Open", (cx) => cb.open(cx), issue ? "Open the issue on GitHub (o)" : "Open the thread (o)", narrow))
+    : c.kind === "ask"
+    ? h_flex().gap(4).flex_none().child(action(t, `op-${e.key}`, "o", narrow ? "Open" : "Decisions", (cx) => cb.command("coordinator.asks"), "Open the coordinator's decisions panel (o)"))
     : actions(t, e.key, canSettle, cb, narrow);
   const meta = h_flex().gap(6).flex_none().items_center().on_mouse_down("left", selectOnly(e.key, cb))
     .when(count > 1, (el) => el.child(fold(t, e.key, count, expanded, cb)))
@@ -437,6 +439,15 @@ export function decisionOf(col, g, info, verdict, now) {
     ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }] : []),
   ];
   const age = ago(g.at, now);
+  if (c.kind === "ask") {
+    return {
+      headline: name,
+      primary: { id: "open", key: "o", label: "Open decisions" },
+      why: [c.context, `Asked ${age} ago`],
+      other: [],
+      checks: null,
+    };
+  }
   if (!DECIDES.has(col)) {
     return {
       headline: g.task ? `${g.task} · ${g.title}` : g.title,
