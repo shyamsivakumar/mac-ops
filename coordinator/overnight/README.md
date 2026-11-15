@@ -637,3 +637,39 @@ Every pass logs before/after quota usage, including budget stops. The delta
 also includes concurrent account activity and may span a quota reset.
 Existing three-dry-run limits and 30-minute refusal caching remain in force.
 Live-service, device and owner testing were waived, not failed.
+
+## Fixture evals
+
+Run `python3 coordinator/overnight/overnight selftest` from the checkout.
+The command prints one PASS/FAIL line per registered eval and exits nonzero
+on any failure. Only `start-routing` is registered. Later loop tickets must
+extend this registry; unimplemented evals are never reported as passing.
+The fast check runs the same command.
+
+The fixture uses six synthetic repositories and the production lane selector,
+run-pass wiring, orphan path and ticket launch-payload builder. Subprocesses
+are denied unless replaced with fixture responses. Removing NEVER_START is
+a negative control that must make the eval fail. Configuration loading now
+happens at lane main entry, so importing the lane module reads no live files.
+
+The adapter excludes occupied SRW chain groups and relaunches dead orphan
+receipts through ticket start. It does not install or cut over the loop.
+The fixture also exercises type-to-alias resolution through cmd_start and
+checks the dispatched refresh request (`startFromOrigin: true`). Missing or
+malformed SRW thread lists refuse dispatch. Live smoke, hourly tick integration,
+T3 internal Git refresh execution, issue label parsing and the other eleven
+evals remain outside this proof.
+
+Occupied SRW groups also filter orphan recovery, including dead-thread
+relaunches and generic unstick batches. Snapshot issue reads include titles
+for the same group classifier. A cached orphan without a title is skipped
+when groups are occupied until a refreshed snapshot supplies its group.
+The fixture exercises the full run-pass fallback with an occupied bot group:
+bot and unknown-title orphans produce no actions or ledger changes, while a
+census orphan relaunches through ticket start.
+
+SRW uses one refreshed thread-list boundary after PR actions for both ready
+starts and orphan recovery. The fixture starts with an idle busy result,
+simulates a PR launch, then requires the occupancy refresh to happen after
+that launch. Same-group recovery, invalid responses and full capacity all
+produce zero additional actions and no recovery ledger writes.
