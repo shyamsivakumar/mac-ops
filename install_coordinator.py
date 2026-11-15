@@ -677,14 +677,20 @@ def restore_files(backups: Path) -> None:
         target = Path(entry["path"])
         try:
             if entry["backup"] is None:
-                with safe_parent(target):
-                    target.unlink(missing_ok=True)
+                with safe_parent(target) as parent:
+                    try:
+                        os.unlink(target.name, dir_fd=parent)
+                    except FileNotFoundError:
+                        pass
             else:
                 original = read_regular(backups / entry["backup"])
                 if original is None:
                     raise RuntimeError("Missing backup: " + entry["backup"])
                 atomic_write(target, original[0], entry["mode"])
-                os.utime(target, ns=(entry["atime_ns"], entry["mtime_ns"]), follow_symlinks=False)
+                with safe_parent(target) as parent:
+                    os.utime(target.name, dir_fd=parent,
+                             ns=(entry["atime_ns"], entry["mtime_ns"]),
+                             follow_symlinks=False)
         except (OSError, ValueError, RuntimeError) as exc:
             failures.append(f"{target}: {exc}")
     if failures:
