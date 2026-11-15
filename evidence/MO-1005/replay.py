@@ -55,3 +55,13 @@ with tempfile.TemporaryDirectory() as folder:
     cycle("idle before partial", ready, "interrupted")
     cycle("partial resets idle", partial, "interrupted")
     cycle("idle after partial", ready, "interrupted")
+    missing_gate = copy.deepcopy(ready)
+    missing_gate["gates"] = [{"repo": "example/project", "pr": 350,
+                              "head": "a" * 40, "thread": "unlisted-gate", "verdict": ""}]
+    missing_gate["queue"]["dispatch-receipts.json"][
+        "gate:example/project#350:" + "a" * 40] = "unlisted-gate"
+    cycle("missing gate first cycle", missing_gate, "missing-gate")
+    cycle("missing gate second cycle", missing_gate, "missing-gate")
+    missing_gate["threads"].append({"threadId": "unlisted-gate", "status": "completed"})
+    cycle("gate terminal first idle", missing_gate, "missing-gate")
+    cycle("gate terminal second idle", missing_gate, "missing-gate")
