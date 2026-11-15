@@ -1,7 +1,7 @@
 // GitHub tickets as the board sees them: the ticket CLI's list and show, and which ticket a thread came from.
 
 import { exec, home, readTextFile } from "herdr";
-import { firstMessage, vendorOf } from "./hub.js";
+import { firstMessage, projectNames, vendorOf } from "./hub.js";
 
 const TICKET = `${home()}/.local/bin/ticket`;
 const LIST_TIMEOUT = 30000;
@@ -35,10 +35,20 @@ export function listIssues(fresh) {
 
 export const issueRef = (issue) => `${issue.repo}#${issue.number}`;
 
-export function issueGroup(issue) {
+export async function repoProjects() {
+  const shortName = (repo) => repo.split("/")[1];
+  try {
+    const [cfg, names] = await Promise.all([loadConfig(), projectNames()]);
+    return (repo) => names.get(cfg.repos?.[repo]?.projectId) ?? shortName(repo);
+  } catch {
+    return shortName;
+  }
+}
+
+export function issueGroup(issue, projectOf) {
   const at = Date.parse(issue.updatedAt);
   const title = issue.key ? issue.title.slice(issue.key.length).replace(/^[\s·:-]+/, "") : issue.title;
-  const thread = { key: `issue:${issueRef(issue)}`, task: issue.key ?? "", led: Boolean(issue.key), title, project: issue.repo.split("/")[1], projectId: null, link: issue.url, session: null, cwd: null, kind: "idle", provider: "", model: "", taskType: issue.type ?? "", review: false, runs: 0, at, created: at, runStarted: null, status: "idle", context: "", prs: [], issue };
+  const thread = { key: `issue:${issueRef(issue)}`, task: issue.key ?? "", led: Boolean(issue.key), title, project: projectOf(issue.repo), projectId: null, link: issue.url, session: null, cwd: null, kind: "idle", provider: "", model: "", taskType: issue.type ?? "", review: false, runs: 0, at, created: at, runStarted: null, status: "idle", context: "", prs: [], issue };
   return { key: issue.key ?? issueRef(issue), task: issue.key ?? "", title, project: thread.project, threads: [thread], primary: thread, kind: "idle", at, runSince: null, prs: [], issue };
 }
 

@@ -65,7 +65,7 @@ async function threads(filter, pages = PAGES) {
   return all;
 }
 
-async function projectNames() {
+export async function projectNames() {
   if (Date.now() - projects.at < 60000) return projects.names;
   const r = await call("t3_project_list", { limit: 100 });
   projects = { at: Date.now(), names: new Map(r.projects.map((p) => [p.id, p.title])), roots: new Map(r.projects.map((p) => [p.id, p.workspaceRoot])) };
