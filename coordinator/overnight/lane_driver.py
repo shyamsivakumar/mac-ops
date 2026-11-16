@@ -13,7 +13,7 @@ RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DRY = False
 SNAPSHOT = {}
 API_FLOOR = 500
-REFRESH_SECONDS = 900
+BOARD_REFRESH_PASSES = 5
 
 
 class ApiBudgetExhausted(RuntimeError):
@@ -48,8 +48,9 @@ def read_json(cmd):
 
 def board_snapshot(ledger):
     cached = ledger.get("_board_snapshot")
-    now = time.time()
-    if isinstance(cached, dict) and 0 <= now - cached.get("refreshed_at", 0) < REFRESH_SECONDS:
+    current_pass = ledger.get("_pass", 0) + 1
+    ledger["_pass"] = current_pass
+    if isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
     fields = "number,state,headRefOid,body,mergeable,isDraft,statusCheckRollup"
@@ -59,6 +60,7 @@ def board_snapshot(ledger):
             "issues": read_json(["gh", "issue", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", "number,title,labels,state"]),
         }
     snapshot["refreshed_at"] = time.time()
+    snapshot["refreshed_pass"] = current_pass
     ledger["_board_snapshot"] = snapshot
     return snapshot
 
