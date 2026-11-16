@@ -408,7 +408,7 @@ def turncap(early_interrupt=False):
 
         try:
             expected = [] if waiting or seconds <= 1200 else [
-                ("t3_thread_interrupt", {"threadId": "fixture"})]
+                ("t3_thread_interrupt", {"threadId": "fixture", "runId": "run"})]
             exact(actions, expected)
             lines = [entry.args[0] for entry in logs().write.call_args_list]
             expected_lines = [] if waiting or seconds <= 600 else [
@@ -444,7 +444,7 @@ def turncap(early_interrupt=False):
                   {"paused": paused, "waiting_since": waiting_since})
             exact(state["attempts"], 7)
             exact(actions, [] if seconds <= 3000 else [
-                ("t3mcp", "t3_thread_interrupt", {"threadId": "paused"})])
+                ("t3mcp", "t3_thread_interrupt", {"threadId": "paused", "runId": "paused-run"})])
             exact(state.get("parked", []), [] if seconds <= 3000 else ["paused"])
             exact([c.args[0] for c in logs().write.call_args_list], [] if seconds <= 2400 else [
                 "- cap mis-sized 2026-11-15T00:40Z | t3 | ticket:fixture/repo#2:a1 | paused-run | 10.0 min\n"] * 2)
