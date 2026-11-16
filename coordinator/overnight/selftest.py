@@ -940,7 +940,85 @@ def send_integrity():
             exact(result, "continue #385: fresh (old unreachable): receipt")
 
 
-EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift}
+def cycle_health():
+    """The cycle's health checks over injected inputs.
+
+    The inputs are the data the checks read, handed in instead of read
+    from the machine: the eval starts no process, opens no socket and
+    touches no board. It proves the four checks of the cycle's health
+    boundary and the rule that a read which failed is never a clean
+    result."""
+    loader = importlib.machinery.SourceFileLoader(
+        "fixture_overnight", str(ROOT / "overnight")
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    # The tools: a probe that failed and a log with a traceback.
+    findings = module.tool_findings(
+        [
+            {
+                "name": "coordq",
+                "command": "python3 coordq status",
+                "exit": 1,
+                "output": "Traceback (most recent call last):",
+            },
+            {
+                "name": "overnight",
+                "command": "python3 overnight --help",
+                "exit": 0,
+                "output": "usage: overnight",
+            },
+        ],
+        [{"path": "/tmp/dispatch.log", "lines": ["a line", "Traceback (most recent call last):"]}],
+    )
+    exact(len(findings), 2)
+    exact([finding["check"] for finding in findings], ["tools", "tools"])
+    exact(module.tool_findings([{"name": "coordq", "command": "x", "exit": 0}], []), [])
+    # The installed files: in sync is no finding, out of sync is one.
+    exact(module.install_findings({"in_sync": True, "differs": []}), [])
+    out = module.install_findings(
+        {"in_sync": False, "differs": ["/Users/x/.local/bin/coordq"]}
+    )
+    exact(len(out), 1)
+    exact(out[0]["check"], "install")
+    # The board's attempts: three starts and no pull request is a finding.
+    record = {
+        "repo": "o/r",
+        "number": 7,
+        "key": "R-7",
+        "attempts": 3,
+        "carried": False,
+        "parked": False,
+    }
+    exact(len(module.attempt_findings([record])), 1)
+    exact(module.attempt_findings([{**record, "carried": True}]), [])
+    exact(module.attempt_findings([{**record, "parked": True}]), [])
+    exact(module.attempt_findings([{**record, "attempts": 2}]), [])
+    # The board's blockers: a closed issue is a false blocker, an issue
+    # whose state was never read is an incomplete check, not a clean one.
+    refusal = {
+        "repo": "o/r",
+        "number": 8,
+        "reason": "refused: text blockers: SRW-9 (#9) is still open",
+    }
+    closed = module.blocker_findings([refusal], {("o/r", 9): "closed"}, {})
+    exact(len(closed), 1)
+    exact(closed[0]["check"], "blockers")
+    exact(module.blocker_findings([refusal], {("o/r", 9): "open"}, {}), [])
+    incomplete = module.blocker_findings(
+        [refusal], {}, {
+            ("o/r", 9): (
+                "the state of o/r#9 could not be read, so the text blocker "
+                "check is incomplete for it"
+            )
+        }
+    )
+    exact(len(incomplete), 1)
+    exact("incomplete" in incomplete[0]["detail"], True)
+
+
+EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health}
 
 
 def main():

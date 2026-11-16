@@ -5403,10 +5403,10 @@ def check_tools(deadline: float) -> tuple[list[str], list[dict]]:
     read for the same reason: a traceback in the last lines of the
     dispatch or gatekeep log is a tool that broke."""
     ran: list[str] = []
-    findings: list[dict] = []
+    probes: list[dict] = []
     interpreter, source = launchd_python()
     if not interpreter:
-        findings.append(
+        return ran, [
             {
                 "check": "tools",
                 "subject": "the launchd interpreter",
@@ -5417,8 +5417,7 @@ def check_tools(deadline: float) -> tuple[list[str], list[dict]]:
                 ),
                 "action": "read the dispatch plist and the installed coordq",
             }
-        )
-        return ran, findings
+        ]
     ran.append(f"the interpreter {interpreter} (from {source})")
     folder = Path.home() / ".local" / "bin"
     for name, arguments in (("coordq", ["status"]), ("overnight", ["--help"])):
@@ -5426,41 +5425,65 @@ def check_tools(deadline: float) -> tuple[list[str], list[dict]]:
         command = [interpreter, str(script), *arguments]
         code, out, err = health_run(command, deadline)
         ran.append(f"`{' '.join(command)}` exit {code}")
-        if code != 0:
-            tail = (err or out or "").strip().splitlines()[-3:]
-            findings.append(
-                {
-                    "check": "tools",
-                    "subject": name,
-                    "detail": (
-                        f"`{' '.join(command)}` failed (exit {code}) under the "
-                        "launchd interpreter: " + " | ".join(tail)
-                    ),
-                    "action": (
-                        "run the same command under the launchd interpreter "
-                        "and fix what it raises"
-                    ),
-                }
-            )
+        probes.append(
+            {
+                "name": name,
+                "command": " ".join(command),
+                "exit": code,
+                "output": err or out,
+            }
+        )
+    logs: list[dict] = []
     for name in ("dispatch.log", "gatekeep.log"):
         path = QUEUE_DIR / name
         lines = queue_log_tail(name, LOG_TAIL)
         ran.append(f"the last {LOG_TAIL} lines of {path}")
-        for line in lines:
+        logs.append({"path": str(path), "lines": lines})
+    return ran, tool_findings(probes, logs)
+
+
+def tool_findings(probes: list[dict], logs: list[dict]) -> list[dict]:
+    """Return the findings of the tool probes and the log tails.
+
+    The probes and the log tails are injected: the caller reads them and
+    this function only reads what it is given. The proof drives it with
+    fixtures, so it never touches the machine."""
+    findings: list[dict] = []
+    for probe in probes:
+        code = probe.get("exit")
+        if not code:
+            continue
+        tail = (probe.get("output") or "").strip().splitlines()[-3:]
+        findings.append(
+            {
+                "check": "tools",
+                "subject": str(probe.get("name") or probe.get("command") or "the tool"),
+                "detail": (
+                    f"`{probe.get('command', '')}` failed (exit {code}) under "
+                    "the launchd interpreter: " + " | ".join(tail)
+                ),
+                "action": (
+                    "run the same command under the launchd interpreter and "
+                    "fix what it raises"
+                ),
+            }
+        )
+    for entry in logs:
+        for line in entry.get("lines") or []:
             if "Traceback" in line:
                 findings.append(
                     {
                         "check": "tools",
-                        "subject": name,
+                        "subject": Path(str(entry.get("path", ""))).name,
                         "detail": (
-                            f"the last {LOG_TAIL} lines of {path} hold a "
-                            f"traceback: {line.strip()[:160]}"
+                            f"the last {LOG_TAIL} lines of {entry.get('path')} "
+                            f"hold a traceback: {line.strip()[:160]}"
                         ),
                         "action": "read the traceback in the log and fix the tool",
                     }
                 )
                 break
-    return ran, findings
+    return findings
 
 
 def check_install(deadline: float) -> tuple[list[str], list[dict]]:
@@ -5471,7 +5494,6 @@ def check_install(deadline: float) -> tuple[list[str], list[dict]]:
     file from an unmerged branch is drift (2026-11-13: the installed
     coordq came from a branch that was never merged)."""
     ran: list[str] = []
-    findings: list[dict] = []
     script = MAC_OPS_DIR / "install_coordinator.py"
     interpreter, _source = launchd_python()
     python = interpreter or sys.executable
@@ -5479,50 +5501,59 @@ def check_install(deadline: float) -> tuple[list[str], list[dict]]:
     code, out, err = health_run(command, deadline)
     ran.append(f"`{' '.join(command)}` exit {code}")
     if code != 0:
-        findings.append(
+        return ran, [
             {
                 "check": "install",
                 "subject": str(script),
                 "detail": (
                     "the install status could not be read (exit "
-                    f"{code}): " + (err or out).strip().splitlines()[-1:][0][:160]
-                    if (err or out).strip()
-                    else f"the install status could not be read (exit {code})"
+                    f"{code}): "
+                    + (
+                        (err or out).strip().splitlines()[-1][:160]
+                        if (err or out).strip()
+                        else "no output"
+                    )
                 ),
                 "action": "read the install status by hand",
             }
-        )
-        return ran, findings
+        ]
     try:
-        state = json.loads(out)
+        status = json.loads(out)
     except ValueError:
-        findings.append(
+        return ran, [
             {
                 "check": "install",
                 "subject": str(script),
                 "detail": "the install status did not return JSON",
                 "action": "read the install status by hand",
             }
-        )
-        return ran, findings
-    differs = [str(item) for item in (state.get("differs") or [])]
-    if not state.get("in_sync"):
-        findings.append(
-            {
-                "check": "install",
-                "subject": str(script),
-                "detail": (
-                    "the installed coordinator differs from the merged main: "
-                    + (", ".join(differs) if differs else "the status does not say")
-                ),
-                "action": (
-                    "find the branch the installed file came from, tell that "
-                    "builder to stop installing, and reinstall from main once "
-                    "the pull requests merge"
-                ),
-            }
-        )
-    return ran, findings
+        ]
+    return ran, install_findings(status)
+
+
+def install_findings(status: dict) -> list[dict]:
+    """Return the findings of the install status.
+
+    The status is injected: the caller reads it and this function only
+    reads what it is given. The proof drives it with a fixture."""
+    if status.get("in_sync"):
+        return []
+    differs = [str(item) for item in (status.get("differs") or [])]
+    return [
+        {
+            "check": "install",
+            "subject": str(MAC_OPS_DIR / "install_coordinator.py"),
+            "detail": (
+                "the installed coordinator differs from the merged main: "
+                + (", ".join(differs) if differs else "the status does not say")
+            ),
+            "action": (
+                "find the branch the installed file came from, tell that "
+                "builder to stop installing, and reinstall from main once "
+                "the pull requests merge"
+            ),
+        }
+    ]
 
 
 def check_attempts(
@@ -5540,6 +5571,7 @@ def check_attempts(
     board: dict[str, list[dict]] = {}
     for issue in issues:
         board.setdefault(issue.get("repo", ""), []).append(issue)
+    records: list[dict] = []
     for repo, _key in repos:
         tickets = board.get(repo, [])
         if not tickets:
@@ -5567,7 +5599,10 @@ def check_attempts(
                 {
                     "check": "attempts",
                     "subject": repo,
-                    "detail": f"the issue list could not be read: {exc}",
+                    "detail": (
+                        "the issue list could not be read, so the tickets of "
+                        f"this repository are not classified: {exc}"
+                    ),
                     "action": "read the board by hand and start what the shift can work",
                 }
             )
@@ -5579,7 +5614,10 @@ def check_attempts(
                 {
                     "check": "attempts",
                     "subject": repo,
-                    "detail": "the issue list did not return JSON",
+                    "detail": (
+                        "the issue list did not return JSON, so the tickets of "
+                        "this repository are not classified"
+                    ),
                     "action": "read the board by hand and start what the shift can work",
                 }
             )
@@ -5642,29 +5680,52 @@ def check_attempts(
                 carried.add(target["number"])
         for issue in tickets:
             number = issue.get("number")
-            count = attempts.get(number, 0)
-            if count < ATTEMPT_LIMIT or number in carried:
-                continue
-            if decision_open(decisions, issue.get("key"), number):
-                # The decisions log already holds an open item for this
-                # ticket: a hold or a park waits for its own answer, so it
-                # is not new drift.
-                continue
-            findings.append(
+            records.append(
                 {
-                    "check": "attempts",
-                    "subject": f"{repo}#{number}",
-                    "detail": (
-                        f"{issue.get('key') or number} was started {count} times "
-                        "and has no open pull request"
-                    ),
-                    "action": (
-                        "read the last builder report, then reword the brief "
-                        "or park the ticket and open a re-spec ticket"
+                    "repo": repo,
+                    "number": number,
+                    "key": issue.get("key") or "",
+                    "attempts": attempts.get(number, 0),
+                    "carried": number in carried,
+                    "parked": bool(
+                        decision_open(decisions, issue.get("key"), number)
                     ),
                 }
             )
-    return ran, findings
+    return ran, findings + attempt_findings(records)
+
+
+def attempt_findings(records: list[dict]) -> list[dict]:
+    """Return the findings of the ticket records.
+
+    The records are injected: the caller reads them and this function
+    only reads what it is given. A record says how many times a ticket
+    was started, whether an open pull request carries it and whether the
+    decisions log holds an open item for it. The proof drives it with
+    fixtures."""
+    findings: list[dict] = []
+    for record in records:
+        count = record.get("attempts", 0)
+        if count < ATTEMPT_LIMIT:
+            continue
+        if record.get("carried") or record.get("parked"):
+            continue
+        label = record.get("key") or record.get("number")
+        findings.append(
+            {
+                "check": "attempts",
+                "subject": f"{record.get('repo')}#{record.get('number')}",
+                "detail": (
+                    f"{label} was started {count} times and has no open "
+                    "pull request"
+                ),
+                "action": (
+                    "read the last builder report, then reword the brief "
+                    "or park the ticket and open a re-spec ticket"
+                ),
+            }
+        )
+    return findings
 
 
 def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
@@ -5675,7 +5736,6 @@ def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
     blocker: the ticket waits for something that is already finished
     (2026-11-13: four FFBT tickets were held by a false text blocker)."""
     ran: list[str] = []
-    findings: list[dict] = []
     path = QUEUE_DIR / "dispatch.log"
     lines = queue_log_tail("dispatch.log", REFUSAL_TAIL)
     ran.append(f"the last {REFUSAL_TAIL} lines of {path}")
@@ -5697,46 +5757,78 @@ def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
                 # refusal it left behind is history, not drift.
                 continue
         latest[(match.group("repo"), match.group("number"))] = match.group("reason")
+    refusals = [
+        {"repo": repo, "number": number, "reason": reason}
+        for (repo, number), reason in sorted(latest.items())
+    ]
     states: dict[tuple[str, int], str] = {}
     unread: dict[tuple[str, int], str] = {}
-    for (repo, number), reason in sorted(latest.items()):
-        if "text blockers:" not in reason:
-            continue
-        tail = reason.split("text blockers:", 1)[1]
-        named: list[tuple[str, int]] = [
-            (match.group(1), int(match.group(2))) for match in NAMED_ISSUE.finditer(tail)
-        ]
-        named += [
-            (repo, int(match.group(2))) for match in NAMED_KEY.finditer(tail)
-        ]
-        for target, target_number in named:
+    for refusal in refusals:
+        for target, target_number in named_issues(refusal["reason"], refusal["repo"]):
             key = (target, target_number)
-            if key not in states and key not in unread:
-                code, out, _err = health_run(
-                    [GH, "api", f"repos/{target}/issues/{target_number}"],
-                    deadline,
+            if key in states or key in unread:
+                continue
+            code, out, _err = health_run(
+                [GH, "api", f"repos/{target}/issues/{target_number}"],
+                deadline,
+            )
+            state = ""
+            if code == 0:
+                try:
+                    state = str(json.loads(out).get("state") or "")
+                except ValueError:
+                    state = ""
+            if not state:
+                # The state of the issue was never established, so this
+                # check is incomplete for it. It says so instead of
+                # reporting that the blocker is not false.
+                unread[key] = (
+                    f"the state of {target}#{target_number} could not be "
+                    "read, so the text blocker check is incomplete for it"
                 )
-                state = ""
-                if code == 0:
-                    try:
-                        state = str(json.loads(out).get("state") or "")
-                    except ValueError:
-                        state = ""
-                if not state:
-                    # The state of the issue was never established, so
-                    # this check is incomplete for it. It says so instead
-                    # of reporting that the blocker is not false.
-                    unread[key] = (
-                        f"the state of {target}#{target_number} could not be "
-                        "read, so the text blocker check is incomplete for it"
-                    )
-                else:
-                    states[key] = state
+            else:
+                states[key] = state
+    return ran, blocker_findings(refusals, states, unread)
+
+
+def named_issues(reason: str, repo: str) -> list[tuple[str, int]]:
+    """Return the issues a refusal names.
+
+    The two forms the ticket CLI writes are read: "owner/repo#12" and
+    "SRW-1061 (#910)". The key form names an issue of the refused
+    ticket's own repository."""
+    tail = reason.split("text blockers:", 1)[1] if "text blockers:" in reason else reason
+    named: list[tuple[str, int]] = [
+        (match.group(1), int(match.group(2))) for match in NAMED_ISSUE.finditer(tail)
+    ]
+    named += [(repo, int(match.group(2))) for match in NAMED_KEY.finditer(tail)]
+    return named
+
+
+def blocker_findings(
+    refusals: list[dict],
+    states: dict[tuple[str, int], str],
+    unread: dict[tuple[str, int], str] | None = None,
+) -> list[dict]:
+    """Return the findings of the recorded refusals.
+
+    The refusals and the states are injected: the caller reads them and
+    this function only reads what it is given. An issue whose state was
+    never read is an incomplete check, not a blocker that is fine. The
+    proof drives it with fixtures."""
+    unread = unread or {}
+    findings: list[dict] = []
+    for refusal in refusals:
+        if "text blockers:" not in refusal.get("reason", ""):
+            continue
+        subject = f"{refusal.get('repo')}#{refusal.get('number')}"
+        for target, target_number in named_issues(refusal["reason"], refusal["repo"]):
+            key = (target, target_number)
             if key in unread:
                 findings.append(
                     {
                         "check": "blockers",
-                        "subject": f"{repo}#{number}",
+                        "subject": subject,
                         "detail": unread[key],
                         "action": (
                             "read the issue, then reword the body so the "
@@ -5745,12 +5837,12 @@ def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
                     }
                 )
                 continue
-            if states[key] != "closed":
+            if states.get(key) != "closed":
                 continue
             findings.append(
                 {
                     "check": "blockers",
-                    "subject": f"{repo}#{number}",
+                    "subject": subject,
                     "detail": (
                         f"the refusal names {target}#{target_number}, which is "
                         "closed, so the text blocker is false"
@@ -5761,7 +5853,7 @@ def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
                     ),
                 }
             )
-    return ran, findings
+    return findings
 
 
 def health_cycle(
