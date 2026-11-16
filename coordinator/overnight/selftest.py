@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 import subprocess
+import tempfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
@@ -941,6 +942,220 @@ def send_integrity():
             exact(result, "continue #385: fresh (old unreachable): receipt")
 
 
+def cycle_health():
+    """The cycle's health checks over injected inputs.
+
+    The inputs are the data the checks read, handed in instead of read
+    from the machine: the eval starts no process, opens no socket and
+    touches no board. It proves the four checks of the cycle's health
+    boundary and the rule that a read which failed is never a clean
+    result."""
+    loader = importlib.machinery.SourceFileLoader(
+        "fixture_overnight", str(ROOT / "overnight")
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    real_decisions_checked = module.read_decisions_checked
+    # The tools: a probe that failed and a log with a traceback.
+    findings = module.tool_findings(
+        [
+            {
+                "name": "coordq",
+                "command": "python3 coordq status",
+                "exit": 1,
+                "output": "Traceback (most recent call last):",
+            },
+            {
+                "name": "overnight",
+                "command": "python3 overnight --help",
+                "exit": 0,
+                "output": "usage: overnight",
+            },
+        ],
+        [{"path": "/tmp/dispatch.log", "lines": ["a line", "Traceback (most recent call last):"]}],
+    )
+    exact(len(findings), 2)
+    exact([finding["check"] for finding in findings], ["tools", "tools"])
+    exact(module.tool_findings([{"name": "coordq", "command": "x", "exit": 0}], []), [])
+    # The installed files: in sync is no finding, out of sync is one.
+    exact(module.install_findings({"in_sync": True, "differs": []}), [])
+    out = module.install_findings(
+        {"in_sync": False, "differs": ["/Users/x/.local/bin/coordq"]}
+    )
+    exact(len(out), 1)
+    exact(out[0]["check"], "install")
+    # The board's attempts: three starts and no pull request is a finding.
+    record = {
+        "repo": "o/r",
+        "number": 7,
+        "key": "R-7",
+        "attempts": 3,
+        "carried": False,
+        "parked": False,
+    }
+    exact(len(module.attempt_findings([record])), 1)
+    exact(module.attempt_findings([{**record, "carried": True}]), [])
+    exact(module.attempt_findings([{**record, "parked": True}]), [])
+    exact(module.attempt_findings([{**record, "attempts": 2}]), [])
+    # A pull request list that was cut off at the limit is not a list
+    # with no pull requests: the tickets of that repository are not
+    # classified at all, and the check says the list was incomplete.
+    module.run = lambda argv, timeout, deadline: json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "a ticket",
+                "comments": [
+                    {"body": "Starting b attempt 1"},
+                    {"body": "Starting b attempt 2"},
+                    {"body": "Starting b attempt 3"},
+                ],
+            }
+        ]
+    )
+    module.read_decisions_checked = lambda: (Path("/tmp/decisions.md"), [], "")
+    module.read_pull_requests = lambda repo, deadline: ([], True)
+    ran, cut = module.check_attempts(
+        [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
+    )
+    exact(len(cut), 1)
+    exact(cut[0]["check"], "attempts")
+    exact("not classified" in cut[0]["detail"], True)
+    exact("cut off" in cut[0]["detail"], True)
+    # The same board with a whole pull request list is classified: the
+    # ticket has no pull request, so it is a finding.
+    module.read_pull_requests = lambda repo, deadline: ([], False)
+    ran, whole = module.check_attempts(
+        [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
+    )
+    exact(len(whole), 1)
+    exact(whole[0]["check"], "attempts")
+    exact("no open pull request" in whole[0]["detail"], True)
+    # An issue whose comments were cut off is not an issue with few
+    # comments: its starts are not known and it is not classified.
+    module.run = lambda argv, timeout, deadline: json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "a ticket",
+                "comments": [
+                    {"body": "Starting b attempt 1"},
+                    {"body": "Starting b attempt 2"},
+                    {"body": "Starting b attempt 3"},
+                ]
+                + [{"body": "a comment"} for _ in range(97)],
+            }
+        ]
+    )
+    module.read_pull_requests = lambda repo, deadline: ([], False)
+    ran, cut_comments = module.check_attempts(
+        [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
+    )
+    exact(len(cut_comments), 1)
+    exact(cut_comments[0]["check"], "attempts")
+    exact("cut off" in cut_comments[0]["detail"], True)
+    exact("not classified" in cut_comments[0]["detail"], True)
+    # A decisions log that exists and cannot be read leaves the parked
+    # tickets unknown: the check is incomplete and classifies nothing.
+    module.read_decisions_checked = lambda: (
+        Path("/tmp/decisions.md"),
+        [],
+        "the log could not be read: boom",
+    )
+    ran, unreadable = module.check_attempts(
+        [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
+    )
+    exact(len(unreadable), 1)
+    exact(unreadable[0]["check"], "attempts")
+    exact("incomplete" in unreadable[0]["detail"], True)
+    exact(any("no ticket was classified" in line for line in ran), True)
+    # A decisions log that does not exist yet is not an error: the
+    # coordinator writes it the first time it parks a ticket.
+    module.read_decisions_checked = real_decisions_checked
+    with tempfile.TemporaryDirectory() as folder:
+        module.DECISIONS_FILE = Path(folder) / "decisions.md"
+        _path, none_yet, none_error = module.read_decisions_checked()
+    exact(none_yet, [])
+    exact(none_error, "")
+    # The board's blockers: a closed issue is a false blocker, an issue
+    # whose state was never read is an incomplete check, not a clean one.
+    refusal = {
+        "repo": "o/r",
+        "number": 8,
+        "reason": "refused: text blockers: SRW-9 (#9) is still open",
+    }
+    closed = module.blocker_findings([refusal], {("o/r", 9): "closed"}, {})
+    exact(len(closed), 1)
+    exact(closed[0]["check"], "blockers")
+    exact(module.blocker_findings([refusal], {("o/r", 9): "open"}, {}), [])
+    incomplete = module.blocker_findings(
+        [refusal], {}, {
+            ("o/r", 9): (
+                "the state of o/r#9 could not be read, so the text blocker "
+                "check is incomplete for it"
+            )
+        }
+    )
+    exact(len(incomplete), 1)
+    exact("incomplete" in incomplete[0]["detail"], True)
+    # A log that could not be read is not an empty log: the check that
+    # needed it is incomplete, and the receipt does not claim the log
+    # was read.
+    broken = module.log_read_finding(
+        "blockers", "/tmp/dispatch.log", "the log could not be read: boom"
+    )
+    exact(broken["check"], "blockers")
+    exact("incomplete" in broken["detail"], True)
+    unread_logs = module.tool_findings(
+        [], [{"path": "/tmp/dispatch.log", "lines": [], "error": "boom"}]
+    )
+    exact(len(unread_logs), 1)
+    exact(unread_logs[0]["check"], "tools")
+    exact("incomplete" in unread_logs[0]["detail"], True)
+    with tempfile.TemporaryDirectory() as folder:
+        module.QUEUE_DIR = Path(folder)
+        ran, failed = module.check_blockers(0)
+    exact(len(failed), 1)
+    exact(failed[0]["check"], "blockers")
+    exact("incomplete" in failed[0]["detail"], True)
+    exact(any("could not be read" in line for line in ran), True)
+    # A stale board is not a board with no tickets: the attempts check
+    # is incomplete and classifies nothing.
+    ran, stale = module.check_attempts([], [("o/r", "")], 0, True)
+    exact(len(stale), 1)
+    exact(stale[0]["check"], "attempts")
+    exact("incomplete" in stale[0]["detail"], True)
+    exact(any("stale" in line for line in ran), True)
+    # The log read is bounded: a huge log costs one fixed read from the
+    # end, so a traceback buried far from the end is outside the window
+    # and a traceback at the end is inside it.
+    import time as clock
+    with tempfile.TemporaryDirectory() as folder:
+        module.QUEUE_DIR = Path(folder)
+        log = Path(folder) / "dispatch.log"
+        filler = "a line of the queue log\n" * 60000
+        log.write_text("Traceback (most recent call last):\n" + filler)
+        lines, error = module.queue_log_tail("dispatch.log", 40, clock.monotonic() + 60)
+        exact(error, "")
+        exact(any("Traceback" in line for line in lines), False)
+        log.write_text(filler + "Traceback (most recent call last):\n")
+        lines, error = module.queue_log_tail("dispatch.log", 40, clock.monotonic() + 60)
+        exact(error, "")
+        exact(any("Traceback" in line for line in lines), True)
+        # The window never returns more lines than asked for, and it
+        # drops the partial first line of the window.
+        exact(len(lines) <= 40, True)
+        exact(all(line for line in lines), True)
+        # A cycle that is out of time does not read the log at all.
+        lines, error = module.queue_log_tail("dispatch.log", 40, clock.monotonic() - 1)
+        exact(lines, [])
+        exact("ran out of time" in error, True)
+        # The bounded window is a fixed budget, far below the log's size.
+        exact(module.LOG_TAIL_BYTES <= 1024 * 1024, True)
+        exact(log.stat().st_size > module.LOG_TAIL_BYTES, True)
+
+
 def stall():
     import lane_driver as lane
     import stall as rule
@@ -1128,7 +1343,7 @@ def stall():
         exact(lane.unstick(repo, {}), "DRY unstick [9]")
 
 
-EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "stall": stall}
+EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall}
 
 
 def main():
