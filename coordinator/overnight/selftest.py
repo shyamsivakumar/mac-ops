@@ -954,7 +954,7 @@ def stall():
     exact(event is not None, True)
     exact(event["kind"], "item")
     exact(event["idle"], 3)
-    exact(rule.stalled(state, "repo#1"), True)
+    exact(state["items"]["repo#1"]["stalled"], True)
     exact(rule.observe(state, "repo#1", "aaa|1"), None)
 
     state = rule.new_state()
@@ -962,7 +962,7 @@ def stall():
     exact(rule.observe(state, "repo#1", "bbb|1"), None)
     exact(rule.observe(state, "repo#1", "bbb|1"), None)
     exact(rule.observe(state, "repo#1", "bbb|1"), None)
-    exact(rule.stalled(state, "repo#1"), False)
+    exact(state["items"]["repo#1"]["stalled"], False)
     event = rule.observe(state, "repo#1", "bbb|1")
     exact(event is not None, True)
     exact(event["kind"], "item")
@@ -1033,7 +1033,7 @@ def stall():
     exact(events[2][1]["kind"], "board")
     exact(events[3][0]["kind"], "board")
     exact(lane.STALL_STATE.get("board_alerted"), None)
-    exact(rule.stalled(lane.STALL_STATE, f"{repo}#9"), True)
+    exact(lane.STALL_STATE["items"][f"{repo}#9"]["stalled"], True)
 
     # New work on the board is progress, whether the shift has measured the
     # new item or not.
@@ -1099,7 +1099,7 @@ def stall():
          patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
         for _ in range(4):
             lane.run_pass({})
-    exact(rule.stalled(lane.STALL_STATE, f"{repo}#9"), False)
+    exact(lane.STALL_STATE["items"][f"{repo}#9"]["stalled"], False)
     exact(True in reads, True)
 
     # A draft is not work the shift does, so it is not measured.

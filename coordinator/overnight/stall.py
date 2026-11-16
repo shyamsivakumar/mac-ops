@@ -13,9 +13,9 @@ new state and the event, so the shift writes the records (the shift log, the
 receipt and the alert) with its own writers and every record is redacted the
 way the rest of the shift's records are.
 
-The state is the lane ledger's own record (`_stall`), so the shift keeps no
-second list of its work: the board is the list and the ledger holds only the
-progress the shift measured.
+The state is the shift's own record, under `run/stall-state.json`, so the
+shift keeps one record of its progress and not a second list of its work:
+the board is the list.
 """
 
 import datetime as dt
@@ -65,13 +65,6 @@ def moved(state, key, item_marker):
         return False
     previous = entry.get("marker")
     return previous is not None and previous != item_marker
-
-
-def appeared(state, key):
-    """Return True when the item was not on the board before.
-
-    A new item on the board is work that arrived, so the board moved."""
-    return key not in (state.get("items") or {})
 
 
 def pending(state, key, item_marker, cap=STALL_CAP):
@@ -145,16 +138,6 @@ def arrived(state, keys):
     fresh = {key for key in keys if key not in seen}
     state["board"] = {key: True for key in keys}
     return fresh
-
-
-def stalled(state, key):
-    """Return True when the item was reported as stalled.
-
-    A reported item is not parked: the shift keeps working it."""
-    entry = (state.get("items") or {}).get(key)
-    if not isinstance(entry, dict):
-        return False
-    return bool(entry.get("stalled"))
 
 
 def board(state, progressed, items=0, cap=STALL_CAP):

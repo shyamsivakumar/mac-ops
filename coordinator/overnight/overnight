@@ -1563,7 +1563,8 @@ def show_stall_state(explicit: str | None = None) -> int:
     """Print the stall state the shift keeps.
 
     The command reads only: it says which items are idle, for how many
-    ticks, and which of them are parked as a stall."""
+    ticks, and which of them were reported as stalled. A reported item is
+    not parked: the shift keeps working it."""
     root = report_root(explicit)
     state = load_stall_state(root)
     items = state.get("items") or {}
@@ -1575,8 +1576,8 @@ def show_stall_state(explicit: str | None = None) -> int:
         if not isinstance(entry, dict):
             continue
         idle = int(entry.get("idle") or 0)
-        parked = " parked" if entry.get("stalled") else ""
-        emit(f"{key}: idle {idle} tick(s){parked}")
+        reported = " reported" if entry.get("stalled") else ""
+        emit(f"{key}: idle {idle} tick(s){reported}")
     emit(f"Board idle: {int(state.get('board_idle') or 0)} tick(s)")
     return 0
 
@@ -1667,7 +1668,7 @@ def cmd_stall(args: argparse.Namespace) -> int:
 
     With `--fixture` the command runs the real rule over the ticks of the
     fixture and writes the records the rule produces: the receipt of a
-    parked item, the line in the shift log and the alert on the
+    reported item, the line in the shift log and the alert on the
     coordinator's board."""
     if args.fixture:
         return run_stall_fixture(args)
