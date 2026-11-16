@@ -128,7 +128,8 @@ def t3(tool, args):
 
 def last_reply(thread_id):
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
-    msgs = [i.get("text") or "" for i in items if i.get("type") == "assistant_message"]
+    msgs = [i.get("text") or i.get("message") or "" for i in items
+            if i.get("type") in {"assistant_message", "error", "run_error", "provider_error"}]
     return (msgs[-1] if msgs else "").rstrip()
 
 
@@ -679,6 +680,165 @@ def item_failure_summary(ledger):
     return failures
 
 
+def dead_run_model(thread, limit_failure):
+    provider = thread.get("providerInstanceId")
+    model = thread.get("model") or ""
+    title = (thread.get("title") or "").lower()
+    if not limit_failure or provider == "router":
+        return {"instanceId": provider or "codex", "model": model}
+    if model == "claude-opus-5-5":
+        return ASTRA if any(word in title for word in ("review", "test", "gate")) else SOL
+    if model in {"gpt-6.1-sol", "gpt-6-astra"}:
+        return {"instanceId": "codex", "model": "gpt-6.1-terra"}
+    return {"instanceId": provider or "codex", "model": model}
+
+
+def recover_dead_runs(ledger):
+    receipts = stall_receipts()
+    for repo in LANE_REPOS:
+        project_id = CFG[repo]["projectId"]
+        threads = []
+        cursor = None
+        while True:
+            args = {"projectId": project_id, "statuses": ["failed", "interrupted"], "settled": False, "limit": 100}
+            if cursor is not None:
+                args["cursor"] = cursor
+            page = t3("t3_thread_list", args)
+            if not isinstance(page, dict) or not isinstance(page.get("threads"), list):
+                print(f"DEAD {repo}: refused, invalid thread list")
+                threads = None
+                break
+            threads.extend(page["threads"])
+            cursor = page.get("nextCursor")
+            if cursor is None:
+                break
+        if threads is None:
+            continue
+        for thread in threads:
+            if not isinstance(thread, dict):
+                print(f"DEAD {repo}: refused, invalid thread record")
+                continue
+            thread_id = thread.get("threadId")
+            if not thread_id or thread.get("settled"):
+                continue
+            title = thread.get("title") or ""
+            if "ascend" in title.lower():
+                print(f"DEAD {thread_id}: coordinator needed, Ascend excluded")
+                continue
+            receipt_key = next((key for key, value in receipts.items() if value == thread_id and key.startswith(f"ticket:{repo}#")), "")
+            if not receipt_key:
+                closed_pr = False
+                for pr in thread.get("pullRequests") or []:
+                    if pr.get("repository") == repo and pr.get("number"):
+                        current = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state"])
+                        closed_pr = closed_pr or current.get("state") in {"CLOSED", "MERGED"}
+                if closed_pr:
+                    print(f"DEAD {thread_id}: settle, linked PR closed (model {thread.get('model')})")
+                    if not DRY:
+                        t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                else:
+                    print(f"DEAD {thread_id}: coordinator needed, no ticket receipt or verified worktree (model {thread.get('model')})")
+                continue
+            work_match = re.match(rf"ticket:{re.escape(repo)}#(\d+)(?::a\d+)?$", receipt_key)
+            if not work_match:
+                print(f"DEAD {thread_id}: coordinator needed, invalid ticket receipt")
+                continue
+            ticket = int(work_match.group(1))
+            work_key = receipt_key.rsplit(":a", 1)[0]
+            full_thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or thread
+            reply = last_reply(thread_id)
+            moved = False
+            if ticket:
+                issue = read_json(["gh", "issue", "view", str(ticket), "-R", repo, "--json", "state"])
+                moved = issue.get("state") == "CLOSED"
+            unknown_open_pr = False
+            for pr in thread.get("pullRequests") or []:
+                if pr.get("repository") != repo or not pr.get("number"):
+                    continue
+                current_pr = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state,headRefOid"])
+                if current_pr.get("state") in {"CLOSED", "MERGED"}:
+                    moved = True
+                recorded_head = pr.get("headRefOid") or pr.get("headSha")
+                if not recorded_head:
+                    heads = re.findall(r"\b(?:head|commit)(?:\s+sha)?\s*[:= ]\s*([0-9a-f]{7,40})\b", reply, re.I)
+                    recorded_head = heads[-1] if heads else None
+                current_head = current_pr.get("headRefOid")
+                if recorded_head and current_head and not current_head.startswith(recorded_head):
+                    moved = True
+                if current_pr.get("state") == "OPEN" and not recorded_head:
+                    unknown_open_pr = True
+            attempt = re.search(r":a(\d+)$", receipt_key)
+            live = []
+            cursor = None
+            while True:
+                args = {"projectId": project_id, "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 100}
+                if cursor is not None:
+                    args["cursor"] = cursor
+                page = t3("t3_thread_list", args)
+                if not isinstance(page, dict) or not isinstance(page.get("threads"), list):
+                    live = None
+                    break
+                live.extend(page["threads"])
+                cursor = page.get("nextCursor")
+                if cursor is None:
+                    break
+            if live is None:
+                print(f"DEAD {thread_id}: coordinator needed, invalid live-thread list")
+                continue
+            newer_threads = {value for key, value in receipts.items() if attempt and key.startswith(receipt_key.rsplit(":a", 1)[0] + ":a") and re.search(r":a(\d+)$", key) and int(re.search(r":a(\d+)$", key).group(1)) > int(attempt.group(1))}
+            if any(t.get("threadId") in newer_threads for t in live if isinstance(t, dict)):
+                moved = True
+            if moved:
+                model = dead_run_model(full_thread, False)
+                print(f"DEAD {thread_id}: settle, work moved on (model {model['model']})")
+                if not DRY:
+                    t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                continue
+            failure = reply.lower()
+            limit_failure = any(term in failure for term in ("rate limit", "spend limit", "quota", "individual spend"))
+            day = time.strftime("%Y-%m-%d")
+            count_key = f"dead-relaunch:{day}:{work_key}"
+            count = int(ledger.get(count_key, 0))
+            if ledger.get(f"dead-relaunch-thread:{thread_id}"):
+                print(f"DEAD {thread_id}: settle, relaunch already queued")
+                if not DRY:
+                    t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                continue
+            model = dead_run_model(full_thread, limit_failure)
+            if count >= 2:
+                print(f"DEAD {thread_id}: coordinator needed, daily relaunch limit reached")
+                continue
+            path = full_thread.get("worktreePath")
+            if not path:
+                print(f"DEAD {thread_id}: coordinator needed, no worktree")
+                continue
+            if unknown_open_pr:
+                print(f"DEAD {thread_id}: coordinator needed, open PR head cannot be compared")
+                continue
+            worktrees = run(["git", "worktree", "list", "--porcelain"])
+            if not any(line == f"worktree {path}" for line in worktrees.splitlines()):
+                print(f"DEAD {thread_id}: coordinator needed, worktree is unavailable")
+                continue
+            ticket_url = f"https://github.com/{repo}/issues/{ticket}"
+            message = (f"Continue {repo}#{ticket} ({ticket_url}) in this existing worktree. The prior thread {thread_id} stopped. "
+                       "Read the ticket and current diff, preserve completed work, finish the acceptance checks, and report the exact remaining blocker. "
+                       "Do not create a new ticket or move the work to another checkout.")
+            next_attempt = max((int(match.group(1)) for key in receipts
+                                if key.startswith(work_key + ":a")
+                                and (match := re.search(r":a(\d+)$", key))), default=0) + 1
+            args = {"projectId": project_id, "clientRequestId": f"{work_key}:a{next_attempt}",
+                    "title": f"Continue {repo}#{ticket}: {title}", "modelSelection": model,
+                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "existing_worktree", "worktreePath": path}, "message": message}
+            print(f"DEAD {thread_id}: relaunch {model['model']}")
+            if not DRY:
+                result = run([COORDQ, "start", json.dumps(args), "--priority", "800"]).strip()
+                if not result:
+                    raise RuntimeError(f"Empty dead-run dispatch receipt for {thread_id}")
+                ledger[count_key] = count + 1
+                ledger[f"dead-relaunch-thread:{thread_id}"] = result.splitlines()[-1]
+                t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+
+
 def run_pass(ledger):
     global SNAPSHOT, STALL_STATE
     ledger.pop("_item_failures", None)
@@ -727,6 +887,7 @@ def run_pass(ledger):
         if not swept:
             SNAPSHOT = board_snapshot(ledger, force=True)
     tickets = SNAPSHOT["tickets"]
+    recover_dead_runs(ledger)
     for repo in LANE_REPOS:
         with item_boundary(repo, "lane", ledger):
             prs = list(ORDER.get(repo, []))
