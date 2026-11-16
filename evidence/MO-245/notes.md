@@ -90,3 +90,20 @@ The first run classifies no ticket and says the list was cut off; the
 second run classifies the ticket and reports it. The live cycle on this
 head is `cycle-live-cut.md`: all four checks ran against the live queue
 and the live board.
+
+## The unreadable log
+
+A queue log that cannot be read is not a log without a traceback and
+not a log without a refusal. The read says it failed, and the check
+that needed the log is incomplete: the receipt says the log could not
+be read, for the crash check and for the text blocker check.
+
+The proof is a cycle whose queue folder holds no log at all:
+
+    COORDQ_DIR=<empty folder> OVERNIGHT_ROOT=<root> \
+    python3 coordinator/overnight/overnight shift --dry-run
+
+The receipt is `cycle-unreadable-log.md`. It shows the two queue logs
+reported as "could not be read", the tools check and the blockers check
+each reporting an incomplete check, and no finding claimed from a log
+nobody could read. The `cycle-health` eval holds the same cases.

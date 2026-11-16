@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 import subprocess
+import tempfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
@@ -1050,6 +1051,27 @@ def cycle_health():
     )
     exact(len(incomplete), 1)
     exact("incomplete" in incomplete[0]["detail"], True)
+    # A log that could not be read is not an empty log: the check that
+    # needed it is incomplete, and the receipt does not claim the log
+    # was read.
+    broken = module.log_read_finding(
+        "blockers", "/tmp/dispatch.log", "the log could not be read: boom"
+    )
+    exact(broken["check"], "blockers")
+    exact("incomplete" in broken["detail"], True)
+    unread_logs = module.tool_findings(
+        [], [{"path": "/tmp/dispatch.log", "lines": [], "error": "boom"}]
+    )
+    exact(len(unread_logs), 1)
+    exact(unread_logs[0]["check"], "tools")
+    exact("incomplete" in unread_logs[0]["detail"], True)
+    with tempfile.TemporaryDirectory() as folder:
+        module.QUEUE_DIR = Path(folder)
+        ran, failed = module.check_blockers(0)
+    exact(len(failed), 1)
+    exact(failed[0]["check"], "blockers")
+    exact("incomplete" in failed[0]["detail"], True)
+    exact(any("could not be read" in line for line in ran), True)
 
 
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health}
