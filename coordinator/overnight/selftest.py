@@ -702,7 +702,41 @@ def ff_drift():
         exact(calls, ["b" * 40, "c" * 40])
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift}
+def script_results():
+    import script_results as results
+    records = [{"repo": "fixture/repo", "issue": n, "deadline": deadline,
+                "state": "WAITING", **extra}
+               for n, deadline, extra in [(1, 99, {}), (2, 100, {}),
+                   (3, 101, {}), (4, 99, {"result": "PASS"}),
+                   (5, 101, {"result": "FAIL"})]]
+    exact(results.reconcile(records, 100), [
+        {"action": "recut", "repo": "fixture/repo", "issue": 1},
+        {"action": "recut", "repo": "fixture/repo", "issue": 5}])
+    exact([row["state"] for row in records], ["FAIL", "WAITING", "WAITING", "PASS", "FAIL"])
+    exact(results.reconcile(records, 100), [])
+    for outcome, status, reason in [(subprocess.CompletedProcess([], 0), "PASS", "artifact"),
+            (subprocess.CompletedProcess([], 7), "FAIL", "exit 7"),
+            (subprocess.TimeoutExpired(["fixture-script"], 2), "FAIL", "timeout"),
+            (OSError("missing"), "FAIL", "launch error: missing")]:
+        calls = []
+        def run(command, **kwargs):
+            calls.append((command, kwargs))
+            if command == ["fixture-script"]:
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+            if command[:3] != ["gh", "issue", "comment"]:
+                raise AssertionError(command)
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(results.subprocess, "run", run):
+            exact(results.run_script("fixture/repo", 1, "abc", 2, ["fixture-script"], "artifact"),
+                  int(status == "FAIL"))
+        exact(calls, [(["fixture-script"], {"timeout": 2, "check": False}),
+            (["gh", "issue", "comment", "1", "--repo", "fixture/repo", "--body",
+              f"RESULT: {status} abc {reason}"], {"timeout": 60, "check": True})])
+
+
+EVALS = {"script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift}
 
 
 def main():
@@ -720,6 +754,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "script-results":
+                        import script_results as results
+                        with patch.object(results, "reconcile", return_value=[]):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted missing deadline routing")
                     if name == "ff-drift":
                         import lane_driver
                         with patch.object(lane_driver, "drift_ff"):
