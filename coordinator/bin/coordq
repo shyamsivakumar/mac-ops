@@ -79,10 +79,10 @@ GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "2"))
 GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
 # The board action keys. A board action for one head is one send, so the
 # key of that action belongs to one queue item. The map holds the key of
-# every action the queue has already taken, and it keeps the item id, so a
-# second send of the same action is refused with the id of the first one.
-# The map is optional: a queue file without it is a queue that has taken no
-# board action yet.
+# every action the queue has taken, with the item that took it and what
+# the queue did with it, so a second send of the same action is refused
+# with the id of the first one. The map is optional: a queue file without
+# it is a queue that has taken no board action yet.
 ACTION_KEYS = "actionKeys"
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
@@ -308,6 +308,7 @@ def drain():
             if item.get("attempts", 0) >= MAX_ATTEMPTS:
                 dropped.add(item["id"])
                 queue.setdefault("failed", []).append(item)
+                release_action_key(queue, item)
                 log(f"DROPPED #{item['id']} after {item['attempts']} attempts: {item.get('last_error', 'unknown error')}")
                 continue
             tool = undispatchable_tool(item)
@@ -315,6 +316,7 @@ def drain():
                 dispatchable.append(item)
                 continue
             dropped.add(item["id"])
+            release_action_key(queue, item)
             log(f"REFUSED #{item['id']}: {tool_refusal(tool)}")
         if dropped:
             queue["items"] = [i for i in queue["items"] if i["id"] not in dropped]
@@ -354,6 +356,8 @@ def drain():
             queue["reserved"][key] = time.time()
             if step["tool"] == "t3_thread_send":
                 queue["reservedThreads"][key] = step["args"]["threadId"]
+        if item.get("actionKey"):
+            set_action_key_state(queue, item["actionKey"], "reserved")
         save(queue)
         code, out = 0, ""
         for index, (key, step) in enumerate(zip(keys, steps)):
@@ -409,12 +413,16 @@ def drain():
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
+            if item.get("actionKey"):
+                set_action_key_state(queue, item["actionKey"], "dispatched")
             save(queue)
             log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})"
                 + (f" key {item['actionKey']}" if item.get("actionKey") else ""))
         else:
             queue["reserved"].pop(reservation, None)
             queue["reservedThreads"].pop(reservation, None)
+            if item.get("actionKey"):
+                set_action_key_state(queue, item["actionKey"], "queued")
             item["attempts"] = item.get("attempts", 0) + 1
             item["last_error"] = out[:200]
             if request_id and request_id.startswith("gate:"):
@@ -431,13 +439,58 @@ def drain():
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
 
 
-def action_key_state(queue, item_id):
+def action_key_record(queue, key):
+    """The record of one action key: the item that took it and its state.
+
+    A record written before the state was kept is a bare item id. Its
+    state is read from the queue, because the item may still be waiting
+    there: a key of a queued item is queued, and a key of an item that is
+    nowhere in the queue was dispatched."""
+    record = (queue.get(ACTION_KEYS) or {}).get(key)
+    if record is None:
+        return None
+    if isinstance(record, dict):
+        item_id, state = record.get("id"), record.get("state")
+    else:
+        item_id, state = record, None
+    if item_id is None:
+        return None
+    return {"id": item_id, "state": action_key_state(queue, item_id, state)}
+
+
+def set_action_key_state(queue, key, state):
+    """Record what the queue did with the item that holds an action key.
+
+    The record is written back into the queue, so a record that carried
+    only an item id keeps the state from now on.
+    """
+    record = action_key_record(queue, key)
+    if record is None:
+        return
+    queue.setdefault(ACTION_KEYS, {})[key] = {"id": record["id"], "state": state}
+
+
+def release_action_key(queue, item):
+    """Give an action key back when its item leaves the queue unsent.
+
+    An item that gave up, that was refused as undispatchable, or that was
+    dropped by hand never reached the thread, so the board action is still
+    open and the same key may be queued again.
+    """
+    key = item.get("actionKey")
+    if key:
+        (queue.get(ACTION_KEYS) or {}).pop(key, None)
+
+
+def action_key_state(queue, item_id, state=None):
     """What the queue is doing with the item that holds an action key.
 
     A key is held from the moment the item is queued, through the
     reservation the dispatcher takes while it starts, and after the item
     is gone from the queue, so the same board action is never sent twice.
     """
+    if state in {"queued", "reserved", "dispatched"}:
+        return state
     if any(item.get("id") == item_id for item in queue.get("items", [])):
         return "queued"
     if str(item_id) in (queue.get("reserved") or {}):
@@ -466,17 +519,18 @@ def cmd_start(a):
         queue = load()
         key = (getattr(a, "action_key", None) or "").strip()
         if key:
-            held = (queue.get(ACTION_KEYS) or {}).get(key)
-            if held is not None:
+            record = action_key_record(queue, key)
+            if record is not None:
                 die(f"refused: the action key {key} is already "
-                    f"{action_key_state(queue, held)} as coordq #{held}")
+                    f"{action_key_state(queue, record['id'], record.get('state'))} "
+                    f"as coordq #{record['id']}")
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
         if key:
             item["actionKey"] = key
         queue["next"] += 1
         queue["items"].append(item)
         if key:
-            queue.setdefault(ACTION_KEYS, {})[key] = item["id"]
+            queue.setdefault(ACTION_KEYS, {})[key] = {"id": item["id"], "state": "queued"}
         # A gate request takes its head with it, so gatekeep does not queue
         # a second gate for the same head.
         request_id = str(args.get("clientRequestId") or "")
@@ -885,6 +939,11 @@ def cmd_drop(a):
         kept = [i for i in queue["items"] if i["id"] != a.id]
         if len(kept) == len(queue["items"]):
             die(f"no queue item #{a.id}")
+        for item in queue["items"]:
+            if item["id"] == a.id:
+                # The item never reached the thread, so the board action it
+                # carried is still open.
+                release_action_key(queue, item)
         queue["items"] = kept
         save(queue)
     print(f"dropped #{a.id}")
