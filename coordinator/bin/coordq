@@ -77,6 +77,13 @@ STUCK_FILE = "gatekeep-stuck.txt"
 # up until its head changes.
 GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "2"))
 GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
+# The board action keys. A board action for one head is one send, so the
+# key of that action belongs to one queue item. The map holds the key of
+# every action the queue has already taken, and it keeps the item id, so a
+# second send of the same action is refused with the id of the first one.
+# The map is optional: a queue file without it is a queue that has taken no
+# board action yet.
+ACTION_KEYS = "actionKeys"
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
 ROUTER_SOURCE = os.path.expanduser("~/.pi/agent/extensions/task-router.ts")
@@ -403,7 +410,8 @@ def drain():
                 os.replace(receipts_path + ".tmp", receipts_path)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
             save(queue)
-            log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})")
+            log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})"
+                + (f" key {item['actionKey']}" if item.get("actionKey") else ""))
         else:
             queue["reserved"].pop(reservation, None)
             queue["reservedThreads"].pop(reservation, None)
@@ -421,6 +429,20 @@ def drain():
                     item["attempts"] = MAX_ATTEMPTS
             save(queue)
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
+
+
+def action_key_state(queue, item_id):
+    """What the queue is doing with the item that holds an action key.
+
+    A key is held from the moment the item is queued, through the
+    reservation the dispatcher takes while it starts, and after the item
+    is gone from the queue, so the same board action is never sent twice.
+    """
+    if any(item.get("id") == item_id for item in queue.get("items", [])):
+        return "queued"
+    if str(item_id) in (queue.get("reserved") or {}):
+        return "reserved"
+    return "dispatched"
 
 
 def cmd_start(a):
@@ -442,9 +464,19 @@ def cmd_start(a):
                 die(f"refused: {e}")
     with Lock(True):
         queue = load()
+        key = (getattr(a, "action_key", None) or "").strip()
+        if key:
+            held = (queue.get(ACTION_KEYS) or {}).get(key)
+            if held is not None:
+                die(f"refused: the action key {key} is already "
+                    f"{action_key_state(queue, held)} as coordq #{held}")
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
+        if key:
+            item["actionKey"] = key
         queue["next"] += 1
         queue["items"].append(item)
+        if key:
+            queue.setdefault(ACTION_KEYS, {})[key] = item["id"]
         # A gate request takes its head with it, so gatekeep does not queue
         # a second gate for the same head.
         request_id = str(args.get("clientRequestId") or "")
@@ -503,20 +535,86 @@ def stage_todo(candidate):
     return [name for name in names if name.startswith("stage:")] == [STAGE]
 
 
+def live_lane_repositories(config):
+    occupied = set()
+    try:
+        with open(path("dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except FileNotFoundError:
+        receipts = {}
+    cursor = None
+    while True:
+        args = {"allProjects": True, "limit": 100, "statuses": LIVE_STATUSES,
+                "includeSubagents": False}
+        if cursor is not None:
+            args["cursor"] = cursor
+        code, out = call("t3_thread_list", args)
+        if code:
+            raise RuntimeError("cannot read live lane threads")
+        result = json.loads(out)
+        for thread in result["threads"]:
+            identities = [key for key, value in receipts.items()
+                          if value == thread["threadId"]]
+            identities.append(str(thread.get("clientRequestId") or ""))
+            for repo, settings in config["repos"].items():
+                title = str(thread.get("title") or "")
+                prefix = settings.get("key", "") + "-"
+                if (any(re.match(r"(?:ticket|gate):" + re.escape(repo) + r"#\d+:", key)
+                        for key in identities)
+                        or (settings.get("key") and title.startswith(prefix))):
+                    occupied.add(repo)
+        next_cursor = result.get("nextCursor")
+        if next_cursor is None:
+            return occupied
+        if cursor is not None and next_cursor <= cursor:
+            raise RuntimeError("live lane pagination did not advance")
+        cursor = next_cursor
+
+
+def lane_candidates(rows, occupied):
+    def order(row):
+        names = [label["name"] if isinstance(label, dict) else str(label)
+                 for label in row.get("labels") or []]
+        priorities = [int(name.split(":")[1]) for name in names
+                      if re.fullmatch(r"priority:\d+", name)]
+        section = re.search(r"(?im)^## Blocked by\s*\n(.*?)(?=^## |\Z)",
+                            row.get("body") or "", re.S)
+        blockers = [int(n) for n in re.findall(r"#(\d+)", section.group(1))] if section else []
+        return (min(priorities, default=999), tuple(blockers), row["number"],
+                row["repository"]["nameWithOwner"])
+
+    busy = set(occupied)
+    for row in rows:
+        names = [label["name"] if isinstance(label, dict) else str(label)
+                 for label in row.get("labels") or []]
+        if "stage:started" in names:
+            busy.add(row["repository"]["nameWithOwner"])
+    selected = []
+    for row in sorted(rows, key=order):
+        repo = row["repository"]["nameWithOwner"]
+        if repo not in busy and stage_todo(row):
+            selected.append(row)
+            busy.add(repo)
+    return selected
+
+
 def board_candidates():
-    """The open stage:todo issues of the repos in tickets.json, oldest first."""
     with open(TICKETS_CONFIG) as f:
         cfg = json.load(f)
-    repos = set(cfg["repos"])
-    owners = sorted({repo.split("/")[0] for repo in repos})
-    found = {}
-    for owner in owners:
-        for row in search_stage_todo(owner):
-            repo = row["repository"]["nameWithOwner"]
-            if repo in repos and stage_todo(row):
-                found[(repo, row["number"])] = row
-    return sorted(found.values(),
-                  key=lambda r: (r["createdAt"], r["repository"]["nameWithOwner"], r["number"]))
+    occupied = live_lane_repositories(cfg)
+    rows = []
+    for repo in cfg["repos"]:
+        run = subprocess.run(["gh", "api", "--paginate", "--slurp",
+                              f"repos/{repo}/issues?state=open&per_page=100"],
+                             capture_output=True, text=True, timeout=40)
+        if run.returncode:
+            raise RuntimeError(f"open issue snapshot failed for {repo}")
+        for page in json.loads(run.stdout):
+            for row in page:
+                if "pull_request" not in row:
+                    rows.append({**row, "repository": {"nameWithOwner": repo},
+                                 "updatedAt": row["updated_at"]})
+    return lane_candidates(rows, occupied)
 
 
 def ticket_start(repo, number, dry_run):
@@ -1428,6 +1526,9 @@ def main():
     s.add_argument("--title")
     s.add_argument("--priority", type=int, default=0)
     s.add_argument("--tool")
+    s.add_argument("--action-key",
+                   help="the board action key this item carries, as action:owner/repo#number:head. "
+                        "The key is held by one queue item, so a second item with the same key is refused.")
     s.set_defaults(fn=cmd_start)
     c = sub.add_parser("create")
     c.add_argument("args")
