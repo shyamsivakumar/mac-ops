@@ -126,6 +126,16 @@ def t3(tool, args):
         return {}
 
 
+def settle_dead_run(thread_id):
+    try:
+        t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        parts = [getattr(exc, "output", None), getattr(exc, "stderr", None)]
+        reason = " ".join(part.decode(errors="replace") if isinstance(part, bytes) else part
+                          for part in parts if part) or str(exc)
+        print(f"DEAD {thread_id}: settle failed: {' '.join(reason.split())}; left for the next pass")
+
+
 def last_reply(thread_id):
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
     msgs = [i.get("text") or i.get("message") or "" for i in items
@@ -781,7 +791,7 @@ def recover_dead_runs(ledger):
                 if closed_pr:
                     print(f"DEAD {thread_id}: settle, linked PR closed (model {thread.get('model')})")
                     if not DRY:
-                        t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                        settle_dead_run(thread_id)
                 else:
                     print(f"DEAD {thread_id}: coordinator needed, no ticket receipt or verified worktree (model {thread.get('model')})")
                 continue
@@ -838,7 +848,7 @@ def recover_dead_runs(ledger):
                 model = dead_run_model(full_thread, False)
                 print(f"DEAD {thread_id}: settle, work moved on (model {model['model']})")
                 if not DRY:
-                    t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                    settle_dead_run(thread_id)
                 continue
             failure = reply.lower()
             limit_failure = any(term in failure for term in ("rate limit", "spend limit", "quota", "individual spend"))
@@ -848,7 +858,7 @@ def recover_dead_runs(ledger):
             if ledger.get(f"dead-relaunch-thread:{thread_id}"):
                 print(f"DEAD {thread_id}: settle, relaunch already queued")
                 if not DRY:
-                    t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                    settle_dead_run(thread_id)
                 continue
             model = dead_run_model(full_thread, limit_failure)
             if count >= 2:
@@ -883,7 +893,7 @@ def recover_dead_runs(ledger):
                     raise RuntimeError(f"Empty dead-run dispatch receipt for {thread_id}")
                 ledger[count_key] = count + 1
                 ledger[f"dead-relaunch-thread:{thread_id}"] = result.splitlines()[-1]
-                t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                settle_dead_run(thread_id)
 
 
 def run_pass(ledger):
