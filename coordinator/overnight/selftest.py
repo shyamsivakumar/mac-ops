@@ -498,7 +498,66 @@ def watchdog():
             exact(call.args, (decisions + ".tmp", decisions))
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog}
+def zero_merge():
+    import datetime as dt
+    import lane_driver as lane
+    other = {"id": "unrelated"}
+    state = {"items": [other]}
+    now = dt.datetime(2026, 11, 15, 12, tzinfo=dt.timezone.utc)
+    class Clock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+    snapshot = {"repos": {"fixture/one": {"prs": [{"number": 1}]},
+                          "fixture/two": {"prs": []}}}
+    rows = []
+    calls = []
+    def read(command):
+        exact(command, ["gh", "pr", "list", "-R", command[4], "--state", "merged",
+            "--search", "merged:>=2026-11-15T11:00:00Z", "--limit", "1", "--json", "mergedAt"])
+        calls.append(command[4])
+        return rows if command[4] == "fixture/two" else []
+    def opened(path, mode="r"):
+        exact(path, "/Users/shyamsivakumar/Code/coordinator/decisions.json" + (".tmp" if mode == "w" else ""))
+        return io.StringIO(json.dumps(state) if mode == "r" else "")
+    def saved(value, handle, **kwargs):
+        state.clear()
+        state.update(json.loads(json.dumps(value)))
+    alert = {"id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
+        "title": "No merge in 60 minutes with open PRs",
+        "why": "The coordinator must inspect blocked PRs and restore merge progress."}
+    with patch.object(dt, "datetime", Clock), patch.object(lane, "read_json", side_effect=read), \
+         patch("builtins.open", side_effect=opened), patch.object(lane.json, "dump", side_effect=saved), \
+         patch.object(lane.os, "replace") as replace:
+        for stamps, expected in [([], [other, alert]),
+                (["2026-11-15T10:59:59Z"], [other, alert]),
+                (["2026-11-15T11:00:00Z"], [other]),
+                (["2026-11-15T11:59:00Z"], [other]),
+                ([], [other, alert])]:
+            rows = [{"mergedAt": stamp} for stamp in stamps]
+            lane.zero_merge(snapshot)
+            exact(state["items"], expected)
+        exact(calls, ["fixture/one", "fixture/two"] * 5)
+        with patch.object(lane, "read_json", side_effect=RuntimeError("fixture read failure")):
+            try:
+                lane.zero_merge(snapshot)
+            except RuntimeError as exc:
+                exact(str(exc), "fixture read failure")
+            else:
+                raise AssertionError("read failure was swallowed")
+        exact(state["items"], [other, alert])
+        exact(replace.call_count, 5)
+        snapshot["repos"]["fixture/one"]["prs"] = []
+        lane.zero_merge(snapshot)
+        exact(state["items"], [other])
+        exact(len(calls), 10)
+        exact(replace.call_count, 6)
+        for call in replace.call_args_list:
+            exact(call.args, ("/Users/shyamsivakumar/Code/coordinator/decisions.json.tmp",
+                              "/Users/shyamsivakumar/Code/coordinator/decisions.json"))
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge}
 
 
 def main():
@@ -516,6 +575,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "zero-merge":
+                        import lane_driver
+                        with patch.object(lane_driver, "zero_merge"):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted missing zero-merge action")
                     if name == "watchdog":
                         import lane_driver
                         with patch.object(lane_driver, "watchdog"):
