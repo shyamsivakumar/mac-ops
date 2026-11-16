@@ -404,7 +404,8 @@ def unstick(repo, ledger, excl=frozenset()):
 
 WATCH = {"tick": ("/Users/shyamsivakumar/Library/Logs/coordinator/tick.log", 65),
          "gatekeep": ("/Users/shyamsivakumar/Code/coordinator/queue/gatekeep.log", 120),
-         "dispatch": ("/Users/shyamsivakumar/Code/coordinator/queue/dispatch.log", 10)}
+         "dispatch": ("/Users/shyamsivakumar/Code/coordinator/queue/dispatch.log", 10),
+         "lanes": ("/Users/shyamsivakumar/Library/Logs/coordinator/lanes.log", 10)}
 
 
 def watchdog():

@@ -452,7 +452,53 @@ def turncap(early_interrupt=False):
         raise AssertionError("; ".join(failures))
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap}
+def watchdog():
+    import lane_driver as lane
+    import os
+    import time
+    from unittest.mock import mock_open
+
+    limits = {"tick": 65, "gatekeep": 120, "dispatch": 10, "lanes": 10}
+    exact({name: minutes for name, (_, minutes) in lane.WATCH.items()}, limits)
+    now = 1000000
+    other = {"id": "unrelated", "title": "preserve"}
+    state = {"items": [other]}
+    mtimes = {path: now for path, _ in lane.WATCH.values()}
+    decisions = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
+
+    def opened(path, mode="r"):
+        exact(str(path), decisions + (".tmp" if mode == "w" else ""))
+        if mode == "r":
+            return io.StringIO(json.dumps(state))
+        return mock_open()()
+
+    def saved(value, handle, **kwargs):
+        state.clear()
+        state.update(json.loads(json.dumps(value)))
+
+    with patch("builtins.open", side_effect=opened),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace:
+        for name, minutes in limits.items():
+            path = lane.WATCH[name][0]
+            mtimes[path] = now - minutes * 60
+            lane.watchdog()
+            exact(state["items"], [other])
+            mtimes[path] -= 60
+            expected = [other, {"id": "factory-watchdog", "group": "Coordinator",
+                "kind": "action",
+                "title": f"Factory job silent: {name} silent {minutes + 1} min (limit {minutes})",
+                "why": "A coordinator job stopped writing its log. The coordinator is routing a fix; nothing for you unless this stays up."}]
+            for _ in range(2):
+                lane.watchdog()
+                exact(state["items"], expected)
+            mtimes[path] = now
+            lane.watchdog()
+            exact(state["items"], [other])
+        exact(replace.call_count, 16)
+        for call in replace.call_args_list:
+            exact(call.args, (decisions + ".tmp", decisions))
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog}
 
 
 def main():
@@ -470,6 +516,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "watchdog":
+                        import lane_driver
+                        with patch.object(lane_driver, "watchdog"):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted missing watchdog action")
                     if name == "turncap":
                         try:
                             turncap(early_interrupt=True)
