@@ -243,17 +243,30 @@ def board_items(snapshot):
 
     The board counts every item the shift may work, measured or not: a
     board with work in it and nothing moving is a stalled board."""
-    count = 0
+    return len(board_keys(snapshot))
+
+
+def board_keys(snapshot):
+    """Return the keys of the items the board holds.
+
+    A pull request and the ticket it names are the same item, so a pull
+    request is keyed by its ticket. A ticket the shift has not started is
+    on the board too: the board is the list, and the shift does not keep
+    a list of its own."""
+    keys = set()
     for repo in LANE_REPOS:
         data = (snapshot.get("repos") or {}).get(repo) or {}
-        count += len(data.get("prs") or [])
+        for pr in data.get("prs") or []:
+            keys.add(pr_item(repo, pr)[0])
     for ticket in snapshot.get("tickets") or []:
-        if ticket.get("repo") not in LANE_REPOS:
+        repo = ticket.get("repo") or ""
+        number = ticket.get("number")
+        if repo not in LANE_REPOS or not number:
             continue
         if (ticket.get("stage") or "") not in ("todo", "started"):
             continue
-        count += 1
-    return count
+        keys.add(f"{repo}#{number}")
+    return keys
 
 
 def builder_thread(repo, body):
@@ -686,9 +699,10 @@ def run_pass(ledger):
         receipts = stall_receipts()
         markers = stall_markers(SNAPSHOT, receipts)
         swept = True
+    fresh = stall.arrived(state, board_keys(SNAPSHOT))
     progressed = any(
         stall.moved(state, key, item["marker"]) for key, item in markers.items()
-    ) or any(stall.appeared(state, key) for key in markers)
+    ) or bool(fresh)
     board_event = stall.board(state, progressed, board_items(SNAPSHOT))
     for key, item in sorted(markers.items()):
         event = stall.observe(state, key, item["marker"])

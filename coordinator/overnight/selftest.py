@@ -1023,6 +1023,47 @@ def stall():
     exact(events[2][1]["kind"], "board")
     exact(rule.stalled(lane.STALL_STATE, f"{repo}#9"), True)
 
+    # New work on the board is progress, whether the shift has measured the
+    # new item or not.
+    state = rule.new_state()
+    exact(rule.arrived(state, {"a", "b"}), {"a", "b"})
+    exact(rule.arrived(state, {"a", "b"}), set())
+    exact(rule.arrived(state, {"b", "c"}), {"c"})
+    exact(sorted(state["board"]), ["b", "c"])
+
+    # A board that receives a new ticket every tick is a board that is
+    # working, so it does not stall.
+    boards = [
+        {"tickets": [dict(repo=repo, number=number, key=f"MO-{number}", stage="todo",
+                          problems=[])],
+         "repos": {repo: {"prs": [], "issues": []}}}
+        for number in (1, 2, 3)
+    ]
+    seen = {"index": 0}
+
+    def board(ledger, force=False):
+        index = min(seen["index"], len(boards) - 1)
+        seen["index"] += 1
+        return boards[index]
+
+    def run(cmd, timeout=150):
+        return "started\n"
+
+    lane.STALL_STATE = {}
+    lane.STALL_EVENTS.clear()
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", side_effect=board), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "run", run), \
+         patch.object(lane, "DRY", False):
+        for _ in range(3):
+            lane.run_pass({})
+    exact(lane.STALL_EVENTS, [])
+    lane.STALL_EVENTS.clear()
+
     # A stale board must not report an item as stalled: the shift reads the
     # board again before it decides, and the fresh head is progress.
     stale = {"number": 8, "state": "OPEN", "headRefOid": "a" * 40, "body": "Refs #9",

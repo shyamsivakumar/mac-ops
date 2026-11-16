@@ -133,6 +133,20 @@ def prune(state, keys):
     return state
 
 
+def arrived(state, keys):
+    """Record the board's items and return the ones that just arrived.
+
+    New work on the board is progress: the board moved, whatever the new
+    item is and whether the shift has measured it. The tracking is bounded
+    by the board: an item that left the board is dropped."""
+    seen = state.get("board")
+    if not isinstance(seen, dict):
+        seen = {}
+    fresh = {key for key in keys if key not in seen}
+    state["board"] = {key: True for key in keys}
+    return fresh
+
+
 def stalled(state, key):
     """Return True when the item was reported as stalled.
 

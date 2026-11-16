@@ -1597,9 +1597,10 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
         if not isinstance(tick, dict):
             die(f"tick {index} of the fixture {path} is not a mapping")
         markers = {str(key): str(value) for key, value in tick.items()}
+        fresh = stall.arrived(state, set(markers))
         progressed = any(
             stall.moved(state, key, marker) for key, marker in markers.items()
-        ) or any(stall.appeared(state, key) for key in markers)
+        ) or bool(fresh)
         board_event = stall.board(state, progressed, len(markers))
         for key, marker in sorted(markers.items()):
             event = stall.observe(state, key, marker)
