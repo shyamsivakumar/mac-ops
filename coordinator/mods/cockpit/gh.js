@@ -4,6 +4,7 @@ const TTL = 60000;
 const RETRY = 60000;
 const FRESH = 600000;
 const POOL = 4;
+const COMMITS_KEEP = 12;
 const FILES_KEEP = 8;
 const FILES_MAX = 60;
 const FILES_BYTES = 30000;
@@ -25,6 +26,8 @@ export const prFresh = (pr) => Date.now() - (cache.get(prKey(pr))?.at ?? 0) < FR
 
 const stateOf = (c) => (c.__typename === "StatusContext" ? c.state : c.status === "COMPLETED" ? c.conclusion : c.status);
 
+const failingChecks = (rollup) => (rollup ?? []).filter((c) => FAILED.has(stateOf(c))).map((c) => ({ name: c.name ?? c.context, url: c.detailsUrl ?? c.targetUrl ?? null }));
+
 const ciFailedAt = (rollup) => Math.max(0, ...(rollup ?? []).filter((c) => FAILED.has(stateOf(c))).map((c) => Date.parse(c.completedAt ?? c.startedAt) || 0));
 
 function ciOf(rollup) {
@@ -43,10 +46,13 @@ export const prChanges = (before, after) => PR_FIELDS.filter(([key]) => before?.
   .map(([key, label]) => `${label}: ${before?.[key] ?? "unknown"} → ${after[key] ?? "unknown"}`);
 
 export async function fetchPr(pr) {
-  const r = await exec("gh", ["pr", "view", String(pr.number), "--repo", pr.repo, "--json", "state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,url,headRefName,headRefOid,isDraft"]);
+  const r = await exec("gh", ["pr", "view", String(pr.number), "--repo", pr.repo, "--json", "state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,url,headRefName,headRefOid,isDraft,commits"]);
   if (r.code !== 0) throw new Error(r.stderr.trim() || "gh pr view failed");
   const j = JSON.parse(r.stdout);
-  return { state: j.state, mergeable: j.mergeable, mergeState: j.mergeStateStatus, sha: j.headRefOid, review: j.reviewDecision, ci: ciOf(j.statusCheckRollup), ciAt: ciFailedAt(j.statusCheckRollup), url: j.url, draft: j.isDraft, branch: j.headRefName };
+  const checks = failingChecks(j.statusCheckRollup);
+  const failure = checks.length ? { at: ciFailedAt(j.statusCheckRollup), checks } : cache.get(prKey(pr))?.data?.failure ?? null;
+  const commits = j.commits.slice(-COMMITS_KEEP).map((c) => ({ oid: c.oid.slice(0, 10), at: Date.parse(c.committedDate), head: c.messageHeadline.slice(0, 70) }));
+  return { failure, commits, state: j.state, mergeable: j.mergeable, mergeState: j.mergeStateStatus, sha: j.headRefOid, review: j.reviewDecision, ci: ciOf(j.statusCheckRollup), ciAt: ciFailedAt(j.statusCheckRollup), url: j.url, draft: j.isDraft, branch: j.headRefName };
 }
 
 const filesKey = (pr, sha) => `${prKey(pr)}@${sha}`;

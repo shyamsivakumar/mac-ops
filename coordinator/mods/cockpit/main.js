@@ -7,7 +7,7 @@ import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, m
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
-import { DEAD, laneOf, needReasons } from "./asks.js";
+import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -524,7 +524,7 @@ export default class Board extends View {
   }
 
   reviewOf(g) {
-    return g.threads.filter((c) => c.kind === "done" && c.review).sort((a, b) => b.at - a.at)[0] ?? null;
+    return reviewThread(g);
   }
 
   columns(t, now) {
@@ -540,8 +540,11 @@ export default class Board extends View {
     const placed = live.map((g) => {
       g.info = this.prInfo(g);
       g.asleep = Boolean(this.sleeper(g, now));
-      g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail");
-      return [g, laneOf(g, g.needs, () => !this.reviewBlock(g))];
+      g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail", now);
+      g.stalledAt = stallOf(g, now);
+      const lane = laneOf(g, g.needs, () => !this.reviewBlock(g));
+      g.trail = lane === "ready" ? null : trailOf(g, now, () => this.verdictFor(g)?.state === "fail");
+      return [g, lane];
     });
     this.asleepCount = live.filter((g) => g.asleep).length;
     this.pruneSnoozed(live, now);
@@ -616,9 +619,9 @@ export default class Board extends View {
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
         const session = variant !== "backlog" && g.kind !== "ask" && !g.issue;
-        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
-        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length), session), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
+        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length), session, g.trail), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
         for (const th of g.threads.slice(1)) {
           const tkey = `t:${th.key}`;
@@ -710,6 +713,8 @@ export default class Board extends View {
     if (key !== "needs") return since;
     const [first] = g.needs;
     if (first === "question") return g.primary.at;
+    if (first === "stalled") return g.stalledAt + STALL_AFTER;
+    if (first === "unrouted") return g.trail.at;
     if (first === "ci") return g.info.gh.ciAt || since;
     if (first === "changes") return this.reviewOf(g)?.at ?? since;
     return since;
@@ -723,7 +728,7 @@ export default class Board extends View {
     if (key === "needs") {
       const asking = groups.filter((g) => g.needs.includes("question"));
       const count = (reason) => groups.filter((g) => g.needs.includes(reason)).length;
-      return [...seg(asking.filter((g) => g.kind === "ask").length, "decisions", "blocked"), ...seg(asking.filter((g) => g.kind === "wait").length, "waiting", "blocked"), ...seg(asking.filter((g) => g.kind !== "ask" && g.kind !== "wait").length, "asked", "blocked"), ...seg(count("ci"), "CI failed", "blocked"), ...seg(count("changes"), "changes requested", "blocked"), ...seg(count("conflict"), "conflict", "blocked"), oldest];
+      return [...seg(asking.filter((g) => g.kind === "ask").length, "decisions", "blocked"), ...seg(asking.filter((g) => g.kind === "wait").length, "waiting", "blocked"), ...seg(asking.filter((g) => g.kind !== "ask" && g.kind !== "wait").length, "asked", "blocked"), ...seg(count("stalled"), "stalled", "blocked"), ...seg(count("unrouted"), "not sent back", "blocked"), ...seg(count("ci"), "CI failed", "blocked"), ...seg(count("changes"), "changes requested", "blocked"), ...seg(count("conflict"), "conflict", "blocked"), oldest];
     }
     if (key === DEAD) {
       return [...seg(groups.filter((g) => g.kind === "fail").length, "failed", "dim"), ...seg(groups.filter((g) => g.kind === "stop").length, "stopped", "dim"), oldest];
@@ -1614,7 +1619,7 @@ export default class Board extends View {
     if (!e || this.guard(true)) return;
     const g = e.group;
     g.info = this.prInfo(g);
-    g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail");
+    g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail", Date.now());
     if (laneOf(g, g.needs, () => !this.reviewBlock(g)) !== "ready") return say("info", "Merge blocked", this.reviewBlock(g) ?? "Not ready to merge");
     const refusal = this.refusalOf(g);
     const block = this.reviewBlock(g) || (refusal && !refusal.planned ? refusal.text : null);
