@@ -60,3 +60,19 @@ The receipt is `cycle-incomplete.md`, and it shows the two rules:
 - an issue whose state could not be read means the text blocker check is
   incomplete for it: the receipt says so instead of reporting that the
   blocker is not false.
+
+## The injected-input proof
+
+The checks take their data as an argument, so the repo's own proof
+harness can drive them without touching the machine. The new
+`cycle-health` eval lives in `coordinator/overnight/selftest.py`, next to
+the watchdog and drift evals that already prove the cycle's health
+boundary:
+
+    PYTHONPATH=coordinator/bin python3 coordinator/overnight/selftest.py
+
+The eval starts no process, opens no socket and reads no board: it hands
+the checks the probes, the log tails, the install status, the ticket
+records and the issue states, and it proves the four checks find their
+breaks and that a read which failed is never a clean result. The output
+is `selftest.txt`; every eval in the file passes.
