@@ -29,6 +29,18 @@ collapsed **Dead runs** column, which shows their count.
 real loader with a standing in for the `herdr` runtime module, so the T3 calls
 are the live ones.
 
+### Offline
+
+`node proof.mjs --offline` runs the deterministic half only. It stops before
+the runtime adapter is registered, before `hub.js` is imported or loaded,
+before the temporary decisions file is written, and before any T3 call, so it
+needs no live board and no credentials. The classifier it exercises is the
+real `coordinator/mods/cockpit/asks.js`, so an offline run still fails when
+the classifier regresses. It exits 0 when every check passes and 1 when one
+does not.
+
+### Live
+
 ```
 cd evidence/board-needs-you
 PROOF_DECISIONS_ITEMS='[]' node proof.mjs                                  # needs 0, dead 54
@@ -39,6 +51,12 @@ PROOF_DECISIONS_ITEMS='[{"id":"x",...},{"id":"y",...}]' node proof.mjs    # two 
 It also checks placement, not only the classifier: a finished turn that asks
 with an open PR lands in Needs you, a quiet one with an open PR stays in Ready
 to merge, and no asked group on the real board sits in Ready.
+
+The offline run covers the mixed group too: a group that is still running and
+also holds a thread whose turn ended by asking is counted as an ask, in
+either thread order, and it beats a mergeable PR. The same mixed group with a
+quiet thread stays a run, and a quiet dead group stays dead. Reverting the
+ask-before-run order in `asks.js` makes the offline run fail.
 
 `proof.txt` is all three runs together. The live board showed `needs 1` (a
 finished turn asking a real question) and `dead 3`; one decision took needs to
