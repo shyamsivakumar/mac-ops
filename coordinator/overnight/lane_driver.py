@@ -319,6 +319,13 @@ def drift_ff(ledger):
             ids = out.split()
             if len(ids) != 2 or ids[0] == ids[1]:
                 continue
+            try:
+                run(["git", "-C", d, "merge-base", "--is-ancestor", ids[0], ids[1]], timeout=60)
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode != 1:
+                    raise
+                print(f"{CFG[repo]['key']:5} left alone, not fast-forwardable ({ids[0]} vs {ids[1]})")
+                continue
             lkey = f"ff:{repo}:{ids[1]}"
             if lkey in ledger or DRY:
                 print(f"{CFG[repo]['key']:5} main behind ({ids[0][:8]} vs {ids[1][:8]})" + (" DRY" if DRY else " queued"))
