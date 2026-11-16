@@ -290,6 +290,7 @@ def gate_pipeline():
             with patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
                 lane.act_on_pr(target, 20, dict(ledger))
@@ -402,6 +403,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "CFG", {repo: {"key": "MO"}}), \
          patch.object(lane, "builder_thread", return_value=("10", "builder")), \
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
+         patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
          patch.object(lane, "run", command), \
          patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
@@ -940,7 +942,7 @@ def send_integrity():
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
                     exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
-                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": "brief"})
+                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief"})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
                 if failure == "error":
@@ -949,9 +951,10 @@ def send_integrity():
             output = io.StringIO()
             with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
                  patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
+                 patch.object(lane, "read_json", return_value=dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), contextlib.redirect_stdout(output):
                 try:
-                    result = lane.send("old", "brief", "fix", ledger, key)
+                    result = lane.send("old", "brief", "fix", ledger, key, repo=repo, pr_number=385)
                 except (subprocess.CalledProcessError, RuntimeError):
                     exact(failure in ("error", "empty"), True)
                     exact(ledger, {})
@@ -962,10 +965,10 @@ def send_integrity():
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
-         patch.object(lane, "t3", side_effect=AssertionError("dry read")), \
+         patch.object(lane, "t3", return_value={"thread": {"status": "running"}}), \
          patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
         ledger = {}
-        exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}")
+        exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}: send existing thread")
         exact(ledger, {})
 
     snapshot = {"repos": {repo: {"issues": [{"number": 385, "labels": []}], "prs": []}}}
@@ -988,12 +991,12 @@ def send_integrity():
              patch.object(lane, "t3", return_value={"thread": {"status": "deleted"}}), \
              patch.object(lane, "run", command):
             result = lane.unstick(repo, ledger)
-        exact(actions, ["fresh"])
-        exact(f"cont:old" in ledger, not failure)
+        exact(actions, [])
+        exact(f"cont:old" in ledger, True)
         if failure:
             exact("started" in result, False)
         else:
-            exact(result, "continue #385: fresh (old unreachable): receipt")
+            exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
 
 
 def cycle_health():
