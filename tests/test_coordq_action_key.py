@@ -88,6 +88,17 @@ class ActionKeyTests(unittest.TestCase):
         self.assertIn("#1", err)
         self.assertEqual(len(self.q.load()["items"]), 0)
 
+    def test_a_key_without_an_item_id_stays_held(self):
+        # A record the queue cannot read is still a key the queue took.
+        # Releasing it would let the same board action be sent twice.
+        queue = self.q.load()
+        queue["actionKeys"] = {KEY: {"state": "queued"}}
+        self.q.save(queue)
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 1)
+        self.assertIn(KEY, err)
+        self.assertEqual(self.q.load()["items"], [])
+
     def test_a_legacy_key_of_a_queued_item_is_read_as_queued(self):
         # A record written before the state was kept is a bare item id.
         # The item may still be waiting in the queue, so the state comes
