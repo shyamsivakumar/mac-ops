@@ -5660,29 +5660,54 @@ def read_shift_receipts(root: Path) -> dict[tuple[str, str], dict]:
     return receipts
 
 
-def receipt_says(receipts: dict[tuple[str, str], dict], repo: str, *numbers) -> str:
+def receipt_number(item: dict) -> object:
+    """Return the number of the ticket an item's receipt is filed under.
+
+    A receipt is filed under a ticket's own issue number. A pull request
+    has two numbers, and its own number is not its ticket's: a pull
+    request #435 that belongs to issue #188 has a receipt under #188, and
+    a receipt under #435 belongs to some other ticket. So a pull request
+    is looked up by the issue it is linked to, and only a ticket is
+    looked up by its own number.
+
+    The linked issue is the number the item carries as `issue`, and the
+    receipt's own `Ticket` line is the cross-check: a receipt whose
+    ticket line names a different number is not this item's receipt."""
+    linked = item.get("issue")
+    if linked not in (None, ""):
+        return linked
+    if item.get("kind") == "pull-request":
+        return ""
+    return item.get("number")
+
+
+def receipt_says(
+    receipts: dict[tuple[str, str], dict], repo: str, number: object
+) -> str:
     """Return what the shift's own receipt says about an item.
 
     The receipt holds the state the shift recorded and why it stopped, so
     an entry can quote the record instead of assuming what happened. An
     item with no receipt gets no claim: the entry says that nothing was
-    recorded."""
-    for number in numbers:
-        if number in (None, ""):
-            continue
-        try:
-            key = (str(repo or "").strip().lower(), str(int(number)))
-        except (TypeError, ValueError):
-            continue
-        fields = receipts.get(key)
-        if not fields:
-            continue
-        state = (fields.get("state") or "").strip() or "no state"
-        why = (fields.get("stopped because") or "").strip()
-        if why:
-            return f"the receipt records the state {state}: {why}"
-        return f"the receipt records the state {state}"
-    return ""
+    recorded.
+
+    The receipt is looked up by the number the caller passes, and the
+    caller passes the ticket's number: an entry never quotes another
+    ticket's state because the two numbers happened to collide."""
+    if number in (None, ""):
+        return ""
+    try:
+        key = (str(repo or "").strip().lower(), str(int(number)))
+    except (TypeError, ValueError):
+        return ""
+    fields = receipts.get(key)
+    if not fields:
+        return ""
+    state = (fields.get("state") or "").strip() or "no state"
+    why = (fields.get("stopped because") or "").strip()
+    if why:
+        return f"the receipt records the state {state}: {why}"
+    return f"the receipt records the state {state}"
 
 
 def budget_observation(minutes: int, fix_tries: int, budget: dict) -> str:
@@ -5903,7 +5928,7 @@ def park_decisions(
                         (
                             "What the shift did",
                             receipt_says(
-                                shift_receipts, repo, number, item.get("issue")
+                                shift_receipts, repo, receipt_number(item)
                             )
                             or (
                                 "the board reports a failing check; builder "
@@ -5932,7 +5957,7 @@ def park_decisions(
                         (
                             "What the shift did",
                             receipt_says(
-                                shift_receipts, repo, number, item.get("issue")
+                                shift_receipts, repo, receipt_number(item)
                             )
                             or (
                                 "the recorded elapsed time or retry count meets "

@@ -203,6 +203,33 @@ written.
 Device, handset and live-service testing is waived (Shyam, 2026-11-14).
 No device or live case was run, so none failed.
 
+## The fourth gate round (PR #435, VERDICT: FAIL at 4418dd2)
+
+The gate found one major defect and one stale document line.
+
+1. **The receipt lookup used the pull request's number before the linked
+   issue's.** A pull request has two numbers, and its own number is not
+   its ticket's: pull request #435 belongs to issue #188, so a receipt
+   filed under #435 belongs to some other ticket. The snag entry looked
+   up both numbers and took whichever it found first, so it could quote
+   an unrelated ticket's state and stopping reason.
+   `receipt_number` now returns the ticket's number and nothing else: the
+   linked issue for a pull request, the item's own number for a ticket,
+   and no number at all for a pull request with no linked ticket. The
+   proof's case 16 files receipts under both numbers and shows that the
+   entry quotes the linked ticket's receipt, never the other one, and
+   that a pull request with no linked ticket quotes nothing and says the
+   action was not verified.
+2. **The README still claimed the log holds a stop.** The log line said
+   the shift "stopped the item and spent no further fix try on it". It
+   now says the shift's budget rule held the item back, records the
+   observation, and never states that the item was stopped. The README
+   also names the receipt rule now: an entry that names an action quotes
+   the shift's own receipt, looked up by the ticket's number.
+
+Device, handset and live-service testing is waived (Shyam, 2026-11-14).
+No device or live case was run, so none failed.
+
 ## The reviewer round
 
 One in-session reviewer round ran over the diff (`gpt-6.1-sol`, high
@@ -236,8 +263,8 @@ effort). It found eight defects, all fixed in this branch:
   local check): passed.
 - `python3 coordinator/overnight/overnight selftest`: all 12 fixture
   evals pass.
-- `python3 evidence/MO-220/prove-park.py`: passed (fifteen cases,
-  including every case the three gate rounds found).
+- `python3 evidence/MO-220/prove-park.py`: passed (sixteen cases,
+  including every case the four gate rounds found).
 - `python3 -m pytest tests/ -q`: 286 pass, 2 fail. Both failures are
   pre-existing on this branch's base and are unrelated to this part:
   `tests/test_gatekeep_retry_limit.py::NonAstraGateTest::test_a_dead_opus_gate_is_not_requeued`
