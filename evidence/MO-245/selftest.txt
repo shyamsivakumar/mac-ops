@@ -11,3 +11,4 @@ PASS board-integrity
 PASS api-budget
 PASS ff-drift
 PASS cycle-health
+PASS stall

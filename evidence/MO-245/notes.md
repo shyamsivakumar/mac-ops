@@ -146,3 +146,28 @@ finding per repository ("the issue's comments were cut off at 100, so
 the number of starts is not known and the ticket is not classified") and
 no ticket counted from a list that is not whole. The `cycle-health`
 eval holds the same case.
+
+## The bounded log read
+
+`queue/` logs are appended to all day and never rotated. The health
+check used to read each log whole and then split every line to keep the
+last few, so a log that had grown for weeks could spend the cycle's
+memory and its deadline and stop the receipt and the board work.
+
+The read is bounded now: it seeks to the end of the log and reads at
+most `LOG_TAIL_BYTES` (512 KiB), which is one fixed read whatever the
+log's size, and it decodes and keeps only the lines asked for. The
+partial line the window starts in the middle of is dropped, so it is
+never counted as a line of the log. The read also checks the cycle's
+deadline first: a cycle that is out of time says the log was not read
+and reports the check incomplete, instead of reading on.
+
+The measurement on this Mac: `dispatch.log` is 2.1 MB and `gatekeep.log`
+is 492 KB; the tail read of `dispatch.log` takes 0.9 ms. The
+`cycle-health` eval proves the window: a traceback 60k lines from the
+end is outside the window and is not found, a traceback at the end is
+inside it and is found, the window never returns more lines than asked
+for, and a cycle out of time reads nothing.
+
+The live cycle on this head is `cycle-bounded-log.md`: all four checks
+ran against the live queue and the live board.

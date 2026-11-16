@@ -1127,6 +1127,33 @@ def cycle_health():
     exact(stale[0]["check"], "attempts")
     exact("incomplete" in stale[0]["detail"], True)
     exact(any("stale" in line for line in ran), True)
+    # The log read is bounded: a huge log costs one fixed read from the
+    # end, so a traceback buried far from the end is outside the window
+    # and a traceback at the end is inside it.
+    import time as clock
+    with tempfile.TemporaryDirectory() as folder:
+        module.QUEUE_DIR = Path(folder)
+        log = Path(folder) / "dispatch.log"
+        filler = "a line of the queue log\n" * 60000
+        log.write_text("Traceback (most recent call last):\n" + filler)
+        lines, error = module.queue_log_tail("dispatch.log", 40, clock.monotonic() + 60)
+        exact(error, "")
+        exact(any("Traceback" in line for line in lines), False)
+        log.write_text(filler + "Traceback (most recent call last):\n")
+        lines, error = module.queue_log_tail("dispatch.log", 40, clock.monotonic() + 60)
+        exact(error, "")
+        exact(any("Traceback" in line for line in lines), True)
+        # The window never returns more lines than asked for, and it
+        # drops the partial first line of the window.
+        exact(len(lines) <= 40, True)
+        exact(all(line for line in lines), True)
+        # A cycle that is out of time does not read the log at all.
+        lines, error = module.queue_log_tail("dispatch.log", 40, clock.monotonic() - 1)
+        exact(lines, [])
+        exact("ran out of time" in error, True)
+        # The bounded window is a fixed budget, far below the log's size.
+        exact(module.LOG_TAIL_BYTES <= 1024 * 1024, True)
+        exact(log.stat().st_size > module.LOG_TAIL_BYTES, True)
 
 
 def stall():
