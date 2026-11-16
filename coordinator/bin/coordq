@@ -409,14 +409,14 @@ def drain():
             queue["reservedThreads"].pop(reservation, None)
             item["attempts"] = item.get("attempts", 0) + 1
             item["last_error"] = out[:200]
-            if request_id and request_id.startswith("gate:") and quota_failure(out):
+            if request_id and request_id.startswith("gate:"):
                 key = ":".join(request_id.split(":")[:3])
-                model = fallback_reviewer(queue, key, item["args"]["modelSelection"], item.get("builderModels", []))
+                model = failed_gate_reviewer(queue, key, item["args"]["modelSelection"], out)
                 if model:
                     item["args"]["modelSelection"] = model
-                    item["args"]["clientRequestId"] = key + ":" + model["model"]
+                    item["args"]["clientRequestId"] = key + ":" + model["model"] + ":retry"
                     item["attempts"] = 0
-                    log(f"quota fallback {key}: {model['model']}")
+                    log(f"gate retry {key}: {model['model']}")
                 else:
                     item["attempts"] = MAX_ATTEMPTS
             save(queue)
@@ -959,6 +959,18 @@ def fallback_reviewer(queue, key, current, models=()):
     return OPUS_MODEL
 
 
+def failed_gate_reviewer(queue, key, current, failure):
+    if quota_failure(failure):
+        return fallback_reviewer(queue, key, current)
+    state = queue.setdefault("gateInfrastructure", {}).setdefault(key, {"retries": 0})
+    if current == ASTRA_MODEL and state["retries"] == 0:
+        state["retries"] = 1
+        return ASTRA_MODEL
+    state.update(status="needs-you", reason="Gate infrastructure failed after the Astra retry"
+                 if current == ASTRA_MODEL else "Non-Astra gate infrastructure failure")
+    return None
+
+
 def gate_args(settings, repo, issue, number, head, publisher, model):
     """The launch arguments of the gate for one pull request.
 
@@ -1134,16 +1146,14 @@ def cmd_gatekeep(a):
                         continue
                     current = {"instanceId": thread.get("providerInstanceId"),
                                "model": thread.get("model")}
-                    if current != ASTRA_MODEL:
+                    model = failed_gate_reviewer(queue, key, current, data)
+                    if model is None:
+                        if not a.dry_run:
+                            heads[key] = {**state, "givenUp": True}
+                            save(queue)
                         continue
-                    if quota_failure(data):
-                        model = fallback_reviewer(queue, key, current, event.get("builderModels", []))
-                        if model is None:
-                            if not a.dry_run:
-                                save(queue)
-                            continue
-                        args["modelSelection"] = model
-                        args["clientRequestId"] = key + ":" + model["model"]
+                    args["modelSelection"] = model
+                    args["clientRequestId"] = key + ":" + model["model"] + ":retry"
                     print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
                     if not a.dry_run:
                         del heads[key]
