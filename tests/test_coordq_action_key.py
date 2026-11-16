@@ -88,6 +88,49 @@ class ActionKeyTests(unittest.TestCase):
         self.assertIn("#1", err)
         self.assertEqual(len(self.q.load()["items"]), 0)
 
+    def test_a_legacy_key_of_a_queued_item_is_read_as_queued(self):
+        # A record written before the state was kept is a bare item id.
+        # The item may still be waiting in the queue, so the state comes
+        # from the queue and not from the shape of the record.
+        queue = self.q.load()
+        queue["items"] = [{"id": 1, "tool": "t3_thread_send",
+                           "args": {"threadId": "mcp:launch:one"},
+                           "priority": 800, "title": "board action",
+                           "actionKey": KEY}]
+        queue["actionKeys"] = {KEY: 1}
+        self.q.save(queue)
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 1)
+        self.assertIn("already queued", err)
+        self.assertIn("#1", err)
+
+    def test_a_legacy_key_of_a_gone_item_is_read_as_dispatched(self):
+        queue = self.q.load()
+        queue["actionKeys"] = {KEY: 7}
+        self.q.save(queue)
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 1)
+        self.assertIn("already dispatched", err)
+        self.assertIn("#7", err)
+
+    def test_a_legacy_key_keeps_its_state_after_a_dispatch(self):
+        queue = self.q.load()
+        queue["items"] = [{"id": 1, "tool": "t3_thread_send",
+                           "args": {"threadId": "mcp:launch:one"},
+                           "priority": 800, "title": "board action",
+                           "actionKey": KEY}]
+        queue["actionKeys"] = {KEY: 1}
+        self.q.save(queue)
+        self.q.live = lambda: 0
+        with patch.object(self.q, "active_thread_ids", return_value=set()), \
+                patch.object(self.q, "call", return_value=(0, "{}")):
+            self.q.drain()
+        self.assertEqual(self.q.load()["actionKeys"],
+                         {KEY: {"id": 1, "state": "dispatched"}})
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 1)
+        self.assertIn("already dispatched", err)
+
     def test_the_key_of_an_item_that_gave_up_is_released(self):
         self.start(KEY)
         # The item ran out of attempts and left the queue without ever

@@ -440,26 +440,34 @@ def drain():
 
 
 def action_key_record(queue, key):
-    """The record of one action key: the item that took it and its state."""
+    """The record of one action key: the item that took it and its state.
+
+    A record written before the state was kept is a bare item id. Its
+    state is read from the queue, because the item may still be waiting
+    there: a key of a queued item is queued, and a key of an item that is
+    nowhere in the queue was dispatched."""
     record = (queue.get(ACTION_KEYS) or {}).get(key)
     if record is None:
         return None
     if isinstance(record, dict):
-        return record
-    # A record written before the state was kept is an item id, and an
-    # item id on its own means the action was dispatched.
-    return {"id": record, "state": "dispatched"}
+        item_id, state = record.get("id"), record.get("state")
+    else:
+        item_id, state = record, None
+    if item_id is None:
+        return None
+    return {"id": item_id, "state": action_key_state(queue, item_id, state)}
 
 
 def set_action_key_state(queue, key, state):
-    """Record what the queue did with the item that holds an action key."""
+    """Record what the queue did with the item that holds an action key.
+
+    The record is written back into the queue, so a record that carried
+    only an item id keeps the state from now on.
+    """
     record = action_key_record(queue, key)
     if record is None:
         return
-    if isinstance(record, dict):
-        record["state"] = state
-    else:
-        queue.setdefault(ACTION_KEYS, {})[key] = {"id": record, "state": state}
+    queue.setdefault(ACTION_KEYS, {})[key] = {"id": record["id"], "state": state}
 
 
 def release_action_key(queue, item):
