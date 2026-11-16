@@ -1036,3 +1036,23 @@ empty receipts, dry mode, continuation routing, and an unchecked-send mutation
 that must fail. Fixtures replace T3, command execution, and file reads. They do
 not prove delivery after coordq accepts a request: a thread can change status
 between inspection and queue execution. Live-service checks and cutover are waived.
+
+
+### Hourly fixture scheduling (Refs #386)
+
+`coord-tick` runs the canonical `overnight selftest` under its tick lock before
+checking model availability. Each completed attempt persists its injected clock
+time in `~/.local/state/mac-ops/overnight-selftest.json`. Runs less than an hour
+later skip the subprocess, including after a launcher restart. The subprocess
+has a 120-second timeout and must return exactly the twelve registered PASS
+lines with exit status zero. Failure, timeout, or runner errors replace the
+single `overnight-selftest` action in coordinator `decisions.json`; a later PASS
+removes it and preserves other items.
+
+The existing watchdog eval also exercises scheduling with a temporary filesystem,
+a fake clock and an injected runner, including recovery and a negative control.
+Run `overnight selftest` or `python3 scripts/mac_ops_fast_check.py` for evidence.
+No installation or live tick was performed for this change. The launcher and
+its sibling coordinator files must be installed together through the existing
+installation process. Malformed state files and concurrent decisions writers
+remain outside the scheduling fixture coverage.
