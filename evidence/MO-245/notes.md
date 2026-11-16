@@ -126,3 +126,23 @@ The receipt is `cycle-stale-board.md`. The attempts check says "the
 board list is stale, so no ticket was classified" and reports an
 incomplete check, instead of the clean "no finding" an empty stale
 board used to produce. The `cycle-health` eval holds the same case.
+
+## The cut-off issue comments
+
+GitHub returns the first 100 comments of an issue with the issue in a
+list read. The starts past that limit are not known, so a ticket whose
+start comments sit beyond it cannot be counted, and a ticket started
+three or more times would slip past the check. The check now reports
+the cut-off as an incomplete check and does not classify that ticket.
+
+The proof is a cycle whose `gh` is a stub that pads the first issue of
+each repository past the 100-comment limit:
+
+    OVERNIGHT_GH=<stub> OVERNIGHT_ROOT=<root> \
+    python3 coordinator/overnight/overnight shift --dry-run
+
+The receipt is `cycle-cut-comments.md`. It shows one incomplete-check
+finding per repository ("the issue's comments were cut off at 100, so
+the number of starts is not known and the ticket is not classified") and
+no ticket counted from a list that is not whole. The `cycle-health`
+eval holds the same case.

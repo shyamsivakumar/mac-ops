@@ -156,6 +156,10 @@ PR_LIMIT = 100
 # The open issues of one repository, read for the marks a ticket body
 # carries. The board's tickets are a small part of that list.
 ISSUE_LIMIT = 500
+# The comments GitHub returns with an issue in a list read: the first
+# 100. An issue with that many comments has more, and the starts past
+# the limit are not known.
+ISSUE_COMMENT_LIMIT = 100
 PR_FIELDS = (
     "number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body"
 )
@@ -5693,15 +5697,38 @@ def check_attempts(
                 }
             )
         attempts: dict[int, int] = {}
+        truncated: set[int] = set()
         for row in rows:
             number = row.get("number")
             if not isinstance(number, int):
                 continue
+            comments = row.get("comments") or []
+            if len(comments) >= ISSUE_COMMENT_LIMIT:
+                # The issue list carries the first comments of an issue
+                # only, so the starts past the limit are not known: the
+                # ticket is not classified from a list that is not whole.
+                truncated.add(number)
+                continue
             count = 0
-            for comment in row.get("comments") or []:
+            for comment in comments:
                 if STARTING.match((comment.get("body") or "").strip()):
                     count += 1
             attempts[number] = count
+        for number in sorted(truncated):
+            findings.append(
+                {
+                    "check": "attempts",
+                    "subject": f"{repo}#{number}",
+                    "detail": (
+                        f"the issue's comments were cut off at "
+                        f"{ISSUE_COMMENT_LIMIT}, so the number of starts is "
+                        "not known and the ticket is not classified"
+                    ),
+                    "action": (
+                        "read the issue's comments and count the starts"
+                    ),
+                }
+            )
         try:
             pulls, cut = read_pull_requests(repo, deadline)
         except RepoError as exc:
@@ -5759,6 +5786,10 @@ def check_attempts(
                 carried.add(target["number"])
         for issue in tickets:
             number = issue.get("number")
+            if number in truncated:
+                # The comments of this issue were cut off, so its starts
+                # are not known and the ticket is not classified.
+                continue
             records.append(
                 {
                     "repo": repo,
