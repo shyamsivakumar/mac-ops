@@ -1,0 +1,22 @@
+# Cycle health - 2026-11-16 06:06 PST
+
+- Cycle: 2026-11-16 06:06 PST
+- Findings: 2
+- Check: the coordinator tools under the interpreter launchd uses
+- Ran: the interpreter /opt/homebrew/bin/python3 (from the PATH of /Users/shyamsivakumar/Library/LaunchAgents/dev.coordinator.dispatch.plist)
+- Ran: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/.local/bin/coordq status` exit 0
+- Ran: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/.local/bin/overnight --help` exit 0
+- Ran: the last 40 lines of /Users/shyamsivakumar/Code/coordinator/queue/dispatch.log
+- Ran: the last 40 lines of /Users/shyamsivakumar/Code/coordinator/queue/gatekeep.log
+- Result: no finding
+- Check: the installed coordinator matches the merged main
+- Ran: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/Code/mac-ops/install_coordinator.py status` exit 0
+- Result: 1 finding(s)
+- Finding: /Users/shyamsivakumar/Code/mac-ops/install_coordinator.py: the installed coordinator differs from the merged main: /Users/shyamsivakumar/.local/bin/coordq, /Users/shyamsivakumar/.local/bin/ticket, /Users/shyamsivakumar/.coordinator/AGENT-RULES.md, /Users/shyamsivakumar/.local/bin/selftest.py (action: find the branch the installed file came from, tell that builder to stop installing, and reinstall from main once the pull requests merge)
+- Check: a ticket started three or more times with no open pull request
+- Ran: the board list is stale, so no ticket was classified
+- Result: 1 finding(s)
+- Finding: the board: the board list is stale, so the attempts check is incomplete: no ticket is classified (action: read the board again and run the check again)
+- Check: a text blockers refusal that names a closed issue
+- Ran: the last 400 lines of /Users/shyamsivakumar/Code/coordinator/queue/dispatch.log
+- Result: no finding
