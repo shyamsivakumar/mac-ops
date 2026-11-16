@@ -305,7 +305,8 @@ effort). It found eight defects, all fixed in this branch:
 
 ## Checks
 
-- `python3 scripts/mac_ops_fast_check.py`: passed.
+- `python3 scripts/mac_ops_fast_check.py`: passed on the merged head
+  (`evidence/MO-220/fast-check.log`).
 - `~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py` (the full
   local check): passed.
 - `python3 coordinator/overnight/overnight selftest`: all 12 fixture
