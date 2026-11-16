@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 import argparse, fcntl, json, os, re, signal, subprocess, sys, time
+from pathlib import Path
+
+# The modules below live next to this script. A caller that loads this file
+# by path, as the tests and the installer checks do, does not put that
+# directory on the path, so these imports would fail without this line.
+_BIN_DIR = str(Path(__file__).resolve().parent)
+if _BIN_DIR not in sys.path:
+    sys.path.insert(0, _BIN_DIR)
 
 from gate_bar import GATE_BAR
 from tick_health import tick_alarm
