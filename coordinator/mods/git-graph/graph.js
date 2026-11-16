@@ -13,6 +13,7 @@ import { available, check, openUpdate } from "./update.js";
 import { loadRepos } from "./repos.js";
 import { branchData, readBranches, branchesStale } from "./branches.js";
 import { Shipped, EVERY } from "./shipped.js";
+import { Flow } from "./flow.js";
 
 const PIN = "git-graph.repo";
 const folderOf = (v) => (typeof v === "string" && v ? v : null);
@@ -119,8 +120,8 @@ export class Graph {
     this.seen = new Map(); this.commitDetails = new Map();
     this.handle = cx.focus_handle();
     this.picking = false; this.repos = null;
-    this.mode = this.folder ? "repo" : "shipped"; this.shipped = new Shipped();
-    cx.timer.every(EVERY, (cx) => this.shipped.tick(cx, this.mode === "shipped"));
+    this.mode = this.folder ? "repo" : "shipped"; this.shipped = new Shipped(); this.flow = new Flow();
+    cx.timer.every(EVERY, (cx) => { this.shipped.tick(cx, this.mode === "shipped"); this.flow.tick(cx, this.mode === "flow"); });
     this.reset();
     this.refresh(cx);
     cx.timer.after(1500, (cx) => this.warm(cx));
@@ -570,13 +571,13 @@ export class Graph {
       .bg(this.mode === mode ? t.raised : t.background).text_color(this.mode === mode ? t.foreground : t.muted)
       .when(this.mode === mode, (e) => e.border_1().border_color(t.border)).hover((s) => s.text_color(t.foreground))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .on_click((_e, cx) => { this.mode = mode; if (mode === "shipped") this.shipped.wake(cx); cx.notify(); }).child(text);
+      .on_click((_e, cx) => { this.mode = mode; if (mode === "shipped") this.shipped.wake(cx); if (mode === "flow") this.flow.wake(cx); cx.notify(); }).child(text);
     return h_flex().p(2).gap(2).flex_none().rounded(7).bg(t.background).border_1().border_color(t.border)
-      .child(segment("graph-mode-shipped", "Shipped", "shipped")).child(segment("graph-mode-repo", "Repo graph", "repo"));
+      .child(segment("graph-mode-shipped", "Shipped", "shipped")).child(segment("graph-mode-flow", "Flow", "flow")).child(segment("graph-mode-repo", "Repo graph", "repo"));
   }
 
   header(t) {
-    const shipped = this.mode === "shipped";
+    const shipped = this.mode === "shipped" || this.mode === "flow";
     const ready = !shipped && (this.state === "ready" || this.state === "empty");
     const where = this.current ?? (this.head ? `detached at ${this.head.slice(0, 8)}` : null);
     return h_flex().h(34).flex_none().px(10).gap(8).items_center().border_b(1).border_color(t.border)
@@ -593,7 +594,7 @@ export class Graph {
         .on_click(() => openUpdate()).child(div().size(6).rounded(3).bg(t.accent)).child("Update Graph")))
       .when(ready && this.remoteNames?.length > 0, (e) => e.child(this.iconButton("graph-fetch", "fetch", this.fetching ? "Fetching…" : null, false, (_e, cx) => this.fetch(cx), t)))
       .when(shipped || this.state !== "nofolder", (e) => e.child(this.iconButton("graph-refresh", "refresh", null, false,
-        (_e, cx) => { if (shipped) this.shipped.refresh(cx, true); else { this.refresh(cx); this.loadBranches(cx, true); } }, t)));
+        (_e, cx) => { if (this.mode === "flow") this.flow.refresh(cx, true); else if (shipped) this.shipped.refresh(cx, true); else { this.refresh(cx); this.loadBranches(cx, true); } }, t)));
   }
 
   taskNotice(t) {
@@ -795,6 +796,7 @@ export class Graph {
       })
       .child(this.header(t))
       .when(this.mode === "shipped", (e) => e.child(this.shipped.render(cx)))
+      .when(this.mode === "flow", (e) => e.child(this.flow.render(cx)))
       .when(this.mode === "repo" && !picker && !ready, (e) => e.child(this.taskNotice(t)))
       .when(picker, (e) => e.child(this.picker(t)))
       .when(this.mode === "repo" && ready && !picker, (e) => e.child(this.taskNotice(t)).child(this.toolbar(t)).child(this.branchesSection(t, mono)).child(this.columns(t, this.graphWidth())).child(this.list(t, mono))

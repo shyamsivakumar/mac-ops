@@ -8,6 +8,7 @@ import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIss
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
+import { flushFlowLog, logLaneChange, markPass } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
@@ -252,6 +253,7 @@ export default class Board extends View {
     hydrateAlerts();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
     cx.timer.every(CHECK_EVERY, (cx) => this.alertTick(cx));
+    cx.timer.every(TICK, (cx) => cx.spawn(() => flushFlowLog(Date.now())));
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
     this.watchWorktrees(cx);
     this.restore();
@@ -813,13 +815,16 @@ export default class Board extends View {
   }
 
   trackColumns(placed, now) {
+    markPass(now);
     const next = {};
     let dirty = Object.keys(this.seen).length !== placed.length;
     for (const [g, col] of placed) {
       const prev = this.seen[g.key];
       next[g.key] = prev?.col === col ? prev : { col, at: prev ? now : 0 };
       dirty ||= next[g.key] !== prev;
+      if (prev?.col !== col) logLaneChange({ t: now, key: g.key, from: prev?.col ?? null, to: col, project: g.project, pr: g.info?.pr?.number ?? null });
     }
+    for (const key of Object.keys(this.seen)) if (!next[key]) logLaneChange({ t: now, key, from: this.seen[key].col, to: null, project: null, pr: null });
     if (!dirty) return;
     this.seen = next;
     localStorage.setItem(SEEN_KEY, JSON.stringify(next));
