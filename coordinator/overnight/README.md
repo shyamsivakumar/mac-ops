@@ -817,3 +817,30 @@ atomic replacement target. A disabled production handler must fail the fixture.
 All six registered evals pass; evals 7 through 12 remain unimplemented.
 The repository check is `python3 scripts/mac_ops_fast_check.py`.
 Live execution and installation are not verified by these fixtures.
+
+### Eval 7: board-integrity (Refs #380)
+
+`overnight selftest` runs the same reporter as the read-only command
+`overnight board-integrity < snapshot.json`. The command prints every defect
+and exits 1 when any are found, or 0 for a clean board. Imports perform no I/O.
+
+The snapshot has `tickets` (repo, number, stage) and a `repos` mapping. Each
+repo has its configured `key`, `issues` (number, title, state, labels and
+optional GitHub `blockedBy` nodes/totalCount), and `prs` (number, state, body).
+Include open issues, open and merged PRs, and the prior started ticket states.
+Missing blocker fields mean no blockers; provided blocker lists must be complete.
+PR bodies use the coordinator's `Refs #n` convention for same-repo issues.
+Keys must have the configured uppercase prefix and a positive integer suffix.
+Backlog and hold stages identify parked issues under the eval contract.
+
+Fixtures assert the exact seven diagnostic strings for absent and multiple
+stages, malformed and duplicate keys, lost started state, a parked blocker
+with an open PR, and an open issue referenced by a merged PR. A clean case
+checks exit 0; disabling the reporter must fail the eval. All subprocesses
+remain forbidden by the suite harness. No unimplemented eval is registered.
+
+Left for later: live snapshot collection, pagination completeness, persisted
+started-state history, cross-repository PR references, and periodic loop wiring.
+The command reports defects and does not repair or mutate the board. Live
+service checks are waived for this ticket; fixture evidence proves the supplied
+snapshot boundary, not live GitHub state.
