@@ -2179,7 +2179,6 @@ export default class Board extends View {
   }
 
 
-
   mergeStop(g) {
     return this.unsure() ? "Board data is out of date. Wait for the refresh." : this.approveBlock(g);
   }
