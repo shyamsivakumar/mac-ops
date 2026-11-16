@@ -98,21 +98,17 @@ def current_run(cli, read_tool, thread):
         cli, read_tool, {"threadId": thread["threadId"], "runLimit": 5, "limit": 1}
     )
     runs = data.get("recentRuns", [])
-    first_start = ticket_start(runs) or parse_time(thread["createdAt"])
     running = [r for r in runs if r.get("status") == "running"]
-    run = max(running or runs, key=lambda r: r.get("ordinal", 0), default=None)
+    run = max(running, key=lambda r: r.get("ordinal", 0), default=None)
     if run and run.get("startedAt"):
         return (
             run["runId"],
             run.get("ordinal", 0),
             parse_time(run["startedAt"]),
-            first_start,
+            parse_time(run["startedAt"]),
             False,
         )
-    run_id = (
-        thread.get("latestRunId") or thread.get("activeRunId") or thread["threadId"]
-    )
-    return run_id, 0, parse_time(thread["updatedAt"]), first_start, True
+    return None
 
 
 def log_hit(harness, thread, run_id, minutes, dry_run, kind="hit"):
@@ -127,7 +123,10 @@ def log_hit(harness, thread, run_id, minutes, dry_run, kind="hit"):
 
 
 def handle_thread(harness, thread, state, dry_run):
-    run_id, _, started, _, _ = current_run("t3mcp", "t3_thread_read", thread)
+    active = current_run("t3mcp", "t3_thread_read", thread)
+    if active is None:
+        return
+    run_id, _, started, _, _ = active
     now = datetime.now(timezone.utc)
     tid = thread["threadId"]
     if "staging test and promote" in thread["title"].lower():
@@ -156,7 +155,7 @@ def handle_thread(harness, thread, state, dry_run):
         if dry_run:
             print(f"DRY-RUN would interrupt and park: {harness} {tid} {run_id}")
             return
-        call("t3mcp", "t3_thread_interrupt", {"threadId": tid})
+        call("t3mcp", "t3_thread_interrupt", {"threadId": tid, "runId": run_id})
         state["handled"].append(run_id)
         if tid not in state.setdefault("parked", []):
             state["parked"].append(tid)
