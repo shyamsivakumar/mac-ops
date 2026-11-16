@@ -5384,6 +5384,14 @@ def read_thread_record(thread_id: str, deadline: float) -> tuple[dict, str]:
         return {}, f"the thread {thread_id} did not return JSON: {exc}"
     if not isinstance(data, dict):
         return {}, f"the thread {thread_id} did not return an object"
+    thread = data.get("thread")
+    if (
+        not isinstance(thread, dict)
+        or not thread
+        or not isinstance(thread.get("status"), str)
+        or not thread["status"].strip()
+    ):
+        return {}, f"the thread {thread_id} returned an empty or malformed thread record"
     return data, ""
 
 
@@ -5803,8 +5811,8 @@ def park_decisions(
                         ("Problem", "a check is failing: " + ", ".join(failing)),
                         (
                             "What the shift did",
-                            "the builder was sent the failing check, and the gate "
-                            "runs again when the head carries it",
+                            "the board reports a failing check; builder delivery "
+                            "has not been verified",
                         ),
                         ("Next", "the builder fixes the failing check"),
                     ],
@@ -5827,8 +5835,8 @@ def park_decisions(
                         ("Problem", verdict["why"]),
                         (
                             "What the shift did",
-                            "the item was stopped and parked, and no further fix "
-                            "try was spent on it",
+                            "the recorded elapsed time or retry count meets the "
+                            "parking threshold; stopping has not been verified",
                         ),
                         ("Next", verdict["next"]),
                     ],

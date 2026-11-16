@@ -202,3 +202,16 @@ The merge, push and slot-cap rules, the Ascend rules, the coordq queue,
 the launchd jobs, the tick, the merge and close commands, and every
 existing test or check. No secret is written: both files go through the
 shift's own redaction before they are written.
+
+## Fix round 2
+
+Reject empty or malformed thread records before parking aggregation. An unreadable
+thread marks the read incomplete and preserves the existing parking lot. Snags
+report observed check failures and budget thresholds; delivery and stopping are
+explicitly unverified. Both corrections agree with #188's reporting scope.
+
+In-session reviewer round: inspected the boundary, preservation path, and changed
+report strings. No remaining critical or major finding in this diff. A direct
+probe rejected empty objects, empty thread objects, list thread values, and
+non-string statuses. No existing tests were changed. Diff comment review: no new
+comments. Deslop review: no further cleanup needed. Live actions were not run.
