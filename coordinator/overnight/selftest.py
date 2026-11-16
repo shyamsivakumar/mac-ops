@@ -534,6 +534,11 @@ def hourly_selftest_fixture():
     import tempfile
     import hourly_selftest as adapter
     from types import SimpleNamespace
+    # The adapter's expected set is the suite's registered eval names. The
+    # fixture used to take its expectations from the adapter, so it agreed
+    # with a wrong adapter; this compares the two lists instead, and a
+    # missing eval or a stale name fails here rather than in production.
+    exact(sorted(adapter.EXPECTED), sorted(EVALS))
     with tempfile.TemporaryDirectory() as directory:
         state = Path(directory) / "state.json"
         decisions = Path(directory) / "decisions.json"
@@ -581,6 +586,66 @@ def hourly_selftest_fixture():
                 pass
             else:
                 raise AssertionError("negative control accepted unconditional PASS")
+    # The adapter must run the executable that sits beside it. A stub that
+    # prints the suite's own names must pass, and an executable that is not
+    # there must fail with a reason of its own rather than the generic
+    # "fixture suite failed".
+    stub_source = ("NAMES = %s\n"
+                   "for name in NAMES:\n"
+                   "    print('PASS ' + name)\n" % json.dumps(sorted(EVALS)))
+    with tempfile.TemporaryDirectory() as directory:
+        home = Path(directory)
+        (home / "Code/coordinator").mkdir(parents=True)
+        decisions = home / "Code/coordinator/decisions.json"
+        decisions.write_text(json.dumps({"items": [{"id": "unrelated"}]}))
+        bindir = home / "bin"
+        bindir.mkdir()
+        stub = bindir / "overnight"
+        stub.write_text(stub_source)
+        script = bindir / "hourly_selftest.py"
+        script.write_text("# stand-in for the installed adapter\n")
+        commands = []
+
+        def stub_runner(command, **options):
+            commands.append(command)
+            exact(Path(command[1]).resolve(), stub.resolve())
+            source = stub.read_text()
+            exact(source, stub_source)
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                exec(compile(source, str(stub), "exec"), {"__name__": "__main__"})
+            output = buffer.getvalue()
+            exact(output, "".join("PASS " + name + "\n" for name in sorted(EVALS)))
+            return subprocess.CompletedProcess(command, 0, output, "")
+
+        with patch.object(adapter, "__file__", str(script)), \
+             patch.object(Path, "home", return_value=home), \
+             patch.object(adapter.subprocess, "run", stub_runner):
+            exact(adapter.tick_selftest(), "PASS")
+        exact(len(commands), 1)
+        exact(commands[0][2], "selftest")
+        exact(json.loads((home / ".local/state/mac-ops/overnight-selftest.json").read_text())["passed"], True)
+        exact(json.loads(decisions.read_text()), {"items": [{"id": "unrelated"}]})
+    with tempfile.TemporaryDirectory() as directory:
+        home = Path(directory)
+        (home / "Code/coordinator").mkdir(parents=True)
+        decisions = home / "Code/coordinator/decisions.json"
+        decisions.write_text(json.dumps({"items": [{"id": "unrelated"}]}))
+        bindir = home / "bin"
+        bindir.mkdir()
+        script = bindir / "hourly_selftest.py"
+        script.write_text("# stand-in for the installed adapter\n")
+        with patch.object(adapter, "__file__", str(script)), \
+             patch.object(Path, "home", return_value=home), \
+             patch.object(adapter.subprocess, "run",
+                          side_effect=AssertionError("no process may start")):
+            exact(adapter.tick_selftest(), "FAIL")
+        items = json.loads(decisions.read_text())["items"]
+        exact([item["id"] for item in items], ["unrelated", adapter.ALARM])
+        why = items[-1]["why"]
+        exact("overnight executable not found" in why, True)
+        exact(why == "fixture suite failed", False)
+        exact(json.loads((home / ".local/state/mac-ops/overnight-selftest.json").read_text())["passed"], False)
 
 
 def watchdog():
