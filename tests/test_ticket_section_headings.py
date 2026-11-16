@@ -30,40 +30,55 @@ CONFIG = json.loads((ROOT / "coordinator" / "config" / "tickets.json").read_text
 CFG = {"repos": {"shyamsivakumar/mac-ops": {"key": "MO"}}, "template": CONFIG["template"]}
 SECTION = "Data/secrets and stop conditions"
 
+# The configured section names and their order, written out so that a change
+# to the configuration fails here instead of passing quietly.
+CONFIGURED = [
+    "Goal and why",
+    "Context",
+    "Scope and non-goals",
+    "Design fit",
+    "Blocked by",
+    "Acceptance and proof",
+    "CI",
+    "Must not cause",
+    "Data/secrets and stop conditions",
+    "Rollback",
+    "Gate",
+    "Finish",
+]
+
 
 def body(case):
     return (FIXTURES / case / "body.md").read_text()
 
 
-class CanonicalSectionTest(unittest.TestCase):
-    def test_the_configured_name_is_its_own_canonical_form(self):
-        self.assertEqual(ticket.canonical_section(SECTION), "data secrets stop conditions")
-
-    def test_a_comma_reads_the_same_as_a_slash(self):
-        self.assertEqual(ticket.canonical_section("Data, secrets and stop conditions"),
-                         ticket.canonical_section(SECTION))
-
-    def test_the_word_and_is_a_separator_between_words(self):
-        self.assertEqual(ticket.canonical_section("Data and secrets and stop conditions"),
-                         ticket.canonical_section(SECTION))
-
-    def test_case_and_spacing_do_not_matter(self):
-        self.assertEqual(ticket.canonical_section("DATA/SECRETS   AND stop Conditions"),
-                         ticket.canonical_section(SECTION))
-
-    def test_a_different_name_keeps_a_different_form(self):
-        self.assertNotEqual(ticket.canonical_section("Design fit"),
-                            ticket.canonical_section(SECTION))
-
-
 class TemplateStatusTest(unittest.TestCase):
-    def test_the_comma_heading_finds_the_configured_section(self):
-        status = ticket.template_status(CFG, body("comma"))
-        self.assertEqual(status[SECTION], "ok")
-
     def test_the_comma_label_line_finds_the_configured_section(self):
+        self.assertEqual(ticket.template_status(CFG, body("comma"))[SECTION], "ok")
+
+    def test_the_comma_label_line_in_bold_finds_the_configured_section(self):
         text = body("comma").replace(
             "Data, secrets and stop conditions:", "**Data, secrets and stop conditions**:")
+        self.assertEqual(ticket.template_status(CFG, text)[SECTION], "ok")
+
+    def test_the_comma_heading_finds_the_configured_section(self):
+        text = body("comma").replace(
+            "Data, secrets and stop conditions: Repo files and the local ticket config only; no secrets and no network writes.",
+            "## Data, secrets and stop conditions\n\nRepo files and the local ticket config only.")
+        self.assertEqual(ticket.template_status(CFG, text)[SECTION], "ok")
+
+    def test_a_heading_written_as_markdown_passes_every_section(self):
+        status = ticket.template_status(CFG, body("heading"))
+        self.assertEqual([s for s, v in status.items() if v != "ok"], [])
+
+    def test_case_and_spacing_do_not_matter(self):
+        text = body("comma").replace(
+            "Data, secrets and stop conditions:", "DATA/SECRETS   AND stop Conditions:")
+        self.assertEqual(ticket.template_status(CFG, text)[SECTION], "ok")
+
+    def test_the_word_and_is_a_separator_between_words(self):
+        text = body("comma").replace(
+            "Data, secrets and stop conditions:", "Data and secrets and stop conditions:")
         self.assertEqual(ticket.template_status(CFG, text)[SECTION], "ok")
 
     def test_a_deleted_heading_is_still_missing(self):
@@ -74,7 +89,7 @@ class TemplateStatusTest(unittest.TestCase):
         self.assertEqual(status[SECTION], "ok")
 
     def test_every_section_of_a_written_body_is_found(self):
-        for case in ("comma", "slash"):
+        for case in ("comma", "slash", "heading"):
             status = ticket.template_status(CFG, body(case))
             self.assertEqual([s for s, v in status.items() if v != "ok"], [], case)
 
@@ -86,14 +101,27 @@ class TemplateStatusTest(unittest.TestCase):
         text = body("slash").replace(SECTION, "Design context")
         self.assertEqual(ticket.template_status(CFG, text)[SECTION], "missing")
 
+    def test_a_letter_is_not_a_separator(self):
+        text = body("slash").replace(SECTION, "Data/secrets and stop conditionsx")
+        self.assertEqual(ticket.template_status(CFG, text)[SECTION], "missing")
+
+    def test_a_non_ascii_letter_is_not_a_separator(self):
+        text = body("heading").replace("## Context\n", "## Contexté\n")
+        self.assertEqual(ticket.template_status(CFG, text)["Context"], "missing")
+
+    def test_a_list_item_is_not_a_section_label(self):
+        text = body("comma").replace(
+            "Context: The skill writes", "Context:\n- Context: The skill writes")
+        self.assertEqual(ticket.template_status(CFG, text)["Context"], "ok")
+
     def test_the_configured_names_and_their_order_do_not_change(self):
-        self.assertEqual(CFG["template"], CONFIG["template"])
+        self.assertEqual(CFG["template"], CONFIGURED)
 
 
 class TicketStartProofTest(unittest.TestCase):
-    """The three `ticket start --dry-run` cases, on the real CLI."""
+    """The `ticket start --dry-run` cases, on the real CLI."""
 
-    def test_the_three_cases(self):
+    def test_the_cases(self):
         sys.path.insert(0, str(ROOT))
         spec = importlib.util.spec_from_file_location(
             "ticket_start_proof", ROOT / "tests" / "ticket_start_proof.py")

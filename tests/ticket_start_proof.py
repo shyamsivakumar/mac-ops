@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Proof for the ticket section matcher: three `ticket start --dry-run` runs.
+"""Proof for the ticket section matcher: four `ticket start --dry-run` runs.
 
 Each case runs the real CLI in coordinator/bin/ticket. The GitHub read is
 answered by the stub in tests/fixtures/ticket_start/ghstub, so no issue on
 GitHub is read, written or changed.
 
 Cases:
-  comma   the skill's heading "Data, secrets and stop conditions" passes
-  missing the same heading deleted still reports the section missing
-  slash   the configured heading "Data/secrets and stop conditions" still passes
+  comma   the skill's label line "Data, secrets and stop conditions" passes
+  heading the same words written as a Markdown heading pass
+  missing the section deleted still reports the section missing
+  slash   the configured name "Data/secrets and stop conditions" still passes
 """
 import os
 import subprocess
@@ -22,6 +23,7 @@ REF = "shyamsivakumar/mac-ops#9001"
 
 CASES = [
     ("comma", "checks passed"),
+    ("heading", "checks passed"),
     ("missing", "refused: template sections Data/secrets and stop conditions (missing)"),
     ("slash", "checks passed"),
 ]
