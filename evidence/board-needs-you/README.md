@@ -12,7 +12,8 @@ collapsed **Dead runs** column, which shows their count.
 
 - `coordinator/mods/cockpit/asks.js` is the classifier: `endsWithAsk` reads a
   turn's last line, `columnOf` decides the column for a group of threads, and
-  `place` gives a real ask precedence over a mergeable PR.
+  `place` gives a real ask precedence over a mergeable PR. An asking thread in
+  a group that is otherwise running still counts, because that turn is asking.
 - `coordinator/mods/cockpit/hub.js` reads `decisions.json` as cards, and reads
   the tail of each finished thread once per change (cached by `updatedAt`) to
   see whether that turn asked something.
