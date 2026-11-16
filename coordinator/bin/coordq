@@ -77,6 +77,13 @@ STUCK_FILE = "gatekeep-stuck.txt"
 # up until its head changes.
 GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "2"))
 GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
+# The board action keys. A board action for one head is one send, so the
+# key of that action belongs to one queue item. The map holds the key of
+# every action the queue has already taken, and it keeps the item id, so a
+# second send of the same action is refused with the id of the first one.
+# The map is optional: a queue file without it is a queue that has taken no
+# board action yet.
+ACTION_KEYS = "actionKeys"
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 REVIEW_TITLE = re.compile(r"\breview\b", re.IGNORECASE)
 ROUTER_SOURCE = os.path.expanduser("~/.pi/agent/extensions/task-router.ts")
@@ -403,7 +410,8 @@ def drain():
                 os.replace(receipts_path + ".tmp", receipts_path)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
             save(queue)
-            log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})")
+            log(f"started #{item['id']} {item['tool']} {item['title']!r} (was {n}/{cap()})"
+                + (f" key {item['actionKey']}" if item.get("actionKey") else ""))
         else:
             queue["reserved"].pop(reservation, None)
             queue["reservedThreads"].pop(reservation, None)
@@ -421,6 +429,20 @@ def drain():
                     item["attempts"] = MAX_ATTEMPTS
             save(queue)
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
+
+
+def action_key_state(queue, item_id):
+    """What the queue is doing with the item that holds an action key.
+
+    A key is held from the moment the item is queued, through the
+    reservation the dispatcher takes while it starts, and after the item
+    is gone from the queue, so the same board action is never sent twice.
+    """
+    if any(item.get("id") == item_id for item in queue.get("items", [])):
+        return "queued"
+    if str(item_id) in (queue.get("reserved") or {}):
+        return "reserved"
+    return "dispatched"
 
 
 def cmd_start(a):
@@ -442,9 +464,19 @@ def cmd_start(a):
                 die(f"refused: {e}")
     with Lock(True):
         queue = load()
+        key = (getattr(a, "action_key", None) or "").strip()
+        if key:
+            held = (queue.get(ACTION_KEYS) or {}).get(key)
+            if held is not None:
+                die(f"refused: the action key {key} is already "
+                    f"{action_key_state(queue, held)} as coordq #{held}")
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
+        if key:
+            item["actionKey"] = key
         queue["next"] += 1
         queue["items"].append(item)
+        if key:
+            queue.setdefault(ACTION_KEYS, {})[key] = item["id"]
         # A gate request takes its head with it, so gatekeep does not queue
         # a second gate for the same head.
         request_id = str(args.get("clientRequestId") or "")
@@ -1494,6 +1526,9 @@ def main():
     s.add_argument("--title")
     s.add_argument("--priority", type=int, default=0)
     s.add_argument("--tool")
+    s.add_argument("--action-key",
+                   help="the board action key this item carries, as action:owner/repo#number:head. "
+                        "The key is held by one queue item, so a second item with the same key is refused.")
     s.set_defaults(fn=cmd_start)
     c = sub.add_parser("create")
     c.add_argument("args")
