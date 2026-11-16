@@ -3651,6 +3651,7 @@ def collect_items(
                         "title": pull.get("title") or "",
                         "url": pull.get("url") or "",
                         "priority": record.get("priority"),
+                        "stage": record.get("stage"),
                         "ticket": ""
                         if record["kind"] == "pr"
                         else record.get("number"),
