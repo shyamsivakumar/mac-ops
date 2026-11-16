@@ -955,6 +955,7 @@ def cycle_health():
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
+    real_decisions_checked = module.read_decisions_checked
     # The tools: a probe that failed and a log with a traceback.
     findings = module.tool_findings(
         [
@@ -1012,7 +1013,7 @@ def cycle_health():
             }
         ]
     )
-    module.read_decisions = lambda: (Path("/tmp/decisions.md"), [])
+    module.read_decisions_checked = lambda: (Path("/tmp/decisions.md"), [], "")
     module.read_pull_requests = lambda repo, deadline: ([], True)
     ran, cut = module.check_attempts(
         [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
@@ -1054,6 +1055,28 @@ def cycle_health():
     exact(cut_comments[0]["check"], "attempts")
     exact("cut off" in cut_comments[0]["detail"], True)
     exact("not classified" in cut_comments[0]["detail"], True)
+    # A decisions log that exists and cannot be read leaves the parked
+    # tickets unknown: the check is incomplete and classifies nothing.
+    module.read_decisions_checked = lambda: (
+        Path("/tmp/decisions.md"),
+        [],
+        "the log could not be read: boom",
+    )
+    ran, unreadable = module.check_attempts(
+        [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
+    )
+    exact(len(unreadable), 1)
+    exact(unreadable[0]["check"], "attempts")
+    exact("incomplete" in unreadable[0]["detail"], True)
+    exact(any("no ticket was classified" in line for line in ran), True)
+    # A decisions log that does not exist yet is not an error: the
+    # coordinator writes it the first time it parks a ticket.
+    module.read_decisions_checked = real_decisions_checked
+    with tempfile.TemporaryDirectory() as folder:
+        module.DECISIONS_FILE = Path(folder) / "decisions.md"
+        _path, none_yet, none_error = module.read_decisions_checked()
+    exact(none_yet, [])
+    exact(none_error, "")
     # The board's blockers: a closed issue is a false blocker, an issue
     # whose state was never read is an incomplete check, not a clean one.
     refusal = {
