@@ -1010,3 +1010,14 @@ must use scripts that do not post a second RESULT themselves, and must supply
 the SHA and artifact identity. The wrapper does not verify artifact contents
 or terminate detached descendants; it must not wrap scripts that daemonize.
 Default selftest intercepts all subprocess calls and performs no live posting.
+
+
+### Eval 11: consolidation-guard (Refs #384)
+
+`overnight selftest` inspects the actual builder and gate brief generators
+and captures the lane re-cut dispatch with a fake command runner. The re-cut
+brief limits creation to two tickets and prohibits a third; a repeated dispatch
+uses the ledger receipt. Removing the dispatch must fail the negative control.
+This proves the dispatched instructions, not compliance by a live planner.
+Ticket bodies and coordinator comments are trusted inputs; the fixture covers
+the generated brief with a representative scoped body. No live thread is launched.
