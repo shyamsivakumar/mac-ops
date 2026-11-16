@@ -1,9 +1,4 @@
-"""The merge bar that every gate brief carries.
-
-Shyam set the bar on 2026-11-16: "yes merge when code is correct". The
-text lives here once, so the two brief builders read the same paragraph
-instead of each carrying a copy of its own.
-"""
+"""The merge bar both gate brief builders read, so the text lives only once."""
 
 GATE_BAR = """Merge bar (Shyam, 2026-11-16). This overrides any stricter proof wording in the ticket.
 
