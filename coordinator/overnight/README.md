@@ -798,3 +798,22 @@ both threshold and heavy-wait interruption paths; timing assertions are unchange
 Focused intercepted-call probes passed for empty and completed-only reads
 (no interruption), and selection of the running identity beside completed history.
 Device, handset and live-service testing remain waived, not failed.
+
+
+### Eval 6: zero-merge (Refs #379)
+
+`python3 coordinator/overnight/overnight selftest` now registers `zero-merge`.
+The lane driver's normal command checks the monitored board after its pass.
+With open PRs and no merge in the preceding 60 minutes, it writes one
+`factory-zero-merge` action to decisions.json. A merge anywhere in the monitored
+repos at or after the cutoff clears the action. No open PRs also clears it.
+The check uses the existing board snapshot and budgeted GitHub read adapter;
+failed reads abort before changing the action. Dry runs skip the check.
+
+Fixtures inject GitHub mergedAt responses, UTC time and decisions-file writes.
+They check old merges, an empty history, the exact cutoff, a recent merge in
+another repo, repeated raises, recovery, unrelated-item preservation and the
+atomic replacement target. A disabled production handler must fail the fixture.
+All six registered evals pass; evals 7 through 12 remain unimplemented.
+The repository check is `python3 scripts/mac_ops_fast_check.py`.
+Live execution and installation are not verified by these fixtures.
