@@ -41,3 +41,22 @@ break:
 - the board's blockers: the refusal of `strategy-replay-workbench#807`
   names `SRW-963 (#680)`, and `#680` is closed, so the text blocker is
   false.
+
+## The incomplete-check cycle
+
+The same command with a `gh` stub that fails the two reads it must not
+guess at (`pr list` and `api`), and a queue that holds one refusal
+naming a closed issue:
+
+    OVERNIGHT_GH=<stub> COORDQ_DIR=<fixture>/queue \
+    OVERNIGHT_ROOT=<fixture>/root \
+    python3 coordinator/overnight/overnight shift --dry-run
+
+The receipt is `cycle-incomplete.md`, and it shows the two rules:
+
+- a pull request list that could not be read means the tickets of that
+  repository are not classified at all: the receipt says the list could
+  not be read, and no ticket is reported as having no open pull request;
+- an issue whose state could not be read means the text blocker check is
+  incomplete for it: the receipt says so instead of reporting that the
+  blocker is not false.
