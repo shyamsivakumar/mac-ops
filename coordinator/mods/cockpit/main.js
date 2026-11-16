@@ -587,7 +587,8 @@ export default class Board extends View {
     const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, total: 0, groups: [] }]));
     const live = this.groups();
     const replaced = new Set(this.issueGroups.map((g) => g.key));
-    const queued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))];
+    const liveKeys = new Set(live.map((g) => g.key));
+    const queued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))].filter((g) => !liveKeys.has(g.key));
     this.projects = tally([...live, ...queued]);
     const inProject = (g) => !this.project || g.project === this.project;
     const matches = this.filterOf();
@@ -704,7 +705,7 @@ export default class Board extends View {
     const why = [...BLOCK_BUCKETS.map(([, name]) => name), PLAN_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
     const lanes = new Map([...cols.backlog.groups.map((g) => [g.key, "backlog"]), ...placed.map(([g, lane]) => [g.key, lane])]);
-    const marked = this.keys().flatMap((k) => cols[k].groups).filter((g) => this.marks.has(g.key));
+    const marked = this.keys().filter((k) => !this.isFolded(k)).flatMap((k) => cols[k].groups).filter((g) => this.marks.has(g.key));
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing, marked, lanes };
     return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries(REBASE_LANES.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
@@ -1486,6 +1487,7 @@ export default class Board extends View {
   }
 
   openReply(e, cx, label = null) {
+    this.replyMarked = false;
     if (!e || (e.group.issue && label !== ABANDON_LABEL)) return;
     if (e.group.kind === "ask") return run("coordinator.asks");
     this.replyLabel = label;
@@ -1728,6 +1730,7 @@ export default class Board extends View {
 
   clearMarks() {
     this.marks.clear();
+    this.replyMarked = false;
     this.armed = null;
   }
 
@@ -1737,6 +1740,7 @@ export default class Board extends View {
     const kept = [...this.marks].filter((key) => live.has(key));
     if (kept.length === this.marks.size) return;
     this.marks = new Set(kept);
+    this.replyMarked = false;
     this.armed = null;
   }
 
@@ -2145,6 +2149,7 @@ export default class Board extends View {
     }
     if (this.replyKey && !all.some((r) => r.key === this.replyKey)) {
       this.replyKey = this.successor(all, replying)?.key ?? null;
+      this.replyMarked = false;
       if (!this.replyKey) this.typing = false;
     }
     if (!this.pop) this.followPop();
