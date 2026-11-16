@@ -9,9 +9,13 @@ const SHOW_TIMEOUT = 60000;
 const ACT_TIMEOUT = 150000;
 const LIST_EVERY = 60000;
 const ORIGIN_BATCH = 8;
-const SHOW_BATCH = 2;
+const SHOW_BATCH = 6;
 const RETRY_AFTER = 300000;
-const TICKET_LINE = /^Ticket: (https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/(\d+))/;
+const TICKET_LINE = /^(?:Ticket: |Continue \S+ \()(https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/(\d+))/m;
+const SPEC_PATH = /\b(?:Approved source|Source|Spec|Design):\s*[`"']?([^\s`"',;]+?\.md)/;
+const PARENT_REF = /\b(?:Parent map|Parent programme|Part of)\b:?\s*(?:https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/|#)(\d+)/i;
+const REFS_LINE = /^Refs #(\d+)/m;
+const GENERIC_SPEC = new Set(["design", "decisions"]);
 const LINEAR_URL = /https:\/\/linear\.app\/[^\s)>\]"'`]+\/issue\/[^\s)>\]"'`]+/;
 
 export const STALE_TEXT = { offline: "GitHub offline", auth: "GitHub auth failed", rate_limit: "GitHub rate limited", error: "GitHub error" };
@@ -114,22 +118,57 @@ const modelId = (model) => `${vendorOf(model)}:${model.split("/").at(-1)}`;
 
 export const fellBack = (requested, effective) => (requested && effective && modelId(requested) !== modelId(effective) ? requested : null);
 
+export function parseParent(show) {
+  const named = PARENT_REF.exec(show.body);
+  if (named) return refParent(named[1] ?? show.repo, Number(named[2]), show);
+  const spec = SPEC_PATH.exec(show.body)?.[1];
+  if (spec) {
+    const parts = spec.replace(/\.md$/, "").split("/");
+    const name = GENERIC_SPEC.has(parts.at(-1)) ? parts.at(-2) : parts.at(-1);
+    return { key: `spec:${name}`, name };
+  }
+  const refs = show.body.includes("Chain position") ? null : REFS_LINE.exec(show.body);
+  return refs ? refParent(show.repo, Number(refs[1]), show) : null;
+}
+
+const refParent = (repo, number, show) => (number === show.number ? null : { key: `ref:${repo}#${number}`, ref: { repo, number } });
+
+const parentTitles = new Map();
+
+export function parentOf(origin) {
+  const parent = origin?.parent;
+  if (!parent) return null;
+  return { key: parent.key, title: parent.name ?? parentTitles.get(parent.key)?.title ?? `#${parent.ref.number}` };
+}
+
 const due = (origin) => !(origin?.retryAt > Date.now());
 
-export async function loadOrigins(threads) {
-  const todo = threads.filter((c) => !origins.has(c.key) || (origins.get(c.key).failed && due(origins.get(c.key)))).slice(0, ORIGIN_BATCH);
+export async function loadOrigins(threads, openIssues) {
+  const byKey = new Map(openIssues.filter((i) => i.key).map((i) => [i.key, { url: i.url, repo: i.repo, number: i.number }]));
+  for (const c of threads) {
+    const origin = origins.get(c.key);
+    if (origin && !origin.ticket && !origin.failed && byKey.has(c.task)) origins.set(c.key, { ...origin, ticket: byKey.get(c.task) });
+  }
+  for (const c of threads.filter((c) => c.issue && !origins.has(c.key))) origins.set(c.key, { ticket: { url: c.issue.url, repo: c.issue.repo, number: c.issue.number }, linear: null });
+  const todo = threads.filter((c) => !c.issue && !origins.has(c.key) || (origins.get(c.key).failed && due(origins.get(c.key)))).slice(0, ORIGIN_BATCH);
   const read = await Promise.allSettled(todo.map(async (c) => parseOrigin(await firstMessage(c.key))));
   read.forEach((r, i) => origins.set(todo[i].key, r.status === "fulfilled" ? r.value : { ticket: null, linear: null, failed: true, retryAt: Date.now() + RETRY_AFTER }));
   const pending = threads.filter((c) => origins.get(c.key)?.ticket && origins.get(c.key).requested === undefined && due(origins.get(c.key))).slice(0, SHOW_BATCH);
   let shown = 0;
   if (pending.length) {
     const cfg = await loadConfig();
-    const results = await Promise.allSettled(pending.map(async (c) => requestedModel(cfg, await showIssue(`${origins.get(c.key).ticket.repo}#${origins.get(c.key).ticket.number}`))));
+    const results = await Promise.allSettled(pending.map(async (c) => {
+      const show = await showIssue(`${origins.get(c.key).ticket.repo}#${origins.get(c.key).ticket.number}`);
+      return { requested: requestedModel(cfg, show), parent: parseParent(show) };
+    }));
     results.forEach((r, i) => {
       const origin = origins.get(pending[i].key);
-      origins.set(pending[i].key, r.status === "fulfilled" ? { ...origin, requested: r.value } : { ...origin, retryAt: Date.now() + RETRY_AFTER });
+      origins.set(pending[i].key, r.status === "fulfilled" ? { ...origin, ...r.value } : { ...origin, retryAt: Date.now() + RETRY_AFTER });
     });
     shown = results.filter((r) => r.status === "fulfilled").length;
   }
-  return read.some((r) => r.status === "fulfilled") || shown > 0;
+  const unnamed = [...new Map(threads.map((c) => origins.get(c.key)?.parent).filter((p) => p?.ref && !parentTitles.get(p.key)?.title && due(parentTitles.get(p.key))).map((p) => [p.key, p])).values()].slice(0, SHOW_BATCH);
+  const titled = await Promise.allSettled(unnamed.map((p) => showIssue(`${p.ref.repo}#${p.ref.number}`)));
+  titled.forEach((r, i) => parentTitles.set(unnamed[i].key, r.status === "fulfilled" ? { title: r.value.key ? r.value.title.slice(r.value.key.length).replace(/^[\s·:-]+/, "") : r.value.title } : { retryAt: Date.now() + RETRY_AFTER }));
+  return read.some((r) => r.status === "fulfilled") || shown > 0 || titled.some((r) => r.status === "fulfilled");
 }
