@@ -1254,3 +1254,16 @@ allowlist negative control. These fixtures do not prove live authentication or
 service availability. Live-service testing and the two live receipts were waived
 for this ticket; they remain necessary evidence before a future loop cutover.
 No loop installation or cutover is included.
+
+
+## PR state classification (Refs #277)
+
+`overnight board --json` classifies PRs by draft, conflict, missing ticket link,
+failed or missing exact-head check, and gate state. It reports `states`,
+`oldestByState`, and `noAction`. Builder lookup uses ticket receipts and then
+thread titles. Missing builders produce `needs-you`.
+
+Dispatch retains origin/main behavior. The latest ticket instruction limits
+this delivery to classification. Additional dispatch, reminder and dedupe work,
+state matrix proof, and live board counts remain unverified.
+See `evidence/MO-254/status.md` for verification and limitations.

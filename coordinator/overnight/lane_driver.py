@@ -295,6 +295,38 @@ def builder_thread(repo, body):
     return (refs[0] if refs else None), None
 
 
+def pr_action(pr, builder, verdict="absent", gate_live=False, builder_live=False):
+    head = pr.get("headRefOid") or ""
+    body = pr.get("body") or ""
+    checks = pr.get("statusCheckRollup") or []
+    failed = any((c.get("conclusion") or c.get("state") or "").upper()
+                 in {"FAIL", "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"} for c in checks)
+    agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "")
+                   and (c.get("conclusion") or c.get("state") or "").upper() == "SUCCESS" for c in checks)
+    check_ok = bool(head and re.search(rf"(?m)^Builder check: PASS {re.escape(head)}\s*$", body)) or agent_ok
+    if pr.get("isDraft"):
+        state, action = "draft", "finish"
+    elif pr.get("mergeable") == "CONFLICTING":
+        state, action = "conflict", "rebase"
+    elif not re.search(r"\bRefs #\d+", body):
+        state, action = "no-ticket-link", "link"
+    elif failed or not check_ok:
+        state, action = ("check-failed" if failed else "check-missing"), "check"
+    elif gate_live or verdict == "running":
+        return "gate-running", "none"
+    elif verdict == "none":
+        return "gate-no-verdict", "regate"
+    elif verdict == "PASS":
+        state, action = "gate-pass-unmerged", "fix"
+    elif verdict == "FAIL":
+        state, action = "gate-fail", "fix"
+    else:
+        return "ready-for-gate", "gate"
+    if builder_live:
+        return state, "none"
+    return (state, action) if builder else ("needs-you", "needs-you")
+
+
 def gate_verdict(repo, number, head):
     key = CFG[repo]["key"]
     threads = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"], "titleContains": f"review #{number} {head[:8]}", "limit": 10}).get("threads") or []

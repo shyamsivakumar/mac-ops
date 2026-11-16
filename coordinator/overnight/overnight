@@ -143,6 +143,7 @@ import json
 import os
 import plistlib
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -175,7 +176,7 @@ ISSUE_LIMIT = 500
 # the limit are not known.
 ISSUE_COMMENT_LIMIT = 100
 PR_FIELDS = (
-    "number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body"
+    "number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body,mergeable"
 )
 # A ticket reference in a pull request body or title. Only the GitHub
 # keywords count: a bare "#123" is often a pull request, not a ticket.
@@ -3651,6 +3652,7 @@ def collect_items(
                         "title": pull.get("title") or "",
                         "url": pull.get("url") or "",
                         "priority": record.get("priority"),
+                        "stage": record.get("stage"),
                         "ticket": ""
                         if record["kind"] == "pr"
                         else record.get("number"),
@@ -3830,6 +3832,12 @@ def collect_items(
                 "actionReason": "",
                 "actionCommand": "",
             }
+            if record.get("stage") == "started":
+                item["reason"] = "stage started"
+                item["actionReason"] = "the ticket is already started"
+                in_flight.append(item)
+                count_for(repo)["in_flight"] += 1
+                continue
             if record.get("stage") != READY_STAGE:
                 item["reason"] = f"stage {record.get('stage') or 'unknown'}"
                 item["actionReason"] = "the board stage is not todo"
@@ -3882,6 +3890,63 @@ def collect_items(
                 item["dryRunCommand"] = (
                     f"ticket start {repo}#{record.get('number')} --dry-run"
                 )
+
+    import lane_driver
+    pulls = {(repo, pull["number"]): pull for repo, prs in pull_requests.items() for pull in prs}
+    for item in failing + gate_pass + in_flight:
+        if item.get("kind") != "pull-request":
+            continue
+        repo, number = item["repo"], item["number"]
+        pull = dict(pulls[(repo, number)])
+        pull["statusCheckRollup"] = [
+            {"name": row.get("name"), "state": "SUCCESS" if row.get("bucket") == "pass" else row.get("state") or row.get("bucket", "").upper()}
+            for row in checks.get((repo, number), ([], ""))[0]
+        ]
+        issue = refs_issue(pull.get("body") or "") or item.get("ticket") or 0
+        if not issue:
+            match = re.match(rf"{re.escape(keys.get(repo, ''))}[- #]+(\d+)", pull.get("title") or "")
+            issue = int(match.group(1)) if match else 0
+        builder, attempt = builder_thread(receipts, repo, int(issue)) if issue else ("", 0)
+        if not builder and issue:
+            payload = json.dumps({"allProjects": True, "titleContains": f"{keys.get(repo, '')}-{issue}", "limit": 100})
+            try:
+                threads = json.loads(run([T3MCP, "call", "t3_thread_list", payload], T3_TIMEOUT, deadline)).get("threads") or []
+                candidates = [t for t in threads if re.match(rf"{re.escape(keys.get(repo, ''))}[- #]+{issue}\b", t.get("title") or "")
+                              and not re.search(r"\b(review|gate)\b", t.get("title") or "", re.I)]
+                if candidates:
+                    builder = max(candidates, key=lambda t: t.get("updatedAt") or "")["threadId"]
+            except (RepoError, ValueError, KeyError):
+                builder = ""
+        gate = item.get("gate") or {}
+        if not gate:
+            thread = receipts.get(f"gate:{repo}#{number}:{item['head']}", "")
+            verdict = read_gate_report(thread, deadline, item["head"])[0] if thread else ""
+            gate = {"threadId": thread, "status": verdict.lower() if verdict else "running" if thread in live["ids"] else "none" if thread else "absent"}
+        status = gate.get("status") or "absent"
+        verdict = {"pass": "PASS", "fail": "FAIL", "queued": "running"}.get(status, status)
+        if status == "none" and not gate.get("threadId"):
+            verdict = "absent"
+        if status == "running" and gate.get("threadId") not in live["ids"]:
+            verdict = "none"
+        if checks.get((repo, number), ([], ""))[1]:
+            pull["body"] = re.sub(r"(?m)^Builder check: PASS .*?$", "", pull.get("body") or "")
+            pull["statusCheckRollup"] = []
+        state, action = lane_driver.pr_action(pull, builder, verdict,
+            gate_live=gate.get("threadId") in live["ids"], builder_live=builder in live["ids"])
+        if verdict == "FAIL" and action == "fix":
+            item.update(state=state, updatedAt=pull.get("updatedAt") or "",
+                        builderLive=builder in live["ids"], gateThreadLive=gate.get("threadId") in live["ids"])
+            continue
+        item.update(state=state, action=action, actionReason=state.replace("-", " "), updatedAt=pull.get("updatedAt") or "",
+                    builderLive=builder in live["ids"], gateThreadLive=gate.get("threadId") in live["ids"], issue=issue, builder={"threadId": builder, "attempt": attempt, "live": builder in live["ids"]}, gate=gate)
+        item["actionCommand"] = ""
+        if action == "gate":
+            item["actionCommand"] = f"coordq gate {repo}#{number}"
+        elif action not in {"none", "needs-you"}:
+            target = gate.get("threadId") if action == "regate" else builder
+            payload = {"threadId": target, "message": f"PR #{number} at {item['head']} needs {action}: {state}. Finish this action, run the repository check, update the exact-head check line, and report."}
+            action_key = shlex.quote(f"{action}:{repo}#{number}:{item['head']}")
+            item["actionCommand"] = f"coordq start {shlex.quote(json.dumps(payload))} --tool t3_thread_send --priority 800 --action-key {action_key}"
 
     failing.sort(key=order_key)
     gate_pass.sort(key=order_key)
@@ -5357,12 +5422,17 @@ def board_item(order: int, group: str, item: dict) -> dict:
     action = item.get("action") or "none"
     row = {
         "order": order,
+        "state": item.get("state") or group,
+        "updatedAt": item.get("updatedAt") or "",
+        "builderLive": bool(item.get("builderLive")),
+        "gateThreadLive": bool(item.get("gateThreadLive")),
         "group": group,
         "kind": item.get("kind"),
         "repo": item.get("repo"),
         "number": item.get("number"),
         "key": item.get("key") or "",
         "title": item.get("title") or "",
+        "stage": item.get("stage"),
         "action": action,
         "actionReason": item.get("actionReason") or "",
         "actionCommand": item.get("actionCommand") or "",
@@ -5486,8 +5556,19 @@ def cmd_board(args: argparse.Namespace) -> int:
     ]
     queue = result["queue"]
     live = result["live"]
+    pr_items = [item for item in items if item["kind"] == "pull-request"]
+    states = {}
+    oldest = {}
+    for item in pr_items:
+        state = item["state"]
+        states[state] = states.get(state, 0) + 1
+        if state not in oldest or item["updatedAt"] < oldest[state]["updatedAt"]:
+            oldest[state] = {key: item[key] for key in ("repo", "number", "updatedAt")}
     payload = {
         "command": "overnight board",
+        "states": states,
+        "oldestByState": oldest,
+        "noAction": sum(item["action"] == "none" and item["state"] != "gate-running" and not item.get("builderLive") and not item.get("gateThreadLive") for item in pr_items),
         "tickAlarm": tick_alarm(),
         "generatedAt": datetime.now(PT).strftime("%Y-%m-%d %H:%M %Z"),
         "rules": BOARD_RULES,
