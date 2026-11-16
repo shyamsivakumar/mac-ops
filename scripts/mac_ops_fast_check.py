@@ -74,11 +74,13 @@ def main():
     print(f"fast-check: Python syntax={changed_python}; shell syntax={changed_shell}; tests={tests}", flush=True)
     if args.plan:
         return
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    subprocess.run([sys.executable, "coordinator/overnight/overnight", "selftest"],
+                   cwd=ROOT, env=env, check=True, timeout=60)
     for name in changed_python:
         ast.parse((ROOT / name).read_bytes(), filename=name)
     for name in changed_shell:
         subprocess.run(["/bin/sh", "-n", name], cwd=ROOT, check=True)
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
     model_dir = ROOT / "formal" / "heavy-queue"
     for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
@@ -92,7 +94,6 @@ def main():
     subprocess.run([sys.executable, "heavy.py", "--help"], cwd=ROOT, env=env, check=True)
     for name in tests:
         subprocess.run([sys.executable, "-m", "unittest", name[:-3].replace("/", ".")], cwd=ROOT, env=env, check=True)
-    subprocess.run([sys.executable, "coordinator/overnight/overnight", "selftest"], cwd=ROOT, env=env, check=True)
     print("fast-check: passed; selected checks are not the full suite", flush=True)
 
 
