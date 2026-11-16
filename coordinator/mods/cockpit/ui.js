@@ -3,6 +3,7 @@
 import { div } from "gpui-kit";
 import { shared } from "herdr";
 import { v_flex, h_flex, Input, TextView } from "gpui-base";
+import { needReasons } from "./asks.js";
 import { shortModel } from "./hub.js";
 import { changedSinceLaunch, issueRef, pickerOptions, startBlock } from "./tickets.js";
 
@@ -19,6 +20,8 @@ const DRAFT = ["Draft", "dim", "Draft PR, not ready to merge"];
 const mergeOf = (gh) => (gh?.draft ? DRAFT : MERGE[gh?.mergeable] ?? MERGE.UNKNOWN);
 export const COLUMNS = [["needs", "Needs you", "blocked", "Needs you"], ["run", "Working", "working", "Working"], ["checks", "Checks running", "idle", "Checks"], ["cifail", "CI failed", "blocked", "CI failed"], ["review", "Review pending", "working", "Review"], ["ready", "Approved/Ready", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"], ["backlog", "Backlog", "idle", "Backlog"], ["dead", "Dead runs", "idle", "Dead"]];
 export const PR_LANES = new Set(["checks", "cifail", "review", "ready"]);
+export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "needs" && Boolean(reasons?.[0]) && reasons[0] !== "question");
+const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
 const COLUMN_NAME = Object.fromEntries(COLUMNS.map((c) => [c[0], c[3]]));
 export const COLUMN_LIMIT = { needs: 10, ready: 10 };
 const AGED_COLUMNS = new Set(["needs", "cifail", "ready"]);
@@ -97,13 +100,14 @@ export function columnHead(t, key, col, state, cb) {
     : key === "ready" && col.count > 0
     ? { id: "approve-all", hint: "M", label: state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, run: (cx) => cb.approveAll(cx), tip: state.approvable ? `Approve all ${state.approvable} (M)` : `${state.nothing} (M)`, dim: state.approvable === 0 }
     : null;
-  const extra = key === "needs" && state.failed > 0
+  const retry = key === "needs" && state.failed > 0
     ? { id: "retry-failed", hint: "F", label: `Retry ${state.failed}`, run: (cx) => cb.retry(cx), tip: `Retry the ${state.failed} failed cards, grouped by error (F)` }
-    : state.conflicts[key] > 0
+    : null;
+  const rebase = state.conflicts[key] > 0
     ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" && state.armed.key === key ? `Confirm ${state.conflicts[key]}` : `Rebase ${state.conflicts[key]}`, run: (cx) => cb.rebaseAll(cx, key), tip: `Send the ${state.conflicts[key]} conflicting PRs here back for a rebase (U does every lane)` }
     : null;
-  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, extra, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
-  const buttons = [settleReviewed, extra, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
+  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, retry, rebase, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
+  const buttons = [settleReviewed, retry, rebase, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
     .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)))
     .when(Boolean(tip), (el) => el.tooltip(tip))
@@ -119,7 +123,7 @@ export function columnHead(t, key, col, state, cb) {
       .when(!summary.length, (el) => el.child(div().flex_1().min_w(0).truncate().text_size(9.5).text_color(col.summary[0][1] === "dim" ? t.muted : t[col.summary[0][1]]).child(col.summary[0][0])))
       .child(div().flex_1())
       .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
-      .when(Boolean(extra), (el) => el.child(action(t, extra.id, extra.hint, extra.label, extra.run, extra.tip, tight, "blocked")))
+      .children([retry, rebase].filter(Boolean).map((x) => action(t, x.id, x.hint, x.label, x.run, x.tip, tight, "blocked")))
       .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5)))));
 }
 
@@ -236,6 +240,12 @@ function originChips(t, e, v, cb) {
     .when(Boolean(v.fell), (el) => el.child(chip(t, "fell back", "working", `Asked for ${shortModel(v.fell)}`)));
 }
 
+function needChip(t, reasons) {
+  const [label] = NEED_CHIP[reasons[0]];
+  const more = reasons.length > 1 ? ` +${reasons.length - 1}` : "";
+  return chip(t, label + more, "blocked", reasons.map((r) => NEED_CHIP[r][1]).join(". "));
+}
+
 function modelParts(c, runModel) {
   const base = shortModel(c.model);
   const used = shortModel(runModel);
@@ -312,6 +322,7 @@ export function card(t, e, v, input, cb) {
   const isPr = variant === "pr";
   const narrow = v.narrow;
   const reason = hasReason(c, variant);
+  const chips = Boolean(c.issue) || Boolean(v.needs?.length);
   const issue = c.issue;
   const line = isPr ? null : reason ? "Failed" : statusLine(v);
   const fit = isPr ? readyFit(v, narrow) : null;
@@ -348,7 +359,7 @@ export function card(t, e, v, input, cb) {
     ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(isPr ? readyActions : quick)
       .when(refused, (el) => el.child(div().id(`why-${e.key}`).flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).tooltip(v.refusal).child(v.refusal)))
     : h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(status).child(meta);
-  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason, issue) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
+  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason, chips) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
     .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
     .border_color(selected ? (mark === "focus" ? t.accent : t.input) : t.border).px(8).py(5).gap(2)
     .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
@@ -364,10 +375,11 @@ export function card(t, e, v, input, cb) {
       .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : v.col === "run" ? div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now)) : columnAge(t, e, v)))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
     .when(Boolean(issue), (el) => el.child(issueChips(t, issue)))
+    .when(Boolean(v.needs?.length), (el) => el.child(h_flex().h(H.chips).w_full().flex_none().items_center().overflow_hidden().child(needChip(t, v.needs))))
     .when(reason, (el) => el.child(div().id(`err-${e.key}`).w_full().h(H.reason - 2).flex_none().overflow_hidden().text_size(10).line_height("13px").text_color(t.muted).tooltip(c.error).child(c.context)))
     .child(div().flex_1())
     .child(foot);
-  const cardEl = div().h(cardHeight(false, reason, issue)).w_full().flex_none().px(6).pb(4).child(body);
+  const cardEl = div().h(cardHeight(false, reason, chips)).w_full().flex_none().px(6).pb(4).child(body);
   if (!replying) return cardEl;
   return v_flex().w_full().flex_none().child(cardEl)
     .child(h_flex().h(H.reply).px(6).pt(2).gap(6).items_start()
@@ -439,11 +451,12 @@ export function decisionOf(col, g, info, verdict, now) {
   const c = g.primary;
   const pr = info.status === "open" ? info.pr : null;
   const settle = (col === "done" || col === "dead") && g.threads.some((x) => SETTLEABLE.includes(x.kind));
+  const reasons = col === "needs" ? needReasons({ ...g, info }, () => verdict?.state === "fail") : null;
   const sendBack = (col === "ready" || col === "review") && pr && verdict?.state === "fail";
   const other = [
     { id: "open", key: "o", label: "Open thread" },
     ...((c.kind === "wait" && col === "needs") || sendBack ? [] : [{ id: "reply", key: "r", label: "Reply" }]),
-    ...(PR_LANES.has(col) ? [{ id: "note", key: "d", label: NOTE_LABEL }] : []),
+    ...(prCard(col, reasons) ? [{ id: "note", key: "d", label: NOTE_LABEL }] : []),
     ...(settle ? [{ id: "settle", key: "s", label: "Settle" }] : []),
     ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }] : []),
   ];
@@ -467,7 +480,7 @@ export function decisionOf(col, g, info, verdict, now) {
     };
   }
   const checks = pr ? checksOf(info.gh, verdict) : null;
-  if (col === "cifail" && pr) {
+  if ((col === "cifail" || (col === "needs" && prCard(col, reasons))) && pr) {
     return { headline: `Fix PR #${pr.number}`, primary: { id: "answer", key: "r", label: "Send back" }, why: [g.task ? `${g.task} · ${g.title}` : g.title, checkWords(info.gh, verdict)], other, checks };
   }
   if ((col === "ready" || col === "review") && pr) {

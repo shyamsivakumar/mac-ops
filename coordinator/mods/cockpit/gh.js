@@ -23,9 +23,13 @@ export const prEntries = (prs) => prs.map((pr) => [prKey(pr), prState(pr), cache
 export const seedPrs = (entries) => entries.forEach(([key, data, at]) => cache.set(key, { at, data }));
 export const prFresh = (pr) => Date.now() - (cache.get(prKey(pr))?.at ?? 0) < FRESH;
 
+const stateOf = (c) => (c.__typename === "StatusContext" ? c.state : c.status === "COMPLETED" ? c.conclusion : c.status);
+
+const ciFailedAt = (rollup) => Math.max(0, ...(rollup ?? []).filter((c) => FAILED.has(stateOf(c))).map((c) => Date.parse(c.completedAt ?? c.startedAt) || 0));
+
 function ciOf(rollup) {
   if (!rollup?.length) return "none";
-  const states = rollup.map((c) => (c.__typename === "StatusContext" ? c.state : c.status === "COMPLETED" ? c.conclusion : c.status));
+  const states = rollup.map(stateOf);
   if (states.some((s) => FAILED.has(s))) return "fail";
   if (states.some((s) => PENDING.has(s))) return "pending";
   return "pass";
@@ -42,7 +46,7 @@ export async function fetchPr(pr) {
   const r = await exec("gh", ["pr", "view", String(pr.number), "--repo", pr.repo, "--json", "state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,url,headRefName,headRefOid,isDraft"]);
   if (r.code !== 0) throw new Error(r.stderr.trim() || "gh pr view failed");
   const j = JSON.parse(r.stdout);
-  return { state: j.state, mergeable: j.mergeable, mergeState: j.mergeStateStatus, sha: j.headRefOid, review: j.reviewDecision, ci: ciOf(j.statusCheckRollup), url: j.url, draft: j.isDraft, branch: j.headRefName };
+  return { state: j.state, mergeable: j.mergeable, mergeState: j.mergeStateStatus, sha: j.headRefOid, review: j.reviewDecision, ci: ciOf(j.statusCheckRollup), ciAt: ciFailedAt(j.statusCheckRollup), url: j.url, draft: j.isDraft, branch: j.headRefName };
 }
 
 const filesKey = (pr, sha) => `${prKey(pr)}@${sha}`;

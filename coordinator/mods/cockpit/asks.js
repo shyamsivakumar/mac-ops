@@ -23,9 +23,28 @@ function columnOf(group) {
   return "done";
 }
 
-// The lane of a group, from live facts only: thread state, then the open PR's CI, then its review.
+const acting = (group) => group.threads.some((thread) => thread.kind === "run");
+
+// A fix round finished after the CI failure was reported, so the failing result may be stale.
+const fixFinished = (group, gh) => group.threads.some((thread) => !thread.review && thread.at > (gh.ciAt || Infinity));
+
+// Why a group needs Shyam, in display order: a question, then the facts of its open PR when no thread is acting on it.
+// `reviewFailed` is called only for an open PR that nobody is acting on.
+export function needReasons(group, reviewFailed) {
+  const column = columnOf(group);
+  const reasons = column === NEEDS ? ["question"] : [];
+  const { status, gh } = group.info;
+  if ((column !== NEEDS && column !== "done") || status !== "open" || acting(group)) return reasons;
+  if (gh?.ci === "fail" && !fixFinished(group, gh)) reasons.push("ci");
+  if (gh?.review === "CHANGES_REQUESTED" || reviewFailed()) reasons.push("changes");
+  if (gh && !gh.draft && gh.mergeable === "CONFLICTING") reasons.push("conflict");
+  return reasons;
+}
+
+// The lane of a group, from live facts only: its reasons to need Shyam, thread state, then the open PR's CI and review.
 // `reviewCleared` is called only for an open PR whose CI is not failing or pending.
-export function laneOf(group, reviewCleared) {
+export function laneOf(group, reasons, reviewCleared) {
+  if (reasons.length) return NEEDS;
   const column = columnOf(group);
   if (column !== "done" || group.info.status !== "open") return column;
   const ci = group.info.gh?.ci ?? "loading";
