@@ -585,7 +585,71 @@ def board_integrity():
         exact(audit.main(), 0)
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity}
+def api_budget():
+    import datetime as dt
+    import lane_driver as lane
+    from unittest.mock import mock_open
+    repo = "fixture/repo"
+    ledger = {}
+    commands = []
+    def read(command):
+        commands.append(command)
+        return {"issues": []} if command[0] == "ticket" else []
+    with patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "read_json", side_effect=read):
+        for number in range(1, 12):
+            lane.board_snapshot(ledger)
+            exact(ledger["_pass"], number)
+            exact(len(commands), ((number - 1) // 5 + 1) * 3)
+    now = dt.datetime(2026, 11, 16, tzinfo=dt.timezone.utc)
+    class Clock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+    tickets = [dict(repo=repo, number=n, key=f"F-{n}", stage="todo", problems=[]) for n in range(1, 6)]
+    commands.clear()
+    def refused(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 2, "refused: fixture", "")
+    ledger = {}
+    with patch.object(dt, "datetime", Clock), patch.object(lane, "unstick", return_value="nothing ready"), \
+         patch.object(lane, "api_remaining", return_value={"core": 1000, "graphql": 1000}), \
+         patch.object(subprocess, "run", side_effect=refused):
+        lane.start_next(repo, tickets, ledger)
+        exact(commands, [["ticket", "start", f"{repo}#{n}", "--dry-run"] for n in (1, 2, 3)])
+        for seconds, expected in [(1799, [4, 5]), (1800, [1, 2, 3])]:
+            now = Clock(2026, 11, 16, tzinfo=dt.timezone.utc) + dt.timedelta(seconds=seconds)
+            commands.clear()
+            lane.start_next(repo, tickets, ledger)
+            exact(commands, [["ticket", "start", f"{repo}#{n}", "--dry-run"] for n in expected])
+    for resource in ("core", "graphql"):
+        remaining = {"core": lane.API_FLOOR, "graphql": lane.API_FLOOR}
+        remaining[resource] -= 1
+        with patch.object(lane, "api_remaining", return_value=remaining):
+            for action in (lambda: lane.read_json(["gh", "fixture"]),
+                           lambda: lane.run(["ticket", "start", "fixture/repo#1", "--dry-run"])):
+                try:
+                    action()
+                except lane.ApiBudgetExhausted:
+                    pass
+                else:
+                    raise AssertionError("read continued below floor")
+    with patch.object(lane, "api_remaining", return_value={"core": lane.API_FLOOR, "graphql": lane.API_FLOOR}), \
+         patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "[]", "")) as called:
+        exact(lane.read_json(["gh", "fixture"]), [])
+        exact(called.call_count, 1)
+    for exhausted in (False, True):
+        quota = [{"core": 1000, "graphql": 1000}, {"core": 990, "graphql": 995}]
+        with patch("builtins.open", mock_open(read_data='{"repos": {}}')), \
+             patch.object(lane.json, "dump"), patch.object(lane, "DRY", True), \
+             patch.object(lane, "api_remaining", side_effect=quota), \
+             patch.object(lane, "run_pass", side_effect=lane.ApiBudgetExhausted("fixture") if exhausted else None), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            lane.main()
+        exact(output.getvalue().splitlines(), (["API BUDGET fixture"] if exhausted else []) + [
+            f"API USAGE used={{'core': 10, 'graphql': 5}} remaining={{'core': 990, 'graphql': 995}} floor={lane.API_FLOOR}"])
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget}
 
 
 def main():
@@ -603,6 +667,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "api-budget":
+                        import lane_driver
+                        with patch.object(lane_driver, "BOARD_REFRESH_PASSES", 1):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted excessive board reads")
                     if name == "board-integrity":
                         import board_integrity as audit
                         with patch.object(audit, "defects", return_value=[]):
