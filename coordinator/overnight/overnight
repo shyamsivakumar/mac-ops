@@ -5342,22 +5342,23 @@ def pending_request_from(data: dict) -> dict:
             # request and shows only answered ones is not a request the
             # shift may park.
             pending = False
-        for item in reversed(open_requests):
+        if open_requests:
+            # The request that is parked is the last open one the thread
+            # holds. Its own text is the text that is parked: when it has
+            # no readable text, the shift says so and logs the problem
+            # instead of parking an older request in its place.
+            latest = open_requests[-1]
             body = (
-                item.get("text")
-                or item.get("prompt")
-                or item.get("question")
-                or item.get("body")
+                latest.get("text")
+                or latest.get("prompt")
+                or latest.get("question")
+                or latest.get("body")
                 or ""
             )
-            body = str(body).strip()
-            if not body:
-                continue
-            text = body
-            item_type = str(item.get("type") or "").strip().lower()
-            if "approval" in item_type or "approv" in body.lower():
+            text = str(body).strip()
+            item_type = str(latest.get("type") or "").strip().lower()
+            if "approval" in item_type or "approv" in text.lower():
                 kind = "pending approval request"
-            break
     return {"pending": pending, "text": text, "kind": kind}
 
 
@@ -5505,29 +5506,44 @@ def parse_snags(text: str) -> list[dict]:
     if title:
         entries.append({"title": title, "body": body})
     for entry in entries:
-        entry["item"] = entry["title"].split(" · ")[-1].strip()
-        entry["problem"] = ""
+        fields = []
         for line in entry["body"]:
             match = FIELD_LINE.match(line.strip())
             if not match:
                 continue
-            if match.group("key").strip().lower() == "problem":
-                entry["problem"] = match.group("value").strip()
+            fields.append(
+                (match.group("key").strip(), match.group("value").strip())
+            )
+        entry["identity"] = snag_identity(entry["title"], fields)
     return entries
 
 
-def snag_identity(title: str, fields: list[tuple[str, str]]) -> tuple[str, str]:
+def snag_identity(
+    title: str, fields: list[tuple[str, str]]
+) -> tuple[str, str, str, str]:
     """Return what makes a snag entry the same problem as another.
 
-    The identity is the item and the problem. The time is not part of it:
-    a problem the shift finds every cycle is one problem, not one problem
-    per cycle."""
+    The identity is the repository, the ticket, the item's number and the
+    problem. Two tickets that share a title and a failing check are two
+    problems, so the identity holds the repository and the ticket as well
+    as the title. The time is not part of it: a problem the shift finds
+    every cycle is one problem, not one problem per cycle."""
+    repo = ""
+    ticket = ""
     problem = ""
     for key, value in fields:
-        if key == "Problem":
-            problem = value
-            break
-    return (title.split(" · ")[-1].strip(), problem)
+        name = key.strip().lower()
+        if name == "repo":
+            repo = value.strip().lower()
+        elif name == "ticket":
+            ticket = value.strip().upper()
+        elif name == "problem":
+            problem = value.strip()
+    number = ""
+    found = re.search(r"#\s*(\d+)", title)
+    if found:
+        number = found.group(1)
+    return (repo, ticket, number, problem)
 
 
 def keep_first_seen(entry: str, seen: dict[str, str]) -> str:
@@ -5587,9 +5603,7 @@ def write_snag_log(root: Path, entries: list[tuple[str, list[tuple[str, str]]]])
     make a new problem out of an old one."""
     path = root / "inbox" / SNAG_FILE
     text = read_text(path) or snag_log_text([])
-    known = {
-        (entry["item"], entry["problem"]) for entry in parse_snags(text)
-    }
+    known = {entry["identity"] for entry in parse_snags(text)}
     added = []
     for title, fields in entries:
         identity = snag_identity(title, fields)
@@ -5624,6 +5638,76 @@ def item_title(item: dict) -> str:
     return f"{label} · {title}" if title else label
 
 
+def read_shift_receipts(root: Path) -> dict[tuple[str, str], dict]:
+    """Return the shift's own receipts, keyed by repository and ticket.
+
+    A receipt is the record of what the shift did with an item: its state
+    and why it stopped. A snag entry quotes it when there is one, so the
+    entry can say what was recorded rather than what it assumes."""
+    receipts: dict[tuple[str, str], dict] = {}
+    folder = root / "receipts"
+    if not folder.is_dir():
+        return receipts
+    for path in sorted(folder.glob("*.md")):
+        if not RECEIPT_FILE.match(path.name):
+            continue
+        fields = parse_receipt(path)["fields"]
+        repo = (fields.get("repo") or "").strip().lower()
+        found = re.search(r"#(\d+)\s*\)?\s*$", (fields.get("ticket") or "").strip())
+        if not repo or not found:
+            continue
+        receipts[(repo, found.group(1))] = fields
+    return receipts
+
+
+def receipt_says(receipts: dict[tuple[str, str], dict], repo: str, *numbers) -> str:
+    """Return what the shift's own receipt says about an item.
+
+    The receipt holds the state the shift recorded and why it stopped, so
+    an entry can quote the record instead of assuming what happened. An
+    item with no receipt gets no claim: the entry says that nothing was
+    recorded."""
+    for number in numbers:
+        if number in (None, ""):
+            continue
+        try:
+            key = (str(repo or "").strip().lower(), str(int(number)))
+        except (TypeError, ValueError):
+            continue
+        fields = receipts.get(key)
+        if not fields:
+            continue
+        state = (fields.get("state") or "").strip() or "no state"
+        why = (fields.get("stopped because") or "").strip()
+        if why:
+            return f"the receipt records the state {state}: {why}"
+        return f"the receipt records the state {state}"
+    return ""
+
+
+def budget_observation(minutes: int, fix_tries: int, budget: dict) -> str:
+    """Return what the shift observed about an item's budget.
+
+    The observation is what was read: the builder's own time and the
+    queue's own count of fix tries. It does not say the item was stopped
+    or parked, because nothing here proves that: the shift's receipt
+    holds the state it recorded, and the snag entry quotes it when there
+    is one."""
+    reasons = []
+    if minutes >= budget["hard"]:
+        reasons.append(
+            f"the builder used {minutes} min of its {budget['hard']} min hard budget"
+        )
+    if fix_tries >= budget["retry_cap"]:
+        reasons.append(
+            f"the queue records {fix_tries} fix tries, the cap is "
+            f"{budget['retry_cap']}"
+        )
+    if not reasons:
+        reasons.append("the builder is within its budget")
+    return "; ".join(reasons)
+
+
 def park_decisions(
     items: list[dict],
     drops: list[tuple[dict, str]],
@@ -5632,6 +5716,7 @@ def park_decisions(
     deadline: float,
     budget: dict,
     queue_state: dict,
+    shift_receipts: dict[tuple[str, str], dict] | None = None,
 ) -> tuple[list[str], list[tuple[str, list[tuple[str, str]]]], str]:
     """Return the parking lot entries, the snag entries and what could not
     be read.
@@ -5654,6 +5739,7 @@ def park_decisions(
     parked: list[str] = []
     snags: list[tuple[str, list[tuple[str, str]]]] = []
     incomplete = ""
+    shift_receipts = shift_receipts or {}
     stamp = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
     for issue, reason in drops:
         if not any(reason.startswith(prefix) for prefix in DECISION_DROP):
@@ -5714,6 +5800,11 @@ def park_decisions(
                 incomplete = incomplete or error
                 continue
             if not record:
+                # A record that holds no thread is a read the shift cannot
+                # trust, so the parking lot is not rewritten from it.
+                incomplete = incomplete or (
+                    f"the thread {thread} returned no record"
+                )
                 continue
             minutes = max(minutes, builder_minutes(record))
             found = pending_request_from(record)
@@ -5811,8 +5902,13 @@ def park_decisions(
                         ("Problem", "a check is failing: " + ", ".join(failing)),
                         (
                             "What the shift did",
-                            "the board reports a failing check; builder delivery "
-                            "has not been verified",
+                            receipt_says(
+                                shift_receipts, repo, number, item.get("issue")
+                            )
+                            or (
+                                "the board reports a failing check; builder "
+                                "delivery has not been verified"
+                            ),
                         ),
                         ("Next", "the builder fixes the failing check"),
                     ],
@@ -5832,11 +5928,17 @@ def park_decisions(
                     [
                         ("Repo", repo),
                         ("Ticket", key),
-                        ("Problem", verdict["why"]),
+                        ("Problem", budget_observation(minutes, tries, budget)),
                         (
                             "What the shift did",
-                            "the recorded elapsed time or retry count meets the "
-                            "parking threshold; stopping has not been verified",
+                            receipt_says(
+                                shift_receipts, repo, number, item.get("issue")
+                            )
+                            or (
+                                "the recorded elapsed time or retry count meets "
+                                "the parking threshold; stopping has not been "
+                                "verified"
+                            ),
                         ),
                         ("Next", verdict["next"]),
                     ],
@@ -5874,7 +5976,14 @@ def cmd_park(args: argparse.Namespace) -> int:
     queue_state = read_queue_state()
     _decisions_path, decision_lines = read_decisions()
     parked, snags, incomplete = park_decisions(
-        items, drops, receipts, decision_lines, deadline, budget, queue_state
+        items,
+        drops,
+        receipts,
+        decision_lines,
+        deadline,
+        budget,
+        queue_state,
+        read_shift_receipts(root),
     )
     if args.dry_run:
         emit("--- parking lot (dry run, nothing written) ---")

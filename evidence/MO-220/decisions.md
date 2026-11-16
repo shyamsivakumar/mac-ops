@@ -215,3 +215,17 @@ report strings. No remaining critical or major finding in this diff. A direct
 probe rejected empty objects, empty thread objects, list thread values, and
 non-string statuses. No existing tests were changed. Diff comment review: no new
 comments. Deslop review: no further cleanup needed. Live actions were not run.
+
+## Fix round 3
+
+Refs #188. Select the latest open request before extracting text, so an
+unreadable latest request produces a snag instead of quoting an older one.
+Snag parsing and generation share repository, ticket, item number and problem
+identity. Budget problems describe observed time and retry counts; receipt
+claims are explicitly attributed to the receipt.
+
+The real-command parking proof passed, including unreadable latest requests,
+distinct-ticket snag identity and budget reporting. Direct and heavy-wrapped
+`python3 scripts/mac_ops_fast_check.py` passed. No operational stop or delivery
+was attempted. Existing checks were preserved. The diff cleanup review found
+no separate cleanup needed.
