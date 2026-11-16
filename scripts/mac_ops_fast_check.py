@@ -2,6 +2,8 @@
 import argparse
 import ast
 import importlib.util
+from importlib.machinery import SourceFileLoader
+from unittest.mock import patch
 import os
 from pathlib import Path
 import shutil
@@ -44,6 +46,53 @@ def module_name(path):
     return ".".join(parts)
 
 
+def check_lane_selection():
+    loader = SourceFileLoader("coordq_lane_check", str(ROOT / "coordinator/bin/coordq"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+
+    def issue(repo, number, priority=1, stage="todo", body=""):
+        return {"repository": {"nameWithOwner": repo}, "number": number,
+                "labels": [f"priority:{priority}", f"stage:{stage}"], "body": body}
+
+    rows = [issue("a/b", 1), issue("a/b", 2, stage="started"),
+            issue("a/c", 9, 2), issue("a/c", 8), issue("a/c", 7),
+            issue("a/d", 1), issue("a/e", 10, body="## Blocked by\n#3"),
+            issue("a/e", 11, body="## Blocked by\n#2")]
+    selected = module.lane_candidates(rows, {"a/d"})
+    assert [(r["repository"]["nameWithOwner"], r["number"]) for r in selected] == [
+        ("a/c", 7), ("a/e", 11)]
+    assert module.lane_candidates([issue("a/b", 1)], set())
+    config = {"repos": {"a/b": {"key": "AB"}, "a/c": {"key": "AC"}}}
+    snapshots = [
+        (0, '{"threads":[{"threadId":"one","title":"AB-1 build"}],"nextCursor":1}'),
+        (0, '{"threads":[{"threadId":"two","clientRequestId":"gate:a/c#2:head"}]}')]
+    with tempfile.TemporaryDirectory() as scratch:
+        with patch.object(module, "DIR", scratch), patch.object(module, "call", side_effect=snapshots):
+            assert module.live_lane_repositories(config) == {"a/b", "a/c"}
+        config_path = Path(scratch) / "tickets.json"
+        config_path.write_text(__import__("json").dumps(config))
+        from types import SimpleNamespace
+        snapshot = [[{"number": 1, "title": "busy", "labels": ["stage:started"],
+                      "updated_at": "now"},
+                     {"number": 2, "title": "todo", "labels": ["stage:todo"],
+                      "updated_at": "now"}]]
+        with patch.object(module, "TICKETS_CONFIG", str(config_path)), \
+                patch.object(module, "live_lane_repositories", return_value=set()), \
+                patch.object(module.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=__import__("json").dumps(snapshot))):
+            assert module.board_candidates() == []
+        with patch.object(module, "DIR", scratch), patch.object(module, "call", return_value=(1, "failed")):
+            try:
+                module.live_lane_repositories(config)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("failed thread snapshot accepted")
+    print("PASS lane-one-active", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", action="store_true")
@@ -74,6 +123,7 @@ def main():
     print(f"fast-check: Python syntax={changed_python}; shell syntax={changed_shell}; tests={tests}", flush=True)
     if args.plan:
         return
+    check_lane_selection()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run([sys.executable, "coordinator/overnight/overnight", "selftest"],
                    cwd=ROOT, env=env, check=True, timeout=60)
