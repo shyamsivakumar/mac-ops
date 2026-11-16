@@ -185,7 +185,8 @@ PASS ff-drift
 PASS stall
 ```
 
-The repository checks:
+The repository checks, run at head `b644eb66e9530a8e5eafe03bcc5f3ff228fcf414`
+(the commit after it adds only this receipt):
 
 ```
 $ ~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py
@@ -193,7 +194,7 @@ $ ~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py
 fast-check: passed; selected checks are not the full suite
 
 $ ~/.local/bin/heavy timeout 300 python3 -m unittest discover -s tests -t .
-Ran 288 tests in 7.894s
+Ran 288 tests in 7.815s
 FAILED (failures=2)
 ```
 
