@@ -41,13 +41,22 @@ passed unless the records say it ran.
 `overnight shift` (spec T12, revision 3) is the command the launchd job
 fires. The job fires it every five minutes, every day: the shift runs
 24x7, so there is no night window and no part of the night. Every run is
-one cycle: it reads the policy snapshot, reads the whole board under the
-snapshot's allow list, works it (there is no item cap and no allowance
-stop) and writes a receipt for every item whose state changed. The shift
-is never armed and never unarmed. The first cycle of the morning writes
-the day's morning report, so Shyam reads one report in the morning;
-`--report` writes it on demand. A real cycle takes the shift's own lock,
-so two cycles never run at once, whatever starts them.
+one cycle: it reads the policy snapshot, runs the health checks, reads the
+whole board under the snapshot's allow list, works it (there is no item cap
+and no allowance stop) and writes a receipt for every item whose state
+changed. The shift is never armed and never unarmed. The first cycle of
+the morning writes the day's morning report, so Shyam reads one report in
+the morning; `--report` writes it on demand. A real cycle takes the
+shift's own lock, so two cycles never run at once, whatever starts them.
+
+The health checks (spec part T14) are the ones the tick ran every tick
+(`loop/tick.md` section 1b). The tick is retired, so the shift runs them
+at the start of every cycle: the coordinator tools under the interpreter
+launchd uses, the installed coordinator against the merged main, the
+tickets that were started again and again with no pull request, and the
+text blocker refusals that name a closed issue. Each finding is one line
+of the cycle's receipt (`receipts/cycle-<stamp>.md`) and an ALERT line in
+the shift log.
 
     overnight shift
     overnight shift --report
@@ -71,6 +80,15 @@ which record is missing.
 
     overnight close --repo shyamsivakumar/mac-ops --number 182
 
+`overnight shift` also runs the health checks the tick used to run every
+tick (spec part T14, `loop/tick.md` section 1b). The tick is retired, so
+the shift runs them at the start of every cycle. They are read only: the
+coordinator tools under the interpreter launchd uses, the installed
+coordinator against the merged main, the tickets that were started again
+and again with no pull request, and the text blocker refusals that name a
+closed issue. Each finding is one line of the cycle's receipt
+(`receipts/cycle-<stamp>.md`) and an ALERT line in the shift log.
+
 `overnight policy` (spec T4, revision 3) writes the policy snapshot the
 shift reads on every cycle: `run/policy.json`. The shift is never unarmed
 and has no deadline, so the snapshot is the whole contract. It holds the
@@ -90,7 +108,7 @@ has no call that answers a request, and the proof runs the command with
 a T3 stub that fails on every call but a read.
 
     overnight park
-    overnight park --fixture evidence/MO-220/fixture-pending-approval.json
+    overnight park --fixture evidence/MO-220/fixtures/answered-then-pending.json
 
 `overnight redact` (spec T7a) is the one redaction the shift has. Every
 record it writes under `.overnight/` goes through it, so no receipt, no
@@ -123,6 +141,7 @@ import argparse
 import fcntl
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -132,7 +151,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tick_health import tick_alarm
+
+import stall
 
 from typing import NoReturn
 
@@ -148,6 +170,10 @@ PR_LIMIT = 100
 # The open issues of one repository, read for the marks a ticket body
 # carries. The board's tickets are a small part of that list.
 ISSUE_LIMIT = 500
+# The comments GitHub returns with an issue in a list read: the first
+# 100. An issue with that many comments has more, and the starts past
+# the limit are not known.
+ISSUE_COMMENT_LIMIT = 100
 PR_FIELDS = (
     "number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body"
 )
@@ -525,8 +551,10 @@ QUOTED = re.compile(r"`([^`]+)`")
 # The intake summary line of the shift log carries how many items were in
 # scope. Without it the planned count cannot be checked.
 PLANNED = re.compile(r"planned\s+(?P<count>\d+)\s+items?\b", re.I)
-# A receipt is one item of the shift. The morning report is not a receipt.
-RECEIPT_FILE = re.compile(r"^(?!morning-).+\.md$")
+# A receipt is one item of the shift. The morning report is not a
+# receipt, and neither is a cycle receipt: a cycle receipt holds the
+# health checks one cycle ran, not the state of an item.
+RECEIPT_FILE = re.compile(r"^(?!morning-|cycle-).+\.md$")
 # The shift log records the end of the shift with the word "stall".
 STALL = re.compile(r"\bstall\b", re.I)
 # The launchd job fires the shift on a fixed interval, every day (spec
@@ -1338,12 +1366,14 @@ def cmd_shift(args: argparse.Namespace) -> int:
 
     The clock is the Mac's local clock, the clock launchd fires on. The
     shift log still says Pacific time, and a Mac that is not on Pacific
-    time is told so."""
+    time is told so.
+
+    The cycle starts with the health checks: the tools under the
+    interpreter launchd uses, the installed files, the board's drift. The
+    checks are read only. Each finding is one line of the cycle's
+    receipt, and an ALERT line in the shift log."""
     now_local = datetime.now().astimezone()
     now_pt = datetime.now(PT)
-    # The cycle's own time budget. The shift has no deadline in the spec's
-    # sense (revision 3), but the commands it runs share one clock.
-    deadline = time.monotonic() + args.deadline
     stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
     root = report_root(args.root)
     if now_local.utcoffset() != now_pt.utcoffset():
@@ -1395,6 +1425,53 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 f"{plural(dropped, 'repository', 'repositories')}, and the "
                 "shift never reads Ascend work."
             )
+    # The cycle starts with the health checks the tick ran every tick,
+    # before the shift acts on the board (spec part T14, loop/tick.md
+    # section 1b). They read only: the tools under the interpreter
+    # launchd uses, the installed files, the board's drift. The board is
+    # read here because the checks need it.
+    started = time.monotonic()
+    cfg = load_config()
+    repos = policy_repos(cfg, allowed)
+    board, board_stale = read_board(started + args.deadline)
+    if board_stale:
+        emit(
+            "overnight: the board list is stale, so the health checks cannot "
+            "trust the board",
+            err=True,
+        )
+    # The checks get half the cycle, so the board work still has time.
+    health_deadline = started + max(60, args.deadline // 2)
+    health_lines, health_findings = health_cycle(
+        root, board, repos, health_deadline, board_stale
+    )
+    receipt = write_cycle_receipt(
+        root, stamp, now_pt.strftime("%Y-%m-%d-%H%M"), health_lines, health_findings
+    )
+    emit(f"overnight: wrote {receipt}")
+    emit(
+        f"Health checks: {len(health_findings)} finding(s) from 4 checks"
+        + (" (no finding)" if not health_findings else "")
+    )
+    for finding in health_findings:
+        # The shift's board work is not built yet (spec part T5), so the
+        # shift cannot resend or park a finding yet. Every finding is an
+        # ALERT line, and the receipt names the action it would take.
+        emit(
+            f"ALERT: {finding['subject']}: {finding['detail']} "
+            f"(action: {finding['action']})"
+        )
+        write_shift_line(
+            root,
+            f"health | ALERT: {finding['subject']}: {finding['detail']} "
+            f"(action: {finding['action']})",
+        )
+    write_shift_line(
+        root, f"health | {len(health_findings)} finding(s) from 4 checks"
+    )
+    # The checks spent part of the cycle, so the board work gets what is
+    # left of it.
+    left = max(1, int(args.deadline - (time.monotonic() - started)))
     import lane_driver
 
     selected = []
@@ -1428,12 +1505,30 @@ def cmd_shift(args: argparse.Namespace) -> int:
             return 0
         try:
             lane_driver.print = emit
-            lane_driver.main()
+            # The shift measures the items against the state it kept, so
+            # the pass knows how long each item has been idle.
+            lane_driver.STALL_STATE = load_stall_state(root)
+            try:
+                lane_driver.main()
+            finally:
+                # The stall records of this pass are written even when the
+                # pass failed an item: a reported stall and a stalled board
+                # are the shift's own findings, not a side effect of the
+                # pass's success. The records come before the state is
+                # saved, so the state says the alert was delivered only
+                # after it was delivered.
+                try:
+                    for line in stall_records(
+                        root, lane_driver.STALL_EVENTS, None, lane_driver.STALL_STATE
+                    ):
+                        emit(f"overnight: {line}")
+                finally:
+                    save_stall_state(root, lane_driver.STALL_STATE)
             write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
             # Part T10: the cycle parks what it cannot decide and logs what
             # it found. A pending request is parked with its exact text and
             # is never answered.
-            park_cycle(root, deadline)
+            park_cycle(root, time.monotonic() + left)
             if report_cycle:
                 return write_morning_report(root)
             return 0
@@ -1444,10 +1539,232 @@ def cmd_shift(args: argparse.Namespace) -> int:
         argparse.Namespace(
             dry_run=True,
             root=args.root,
-            deadline=args.deadline,
+            deadline=left,
             allowed=allowed,
         )
     )
+
+
+def load_stall_state(root: Path) -> dict:
+    """Return the stall state the shift keeps.
+
+    The state is the shift's own record of how long every item has been
+    idle. A state that cannot be read is an empty state: the shift measures
+    the items again from this tick on."""
+    text = read_text(stall.state_path(root))
+    if not text.strip():
+        return stall.new_state()
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return stall.new_state()
+    if not isinstance(data, dict):
+        return stall.new_state()
+    if not isinstance(data.get("items"), dict):
+        data["items"] = {}
+    return data
+
+
+def save_stall_state(root: Path, state: dict) -> Path:
+    """Write the stall state and return the path it went to.
+
+    The write is atomic, so a cycle that reads while the state is being
+    written reads the old state or the new one, never half of one."""
+    path = stall.state_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f"{path.name}.tmp"
+    write_record(tmp, json.dumps(state, indent=1) + "\n")
+    os.replace(tmp, path)
+    return path
+
+
+def stall_records(
+    root: Path,
+    events: list[dict],
+    board: str | None = None,
+    state: dict | None = None,
+) -> list[str]:
+    """Write the records of the stall events of one pass and return them.
+
+    An item that was reported as stalled gets a receipt that says so, so
+    the morning report names it under "Stuck". A board that stopped moving
+    gets a line in the shift log and an alert on the coordinator's board,
+    the same board the merge alert uses.
+
+    The board's alert flag is set only after the alert was written: a board
+    whose alert could not be written asks again on the next tick instead of
+    going quiet for good.
+
+    The shift does not end here: the sweep ran again and the shift keeps
+    running until every item is done or parked."""
+    written: list[str] = []
+    for event in events:
+        kind = event.get("kind")
+        if kind == "item":
+            item = {
+                "kind": "ticket",
+                "repo": event.get("repo") or "",
+                "number": event.get("number") or 0,
+                "key": event.get("key") or "",
+                "title": event.get("title") or "",
+                "url": event.get("url") or "",
+            }
+            body = receipt_text(
+                item,
+                STATE_STUCK,
+                None,
+                None,
+                0,
+                f"stall: no new commit or receipt for {event.get('idle')} ticks",
+                "the shift keeps working the item; Shyam sees it in the morning report",
+            )
+            outcome = write_receipt(root, item, body)
+            write_shift_line(
+                root,
+                f"stall: {event.get('item')} reported, no new commit or receipt "
+                f"for {event.get('idle')} ticks; the shift keeps working it",
+            )
+            written.append(f"{receipt_path(root, item)} ({outcome})")
+        elif kind == "board":
+            reason = (
+                f"The overnight shift saw no board progress for "
+                f"{event.get('idle')} ticks. The board was swept again and the "
+                "shift keeps running until every item is done or parked."
+            )
+            target = stall.alert(reason, board)
+            if target:
+                if isinstance(state, dict):
+                    stall.delivered(state)
+                write_shift_line(
+                    root,
+                    f"stall: no board progress for {event.get('idle')} ticks; the "
+                    "board was swept again and Shyam was alerted",
+                )
+                written.append(target)
+            else:
+                write_shift_line(
+                    root,
+                    f"stall: no board progress for {event.get('idle')} ticks; the "
+                    "board was swept again and the alert could not be written",
+                )
+                written.append("the alert could not be written")
+    return written
+
+
+def show_stall_state(explicit: str | None = None) -> int:
+    """Print the stall state the shift keeps.
+
+    The command reads only: it says which items are idle, for how many
+    ticks, and which of them are stalled. A stalled item is not parked:
+    the shift keeps working it."""
+    root = report_root(explicit)
+    state = load_stall_state(root)
+    items = state.get("items") or {}
+    if not items:
+        emit(f"overnight: no item has been measured yet ({stall.state_path(root)})")
+        return 0
+    emit("Overnight stall state")
+    for key, entry in sorted(items.items()):
+        if not isinstance(entry, dict):
+            continue
+        idle = int(entry.get("idle") or 0)
+        stalled = " stalled" if entry.get("stalled") else ""
+        emit(f"{key}: idle {idle} tick(s){stalled}")
+    emit(f"Board idle: {int(state.get('board_idle') or 0)} tick(s)")
+    return 0
+
+
+def run_stall_fixture(args: argparse.Namespace) -> int:
+    """Run the stall rule over the ticks of a fixture.
+
+    The fixture names its items and its ticks. A tick maps every item to
+    its marker: the item's commit and the item's newest dispatch receipt.
+    The command runs the real rule, so the stall line and the alert come
+    from the same code the shift runs.
+
+    The records go to `--root`, so a fixture run never touches the live
+    records."""
+    path = Path(args.fixture).expanduser()
+    try:
+        data = json.loads(read_text(path))
+    except ValueError as exc:
+        die(f"the fixture {path} is not JSON: {exc}")
+    if not isinstance(data, dict):
+        die(f"the fixture {path} is not a JSON object")
+    items = data.get("items")
+    ticks = data.get("ticks")
+    if not isinstance(items, list) or not isinstance(ticks, list) or not ticks:
+        die(f"the fixture {path} must name its items and its ticks")
+    details: dict[str, dict] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = f"{item.get('repo') or ''}#{item.get('number') or ''}"
+        details[key] = item
+    state = stall.new_state()
+    events: list[dict] = []
+    for index, tick in enumerate(ticks, start=1):
+        if not isinstance(tick, dict):
+            die(f"tick {index} of the fixture {path} is not a mapping")
+        markers = {str(key): str(value) for key, value in tick.items()}
+        fresh = stall.arrived(state, set(markers))
+        progressed = any(
+            stall.moved(state, key, marker) for key, marker in markers.items()
+        ) or bool(fresh)
+        board_event = stall.board(state, progressed, len(markers))
+        for key, marker in sorted(markers.items()):
+            event = stall.observe(state, key, marker)
+            if not event:
+                continue
+            item = details.get(key) or {}
+            event.update(
+                {
+                    "repo": item.get("repo") or "",
+                    "number": item.get("number") or 0,
+                    "key": item.get("key") or "",
+                    "title": item.get("title") or "",
+                    "url": item.get("url") or "",
+                }
+            )
+            emit(
+                f"STALL {key}: no new commit or receipt for {event['idle']} ticks; "
+                "reported, the shift keeps working it"
+            )
+            events.append(event)
+        if board_event:
+            emit(
+                f"STALL board: no board progress for {board_event['idle']} ticks; "
+                "the board is swept again"
+            )
+            events.append(board_event)
+    if args.root:
+        root = Path(args.root).expanduser()
+        for folder in ("run", "receipts", "inbox", "staging"):
+            (root / folder).mkdir(parents=True, exist_ok=True)
+        board = root / "decisions.json"
+        if not board.exists():
+            write_record(board, json.dumps({"items": []}, indent=1) + "\n")
+        for line in stall_records(root, events, str(board), state):
+            emit(f"wrote {line}")
+        save_stall_state(root, state)
+    else:
+        emit("This run wrote nothing: give --root to write the records.")
+    return 0
+
+
+def cmd_stall(args: argparse.Namespace) -> int:
+    """Show the stall state, or run the stall rule over a fixture.
+
+    Without a fixture the command reads the shift's own stall state and
+    says which items are idle and for how many ticks. It writes nothing.
+
+    With `--fixture` the command runs the real rule over the ticks of the
+    fixture and writes the records the rule produces: the receipt of a
+    reported item, the line in the shift log and the alert on the
+    coordinator's board."""
+    if args.fixture:
+        return run_stall_fixture(args)
+    return show_stall_state(args.root)
 
 
 def report_root(explicit: str | None) -> Path:
@@ -1726,8 +2043,13 @@ def how_it_ended(root: Path, log: dict, receipts: list[dict], planned: int | Non
     statement. It reads it only when the records support it: "all done"
     needs every receipt to be done or parked, "deadline" needs the clock
     to be past the deadline, "STOP" needs the STOP file and "stall" needs
-    the stall in the log. A claim the records do not support is never
-    repeated."""
+    the shift to say it ended with a stall. A claim the records do not
+    support is never repeated.
+
+    A stall in the log is not the end of the shift (spec part T8b): a
+    stalled board is swept again and the shift keeps running until every
+    item is done or parked. So a stall line alone ends nothing, and only
+    a shift that states it ended with a stall ends that way."""
     if (root / "run" / "STOP").exists():
         return "STOP"
     states = [classify(receipt)[0] for receipt in receipts]
@@ -1750,8 +2072,6 @@ def how_it_ended(root: Path, log: dict, receipts: list[dict], planned: int | Non
     if claim == "deadline" and deadline_passed:
         return "deadline"
     if claim == "stall" and log["stall"]:
-        return "stall"
-    if log["stall"]:
         return "stall"
     if all_done:
         return "all done"
@@ -1924,6 +2244,20 @@ def render_report(snapshot: dict) -> str:
         lines.append("- Nothing was left unrun.")
 
     lines.append("")
+    lines.append("## Health and drift (the cycles)")
+    lines.append("")
+    cycles = snapshot.get("cycles") or []
+    alerts = [
+        (stamp, finding)
+        for stamp, findings in cycles
+        for finding in findings
+    ]
+    if alerts:
+        for stamp, finding in alerts:
+            lines.append(f"- {stamp}. {finding}.")
+    else:
+        lines.append("- None.")
+    lines.append("")
     lines.append("## Cost")
     lines.append("")
     minutes = [receipt_minutes(receipt) for receipt in receipts]
@@ -2017,6 +2351,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         "policy": policy,
         "log": log,
         "parking_lot": parking_lot,
+        "cycles": cycle_receipts(receipts_dir),
         "date": day,
         "window": window,
         "ended": how_it_ended(root, log, receipts, log["planned"]),
@@ -2165,6 +2500,21 @@ def read_decisions() -> tuple[Path, list[str]]:
             return DECISIONS_FILE, stream.read().splitlines()
     except OSError:
         return DECISIONS_FILE, []
+
+
+def read_decisions_checked() -> tuple[Path, list[str], str]:
+    """Return the decisions log, its lines and why it could not be read.
+
+    A log that does not exist yet is not an error: the coordinator writes
+    it the first time it parks a ticket. A log that exists and cannot be
+    read is an error, because the tickets it parks are then not known."""
+    try:
+        with open(DECISIONS_FILE) as stream:
+            return DECISIONS_FILE, stream.read().splitlines(), ""
+    except FileNotFoundError:
+        return DECISIONS_FILE, [], ""
+    except OSError as exc:
+        return DECISIONS_FILE, [], f"the log could not be read: {exc}"
 
 
 def mark_reason(text: str) -> tuple[str, str] | None:
@@ -5168,6 +5518,882 @@ def cmd_board(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- The cycle health check (spec part T14) ---------------------------------
+#
+# The tick ran these checks every tick (loop/tick.md, section 1b). The
+# tick is retired for the 24x7 shift (MO-240), so the shift runs them at
+# the start of every cycle instead. They are read only: they read the
+# tools, the installed files, the board and the queue's log, and they
+# change nothing.
+#
+# A finding the shift may fix under its own rules (resend, park) it
+# fixes; anything else becomes an ALERT line in the cycle's report. The
+# shift's board work is not built yet (spec part T5), so today every
+# finding is an ALERT and the receipt names the action each one would
+# take.
+
+# The queue's own folder, the one the dispatcher writes and the ticket
+# CLI reads.
+QUEUE_DIR = Path(
+    os.environ.get(
+        "COORDQ_DIR", str(Path.home() / "Code" / "coordinator" / "queue")
+    )
+)
+# The mac-ops checkout the installed files are compared against.
+MAC_OPS_DIR = Path(
+    os.environ.get("MAC_OPS_DIR", str(Path.home() / "Code" / "mac-ops"))
+)
+# The launchd job that runs the coordinator tools. Its plist says which
+# interpreter it runs them with.
+DISPATCH_PLIST = (
+    Path.home() / "Library" / "LaunchAgents" / "dev.coordinator.dispatch.plist"
+)
+# The lines of the queue logs the check reads for a crash.
+LOG_TAIL = 40
+# The lines of the dispatch log the check reads for the refusals the
+# queue recorded.
+REFUSAL_TAIL = 400
+# A refusal older than this is not a refusal any more: the queue records
+# the refusal of every ticket it will not start on every pass, so a
+# refusal this old means the ticket is not refused now.
+REFUSAL_FRESH_MINUTES = 15
+# A ticket started this many times has a broken spec.
+ATTEMPT_LIMIT = 3
+# The comment the ticket CLI writes when it starts a builder.
+STARTING = re.compile(r"^Starting\s+\S+\s+attempt\s+(\d+)\b")
+# The refusal the queue records for a ticket it will not start.
+REFUSAL = re.compile(
+    r"^(?P<at>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) refill refused "
+    r"(?P<repo>[^\s:]+/[^\s#]+)#(?P<number>\d+): refused: (?P<reason>.*)"
+)
+# The issue a text blocker refusal names, in the two forms the ticket
+# CLI writes: "owner/repo#12" and "SRW-1061 (#910)".
+NAMED_ISSUE = re.compile(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)")
+NAMED_KEY = re.compile(r"\b([A-Z]{2,5}-\d+)\s+\(#(\d+)\)")
+
+
+def names_bare(line: str, prefix: str, number: int) -> bool:
+    """True when a decisions log line names this issue in a list of numbers.
+
+    The log writes a group of tickets with the key of the repository and
+    the bare issue numbers ("SRW #720, #716, #692, #492"), so the key and
+    the list are read together. A number in another repository's list is
+    not this ticket's."""
+    if not prefix:
+        return False
+    for match in re.finditer(
+        rf"\b{re.escape(prefix)}\s+#(\d+(?:\s*,\s*#?\d+)*)", line, re.I
+    ):
+        if str(number) in re.findall(r"\d+", match.group(1)):
+            return True
+    return False
+
+
+def decision_open(lines: list[str], key: str | None, number: int | None) -> bool:
+    """True when the decisions log holds an open item for this ticket.
+
+    The log names a ticket two ways: with its key and its issue number
+    ("SRW-685 #468") and with the key of the repository and a list of
+    bare issue numbers ("SRW #720, #716, #692"). Both are read, so a
+    ticket the log already parked is not new drift. Only the last line
+    about the ticket counts: the log is append-only history, and a line
+    that closes the item closes it."""
+    prefix = (key or "").partition("-")[0]
+    last = None
+    for line in lines:
+        if names_ticket(line, key, number) or names_bare(line, prefix, number):
+            last = line
+    if last is None:
+        return False
+    if DECISION_HOLD.search(last) or DECISION_OPEN.search(last):
+        return True
+    if DECISION_STRONG.search(last):
+        return True
+    if DECISION_ASKS.search(last):
+        return True
+    if DECISION_ASKED.search(last) and not DECISION_CLOSED.search(last):
+        return True
+    if DECISION_QUESTION.search(last) and not DECISION_CLOSED.search(last):
+        return True
+    return False
+
+
+def launchd_python() -> tuple[str, str]:
+    """Return the interpreter launchd runs the coordinator tools with.
+
+    The dispatch job runs `~/.local/bin/coordq`, and that script's
+    shebang names the interpreter. The job's own PATH decides which
+    `python3` that name means, so the interpreter is read the way
+    launchd reads it: the plist says the PATH, the script says the name.
+    The shell's own `python3` is never used here: it is an older one, and
+    it hides the errors the launchd interpreter raises (2026-11-13: a
+    duplicate parser argument stopped the dispatcher for 14 minutes)."""
+    program = ""
+    launchd_path = ""
+    try:
+        with DISPATCH_PLIST.open("rb") as stream:
+            plist = plistlib.load(stream)
+    except (OSError, ValueError):
+        plist = {}
+    arguments = plist.get("ProgramArguments") or []
+    if arguments:
+        program = str(arguments[0])
+    environment = plist.get("EnvironmentVariables") or {}
+    launchd_path = str(environment.get("PATH", ""))
+    script = (
+        Path(program).expanduser()
+        if program
+        else Path.home() / ".local" / "bin" / "coordq"
+    )
+    shebang = ""
+    try:
+        with script.open("r", errors="replace") as stream:
+            shebang = stream.readline().strip()
+    except OSError:
+        shebang = ""
+    name = ""
+    if shebang.startswith("#!"):
+        parts = shebang[2:].split()
+        if parts and parts[0].endswith("/env"):
+            name = parts[1] if len(parts) > 1 else ""
+        elif parts:
+            name = parts[0]
+    if name.startswith("/"):
+        return name, f"the shebang of {script}"
+    if name:
+        for folder in launchd_path.split(os.pathsep):
+            candidate = Path(folder).expanduser() / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate), f"the PATH of {DISPATCH_PLIST}"
+    return "", ""
+
+
+# The most bytes one queue log tail reads. The queue logs grow all day
+# and are never rotated, so the tail is read from the end with a fixed
+# byte budget: a log that grew for weeks cannot spend the cycle's time
+# or its memory.
+LOG_TAIL_BYTES = 512 * 1024
+
+
+def queue_log_tail(
+    name: str, lines: int, deadline: float | None = None
+) -> tuple[list[str], str]:
+    """Return the last lines of one queue log, and why they are missing.
+
+    The read is bounded: it seeks to the end of the log and reads at most
+    `LOG_TAIL_BYTES` bytes, so a huge log costs the same as a small one
+    and the cycle cannot run out of time or memory on a log. A log that
+    cannot be read is not an empty log: the caller has to say the check
+    is incomplete instead of reporting that the log holds nothing."""
+    if deadline is not None and deadline - time.monotonic() <= 0:
+        return [], "the cycle ran out of time before the log could be read"
+    try:
+        with open(QUEUE_DIR / name, "rb") as stream:
+            size = stream.seek(0, os.SEEK_END)
+            start = max(0, size - LOG_TAIL_BYTES)
+            stream.seek(start)
+            raw = stream.read(LOG_TAIL_BYTES)
+    except OSError as exc:
+        return [], f"the log could not be read: {exc}"
+    text = raw.decode("utf-8", errors="replace")
+    if start:
+        # The read began in the middle of a line, so that line is not a
+        # line of the log and is dropped rather than counted.
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+    tail = text.splitlines()[-lines:]
+    if start and len(tail) < lines:
+        return tail, "the byte limit prevented reading the requested line count"
+    return tail, ""
+
+
+def log_read_finding(check: str, path: str, error: str) -> dict:
+    """Return the finding of a log that could not be read.
+
+    A read that failed is never a clean result: the check that needed
+    the log is incomplete, and the receipt must say so."""
+    return {
+        "check": check,
+        "subject": str(path),
+        "detail": (
+            f"the {check} check is incomplete for the log: {error}"
+        ),
+        "action": "read the log by hand and fix what it says",
+    }
+
+
+def health_run(argv: list[str], deadline: float) -> tuple[int, str, str]:
+    """Run one read-only command for a health check.
+
+    A command that cannot run is a finding, not a crash: the check says
+    what it could not do and the cycle carries on."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        return 124, "", "the cycle ran out of time before the check could run"
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(GH_TIMEOUT, int(left))),
+            check=False,
+        )
+    except FileNotFoundError:
+        return 127, "", f"{argv[0]} is not on PATH"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"{' '.join(argv)} timed out"
+    return result.returncode, result.stdout or "", result.stderr or ""
+
+
+def check_tools(deadline: float) -> tuple[list[str], list[dict]]:
+    """Check the coordinator tools under the interpreter launchd uses.
+
+    The tools are run, not read: a tool that breaks under the launchd
+    interpreter is the break this check exists for. The queue's logs are
+    read for the same reason: a traceback in the last lines of the
+    dispatch or gatekeep log is a tool that broke."""
+    ran: list[str] = []
+    probes: list[dict] = []
+    interpreter, source = launchd_python()
+    if not interpreter:
+        return ran, [
+            {
+                "check": "tools",
+                "subject": "the launchd interpreter",
+                "detail": (
+                    "the interpreter launchd runs the coordinator tools with "
+                    f"could not be found: {DISPATCH_PLIST} does not say, and "
+                    "the installed coordq has no shebang"
+                ),
+                "action": "read the dispatch plist and the installed coordq",
+            }
+        ]
+    ran.append(f"the interpreter {interpreter} (from {source})")
+    folder = Path.home() / ".local" / "bin"
+    for name, arguments in (("coordq", ["status"]), ("overnight", ["--help"])):
+        script = folder / name
+        command = [interpreter, str(script), *arguments]
+        code, out, err = health_run(command, deadline)
+        ran.append(f"`{' '.join(command)}` exit {code}")
+        probes.append(
+            {
+                "name": name,
+                "command": " ".join(command),
+                "exit": code,
+                "output": err or out,
+            }
+        )
+    logs: list[dict] = []
+    for name in ("dispatch.log", "gatekeep.log"):
+        path = QUEUE_DIR / name
+        lines, error = queue_log_tail(name, LOG_TAIL, deadline)
+        if error:
+            ran.append(f"the last {LOG_TAIL} lines of {path} could not be read")
+        else:
+            ran.append(f"the last {LOG_TAIL} lines of {path}")
+        logs.append({"path": str(path), "lines": lines, "error": error})
+    return ran, tool_findings(probes, logs)
+
+
+def tool_findings(probes: list[dict], logs: list[dict]) -> list[dict]:
+    """Return the findings of the tool probes and the log tails.
+
+    The probes and the log tails are injected: the caller reads them and
+    this function only reads what it is given. The proof drives it with
+    fixtures, so it never touches the machine."""
+    findings: list[dict] = []
+    for probe in probes:
+        code = probe.get("exit")
+        if not code:
+            continue
+        tail = (probe.get("output") or "").strip().splitlines()[-3:]
+        findings.append(
+            {
+                "check": "tools",
+                "subject": str(probe.get("name") or probe.get("command") or "the tool"),
+                "detail": (
+                    f"`{probe.get('command', '')}` failed (exit {code}) under "
+                    "the launchd interpreter: " + " | ".join(tail)
+                ),
+                "action": (
+                    "run the same command under the launchd interpreter and "
+                    "fix what it raises"
+                ),
+            }
+        )
+    for entry in logs:
+        error = entry.get("error")
+        if error:
+            # The log could not be read, so the crash check is
+            # incomplete for it: a log nobody could read is not a log
+            # without a traceback.
+            findings.append(
+                log_read_finding("tools", str(entry.get("path", "")), str(error))
+            )
+            continue
+        for line in entry.get("lines") or []:
+            if "Traceback" in line:
+                findings.append(
+                    {
+                        "check": "tools",
+                        "subject": Path(str(entry.get("path", ""))).name,
+                        "detail": (
+                            f"the last {LOG_TAIL} lines of {entry.get('path')} "
+                            f"hold a traceback: {line.strip()[:160]}"
+                        ),
+                        "action": "read the traceback in the log and fix the tool",
+                    }
+                )
+                break
+    return findings
+
+
+def check_install(deadline: float) -> tuple[list[str], list[dict]]:
+    """Check that the installed coordinator matches the merged main.
+
+    The installer's own status says it: it compares the installed files
+    with the checkout and reports `in_sync` and `differs`. An installed
+    file from an unmerged branch is drift (2026-11-13: the installed
+    coordq came from a branch that was never merged)."""
+    ran: list[str] = []
+    script = MAC_OPS_DIR / "install_coordinator.py"
+    interpreter, _source = launchd_python()
+    python = interpreter or sys.executable
+    command = [python, str(script), "status"]
+    code, out, err = health_run(command, deadline)
+    ran.append(f"`{' '.join(command)}` exit {code}")
+    if code != 0:
+        return ran, [
+            {
+                "check": "install",
+                "subject": str(script),
+                "detail": (
+                    "the install status could not be read (exit "
+                    f"{code}): "
+                    + (
+                        (err or out).strip().splitlines()[-1][:160]
+                        if (err or out).strip()
+                        else "no output"
+                    )
+                ),
+                "action": "read the install status by hand",
+            }
+        ]
+    try:
+        status = json.loads(out)
+    except ValueError:
+        return ran, [
+            {
+                "check": "install",
+                "subject": str(script),
+                "detail": "the install status did not return JSON",
+                "action": "read the install status by hand",
+            }
+        ]
+    return ran, install_findings(status)
+
+
+def install_findings(status: dict) -> list[dict]:
+    """Return the findings of the install status.
+
+    The status is injected: the caller reads it and this function only
+    reads what it is given. The proof drives it with a fixture."""
+    if status.get("in_sync"):
+        return []
+    differs = [str(item) for item in (status.get("differs") or [])]
+    return [
+        {
+            "check": "install",
+            "subject": str(MAC_OPS_DIR / "install_coordinator.py"),
+            "detail": (
+                "the installed coordinator differs from the merged main: "
+                + (", ".join(differs) if differs else "the status does not say")
+            ),
+            "action": (
+                "find the branch the installed file came from, tell that "
+                "builder to stop installing, and reinstall from main once "
+                "the pull requests merge"
+            ),
+        }
+    ]
+
+
+def check_attempts(
+    issues: list[dict],
+    repos: list[tuple[str, str]],
+    deadline: float,
+    stale: bool = False,
+) -> tuple[list[str], list[dict]]:
+    """Check the tickets that were started again and again with no pull request.
+
+    A ticket the ticket CLI started three or more times has a broken
+    spec: the builder reads the same brief and stops the same way. The
+    check counts the `Starting ... attempt` comments and asks the open
+    pull requests whether one of them carries the ticket.
+
+    A stale board is not a board with no tickets: the list could not be
+    refreshed, so the tickets it names are not known, and the check is
+    incomplete rather than clean."""
+    ran: list[str] = []
+    findings: list[dict] = []
+    if stale:
+        # The board could not be refreshed. An empty stale board would
+        # skip every repository and report no finding, so the receipt
+        # would show a clean check that never ran.
+        findings.append(
+            {
+                "check": "attempts",
+                "subject": "the board",
+                "detail": (
+                    "the board list is stale, so the attempts check is "
+                    "incomplete: no ticket is classified"
+                ),
+                "action": "read the board again and run the check again",
+            }
+        )
+        ran.append("the board list is stale, so no ticket was classified")
+        return ran, findings
+    decisions_path, decisions, decisions_error = read_decisions_checked()
+    if decisions_error:
+        # The log that parks tickets could not be read, so which tickets
+        # are already parked is not known: the check is incomplete and
+        # classifies nothing, instead of reporting parked work as drift.
+        findings.append(
+            log_read_finding("attempts", str(decisions_path), decisions_error)
+        )
+        ran.append(
+            f"{decisions_path} could not be read, so no ticket was classified"
+        )
+        return ran, findings
+    board: dict[str, list[dict]] = {}
+    for issue in issues:
+        board.setdefault(issue.get("repo", ""), []).append(issue)
+    records: list[dict] = []
+    for repo, _key in repos:
+        tickets = board.get(repo, [])
+        if not tickets:
+            continue
+        try:
+            raw = run(
+                [
+                    GH,
+                    "issue",
+                    "list",
+                    "-R",
+                    repo,
+                    "--state",
+                    "open",
+                    "--limit",
+                    str(ISSUE_LIMIT),
+                    "--json",
+                    "number,title,comments",
+                ],
+                GH_TIMEOUT,
+                deadline,
+            )
+        except RepoError as exc:
+            findings.append(
+                {
+                    "check": "attempts",
+                    "subject": repo,
+                    "detail": (
+                        "the issue list could not be read, so the tickets of "
+                        f"this repository are not classified: {exc}"
+                    ),
+                    "action": "read the board by hand and start what the shift can work",
+                }
+            )
+            continue
+        try:
+            rows = json.loads(raw)
+        except ValueError:
+            findings.append(
+                {
+                    "check": "attempts",
+                    "subject": repo,
+                    "detail": (
+                        "the issue list did not return JSON, so the tickets of "
+                        "this repository are not classified"
+                    ),
+                    "action": "read the board by hand and start what the shift can work",
+                }
+            )
+            continue
+        rows = rows if isinstance(rows, list) else []
+        ran.append(f"the open issues of {repo} with their comments")
+        if len(rows) >= ISSUE_LIMIT:
+            findings.append(
+                {
+                    "check": "attempts",
+                    "subject": repo,
+                    "detail": (
+                        f"the issue list was cut off at {ISSUE_LIMIT}, so the "
+                        "attempts of every ticket are not known"
+                    ),
+                    "action": "raise the issue limit and run the check again",
+                }
+            )
+        attempts: dict[int, int] = {}
+        truncated: set[int] = set()
+        for row in rows:
+            number = row.get("number")
+            if not isinstance(number, int):
+                continue
+            comments = row.get("comments") or []
+            if len(comments) >= ISSUE_COMMENT_LIMIT:
+                # The issue list carries the first comments of an issue
+                # only, so the starts past the limit are not known: the
+                # ticket is not classified from a list that is not whole.
+                truncated.add(number)
+                continue
+            count = 0
+            for comment in comments:
+                if STARTING.match((comment.get("body") or "").strip()):
+                    count += 1
+            attempts[number] = count
+        for number in sorted(truncated):
+            findings.append(
+                {
+                    "check": "attempts",
+                    "subject": f"{repo}#{number}",
+                    "detail": (
+                        f"the issue's comments were cut off at "
+                        f"{ISSUE_COMMENT_LIMIT}, so the number of starts is "
+                        "not known and the ticket is not classified"
+                    ),
+                    "action": (
+                        "read the issue's comments and count the starts"
+                    ),
+                }
+            )
+        try:
+            pulls, cut = read_pull_requests(repo, deadline)
+        except RepoError as exc:
+            findings.append(
+                {
+                    "check": "attempts",
+                    "subject": repo,
+                    "detail": (
+                        "the open pull requests could not be read, so the "
+                        f"tickets of this repository are not classified: {exc}"
+                    ),
+                    "action": "read the pull requests by hand",
+                }
+            )
+            # The tickets of this repository are not classified at all: a
+            # missing pull request list is not the same as an empty one,
+            # and a ticket with no open pull request must not be reported
+            # from a list nobody could read.
+            ran.append(f"the open pull requests of {repo} could not be read")
+            continue
+        if cut:
+            # A list that was cut off at the limit is not a list with no
+            # pull requests: the ones past the limit are missing, so a
+            # ticket that has one would look like it has none. The
+            # tickets of this repository are not classified at all.
+            findings.append(
+                {
+                    "check": "attempts",
+                    "subject": repo,
+                    "detail": (
+                        f"the open pull request list was cut off at {PR_LIMIT}, "
+                        "so the tickets of this repository are not classified: "
+                        "a pull request past the limit would look like none"
+                    ),
+                    "action": (
+                        "raise the pull request limit and run the check again"
+                    ),
+                }
+            )
+            ran.append(
+                f"the open pull requests of {repo} were cut off at {PR_LIMIT}"
+            )
+            continue
+        ran.append(f"the open pull requests of {repo}")
+        by_number = {item["number"]: item for item in tickets if item.get("number")}
+        by_key = {
+            (item.get("key") or "").upper(): item
+            for item in tickets
+            if item.get("key")
+        }
+        carried: set[int] = set()
+        for row in pulls:
+            target, _signal = linked_ticket(row, by_number, by_key)
+            if target is not None and target.get("number"):
+                carried.add(target["number"])
+        for issue in tickets:
+            number = issue.get("number")
+            if number in truncated:
+                # The comments of this issue were cut off, so its starts
+                # are not known and the ticket is not classified.
+                continue
+            records.append(
+                {
+                    "repo": repo,
+                    "number": number,
+                    "key": issue.get("key") or "",
+                    "attempts": attempts.get(number, 0),
+                    "carried": number in carried,
+                    "parked": bool(
+                        decision_open(decisions, issue.get("key"), number)
+                    ),
+                }
+            )
+    return ran, findings + attempt_findings(records)
+
+
+def attempt_findings(records: list[dict]) -> list[dict]:
+    """Return the findings of the ticket records.
+
+    The records are injected: the caller reads them and this function
+    only reads what it is given. A record says how many times a ticket
+    was started, whether an open pull request carries it and whether the
+    decisions log holds an open item for it. The proof drives it with
+    fixtures."""
+    findings: list[dict] = []
+    for record in records:
+        count = record.get("attempts", 0)
+        if count < ATTEMPT_LIMIT:
+            continue
+        if record.get("carried") or record.get("parked"):
+            continue
+        label = record.get("key") or record.get("number")
+        findings.append(
+            {
+                "check": "attempts",
+                "subject": f"{record.get('repo')}#{record.get('number')}",
+                "detail": (
+                    f"{label} was started {count} times and has no open "
+                    "pull request"
+                ),
+                "action": (
+                    "read the last builder report, then reword the brief "
+                    "or park the ticket and open a re-spec ticket"
+                ),
+            }
+        )
+    return findings
+
+
+def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
+    """Check the text blocker refusals that name a closed issue.
+
+    The queue records the refusal of every ticket it will not start. A
+    refusal whose text blocker names an issue that is closed is a false
+    blocker: the ticket waits for something that is already finished
+    (2026-11-13: four FFBT tickets were held by a false text blocker)."""
+    ran: list[str] = []
+    path = QUEUE_DIR / "dispatch.log"
+    lines, error = queue_log_tail("dispatch.log", REFUSAL_TAIL, deadline)
+    if error:
+        # The log could not be read, so the text blocker check is
+        # incomplete: a log nobody could read is not a log without a
+        # refusal. The receipt must not claim the log was read.
+        ran.append(f"the last {REFUSAL_TAIL} lines of {path} could not be read")
+        return ran, [log_read_finding("blockers", str(path), error)]
+    ran.append(f"the last {REFUSAL_TAIL} lines of {path}")
+    latest: dict[tuple[str, str], str] = {}
+    now = datetime.now()
+    for line in lines:
+        match = REFUSAL.search(line)
+        if not match:
+            continue
+        moment = None
+        try:
+            moment = datetime.strptime(match.group("at"), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            moment = None
+        if moment is not None:
+            age = (now - moment).total_seconds() / 60
+            if age > REFUSAL_FRESH_MINUTES:
+                # The queue does not refuse this ticket any more, so the
+                # refusal it left behind is history, not drift.
+                continue
+        latest[(match.group("repo"), match.group("number"))] = match.group("reason")
+    refusals = [
+        {"repo": repo, "number": number, "reason": reason}
+        for (repo, number), reason in sorted(latest.items())
+    ]
+    states: dict[tuple[str, int], str] = {}
+    unread: dict[tuple[str, int], str] = {}
+    for refusal in refusals:
+        for target, target_number in named_issues(refusal["reason"], refusal["repo"]):
+            key = (target, target_number)
+            if key in states or key in unread:
+                continue
+            code, out, _err = health_run(
+                [GH, "api", f"repos/{target}/issues/{target_number}"],
+                deadline,
+            )
+            state = ""
+            if code == 0:
+                try:
+                    state = str(json.loads(out).get("state") or "")
+                except ValueError:
+                    state = ""
+            if not state:
+                # The state of the issue was never established, so this
+                # check is incomplete for it. It says so instead of
+                # reporting that the blocker is not false.
+                unread[key] = (
+                    f"the state of {target}#{target_number} could not be "
+                    "read, so the text blocker check is incomplete for it"
+                )
+            else:
+                states[key] = state
+    return ran, blocker_findings(refusals, states, unread)
+
+
+def named_issues(reason: str, repo: str) -> list[tuple[str, int]]:
+    """Return the issues a refusal names.
+
+    The two forms the ticket CLI writes are read: "owner/repo#12" and
+    "SRW-1061 (#910)". The key form names an issue of the refused
+    ticket's own repository."""
+    tail = reason.split("text blockers:", 1)[1] if "text blockers:" in reason else reason
+    named: list[tuple[str, int]] = [
+        (match.group(1), int(match.group(2))) for match in NAMED_ISSUE.finditer(tail)
+    ]
+    named += [(repo, int(match.group(2))) for match in NAMED_KEY.finditer(tail)]
+    return named
+
+
+def blocker_findings(
+    refusals: list[dict],
+    states: dict[tuple[str, int], str],
+    unread: dict[tuple[str, int], str] | None = None,
+) -> list[dict]:
+    """Return the findings of the recorded refusals.
+
+    The refusals and the states are injected: the caller reads them and
+    this function only reads what it is given. An issue whose state was
+    never read is an incomplete check, not a blocker that is fine. The
+    proof drives it with fixtures."""
+    unread = unread or {}
+    findings: list[dict] = []
+    for refusal in refusals:
+        if "text blockers:" not in refusal.get("reason", ""):
+            continue
+        subject = f"{refusal.get('repo')}#{refusal.get('number')}"
+        for target, target_number in named_issues(refusal["reason"], refusal["repo"]):
+            key = (target, target_number)
+            if key in unread:
+                findings.append(
+                    {
+                        "check": "blockers",
+                        "subject": subject,
+                        "detail": unread[key],
+                        "action": (
+                            "read the issue, then reword the body so the "
+                            "Blocked by section names only real blockers"
+                        ),
+                    }
+                )
+                continue
+            if states.get(key) != "closed":
+                continue
+            findings.append(
+                {
+                    "check": "blockers",
+                    "subject": subject,
+                    "detail": (
+                        f"the refusal names {target}#{target_number}, which is "
+                        "closed, so the text blocker is false"
+                    ),
+                    "action": (
+                        "reword the body so the Blocked by section names only "
+                        "real blockers"
+                    ),
+                }
+            )
+    return findings
+
+
+def health_cycle(
+    root: Path,
+    issues: list[dict],
+    repos: list[tuple[str, str]],
+    deadline: float,
+    stale: bool = False,
+) -> tuple[list[str], list[dict]]:
+    """Run the four health checks of one cycle.
+
+    Every check says what it ran and what it found, so a reader can tell
+    a check that passed from a check that never ran. The receipt holds
+    one line per finding.
+
+    The board is stale when it could not be refreshed: the check that
+    reads the board is then incomplete, and says so."""
+    lines: list[str] = []
+    findings: list[dict] = []
+    checks = (
+        (
+            "the coordinator tools under the interpreter launchd uses",
+            lambda: check_tools(deadline),
+        ),
+        (
+            "the installed coordinator matches the merged main",
+            lambda: check_install(deadline),
+        ),
+        (
+            "a ticket started three or more times with no open pull request",
+            lambda: check_attempts(issues, repos, deadline, stale),
+        ),
+        (
+            "a text blockers refusal that names a closed issue",
+            lambda: check_blockers(deadline),
+        ),
+    )
+    for title, run_check in checks:
+        lines.append(f"- Check: {title}")
+        ran, found = run_check()
+        for line in ran:
+            lines.append(f"- Ran: {line}")
+        lines.append(
+            f"- Result: {'no finding' if not found else f'{len(found)} finding(s)'}"
+        )
+        for finding in found:
+            lines.append(
+                f"- Finding: {finding['subject']}: {finding['detail']} "
+                f"(action: {finding['action']})"
+            )
+        findings.extend(found)
+    return lines, findings
+
+
+def write_cycle_receipt(
+    root: Path, stamp: str, name: str, lines: list[str], findings: list[dict]
+) -> Path:
+    """Write the receipt of one cycle's health checks and return its path."""
+    path = root / "receipts" / f"cycle-{name}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = [f"# Cycle health - {stamp}", ""]
+    body.append(f"- Cycle: {stamp}")
+    body.append(f"- Findings: {len(findings)}")
+    body.extend(lines)
+    path.write_text("\n".join(body) + "\n")
+    return path
+
+
+def cycle_receipts(receipts_dir: Path) -> list[tuple[str, list[str]]]:
+    """Return the health receipts of the shift, with their findings.
+
+    A cycle receipt is not a ticket receipt: it is the record of the
+    checks one cycle ran, so the report reads it apart from the items."""
+    found: list[tuple[str, list[str]]] = []
+    if not receipts_dir.is_dir():
+        return found
+    for path in sorted(receipts_dir.glob("cycle-*.md")):
+        stamp = ""
+        findings: list[str] = []
+        for line in read_text(path).splitlines():
+            if line.startswith("- Cycle: "):
+                stamp = line[len("- Cycle: ") :].strip()
+            elif line.startswith("- Finding: "):
+                findings.append(line[len("- Finding: ") :].strip())
+        found.append((stamp, findings))
+    return found
+
+
 # --- Part T10: the parking lot and the snag log ---------------------------
 #
 # The shift works the board on its own and cannot make every decision. A
@@ -6659,6 +7885,13 @@ def main() -> int:
     selftest.add_argument("--live", action="store_true", help="run two bounded read-only GitHub/T3 smoke passes")
     selftest.set_defaults(func=lambda args: (__import__("live_smoke").main() if args.live
                                              else __import__("selftest").main()))
+    stall_cmd = sub.add_parser(
+        "stall",
+        help="show the stall state, or run the stall rule over a fixture",
+    )
+    stall_cmd.add_argument("--fixture", help="a JSON fixture of ticks")
+    stall_cmd.add_argument("--root", help="the folder the records go to")
+    stall_cmd.set_defaults(func=cmd_stall)
     args = parser.parse_args()
     return args.func(args)
 

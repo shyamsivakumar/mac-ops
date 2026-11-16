@@ -298,6 +298,95 @@ item through the real writer, so the budget can be shown on the real path:
 an item over its hard budget is written up as `parked`, and the morning
 report reads it like any other receipt.
 
+## The stall rule (spec part T8b)
+
+A tick that shows no new commit and no new receipt for three ticks means
+the item is not moving. The shift reports the stall: a receipt for the
+item and a line in the shift log. When the whole board shows no progress
+for three ticks, the shift logs the stall, sweeps the board again and
+alerts Shyam. The shift keeps running until every item is done or parked:
+a stall is not the end of the shift, and a stalled item is not parked. The
+shift keeps working it (the no-parking policy from Refs #376).
+
+The rule lives in one place (`coordinator/overnight/stall.py`): `observe`
+decides one item, `board` decides the board, and both are pure. The shift
+writes the records.
+
+| Thing | What it is |
+| --- | --- |
+| The marker of an item | The item's commit and the item's newest dispatch receipt, as one string. A new commit or a new receipt is progress, and nothing else is. |
+| The idle count | How many ticks in a row the item's marker did not change. The first tick of an item counts as idle: there is nothing yet to compare it with. |
+| The stall cap | Three idle ticks (`STALL_CAP`). The policy snapshot's `stall_cap` names the same number. |
+| The stall state | `run/stall-state.json`, in the shift's own folder. It holds the marker, the idle count and the parked flag of every item the shift measured. |
+
+An item is measured when the shift has something to measure: a commit or a
+receipt. An item the shift never started has neither, so it is not a
+stalled item, it is an item the shift still has to start. A draft pull
+request is not work the shift does, so it is not measured either.
+
+The board the shift holds is cached for a few passes, and a stale head is
+not evidence that an item stopped moving. So a tick that could park an
+item or stall the board reads the board again first, and the fresh head
+decides.
+
+The board moved when an item moved or when new work arrived on it. New
+work counts whether the shift has measured the new item or not: a ticket
+that appeared on the board is work, and a board that keeps receiving work
+is not stuck. The board's first tick is its baseline: there is nothing yet
+to compare it with, so it counts as an idle tick, the way the first tick
+of an item does.
+
+A stalled item is reported, not parked: the lane keeps working it, the
+shift does not label it, does not re-cut it and does not stop its
+builder. The shift writes the receipt of a stalled item (`State: stuck`,
+`Stopped because: stall: ...`), so the morning report names it under
+"Stuck" and Shyam sees it.
+
+A board that stopped moving gets one alert, not one per tick: the alert
+is written again after the board moves and stalls a second time. The flag
+that says "the board was alerted" is set only after the alert was written,
+so a board whose alert could not be written asks again on the next tick
+instead of going quiet for good. The alert goes to the coordinator's board
+(`factory-overnight-stall`), the same board the merge alert and the
+watchdog use. The board is swept again in the same tick, so the shift
+keeps working on a fresh board.
+
+The tracking is bounded: an item's idle count stops at the cap, and an
+item that leaves the board is not tracked any more.
+
+```sh
+overnight stall --fixture evidence/MO-218/stall-fixture.json --root <folder>
+overnight stall --root <folder>
+```
+
+The first command runs the real rule over the ticks of the fixture and
+writes the records it produces: the receipt of the reported item, the lines
+in the shift log and the alert. The second command reads the shift's own
+stall state and says which items are idle and for how many ticks, and
+which of them are `stalled` (never `parked`: the shift keeps working a
+stalled item). It writes nothing.
+
+The fixture is a JSON file that names its items and its ticks. A tick maps
+every item to its marker.
+
+```json
+{
+  "items": [
+    {
+      "key": "MO-218",
+      "repo": "shyamsivakumar/mac-ops",
+      "number": 218,
+      "title": "Overnight T8b: Stall detection"
+    }
+  ],
+  "ticks": [
+    { "shyamsivakumar/mac-ops#218": "aaaa111|1" },
+    { "shyamsivakumar/mac-ops#218": "aaaa111|1" },
+    { "shyamsivakumar/mac-ops#218": "aaaa111|1" }
+  ]
+}
+```
+
 ## The secret redaction
 
 Every record the shift writes under `.overnight/` goes through one
@@ -395,7 +484,7 @@ cycle is the same cycle.
 
 | Every 5 minutes | What runs |
 | --- | --- |
-| Any time of day | One shift cycle. It reads the policy snapshot, reads the whole board, works it and writes the receipt of every item whose state changed. |
+| Any time of day | One shift cycle. It reads the policy snapshot, runs the health checks, reads the whole board, works it and writes the receipt of every item whose state changed, plus the cycle's own health receipt. |
 | 06:00 to 07:29 PT | The same cycle, and it writes the day's morning report. The report is written once a day: the first morning cycle writes it and a later cycle leaves it alone. |
 
 The interval lives in the plist (`StartInterval`), not in the command, so
@@ -423,6 +512,30 @@ merge and no push: the queue starts the work, under the rules that apply
 today, and the shift records what it really saw. The policy snapshot (T4)
 is read on every cycle, and a cycle that finds no snapshot refuses to
 work.
+
+Every cycle also runs the health checks below before it acts on the board,
+and writes the cycle's own receipt, `receipts/cycle-<stamp>.md`. A dry run
+(`shift --dry-run`) writes that receipt too and no ticket receipt.
+
+## The health checks of a cycle
+
+Every cycle starts with the health checks the tick used to run every tick
+(`loop/tick.md` section 1b). The tick is retired for the 24x7 shift, so
+the shift runs them instead. They read only; they change nothing.
+
+| Check | What it reads | What a finding means |
+| --- | --- | --- |
+| The tools | `coordq status` and `overnight --help` under the interpreter launchd uses, plus the last 40 lines of `dispatch.log` and `gatekeep.log` | A tool breaks under the launchd interpreter, or the queue's log holds a traceback (2026-11-13: a duplicate parser argument stopped the dispatcher for 14 minutes). |
+| The installed files | `install_coordinator.py status` in the mac-ops checkout | The installed coordinator differs from the merged main (2026-11-13: the installed coordq came from an unmerged branch). |
+| The board's attempts | The `Starting ... attempt` comments of every board ticket, against the open pull requests | A ticket was started three or more times and has no pull request, so its spec is broken. |
+| The board's blockers | The refusals the queue recorded, against the state of the issues they name | A text blocker refusal names an issue that is closed, so the blocker is false (2026-11-13: four FFBT tickets were held by a false text blocker). |
+
+Each finding is one line of the cycle's receipt, one ALERT line in the
+shift log and one line of the report's `## Health and drift` section. A
+finding the shift may fix under its own rules (resend, park) it fixes;
+anything else is an ALERT. The shift's board work is not built yet (T5),
+so today every finding is an ALERT and the receipt names the action each
+one would take.
 
 The shift is never armed: `run/armed` does not gate it, and every cycle
 reads the board. The morning report has a time even though the shift does
@@ -513,6 +626,7 @@ revision 3 changes them.
 | `run/armed` | The attended first night only | Shift id and start time of the rehearsal. The shift is always armed (revision 3). |
 | `run/deadline` | The attended first night only | UNIX epoch the rehearsal ends at. The shift has no deadline (revision 3). |
 | `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
+| `run/stall-state.json` | A cycle | How long every item the shift measured has been idle, and which items are parked as a stall. It holds no list of work: the board is the list. |
 | `receipts/<item>.md` | A cycle (`overnight receipt`) | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
 | `inbox/parking-lot.md` | A cycle (`overnight park`) | Decisions the shift could not make. Each with a default and a recommendation. |
 | `inbox/snag-log.md` | A cycle (`overnight park`) | Problems found (flaky test, conflict, dialog) and what the shift did. |
