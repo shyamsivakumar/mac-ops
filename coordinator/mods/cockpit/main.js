@@ -34,7 +34,6 @@ const COLUMN_KEYS = COLUMNS.map((c) => c[0]);
 const DECIDE_GUARD = 800;
 const CONFIRM_GAP = 400;
 const DEC_FRESH = 60000;
-const STALE_RUN = 1800000;
 const NO_REVIEW_REFUSAL = /no review thread found/i;
 const PLAN_STALE = 60000;
 const BULK_KEYS = new Set(["S", "A", "M", "F", "U"]);
@@ -519,11 +518,6 @@ export default class Board extends View {
     return `The review found problems (${verdict.label.replace(/^rev /, "")}). Send it back first.`;
   }
 
-  quiet(g, now) {
-    const c = g.primary;
-    return c.kind === "run" && c.status !== "queued" && now - c.at > STALE_RUN;
-  }
-
   mergeCandidate(g) {
     return g.info.status === "open" && !g.threads.some((c) => ["run", "wait", "fail", "stop"].includes(c.kind));
   }
@@ -545,6 +539,8 @@ export default class Board extends View {
     const placed = live.map((g) => {
       g.info = this.prInfo(g);
       g.asleep = Boolean(this.sleeper(g, now));
+      g.trusted = !this.unsure();
+      g.sentAt = this.sent.get(g.key)?.at ?? 0;
       g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail", now);
       g.stalledAt = stallOf(g, now);
       const lane = laneOf(g, g.needs, () => !this.reviewBlock(g));
@@ -629,7 +625,7 @@ export default class Board extends View {
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
         const session = variant !== "backlog" && g.kind !== "ask" && !g.issue;
-        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length), session, g.trail), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -790,8 +786,7 @@ export default class Board extends View {
     if (key === "run") {
       const started = groups.map((g) => g.runSince).filter(Boolean);
       const capSeg = this.board.running >= this.cap ? ["at cap", "blocked"] : [`${this.cap - this.board.running} free`, "dim"];
-      const quiet = groups.filter((g) => this.quiet(g, now)).length;
-      return started.length ? [capSeg, ...seg(quiet, "quiet", "dim"), [`longest ${elapsed(now - Math.min(...started))}`, "working"]] : [capSeg, ...seg(quiet, "quiet", "dim")];
+      return started.length ? [capSeg, [`longest ${elapsed(now - Math.min(...started))}`, "working"]] : [capSeg];
     }
     if (PR_LANES.has(key)) {
       const conflicts = groups.filter(conflicting).length;

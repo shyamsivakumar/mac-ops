@@ -46,13 +46,17 @@ export const prChanges = (before, after) => PR_FIELDS.filter(([key]) => before?.
   .map(([key, label]) => `${label}: ${before?.[key] ?? "unknown"} → ${after[key] ?? "unknown"}`);
 
 export async function fetchPr(pr) {
-  const r = await exec("gh", ["pr", "view", String(pr.number), "--repo", pr.repo, "--json", "state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,url,headRefName,headRefOid,isDraft,commits"]);
+  const r = await exec("gh", ["pr", "view", String(pr.number), "--repo", pr.repo, "--json", "state,mergeable,mergeStateStatus,reviewDecision,latestReviews,statusCheckRollup,url,headRefName,headRefOid,isDraft,commits"]);
   if (r.code !== 0) throw new Error(r.stderr.trim() || "gh pr view failed");
   const j = JSON.parse(r.stdout);
   const checks = failingChecks(j.statusCheckRollup);
-  const failure = checks.length ? { at: ciFailedAt(j.statusCheckRollup), checks } : cache.get(prKey(pr))?.data?.failure ?? null;
+  const before = cache.get(prKey(pr))?.data?.failure ?? null;
+  const stamped = ciFailedAt(j.statusCheckRollup);
+  const seen = before?.untimed ? before.at : Date.now();
+  const failure = checks.length ? { at: stamped || seen, untimed: !stamped, checks } : before;
+  const changesAt = Math.max(0, ...j.latestReviews.filter((r) => r.state === "CHANGES_REQUESTED").map((r) => Date.parse(r.submittedAt) || 0));
   const commits = j.commits.slice(-COMMITS_KEEP).map((c) => ({ oid: c.oid.slice(0, 10), at: Date.parse(c.committedDate), head: c.messageHeadline.slice(0, 70) }));
-  return { failure, commits, state: j.state, mergeable: j.mergeable, mergeState: j.mergeStateStatus, sha: j.headRefOid, review: j.reviewDecision, ci: ciOf(j.statusCheckRollup), ciAt: ciFailedAt(j.statusCheckRollup), url: j.url, draft: j.isDraft, branch: j.headRefName };
+  return { failure, commits, state: j.state, mergeable: j.mergeable, mergeState: j.mergeStateStatus, sha: j.headRefOid, review: j.reviewDecision, changesAt, ci: ciOf(j.statusCheckRollup), ciAt: ciFailedAt(j.statusCheckRollup), url: j.url, draft: j.isDraft, branch: j.headRefName };
 }
 
 const filesKey = (pr, sha) => `${prKey(pr)}@${sha}`;
