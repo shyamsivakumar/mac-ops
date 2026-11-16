@@ -424,7 +424,6 @@ export default class Board extends View {
   apply(snap) {
     const own = snap.key === "backlog";
     this.applied = snap.rev;
-    this.armed = null;
     this.board = { groups: own ? [] : snap.groups, running: snap.running, at: snap.at };
     this.backlog = own ? snap.groups : [];
     this.backlogLoaded = true;
@@ -434,6 +433,8 @@ export default class Board extends View {
     seedVerdicts(snap.verdicts);
     seedOrigins(snap.origins);
     seedSessions(snap.sessions);
+    const live = this.armed && this.groups().find((g) => g.key === this.armed.key);
+    if (!(this.reviewMode && this.armed?.kind === "approve" && live && this.stamp(live) === this.armed.stamp)) this.armed = null;
   }
 
   snapshot(key) {
@@ -1541,11 +1542,11 @@ export default class Board extends View {
     if (!text || !this.replyKey || (!thread && !this.replyMarked)) return;
     if (this.replyMarked) return this.sendMarked(text, cx);
     if (thread.issue) return this.confirm("abandon", this.replyKey, () => this.abandon(thread, cx), cx);
-    const key = this.replyKey;
+    const card = this.reviewMode ? this.reviewing(Date.now()).g : null;
     this.closeInput();
     this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
       const sent = await sendReply(thread.key, text);
-      if (this.reviewMode) this.finishReview(key, "Sent back");
+      if (card) this.finishReview(card, "Sent back");
       return sent;
     }, cx);
   }
@@ -1711,7 +1712,7 @@ export default class Board extends View {
         say(notice.level, left ? `${notice.text} (${left})` : notice.text, null, notice.items);
         const first = results.find((r) => !r.queued);
         if (first && (this.dec || this.reviewMode)) this.outcome = { text: `Not merged: ${first.text}` };
-        else if (this.reviewMode) this.finishReview(groups[0].key, "Merge queued");
+        else if (this.reviewMode) this.finishReview(groups[0], "Merge queued");
         await this.refresh(cx, true);
       } finally {
         this.merging = false;
@@ -1734,9 +1735,10 @@ export default class Board extends View {
       this.armed = null;
       return go(armed.seen);
     }
-    this.armed = { kind, key, at: Date.now(), seen };
+    const armed = { kind, key, at: Date.now(), seen };
+    this.armed = armed;
     cx.timer.after(ARM_FOR, (cx) => {
-      if (this.armed?.kind === kind && this.armed.key === key) this.armed = null;
+      if (this.armed === armed) this.armed = null;
       cx.notify();
     });
     cx.notify();
@@ -2159,11 +2161,15 @@ export default class Board extends View {
     this.armed = null;
   }
 
-  finishReview(key, label) {
-    this.rvDone.set(key, label);
+  doneKey(g) {
+    return `${g.key}@${this.reviewOf(g).at}`;
+  }
+
+  finishReview(card, label) {
+    this.rvDone.set(this.doneKey(card), label);
     const { list, i } = this.reviewing(Date.now());
-    if (list[i]?.key !== key) return;
-    const next = [...list.slice(i + 1), ...list.slice(0, i)].find((g) => !this.rvDone.has(g.key));
+    if (list[i]?.key !== card.key) return;
+    const next = [...list.slice(i + 1), ...list.slice(0, i)].find((g) => !this.rvDone.has(this.doneKey(g)));
     if (next) {
       this.rvKey = next.key;
       this.rvAt = list.indexOf(next);
@@ -2173,12 +2179,13 @@ export default class Board extends View {
   }
 
 
+
   mergeStop(g) {
     return this.unsure() ? "Board data is out of date. Wait for the refresh." : this.approveBlock(g);
   }
 
   approveReview(g, cx) {
-    if (!g || this.rvDone.has(g.key)) return;
+    if (!g || this.rvDone.has(this.doneKey(g))) return;
     const stop = this.mergeStop(g);
     if (stop) {
       this.outcome = { text: `Not merged: ${stop}` };
@@ -2186,12 +2193,18 @@ export default class Board extends View {
     }
     this.outcome = null;
     this.confirm("approve", g.key, (seen) => this.merge([g], cx, seen), cx, [g.info.gh]);
+    if (this.armed?.key === g.key) this.armed.stamp = this.stamp(g);
   }
 
   sendBackReview(g, cx) {
-    if (!g || this.rvDone.has(g.key)) return;
+    if (!g || this.rvDone.has(this.doneKey(g))) return;
+    const author = this.authorOf(g);
+    if (!author) {
+      this.outcome = { text: "No builder thread to send back to" };
+      return;
+    }
     this.outcome = null;
-    this.openReply({ key: g.key, col: "ready", group: g, thread: null }, cx, NOTE_LABEL);
+    this.openReply({ key: g.key, col: "ready", group: g, thread: author }, cx, NOTE_LABEL);
   }
 
   reviewKey(e, cx) {
@@ -2252,7 +2265,7 @@ export default class Board extends View {
       const author = this.authorOf(g);
       const reviewer = this.reviewOf(g);
       const verdict = this.verdictFor(g);
-      const done = this.rvDone.get(g.key);
+      const done = this.rvDone.get(this.doneKey(g));
       const detail = this.loadDetails(g, cx);
       view = { pos: i + 1, total: list.length, g, pr, gh, url: gh?.url ?? pr.url, branch: gh?.branch ?? (author && sessionOf(author)?.branch) ?? null, builder: author && (runModelOf(author) || author.model), reviewer: runModelOf(reviewer) || reviewer.model, entered: this.enteredAt("ready", g), now, verdict, detail, trail: trailOf(g, now, () => verdict?.state === "fail"), done, block: done ? null : this.mergeStop(g), armed: this.armed?.kind === "approve" && this.armed.key === g.key, outcome: this.outcome, replying: Boolean(this.replyKey), replyLabel: this.replyLabel };
     }
