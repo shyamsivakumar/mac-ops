@@ -38,6 +38,8 @@ const DEC_FRESH = 60000;
 const NO_REVIEW_REFUSAL = /no review thread found/i;
 const PLAN_STALE = 60000;
 const BULK_KEYS = new Set(["S", "A", "M", "F", "U"]);
+const SETTLEABLE = ["done", "fail", "stop"];
+const NOTE_KINDS = { settle: "not finished", approve: "not ready", retry: "not failed", rebase: "not conflicting", note: "no thread to reply to" };
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
@@ -70,6 +72,10 @@ const conflicting = (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.
 const REBASE_LANES = [...PR_LANES, "needs"];
 
 const failedIn = (cols) => cols.needs.groups.filter((g) => g.kind === "fail" && !g.asleep);
+
+const finishedOf = (g) => g.threads.filter((c) => SETTLEABLE.includes(c.kind));
+
+const unfit = (kind, n) => (n ? `${n} ${NOTE_KINDS[kind]}` : "");
 
 const BLOCK_BUCKETS = [[/^Draft/, "drafts"], [/^No review/, "need a review"], [/^Still checking/, "still checking"], [/^The review found/, "review failed"], [/^Review unreadable/, "review unreadable"]];
 const PLAN_BUCKET = "failed the merge check";
@@ -168,6 +174,8 @@ export default class Board extends View {
     this.snoozed = JSON.parse(localStorage.getItem(SNOOZED_KEY) ?? "{}");
     this.asleepCount = 0;
     this.sent = new Map();
+    this.marks = new Set();
+    this.replyMarked = false;
     this.actSeen = shared("cockpit.act")?.rev ?? 0;
     this.query = "";
     this.quick = new Set();
@@ -191,7 +199,7 @@ export default class Board extends View {
     this.reveal = null;
     this.box = Object.fromEntries([...COLUMN_KEYS, "compact", "fan"].map((k) => [k, { width: 300, height: 200 }]));
     this.drawn = Date.now();
-    this.layout = { cols: {}, reviewed: [], finished: [], approvable: [], skipped: 0, nothing: "" };
+    this.layout = { cols: {}, reviewed: [], finished: [], approvable: [], skipped: 0, nothing: "", marked: [], lanes: new Map() };
     if (this.sheet) {
       cx.timer.after(60, () => this.handle.focus());
       cx.timer.after(POP_FOLLOW, () => closeOverlay(this.overlay));
@@ -589,6 +597,7 @@ export default class Board extends View {
     this.asleepCount = live.filter((g) => g.asleep).length;
     this.pruneSnoozed(live, now);
     this.pruneSent(live);
+    this.pruneMarks([...live, ...queued]);
     for (const [, key] of placed) cols[key].total += 1;
     if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
     for (const [g, key] of placed) if (keep(g)) cols[key].groups.push(g);
@@ -640,6 +649,10 @@ export default class Board extends View {
       },
       expand: (key) => this.expand(key),
       fan: (cx) => this.toggleFan(cx),
+      clearMarks: (cx) => {
+        this.clearMarks();
+        cx.notify();
+      },
       foldParent: (key, cx) => {
         this.setParentFold(key, !this.fanFolded.has(key));
         cx.notify();
@@ -665,7 +678,7 @@ export default class Board extends View {
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
         const session = variant !== "backlog" && g.kind !== "ask" && !g.issue;
-        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ marked: this.marks.has(g.key), col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length), session, g.trail), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -690,7 +703,9 @@ export default class Board extends View {
     }
     const why = [...BLOCK_BUCKETS.map(([, name]) => name), PLAN_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
-    this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing };
+    const lanes = new Map([...cols.backlog.groups.map((g) => [g.key, "backlog"]), ...placed.map(([g, lane]) => [g.key, lane])]);
+    const marked = this.keys().flatMap((k) => cols[k].groups).filter((g) => this.marks.has(g.key));
+    this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing, marked, lanes };
     return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries(REBASE_LANES.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
 
@@ -730,7 +745,7 @@ export default class Board extends View {
         const key = `f:${g.key}`;
         const author = this.taskThread(g);
         const entry = { key, col: lane, group: g, thread: null, parent: f.key };
-        const view = { col: lane, now, selected: this.cursor === key, mark: this.cursorMark(false), c: { ...g.primary, title: g.title, task: g.task }, pr: g.info?.pr, gh: g.info?.gh, merged: g.info?.status === "merged", needs: g.needs, entered: this.enteredAt(lane, g), issue: g.issue, session: g.issue ? null : sessionOf(author) };
+        const view = { marked: this.marks.has(g.key), col: lane, now, selected: this.cursor === key, mark: this.cursorMark(false), c: { ...g.primary, title: g.title, task: g.task }, pr: g.info?.pr, gh: g.info?.gh, merged: g.info?.status === "merged", needs: g.needs, entered: this.enteredAt(lane, g), issue: g.issue, session: g.issue ? null : sessionOf(author) };
         rows.push({ key, h: H.worker, entry, el: () => workerRow(t, entry, view, cb) });
       }
     }
@@ -1057,13 +1072,13 @@ export default class Board extends View {
     openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: projectSheetHeight(list.length), props: { projects: { kind: "project", title: "Show project", close: "P", list, current: this.project } } });
   }
 
-  openSnoozeChooser(e, cx) {
+  openSnoozeChooser(e, cx, groups = [e.group]) {
     if (!e || !DECIDES.has(e.col) || this.deciding === "snooze") return;
     this.deciding = "snooze";
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
     const now = Date.now();
     const list = SNOOZE_CHOICES.map(([id, name]) => ({ id, name, count: id === "change" ? "on new activity" : whenText(snoozeUntil(id, now)) }));
-    openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: projectSheetHeight(list.length), props: { snooze: { kind: "snooze", title: `Snooze ${e.group.task || this.cleanTitle(e.group)}`, close: "z", key: e.group.key, list } } });
+    openOverlay({ mod: "cockpit", kind: "dialog", width: PROJECT_SHEET_WIDTH, height: projectSheetHeight(list.length), props: { snooze: { kind: "snooze", title: groups.length === 1 ? `Snooze ${groups[0].task || this.cleanTitle(groups[0])}` : `Snooze ${groups.length} marked cards`, close: "z", keys: groups.map((g) => g.key), list } } });
   }
 
   openRetry(cx) {
@@ -1106,13 +1121,13 @@ export default class Board extends View {
 
   choose(item) {
     if (this.chooser.kind === "project") return this.chooseProject(item.name);
-    setShared("cockpit.act", { kind: "snooze", id: this.chooser.key, until: item.id, rev: Date.now() });
+    setShared("cockpit.act", { kind: "snooze", keys: this.chooser.keys, until: item.id, rev: Date.now() });
     closeOverlay(this.overlay);
   }
 
   runAct(act, cx) {
     if (act.kind === "retry") return this.retryFailed(act, cx);
-    if (act.kind === "snooze") return this.snooze(act.id, act.until);
+    if (act.kind === "snooze") return this.snooze(act.keys, act.until);
     if (act.all) this.snoozed = {};
     else delete this.snoozed[act.id];
     this.saveSnoozed();
@@ -1159,12 +1174,16 @@ export default class Board extends View {
     this.saveSnoozed();
   }
 
-  snooze(key, choice) {
-    const g = this.groups().find((x) => x.key === key);
-    if (!g) return;
-    this.snoozed[key] = { until: snoozeUntil(choice, Date.now()), stamp: this.activity(g) };
+  snooze(keys, choice) {
+    const groups = this.groups().filter((g) => keys.includes(g.key));
+    if (!groups.length) return;
+    const until = snoozeUntil(choice, Date.now());
+    for (const g of groups) {
+      this.snoozed[g.key] = { until, stamp: this.activity(g) };
+      this.marks.delete(g.key);
+    }
     this.saveSnoozed();
-    say("info", `Snoozed ${g.task || this.cleanTitle(g)}`, whenText(this.snoozed[key].until));
+    say("info", groups.length === 1 ? `Snoozed ${groups[0].task || this.cleanTitle(groups[0])}` : `Snoozed ${groups.length} cards`, whenText(until));
   }
 
   rebasable(g) {
@@ -1484,6 +1503,7 @@ export default class Board extends View {
     this.armed = null;
     this.replyKey = null;
     this.replyLabel = null;
+    this.replyMarked = false;
     this.typing = false;
     this.handle.focus();
   }
@@ -1491,7 +1511,8 @@ export default class Board extends View {
   submitReply(cx) {
     const text = this.input.value().trim();
     const thread = this.replyThread;
-    if (!text || !thread || !this.replyKey) return;
+    if (!text || !this.replyKey || (!thread && !this.replyMarked)) return;
+    if (this.replyMarked) return this.sendMarked(text, cx);
     if (thread.issue) return this.confirm("abandon", this.replyKey, () => this.abandon(thread, cx), cx);
     this.closeInput();
     this.attempt(`Sent to ${thread.task || thread.title}`, () => sendReply(thread.key, text), cx);
@@ -1519,12 +1540,12 @@ export default class Board extends View {
     }).catch(() => undefined);
   }
 
-  settleThreads(threads, cx) {
+  settleThreads(threads, cx, summary) {
     if (!threads.length) return say("info", "Only finished threads can be settled");
     this.acted = Date.now();
     if (this.dec) setShared("cockpit.acted", Date.now());
     for (const c of threads) this.settled.set(c.key, c.at);
-    const label = threads.length === 1 ? `Settled ${threads[0].task || threads[0].title}` : `Settled ${threads.length} threads`;
+    const label = summary ?? (threads.length === 1 ? `Settled ${threads[0].task || threads[0].title}` : `Settled ${threads.length} threads`);
     const undo = () => threads.forEach((c) => this.settled.delete(c.key));
     this.attempt(label, async () => {
       for (const c of threads) await settle(c.key);
@@ -1639,7 +1660,7 @@ export default class Board extends View {
     }
   }
 
-  merge(groups, cx, seen) {
+  merge(groups, cx, seen, left = "") {
     if (this.merging) return;
     this.merging = true;
     this.acted = Date.now();
@@ -1655,7 +1676,7 @@ export default class Board extends View {
           results.push(await this.mergeOne(g, seen[i]).catch((error) => this.refuse(g, g.task || g.title, error.message)));
         }
         const notice = mergeNotice(results);
-        say(notice.level, notice.text, null, notice.items);
+        say(notice.level, left ? `${notice.text} (${left})` : notice.text, null, notice.items);
         const first = results.find((r) => !r.queued);
         if (this.dec && first) this.outcome = { text: `Not merged: ${first.text}` };
         await this.refresh(cx, true);
@@ -1670,7 +1691,7 @@ export default class Board extends View {
   settleEntry(e, cx) {
     if (!e || !["done", DEAD].includes(e.col) || this.guard(true)) return;
     const threads = e.thread ? [e.thread] : e.group.threads;
-    this.settleThreads(threads.filter((c) => ["done", "fail", "stop"].includes(c.kind)), cx);
+    this.settleThreads(threads.filter((c) => SETTLEABLE.includes(c.kind)), cx);
   }
 
   confirm(kind, key, go, cx, seen) {
@@ -1698,6 +1719,104 @@ export default class Board extends View {
     if (this.owns("done") && threads.length && !this.guard(false)) this.confirm("settle-all", "all", () => this.settleThreads(this.layout.finished, cx), cx);
   }
 
+  toggleMark(e) {
+    if (!e || this.pop) return;
+    const key = e.group.key;
+    this.marks.has(key) ? this.marks.delete(key) : this.marks.add(key);
+    this.armed = null;
+  }
+
+  clearMarks() {
+    this.marks.clear();
+    this.armed = null;
+  }
+
+  pruneMarks(groups) {
+    if (this.pop || !this.board || this.unsure() || !this.marks.size) return;
+    const live = new Set(groups.map((g) => g.key));
+    const kept = [...this.marks].filter((key) => live.has(key));
+    if (kept.length === this.marks.size) return;
+    this.marks = new Set(kept);
+    this.armed = null;
+  }
+
+  markedTargets(kind) {
+    const { marked, lanes } = this.layout;
+    if (kind === "settle") return marked.filter((g) => ["done", DEAD].includes(lanes.get(g.key)) && finishedOf(g).length);
+    if (kind === "approve") return marked.filter((g) => !this.approveBlock(g));
+    if (kind === "retry") return failedIn(this.layout.cols).filter((g) => marked.includes(g));
+    if (kind === "rebase") return this.rebaseTargets().filter((g) => marked.includes(g));
+    if (kind === "snooze") return marked.filter((g) => DECIDES.has(lanes.get(g.key)));
+    return marked.filter((g) => !g.issue && g.kind !== "ask");
+  }
+
+  confirmMarked(kind, none, go, cx) {
+    if (this.guard(false)) return;
+    const targets = this.markedTargets(kind);
+    if (!targets.length) return say("info", none);
+    this.confirm(`mark-${kind}`, "marked", (seen) => go(this.markedTargets(kind).filter((g) => seen.has(g.key)), seen), cx, new Map(targets.map((g) => [g.key, g.info?.gh])));
+  }
+
+  settleMarked(cx) {
+    this.confirmMarked("settle", "No marked card is finished", (targets) => {
+      const total = this.layout.marked.length;
+      this.settleThreads(targets.flatMap(finishedOf), cx, targets.length === total ? `Settled ${total}` : `Settled ${targets.length} of ${total} (${unfit("settle", total - targets.length)})`);
+    }, cx);
+  }
+
+  approveMarked(cx) {
+    this.confirmMarked("approve", "No marked card can merge", (targets, seen) => {
+      if (targets.length) this.merge(targets, cx, targets.map((g) => seen.get(g.key)), unfit("approve", this.layout.marked.length - targets.length));
+    }, cx);
+  }
+
+  retryMarked(cx) {
+    this.confirmMarked("retry", "No marked card is failed", (targets) => this.tellEach(targets.map((g) => [g, this.ask("Retry", g, RETRY_NOTE)]), "Retry", cx, undefined, unfit("retry", this.layout.marked.length - targets.length)), cx);
+  }
+
+  rebaseMarked(cx) {
+    this.confirmMarked("rebase", "No marked PR has a conflict to rebase", (targets) => this.tellEach(targets.map((g) => [g, this.ask("Rebase", g, REBASE_NOTE)]), "Rebase", cx, undefined, unfit("rebase", this.layout.marked.length - targets.length)), cx);
+  }
+
+  snoozeMarked(cx) {
+    const targets = this.markedTargets("snooze");
+    if (!targets.length) return say("info", "No marked card can be snoozed", "Snooze works on Needs you, CI failed, Review pending and Approved/Ready cards.");
+    this.openSnoozeChooser({ col: this.layout.lanes.get(targets[0].key) }, cx, targets);
+  }
+
+  noteMarked(cx) {
+    if (this.guard(false)) return;
+    const targets = this.markedTargets("note");
+    if (!targets.length) return say("info", "No marked card has a thread to reply to");
+    const host = targets.find((g) => g.key === this.current()?.group.key) ?? targets[0];
+    this.replyLabel = `Send to ${targets.length}`;
+    this.replyMarked = true;
+    this.followed = false;
+    this.replyKey = this.rowKey(this.layout.lanes.get(host.key), host);
+    this.cursor = this.replyKey;
+    this.reveal = this.replyKey;
+    this.input.set_value("");
+    cx.timer.after(60, () => this.input.focus());
+  }
+
+  sendMarked(text, cx) {
+    this.confirmMarked("note", "No marked card has a thread to reply to", (targets) => {
+      this.closeInput();
+      this.tellEach(targets.map((g) => [g, text]), "Note", cx, (message, g) => sendReply((g.lead ?? g.primary).key, message), unfit("note", this.layout.marked.length - targets.length));
+    }, cx);
+  }
+
+  markedKey(k, cx) {
+    if (k === "s") this.settleMarked(cx);
+    else if (k === "a") this.approveMarked(cx);
+    else if (k === "t") this.retryMarked(cx);
+    else if (k === "u") this.rebaseMarked(cx);
+    else if (k === "z") this.snoozeMarked(cx);
+    else if (k === "r" || k === "d") this.noteMarked(cx);
+    else return false;
+    return true;
+  }
+
   coordinator() {
     return agents().find((a) => a.space_name === "Coordinator");
   }
@@ -1710,9 +1829,10 @@ export default class Board extends View {
     }, cx);
   }
 
-  tellEach(pairs, verb, cx) {
-    const info = this.coordinator();
-    if (!info) return say("error", "The Coordinator isn't running");
+  tellEach(pairs, verb, cx, deliver, left = "") {
+    const info = deliver ? null : this.coordinator();
+    if (!deliver && !info) return say("error", "The Coordinator isn't running");
+    const send = deliver ?? ((text) => hc(["send", info.address, text]));
     const fresh = pairs.filter(([g]) => !this.sentAs(g, verb));
     const skipped = pairs.length - fresh.length ? `${pairs.length - fresh.length} skipped, already sent` : "";
     if (!fresh.length) return say("info", `${verb} skipped`, skipped);
@@ -1720,27 +1840,31 @@ export default class Board extends View {
       const failed = [];
       for (const [g, text] of fresh) {
         try {
-          await hc(["send", info.address, text]);
+          await send(text, g);
           this.sent.set(g.key, { action: verb, stamp: this.activity(g), at: Date.now() });
         } catch {
           failed.push(g.task || this.cleanTitle(g));
         }
       }
       const label = fresh.length === 1 ? `${verb} sent for ${fresh[0][0].task || this.cleanTitle(fresh[0][0])}` : `${verb} sent for ${fresh.length - failed.length} of ${fresh.length} cards`;
-      return { label, note: [failed.length && `${failed.length} failed to send: ${failed.join(", ")}`, skipped].filter(Boolean).join(". "), level: failed.length ? "error" : "success" };
+      return { label, note: [failed.length && `${failed.length} failed to send: ${failed.join(", ")}`, skipped, left].filter(Boolean).join(". "), level: failed.length ? "error" : "success" };
     }, cx);
   }
 
   approve(e, cx) {
     if (!e || this.guard(true)) return;
     const g = e.group;
-    g.info = this.prInfo(g);
-    g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail", Date.now());
-    if (laneOf(g, g.needs, () => !this.reviewBlock(g)) !== "ready") return say("info", "Merge blocked", this.reviewBlock(g) ?? "Not ready to merge");
-    const refusal = this.refusalOf(g);
-    const block = this.reviewBlock(g) || (refusal && !refusal.planned ? refusal.text : null);
+    const block = this.approveBlock(g);
     if (block) return say("info", "Merge blocked", block);
     this.confirm("approve", e.key, (seen) => this.merge([g], cx, seen), cx, [g.info.gh]);
+  }
+
+  approveBlock(g) {
+    g.info = this.prInfo(g);
+    g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail", Date.now());
+    if (laneOf(g, g.needs, () => !this.reviewBlock(g)) !== "ready") return this.reviewBlock(g) ?? "Not ready to merge";
+    const refusal = this.refusalOf(g);
+    return this.reviewBlock(g) || (refusal && !refusal.planned ? refusal.text : null);
   }
 
   approveAll(cx) {
@@ -1820,6 +1944,7 @@ export default class Board extends View {
       say("info", "Bulk actions are off in the fan-out view", "Press v to go back to the board.");
       return true;
     }
+    if (this.marks.size && this.markedKey(k, cx)) return true;
     if (k === "j" || k === "down") this.step(1);
     else if (k === "k" || k === "up") this.step(-1);
     else if (k === "h") this.shift(-1);
@@ -1831,6 +1956,9 @@ export default class Board extends View {
     else if (k === "?" || (k === "/" && m.shift)) this.openKeys(cx);
     else if (k === "/" && !this.pop) this.openSearch(cx);
     else if (k === "escape" && this.searchOpen) this.clearSearch();
+    else if (k === "escape" && this.marks.size) this.clearMarks();
+    else if (k === "x" && c && !this.pop) this.toggleMark(c);
+    else if (k === "X") this.clearMarks();
     else if (k === "right" && c?.group.threads.length > 1) this.expanded.add(c.group.key);
     else if (k === "left" && c) {
       this.expanded.delete(c.group.key);
@@ -2034,7 +2162,7 @@ export default class Board extends View {
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, fan: this.fanView, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
+      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, fan: this.fanView, marks: this.marks.size, markedShown: this.layout.marked.length, armedMark: this.armed?.kind.startsWith("mark-") ? this.armed : null, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
       .when(this.searchOpen, (el) => el.child(searchRow(t, { quick: this.quick, searching: this.searching, compact: this.compact, ...this.scope }, this.search, cb)))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()

@@ -59,6 +59,8 @@ function action(t, id, hint, label, run, tip, bare, tone) {
   return tip ? el.tooltip(tip) : el;
 }
 
+const markBox = (t) => div().flex_none().text_size(12).text_color(t.accent).child("☑");
+
 function fitSummary(parts, room) {
   const fit = [];
   let used = 0;
@@ -162,15 +164,34 @@ function barItems(v) {
     { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     projectItem(v),
     alertsItem(),
-    { id: "fan", prio: v.fan ? -1 : 2, toggle: true, label: v.fan ? "Fan-out · on" : "Fan-out", tone: v.fan ? "accent" : undefined, tip: "Group workers under the feature they belong to, so one big ask shows as several PRs (v). Bulk actions are off in this view." },
+    { id: "fan", prio: v.fan ? -1 : 2, toggle: true, label: v.fan ? "Fan-out · on" : "Fan-out", tone: v.fan ? "accent" : undefined, tip: "Group workers under the feature they belong to, so one big ask shows as several PRs (v). Lane-wide bulk actions are off in this view; marked cards (x) can still be acted on." },
     ...(v.snoozed ? [{ id: "snoozed", prio: 2, label: `Snoozed ${v.snoozed}`, tip: `${v.snoozed} snoozed cards are hidden but still count toward the column limits. Click to list or wake them (Z).` }] : []),
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
 }
 
+const MARK_KEYS = [["s", "settle"], ["a", "approve"], ["t", "retry"], ["u", "rebase"], ["z", "snooze"], ["r", "send back"]];
+const MARK_ARMED = { settle: "settle", approve: "approve", retry: "retry", rebase: "rebase", note: "send to" };
+const MARK_WIDE = 1000;
+
+function markedText(v, width) {
+  if (v.armedMark) return `Confirm ${MARK_ARMED[v.armedMark.kind.slice(5)]} ${v.armedMark.seen.size} marked · press again`;
+  const hidden = v.marks - v.markedShown;
+  const head = `Marked ${v.marks}${hidden ? ` (${hidden} hidden)` : ""}`;
+  return width >= MARK_WIDE && !v.compact ? [head, ...MARK_KEYS.map(([key, word]) => `${key} ${word}`)].join(" · ") : head;
+}
+
+function markedBar(t, text, cb) {
+  return h_flex().id("bar-marked").h(18).pl(6).gap(2).items_center().flex_none().rounded(4).border_1().border_color(t.accent + "88").bg(t.accent + "22")
+    .text_size(10.5).font_medium().text_color(t.foreground)
+    .tooltip("These cards are marked. s, a, t, u, z and r act on them instead of the selected card. x marks or unmarks the selected card; X or Esc clears the marks.")
+    .child(text)
+    .child(headButton(t, "bar-marked-x", "✕", "Clear the marks (X or Esc)", (cx) => cb.clearMarks(cx)));
+}
+
 export function fitBar(width, v) {
   if (v.compact) return [];
-  const room = width - 20 - HINT_ROOM - (v.notice ? NOTICE_MIN + BAR_GAP : 0);
+  const room = width - 20 - HINT_ROOM - (v.notice ? NOTICE_MIN + BAR_GAP : 0) - (v.marks ? markedText(v, width).length * 6.2 + 34 + BAR_GAP : 0);
   const fits = (list) => list.reduce((sum, x) => sum + barCost(x), 0) + (list.length - 1) * BAR_GAP <= room;
   let shown = barItems(v);
   const wt = shown.find((x) => x.id === "wt");
@@ -189,6 +210,7 @@ function noticeLine(t, notice, cb) {
 
 export function toolbar(t, width, v, cb) {
   return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
+    .when(v.marks > 0, (el) => el.child(markedBar(t, markedText(v, width), cb)))
     .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.id === "alerts" ? cb.alerts(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
     .when(Boolean(v.notice), (el) => el.child(noticeLine(t, v.notice, cb)))
     .when(!v.notice, (el) => el.child(div().flex_1()))
@@ -423,11 +445,13 @@ export function card(t, e, v, input, cb) {
     : h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(status).child(meta);
   const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason, chips, session, trail) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
     .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
-    .border_color(selected ? (mark === "focus" ? t.accent : t.input) : trail?.unrouted ? t.blocked : t.border).px(8).py(5).gap(2)
+    .border_color(selected ? (mark === "focus" ? t.accent : t.input) : trail?.unrouted ? t.blocked : v.marked ? t.accent : t.border).px(8).py(5).gap(2)
+    .when(v.marked, (el) => el.bg(t.accent + "22"))
     .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
     .on_mouse_move((ev) => cb.drag(ev))
     .on_click((_e, cx) => cb.click(e.key, cx))
     .child(h_flex().h(18).flex_none().gap(6).items_center()
+      .when(v.marked, (el) => el.child(markBox(t)))
       .when(Boolean(c.task), (el) => el.child(div().flex_none().text_size(11.5).font_semibold().text_color(t.foreground).child(c.task)))
       .when(!c.task, (el) => el.child(div().min_w(0).truncate().text_size(11).font_medium().text_color(t.muted).child(c.project ?? "thread")))
       .child(originChips(t, e, v, cb))
@@ -496,12 +520,14 @@ export function workerRow(t, e, v, cb) {
   const tree = v.session?.worktree?.split("/").at(-1);
   const where = v.issue ? `${issueRef(v.issue)} · ${v.issue.stage ?? "no stage"}` : [branch, tree && `worktree ${tree}`].filter(Boolean).join(" · ");
   const body = v_flex().id(`worker-${e.key}`).w_full().h(H.worker - 4).overflow_hidden().rounded(5).bg(selected ? t.raised : t.surface).border_1()
-    .border_color(selected ? (mark === "focus" ? t.accent : t.input) : t.border).px(8).py(3).gap(1)
+    .border_color(selected ? (mark === "focus" ? t.accent : t.input) : v.marked ? t.accent : t.border).px(8).py(3).gap(1)
+    .when(v.marked, (el) => el.bg(t.accent + "22"))
     .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
     .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
     .on_mouse_move((ev) => cb.drag(ev))
     .on_click((_e, cx) => cb.click(e.key, cx))
     .child(h_flex().h(18).flex_none().gap(6).items_center()
+      .when(v.marked, (el) => el.child(markBox(t)))
       .child(chip(t, word, LANE_TONE[v.col] === "idle" ? "dim" : LANE_TONE[v.col]))
       .when(Boolean(c.task), (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.foreground).child(c.task)))
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.foreground).child(c.title))
@@ -856,6 +882,14 @@ export const KEY_TABLE = [
   { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (PR cards)" },
   { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, CI failed, Review pending and Approved/Ready cards)" },
   { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards without a GitHub issue)" },
+  { keys: "x", group: "Marked", all: "Mark or unmark the selected card, in any lane and in the fan-out view. The toolbar shows how many are marked" },
+  { keys: "X Esc", group: "Marked", all: "Clear every mark (Esc only when no search is open)" },
+  { keys: "s", group: "Marked", all: "With marks: settle the marked Done and Dead cards, press twice" },
+  { keys: "a", group: "Marked", all: "With marks: approve the marked Approved/Ready cards that can merge, press twice" },
+  { keys: "t", group: "Marked", all: "With marks: retry the marked failed cards, press twice" },
+  { keys: "u", group: "Marked", all: "With marks: send the marked conflicting PRs back for a rebase, press twice" },
+  { keys: "z", group: "Marked", all: "With marks: snooze every marked card, choosing how long once" },
+  { keys: "r d", group: "Marked", all: "With marks: write one note and send it to each marked card's thread, press Enter twice" },
   { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then CI failed, then Approved/Ready, and cycle" },
   { keys: "⌥⌘N", group: "Move", all: "Jump to the next blocked agent in any space, else the next Needs you card (bind cockpit.needs)" },
   { keys: "j k", group: "Move", all: "Next or previous card (the arrow keys work too)" },
@@ -871,7 +905,7 @@ export const KEY_TABLE = [
   { keys: "f", group: "Board", all: "Fold or show this column" },
   { keys: "e", group: "Board", all: "Open this column in a pop-up" },
   { keys: "b", group: "Board", all: "Fold or show Backlog" },
-  { keys: "v", group: "Board", all: "Switch to the fan-out view: one card per feature with its worker cards under it (bulk actions are off there; ← → or f fold a feature)" },
+  { keys: "v", group: "Board", all: "Switch to the fan-out view: one card per feature with its worker cards under it (lane-wide bulk keys are off there, marked cards still work; ← → or f fold a feature)" },
   { keys: "P", group: "Board", all: "Choose one project to show, or all projects" },
   { keys: "/", group: "Board", all: "Search cards by ticket ID or title, with quick filters. Enter returns to the board, Esc clears" },
   { keys: "R", group: "Board", all: "Reload the board now" },
