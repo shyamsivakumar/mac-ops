@@ -27,6 +27,23 @@ So the shift reports a stall and keeps working the item. It does not skip
 the item, does not block its start, does not recover it, does not label it
 and does not re-cut it. The receipt says `State: stuck`, not `parked`.
 
+## The sixth gate round
+
+The gate ran against `10b50bc` and returned one minor finding: the stall
+view printed `parked` for an item the lane keeps working, so it reported
+an operational state the shift does not have. The label is `stalled` now:
+
+```
+$ python3 coordinator/overnight/overnight stall --root /tmp/mo218j
+Overnight stall state
+shyamsivakumar/mac-ops#218: idle 3 tick(s) stalled
+Board idle: 3 tick(s)
+```
+
+The receipt of a reported item says `State: stuck`, the shift log says the
+item was reported and the shift keeps working it, and no record in the
+stall path says `parked`.
+
 ## The fifth gate round
 
 The gate ran against `a860533` and returned one major finding and one
@@ -252,7 +269,7 @@ PASS ff-drift
 PASS stall
 ```
 
-The repository checks, run at head `6cbe191b952cde824128604efc9e1f4ed85936a3`
+The repository checks, run at head `8a468033e1864b2e88f0e1a2d9a5de4f61f436d7`
 (the commit after it adds only this receipt):
 
 ```
@@ -261,7 +278,7 @@ $ ~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py
 fast-check: passed; selected checks are not the full suite
 
 $ ~/.local/bin/heavy timeout 300 python3 -m unittest discover -s tests -t .
-Ran 288 tests in 7.947s
+Ran 288 tests in 7.220s
 FAILED (failures=2)
 ```
 
