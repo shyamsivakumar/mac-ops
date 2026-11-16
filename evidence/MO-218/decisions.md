@@ -27,6 +27,50 @@ So the shift reports a stall and keeps working the item. It does not skip
 the item, does not block its start, does not recover it, does not label it
 and does not re-cut it. The receipt says `State: stuck`, not `parked`.
 
+## The fifth gate round
+
+The gate ran against `a860533` and returned one major finding and one
+minor.
+
+| Finding | Where it is fixed now |
+| --- | --- |
+| The board was marked as alerted before the alert was delivered, and the state was persisted before the alert was written, so a failed write suppressed the retries for good. | Fixed in `687dced`: `stall.board` does not set the flag, `stall_records` sets it with `stall.delivered` only after the alert was written, and the shift writes the records before it saves the state. The `stall` eval covers it: the board asks again while the alert was not delivered and stops asking once it was. |
+| The stall view displayed stalled items as "parked", against the amended policy. | `coordinator/overnight/overnight`: `overnight stall` now says "reported", and the receipt of a reported item says `State: stuck`. Nothing in the stall path parks a builder. |
+
+The gate noted that the full suite still shows two failures. Both are
+pre-existing on `origin/main` and both come from other parts' changes,
+not from this one:
+
+- `tests/test_install_coordinator.py::test_coord_pi_exports_coord_wake_zero`
+  expects `export COORD_WAKE=0` in `coordinator/pi/bin/coord-pi`. The
+  launcher now defaults wake on (`export COORD_WAKE="${COORD_WAKE:-1}"`),
+  which came with `7d33f57` ("Enable coordinator backlog auto-wake",
+  Refs #346). Making the test pass again would undo another ticket's
+  decision.
+- `tests/test_gatekeep_retry_limit.py::test_a_dead_opus_gate_is_not_requeued`
+  uses the stale gate-model fixture that `docs/coord-watch.md` already
+  records as failing on `origin/main`.
+
+Both fail the same way in a clean worktree of `origin/main`
+(`580535a0b096161fe54e0f60b718b98ed79aad7a`), with no errors. No test was
+changed and no assertion was removed to hide them: they belong to other
+parts, and this part does not touch the launcher, the gatekeep retry
+policy or the queue. The full-suite receipt is in "The repository
+checks" below.
+
+## A self-review round
+
+A self-review over the same diff, with the gate's bar in mind, found and
+fixed three more things:
+
+- `stall.appeared` and `stall.stalled` were not used by the shift any
+  more: `appeared` was replaced by `arrived` (new work on the board) and
+  `stalled` had no caller outside the eval. Both are gone, so the module
+  has no unused surface.
+- The module docstring still said the state lived in the lane ledger. It
+  lives in `run/stall-state.json`, in the shift's own folder, and the
+  docstring says so now.
+
 ## The fourth gate round
 
 The gate ran against `1c8fd42` and returned one major finding: the board
