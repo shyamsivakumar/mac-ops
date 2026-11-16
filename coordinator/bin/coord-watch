@@ -281,6 +281,10 @@ def runtime_events(raw, previous, now):
                 continue
             started = moment(thread.get("startedAt"))
             if started is None:
+                prefix = f"run:{identity}:"
+                run_id = thread.get("runId")
+                active.update(key for key in seen if key.startswith(prefix)
+                              and (not run_id or key == f"{prefix}{run_id}"))
                 continue
             key = f"run:{identity}:{thread.get('runId') or started}"
             active.add(key)
