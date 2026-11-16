@@ -7,7 +7,7 @@ import { needReasons } from "./asks.js";
 import { shortModel } from "./hub.js";
 import { changedSinceLaunch, issueRef, pickerOptions, startBlock } from "./tickets.js";
 
-export const H = { bar: 26, search: 30, head: 46, sub: 20, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, chips: 18, empty: 50, folded: 44 };
+export const H = { bar: 26, search: 30, head: 46, sub: 20, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, chips: 18, session: 15, empty: 50, folded: 44 };
 const TONE = { ask: "blocked", wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
@@ -35,7 +35,7 @@ const selectOnly = (key, cb) => (e, cx) => {
 };
 
 export const hasReason = (c, variant) => variant === "std" && c.kind === "fail" && Boolean(c.context);
-export const cardHeight = (replying, reason, chips) => H.card + (replying ? H.reply : 0) + (reason ? H.reason : 0) + (chips ? H.chips : 0);
+export const cardHeight = (replying, reason, chips, session) => H.card + (replying ? H.reply : 0) + (reason ? H.reason : 0) + (chips ? H.chips : 0) + (session ? H.session : 0);
 
 export function ago(at, now) {
   const m = Math.floor((now - at) / 60000);
@@ -246,6 +246,26 @@ function needChip(t, reasons) {
   return chip(t, label + more, "blocked", reasons.map((r) => NEED_CHIP[r][1]).join(". "));
 }
 
+const middle = (text, n) => (text.length > n ? `${text.slice(0, Math.ceil((n - 1) / 2))}…${text.slice(-Math.floor((n - 1) / 2))}` : text);
+
+function agentLine(model) {
+  const short = shortModel(model);
+  const detail = (model?.split("/").at(-1) ?? "").replace(short, "").replace(/^claude/, "").replace(/^-+|-+$/g, "");
+  return detail ? `${short} · ${detail}` : short;
+}
+
+function sessionRow(t, v) {
+  const { thread, info } = v.session;
+  const agent = agentLine(v.runModel || thread.model);
+  const room = v.colW - 40 - agent.length * 5.3;
+  const branch = info?.branch;
+  const tip = info ? [branch, info.worktree && `worktree ${info.worktree.split("/").at(-1)}`].filter(Boolean).join(" · ") : "";
+  return h_flex().h(H.session).w_full().flex_none().gap(5).items_center().overflow_hidden()
+    .when(Boolean(agent), (el) => el.child(div().flex_none().text_size(9.5).text_color(t.muted).child(agent)))
+    .when(!info, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.dim).child("…")))
+    .when(Boolean(branch) && room > 40, (el) => el.child(chip(t, middle(branch, Math.max(8, Math.floor(room / 5.5) - 2)), "dim", tip)));
+}
+
 function modelParts(c, runModel) {
   const base = shortModel(c.model);
   const used = shortModel(runModel);
@@ -309,12 +329,18 @@ function ageTone(col, ms) {
   return ms >= RED_AFTER ? "blocked" : ms >= AMBER_AFTER ? "working" : "muted";
 }
 
+const NEED_WORD = { question: "question", ci: "CI failed", changes: "changes", conflict: "conflict" };
+const stateWord = (v) => (v.col === "needs" && v.needs?.length ? NEED_WORD[v.needs[0]] : COLUMN_NAME[v.col]);
+
 function columnAge(t, e, v) {
   const ms = v.now - v.entered;
   const age = ago(v.entered, v.now);
-  const named = v.col === "backlog" && v.c.issue ? `Updated ${elapsed(ms)} ago` : `In ${COLUMN_NAME[v.col]} for ${elapsed(ms)}`;
-  const text = v.narrow ? age : v.col === "backlog" && v.c.issue ? `updated ${age}` : `in ${COLUMN_NAME[v.col]} ${age}`;
-  return div().id(`age-${e.key}`).flex_none().text_size(10).text_color(t[ageTone(v.col, ms)]).tooltip(named).child(text);
+  const issue = v.col === "backlog" && v.c.issue;
+  const word = issue ? "Updated" : stateWord(v);
+  const room = v.colW - 40 - (v.c.task ? v.c.task.length * 7 : 0) - 8;
+  const fit = (word.length + age.length + 1) * 5.3 <= room ? word : null;
+  const named = issue ? `Updated ${elapsed(ms)} ago` : `In ${COLUMN_NAME[v.col]} for ${elapsed(ms)}`;
+  return div().id(`age-${e.key}`).flex_none().text_size(10).text_color(t[ageTone(v.col, ms)]).tooltip(named).child(fit ? `${fit} ${age}` : age);
 }
 
 export function card(t, e, v, input, cb) {
@@ -323,6 +349,7 @@ export function card(t, e, v, input, cb) {
   const narrow = v.narrow;
   const reason = hasReason(c, variant);
   const chips = Boolean(c.issue) || Boolean(v.needs?.length);
+  const session = Boolean(v.session);
   const issue = c.issue;
   const line = isPr ? null : reason ? "Failed" : statusLine(v);
   const fit = isPr ? readyFit(v, narrow) : null;
@@ -359,7 +386,7 @@ export function card(t, e, v, input, cb) {
     ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(isPr ? readyActions : quick)
       .when(refused, (el) => el.child(div().id(`why-${e.key}`).flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).tooltip(v.refusal).child(v.refusal)))
     : h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(status).child(meta);
-  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason, chips) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
+  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason, chips, session) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
     .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
     .border_color(selected ? (mark === "focus" ? t.accent : t.input) : t.border).px(8).py(5).gap(2)
     .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
@@ -372,14 +399,15 @@ export function card(t, e, v, input, cb) {
       .when(v.asleep, (el) => el.child(chip(t, "snoozed", "dim", "Snoozed: hidden unless you search for it")))
       .when(Boolean(v.sent), (el) => el.child(chip(t, v.sent, "working", "Already sent to the Coordinator. Pressing again is skipped until the card changes.")))
       .child(div().flex_1())
-      .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : v.col === "run" ? div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now)) : columnAge(t, e, v)))
+      .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : columnAge(t, e, v)))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
     .when(Boolean(issue), (el) => el.child(issueChips(t, issue)))
     .when(Boolean(v.needs?.length), (el) => el.child(h_flex().h(H.chips).w_full().flex_none().items_center().overflow_hidden().child(needChip(t, v.needs))))
     .when(reason, (el) => el.child(div().id(`err-${e.key}`).w_full().h(H.reason - 2).flex_none().overflow_hidden().text_size(10).line_height("13px").text_color(t.muted).tooltip(c.error).child(c.context)))
+    .when(session, (el) => el.child(sessionRow(t, v)))
     .child(div().flex_1())
     .child(foot);
-  const cardEl = div().h(cardHeight(false, reason, chips)).w_full().flex_none().px(6).pb(4).child(body);
+  const cardEl = div().h(cardHeight(false, reason, chips, session)).w_full().flex_none().px(6).pb(4).child(body);
   if (!replying) return cardEl;
   return v_flex().w_full().flex_none().child(cardEl)
     .child(h_flex().h(H.reply).px(6).pt(2).gap(6).items_start()
@@ -446,7 +474,7 @@ function checksOf(gh, verdict) {
   ];
 }
 
-export function decisionOf(col, g, info, verdict, now) {
+export function decisionOf(col, g, info, verdict, now, tab) {
   const name = g.task || g.title;
   const c = g.primary;
   const pr = info.status === "open" ? info.pr : null;
@@ -458,7 +486,8 @@ export function decisionOf(col, g, info, verdict, now) {
     ...((c.kind === "wait" && col === "needs") || sendBack ? [] : [{ id: "reply", key: "r", label: "Reply" }]),
     ...(prCard(col, reasons) ? [{ id: "note", key: "d", label: NOTE_LABEL }] : []),
     ...(settle ? [{ id: "settle", key: "s", label: "Settle" }] : []),
-    ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }] : []),
+    ...(tab ? [{ id: "tab", key: "w", label: "Open tab" }] : []),
+    ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }, { id: "files", key: "c", label: "Changed files" }] : []),
   ];
   const age = ago(g.at, now);
   if (c.kind === "ask") {
@@ -538,7 +567,7 @@ function checkRows(t, rows) {
       .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.muted).child(reason))));
 }
 
-function fileRows(t, files) {
+function fileRows(t, files, url, cb) {
   const count = (key) => files.files.reduce((sum, f) => sum + f[key], 0);
   const summary = files.status === "ok" ? `${plural(files.files.length, "file")}  +${count("add")} −${count("del")}` : null;
   const body = files.status === "loading"
@@ -547,6 +576,7 @@ function fileRows(t, files) {
       ? [div().w_full().py(4).text_size(11.5).line_height("17px").text_color(t.blocked).child(`Could not load changed files: ${files.error}`)]
       : files.files.length
         ? [...files.files.map((f, i) => h_flex().id(`dec-file-${i}`).w_full().min_h(22).gap(8).items_start().py(2)
+          .when(Boolean(url), (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)).tooltip("Open the PR's files on GitHub").on_click(() => cb.link(url)))
           .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.foreground).child(f.path))
           .child(div().flex_none().text_size(11).font_medium().text_color(f.add ? t.done : t.dim).child(`+${f.add}`))
           .child(div().flex_none().text_size(11).font_medium().text_color(f.del ? t.blocked : t.dim).child(`−${f.del}`))),
@@ -667,7 +697,7 @@ function ticketPanel(t, v, cb) {
           .children(record.pullRequests.map((p) => action(t, `dec-pr-${p.number}`, "", `${p.repository.split("/").at(-1)}#${p.number} ${p.state.toLowerCase()}`, () => cb.link(p.url), p.url, true))))))
       .when(Boolean(ticket?.origin?.ticket || ticket?.origin?.linear), (el) => el.child(ticketLinks(t, ticket, cb)))
       .when(Boolean(d.checks), (el) => el.child(checkRows(t, d.checks)))
-      .when(Boolean(d.checks && files), (el) => el.child(fileRows(t, files)))
+      .when(Boolean(d.checks && files), (el) => el.child(fileRows(t, files, v.filesUrl, cb)))
       .when(Boolean(record), (el) => el.child(v_flex().w_full().gap(4)
         .child(section(t, "Latest report"))
         .child(ticket.report === null
@@ -712,6 +742,8 @@ export const KEY_TABLE = [
   { keys: "d", group: "Card", all: "Send back with a note: reply to the thread (PR cards; on Needs you cards it is a plain reply)" },
   { keys: "s", group: "Card", all: "Settle the card's finished threads" },
   { keys: "p", group: "Card", all: "Open the pull request" },
+  { keys: "w", group: "Card", all: "Open the Herdr tab whose terminal runs in the task's worktree (only when one exists)" },
+  { keys: "c", group: "Card", all: "Open the pull request's changed files on GitHub (the pop-up lists them and clicking a file opens them too)" },
   { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (PR cards)" },
   { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, CI failed, Review pending and Approved/Ready cards)" },
   { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards without a GitHub issue)" },

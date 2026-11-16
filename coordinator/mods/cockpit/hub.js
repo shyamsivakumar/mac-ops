@@ -512,6 +512,24 @@ export async function readTask(thread) {
   return { worktree: read.worktreePath ?? null, branch: read.branch ?? null, repo: projects.roots.get(thread.projectId) ?? null };
 }
 
+const sessions = new Map();
+const SESSION_BATCH = 6;
+const SESSION_RETRY = 300000;
+
+export const sessionOf = (thread) => sessions.get(thread.key)?.info ?? null;
+export const sessionEntries = (threads) => threads.filter((c) => sessions.has(c.key)).map((c) => [c.key, sessions.get(c.key)]);
+export const seedSessions = (entries) => entries.forEach(([key, value]) => sessions.set(key, value));
+
+export async function loadSessions(threads) {
+  const todo = threads.filter((c) => sessions.get(c.key)?.at !== c.at && !(sessions.get(c.key)?.retryAt > Date.now())).slice(0, SESSION_BATCH);
+  const read = await Promise.allSettled(todo.map(readTask));
+  read.forEach((r, i) => {
+    const key = todo[i].key;
+    sessions.set(key, r.status === "fulfilled" ? { at: todo[i].at, info: r.value } : { at: 0, info: sessions.get(key)?.info ?? null, retryAt: Date.now() + SESSION_RETRY });
+  });
+  return read.some((r) => r.status === "fulfilled");
+}
+
 export async function firstMessage(key) {
   const read = await call("t3_thread_read", { threadId: key, limit: 1 });
   return read.items.find((i) => i.type === "user_message")?.text ?? null;
