@@ -356,7 +356,7 @@ export async function queueStatus() {
 
 export async function loadBacklog() {
   const [idle, names] = await Promise.all([idleList(), projectNames()]);
-  const queued = idle.filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
+  const queued = idle.filter((t) => !t.parentThreadId && !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
   return { backlog: group(queued).sort((a, b) => a.at - b.at), tasks: taskMap(queued) };
 }
 
@@ -510,6 +510,27 @@ export function mergeNotice(results) {
 export async function readTask(thread) {
   const { thread: read } = await call("t3_thread_read", { threadId: thread.key, limit: 1 });
   return { worktree: read.worktreePath ?? null, branch: read.branch ?? null, repo: projects.roots.get(thread.projectId) ?? null };
+}
+
+const sessions = new Map();
+const SESSION_BATCH = 6;
+const SESSION_RETRY = 300000;
+const SESSION_TTL = 600000;
+
+export const sessionOf = (thread) => sessions.get(thread.key)?.info ?? null;
+export const sessionEntries = (threads) => threads.filter((c) => sessions.has(c.key)).map((c) => [c.key, sessions.get(c.key)]);
+export const seedSessions = (entries) => entries.forEach(([key, value]) => sessions.set(key, value));
+
+export async function loadSessions(threads) {
+  const now = Date.now();
+  const due = (c) => !(sessions.get(c.key)?.at > now - SESSION_TTL) && !(sessions.get(c.key)?.retryAt > now);
+  const todo = threads.filter(due).sort((a, b) => Number(sessions.has(a.key)) - Number(sessions.has(b.key))).slice(0, SESSION_BATCH);
+  const read = await Promise.allSettled(todo.map(readTask));
+  read.forEach((r, i) => {
+    const key = todo[i].key;
+    sessions.set(key, r.status === "fulfilled" ? { at: now, info: r.value } : { at: 0, info: sessions.get(key)?.info ?? null, retryAt: now + SESSION_RETRY });
+  });
+  return read.some((r) => r.status === "fulfilled");
 }
 
 export async function firstMessage(key) {

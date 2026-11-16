@@ -3,10 +3,11 @@
 import { div } from "gpui-kit";
 import { shared } from "herdr";
 import { v_flex, h_flex, Input, TextView } from "gpui-base";
+import { needReasons, stallOf, trailOf } from "./asks.js";
 import { shortModel } from "./hub.js";
 import { changedSinceLaunch, issueRef, pickerOptions, startBlock } from "./tickets.js";
 
-export const H = { bar: 26, search: 30, head: 42, sub: 16, card: 86, foot: 18, title: 30, reason: 28, child: 24, reply: 34, chips: 18, empty: 50, folded: 44 };
+export const H = { bar: 26, search: 30, head: 46, sub: 20, card: 86, foot: 18, title: 30, reason: 28, trail: 15, child: 24, reply: 34, chips: 18, session: 15, empty: 50, folded: 44, fan: 56, worker: 40 };
 const TONE = { ask: "blocked", wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
@@ -17,10 +18,14 @@ export const canMerge = (verdict) => verdict?.state === "pass" || verdict?.state
 const MERGE = { MERGEABLE: ["merge ✓", "done", "Mergeable"], CONFLICTING: ["merge ✗", "blocked", "Merge conflict"], UNKNOWN: ["merge ?", "dim", "Merge status unknown"] };
 const DRAFT = ["Draft", "dim", "Draft PR, not ready to merge"];
 const mergeOf = (gh) => (gh?.draft ? DRAFT : MERGE[gh?.mergeable] ?? MERGE.UNKNOWN);
-export const COLUMNS = [["backlog", "Backlog", "idle", "Backlog"], ["needs", "Needs you", "blocked", "Needs"], ["run", "Running", "working", "Running"], ["ready", "Ready to merge", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"], ["dead", "Dead runs", "idle", "Dead"]];
+export const COLUMNS = [["needs", "Needs you", "blocked", "Needs you"], ["run", "Working", "working", "Working"], ["checks", "Checks running", "idle", "Checks"], ["cifail", "CI failed", "blocked", "CI failed"], ["review", "Review pending", "working", "Review"], ["ready", "Approved/Ready", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"], ["backlog", "Backlog", "idle", "Backlog"], ["dead", "Dead runs", "idle", "Dead"]];
+export const PR_LANES = new Set(["checks", "cifail", "review", "ready"]);
+const PR_REASONS = new Set(["unrouted", "ci", "changes", "conflict"]);
+export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "needs" && PR_REASONS.has(reasons?.[0]));
+export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
 const COLUMN_NAME = Object.fromEntries(COLUMNS.map((c) => [c[0], c[3]]));
 export const COLUMN_LIMIT = { needs: 10, ready: 10 };
-const AGED_COLUMNS = new Set(["needs", "ready"]);
+const AGED_COLUMNS = new Set(["needs", "cifail", "ready"]);
 const DAY = 86400000;
 const AMBER_AFTER = DAY;
 const RED_AFTER = 3 * DAY;
@@ -31,7 +36,7 @@ const selectOnly = (key, cb) => (e, cx) => {
 };
 
 export const hasReason = (c, variant) => variant === "std" && c.kind === "fail" && Boolean(c.context);
-export const cardHeight = (replying, reason, chips) => H.card + (replying ? H.reply : 0) + (reason ? H.reason : 0) + (chips ? H.chips : 0);
+export const cardHeight = (replying, reason, chips, session, trail) => H.card + (replying ? H.reply : 0) + (reason ? H.reason : 0) + (chips ? H.chips : 0) + (session ? H.session : 0) + (trail ? H.trail : 0);
 
 export function ago(at, now) {
   const m = Math.floor((now - at) / 60000);
@@ -58,20 +63,14 @@ function fitSummary(parts, room) {
   const fit = [];
   let used = 0;
   for (const part of parts) {
-    used += part[0].length * 5.2 + 10;
-    if (used > room) break;
+    used += part[0].length * 5 + 8;
+    if (used - 8 > room) break;
     fit.push(part);
   }
   return fit;
 }
 
-const buttonWidth = (label, bare) => label.length * 6 + 12 + (bare ? 0 : 10);
-
-export function headTitle(label, short, colW, popup, count, buttons) {
-  const children = (popup ? 0 : 1) + 5 + buttons.length;
-  const used = 20 + (popup ? 0 : 10) + 7 + count.length * 7 + 20 + 6 * (children - 1) + buttons.reduce((sum, b) => sum + buttonWidth(b.label, b.bare), 0);
-  return label.length * 6.4 <= colW - used ? label : short;
-}
+const buttonWidth = (label, bare) => label.length * 5.6 + 12 + (bare ? 0 : 10);
 
 function headButton(t, id, glyph, tip, run) {
   return div().id(id).size(18).flex_none().flex().items_center().justify_center().rounded(4).text_size(12).text_color(t.muted)
@@ -93,6 +92,7 @@ export function columnHead(t, key, col, state, cb) {
   const over = overLimit(key, col);
   const capped = (key === "run" && state.running >= state.cap) || over;
   const tight = state.colW < 260;
+  const cramped = state.colW < 200;
   const count = countText(key, col, state);
   const tip = [state.popup ? "" : `${state.collapsed ? "Show" : "Hide"} ${label}`, limitTip(key, col)].filter(Boolean).join(". ");
   const settleReviewed = key === "done" && state.reviewed > 0 && !tight ? { label: state.armed?.kind === "settle" ? `Confirm ${state.reviewed}` : `Settle ${state.reviewed}` } : null;
@@ -101,27 +101,31 @@ export function columnHead(t, key, col, state, cb) {
     : key === "ready" && col.count > 0
     ? { id: "approve-all", hint: "M", label: state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, run: (cx) => cb.approveAll(cx), tip: state.approvable ? `Approve all ${state.approvable} (M)` : `${state.nothing} (M)`, dim: state.approvable === 0 }
     : null;
-  const extra = key === "needs" && state.failed > 0
+  const retry = key === "needs" && state.failed > 0
     ? { id: "retry-failed", hint: "F", label: `Retry ${state.failed}`, run: (cx) => cb.retry(cx), tip: `Retry the ${state.failed} failed cards, grouped by error (F)` }
-    : key === "ready" && state.conflicts > 0
-    ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" ? `Confirm ${state.conflicts}` : `Rebase ${state.conflicts}`, run: (cx) => cb.rebaseAll(cx), tip: `Send the ${state.conflicts} conflicting PRs back for a rebase (U)` }
     : null;
-  const buttons = [settleReviewed, extra, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
+  const rebase = state.conflicts[key] > 0
+    ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" && state.armed.key === key ? `Confirm ${state.conflicts[key]}` : `Rebase ${state.conflicts[key]}`, run: (cx) => cb.rebaseAll(cx, key), tip: `Send the ${state.conflicts[key]} conflicting PRs here back for a rebase (U does every lane)` }
+    : null;
+  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, retry, rebase, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
+  const buttons = [settleReviewed, retry, rebase, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
     .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)))
     .when(Boolean(tip), (el) => el.tooltip(tip))
-    .child(h_flex().h(H.head - H.sub).px(10).gap(6).items_center().overflow_hidden()
-      .when(!state.popup, (el) => el.child(div().w(10).text_size(9).text_color(t.dim).child(state.collapsed ? "▸" : "▾")))
+    .child(h_flex().h(H.head - H.sub).px(10).gap(cramped ? 4 : 6).items_center().overflow_hidden()
+      .when(!state.popup && !cramped, (el) => el.child(div().w(10).text_size(9).text_color(t.dim).child(state.collapsed ? "▸" : "▾")))
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
-      .child(div().min_w(0).text_size(11).font_semibold().text_color(t.foreground).truncate().child(headTitle(label, short, state.colW, state.popup, count, buttons)))
+      .child(div().flex_none().text_size(11).font_semibold().text_color(t.foreground).child(state.popup ? label : short))
+      .child(div().flex_1())
       .child(div().flex_none().text_size(11).font_semibold().text_color(capped ? t.blocked : col.count ? t[tone] : t.dim).when(over, (el) => el.px(tight ? 2 : 4).rounded(3).bg(t.blocked + "22")).child(count))
+      .child(state.popup ? headButton(t, "pop-close", "✕", "Close", () => cb.close()) : headButton(t, `pop-${key}`, "⤢", `Open ${label} in a pop-up`, () => cb.expand(key))))
+    .child(h_flex().h(H.sub).px(10).gap(8).items_center().overflow_hidden()
+      .children(summary.map(([text, summaryTone]) => div().flex_none().text_size(9.5).text_color(summaryTone === "dim" ? t.muted : t[summaryTone]).child(text)))
+      .when(!summary.length, (el) => el.child(div().flex_1().min_w(0).truncate().text_size(9.5).text_color(col.summary[0][1] === "dim" ? t.muted : t[col.summary[0][1]]).child(col.summary[0][0])))
       .child(div().flex_1())
       .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
-      .when(Boolean(extra), (el) => el.child(action(t, extra.id, extra.hint, extra.label, extra.run, extra.tip, tight, "blocked")))
-      .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5))))
-      .child(state.popup ? headButton(t, "pop-close", "✕", "Close", () => cb.close()) : headButton(t, `pop-${key}`, "⤢", `Open ${label} in a pop-up`, () => cb.expand(key))))
-    .child(h_flex().h(H.sub).px(10).gap(8).items_start().overflow_hidden()
-      .children(fitSummary(col.summary, state.colW - 20).map(([text, summaryTone]) => div().flex_none().text_size(9.5).text_color(summaryTone === "dim" ? t.muted : t[summaryTone]).child(text))));
+      .children([retry, rebase].filter(Boolean).map((x) => action(t, x.id, x.hint, x.label, x.run, x.tip, tight, "blocked")))
+      .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5)))));
 }
 
 const BAR_GAP = 6;
@@ -132,6 +136,14 @@ const barCost = (item) => (item.label.length + (item.more?.length ?? 0)) * 6.2 +
 function projectItem(v) {
   if (!v.project) return { id: "project", prio: 3, label: "Project · all", tip: "Showing every project. Click to show one project only (P)." };
   return { id: "project", prio: -1, label: `Project · ${v.project}${v.projectCount ? "" : " · no cards"}`, tone: "working", tip: `Showing only ${v.project}. Bulk actions touch only these cards. Click to change (P).` };
+}
+
+function alertsItem() {
+  const a = shared("cockpit.alerts");
+  if (a && !a.on) return { id: "alerts", prio: 3, label: "Alerts · off", tip: "Phone alerts are off. Click to turn them on." };
+  const last = a?.sent ? `Last sent ${ago(a.sent.at, Date.now())} ago: ${a.sent.text.replace(/^Mirror: /, "")}.` : "Nothing sent yet.";
+  if (a?.failed) return { id: "alerts", prio: -1, label: "Alerts · relay down", tone: "blocked", tip: `The last phone alert failed, so Herdr showed a desktop notification instead: ${a.failed}. ${last} Click to turn alerts off.` };
+  return { id: "alerts", prio: 3, label: a?.sent ? `Alerts · on · ${ago(a.sent.at, Date.now())}` : "Alerts · on", tip: `A card entering Needs you or becoming Ready is sent to your phone relay, at most one message every 5 minutes. ${last} Click to turn off.` };
 }
 
 function barItems(v) {
@@ -149,6 +161,8 @@ function barItems(v) {
     ...failedScan,
     { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     projectItem(v),
+    alertsItem(),
+    { id: "fan", prio: v.fan ? -1 : 2, toggle: true, label: v.fan ? "Fan-out · on" : "Fan-out", tone: v.fan ? "accent" : undefined, tip: "Group workers under the feature they belong to, so one big ask shows as several PRs (v). Bulk actions are off in this view." },
     ...(v.snoozed ? [{ id: "snoozed", prio: 2, label: `Snoozed ${v.snoozed}`, tip: `${v.snoozed} snoozed cards are hidden but still count toward the column limits. Click to list or wake them (Z).` }] : []),
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
@@ -175,7 +189,7 @@ function noticeLine(t, notice, cb) {
 
 export function toolbar(t, width, v, cb) {
   return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
-    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
+    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.id === "alerts" ? cb.alerts(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
     .when(Boolean(v.notice), (el) => el.child(noticeLine(t, v.notice, cb)))
     .when(!v.notice, (el) => el.child(div().flex_1()))
     .when(v.stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))
@@ -237,6 +251,38 @@ function originChips(t, e, v, cb) {
     .when(Boolean(v.fell), (el) => el.child(chip(t, "fell back", "working", `Asked for ${shortModel(v.fell)}`)));
 }
 
+function needLabel(reason, v) {
+  if (reason === "stalled") return `stalled ${elapsed(v.now - v.stall)}`;
+  if (reason === "unrouted") return `not sent back ${elapsed(v.now - v.trail.at)}`;
+  return NEED_CHIP[reason][0];
+}
+
+function needChip(t, reasons, v) {
+  const label = needLabel(reasons[0], v);
+  const more = reasons.length > 1 ? ` +${reasons.length - 1}` : "";
+  return chip(t, label + more, "blocked", reasons.map((r) => NEED_CHIP[r][1]).join(". "));
+}
+
+const middle = (text, n) => (text.length > n ? `${text.slice(0, Math.ceil((n - 1) / 2))}…${text.slice(-Math.floor((n - 1) / 2))}` : text);
+
+function agentLine(model) {
+  const short = shortModel(model);
+  const detail = (model?.split("/").at(-1) ?? "").replace(short, "").replace(/^claude/, "").replace(/^-+|-+$/g, "");
+  return detail ? `${short} · ${detail}` : short;
+}
+
+function sessionRow(t, v) {
+  const { thread, info } = v.session;
+  const agent = agentLine(v.runModel || thread.model);
+  const room = v.colW - 40 - agent.length * 5.3;
+  const branch = info?.branch;
+  const tip = info ? [branch, info.worktree && `worktree ${info.worktree.split("/").at(-1)}`].filter(Boolean).join(" · ") : "";
+  return h_flex().h(H.session).w_full().flex_none().gap(5).items_center().overflow_hidden()
+    .when(Boolean(agent), (el) => el.child(div().flex_none().text_size(9.5).text_color(t.muted).child(agent)))
+    .when(!info, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.dim).child("…")))
+    .when(Boolean(branch) && room > 40, (el) => el.child(chip(t, middle(branch, Math.max(8, Math.floor(room / 5.5) - 2)), "dim", tip)));
+}
+
 function modelParts(c, runModel) {
   const base = shortModel(c.model);
   const used = shortModel(runModel);
@@ -255,7 +301,7 @@ const COLD_AFTER = 300000;
 const CLAUDE_MODEL = /claude|opus|sonnet|haiku/i;
 const NEEDS_KINDS = new Set(["wait", "fail", "stop"]);
 
-const isCold = (v) => (v.variant === "ready" || NEEDS_KINDS.has(v.c.kind)) && v.now - v.c.at > COLD_AFTER && CLAUDE_MODEL.test(v.c.model || v.runModel);
+const isCold = (v) => (v.variant === "pr" || NEEDS_KINDS.has(v.c.kind)) && v.now - v.c.at > COLD_AFTER && CLAUDE_MODEL.test(v.c.model || v.runModel);
 
 const chipWidth = (text) => 8 + text.length * 5.5;
 
@@ -287,10 +333,27 @@ function prChips(t, v, fit) {
     .child(chip(t, fit.short ? (gh?.draft ? "D" : mergeLabel.slice(-1)) : mergeLabel, mergeTone, mergeTip));
 }
 
+function trailText(trail) {
+  const what = trail.review ? "review" : `${trail.checks[0].name}${trail.checks.length > 1 ? ` +${trail.checks.length - 1}` : ""}`;
+  const routed = trail.routedIn === null ? "not sent back" : `sent back ${elapsed(trail.routedIn)}`;
+  return [`${trail.live ? "✗" : "✓"} ${what}`, routed, trail.fixes.length ? `${trail.fixes.length} ${trail.fixes.length === 1 ? "fix" : "fixes"}` : null].filter(Boolean).join(" · ");
+}
+
+function trailTip(trail) {
+  const failed = trail.review ? "Review asked for changes" : `Failed: ${trail.checks.map((c) => c.name).join(", ")}`;
+  const routed = trail.routedIn === null ? "No fix round started yet" : `Acted on ${elapsed(trail.routedIn)} after the failure`;
+  return [failed, routed, trail.fixes.length ? `Latest fix: ${trail.fixes.at(-1).head}` : "No fix commits yet", "A settled round that pushed no commits cannot be seen"].join(". ");
+}
+
+function trailRow(t, e, trail) {
+  const tone = trail.unrouted ? "blocked" : trail.live ? "working" : "muted";
+  return div().id(`trail-${e.key}`).h(H.trail).w_full().flex_none().truncate().text_size(10).text_color(t[tone]).tooltip(trailTip(trail)).child(trailText(trail));
+}
+
 function statusLine(v) {
   const { c, variant, now } = v;
   if (variant === "backlog") return c.issue ? issueRef(c.issue) : c.context;
-  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}` : "Running";
+  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}` : "Running";
   if (c.kind === "done") return v.reviewed ? "Ready to settle" : "Not reviewed yet";
   return c.context;
 }
@@ -300,26 +363,35 @@ function ageTone(col, ms) {
   return ms >= RED_AFTER ? "blocked" : ms >= AMBER_AFTER ? "working" : "muted";
 }
 
+const NEED_WORD = { question: "question", stalled: "stalled", unrouted: "not sent back", ci: "CI failed", changes: "changes", conflict: "conflict" };
+const stateWord = (v) => (v.col === "needs" && v.needs?.length ? NEED_WORD[v.needs[0]] : COLUMN_NAME[v.col]);
+
 function columnAge(t, e, v) {
   const ms = v.now - v.entered;
   const age = ago(v.entered, v.now);
-  const named = v.col === "backlog" && v.c.issue ? `Updated ${elapsed(ms)} ago` : `In ${COLUMN_NAME[v.col]} for ${elapsed(ms)}`;
-  const text = v.col === "backlog" && v.c.issue ? `updated ${age}` : `in ${COLUMN_NAME[v.col]} ${age}`;
-  return div().id(`age-${e.key}`).flex_none().text_size(10).text_color(t[ageTone(v.col, ms)]).tooltip(named).child(text);
+  const issue = v.col === "backlog" && v.c.issue;
+  const word = issue ? "Updated" : stateWord(v);
+  const room = v.colW - 40 - (v.c.task ? v.c.task.length * 7 : 0) - 8;
+  const fit = (word.length + age.length + 1) * 5.3 <= room ? word : null;
+  const named = issue ? `Updated ${elapsed(ms)} ago` : `In ${COLUMN_NAME[v.col]} for ${elapsed(ms)}`;
+  return div().id(`age-${e.key}`).flex_none().text_size(10).text_color(t[ageTone(v.col, ms)]).tooltip(named).child(fit ? `${fit} ${age}` : age);
 }
 
 export function card(t, e, v, input, cb) {
   const { c, count, expanded, selected, mark, replying, now, canSettle, variant, opening } = v;
-  const ready = variant === "ready";
+  const isPr = variant === "pr";
   const narrow = v.narrow;
   const reason = hasReason(c, variant);
+  const chips = Boolean(c.issue) || Boolean(v.needs?.length);
+  const session = Boolean(v.session);
+  const trail = v.trail;
   const issue = c.issue;
-  const line = ready ? null : reason ? "Failed" : statusLine(v);
-  const fit = ready ? readyFit(v, narrow) : null;
-  const refused = ready && Boolean(v.refusal);
+  const line = isPr ? null : reason ? "Failed" : statusLine(v);
+  const fit = isPr ? readyFit(v, narrow) : null;
+  const refused = isPr && Boolean(v.refusal);
   const armedHere = v.armed?.key === e.key ? v.armed.kind : null;
   const readyActions = h_flex().gap(4).h(H.foot).min_w(0).when(!refused, (el) => el.flex_1()).items_center().overflow_hidden()
-    .child(action(t, `ap-${e.key}`, "a", armedHere === "approve" ? "Confirm" : "Approve merge", (cx) => cb.approve(cx), armedHere === "approve" ? "Press again to queue the merge relay" : v.blocked ? v.refusal : v.plan?.sha ? `Queue relay #${v.plan.number} ${v.plan.sha.slice(0, 8)}` : "Checking merge plan", narrow).when(v.blocked, (el) => el.opacity(0.5)))
+    .when(v.col === "ready", (el) => el.child(action(t, `ap-${e.key}`, "a", armedHere === "approve" ? "Confirm" : "Approve merge", (cx) => cb.approve(cx), armedHere === "approve" ? "Press again to queue the merge relay" : v.blocked ? v.refusal : v.plan?.sha ? `Queue relay #${v.plan.number} ${v.plan.sha.slice(0, 8)}` : "Checking merge plan", narrow).when(v.blocked, (a) => a.opacity(0.5))))
     .when(v.conflict, (el) => el.child(action(t, `rb-${e.key}`, "u", armedHere === "rebase" ? "Confirm" : "Rebase", (cx) => cb.rebase(cx), armedHere === "rebase" ? "Press again to send it back for a rebase" : "Send the builder back to rebase on origin/main and resolve the conflicts (u)", narrow, "blocked")))
     .child(action(t, `pr-${e.key}`, "p", "PR", () => cb.openPr(), "Open the PR (p)", narrow))
     .child(action(t, `op-${e.key}`, "o", narrow ? "Open" : "Thread", (cx) => cb.open(cx), "Open the thread (o)", narrow))
@@ -335,23 +407,23 @@ export function card(t, e, v, input, cb) {
     .when(count > 1, (el) => el.child(fold(t, e.key, count, expanded, cb)))
     .when(v.merged, (el) => el.child(chip(t, "merged", "done")))
     .when(isCold(v), (el) => el.child(chip(t, "cold", "dim", "Prompt cache expired: the next message re-reads the whole context")))
-    .when(!refused && (!ready || fit.model), (el) => el.child(modelChips(t, c, v.runModel)));
+    .when(!refused && (!isPr || fit.model), (el) => el.child(modelChips(t, c, v.runModel)));
   const status = refused
     ? h_flex().id(`why-${e.key}`).flex_1().min_w(0).gap(5).items_center().tooltip(v.refusal).on_mouse_down("left", selectOnly(e.key, cb))
       .child(div().size(6).flex_none().rounded(3).bg(t.blocked))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).child(v.refusal))
-    : ready
+    : isPr
     ? prChips(t, v, fit).tooltip(v.plan?.sha ? `Relay #${v.plan.number} ${v.plan.sha.slice(0, 8)}` : "Checking merge plan").on_mouse_down("left", selectOnly(e.key, cb))
     : h_flex().flex_1().min_w(0).gap(5).items_center()
-      .child(div().size(6).flex_none().rounded(3).bg(v.quiet ? t.muted : t[TONE[c.kind]]))
+      .child(div().size(6).flex_none().rounded(3).bg(t[TONE[c.kind]]))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
   const foot = selected
-    ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(ready ? readyActions : quick)
+    ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(isPr ? readyActions : quick)
       .when(refused, (el) => el.child(div().id(`why-${e.key}`).flex_1().min_w(0).truncate().text_size(10).text_color(t.blocked).tooltip(v.refusal).child(v.refusal)))
     : h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(status).child(meta);
-  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason, issue) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
+  const body = v_flex().id(`card-${e.key}`).w_full().h(cardHeight(false, reason, chips, session, trail) - 4).overflow_hidden().rounded(6).bg(selected ? t.raised : t.surface).border_1()
     .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
-    .border_color(selected ? (mark === "focus" ? t.accent : t.input) : t.border).px(8).py(5).gap(2)
+    .border_color(selected ? (mark === "focus" ? t.accent : t.input) : trail?.unrouted ? t.blocked : t.border).px(8).py(5).gap(2)
     .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
     .on_mouse_move((ev) => cb.drag(ev))
     .on_click((_e, cx) => cb.click(e.key, cx))
@@ -362,13 +434,16 @@ export function card(t, e, v, input, cb) {
       .when(v.asleep, (el) => el.child(chip(t, "snoozed", "dim", "Snoozed: hidden unless you search for it")))
       .when(Boolean(v.sent), (el) => el.child(chip(t, v.sent, "working", "Already sent to the Coordinator. Pressing again is skipped until the card changes.")))
       .child(div().flex_1())
-      .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : v.col === "run" ? div().flex_none().text_size(10).text_color(t.muted).child(ago(c.at, now)) : columnAge(t, e, v)))
+      .child(opening === e.key ? div().flex_none().text_size(10).font_medium().text_color(t.accent).child("Opening…") : columnAge(t, e, v)))
     .child(div().w_full().h(H.title).flex_none().overflow_hidden().text_size(11.5).line_height("15px").text_color(t.foreground).child(c.title))
     .when(Boolean(issue), (el) => el.child(issueChips(t, issue)))
+    .when(Boolean(v.needs?.length), (el) => el.child(h_flex().h(H.chips).w_full().flex_none().items_center().overflow_hidden().child(needChip(t, v.needs, v))))
     .when(reason, (el) => el.child(div().id(`err-${e.key}`).w_full().h(H.reason - 2).flex_none().overflow_hidden().text_size(10).line_height("13px").text_color(t.muted).tooltip(c.error).child(c.context)))
+    .when(session, (el) => el.child(sessionRow(t, v)))
+    .when(Boolean(trail), (el) => el.child(trailRow(t, e, trail)))
     .child(div().flex_1())
     .child(foot);
-  const cardEl = div().h(cardHeight(false, reason, issue)).w_full().flex_none().px(6).pb(4).child(body);
+  const cardEl = div().h(cardHeight(false, reason, chips, session, trail)).w_full().flex_none().px(6).pb(4).child(body);
   if (!replying) return cardEl;
   return v_flex().w_full().flex_none().child(cardEl)
     .child(h_flex().h(H.reply).px(6).pt(2).gap(6).items_start()
@@ -388,6 +463,54 @@ export function childRow(t, e, v, cb) {
     .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(c.title))
     .when(selected, (el) => el.child(actions(t, e.key, c.kind === "done", cb)))
     .child(opening === e.key ? div().flex_none().text_size(9.5).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(9.5).text_color(t.muted).child(ago(c.at, now)));
+}
+
+const LANE_TONE = Object.fromEntries(COLUMNS.map((c) => [c[0], c[2]]));
+const PROGRESS_TONE = { merged: "done", review: "accent", working: "working", needs: "blocked", queued: "dim", other: "dim" };
+const PROGRESS_WORD = { review: "in review", working: "working", needs: "needs you", queued: "queued", other: "idle" };
+
+export function progressParts(counts, total) {
+  return [[`${counts.merged}/${total} PRs merged`, counts.merged === total ? "done" : "muted"], ...["review", "working", "needs", "queued", "other"].filter((k) => counts[k]).map((k) => [`${counts[k]} ${PROGRESS_WORD[k]}`, PROGRESS_TONE[k] === "dim" ? "muted" : PROGRESS_TONE[k]])];
+}
+
+export function parentCard(t, p, v, cb) {
+  const barWidth = Math.max(40, v.colW - 32);
+  return div().id(`fan-${p.key}`).h(H.fan).w_full().flex_none().px(6).pb(4)
+    .child(v_flex().h(H.fan - 4).w_full().overflow_hidden().rounded(6).bg(t.surface).border_1().border_color(t.border).px(8).py(5).gap(3)
+      .cursor_pointer().hover((s) => s.bg(t.raised)).on_click((_e, cx) => cb.foldParent(p.key, cx))
+      .tooltip(p.hint)
+      .child(h_flex().h(18).flex_none().gap(6).items_center()
+        .child(div().w(10).flex_none().text_size(9).text_color(t.dim).child(v.folded ? "▸" : "▾"))
+        .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.foreground).child(p.title))
+        .child(chip(t, `${p.total} workers`, "dim")))
+      .child(h_flex().h(14).flex_none().gap(5).items_center().overflow_hidden()
+        .children(p.parts.map(([text, tone], i) => h_flex().flex_none().gap(5).child(div().text_size(10.5).text_color(tone === "muted" ? t.muted : t[tone]).child(text)).when(i < p.parts.length - 1, (el) => el.child(div().text_size(10.5).text_color(t.dim).child("·"))))))
+      .child(h_flex().h(3).w(barWidth).flex_none().rounded(2).overflow_hidden().bg(t.border)
+        .children(["merged", "review", "working", "needs", "queued", "other"].filter((k) => p.counts[k]).map((k) => div().h(3).w(Math.round(barWidth * p.counts[k] / p.total)).flex_none().bg(t[PROGRESS_TONE[k] === "dim" ? "muted" : PROGRESS_TONE[k]])))));
+}
+
+export function workerRow(t, e, v, cb) {
+  const { c, selected, mark, now, pr, gh } = v;
+  const word = v.col === "needs" && v.needs?.length ? NEED_WORD[v.needs[0]] : COLUMN_NAME[v.col];
+  const branch = v.session?.branch;
+  const tree = v.session?.worktree?.split("/").at(-1);
+  const where = v.issue ? `${issueRef(v.issue)} · ${v.issue.stage ?? "no stage"}` : [branch, tree && `worktree ${tree}`].filter(Boolean).join(" · ");
+  const body = v_flex().id(`worker-${e.key}`).w_full().h(H.worker - 4).overflow_hidden().rounded(5).bg(selected ? t.raised : t.surface).border_1()
+    .border_color(selected ? (mark === "focus" ? t.accent : t.input) : t.border).px(8).py(3).gap(1)
+    .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
+    .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
+    .on_mouse_move((ev) => cb.drag(ev))
+    .on_click((_e, cx) => cb.click(e.key, cx))
+    .child(h_flex().h(18).flex_none().gap(6).items_center()
+      .child(chip(t, word, LANE_TONE[v.col] === "idle" ? "dim" : LANE_TONE[v.col]))
+      .when(Boolean(c.task), (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.foreground).child(c.task)))
+      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.foreground).child(c.title))
+      .when(Boolean(pr), (el) => el.child(v.merged ? chip(t, `#${pr.number} merged`, "done") : chip(t, `#${pr.number}`, "accent", `PR #${pr.number}${gh?.draft ? " (draft)" : ""}`)))
+      .when(Boolean(pr) && !v.merged, (el) => el.child(chip(t, `CI ${gh ? CI_MARK[gh.ci] ?? "?" : "…"}`, CI_TONE[gh?.ci] ?? "dim", gh ? `CI ${gh.ci}` : "CI loading")))
+      .child(div().flex_none().text_size(10).text_color(t.muted).child(ago(v.entered, now))))
+    .child(h_flex().h(H.session).w_full().flex_none().items_center().overflow_hidden()
+      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.dim).tooltip(where || "No worktree yet").child(where || (v.session ? "no worktree" : "…"))));
+  return div().h(H.worker).w_full().flex_none().pl(22).pr(6).pb(4).child(body);
 }
 
 export const DEC_WIDTH = 920;
@@ -435,18 +558,26 @@ function checksOf(gh, verdict) {
   ];
 }
 
-export function decisionOf(col, g, info, verdict, now) {
+export function decisionOf(col, g, info, verdict, now, tab) {
+  const d = decisionBase(col, g, info, verdict, now, tab);
+  const trail = info.status === "open" && col !== "ready" ? trailOf({ ...g, info }, now, () => verdict?.state === "fail") : null;
+  return trail ? { ...d, trail } : d;
+}
+
+function decisionBase(col, g, info, verdict, now, tab) {
   const name = g.task || g.title;
   const c = g.primary;
   const pr = info.status === "open" ? info.pr : null;
-  const settle = g.threads.some((x) => SETTLEABLE.includes(x.kind));
-  const sendBack = col === "ready" && pr && verdict?.state === "fail";
+  const settle = (col === "done" || col === "dead") && g.threads.some((x) => SETTLEABLE.includes(x.kind));
+  const reasons = col === "needs" ? needReasons({ ...g, info }, () => verdict?.state === "fail", now) : null;
+  const sendBack = (col === "ready" || col === "review") && pr && verdict?.state === "fail";
   const other = [
     { id: "open", key: "o", label: "Open thread" },
     ...((c.kind === "wait" && col === "needs") || sendBack ? [] : [{ id: "reply", key: "r", label: "Reply" }]),
-    ...(col === "ready" ? [{ id: "note", key: "d", label: NOTE_LABEL }] : []),
+    ...(prCard(col, reasons) ? [{ id: "note", key: "d", label: NOTE_LABEL }] : []),
     ...(settle ? [{ id: "settle", key: "s", label: "Settle" }] : []),
-    ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }] : []),
+    ...(tab ? [{ id: "tab", key: "w", label: "Open tab" }] : []),
+    ...(info.pr ? [{ id: "pr", key: "p", label: "Open PR" }, { id: "files", key: "c", label: "Changed files" }] : []),
   ];
   const age = ago(g.at, now);
   if (c.kind === "ask") {
@@ -468,7 +599,13 @@ export function decisionOf(col, g, info, verdict, now) {
     };
   }
   const checks = pr ? checksOf(info.gh, verdict) : null;
-  if (col === "ready" && pr) {
+  if (reasons?.[0] === "stalled") {
+    return { headline: `${name} has stalled`, primary: { id: "open", key: "o", label: "Open thread" }, why: [`No agent activity for ${elapsed(now - stallOf(g, now))}.`, `${g.title} · ${g.project}`], other: other.filter((x) => x.id !== "open"), checks: null };
+  }
+  if ((col === "cifail" || (col === "needs" && prCard(col, reasons))) && pr) {
+    return { headline: `Fix PR #${pr.number}`, primary: { id: "answer", key: "r", label: "Send back" }, why: [g.task ? `${g.task} · ${g.title}` : g.title, checkWords(info.gh, verdict)], other, checks };
+  }
+  if ((col === "ready" || col === "review") && pr) {
     const title = g.task ? `${g.task} · ${g.title}` : g.title;
     if (!verdict) return { headline: `Review PR #${pr.number}`, primary: { id: "review", key: "t", label: "Start review", armed: "Confirm review" }, why: [title, "No review yet, so this can't merge."], other, checks };
     if (verdict.state === "loading") return { headline: `PR #${pr.number}`, primary: { id: "wait", key: "", label: "Checking review…" }, why: [title, checkWords(info.gh, verdict)], other, checks };
@@ -523,7 +660,22 @@ function checkRows(t, rows) {
       .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.muted).child(reason))));
 }
 
-function fileRows(t, files) {
+function linkRow(t, id, label, text, url, tone, cb) {
+  return h_flex().id(id).w_full().min_h(20).gap(8).items_start().py(1)
+    .when(Boolean(url), (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)).tooltip(url).on_click(() => cb.link(url)))
+    .child(div().w(52).flex_none().text_size(11).text_color(t.dim).child(label))
+    .child(div().flex_1().min_w(0).text_size(11.5).line_height("16px").text_color(t[tone]).child(text));
+}
+
+function trailRows(t, trail, cb) {
+  const routed = trail.routedIn === null ? "Not sent back" : `Sent back ${elapsed(trail.routedIn)} after`;
+  return v_flex().w_full().gap(2)
+    .child(section(t, "Feedback trail", routed))
+    .children(trail.review ? [linkRow(t, "trail-review", "Failed", "Review asked for changes", null, "blocked", cb)] : trail.checks.map((c, i) => linkRow(t, `trail-check-${i}`, i ? "" : "Failed", c.name, c.url, "blocked", cb)))
+    .children(trail.fixes.length ? trail.fixes.map((f, i) => linkRow(t, `trail-fix-${i}`, i ? "" : "Fixes", `${f.oid.slice(0, 7)} ${f.head}`, f.url, "foreground", cb)) : [linkRow(t, "trail-nofix", "Fixes", "No fix commits yet", null, "dim", cb)]);
+}
+
+function fileRows(t, files, url, cb) {
   const count = (key) => files.files.reduce((sum, f) => sum + f[key], 0);
   const summary = files.status === "ok" ? `${plural(files.files.length, "file")}  +${count("add")} −${count("del")}` : null;
   const body = files.status === "loading"
@@ -532,6 +684,7 @@ function fileRows(t, files) {
       ? [div().w_full().py(4).text_size(11.5).line_height("17px").text_color(t.blocked).child(`Could not load changed files: ${files.error}`)]
       : files.files.length
         ? [...files.files.map((f, i) => h_flex().id(`dec-file-${i}`).w_full().min_h(22).gap(8).items_start().py(2)
+          .when(Boolean(url), (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)).tooltip("Open the PR's files on GitHub").on_click(() => cb.link(url)))
           .child(div().flex_1().min_w(0).text_size(11.5).line_height("17px").text_color(t.foreground).child(f.path))
           .child(div().flex_none().text_size(11).font_medium().text_color(f.add ? t.done : t.dim).child(`+${f.add}`))
           .child(div().flex_none().text_size(11).font_medium().text_color(f.del ? t.blocked : t.dim).child(`−${f.del}`))),
@@ -651,8 +804,9 @@ function ticketPanel(t, v, cb) {
         .child(h_flex().w_full().gap(6).flex_wrap()
           .children(record.pullRequests.map((p) => action(t, `dec-pr-${p.number}`, "", `${p.repository.split("/").at(-1)}#${p.number} ${p.state.toLowerCase()}`, () => cb.link(p.url), p.url, true))))))
       .when(Boolean(ticket?.origin?.ticket || ticket?.origin?.linear), (el) => el.child(ticketLinks(t, ticket, cb)))
+      .when(Boolean(d.trail), (el) => el.child(trailRows(t, d.trail, cb)))
       .when(Boolean(d.checks), (el) => el.child(checkRows(t, d.checks)))
-      .when(Boolean(d.checks && files), (el) => el.child(fileRows(t, files)))
+      .when(Boolean(d.checks && files), (el) => el.child(fileRows(t, files, v.filesUrl, cb)))
       .when(Boolean(record), (el) => el.child(v_flex().w_full().gap(4)
         .child(section(t, "Latest report"))
         .child(ticket.report === null
@@ -688,19 +842,21 @@ export function decisionView(t, v, input, cb) {
       .child(v.issue ? issuePanel(t, v, cb) : ticketPanel(t, v, cb)));
 }
 
-export const DECIDES = new Set(["needs", "ready"]);
+export const DECIDES = new Set(["needs", "cifail", "review", "ready"]);
 export const KEY_TABLE = [
   { keys: "⏎", group: "Card", all: "Open the card's ticket and decision pop-up" },
-  { keys: "a", group: "Card", all: "Approve the merge, press twice (Ready cards)" },
+  { keys: "a", group: "Card", all: "Approve the merge, press twice (Approved/Ready cards)" },
   { keys: "o", group: "Card", all: "Open the thread (the issue on GitHub for ticket cards)" },
   { keys: "r", group: "Card", all: "Reply to the thread" },
-  { keys: "d", group: "Card", all: "Send back with a note: reply to the thread (Ready cards; on Needs you cards it is a plain reply)" },
+  { keys: "d", group: "Card", all: "Send back with a note: reply to the thread (PR cards; on Needs you cards it is a plain reply)" },
   { keys: "s", group: "Card", all: "Settle the card's finished threads" },
   { keys: "p", group: "Card", all: "Open the pull request" },
-  { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (Ready cards)" },
-  { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you and Ready cards)" },
+  { keys: "w", group: "Card", all: "Open the Herdr tab whose terminal runs in the task's worktree (only when one exists)" },
+  { keys: "c", group: "Card", all: "Open the pull request's changed files on GitHub (the pop-up lists them and clicking a file opens them too)" },
+  { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (PR cards)" },
+  { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, CI failed, Review pending and Approved/Ready cards)" },
   { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards without a GitHub issue)" },
-  { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then Ready, and cycle" },
+  { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then CI failed, then Approved/Ready, and cycle" },
   { keys: "⌥⌘N", group: "Move", all: "Jump to the next blocked agent in any space, else the next Needs you card (bind cockpit.needs)" },
   { keys: "j k", group: "Move", all: "Next or previous card (the arrow keys work too)" },
   { keys: "h l", group: "Move", all: "Previous or next column (section on a narrow board)" },
@@ -708,13 +864,14 @@ export const KEY_TABLE = [
   { keys: "→ ←", group: "Move", all: "Show or hide a task's other threads" },
   { keys: "S", group: "Board", all: "Settle every reviewed card, press twice (Done)" },
   { keys: "A", group: "Board", all: "Settle every finished card, press twice (Done)" },
-  { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (Ready)" },
+  { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (Approved/Ready)" },
   { keys: "F", group: "Board", all: "Retry failed cards in groups by error kind (Needs you)" },
-  { keys: "U", group: "Board", all: "Send every conflicting PR back for a rebase, press twice (Ready)" },
+  { keys: "U", group: "Board", all: "Send every conflicting PR back for a rebase, press twice (every PR lane; the lane head button does one lane)" },
   { keys: "Z", group: "Board", all: "List snoozed cards, wake one or all" },
   { keys: "f", group: "Board", all: "Fold or show this column" },
   { keys: "e", group: "Board", all: "Open this column in a pop-up" },
   { keys: "b", group: "Board", all: "Fold or show Backlog" },
+  { keys: "v", group: "Board", all: "Switch to the fan-out view: one card per feature with its worker cards under it (bulk actions are off there; ← → or f fold a feature)" },
   { keys: "P", group: "Board", all: "Choose one project to show, or all projects" },
   { keys: "/", group: "Board", all: "Search cards by ticket ID or title, with quick filters. Enter returns to the board, Esc clears" },
   { keys: "R", group: "Board", all: "Reload the board now" },
