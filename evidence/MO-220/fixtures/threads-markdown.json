@@ -1,0 +1,13 @@
+{
+  "thread": {
+    "threadId": "mcp:launch:t10-markdown",
+    "status": "waiting_for_approval",
+    "pendingRequestCount": 1
+  },
+  "items": [
+    {
+      "type": "question",
+      "text": "## A heading inside the request\n- Default: a default inside the request\n- Recommend: a recommendation inside the request\nApprove lines A-C?"
+    }
+  ]
+}

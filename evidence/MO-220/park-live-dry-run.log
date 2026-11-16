@@ -6,7 +6,21 @@ that applies when Shyam says nothing and a recommendation. The shift
 never answers an approval request: a pending request is parked with
 its exact text and left alone.
 
-No decision is parked. The shift made every decision it could.
+## SRW-1068 (#917) · Update finite admission proofs and staging cancellation coverage
+
+- Repo: shyamsivakumar/strategy-replay-workbench
+- Ticket: SRW-1068
+- Kind: open item in the decisions log — a decision the shift cannot make
+- Parked at: 2026-11-16 05:43 AM PT
+- Default: the ticket stays as it is and the shift does not work it
+- Recommend: answer the open question in the decisions log, and the shift works the ticket
+- Next: Shyam answers, and the shift works the ticket
+
+The open question, quoted exactly:
+
+```text
+- 2026-11-12T22:45Z PARKED (needs Shyam): SRW-1068 #917 (last SRW-1033 build slice) replaces refusal-until-false exha...
+```
 
 --- snag log (dry run, nothing written) ---
 # Snag log
@@ -14,11 +28,39 @@ No decision is parked. The shift made every decision it could.
 The problems the shift found and what it did about them. One section
 per problem. A problem the shift finds twice is written once.
 
-## 2026-11-16 05:34 AM PT · SRW-1169 (#1161) · Bounded census submission API and durable credits
+## 2026-11-16 05:43 AM PT · SRW-1169 (#1161) · Bounded census submission API and durable credits
 
 - Repo: shyamsivakumar/strategy-replay-workbench
 - Ticket: SRW-1169
 - Problem: the builder used 20 min of its 8 min hard budget, so the item was stopped and parked
+- What the shift did: the item was stopped and parked, and no further fix try was spent on it
+- Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
+
+## 2026-11-16 05:43 AM PT · shyamsivakumar/fantasy-football-toolkit#506 · feat: connect the live nominee to guidance and alternatives in the acquisition workspace (Refs #418)
+
+- Repo: shyamsivakumar/fantasy-football-toolkit
+- Problem: the builder used 15 min of its 8 min hard budget, so the item was stopped and parked
+- What the shift did: the item was stopped and parked, and no further fix try was spent on it
+- Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
+
+## 2026-11-16 05:43 AM PT · shyamsivakumar/mac-ops#434 · Park stalled items and alert on a stalled board (Refs #186)
+
+- Repo: shyamsivakumar/mac-ops
+- Problem: the builder used 14 min of its 8 min hard budget, so the item was stopped and parked
+- What the shift did: the item was stopped and parked, and no further fix try was spent on it
+- Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
+
+## 2026-11-16 05:43 AM PT · shyamsivakumar/strategy-replay-workbench#1167 · Bot 2: book recovered exit dollars by execution increment (Refs #1017)
+
+- Repo: shyamsivakumar/strategy-replay-workbench
+- Problem: the builder used 224 min of its 8 min hard budget, so the item was stopped and parked
+- What the shift did: the item was stopped and parked, and no further fix try was spent on it
+- Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
+
+## 2026-11-16 05:43 AM PT · shyamsivakumar/strategy-replay-workbench#1099 · Bot 2: keep protective management running after save failures
+
+- Repo: shyamsivakumar/strategy-replay-workbench
+- Problem: the builder used 9 min of its 8 min hard budget, so the item was stopped and parked
 - What the shift did: the item was stopped and parked, and no further fix try was spent on it
 - Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
 

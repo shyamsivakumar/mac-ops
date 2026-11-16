@@ -27,31 +27,40 @@ Run id: `ticket:shyamsivakumar/mac-ops#188:a1`. Refs #188.
     - A pending approval request on a thread that holds the work is
       parked with its exact text, quoted as the tool showed it, and the
       request is never answered. The shift has no call that answers a
-      request: the module reads the thread and writes the record.
+      request: the module reads the thread and writes the record. The
+      request that is parked is the last one the thread holds that is
+      still open, so a question that was already answered is never parked
+      as if it waited for an answer.
     - An open decision in the coordinator's own decisions log is parked
-      with the open line quoted.
+      with the open line quoted, and so is a ticket the filter drops for
+      a decision (marked needs Shyam, marked design needed, an open item
+      or a hold in the decisions log). A ticket dropped as Ascend work, or
+      as being off the allow list, is not a decision and is never parked.
     - The file is written whole, so a decision that is no longer waiting
       leaves it and the morning report never names a decision that is
-      gone.
+      gone. A decision that is still waiting keeps the time it was first
+      parked.
   - **The snag log** holds the problems the shift found and what it did
     about them: a failing check on a pull request, a pending request
-    whose text could not be read, and an item the budget stopped. A
-    problem the shift finds twice is written once, so the log holds the
-    problems and not the cycles.
+    whose text could not be read, an item the budget stopped, and a thread
+    that could not be read. A problem the shift finds twice is written
+    once, so the log holds the problems and not the cycles.
   - The shift cycle (`overnight shift`) runs the parking step after the
     lane pass, so a cycle parks what it cannot decide and logs what it
-    found. A cycle that cannot read the board says so and goes on: a
-    record that is missing never ends the shift.
+    found. Nothing in that step raises out of the cycle: a parking
+    problem never takes the morning report with it.
+  - `parse_parking_lot` reads the fences now, so a quoted request that
+    holds a heading or a `Default:` line cannot change the decision it is
+    quoted in.
 - `coordinator/overnight/README.md`: the contract names the `park`
   command, the two inbox files, what is parked, what is logged, and the
-  rule that a pending request is parked with its exact text and never
-  answered.
+  rules that keep the records honest.
 - `evidence/MO-220/prove-park.py`: the proof. It runs the real
-  `overnight park` command against a temp records folder and a stub
-  `t3mcp` that serves one thread waiting on a person and refuses every
-  call but a read.
-- `evidence/MO-220/fixture-pending-approval.json`: the fixture thread
-  that waits on a person.
+  `overnight park` command against temp records folders, a stub `t3mcp`
+  that serves the threads it is given and refuses every call but a read,
+  and the live board (read only).
+- `evidence/MO-220/fixtures/`: the fixture threads and the fixture
+  requests.
 - `evidence/MO-220/park-fixture.log`: the proof's output.
 - `evidence/MO-220/park-live-dry-run.log`: the same command on the live
   board, read only.
@@ -68,8 +77,8 @@ entry the proof writes, from `evidence/MO-220/park-fixture.log`:
 - Repo: shyamsivakumar/mac-ops
 - Ticket: MO-220
 - Kind: pending approval request
-- Thread: mcp:launch:fixture-mo-220
-- Parked at: 2026-11-16 05:32 AM PT
+- Thread: mcp:launch:t10-answered
+- Parked at: 2026-11-16 05:42 AM PT
 - Default: the request stays unanswered and the item stays parked
 - Recommend: answer the request in the morning; the shift never answers one
 - Next: Shyam answers the request, and the shift works the item again
@@ -77,23 +86,63 @@ entry the proof writes, from `evidence/MO-220/park-fixture.log`:
 The request, quoted exactly as the tool showed it:
 
 ```text
-Approve running `python3 scripts/mac_ops_fast_check.py` on mac-ops#188 and pushing the result to t3/overnight-decision-parking? [y/N]
+Approve running `python3 scripts/mac_ops_fast_check.py`?
 ```
 ```
 
 The stub was called for `t3_thread_read` and for nothing else, so the
-shift read the request and never answered it. The morning report then
-names the decision for Shyam with its recommendation and its default:
+shift read the request and never answered it. The proof also shows:
+
+1. and 2. the answered question that sits before the pending approval
+   is not parked, and the pending approval is;
+3. a pending request whose text cannot be read is still parked, and the
+   problem is logged;
+4. a quoted request that holds markdown does not break the morning
+   report: the report names one decision with its own default and its own
+   recommendation;
+5. a thread that cannot be read leaves the parking lot as it was, exits
+   non-zero, and logs the failure;
+6. a problem that is still there is written once, not once a cycle;
+7. a ticket the filter drops for an open question in the coordinator's
+   decisions log is parked with its default and its recommendation.
+
+The morning report then names the decision for Shyam:
 
 ```
 ## Decisions for you (one at a time, each with my recommendation)
 
-1. MO-220 (#188) · Overnight T10: Parking lot and snag log — Recommend: answer the request in the morning; the shift never answers one. Default if you say nothing: the request stays unanswered and the item stays parked
+1. MO-222 (#190) · Overnight T10: a request that holds markdown — Recommend: answer the request in the morning; the shift never answers one. Default if you say nothing: the request stays unanswered and the item stays parked
 ```
 
 The live dry run (`park-live-dry-run.log`) shows the same command on the
-real board: nothing is parked today, and one problem is logged
-(SRW-1169's builder is over its hard budget).
+real board: nothing is parked today, and the problems the shift found
+(items whose builder is over its hard budget) are logged.
+
+## The reviewer round
+
+One in-session reviewer round ran over the diff (`gpt-6.1-sol`, high
+effort). It found eight defects, all fixed in this branch:
+
+1. the builder of a pull request was looked up by the pull request's
+   number, so a pull request's builder was missed. The board's own
+   builder and gate threads are read first, and the receipts are looked
+   up by the linked ticket's number.
+2. the tickets with an open question in the decisions log are dropped by
+   the filter, so the parking lot never held them. The drops come with
+   the items now, and the decisions among them are parked.
+3. the quoted request could be an old, answered question. The last open
+   request is the one that is parked, and a request that carries an
+   answer is skipped.
+4. a failed read could empty the parking lot. A thread that cannot be
+   read leaves the file as it is, exits non-zero and logs the failure.
+5. a parking failure could terminate the shift cycle. The parking step
+   catches what it raises, so the morning report is still written.
+6. a quoted request could corrupt the morning report. The parser reads
+   the fences now.
+7. a failed write reported success. A failed write is reported, exits
+   non-zero and is recorded in the shift log.
+8. a problem that was still there was written again every cycle. The
+   identity of a problem is the item and the problem, not the time.
 
 ## Checks
 
@@ -102,6 +151,7 @@ real board: nothing is parked today, and one problem is logged
   local check): passed.
 - `python3 coordinator/overnight/overnight selftest`: all 12 fixture
   evals pass.
+- `python3 evidence/MO-220/prove-park.py`: passed (seven cases).
 - `python3 -m pytest tests/ -q`: 286 pass, 2 fail. Both failures are
   pre-existing on this branch's base and are unrelated to this part:
   `tests/test_gatekeep_retry_limit.py::NonAstraGateTest::test_a_dead_opus_gate_is_not_requeued`
@@ -112,6 +162,6 @@ real board: nothing is parked today, and one problem is logged
 ## Not touched
 
 The merge, push and slot-cap rules, the Ascend rules, the coordq queue,
-the launchd jobs, the tick, the merge and close commands, the report
-command, and every existing test or check. No secret is written: both
-files go through the shift's own redaction before they are written.
+the launchd jobs, the tick, the merge and close commands, and every
+existing test or check. No secret is written: both files go through the
+shift's own redaction before they are written.
