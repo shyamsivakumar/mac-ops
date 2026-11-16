@@ -874,11 +874,16 @@ Each caught failure emits one ITEM ERROR line with repository, item, command,
 exit status and the first output line. The pass prints ITEM SUMMARY and raises
 after processing the lanes when any item failed, so shift health stays failed.
 The per-pass count is retained in the lane ledger. API budget exhaustion remains
-a pass-wide stop.
+a pass-wide stop, and it does not hide an item failure: a pass that is stopped
+by the API budget after an item failed still prints ITEM SUMMARY and still
+fails.
 
 The driver's LANE_REPOS list excludes digitized/Concerning; both board reads
-and main-refresh scheduling use that list. No installed lane configuration is
-changed until installation.
+and main-refresh scheduling use that list, and the repository's entry is gone
+from the per-repository pull-request order and checkout map. The manual-merge
+branch in the pull-request handler stays, because the registered gate-pipeline
+eval still exercises it. No installed lane configuration is changed until
+installation.
 
 #### Ticket #407 live dry pass
 
@@ -894,32 +899,55 @@ driver's own DRY flag set. The board snapshot, the `ticket list --json
 --fresh` read, the GitHub pull-request and issue reads, the thread lists and
 the per-repository `git rev-parse` checks were real reads of the live
 services; only the mutating actions were skipped, which is what the flag
-means. One real command was planted to fail: the mac-ops main-refresh
-`git rev-parse` exited 2 with "planted failure". Every other `git` and
-`ticket` call reached the real binary. The plant was a temporary PATH wrapper
-and it was removed after the run.
+means. The lane ledger path pointed at a copy of the live ledger whose pass
+counter was advanced, so the driver's own read path took fresh board reads
+instead of the ledger's cached snapshot; the copy was never written back.
+One real command was planted to fail: the mac-ops main-refresh `git rev-parse`
+exited 2 with "planted failure". Every other `git` and `ticket` call reached
+the real binary. The plant was a temporary PATH wrapper and it was removed
+after the run.
 
 The pass logged the planted failure once, processed the items and the lanes
 after it, and raised at the end so shift health stays failed:
 
 ```text
 ITEM ERROR repo=shyamsivakumar/mac-ops item=main-refresh command='git -C /Users/shyamsivakumar/Code/mac-ops rev-parse main origin/main' exit=2 output='planted failure: local main could not be read'
-MO    busy (live: MO-1041 · Lane driver: one item's failure never stops the pa); PR actions still run
-MO    #408 fix: already done fix:shyamsivakumar/mac-ops#408:f1e77b1cde9151f90c65ba77651a9f647c4c5b15
-SRW   busy (live: SRW-1091 review #1188 a75eaef2); PR actions still run
-SRW   #1188: gate running
+MO    busy (live: #408 fix 94f6a66c r1); PR actions still run
+SRW   busy (live: Reviewer round for SRW-1140 Lane 3 revalidation receipts); PR actions still run
+ITEM ERROR repo=shyamsivakumar/strategy-replay-workbench item=1084 command="ticket start 'shyamsivakumar/strategy-replay-workbench#1084' --dry-run" exit=2 output='merged PR #1094 changed only docs; not treated as delivery'
+SRW   nothing ready
 FFBT  busy (live: FFBT-48 · Connect auction target shared evidence to live pro); PR actions still run
 CTL   nothing ready
-ITEM SUMMARY failures=1
-API USAGE used={'core': 1, 'graphql': 10} remaining={'core': 3266, 'graphql': 4889} floor=500
-RuntimeError: lane pass completed with 1 item failures
+ITEM SUMMARY failures=2
+API USAGE used={'core': 15, 'graphql': 10} remaining={'core': 2553, 'graphql': 4550} floor=500
+RuntimeError: lane pass completed with 2 item failures
+```
+
+Two failures were logged, each once. The first is the planted one. The second
+came from the live board: the ticket CLI refused `ticket start` for SRW#1084
+with exit 2 and the message "merged PR #1094 changed only docs; not treated as
+delivery". That refusal is not the "refused: " form the driver already
+tolerates, so before this change it would have ended the whole pass; here it
+was caught at the ticket-start boundary, logged, and the pass continued
+through the fantasy-football-toolkit and catalogue lanes before it raised.
+
+The command log of that run is the whole set of commands the driver ran:
+
+```text
+GIT-CALL -C /Users/shyamsivakumar/Code/mac-ops rev-parse main origin/main
+GIT-CALL -C /Users/shyamsivakumar/Code/strategy-replay-workbench rev-parse main origin/main
+GIT-CALL -C /Users/shyamsivakumar/Code/fantasy-football-toolkit rev-parse main origin/main
+GIT-CALL -C /Users/shyamsivakumar/Code/catalogue rev-parse main origin/main
+TICKET-CALL list --json --fresh
+TICKET-CALL start shyamsivakumar/strategy-replay-workbench#1084 --dry-run
 ```
 
 No call touched digitized/Concerning or /Users/shyamsivakumar/Code/concerning.
 The pass rewrote the coordinator's decisions.json the way every production
-pass does through the watchdog. The lane ledger was not written, because the
-dry flag skips it. No other live file changed. Installation and the live
-shift remain unverified.
+pass does through the watchdog; the watchdog reported no stale job, so the
+file holds the same items. The lane ledger was not written, because the dry
+flag skips it. The ticket-start call was a dry run of the ticket CLI and
+started nothing. Installation and the live shift remain unverified.
 
 #### Repeatable offline dry-pass proof
 
@@ -931,9 +959,13 @@ replaced. The ticket executable plants the reported gate-brief exit 2.
 
 The one-failure case logs the failing PR once, processes its successor and
 the remaining repositories, then exits nonzero with failures=1. The all-fail
-case logs all five attempted PRs and exits nonzero with failures=5. Command
-receipts assert that Concerning is never touched. The dry ledger is not written;
-temporary commands and files are removed after both passes.
+case logs all five attempted PRs and exits nonzero with failures=5. The third
+case stops the pass with the API budget right after an item failed, and the
+pass still exits nonzero with the item failure. Every ITEM ERROR line is
+checked for its repository, item, command, exit status and output text, not
+only for its count. Command receipts assert that Concerning is never touched.
+The dry ledger is not written; temporary commands and files are removed after
+every pass.
 
 This is offline process evidence: it repeats without the live board and
 without any live service. The live dry pass above is a separate record, and
