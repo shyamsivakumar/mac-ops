@@ -2,8 +2,8 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
-import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { errorKind, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, verdictEntries, verdictOf } from "./hub.js";
+import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, props, readTextFile, run, setShared, shared, theme } from "herdr";
+import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
@@ -375,6 +375,7 @@ export default class Board extends View {
     seedPrs(snap.prs);
     seedVerdicts(snap.verdicts);
     seedOrigins(snap.origins);
+    seedSessions(snap.sessions);
   }
 
   snapshot(key) {
@@ -390,6 +391,7 @@ export default class Board extends View {
       prs: prEntries(groups.flatMap((g) => g.prs)),
       verdicts: verdictEntries(threads),
       origins: originEntries(threads),
+      sessions: sessionEntries(threads),
     };
   }
 
@@ -462,6 +464,7 @@ export default class Board extends View {
       return !this.unchanged("tickets", [this.issues, this.ticketError]);
     }, cx, force);
     this.background("origins", () => loadOrigins(board.groups.flatMap((g) => (g.kind === "ask" ? [] : g.threads))), cx, force);
+    this.background("sessions", () => loadSessions(board.groups.filter((g) => g.kind !== "ask" && !g.issue).map((g) => this.taskThread(g))), cx, force);
     this.background("prs", async () => {
       await refreshPrs(board.groups.filter((g) => !g.threads.some((c) => c.kind === "run")).flatMap((g) => g.prs).filter((p) => p.state === "open"));
       if (!this.unchanged("prs", this.prStamp())) {
@@ -612,9 +615,10 @@ export default class Board extends View {
         const refusal = key === "ready" ? this.refusalOf(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
-        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const session = variant !== "backlog" && g.kind !== "ask" && !g.issue;
+        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
-        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
+        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length), session), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
         for (const th of g.threads.slice(1)) {
           const tkey = `t:${th.key}`;
@@ -1113,7 +1117,7 @@ export default class Board extends View {
 
   decisionSnap(e) {
     const g = { ...e.group, info: undefined };
-    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads) };
+    return { key: "dec", running: this.board?.running ?? 0, unsure: this.unsure(), stale: this.stale, restored: this.restored, cap: this.cap, at: this.board?.at ?? 0, rev: 0, groups: [g], prs: prEntries(g.prs), verdicts: verdictEntries(g.threads), origins: originEntries(g.threads), sessions: sessionEntries(g.threads) };
   }
 
   openDecision(e, cx) {
@@ -1184,7 +1188,7 @@ export default class Board extends View {
     if (PR_LANES.has(this.dec.col) && g.info.status !== "open") return null;
     const entry = { key: this.dec.key, col: this.dec.col, group: g, thread: null };
     if (g.issue) return { entry, d: issueDecision(g, this.ticket, Boolean(this.replyKey), this.armed?.kind === "abandon") };
-    return { entry, d: decisionOf(entry.col, g, g.info, this.verdictFor(g), Date.now()) };
+    return { entry, d: decisionOf(entry.col, g, g.info, this.verdictFor(g), Date.now(), Boolean(this.tabOf(g))) };
   }
 
   live() {
@@ -1301,6 +1305,8 @@ export default class Board extends View {
       if (this.guard(true)) return;
       this.confirm("settle", cur.entry.key, () => this.settleEntry(cur.entry, cx), cx);
     } else if (id === "pr") this.openPr(cur.entry);
+    else if (id === "files") this.openFiles(cur.entry);
+    else if (id === "tab") this.openTab(cur.entry);
   }
 
   decideKey(e, cx) {
@@ -1632,6 +1638,21 @@ export default class Board extends View {
     this.confirm("queue", e.key, () => this.tell(this.ask("Queue", e.group, "start it when a slot frees"), `Queued ${e.group.task || e.group.title}`, cx), cx);
   }
 
+  tabOf(g) {
+    const worktree = sessionOf(this.taskThread(g))?.worktree;
+    return worktree && panes().find((p) => p.terminal && p.cwd && (p.cwd === worktree || p.cwd.startsWith(`${worktree}/`)));
+  }
+
+  openTab(e) {
+    const pane = e && this.tabOf(e.group);
+    if (pane) run("pane.focus", { terminal: pane.terminal });
+  }
+
+  openFiles(e) {
+    const info = e?.group.info;
+    if (info?.pr) exec("open", [`${info.gh?.url ?? info.pr.url}/files`]);
+  }
+
   openPr(e) {
     const info = e?.group.info;
     if (info?.pr) exec("open", [info.gh?.url ?? info.pr.url]);
@@ -1702,6 +1723,8 @@ export default class Board extends View {
     else if (k === "F") this.openRetry(cx);
     else if (k === "q") this.queue(c, cx);
     else if (k === "p") this.openPr(c);
+    else if (k === "c") this.openFiles(c);
+    else if (k === "w") this.openTab(c);
     else if (k === "n") this.jump();
     else if (k === "P" && !this.pop) this.openProjects(cx);
     else if (k === "f" && c && !this.pop) this.toggleFold(c.col);
@@ -1810,7 +1833,7 @@ export default class Board extends View {
     const primaryKind = cur?.d.primary.id === "merge" ? "approve" : cur?.d.primary.id;
     const armedKind = this.armed?.key === cur?.entry.key ? this.armed?.kind : null;
     const refusal = cur && this.refusalOf(cur.entry.group);
-    const view = cur && { col: cur.entry.col, d: cur.d, armed: armedKind === primaryKind, armedKind, outdated: this.outdated, replying: Boolean(this.replyKey), replyLabel: this.replyLabel, outcome: this.outcome ?? (refusal && { text: `Not merged: ${refusal.text}` }), files: this.files, ticket: this.ticket, issue: cur.entry.group.issue, picker: this.picker, verdict: this.verdictFor(cur.entry.group) };
+    const view = cur && { col: cur.entry.col, d: cur.d, armed: armedKind === primaryKind, armedKind, outdated: this.outdated, replying: Boolean(this.replyKey), replyLabel: this.replyLabel, outcome: this.outcome ?? (refusal && { text: `Not merged: ${refusal.text}` }), files: this.files, filesUrl: cur.entry.group.info.pr && `${cur.entry.group.info.gh?.url ?? cur.entry.group.info.pr.url}/files`, ticket: this.ticket, issue: cur.entry.group.issue, picker: this.picker, verdict: this.verdictFor(cur.entry.group) };
     return v_flex().id("ck-dec").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
