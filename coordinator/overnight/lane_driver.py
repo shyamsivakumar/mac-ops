@@ -449,6 +449,38 @@ def watchdog():
     os.replace(p + ".tmp", p)
 
 
+def zero_merge(snapshot):
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(minutes=60)
+    recent = False
+    open_prs = any(data["prs"] for data in snapshot["repos"].values())
+    if open_prs:
+        for repo in snapshot["repos"]:
+            rows = read_json(["gh", "pr", "list", "-R", repo, "--state", "merged",
+                              "--search", "merged:>=" + cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                              "--limit", "1", "--json", "mergedAt"])
+            if not isinstance(rows, list):
+                raise ValueError("invalid merged PR response")
+            for row in rows:
+                stamp = dt.datetime.fromisoformat(row["mergedAt"].replace("Z", "+00:00"))
+                if cutoff <= stamp <= now:
+                    recent = True
+    path = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
+    with open(path) as handle:
+        decisions = json.load(handle)
+    decisions["items"] = [item for item in decisions["items"]
+                          if item.get("id") != "factory-zero-merge"]
+    if open_prs and not recent:
+        decisions["items"].append({"id": "factory-zero-merge", "group": "Coordinator",
+            "kind": "action", "title": "No merge in 60 minutes with open PRs",
+            "why": "The coordinator must inspect blocked PRs and restore merge progress."})
+    decisions["updated"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(path + ".tmp", "w") as handle:
+        json.dump(decisions, handle, indent=1)
+    os.replace(path + ".tmp", path)
+
+
 def run_pass(ledger):
     global SNAPSHOT
     watchdog()
@@ -505,6 +537,8 @@ def main():
     try:
         before = api_remaining()
         run_pass(ledger)
+        if not DRY:
+            zero_merge(SNAPSHOT)
     except ApiBudgetExhausted as exc:
         print(f"API BUDGET {exc}")
     finally:
