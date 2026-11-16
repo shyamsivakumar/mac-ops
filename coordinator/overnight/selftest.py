@@ -102,6 +102,7 @@ def start_routing():
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
          patch.object(lane, "t3", return_value={"threads": [{"title": "bot"}]}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False):
         lane.run_pass({})
         for invalid in ({}, {"threads": None}, {"threads": {}}, {"threads": [None]}, {"threads": [{}]}):
@@ -1128,7 +1129,194 @@ def cycle_health():
     exact(any("stale" in line for line in ran), True)
 
 
-EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health}
+def stall():
+    import lane_driver as lane
+    import stall as rule
+
+    # The rule: three idle ticks park the item, and a marker that moves
+    # starts the count again.
+    state = rule.new_state()
+    exact(rule.observe(state, "repo#1", "aaa|1"), None)
+    exact(rule.observe(state, "repo#1", "aaa|1"), None)
+    event = rule.observe(state, "repo#1", "aaa|1")
+    exact(event is not None, True)
+    exact(event["kind"], "item")
+    exact(event["idle"], 3)
+    exact(state["items"]["repo#1"]["stalled"], True)
+    exact(rule.observe(state, "repo#1", "aaa|1"), None)
+
+    state = rule.new_state()
+    exact(rule.observe(state, "repo#1", "aaa|1"), None)
+    exact(rule.observe(state, "repo#1", "bbb|1"), None)
+    exact(rule.observe(state, "repo#1", "bbb|1"), None)
+    exact(rule.observe(state, "repo#1", "bbb|1"), None)
+    exact(state["items"]["repo#1"]["stalled"], False)
+    event = rule.observe(state, "repo#1", "bbb|1")
+    exact(event is not None, True)
+    exact(event["kind"], "item")
+
+    # The board is alerted once per episode, and the flag is set only after
+    # the alert was delivered: an alert that could not be written asks
+    # again on the next tick.
+    state = rule.new_state()
+    exact(rule.board(state, False, 1), None)
+    exact(rule.board(state, False, 1), None)
+    event = rule.board(state, False, 1)
+    exact(event["kind"], "board")
+    exact(event["idle"], 3)
+    # The alert was not delivered, so the board asks again.
+    exact(rule.board(state, False, 1)["kind"], "board")
+    rule.delivered(state)
+    exact(rule.board(state, False, 1), None)
+    # The board moved, so the episode is over and the flag is gone.
+    exact(rule.board(state, True, 1), None)
+    exact(rule.board(state, False, 1), None)
+    exact(state.get("board_alerted"), None)
+    # A board with no item in it is not a stalled board.
+    state = rule.new_state()
+    exact(rule.board(state, False, 0), None)
+    exact(state["board_idle"], 0)
+    # The board's first tick is its baseline, and a board that keeps moving
+    # never stalls.
+    state = rule.new_state()
+    exact(rule.board(state, True, 1), None)
+    exact(state["board_idle"], 1)
+    exact(rule.board(state, True, 1), None)
+    exact(state["board_idle"], 0)
+
+    # The driver: the item is worked until it is parked, and a parked item
+    # is skipped, so the shift moves on.
+    repo = "shyamsivakumar/mac-ops"
+    head = "a" * 40
+    pull = {"number": 7, "state": "OPEN", "headRefOid": head, "body": "Refs #9",
+            "mergeable": "MERGEABLE", "isDraft": False}
+    snapshot = {"tickets": [], "repos": {repo: {"prs": [pull], "issues": []}}}
+    ledger = {}
+    acted = []
+    events = []
+
+    def act(repo_name, number, ledger_state):
+        acted.append(number)
+        return f"#{number} worked"
+
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", return_value=snapshot), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+        lane.STALL_STATE = {}
+        lane.STALL_EVENTS.clear()
+        for _ in range(4):
+            lane.run_pass(ledger)
+            events.append(list(lane.STALL_EVENTS))
+            lane.STALL_EVENTS.clear()
+    exact(acted, [7, 7, 7, 7])
+    # The board asks again on the next tick, because the alert was never
+    # delivered: the flag is set only after the alert was written.
+    exact([len(found) for found in events], [0, 0, 2, 1])
+    exact(events[2][0]["kind"], "item")
+    exact(events[2][0]["item"], f"{repo}#9")
+    exact(events[2][1]["kind"], "board")
+    exact(events[3][0]["kind"], "board")
+    exact(lane.STALL_STATE.get("board_alerted"), None)
+    exact(lane.STALL_STATE["items"][f"{repo}#9"]["stalled"], True)
+
+    # New work on the board is progress, whether the shift has measured the
+    # new item or not.
+    state = rule.new_state()
+    exact(rule.arrived(state, {"a", "b"}), {"a", "b"})
+    exact(rule.arrived(state, {"a", "b"}), set())
+    exact(rule.arrived(state, {"b", "c"}), {"c"})
+    exact(sorted(state["board"]), ["b", "c"])
+
+    # A board that receives a new ticket every tick is a board that is
+    # working, so it does not stall.
+    boards = [
+        {"tickets": [dict(repo=repo, number=number, key=f"MO-{number}", stage="todo",
+                          problems=[])],
+         "repos": {repo: {"prs": [], "issues": []}}}
+        for number in (1, 2, 3)
+    ]
+    seen = {"index": 0}
+
+    def board(ledger, force=False):
+        index = min(seen["index"], len(boards) - 1)
+        seen["index"] += 1
+        return boards[index]
+
+    def run(cmd, timeout=150):
+        return "started\n"
+
+    lane.STALL_STATE = {}
+    lane.STALL_EVENTS.clear()
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", side_effect=board), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "run", run), \
+         patch.object(lane, "DRY", False):
+        for _ in range(3):
+            lane.run_pass({})
+    exact(lane.STALL_EVENTS, [])
+    lane.STALL_EVENTS.clear()
+
+    # A stale board must not report an item as stalled: the shift reads the
+    # board again before it decides, and the fresh head is progress.
+    stale = {"number": 8, "state": "OPEN", "headRefOid": "a" * 40, "body": "Refs #9",
+             "mergeable": "MERGEABLE", "isDraft": False}
+    fresh = dict(stale, headRefOid="b" * 40)
+    stale_board = {"tickets": [], "repos": {repo: {"prs": [stale], "issues": []}}}
+    fresh_board = {"tickets": [], "repos": {repo: {"prs": [fresh], "issues": []}}}
+    reads = []
+
+    def snapshot(ledger, force=False):
+        reads.append(force)
+        return fresh_board if force else stale_board
+
+    lane.STALL_STATE = {}
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", side_effect=snapshot), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+        for _ in range(4):
+            lane.run_pass({})
+    exact(lane.STALL_STATE["items"][f"{repo}#9"]["stalled"], False)
+    exact(True in reads, True)
+
+    # A draft is not work the shift does, so it is not measured.
+    draft = {"tickets": [], "repos": {repo: {"prs": [dict(stale, isDraft=True)],
+                                              "issues": []}}}
+    lane.STALL_STATE = {}
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", return_value=draft), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+        lane.run_pass({})
+    exact(lane.STALL_STATE.get("items", {}), {})
+
+    # A stalled item is reported, not parked: the shift keeps working it.
+    lane.STALL_STATE = {"items": {f"{repo}#9": {"marker": "a" * 40, "idle": 3,
+                                                "stalled": True}}}
+    orphan = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
+        {"number": 9, "title": "bot repair", "labels": []}]}}}
+    from unittest.mock import mock_open
+    with patch.object(lane, "SNAPSHOT", orphan), patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", return_value={}), \
+         patch("builtins.open", mock_open(read_data="{}")):
+        exact(lane.unstick(repo, {}), "DRY unstick [9]")
+
+
+EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall}
 
 
 def main():
@@ -1200,6 +1388,15 @@ def main():
                                 pass
                             else:
                                 raise AssertionError("negative control accepted missing board defects")
+                    if name == "stall":
+                        import stall as rule
+                        with patch.object(rule, "observe", return_value=None):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted a missing stall")
                     if name == "zero-merge":
                         import lane_driver
                         with patch.object(lane_driver, "zero_merge"):

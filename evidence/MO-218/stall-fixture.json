@@ -1,0 +1,17 @@
+{
+  "note": "Three idle ticks of one item: the item shows no new commit and no new receipt, so the shift parks it as a stall and the board shows no progress, so the shift logs the stall, sweeps the board again and alerts Shyam.",
+  "items": [
+    {
+      "key": "MO-218",
+      "repo": "shyamsivakumar/mac-ops",
+      "number": 218,
+      "title": "Overnight T8b: Stall detection",
+      "url": "https://github.com/shyamsivakumar/mac-ops/issues/218"
+    }
+  ],
+  "ticks": [
+    { "shyamsivakumar/mac-ops#218": "aaaa111|1" },
+    { "shyamsivakumar/mac-ops#218": "aaaa111|1" },
+    { "shyamsivakumar/mac-ops#218": "aaaa111|1" }
+  ]
+}
