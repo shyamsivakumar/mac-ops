@@ -27,6 +27,24 @@ So the shift reports a stall and keeps working the item. It does not skip
 the item, does not block its start, does not recover it, does not label it
 and does not re-cut it. The receipt says `State: stuck`, not `parked`.
 
+## The third gate round
+
+The gate ran against `ab4bb8b` and returned the same two major findings.
+Both were already fixed in `d7bdbc5`, which is two commits earlier than
+the head the gate read:
+
+| Finding | Where it is fixed now |
+| --- | --- |
+| The lane skipped stalled pull requests and blocked ticket starts and the recovery path. | `coordinator/overnight/lane_driver.py`: the pull request loop calls `act_on_pr` for every pull request (line 724), `start_next` filters the ready tickets by stage, problems and group only (line 506), and `unstick` lists its orphans without a stall condition (line 537). The driver reads the stall state only to measure and report it; nothing in it suppresses work, and the driver's `park()` is never called by the stall path. |
+| The decisions file recorded only the selected fast check. | `evidence/MO-218/decisions.md`, "The repository checks": the fast check and the full local suite, with the head they ran on. |
+
+The gate's reconciliation note said that "new tickets without receipts
+remain excluded from progress detection". That is fixed now: the board
+tracks the keys it holds, so a new ticket on the board is progress whether
+or not the shift has measured it, and the tracking stays bounded by the
+board. The `stall` eval covers it (a board that receives a new ticket every
+tick does not stall).
+
 ## The second gate round
 
 The gate ran again and returned the same report, against the same first

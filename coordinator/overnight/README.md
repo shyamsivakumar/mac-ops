@@ -328,10 +328,12 @@ not evidence that an item stopped moving. So a tick that could park an
 item or stall the board reads the board again first, and the fresh head
 decides.
 
-The board moved when an item moved or when new work arrived on it. The
-board's first tick is its baseline: there is nothing yet to compare it
-with, so it counts as an idle tick, the way the first tick of an item
-does.
+The board moved when an item moved or when new work arrived on it. New
+work counts whether the shift has measured the new item or not: a ticket
+that appeared on the board is work, and a board that keeps receiving work
+is not stuck. The board's first tick is its baseline: there is nothing yet
+to compare it with, so it counts as an idle tick, the way the first tick
+of an item does.
 
 A stalled item is reported, not parked: the lane keeps working it, the
 shift does not label it, does not re-cut it and does not stop its
