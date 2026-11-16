@@ -18,3 +18,6 @@ No live sends, runtime installation or production changes were performed.
 Left for later: state matrix fixtures, repeated-cycle/new-head dispatch proof,
 live board counts, additional dispatch changes and canonical wiki documentation.
 The board classifier is not evidence of completed dispatch behavior.
+
+
+Gate correction for Refs #277: preserve the precomputed failed-gate action, suppression reason and coordq fix command when the shared classifier selects fix. Retry cap, hard budget and already-delivered findings remain authoritative. A focused probe executed the actual AST guard for each suppression case and an allowed coordq fix, with all existing fields preserved. The required fast check passes; no tests/checks were edited. In-session diff review confirmed the override exits before clearing the action command. No added comments or cleanup needed. Device, handset and live-service testing were waived, not failed. Missing state-matrix, repeated-cycle/new-head and live-board proof remain left for later as the gate minor finding states.

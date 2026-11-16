@@ -3926,6 +3926,10 @@ def collect_items(
             pull["statusCheckRollup"] = []
         state, action = lane_driver.pr_action(pull, builder, verdict,
             gate_live=gate.get("threadId") in live["ids"], builder_live=builder in live["ids"])
+        if verdict == "FAIL" and action == "fix":
+            item.update(state=state, updatedAt=pull.get("updatedAt") or "",
+                        builderLive=builder in live["ids"], gateThreadLive=gate.get("threadId") in live["ids"])
+            continue
         item.update(state=state, action=action, actionReason=state.replace("-", " "), updatedAt=pull.get("updatedAt") or "",
                     builderLive=builder in live["ids"], gateThreadLive=gate.get("threadId") in live["ids"], issue=issue, builder={"threadId": builder, "attempt": attempt, "live": builder in live["ids"]}, gate=gate)
         item["actionCommand"] = ""
