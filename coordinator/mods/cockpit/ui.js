@@ -22,7 +22,7 @@ export const COLUMNS = [["needs", "Needs you", "blocked", "Needs you"], ["run", 
 export const PR_LANES = new Set(["checks", "cifail", "review", "ready"]);
 const PR_REASONS = new Set(["unrouted", "ci", "changes", "conflict"]);
 export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "needs" && PR_REASONS.has(reasons?.[0]));
-const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
+export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
 const COLUMN_NAME = Object.fromEntries(COLUMNS.map((c) => [c[0], c[3]]));
 export const COLUMN_LIMIT = { needs: 10, ready: 10 };
 const AGED_COLUMNS = new Set(["needs", "cifail", "ready"]);
@@ -138,6 +138,14 @@ function projectItem(v) {
   return { id: "project", prio: -1, label: `Project · ${v.project}${v.projectCount ? "" : " · no cards"}`, tone: "working", tip: `Showing only ${v.project}. Bulk actions touch only these cards. Click to change (P).` };
 }
 
+function alertsItem() {
+  const a = shared("cockpit.alerts");
+  if (a && !a.on) return { id: "alerts", prio: 3, label: "Alerts · off", tip: "Phone alerts are off. Click to turn them on." };
+  const last = a?.sent ? `Last sent ${ago(a.sent.at, Date.now())} ago: ${a.sent.text.replace(/^Mirror: /, "")}.` : "Nothing sent yet.";
+  if (a?.failed) return { id: "alerts", prio: -1, label: "Alerts · relay down", tone: "blocked", tip: `The last phone alert failed, so Herdr showed a desktop notification instead: ${a.failed}. ${last} Click to turn alerts off.` };
+  return { id: "alerts", prio: 3, label: a?.sent ? `Alerts · on · ${ago(a.sent.at, Date.now())}` : "Alerts · on", tip: `A card entering Needs you or becoming Ready is sent to your phone relay, at most one message every 5 minutes. ${last} Click to turn off.` };
+}
+
 function barItems(v) {
   const { worktrees: w, slots } = v;
   const asks = shared("co.asks")?.items ?? [];
@@ -153,6 +161,7 @@ function barItems(v) {
     ...failedScan,
     { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     projectItem(v),
+    alertsItem(),
     { id: "fan", prio: v.fan ? -1 : 2, toggle: true, label: v.fan ? "Fan-out · on" : "Fan-out", tone: v.fan ? "accent" : undefined, tip: "Group workers under the feature they belong to, so one big ask shows as several PRs (v). Bulk actions are off in this view." },
     ...(v.snoozed ? [{ id: "snoozed", prio: 2, label: `Snoozed ${v.snoozed}`, tip: `${v.snoozed} snoozed cards are hidden but still count toward the column limits. Click to list or wake them (Z).` }] : []),
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
@@ -180,7 +189,7 @@ function noticeLine(t, notice, cb) {
 
 export function toolbar(t, width, v, cb) {
   return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
-    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
+    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.id === "alerts" ? cb.alerts(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
     .when(Boolean(v.notice), (el) => el.child(noticeLine(t, v.notice, cb)))
     .when(!v.notice, (el) => el.child(div().flex_1()))
     .when(v.stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))
