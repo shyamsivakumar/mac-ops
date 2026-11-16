@@ -649,7 +649,60 @@ def api_budget():
             f"API USAGE used={{'core': 10, 'graphql': 5}} remaining={{'core': 990, 'graphql': 995}} floor={lane.API_FLOOR}"])
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget}
+def ff_drift():
+    import lane_driver as lane
+    from unittest.mock import mock_open
+    repo = "fixture/repo"
+    path = "/Users/shyamsivakumar/Code/fixture"
+    local, origin = "a" * 40, "b" * 40
+    calls = []
+    ancestor = True
+
+    def run(cmd, **kwargs):
+        if cmd == ["git", "-C", path, "rev-parse", "main", "origin/main"]:
+            return f"{local} {origin}"
+        if cmd == ["git", "-C", path, "merge-base", "--is-ancestor", local, origin]:
+            if not ancestor:
+                raise subprocess.CalledProcessError(1, cmd)
+            return ""
+        if cmd[:2] == [lane.COORDQ, "start"]:
+            exact(cmd[3:], ["--priority", "700"])
+            payload = json.loads(cmd[2])
+            exact(payload["title"], "Chore · level local main (FIX)")
+            calls.append(origin)
+            return "fixture-queued"
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    with patch.object(lane, "PATHS", {repo: "fixture"}), \
+         patch.object(lane, "LANE_REPOS", [repo]), \
+         patch.object(lane, "CFG", {repo: {"key": "FIX"}}), \
+         patch.object(lane, "DRY", False), \
+         patch.object(lane.os.path, "isdir", return_value=True), \
+         patch.object(lane, "run", side_effect=run), \
+         patch("builtins.open", mock_open(read_data="fixture chore")):
+        ledger = {}
+        lane.drift_ff(ledger)
+        lane.drift_ff(ledger)
+        exact(calls, [origin])
+        exact(ledger, {f"ff:{repo}:{origin}": "fixture-queued"})
+        origin = "c" * 40
+        lane.drift_ff(ledger)
+        exact(calls, ["b" * 40, origin])
+        local = origin
+        lane.drift_ff(ledger)
+        exact(calls, ["b" * 40, origin])
+        origin = "d" * 40
+        ancestor = False
+        before = dict(ledger)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            lane.drift_ff(ledger)
+        exact(output.getvalue().splitlines(), [
+            f"FIX   left alone, not fast-forwardable ({local} vs {origin})"])
+        exact(ledger, before)
+        exact(calls, ["b" * 40, "c" * 40])
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift}
 
 
 def main():
@@ -667,6 +720,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "ff-drift":
+                        import lane_driver
+                        with patch.object(lane_driver, "drift_ff"):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted missing fast-forward chore")
                     if name == "api-budget":
                         import lane_driver
                         with patch.object(lane_driver, "BOARD_REFRESH_PASSES", 1):
