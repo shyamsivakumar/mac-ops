@@ -142,7 +142,7 @@ def main():
           state["items"][0].get("actionKey") == key, json.dumps(state["items"][0]))
     check("the queued item carries the payload the board printed",
           state["items"][0]["args"] == payload)
-    check("the queue holds the key", state.get("actionKeys") == {key: 1},
+    check("the queue holds the key", state.get("actionKeys") == {key: {"id": 1, "state": "queued"}},
           json.dumps(state.get("actionKeys")))
 
     # 2. The same command a second time is refused, and nothing changes.
@@ -180,13 +180,19 @@ def main():
     check("the started line names the key", bool(started) and f"key {key}" in started[0],
           started[0] if started else dispatch_log)
 
-    # The binary before this change refuses the flag the board prints.
+    # The binary before this change refuses the flag the board prints. The
+    # commit that added the flag is found in the history, so the proof
+    # works on a branch whose base already carries the flag.
     old = tmp / "coordq-old"
-    base = subprocess.run(["git", "-C", str(ROOT), "merge-base", "origin/main", "HEAD"],
-                           capture_output=True, text=True, check=True).stdout.strip()
-    old.write_bytes(subprocess.run(["git", "-C", str(ROOT), "show",
-                                    f"{base}:coordinator/bin/coordq"],
-                                   capture_output=True, check=True).stdout)
+    added = subprocess.run(["git", "-C", str(ROOT), "log", "--reverse",
+                            "--format=%H", "-S", "--action-key", "--",
+                            "coordinator/bin/coordq"],
+                           capture_output=True, text=True, check=True).stdout.split()
+    if added:
+        before = added[0] + "^"
+        old.write_bytes(subprocess.run(["git", "-C", str(ROOT), "show",
+                                        f"{before}:coordinator/bin/coordq"],
+                                       capture_output=True, check=True).stdout)
     for name in ("gate_bar.py", "tick_health.py"):
         (tmp / name).write_bytes((ROOT / "coordinator" / "bin" / name).read_bytes())
     result = run(args, binary=old)
