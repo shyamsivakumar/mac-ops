@@ -394,7 +394,7 @@ cycle is the same cycle.
 
 | Every 5 minutes | What runs |
 | --- | --- |
-| Any time of day | One shift cycle. It reads the policy snapshot, reads the whole board, works it and writes the receipt of every item whose state changed. |
+| Any time of day | One shift cycle. It reads the policy snapshot, runs the health checks, reads the whole board, works it and writes the receipt of every item whose state changed, plus the cycle's own health receipt. |
 | 06:00 to 07:29 PT | The same cycle, and it writes the day's morning report. The report is written once a day: the first morning cycle writes it and a later cycle leaves it alone. |
 
 The interval lives in the plist (`StartInterval`), not in the command, so
@@ -422,6 +422,30 @@ merge and no push: the queue starts the work, under the rules that apply
 today, and the shift records what it really saw. The policy snapshot (T4)
 is read on every cycle, and a cycle that finds no snapshot refuses to
 work.
+
+Every cycle also runs the health checks below before it acts on the board,
+and writes the cycle's own receipt, `receipts/cycle-<stamp>.md`. A dry run
+(`shift --dry-run`) writes that receipt too and no ticket receipt.
+
+## The health checks of a cycle
+
+Every cycle starts with the health checks the tick used to run every tick
+(`loop/tick.md` section 1b). The tick is retired for the 24x7 shift, so
+the shift runs them instead. They read only; they change nothing.
+
+| Check | What it reads | What a finding means |
+| --- | --- | --- |
+| The tools | `coordq status` and `overnight --help` under the interpreter launchd uses, plus the last 40 lines of `dispatch.log` and `gatekeep.log` | A tool breaks under the launchd interpreter, or the queue's log holds a traceback (2026-11-13: a duplicate parser argument stopped the dispatcher for 14 minutes). |
+| The installed files | `install_coordinator.py status` in the mac-ops checkout | The installed coordinator differs from the merged main (2026-11-13: the installed coordq came from an unmerged branch). |
+| The board's attempts | The `Starting ... attempt` comments of every board ticket, against the open pull requests | A ticket was started three or more times and has no pull request, so its spec is broken. |
+| The board's blockers | The refusals the queue recorded, against the state of the issues they name | A text blocker refusal names an issue that is closed, so the blocker is false (2026-11-13: four FFBT tickets were held by a false text blocker). |
+
+Each finding is one line of the cycle's receipt, one ALERT line in the
+shift log and one line of the report's `## Health and drift` section. A
+finding the shift may fix under its own rules (resend, park) it fixes;
+anything else is an ALERT. The shift's board work is not built yet (T5),
+so today every finding is an ALERT and the receipt names the action each
+one would take.
 
 The shift is never armed: `run/armed` does not gate it, and every cycle
 reads the board. The morning report has a time even though the shift does
