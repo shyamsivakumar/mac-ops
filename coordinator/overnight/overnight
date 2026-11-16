@@ -1563,8 +1563,8 @@ def show_stall_state(explicit: str | None = None) -> int:
     """Print the stall state the shift keeps.
 
     The command reads only: it says which items are idle, for how many
-    ticks, and which of them were reported as stalled. A reported item is
-    not parked: the shift keeps working it."""
+    ticks, and which of them are stalled. A stalled item is not parked:
+    the shift keeps working it."""
     root = report_root(explicit)
     state = load_stall_state(root)
     items = state.get("items") or {}
@@ -1576,8 +1576,8 @@ def show_stall_state(explicit: str | None = None) -> int:
         if not isinstance(entry, dict):
             continue
         idle = int(entry.get("idle") or 0)
-        reported = " reported" if entry.get("stalled") else ""
-        emit(f"{key}: idle {idle} tick(s){reported}")
+        stalled = " stalled" if entry.get("stalled") else ""
+        emit(f"{key}: idle {idle} tick(s){stalled}")
     emit(f"Board idle: {int(state.get('board_idle') or 0)} tick(s)")
     return 0
 
