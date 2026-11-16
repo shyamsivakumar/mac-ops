@@ -5472,6 +5472,8 @@ def main() -> int:
     turncap = sub.add_parser("turncap", help="run one canonical turn cap pass")
     turncap.add_argument("--dry-run", action="store_true")
     turncap.set_defaults(func=lambda args: __import__("turn_cap").one_pass(args.dry_run))
+    integrity = sub.add_parser("board-integrity", help="audit a complete JSON board snapshot from stdin")
+    integrity.set_defaults(func=lambda args: __import__("board_integrity").main())
     selftest = sub.add_parser("selftest", help="run isolated registered fixture evals")
     selftest.set_defaults(func=lambda args: __import__("selftest").main())
     args = parser.parse_args()
