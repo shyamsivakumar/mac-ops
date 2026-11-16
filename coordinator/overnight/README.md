@@ -1056,3 +1056,27 @@ No installation or live tick was performed for this change. The launcher and
 its sibling coordinator files must be installed together through the existing
 installation process. Malformed state files and concurrent decisions writers
 remain outside the scheduling fixture coverage.
+
+### Read-only live smoke (Refs #388)
+
+Run `git fetch origin` and then `python3 coordinator/overnight/overnight selftest --live`.
+The adapter performs two consecutive passes. Each reads `origin/main`, GitHub's
+mac-ops main SHA, and a bounded T3 thread list through the installed `t3mcp`.
+Every successful pass prints its UTC timestamp and exact main SHA. A SHA mismatch,
+authentication failure, unavailable service, timeout, or malformed response exits 1.
+Keep both PASS lines as the pre-cutover receipt. The command does not fetch,
+install, launch threads, send, merge, close, comment, label, or persist receipts.
+
+Only the three exact command argument lists in `live_smoke.COMMANDS` are allowed.
+Each subprocess has a 15-second timeout; the six reads take at most 90 seconds
+apart from process cleanup. Service output and exception diagnostics are never
+printed; failures use fixed messages. Existing CLI authentication is used without
+opening credential or `.env` files in the adapter.
+
+Default selftest remains the twelve fixture evals. The api-budget eval additionally
+checks this adapter with fake subprocesses, rejected write commands, malformed and
+failed service responses, timeout handling, two-pass output, and a disabled
+allowlist negative control. These fixtures do not prove live authentication or
+service availability. Live-service testing and the two live receipts were waived
+for this ticket; they remain necessary evidence before a future loop cutover.
+No loop installation or cutover is included.
