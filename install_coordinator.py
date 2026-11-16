@@ -699,12 +699,38 @@ def restore_files(backups: Path) -> None:
         raise RuntimeError("Rollback incomplete: " + "; ".join(failures))
 
 
+def require_main_source(checkout: Path) -> str:
+    def git(*args: str) -> str:
+        try:
+            return subprocess.check_output(
+                ["git", "-C", str(checkout), *args],
+                stderr=subprocess.PIPE, text=True, timeout=60,
+            ).strip()
+        except (subprocess.SubprocessError, OSError) as exc:
+            raise RuntimeError("Cannot verify installer source against origin/main") from exc
+
+    top = Path(git("rev-parse", "--show-toplevel")).resolve()
+    common = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
+    if top != checkout.resolve() or common != top / ".git":
+        raise RuntimeError("Installation requires the canonical checkout, not a linked worktree")
+    if git("symbolic-ref", "--short", "HEAD") != "main":
+        raise RuntimeError("Installation requires branch main")
+    if git("status", "--porcelain", "--untracked-files=all"):
+        raise RuntimeError("Installation requires a clean checkout")
+    git("fetch", "origin", "+refs/heads/main:refs/remotes/origin/main")
+    head = git("rev-parse", "HEAD")
+    if head != git("rev-parse", "refs/remotes/origin/main"):
+        raise RuntimeError("Installation requires HEAD matching fetched origin/main")
+    return head
+
+
 def install(
     checkout: Path,
     dry_run: bool,
     home: Path | None = None,
     coordinator: Path | None = None,
 ) -> None:
+    source_sha = require_main_source(checkout)
     require_real_home()
     home = home or Path.home()
     coordinator = coordinator or coordinator_dir(home)
@@ -764,6 +790,7 @@ def install(
             write(target, data, mode, backups)
         receipt = {
             "checkout": str(checkout),
+            "source_sha": source_sha,
             "installed_at": time.time(),
             "written": [str(t) for t, _, _ in pending],
             "backups": str(backups),
