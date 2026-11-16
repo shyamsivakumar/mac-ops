@@ -1524,12 +1524,20 @@ def stall_records(root: Path, events: list[dict], board: str | None = None) -> l
                 "shift keeps running until every item is done or parked."
             )
             target = stall.alert(reason, board)
-            write_shift_line(
-                root,
-                f"stall: no board progress for {event.get('idle')} ticks; the "
-                "board was swept again and Shyam was alerted",
-            )
-            written.append(target or "the alert could not be written")
+            if target:
+                write_shift_line(
+                    root,
+                    f"stall: no board progress for {event.get('idle')} ticks; the "
+                    "board was swept again and Shyam was alerted",
+                )
+                written.append(target)
+            else:
+                write_shift_line(
+                    root,
+                    f"stall: no board progress for {event.get('idle')} ticks; the "
+                    "board was swept again and the alert could not be written",
+                )
+                written.append("the alert could not be written")
     return written
 
 
@@ -1590,7 +1598,7 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
         markers = {str(key): str(value) for key, value in tick.items()}
         progressed = any(
             stall.moved(state, key, marker) for key, marker in markers.items()
-        )
+        ) or any(stall.appeared(state, key) for key in markers)
         board_event = stall.board(state, progressed, len(markers))
         for key, marker in sorted(markers.items()):
             event = stall.observe(state, key, marker)

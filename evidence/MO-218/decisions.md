@@ -5,6 +5,27 @@ Run id: `ticket:shyamsivakumar/mac-ops#186:a3`. Refs #186.
 Spec: the overnight runner spec, revision 2, section 10 (budgets and the
 stall cap) and the ticket's own brief for part T8b.
 
+## The review round
+
+One reviewer round ran in-session (Codex, `gpt-6.1-sol`, high effort) over
+`git diff origin/main...HEAD`. It returned FAIL with five major findings
+and one minor. All six are fixed in this revision, and the fixes are
+covered by the `stall` eval.
+
+| Finding | The fix |
+| --- | --- |
+| The cached board snapshot was counted as an idle observation, so an item could be parked on a stale head. | A tick that could park an item or stall the board reads the board again first (`stall.pending`, `stall.board_pending`, `board_snapshot(force=True)`). The fresh head decides. |
+| A draft pull request was measured, so the shift could park work it never does. | Drafts are not measured. |
+| `unstick` ignored the stall state, so a parked issue could be recovered on a later tick. | A parked item is not recovered either. |
+| Dispatch receipt attempts were compared as strings, so `a10` looked older than `a9` and new receipts stopped counting as progress. | The attempts are compared as numbers. |
+| A board where new work arrived every tick still counted as no progress. | New work arriving on the board is progress; the board's first tick is its baseline. |
+| The shift log said "Shyam was alerted" even when the alert could not be written. | The log claims the alert only after the alert was written. |
+
+The reviewer raised no objection to the state file's home, to the report's
+end reason, or to the isolation of the `start-routing` eval, and found no
+weakened assertion and no change to merge authority, the push rules, the
+slot cap or the Ascend rules.
+
 ## What landed
 
 - `coordinator/overnight/stall.py` (new): the stall rule, and only the rule.
@@ -21,7 +42,10 @@ stall cap) and the ticket's own brief for part T8b.
   gains the command `overnight stall` that runs the rule over a fixture or
   shows the shift's own state.
 - `coordinator/overnight/selftest.py`: the `stall` eval, with its negative
-  control.
+  control. It covers the idle count, the progress that resets it, the
+  board's baseline, the fresh read before a park, the draft that is not
+  measured, the parked item that is not recovered, and the parked item the
+  lane skips.
 - `coordinator/overnight/README.md`: the rule, the state file and the
   command.
 - `evidence/MO-218/stall-fixture.json`: the fixture with three idle ticks.
@@ -140,7 +164,11 @@ preview, and the proof runs wrote only into a fixture folder.
   its own. The commit is the head of the pull request the board already
   shows. The first tick of an item counts as idle: there is nothing yet to
   compare it with, and counting it parks an item one tick earlier than a
-  strict reading would.
+  strict reading would. The attempts are compared as numbers, so `a10` is
+  newer than `a9`.
+- **The review**: The reviewer showed that the cached board snapshot made a
+  stale head count as an idle tick. A tick that could park an item now
+  reads the board again first, and the fresh head decides.
 
 ### 2. An item is measured when it has a commit or a receipt
 
@@ -156,6 +184,7 @@ preview, and the proof runs wrote only into a fixture folder.
 - **The reach**: A ticket that the shift started has a receipt, so it is
   measured and it is parked if the builder never delivers. A pull request
   has a commit, so it is measured and it is parked if nothing moves on it.
+  A draft pull request is not work the shift does, so it is not measured.
   A ticket that was never started keeps being started (the queue's own
   thirty-minute refusal cache still applies). The literal reading would
   have changed the `start-routing` eval: its fixture shows five ticks with
@@ -209,7 +238,11 @@ preview, and the proof runs wrote only into a fixture folder.
 - **The reach**: No new channel and no new rights. The alert is a local
   file write, like the two alerts that are already there. The shift's
   folder keeps the detail (the shift log lines and the receipt of the
-  parked item), so nothing is lost when the board item is replaced.
+  parked item), so nothing is lost when the board item is replaced. The
+  board file is written the way the merge alert and the watchdog write it,
+  so it is not redacted: it holds the coordinator's own items, not the
+  shift's records. The shift log says that Shyam was alerted only after
+  the alert was written.
 
 ### 6. One existing eval changed, and only to keep it hermetic
 
@@ -221,6 +254,19 @@ preview, and the proof runs wrote only into a fixture folder.
   receipts file, and a live receipt for the fixture's ticket would park it.
 - **The reach**: The eval reads no live file and asserts exactly what it
   asserted before. The other twelve evals are untouched.
+
+### 7. New work arriving on the board is progress
+
+- **When**: revision 1.
+- **The decision**: The board moved when an item's marker changed or when
+  a new item appeared on it. The board's first tick is its baseline, the
+  way the first tick of an item is.
+- **The gap**: The brief says "if the whole board shows no progress for 3
+  ticks" and does not say what progress on the board is.
+- **The reach**: A board where each tick brings a new item with a new
+  commit is a board that is working, and the shift does not alert Shyam
+  about it. The baseline keeps the fixture honest: its three ticks are
+  three idle ticks, so the third one stalls the board.
 
 ## What is not proven here
 

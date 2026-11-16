@@ -318,14 +318,24 @@ writes the records.
 
 An item is measured when the shift has something to measure: a commit or a
 receipt. An item the shift never started has neither, so it is not a
-stalled item, it is an item the shift still has to start. The shift keeps
-its own record of the items it measured and no second list: the board is
-the list of the work.
+stalled item, it is an item the shift still has to start. A draft pull
+request is not work the shift does, so it is not measured either.
 
-A parked item is skipped: the lane moves on to the next one, and a parked
-ticket is not started again. The shift writes the receipt of a parked item
-(`State: parked`, `Stopped because: stall: ...`), so the morning report
-counts it as parked and names it under the decisions for Shyam.
+The board the shift holds is cached for a few passes, and a stale head is
+not evidence that an item stopped moving. So a tick that could park an
+item or stall the board reads the board again first, and the fresh head
+decides.
+
+The board moved when an item moved or when new work arrived on it. The
+board's first tick is its baseline: there is nothing yet to compare it
+with, so it counts as an idle tick, the way the first tick of an item
+does.
+
+A parked item is skipped: the lane moves on to the next one, a parked
+ticket is not started again, and a parked issue is not recovered. The
+shift writes the receipt of a parked item (`State: parked`, `Stopped
+because: stall: ...`), so the morning report counts it as parked and names
+it under the decisions for Shyam.
 
 A board that stopped moving gets a line in the shift log and an alert on
 the coordinator's board (`factory-overnight-stall`), the same board the
