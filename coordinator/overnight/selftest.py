@@ -1016,15 +1016,15 @@ def stall():
             lane.run_pass(ledger)
             events.append(list(lane.STALL_EVENTS))
             lane.STALL_EVENTS.clear()
-    exact(acted, [7, 7])
+    exact(acted, [7, 7, 7, 7])
     exact([len(found) for found in events], [0, 0, 2, 0])
     exact(events[2][0]["kind"], "item")
     exact(events[2][0]["item"], f"{repo}#9")
     exact(events[2][1]["kind"], "board")
     exact(rule.stalled(lane.STALL_STATE, f"{repo}#9"), True)
 
-    # A stale board must not park an item: the shift reads the board again
-    # before it parks, and the fresh head is progress.
+    # A stale board must not report an item as stalled: the shift reads the
+    # board again before it decides, and the fresh head is progress.
     stale = {"number": 8, "state": "OPEN", "headRefOid": "a" * 40, "body": "Refs #9",
              "mergeable": "MERGEABLE", "isDraft": False}
     fresh = dict(stale, headRefOid="b" * 40)
@@ -1063,7 +1063,7 @@ def stall():
         lane.run_pass({})
     exact(lane.STALL_STATE.get("items", {}), {})
 
-    # A parked item is not recovered either: the shift moves on from it.
+    # A stalled item is reported, not parked: the shift keeps working it.
     lane.STALL_STATE = {"items": {f"{repo}#9": {"marker": "a" * 40, "idle": 3,
                                                 "stalled": True}}}
     orphan = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
@@ -1072,7 +1072,7 @@ def stall():
     with patch.object(lane, "SNAPSHOT", orphan), patch.object(lane, "DRY", True), \
          patch.object(lane, "t3", return_value={}), \
          patch("builtins.open", mock_open(read_data="{}")):
-        exact(lane.unstick(repo, {}), "nothing ready")
+        exact(lane.unstick(repo, {}), "DRY unstick [9]")
 
 
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "stall": stall}

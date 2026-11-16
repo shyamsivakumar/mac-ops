@@ -121,6 +121,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tick_health import tick_alarm
 
 import stall
@@ -1503,18 +1504,18 @@ def stall_records(root: Path, events: list[dict], board: str | None = None) -> l
             }
             body = receipt_text(
                 item,
-                STATE_PARKED,
+                STATE_STUCK,
                 None,
                 None,
                 0,
                 f"stall: no new commit or receipt for {event.get('idle')} ticks",
-                "Shyam re-cuts the item or hands it back to the shift",
+                "the shift keeps working the item; Shyam sees it in the morning report",
             )
             outcome = write_receipt(root, item, body)
             write_shift_line(
                 root,
-                f"stall: {event.get('item')} parked, no new commit or receipt "
-                f"for {event.get('idle')} ticks; the shift moves on",
+                f"stall: {event.get('item')} reported, no new commit or receipt "
+                f"for {event.get('idle')} ticks; the shift keeps working it",
             )
             written.append(f"{receipt_path(root, item)} ({outcome})")
         elif kind == "board":
@@ -1616,7 +1617,7 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
             )
             emit(
                 f"STALL {key}: no new commit or receipt for {event['idle']} ticks; "
-                "parked, the shift moves on"
+                "reported, the shift keeps working it"
             )
             events.append(event)
         if board_event:

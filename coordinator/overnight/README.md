@@ -300,10 +300,12 @@ report reads it like any other receipt.
 ## The stall rule (spec part T8b)
 
 A tick that shows no new commit and no new receipt for three ticks means
-the item is not moving. The shift parks the item as `stall` and moves on.
-When the whole board shows no progress for three ticks, the shift logs the
-stall, sweeps the board again and alerts Shyam. The shift keeps running
-until every item is done or parked: a stall is not the end of the shift.
+the item is not moving. The shift reports the stall: a receipt for the
+item and a line in the shift log. When the whole board shows no progress
+for three ticks, the shift logs the stall, sweeps the board again and
+alerts Shyam. The shift keeps running until every item is done or parked:
+a stall is not the end of the shift, and a stalled item is not parked. The
+shift keeps working it (the no-parking policy from Refs #376).
 
 The rule lives in one place (`coordinator/overnight/stall.py`): `observe`
 decides one item, `board` decides the board, and both are pure. The shift
@@ -331,16 +333,20 @@ board's first tick is its baseline: there is nothing yet to compare it
 with, so it counts as an idle tick, the way the first tick of an item
 does.
 
-A parked item is skipped: the lane moves on to the next one, a parked
-ticket is not started again, and a parked issue is not recovered. The
-shift writes the receipt of a parked item (`State: parked`, `Stopped
-because: stall: ...`), so the morning report counts it as parked and names
-it under the decisions for Shyam.
+A stalled item is reported, not parked: the lane keeps working it, the
+shift does not label it, does not re-cut it and does not stop its
+builder. The shift writes the receipt of a stalled item (`State: stuck`,
+`Stopped because: stall: ...`), so the morning report names it under
+"Stuck" and Shyam sees it.
 
-A board that stopped moving gets a line in the shift log and an alert on
-the coordinator's board (`factory-overnight-stall`), the same board the
-merge alert and the watchdog use. The board is swept again in the same
-tick, so the shift keeps working on a fresh board.
+A board that stopped moving gets one alert, not one per tick: the alert
+is written again after the board moves and stalls a second time. The
+alert goes to the coordinator's board (`factory-overnight-stall`), the
+same board the merge alert and the watchdog use. The board is swept again
+in the same tick, so the shift keeps working on a fresh board.
+
+The tracking is bounded: an item's idle count stops at the cap, and an
+item that leaves the board is not tracked any more.
 
 ```sh
 overnight stall --fixture evidence/MO-218/stall-fixture.json --root <folder>
