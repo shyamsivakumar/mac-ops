@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import importlib.machinery
 import importlib.util
+import json
 import os
 import plistlib
 import signal
@@ -24,6 +25,31 @@ if str(ROOT) not in sys.path:
 import install_coordinator
 
 CHECKOUT = ROOT
+
+GIT_ANSWERS = {
+    ("rev-parse", "--show-toplevel"): str(CHECKOUT),
+    ("rev-parse", "--path-format=absolute", "--git-common-dir"): str(CHECKOUT / ".git"),
+    ("symbolic-ref", "--short", "HEAD"): "main",
+    ("status", "--porcelain", "--untracked-files=all"): "",
+    ("fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"): "",
+    ("rev-parse", "HEAD"): "a" * 40,
+    ("rev-parse", "refs/remotes/origin/main"): "a" * 40,
+}
+
+
+def fake_git(answers):
+    """Answer the installer's git calls from a table instead of a real repo."""
+    original = subprocess.check_output
+
+    def check_output(argv, **kwargs):
+        if argv[:3] != ["git", "-C", str(CHECKOUT)]:
+            return original(argv, **kwargs)
+        key = tuple(argv[3:])
+        if key in answers:
+            return answers[key]
+        return original(argv, **kwargs)
+
+    return check_output
 
 
 @contextmanager
@@ -45,7 +71,8 @@ def temp_home():
             "COORDQ_DIR": str(queue), "COORDQ_T3MCP": str(t3),
             "PATH": str(runtime_root) + os.pathsep + os.environ.get("PATH", ""),
         }):
-            yield td
+            with mock.patch.object(subprocess, "check_output", side_effect=fake_git(GIT_ANSWERS)):
+                yield td
 
 
 class TestTurncapPlist(unittest.TestCase):
@@ -312,9 +339,11 @@ class TestTickLauncher(unittest.TestCase):
         self.assertEqual(source, CHECKOUT / "coordinator/pi/bin/coord-tick")
         self.assertEqual(mode, 0o755)
 
-    def test_coord_pi_exports_coord_wake_zero(self):
+    def test_coord_pi_keeps_wake_on_by_default(self):
+        """Refs #346: the launcher defaults wake on and keeps an explicit 0."""
         launcher = (CHECKOUT / "coordinator/pi/bin/coord-pi").read_text()
-        self.assertIn("export COORD_WAKE=0", launcher)
+        self.assertIn('export COORD_WAKE="${COORD_WAKE:-1}"', launcher)
+        self.assertNotIn("export COORD_WAKE=0", launcher)
 
     def test_only_alert_lines_are_alerts(self):
         module = self.launcher()
@@ -612,6 +641,49 @@ class TestInstallPath(unittest.TestCase):
                 install_coordinator.install(CHECKOUT, False, home)
                 install_coordinator.install(CHECKOUT, False, home)
             self.assertTrue((home / "Library/Logs/coordinator").is_dir())
+
+
+class TestMainSourcePin(unittest.TestCase):
+    """The installer only accepts clean canonical main that matches origin/main."""
+
+    def pin(self, overrides=None):
+        answers = dict(GIT_ANSWERS)
+        answers.update(overrides or {})
+        with mock.patch.object(subprocess, "check_output", side_effect=fake_git(answers)):
+            return install_coordinator.require_main_source(CHECKOUT)
+
+    def test_clean_main_is_pinned_to_its_fetched_sha(self):
+        self.assertEqual(self.pin(), "a" * 40)
+
+    def test_a_linked_worktree_is_refused(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.pin({("rev-parse", "--path-format=absolute", "--git-common-dir"): "/tmp/elsewhere/.git"})
+        self.assertIn("canonical checkout", str(caught.exception))
+
+    def test_a_branch_other_than_main_is_refused(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.pin({("symbolic-ref", "--short", "HEAD"): "feature/pin"})
+        self.assertIn("branch main", str(caught.exception))
+
+    def test_a_dirty_checkout_is_refused(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.pin({("status", "--porcelain", "--untracked-files=all"): " M install_coordinator.py"})
+        self.assertIn("clean checkout", str(caught.exception))
+
+    def test_a_stale_main_is_refused(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.pin({("rev-parse", "refs/remotes/origin/main"): "b" * 40})
+        self.assertIn("HEAD matching fetched origin/main", str(caught.exception))
+
+    def test_the_receipt_records_the_pinned_source_sha(self):
+        with temp_home() as td:
+            home = Path(td)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            receipt = json.loads(
+                (home / ".local/state/mac-ops" / install_coordinator.RECEIPT_NAME).read_text()
+            )
+            self.assertEqual(receipt["source_sha"], "a" * 40)
 
 
 if __name__ == "__main__":
