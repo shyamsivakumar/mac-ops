@@ -25,7 +25,7 @@ python3 scripts/mac_ops_fast_check.py returns FAIL. Unmodified send-integrity
 expects the old coordq command shape; gate-pipeline expects lane merges and
 immediate fresh-gate recovery; no-parking expects an extra same-head continuation.
 These failures are caused by intentional changed contracts, not claimed unrelated.
-Tests/checks were not edited or weakened. Final PR check line records FAIL.
+Correction: the branch had deleted gate-brief assertions from consolidation-guard. The finish pass restored those assertions from origin/main. Final PR check line records FAIL.
 
 Left for later: reconcile existing proof expectations with the new contract;
 stubbed repeated-cycle/new-head coverage and live board counts are not collected.
