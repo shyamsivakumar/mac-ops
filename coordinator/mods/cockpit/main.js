@@ -6,8 +6,8 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, 
 import { errorKind, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
-import { DEAD, place } from "./asks.js";
+import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { DEAD, laneOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -27,9 +27,9 @@ const LOAD_STALE = 300000;
 const STUCK_AFTER = 25000;
 const COMPACT_BELOW = 700;
 const PROJECT_SHEET_WIDTH = 420;
-const COMPACT_ORDER = ["needs", "ready", "run", "backlog", "done", "dead"];
-const MIN_COL = 164;
-const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", run: "Nothing running", ready: "No PRs ready to merge", done: "Nothing to settle", dead: "No dead runs" };
+const COMPACT_ORDER = ["needs", "cifail", "ready", "review", "checks", "run", "done", "backlog", "dead"];
+const MIN_COL = 136;
+const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", run: "Nothing working", checks: "No checks running", cifail: "No failing CI", review: "No reviews pending", ready: "No PRs ready to merge", done: "Nothing to settle", dead: "No dead runs" };
 const COLUMN_KEYS = COLUMNS.map((c) => c[0]);
 const DECIDE_GUARD = 800;
 const CONFIRM_GAP = 400;
@@ -182,7 +182,7 @@ export default class Board extends View {
     this.compact = false;
     this.cap = 6;
     this.area = { width: 1200, height: 260 };
-    this.scrollY = { backlog: 0, needs: 0, run: 0, ready: 0, done: 0, dead: 0, compact: 0 };
+    this.scrollY = Object.fromEntries([...COLUMN_KEYS, "compact"].map((k) => [k, 0]));
     this.reveal = null;
     this.box = Object.fromEntries([...COLUMN_KEYS, "compact"].map((k) => [k, { width: 300, height: 200 }]));
     this.drawn = Date.now();
@@ -535,7 +535,7 @@ export default class Board extends View {
     const placed = live.map((g) => {
       g.info = this.prInfo(g);
       g.asleep = Boolean(this.sleeper(g, now));
-      return [g, place(g, this.mergeCandidate(g))];
+      return [g, laneOf(g, () => !this.reviewBlock(g))];
     });
     this.asleepCount = live.filter((g) => g.asleep).length;
     this.pruneSnoozed(live, now);
@@ -580,7 +580,7 @@ export default class Board extends View {
       approveAll: (cx) => this.approveAll(cx),
       retry: (cx) => this.openRetry(cx),
       rebase: (cx) => this.rebase(this.current(), cx),
-      rebaseAll: (cx) => this.rebaseAll(cx),
+      rebaseAll: (cx, lane) => this.rebaseAll(cx, lane),
       queue: (cx) => this.queue(this.current(), cx),
       openPr: () => this.openPr(this.current()),
       fold: (key, cx) => {
@@ -596,7 +596,7 @@ export default class Board extends View {
     for (const key of COLUMN_KEYS) {
       const col = cols[key];
       const narrow = this.colW < 220;
-      const variant = key === "ready" ? "ready" : key === "backlog" ? "backlog" : "std";
+      const variant = PR_LANES.has(key) ? "pr" : key === "backlog" ? "backlog" : "std";
       for (const g of col.groups) {
         col.count += 1;
         if (this.isFolded(key) && key !== this.pop) continue;
@@ -605,11 +605,10 @@ export default class Board extends View {
         const replying = this.replyKey === gkey;
         const selected = this.cursor === gkey;
         const c = { ...g.primary, title: g.title, task: g.task };
-        const refusal = variant === "ready" ? this.refusalOf(g) : null;
-        const block = variant === "ready" && g.info.status === "open" ? this.reviewBlock(g) : null;
+        const refusal = key === "ready" ? this.refusalOf(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
-        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text ?? block, blocked: Boolean(block || refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "ready" && this.rebasable(g), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -622,7 +621,7 @@ export default class Board extends View {
       col.summary = this.summary(key, col, now);
     }
     this.scope = { shown: COLUMN_KEYS.reduce((sum, k) => sum + cols[k].count, 0), total: [...live, ...queued].filter(inProject).length };
-    const open = cols.ready.groups.filter((g) => g.info.status === "open" && g.info.pr && !g.asleep);
+    const open = [...cols.ready.groups, ...cols.review.groups].filter((g) => g.info.pr && !g.asleep);
     const approvable = [];
     const blocked = new Map();
     for (const g of open) {
@@ -634,7 +633,7 @@ export default class Board extends View {
     const why = [...BLOCK_BUCKETS.map(([, name]) => name), PLAN_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing };
-    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: cols.ready.groups.filter((g) => this.rebasable(g) && !g.asleep).length, reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
+    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries([...PR_LANES].map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
 
   filterOf() {
@@ -720,14 +719,15 @@ export default class Board extends View {
       const quiet = groups.filter((g) => this.quiet(g, now)).length;
       return started.length ? [capSeg, ...seg(quiet, "quiet", "dim"), [`longest ${elapsed(now - Math.min(...started))}`, "working"]] : [capSeg, ...seg(quiet, "quiet", "dim")];
     }
-    if (key === "ready") {
-      const ci = (g) => g.info.gh?.ci ?? "loading";
-      return [
-        ...seg(groups.filter((g) => ci(g) === "pass").length, "pass", "done"),
-        ...seg(groups.filter((g) => ci(g) === "fail").length, "failing", "blocked"),
-        ...seg(groups.filter((g) => !g.info.gh?.draft && g.info.gh?.mergeable === "CONFLICTING").length, "conflict", "blocked"),
-        ...seg(groups.filter((g) => ci(g) === "pending" || ci(g) === "loading").length, "pending", "working"),
-      ];
+    if (PR_LANES.has(key)) {
+      const conflicts = groups.filter(conflicting).length;
+      const conflict = seg(conflicts, "conflict", "blocked");
+      if (key === "checks") return [...seg(groups.length, "pending", "working"), ...conflict, oldest];
+      if (key === "cifail") return [...seg(groups.length, "failing", "blocked"), ...conflict, oldest];
+      if (key === "ready") return [...seg(groups.length - conflicts, "ready", "done"), ...conflict, oldest];
+      const draft = groups.filter((g) => g.info.gh?.draft).length;
+      const changes = groups.filter((g) => !g.info.gh?.draft && this.verdictFor(g)?.state === "fail").length;
+      return [...seg(groups.length - draft - changes, "waiting", "working"), ...seg(changes, "changes requested", "blocked"), ...seg(draft, "draft", "dim"), ...conflict, oldest];
     }
     if (key === "done") {
       const reviewedCards = groups.filter((g) => g.threads.some((c) => c.review)).length;
@@ -845,7 +845,7 @@ export default class Board extends View {
 
   jump() {
     if (this.pop) return;
-    const order = ["needs", "ready"]
+    const order = ["needs", "cifail", "ready"]
       .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => a.at - b.at).map((g) => ({ col: key, key: `g:${key}:${g.key}` })));
     if (!order.length) return say("success", "Nothing needs you");
     const next = order[(order.findIndex((x) => x.key === this.cursor) + 1) % order.length];
@@ -1037,21 +1037,22 @@ export default class Board extends View {
   }
 
   rebase(e, cx) {
-    if (e?.col !== "ready" || this.guard(true)) return;
+    if (!PR_LANES.has(e?.col) || this.guard(true)) return;
     if (!this.rebasable(e.group)) return say("info", "Nothing to rebase", "This PR has no merge conflict, or its thread is running.");
     this.confirm("rebase", e.key, () => this.tellEach([[e.group, this.ask("Rebase", e.group, REBASE_NOTE)]], "Rebase", cx), cx);
   }
 
-  rebaseTargets() {
-    return this.layout.cols.ready.groups.filter((g) => this.rebasable(g) && !g.asleep);
+  rebaseTargets(lane, cols = this.layout.cols) {
+    const lanes = lane ? [lane] : [...PR_LANES].filter((k) => this.owns(k));
+    return lanes.flatMap((k) => cols[k].groups).filter((g) => this.rebasable(g) && !g.asleep);
   }
 
-  rebaseAll(cx) {
-    if (!this.owns("ready") || this.guard(false)) return;
-    const armed = new Set(this.rebaseTargets().map((g) => g.key));
+  rebaseAll(cx, lane) {
+    if (this.guard(false)) return;
+    const armed = new Set(this.rebaseTargets(lane).map((g) => g.key));
     if (!armed.size) return say("info", "No conflicting PRs to rebase");
-    this.confirm("rebase-all", "all", (seen) => {
-      const targets = this.rebaseTargets().filter((g) => seen.has(g.key));
+    this.confirm("rebase-all", lane ?? "all", (seen) => {
+      const targets = this.rebaseTargets(lane).filter((g) => seen.has(g.key));
       if (!targets.length) return say("info", "No conflicting PRs to rebase");
       this.tellEach(targets.map((g) => [g, this.ask("Rebase", g, REBASE_NOTE)]), "Rebase", cx);
     }, cx, armed);
@@ -1170,7 +1171,7 @@ export default class Board extends View {
     const g = this.groups()[0];
     if (!g) return null;
     g.info = this.prInfo(g);
-    if (this.dec.col === "ready" && g.info.status !== "open") return null;
+    if (PR_LANES.has(this.dec.col) && g.info.status !== "open") return null;
     const entry = { key: this.dec.key, col: this.dec.col, group: g, thread: null };
     if (g.issue) return { entry, d: issueDecision(g, this.ticket, Boolean(this.replyKey), this.armed?.kind === "abandon") };
     return { entry, d: decisionOf(entry.col, g, g.info, this.verdictFor(g), Date.now()) };
@@ -1676,7 +1677,7 @@ export default class Board extends View {
     } else if (k === "enter" && c) this.activate(c, cx);
     else if (k === "o" && c) this.openEntry(c, cx);
     else if (k === "r" && c) this.openReply(c, cx);
-    else if (k === "d" && c && DECIDES.has(c.col)) this.openReply(c, cx, c.col === "ready" ? NOTE_LABEL : "Reply");
+    else if (k === "d" && c && DECIDES.has(c.col)) this.openReply(c, cx, PR_LANES.has(c.col) ? NOTE_LABEL : "Reply");
     else if (k === "S") this.settleReviewed(cx);
     else if (k === "A") this.settleAll(cx);
     else if (k === "a") this.approve(c, cx);
