@@ -264,7 +264,7 @@ export function flushMirrors(): Promise<unknown> {
 // ---------- wake ----------
 const WAKE_MIN = Number(process.env.COORD_WAKE_MIN || 30);
 const TICK_PROMPT = process.env.COORD_TICK_PROMPT ||
-  "Tick (auto-wake). Run one tick per loop/tick.md. Keep it cheap: filter command output, act only on what changed, reply NOOP or ALERT lines only.";
+  "Push on the rest of the backlog and complete it: read the latest EVENT lines and loop/tick.md, clear every stopped, failed or idle item, then report.";
 
 export default function (pi: any) {
   let ctxRef: any;
