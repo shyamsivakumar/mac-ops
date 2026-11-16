@@ -5615,11 +5615,19 @@ def check_attempts(
                 {
                     "check": "attempts",
                     "subject": repo,
-                    "detail": f"the open pull requests could not be read: {exc}",
+                    "detail": (
+                        "the open pull requests could not be read, so the "
+                        f"tickets of this repository are not classified: {exc}"
+                    ),
                     "action": "read the pull requests by hand",
                 }
             )
-            pulls = []
+            # The tickets of this repository are not classified at all: a
+            # missing pull request list is not the same as an empty one,
+            # and a ticket with no open pull request must not be reported
+            # from a list nobody could read.
+            ran.append(f"the open pull requests of {repo} could not be read")
+            continue
         ran.append(f"the open pull requests of {repo}")
         by_number = {item["number"]: item for item in tickets if item.get("number")}
         by_key = {
@@ -5690,6 +5698,7 @@ def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
                 continue
         latest[(match.group("repo"), match.group("number"))] = match.group("reason")
     states: dict[tuple[str, int], str] = {}
+    unread: dict[tuple[str, int], str] = {}
     for (repo, number), reason in sorted(latest.items()):
         if "text blockers:" not in reason:
             continue
@@ -5702,7 +5711,7 @@ def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
         ]
         for target, target_number in named:
             key = (target, target_number)
-            if key not in states:
+            if key not in states and key not in unread:
                 code, out, _err = health_run(
                     [GH, "api", f"repos/{target}/issues/{target_number}"],
                     deadline,
@@ -5713,7 +5722,29 @@ def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
                         state = str(json.loads(out).get("state") or "")
                     except ValueError:
                         state = ""
-                states[key] = state
+                if not state:
+                    # The state of the issue was never established, so
+                    # this check is incomplete for it. It says so instead
+                    # of reporting that the blocker is not false.
+                    unread[key] = (
+                        f"the state of {target}#{target_number} could not be "
+                        "read, so the text blocker check is incomplete for it"
+                    )
+                else:
+                    states[key] = state
+            if key in unread:
+                findings.append(
+                    {
+                        "check": "blockers",
+                        "subject": f"{repo}#{number}",
+                        "detail": unread[key],
+                        "action": (
+                            "read the issue, then reword the body so the "
+                            "Blocked by section names only real blockers"
+                        ),
+                    }
+                )
+                continue
             if states[key] != "closed":
                 continue
             findings.append(
