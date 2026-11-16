@@ -1,0 +1,44 @@
+Baseline HEAD: 8d6c70d4146cf857a59d0081159e784773837635 (branch base, MO-1005 merge)
+Worktree: <worktree:branch-base>
+Command: timeout 300 python3 -m unittest tests.test_gatekeep_retry_limit
+Start: 2026-11-15T16:03:23Z
+End: 2026-11-15T16:03:23Z
+Exit: 1
+---
+F.......FF.F..
+======================================================================
+FAIL: test_a_second_retry_happens_after_the_backoff (tests.test_gatekeep_retry_limit.BackoffTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree:branch-base>/tests/test_gatekeep_retry_limit.py", line 177, in test_a_second_retry_happens_after_the_backoff
+    self.assertIn("regating o/r#7", out)
+AssertionError: 'regating o/r#7' not found in ''
+
+======================================================================
+FAIL: test_a_head_with_no_retry_yet_is_retried (tests.test_gatekeep_retry_limit.FirstRetryTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree:branch-base>/tests/test_gatekeep_retry_limit.py", line 140, in test_a_head_with_no_retry_yet_is_retried
+    self.assertIn("regating o/r#7", out)
+AssertionError: 'regating o/r#7' not found in ''
+
+======================================================================
+FAIL: test_a_legacy_head_is_retried (tests.test_gatekeep_retry_limit.FirstRetryTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree:branch-base>/tests/test_gatekeep_retry_limit.py", line 133, in test_a_legacy_head_is_retried
+    self.assertIn("regating o/r#7: aaaaaaaa (gate died without a verdict)", out)
+AssertionError: 'regating o/r#7: aaaaaaaa (gate died without a verdict)' not found in ''
+
+======================================================================
+FAIL: test_an_odd_record_does_not_stop_the_run (tests.test_gatekeep_retry_limit.GiveUpTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<worktree:branch-base>/tests/test_gatekeep_retry_limit.py", line 204, in test_an_odd_record_does_not_stop_the_run
+    self.assertIn("would queue " + self.key, out)
+AssertionError: 'would queue gate:o/r#7:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' not found in ''
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.031s
+
+FAILED (failures=4)
