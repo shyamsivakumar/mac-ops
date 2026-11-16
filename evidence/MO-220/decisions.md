@@ -250,6 +250,33 @@ still finds its linked ticket's builder when that receipt exists.
 Device, handset and live-service testing is waived (Shyam, 2026-11-14).
 No device or live case was run, so none failed.
 
+## The merge with main (PR #435 conflicted at 0b7d428)
+
+While this part was open, main took the cycle health check (T14,
+`dev.coordinator.tick` retirement work) and stall detection (T8b). The
+merge conflict was one hunk in `coordinator/overnight/overnight`, where
+both sides inserted their own section at the same place.
+
+The resolution keeps both parts whole and puts them in the order the
+cycle runs them:
+
+- main's cycle health check (`health_deadline`, `cycle_health`) runs at
+  the start of the cycle, as main wrote it;
+- the lane pass keeps main's stall records (`STALL_STATE`,
+  `stall_records`, `save_stall_state`) and the `STALL_EVENTS` loop;
+- the T10 parking step runs after the lane pass, inside the same lock,
+  and takes its deadline from the cycle's remaining time (`left`), so it
+  cannot outlive the cycle.
+
+`README.md` merged without a conflict and holds both sections. The
+selftest now runs fourteen fixture evals: main's twelve plus
+`cycle-health` and `stall`, and all fourteen pass. Nothing in this
+resolution changes the T10 behaviour: the live dry run and the proof are
+re-captured on the merged tree.
+
+Device, handset and live-service testing is waived (Shyam, 2026-11-14).
+No device or live case was run, so none failed.
+
 ## The reviewer round
 
 One in-session reviewer round ran over the diff (`gpt-6.1-sol`, high
