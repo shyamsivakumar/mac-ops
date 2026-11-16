@@ -27,6 +27,23 @@ So the shift reports a stall and keeps working the item. It does not skip
 the item, does not block its start, does not recover it, does not label it
 and does not re-cut it. The receipt says `State: stuck`, not `parked`.
 
+## The sixth gate round
+
+The gate ran against `10b50bc` and returned one minor finding: the stall
+view printed `parked` for an item the lane keeps working, so it reported
+an operational state the shift does not have. The label is `stalled` now:
+
+```
+$ python3 coordinator/overnight/overnight stall --root /tmp/mo218j
+Overnight stall state
+shyamsivakumar/mac-ops#218: idle 3 tick(s) stalled
+Board idle: 3 tick(s)
+```
+
+The receipt of a reported item says `State: stuck`, the shift log says the
+item was reported and the shift keeps working it, and no record in the
+stall path says `parked`.
+
 ## The fifth gate round
 
 The gate ran against `a860533` and returned one major finding and one
