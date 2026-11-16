@@ -183,6 +183,26 @@ The gate on the second head found two major defects. Both are fixed here.
 Device, handset and live-service testing is waived (Shyam, 2026-11-14).
 No device or live case was run, so none failed.
 
+## The third gate round (PR #435, VERDICT: FAIL at 3a251b1)
+
+The gate found one major defect: `park --dry-run` returned success before
+the incomplete-read check, so a failed thread read made the preview hide
+a pending decision and call itself complete.
+
+The incomplete read is handled before the dry-run return now. Both modes
+say the same thing: the preview prints an `INCOMPLETE` line on stderr
+before the parking lot, the snag log holds the failed read, and the
+command exits non-zero without writing a file. A preview that hides a
+decision and calls itself complete is the same failure as a write that
+erases one, so it is refused the same way. The fixture path refuses a
+dry run the same way and writes nothing. The proof's case 15 runs the
+board path with a T3 stub that fails every thread read and shows the
+`INCOMPLETE` line, the snag entry, the refusal and exit 1, with no file
+written.
+
+Device, handset and live-service testing is waived (Shyam, 2026-11-14).
+No device or live case was run, so none failed.
+
 ## The reviewer round
 
 One in-session reviewer round ran over the diff (`gpt-6.1-sol`, high
@@ -216,8 +236,8 @@ effort). It found eight defects, all fixed in this branch:
   local check): passed.
 - `python3 coordinator/overnight/overnight selftest`: all 12 fixture
   evals pass.
-- `python3 evidence/MO-220/prove-park.py`: passed (fourteen cases,
-  including every case the two gate rounds found).
+- `python3 evidence/MO-220/prove-park.py`: passed (fifteen cases,
+  including every case the three gate rounds found).
 - `python3 -m pytest tests/ -q`: 286 pass, 2 fail. Both failures are
   pre-existing on this branch's base and are unrelated to this part:
   `tests/test_gatekeep_retry_limit.py::NonAstraGateTest::test_a_dead_opus_gate_is_not_requeued`
