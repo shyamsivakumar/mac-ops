@@ -65,7 +65,7 @@ class TestTurncapPlist(unittest.TestCase):
         parsed = plistlib.loads(self.rendered["dev.coordinator.turncap.plist"])
         self.assertEqual(
             parsed["ProgramArguments"],
-            ["/usr/bin/python3", "/Users/example/Code/coordinator/loop/turn_cap.py"],
+            ["/usr/bin/python3", "/Users/example/.local/bin/turn_cap.py"],
         )
         self.assertIs(parsed["RunAtLoad"], True)
         self.assertIs(parsed["KeepAlive"], True)
@@ -97,7 +97,7 @@ class TestTurncapPlist(unittest.TestCase):
         ]
         parsed = plistlib.loads(data)
         self.assertEqual(
-            parsed["ProgramArguments"][1], "/Users/a&b/Code/coordinator/loop/turn_cap.py"
+            parsed["ProgramArguments"][1], "/Users/a&b/.local/bin/turn_cap.py"
         )
 
     def test_unreadable_plist_is_reported_not_crashed(self):
@@ -156,10 +156,10 @@ class TestTurncapPlist(unittest.TestCase):
     def test_monitor_pattern_needs_a_python_interpreter_and_the_script_path(self):
         pattern = install_coordinator.MONITOR_PATTERN
         self.assertRegex(
-            "/usr/bin/python3 /Users/x/Code/coordinator/loop/turn_cap.py", pattern
+            "/usr/bin/python3 /Users/x/.local/bin/turn_cap.py", pattern
         )
         self.assertRegex(
-            "/usr/bin/python3 /Users/x/Code/coordinator/loop/turn_cap.py --dry-run",
+            "/usr/bin/python3 /Users/x/.local/bin/turn_cap.py --dry-run",
             pattern,
         )
         self.assertNotRegex("/bin/grep turn_cap.py", pattern)
