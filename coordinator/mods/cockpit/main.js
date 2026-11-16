@@ -610,7 +610,7 @@ export default class Board extends View {
         const origin = author && originOf(author);
         const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
-        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: g.threads.some((x) => x.kind === "done") }), this.input, cb) });
+        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
         for (const th of g.threads.slice(1)) {
           const tkey = `t:${th.key}`;
@@ -1531,7 +1531,7 @@ export default class Board extends View {
   }
 
   settleEntry(e, cx) {
-    if (!e || this.guard(true)) return;
+    if (!e || !["done", DEAD].includes(e.col) || this.guard(true)) return;
     const threads = e.thread ? [e.thread] : e.group.threads;
     this.settleThreads(threads.filter((c) => ["done", "fail", "stop"].includes(c.kind)), cx);
   }
@@ -1595,8 +1595,10 @@ export default class Board extends View {
   }
 
   approve(e, cx) {
-    if (e?.col !== "ready" || this.guard(true)) return;
+    if (!e || this.guard(true)) return;
     const g = e.group;
+    g.info = this.prInfo(g);
+    if (laneOf(g, () => !this.reviewBlock(g)) !== "ready") return say("info", "Merge blocked", this.reviewBlock(g) ?? "Not ready to merge");
     const refusal = this.refusalOf(g);
     const block = this.reviewBlock(g) || (refusal && !refusal.planned ? refusal.text : null);
     if (block) return say("info", "Merge blocked", block);
