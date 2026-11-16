@@ -1,0 +1,17 @@
+{
+  "thread": {
+    "threadId": "mcp:launch:t10-latest-unreadable",
+    "status": "waiting_for_approval",
+    "pendingRequestCount": 1
+  },
+  "items": [
+    {
+      "type": "question",
+      "text": "Approve the older request?"
+    },
+    {
+      "type": "question",
+      "text": ""
+    }
+  ]
+}

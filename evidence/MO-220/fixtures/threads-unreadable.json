@@ -1,0 +1,13 @@
+{
+  "thread": {
+    "threadId": "mcp:launch:t10-unreadable",
+    "status": "waiting_for_approval",
+    "pendingRequestCount": 1
+  },
+  "items": [
+    {
+      "type": "assistant_message",
+      "text": "I need an answer before I can go on."
+    }
+  ]
+}
