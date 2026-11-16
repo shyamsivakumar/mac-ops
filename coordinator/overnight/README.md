@@ -359,10 +359,11 @@ overnight stall --root <folder>
 ```
 
 The first command runs the real rule over the ticks of the fixture and
-writes the records it produces: the receipt of the parked item, the lines
+writes the records it produces: the receipt of the reported item, the lines
 in the shift log and the alert. The second command reads the shift's own
-stall state and says which items are idle and for how many ticks. It
-writes nothing.
+stall state and says which items are idle and for how many ticks, and
+which of them are `stalled` (never `parked`: the shift keeps working a
+stalled item). It writes nothing.
 
 The fixture is a JSON file that names its items and its ticks. A tick maps
 every item to its marker.
