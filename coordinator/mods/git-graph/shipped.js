@@ -108,7 +108,7 @@ async function fetchShipped(now = Date.now()) {
   const fortnight = withTickets([...mergedWeeks.values(), ...days.map((d) => d.prs)].flat().filter((p) => p.at >= start), coordinator).sort((a, b) => b.at - a.at);
   return {
     merged: fortnight.filter((p) => p.at >= week), fortnight,
-    capped: days.some((d) => d.capped),
+    capped: [...mergedDays].some(([key, d]) => d.capped && key.split("|")[1] >= utcDay(week)),
     open: [...openByOwner.values()].flat(),
     errors: [...new Set(errors)], at: Date.now(),
   };

@@ -53,14 +53,15 @@ export function startToMerge(merged) {
 
 export function laneTimes(lines, now) {
   const byKey = new Map();
-  for (const e of lines) byKey.set(e.key, [...(byKey.get(e.key) ?? []), e]);
+  const gaps = lines.filter((e) => e.gap).map((e) => e.t);
+  for (const e of lines.filter((x) => !x.gap)) byKey.set(e.key, [...(byKey.get(e.key) ?? []), e]);
   const spent = new Map(LANES.map(([id]) => [id, []])), sitting = new Map(LANES.map(([id]) => [id, []]));
   for (const entries of byKey.values()) {
     entries.sort((a, b) => a.t - b.t);
     entries.forEach((e, i) => {
       if (!spent.has(e.to)) return;
       const next = entries[i + 1];
-      if (next) { if (e.from !== null) spent.get(e.to).push(next.t - e.t); }
+      if (next) { if (e.from !== null && !gaps.some((g) => g > e.t && g <= next.t)) spent.get(e.to).push(next.t - e.t); }
       else sitting.get(e.to).push({ key: e.key, project: e.project, pr: e.pr, ms: now - e.t });
     });
   }

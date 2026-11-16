@@ -8,7 +8,7 @@ import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIss
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
-import { flushFlowLog, logLaneChange } from "./flowlog.js";
+import { flushFlowLog, logLaneChange, markPass } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
@@ -815,6 +815,7 @@ export default class Board extends View {
   }
 
   trackColumns(placed, now) {
+    markPass(now);
     const next = {};
     let dirty = Object.keys(this.seen).length !== placed.length;
     for (const [g, col] of placed) {
