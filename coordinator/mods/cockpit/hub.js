@@ -158,17 +158,29 @@ const byUrgency = (a, b) => URGENCY[a.kind] - URGENCY[b.kind] || b.at - a.at;
 
 export function group(cards) {
   const groups = new Map();
+  const taskOf = new Map();
+  for (const c of cards.filter((c) => c.task)) {
+    for (const p of c.prs) {
+      const id = `${p.repo}#${p.number}`;
+      if (!(taskOf.get(id) <= c.task)) taskOf.set(id, c.task);
+    }
+  }
+  const keyOf = (c) => {
+    if (c.task) return c.task;
+    const ids = c.prs.map((p) => `${p.repo}#${p.number}`);
+    return ids.map((id) => taskOf.get(id)).find(Boolean) ?? (ids.length ? `pr:${ids[0]}` : c.key);
+  };
   for (const c of cards) {
-    const key = c.task || c.key;
+    const key = keyOf(c);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(c);
   }
   return [...groups].map(([key, threads]) => {
     threads.sort(byUrgency);
-    const lead = threads.find((c) => c.led) ?? threads[0];
+    const lead = threads.find((c) => c.led) ?? threads.find((c) => c.task) ?? threads[0];
     const running = threads.filter((c) => c.kind === "run" && c.status !== "queued");
     const prs = new Map(threads.flatMap((c) => c.prs).map((p) => [`${p.repo}#${p.number}`, p]));
-    return { key, task: threads[0].task, title: lead.title, project: lead.project, threads, primary: threads[0], kind: threads[0].kind, at: Math.max(...threads.map((c) => c.at)), runSince: running.some((c) => c.runStarted) ? Math.min(...running.map((c) => c.runStarted).filter(Boolean)) : null, prs: [...prs.values()] };
+    return { key, task: threads.find((c) => c.task)?.task ?? "", title: lead.title, project: lead.project, threads, primary: threads[0], kind: threads[0].kind, at: Math.max(...threads.map((c) => c.at)), runSince: running.some((c) => c.runStarted) ? Math.min(...running.map((c) => c.runStarted).filter(Boolean)) : null, prs: [...prs.values()] };
   });
 }
 
