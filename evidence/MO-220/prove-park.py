@@ -39,7 +39,9 @@ What it proves:
    the snag log keeps both,
 14. the latest open request is the one that is parked: when its own text
    cannot be read, the shift says so instead of parking an older
-   request in its place.
+   request in its place,
+15. a dry run of the real board refuses too when a thread cannot be
+   read: it shows the failure, writes nothing, and exits non-zero.
 
 Run it from the mac-ops checkout:
 
@@ -79,10 +81,16 @@ if tool != "t3_thread_read":
 payload = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
 thread = payload.get("threadId") or ""
 threads = json.load(open(os.environ["T3_THREADS"]))
-if thread in threads.get("fail", []):
+fail = threads.get("fail", [])
+if "*" in fail or thread in fail:
     print(f"stub t3mcp: the thread {thread} could not be read", file=sys.stderr)
     sys.exit(1)
-print(json.dumps(threads.get(thread, {})))
+record = threads.get(thread)
+if record is None:
+    # A thread the fixture did not name is a well-formed thread that holds
+    # nothing, so a read of it is complete.
+    record = {"thread": {"threadId": thread, "status": "completed"}, "items": []}
+print(json.dumps(record))
 '''
 
 PROBLEMS = []
@@ -495,6 +503,53 @@ def main() -> int:
         check(
             "could not be read" in snag,
             "the unreadable latest request was not logged as a problem",
+        )
+
+        # 15: a dry run of the board refuses when a thread cannot be read.
+        # Every thread read fails here, so the preview cannot be complete.
+        threads = {"fail": ["*"], "mcp:launch:t10-fails": {}}
+        env = park_env(work / "dry", threads)
+        dry = work / "records-15"
+        (dry / "inbox").mkdir(parents=True)
+        code, out, err = run(
+            [
+                sys.executable,
+                str(OVERNIGHT),
+                "park",
+                "--root",
+                str(dry),
+                "--dry-run",
+                "--deadline",
+                "150",
+            ],
+            env=env,
+        )
+        message = out + err
+        print("=== 15: a dry run refuses on an incomplete read ===")
+        print("\n".join(
+            line for line in message.splitlines()
+            if "INCOMPLETE" in line or "REFUSED" in line or line.startswith("- ")
+        )[:1200])
+        check(code != 0, "the dry run reported success after a failed read")
+        check(
+            "INCOMPLETE" in message,
+            f"the dry run did not say its preview was incomplete: {message[:400]}",
+        )
+        check(
+            "REFUSED" in message,
+            "the dry run did not report the refusal",
+        )
+        check(
+            not (dry / "inbox" / "parking-lot.md").exists(),
+            "the dry run wrote a parking lot",
+        )
+        # And the fixture path refuses the same way.
+        code, out, err = park(
+            env, FIXTURES / "failing-thread.json", dry, dry_run=True
+        )
+        check(
+            code != 0 and "REFUSED" in (out + err),
+            f"the fixture dry run did not refuse: {out}{err}",
         )
 
         # 3 and 5: a request whose text cannot be read, and a thread that

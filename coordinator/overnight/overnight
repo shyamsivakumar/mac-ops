@@ -5985,16 +5985,11 @@ def cmd_park(args: argparse.Namespace) -> int:
         queue_state,
         read_shift_receipts(root),
     )
-    if args.dry_run:
-        emit("--- parking lot (dry run, nothing written) ---")
-        emit(parking_lot_text(parked))
-        emit("--- snag log (dry run, nothing written) ---")
-        emit(snag_log_text([snag_section(title, fields) for title, fields in snags]))
-        return 0
+    # A thread that could not be read may hold a request the shift does
+    # not know about, so the record is incomplete. Both modes say so and
+    # refuse: a preview that hides a decision and calls itself complete is
+    # the same failure as a write that erases one.
     if incomplete:
-        # A thread could not be read, so the parking lot is not written: a
-        # decision that is still waiting must not leave the file because
-        # one read failed. The problem goes to the snag log.
         snags.append(
             (
                 f"{stamp_line()} · the parking lot",
@@ -6012,6 +6007,34 @@ def cmd_park(args: argparse.Namespace) -> int:
                 ],
             )
         )
+    snag_text = snag_log_text(
+        [snag_section(title, fields) for title, fields in snags]
+    )
+    if args.dry_run:
+        if incomplete:
+            emit(
+                "overnight: the preview below is INCOMPLETE; a thread could not "
+                f"be read: {incomplete}",
+                err=True,
+            )
+        emit("--- parking lot (dry run, nothing written) ---")
+        emit(parking_lot_text(parked))
+        emit("--- snag log (dry run, nothing written) ---")
+        emit(snag_text)
+        if incomplete:
+            emit(
+                "overnight: REFUSED: the parking lot was not previewed in full: "
+                f"{incomplete}",
+                err=True,
+            )
+            emit(
+                "overnight: a decision that is still waiting may be missing from "
+                "the preview above.",
+                err=True,
+            )
+            return 1
+        return 0
+    if incomplete:
         outcome = write_snag_log(root, snags)
         emit(
             f"overnight: REFUSED: the parking lot was not written: {incomplete}",
@@ -6077,6 +6100,13 @@ def cmd_fixture_park(args: argparse.Namespace, root: Path, deadline: float) -> i
                 ],
             )
         ]
+        if args.dry_run:
+            emit(
+                f"overnight: REFUSED: the parking lot was not written: {error}",
+                err=True,
+            )
+            emit(snag_log_text([snag_section(title, fields) for title, fields in snags]))
+            return 1
         outcome = write_snag_log(root, snags)
         emit(
             f"overnight: REFUSED: the parking lot was not written: {error}",
