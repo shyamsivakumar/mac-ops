@@ -154,6 +154,35 @@ fixed here.
 Device, handset and live-service testing is waived (Shyam, 2026-11-14).
 No device or live case was run, so none failed.
 
+## The second gate round (PR #435, VERDICT: FAIL at d54695d)
+
+The gate on the second head found two major defects. Both are fixed here.
+
+1. **The latest request could be the wrong one.** When the last open
+   request of a thread had no readable text, the search fell back to an
+   older open request, so the parking lot presented a request nobody
+   waits for and the unreadable request was never logged. The latest open
+   request is now selected first and its own text is what is parked: when
+   that text cannot be read, the entry says so and the snag log holds the
+   problem. The proof parks a thread whose latest request has no text and
+   shows that the older request is not parked in its place.
+2. **Two tickets with the same title collided in the snag log.** The
+   identity of a problem was the title's suffix and the problem, so two
+   tickets with the same title and the same failing check were one
+   problem and one of them was silently dropped. The identity now holds
+   the repository, the ticket, the item's number and the problem, in both
+   the generation and the parsing. The proof parks two tickets that share
+   a title and shows that the log keeps both.
+3. **The stopping wording (the earlier partly-resolved finding).** The
+   budget snag still copied the rule's wording, which said the item "was
+   stopped and parked". The problem line now holds what was observed (the
+   builder's own time and the queue's own count of fix tries) and the
+   entry quotes the shift's own receipt when there is one, so the record
+   says what was recorded instead of what it assumes.
+
+Device, handset and live-service testing is waived (Shyam, 2026-11-14).
+No device or live case was run, so none failed.
+
 ## The reviewer round
 
 One in-session reviewer round ran over the diff (`gpt-6.1-sol`, high
@@ -187,8 +216,8 @@ effort). It found eight defects, all fixed in this branch:
   local check): passed.
 - `python3 coordinator/overnight/overnight selftest`: all 12 fixture
   evals pass.
-- `python3 evidence/MO-220/prove-park.py`: passed (ten cases, including
-  the three the gate round found).
+- `python3 evidence/MO-220/prove-park.py`: passed (fourteen cases,
+  including every case the two gate rounds found).
 - `python3 -m pytest tests/ -q`: 286 pass, 2 fail. Both failures are
   pre-existing on this branch's base and are unrelated to this part:
   `tests/test_gatekeep_retry_limit.py::NonAstraGateTest::test_a_dead_opus_gate_is_not_requeued`
