@@ -240,6 +240,10 @@ def gate_pipeline():
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
         def command(cmd, timeout=150):
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
+                return json.dumps({"state": "OPEN", "mergedAt": None})
+            if cmd == [lane.COORDQ, "list"]:
+                return ""
             if cmd[:2] == ["ticket", "gate"]:
                 return f"Gate exact head {head}"
             if cmd[:2] == ["ticket", "close"]:
@@ -383,6 +387,10 @@ def no_parking(status="interrupted"):
     actions = []
 
     def command(cmd, timeout=150):
+        if cmd == ["gh", "pr", "view", "20", "-R", repo, "--json", "state,mergedAt"]:
+            return json.dumps({"state": "OPEN", "mergedAt": None})
+        if cmd == [lane.COORDQ, "list"]:
+            return ""
         exact(cmd[0:2], [lane.COORDQ, "start"])
         exact(cmd[3:5], ["--tool", "t3_thread_send"])
         payload = json.loads(cmd[2])
