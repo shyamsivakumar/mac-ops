@@ -325,3 +325,19 @@ distinct-ticket snag identity and budget reporting. Direct and heavy-wrapped
 `python3 scripts/mac_ops_fast_check.py` passed. No operational stop or delivery
 was attempted. Existing checks were preserved. The diff cleanup review found
 no separate cleanup needed.
+
+## Finish verification, 2026-11-16
+
+The inherited merge completed at 66e7579 while verification was running.
+The in-session review found that the merged parking call restarted the remaining
+cycle budget after the lane pass. It now uses the original cycle deadline.
+No existing tests or checks were changed. Comment review added no comments;
+bounded cleanup found no further change needed.
+
+Earlier check receipts refer to earlier revisions and do not prove this head.
+Current direct and heavy repository check results are recorded in the PR body.
+
+### Left for later
+
+Authenticated live approval behavior and deployment remain unverified. The
+full pytest suite was not rerun; the repository check selects its own checks.

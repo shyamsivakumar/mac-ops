@@ -1528,7 +1528,7 @@ def cmd_shift(args: argparse.Namespace) -> int:
             # Part T10: the cycle parks what it cannot decide and logs what
             # it found. A pending request is parked with its exact text and
             # is never answered.
-            park_cycle(root, time.monotonic() + left)
+            park_cycle(root, started + args.deadline)
             if report_cycle:
                 return write_morning_report(root)
             return 0
