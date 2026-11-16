@@ -5660,7 +5660,10 @@ def queue_log_tail(
         # The read began in the middle of a line, so that line is not a
         # line of the log and is dropped rather than counted.
         text = text.split("\n", 1)[1] if "\n" in text else ""
-    return text.splitlines()[-lines:], ""
+    tail = text.splitlines()[-lines:]
+    if start and len(tail) < lines:
+        return tail, "the byte limit prevented reading the requested line count"
+    return tail, ""
 
 
 def log_read_finding(check: str, path: str, error: str) -> dict:
