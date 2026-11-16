@@ -504,10 +504,8 @@ def group_of(title):
 
 
 def start_next(repo, tickets, ledger, excl=frozenset()):
-    state = STALL_STATE if isinstance(STALL_STATE, dict) else {}
     ready = sorted((t for t in tickets if t["repo"] == repo and t.get("stage") == "todo" and not t.get("problems")
-                    and group_of(t.get("title") or "") not in excl
-                    and not stall.stalled(state, f"{repo}#{t['number']}")),
+                    and group_of(t.get("title") or "") not in excl),
                    key=lambda t: (t.get("priority") or 9, t["number"]))
     import datetime as _dt
     now = _dt.datetime.now(_dt.timezone.utc)
@@ -537,14 +535,12 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
 
 
 def unstick(repo, ledger, excl=frozenset()):
-    state = STALL_STATE if isinstance(STALL_STATE, dict) else {}
     issues = SNAPSHOT["repos"][repo]["issues"]
     referenced = {int(x) for pr in SNAPSHOT["repos"][repo]["prs"]
                   for x in re.findall(r"\bRefs #(\d+)", pr.get("body") or "")}
     orphans = [i["number"] for i in issues if not any(l["name"].startswith("stage:") for l in i["labels"])
                and i["number"] not in referenced
                and (repo, i["number"]) not in NEVER_START
-               and not stall.stalled(state, f"{repo}#{i['number']}")
                and (not excl or (isinstance(i.get("title"), str) and i["title"]
                                  and group_of(i["title"]) not in excl))]
     if not orphans:
@@ -701,9 +697,10 @@ def run_pass(ledger):
         event.update(item)
         print(
             f"STALL {key}: no new commit or receipt for {event['idle']} ticks; "
-            "parked, the shift moves on"
+            "reported, the shift keeps working it"
         )
         STALL_EVENTS.append(event)
+    stall.prune(state, set(markers))
     if board_event:
         print(
             f"STALL board: no board progress for {board_event['idle']} ticks; "
@@ -724,17 +721,6 @@ def run_pass(ledger):
             done = False
             for number in prs:
                 with item_boundary(repo, number, ledger):
-                    pr = next(
-                        (p for p in SNAPSHOT["repos"][repo]["prs"] if p["number"] == number),
-                        {},
-                    )
-                    key = pr_item(repo, pr)[0] if pr else f"{repo}!pr{number}"
-                    if stall.stalled(state, key):
-                        print(
-                            f"{CFG[repo]['key']:5} skip #{number}: stalled, the "
-                            "shift moved on"
-                        )
-                        continue
                     result = act_on_pr(repo, number, ledger)
                     if result is None:
                         continue

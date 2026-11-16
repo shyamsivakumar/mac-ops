@@ -97,8 +97,11 @@ def observe(state, key, item_marker, cap=STALL_CAP):
     """Record one tick of one item and return the stall event, or None.
 
     A marker that changed is progress: the idle count starts again. A
-    marker that did not change is one more idle tick. When the idle count
-    reaches the cap the item is parked as a stall, and the event says so."""
+    marker that did not change is one more idle tick. The idle count stops
+    at the cap, so the tracking is bounded. When the idle count reaches the
+    cap the item is reported as stalled, and the event says so.
+
+    A stalled item is reported, not parked: the shift keeps working it."""
     items = state.setdefault("items", {})
     entry = items.get(key)
     entry = dict(entry) if isinstance(entry, dict) else {}
@@ -108,13 +111,25 @@ def observe(state, key, item_marker, cap=STALL_CAP):
     elif item_marker != previous:
         entry = {"marker": item_marker, "idle": 0, "stalled": False}
     else:
-        entry["idle"] = int(entry.get("idle") or 0) + 1
+        entry["idle"] = min(int(entry.get("idle") or 0) + 1, cap)
     items[key] = entry
     if entry["idle"] >= cap and not entry.get("stalled"):
         entry["stalled"] = True
         items[key] = entry
         return {"kind": "item", "item": key, "idle": entry["idle"], "cap": cap}
     return None
+
+
+def prune(state, keys):
+    """Return the state with the items that left the board dropped.
+
+    The tracking is bounded by the board: an item that is not on the board
+    is not tracked any more."""
+    items = state.get("items")
+    if not isinstance(items, dict):
+        return state
+    state["items"] = {key: entry for key, entry in items.items() if key in keys}
+    return state
 
 
 def stalled(state, key):
@@ -137,22 +152,26 @@ def board(state, progressed, items=0, cap=STALL_CAP):
 
     The board's first tick is its baseline: there is nothing yet to compare
     it with, so it counts as an idle tick, the way the first tick of an
-    item does."""
+    item does.
+
+    The board is alerted once per episode: the alert is not repeated until
+    the board moves again. The idle count stops at the cap, so the
+    tracking is bounded."""
     if not items:
         state["board_idle"] = 0
+        state.pop("board_alerted", None)
         return None
     if not state.get("board_seen"):
         state["board_seen"] = True
         progressed = False
     if progressed:
         state["board_idle"] = 0
+        state.pop("board_alerted", None)
         return None
-    idle = int(state.get("board_idle") or 0) + 1
+    idle = min(int(state.get("board_idle") or 0) + 1, cap)
     state["board_idle"] = idle
-    if idle >= cap:
-        # The shift sweeps the board again, so the count starts again: a
-        # board that is still stuck after the sweep is a new stall.
-        state["board_idle"] = 0
+    if idle >= cap and not state.get("board_alerted"):
+        state["board_alerted"] = True
         return {"kind": "board", "idle": idle, "cap": cap}
     return None
 
