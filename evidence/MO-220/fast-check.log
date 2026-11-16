@@ -1,0 +1,7 @@
+# mac_ops_fast_check on 4dd122e285b5a901265fa8b962a71e4e1207c113
+
+Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.
+Admission requires stable swap, CPU and memory below 95%, and at least max(6 GiB, 15% RAM) headroom to start or resume (a running job pauses only below max(6 GiB, 12.5% RAM)); level 2 is allowed above 30% free memory, level 4 is blocked.
+Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.
+status and request-curtail use JSON; request-curtail explicitly terminates the newest active job.
+fast-check: passed; selected checks are not the full suite
