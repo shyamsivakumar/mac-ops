@@ -68,8 +68,16 @@ a crash between persistence and printing can lose an event. State-file loss
 can repeat events. Event history remains bounded by the existing 8 MiB state
 limit: reaching it fails the cycle visibly rather than dropping identities.
 Log errors are skipped without printing source content. Reads never write logs.
-Device, live-service and owner testing were waived for #345. The required
-repository check remains `timeout 300 python3 scripts/mac_ops_fast_check.py`.
+Device, live-service and owner testing were waived for #345. The fast
+selector is `timeout 300 python3 scripts/mac_ops_fast_check.py` and the full
+local suite is `timeout 300 python3 -m unittest discover -s tests -t .`. At the
+fix-round head both pass: the fast selector passes, and the full suite passes
+with 288 tests, `OK`. The four `tests/test_gatekeep_retry_limit.py` failures
+that also fail on origin/main came from a stale gate-model fixture written
+before gates moved to the Astra model; the fixture was realigned to the model
+coordq launches, with the non-Astra no-requeue case pinned by a new test and
+no assertion removed. The watcher runtime and the installer mapping are
+unchanged by that repair.
 
 Reproduce the runtime acceptance and temporary-HOME installation receipts with
 `timeout 300 env PYTHONDONTWRITEBYTECODE=1 python3 evidence/MO-1006/replay.py`.

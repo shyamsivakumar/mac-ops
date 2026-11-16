@@ -141,12 +141,14 @@ with the reason; the fast check is separately reported PASS.
 Device, handset and live-service cases remain WAIVED, not failed. This turn
 only adds receipts and documentation; watcher runtime and installer unchanged.
 
-## Finish check correction
+## Finish check correction (superseded by the fix round below)
 
 The earlier full-suite FAIL receipt remains historical evidence. The finish
-fix moves the Astra identity guard into the quota fallback path, restoring
+fix moved the Astra identity guard into the quota fallback path, restoring
 ordinary terminal-run retries while preserving quota routing restrictions,
-retry limits and backoff. No tests or checks changed.
+retry limits and backoff. The gate round found that guard move out of the
+#345 scope, so the fix round below removes it again; this section records what
+the previous head contained. No tests or checks changed in that commit.
 
 Validation on the resulting source tree:
 - `timeout 300 python3 -m unittest tests.test_gatekeep_retry_limit`: PASS, 14 tests.
@@ -157,6 +159,38 @@ Receipts: finish-full-check.log and finish-fast-check.log. The heavy-wrapped
 attempt was waiting in the queue; the direct full-suite command above completed.
 One in-session read-only review found no blocking findings. Diff comment review
 and bounded deslop inspection required no further changes.
+
+## Fix round 1: scope correction and green local checks
+
+The gate round's major finding on head 8b602110c9069e4e0ac34edbe2ab6aa470aafe0c
+was that `coordinator/bin/coordq` moved the Astra identity guard into the
+quota-fallback branch, which changed ordinary gate retries for non-Astra
+models. #345 permits only the watcher runtime and the installer mapping, so
+that runtime fix is removed here. `coordinator/bin/coordq` is byte-identical
+to base 8d6c70d4146cf857a59d0081159e784773837635 again, and the pull request
+diff now contains no coordinator runtime change at all.
+
+Removing it restores the baseline failure that the previous head had papered
+over: `tests/test_gatekeep_retry_limit.py` models a dead gate without the
+model the gate ran on. Since gates moved to the Astra model (c61f660, #340),
+that fixture is stale, and the four retry-limit cases fail on the base and on
+origin/main alike. The repair is in the test fixture, not in the runtime:
+the dead gate now records the model coordq launches (asserted against
+`coordq.ASTRA_MODEL` at module setup, so it cannot drift again), and a new
+case pins that a dead gate on another model is not requeued. No assertion was
+removed, no check was weakened and no production code changed. This is the
+same repair the #357 branch carries in commit b27dd09, so pull request 359
+and this pull request agree on the test file.
+
+Validation on this source tree:
+- `timeout 300 python3 -m unittest discover -s tests -t .`: exit 0, 288 tests, OK.
+- `timeout 300 python3 scripts/mac_ops_fast_check.py`: exit 0, passed.
+
+Receipts: fix-round1-full-check.log and fix-round1-fast-check.log. The two
+receipt files are the only files added after the checked tree, and both
+commands were re-run at the final head with the same results. Device,
+handset and live-service cases remain WAIVED, not failed. Live watcher
+activation and authenticated service behavior remain unverified.
 
 ## Left for later
 
