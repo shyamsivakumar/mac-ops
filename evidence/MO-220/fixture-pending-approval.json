@@ -1,0 +1,42 @@
+{
+  "item": "Overnight T10: Parking lot and snag log",
+  "repo": "shyamsivakumar/mac-ops",
+  "key": "MO-220",
+  "number": 188,
+  "thread": "mcp:launch:fixture-mo-220",
+  "response": {
+    "thread": {
+      "threadId": "mcp:launch:fixture-mo-220",
+      "title": "MO-220 · Overnight T10: Parking lot and snag log",
+      "status": "waiting_for_approval",
+      "pendingRequestCount": 1,
+      "createdAt": "2026-11-16T12:00:00.000Z",
+      "updatedAt": "2026-11-16T12:34:00.000Z"
+    },
+    "recentRuns": [
+      {
+        "runId": "run:thread:fixture-mo-220:ordinal:1",
+        "ordinal": 1,
+        "status": "completed",
+        "executedModel": "gpt-6.1-sol",
+        "requestedAt": "2026-11-16T12:00:01.000Z",
+        "startedAt": "2026-11-16T12:00:01.000Z",
+        "completedAt": "2026-11-16T12:34:00.000Z"
+      }
+    ],
+    "items": [
+      {
+        "type": "user_message",
+        "text": "Build the T10 parking lot and snag log."
+      },
+      {
+        "type": "assistant_message",
+        "text": "The parking lot and the snag log are written. The receipt for mac-ops#188 shows no exit code, so the check cannot be claimed as run."
+      },
+      {
+        "type": "question",
+        "text": "Approve running `python3 scripts/mac_ops_fast_check.py` on mac-ops#188 and pushing the result to t3/overnight-decision-parking? [y/N]"
+      }
+    ]
+  }
+}

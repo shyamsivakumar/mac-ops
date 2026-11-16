@@ -1,0 +1,24 @@
+--- parking lot (dry run, nothing written) ---
+# Parking lot
+
+The decisions the shift could not make. Each entry names the default
+that applies when Shyam says nothing and a recommendation. The shift
+never answers an approval request: a pending request is parked with
+its exact text and left alone.
+
+No decision is parked. The shift made every decision it could.
+
+--- snag log (dry run, nothing written) ---
+# Snag log
+
+The problems the shift found and what it did about them. One section
+per problem. A problem the shift finds twice is written once.
+
+## 2026-11-16 05:34 AM PT · SRW-1169 (#1161) · Bounded census submission API and durable credits
+
+- Repo: shyamsivakumar/strategy-replay-workbench
+- Ticket: SRW-1169
+- Problem: the builder used 20 min of its 8 min hard budget, so the item was stopped and parked
+- What the shift did: the item was stopped and parked, and no further fix try was spent on it
+- Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
+

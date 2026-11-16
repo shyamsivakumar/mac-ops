@@ -1,0 +1,57 @@
+=== overnight park --fixture (the real command) ===
+overnight: parking lot wrote; snag log unchanged
+# Parking lot
+
+The decisions the shift could not make. Each entry names the default
+that applies when Shyam says nothing and a recommendation. The shift
+never answers an approval request: a pending request is parked with
+its exact text and left alone.
+
+## MO-220 (#188) · Overnight T10: Parking lot and snag log
+
+- Repo: shyamsivakumar/mac-ops
+- Ticket: MO-220
+- Kind: pending approval request
+- Thread: mcp:launch:fixture-mo-220
+- Parked at: 2026-11-16 05:34 AM PT
+- Default: the request stays unanswered and the item stays parked
+- Recommend: answer the request in the morning; the shift never answers one
+- Next: Shyam answers the request, and the shift works the item again
+
+The request, quoted exactly as the tool showed it:
+
+```text
+Approve running `python3 scripts/mac_ops_fast_check.py` on mac-ops#188 and pushing the result to t3/overnight-decision-parking? [y/N]
+```
+
+=== inbox/parking-lot.md ===
+# Parking lot
+
+The decisions the shift could not make. Each entry names the default
+that applies when Shyam says nothing and a recommendation. The shift
+never answers an approval request: a pending request is parked with
+its exact text and left alone.
+
+## MO-220 (#188) · Overnight T10: Parking lot and snag log
+
+- Repo: shyamsivakumar/mac-ops
+- Ticket: MO-220
+- Kind: pending approval request
+- Thread: mcp:launch:fixture-mo-220
+- Parked at: 2026-11-16 05:34 AM PT
+- Default: the request stays unanswered and the item stays parked
+- Recommend: answer the request in the morning; the shift never answers one
+- Next: Shyam answers the request, and the shift works the item again
+
+The request, quoted exactly as the tool showed it:
+
+```text
+Approve running `python3 scripts/mac_ops_fast_check.py` on mac-ops#188 and pushing the result to t3/overnight-decision-parking? [y/N]
+```
+=== the calls the shift made ===
+t3_thread_read
+=== overnight report --dry-run (the decision reaches Shyam) ===
+## Decisions for you (one at a time, each with my recommendation)
+
+1. MO-220 (#188) · Overnight T10: Parking lot and snag log — Recommend: answer the request in the morning; the shift never answers one. Default if you say nothing: the request stays unanswered and the item stays parked
+PASS: the request was parked with its exact text and never answered
