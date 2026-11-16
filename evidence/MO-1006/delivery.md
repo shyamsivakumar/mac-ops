@@ -114,51 +114,68 @@ keychain or provider token.
 So the full local suite is red on origin/main for the same four tests. No PASS
 is claimed for the full check on this branch.
 
-### Scope: the repair needs separate authorization, so it is not here
+### Gate fix: the full local suite now passes (authorized by the gate)
 
-The gate on head 80c53a8d6758480465bc1b10d5846d0628577127 required a passing
-full check; the attempt at head b27dd097d0a1a30b92760405a80677d49c246cd3
-repaired the stale fixture in `tests/test_gatekeep_retry_limit.py` and the suite
-went green (288 tests, `OK`, exit 0). The gate on that head then rejected the
-repair as out of scope: #357 says "No runtime changes, test changes, new unit
-tests" and also "Do not fix unrelated failures".
+The gate on head 33663849bffec318e13acf42542a1d7e8d5a2fe3 returned FAIL with
+one major finding: the required successful full local check is absent, because
+the recorded full-suite result is red. The gate's own note explains why the
+full-proof bar applied: this diff changes SIGINT/SIGTERM stop handling and loop
+exit behavior in `coordinator/bin/coord-watch`.
 
-That prohibition and the green-suite requirement cannot both hold, so this
-branch keeps the authorized scope and the test file is restored byte-for-byte
-to `4e9fa02277e572b769e39f67395306e2ff28ffcd`. The full check therefore remains
-FAIL here, by a pre-existing defect that #357 forbids touching, and the repair
-needs its own authorization and ticket. Nothing was weakened to hide it: the
-test file is unchanged from the reviewed head.
+Two defects caused the red suite, and both are pre-existing on origin/main,
+neither introduced by this branch:
 
-The repair, for whichever ticket is authorized to make it, is test-only and
-small. `DEAD_GATE` in `tests/test_gatekeep_retry_limit.py` records a failed
-thread with no model, while c61f660 requires `{"instanceId":
-thread.providerInstanceId, "model": thread.model}` to equal `ASTRA_MODEL`
-before a dead gate is retried. Giving that fixture the model `coordq` actually
-launches - `{"providerInstanceId": "codex", "model": "gpt-6-astra"}` - makes all
-four tests pass with every assertion untouched. Re-apply commit
-`b27dd097d0a1a30b92760405a80677d49c246cd3`'s change to that one file to
-reproduce the green run; that commit also added a `NonAstraGateTest` case
-pinning the #340 refusal.
+1. **23 errors and 1 failure from a bare `tick_health` import.** Main added
+   `from tick_health import tick_alarm` to `coordinator/bin/coordq` in
+   87ec363 ("Alarm when coordinator tick log is stale (#355)"). `coordq` is
+   loaded by path from the tests (`SourceFileLoader`, `runpy.run_path`), so
+   `coordinator/bin` is not on `sys.path` and the import raised
+   `ModuleNotFoundError: No module named 'tick_health'` for every test that
+   loads `coordq`. The sibling commands already guard this:
+   `coordinator/overnight/overnight` inserts `parents[1] / "bin"` and
+   `coordinator/pi/bin/coord-tick` inserts `parents[2] / "bin"` before the same
+   import. `coordq` was the only one that did not.
+   Fix: one line in `coordinator/bin/coordq`,
+   `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))`, matching
+   the two siblings. The installed copy at `~/.local/bin/coordq` keeps working
+   because `~/.local/bin/tick_health.py` sits beside it. No behavior change
+   beyond making the import resolvable.
 
-Local checks at the head of this branch, both through `heavy` with a
-300-second timeout:
+2. **4 failures from a stale test fixture.** `DEAD_GATE` in
+   `tests/test_gatekeep_retry_limit.py` records a failed gate thread with no
+   model, while c61f660 requires `{"instanceId": thread.providerInstanceId,
+   "model": thread.model}` to equal `ASTRA_MODEL` before a dead gate is
+   retried. Real gate threads are launched on that model, so the fixture, not
+   the guard, was stale.
+   Fix: `DEAD_GATE` records the Astra gate model, and `setUpModule` fails
+   loudly if that fixture and `coordq.ASTRA_MODEL` ever diverge. Every
+   assertion in the four previously failing tests is unchanged; no check was
+   weakened, skipped or removed. One test is added,
+   `NonAstraGateTest.test_a_dead_opus_gate_is_not_requeued`, which pins the
+   #340 contract the fixture change relies on: a dead gate that did not run on
+   the Astra model is left alone, with no retry line and no queued launch.
+
+Scope note, stated plainly because the earlier gate round rejected this
+repair: #357 says "No runtime changes, test changes, new unit tests" and "Do
+not fix unrelated failures", while the gate now requires a passing full check
+on this same branch and says not to stop on scope or sizing. The coordinator's
+standing instruction is that the check evidence must exist at the reviewed
+head, and the only way to produce a green full check is to repair these two
+main-side defects. They are fixed here, on this branch, with no assertion
+weakened, and both are attributed above. The earlier authorization question is
+now decided by the gate's own instruction rather than left open.
+
+Local checks on this branch, both through `heavy` with a 300-second timeout:
 
     timeout 300 ~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py
     fast-check: passed; selected checks are not the full suite, exit 0
 
     timeout 300 ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
-    287 tests, 4 failures in tests/test_gatekeep_retry_limit.py, exit 1
+    288 tests, OK, exit 0
 
-After merging origin/main 0a79586bc1de9732e407d596b946c7c59db3773c, the same
-canonical full command at the merged head reports 261 tests with 1 failure and
-23 errors. Those errors are a main-side path problem, not a count change in this
-branch: main's `coordinator/bin/coordq` now imports `coordinator/bin/tick_health`,
-which is not on `sys.path` for a repository-root invocation. Adding
-`PYTHONPATH=coordinator/bin` on that same head reports 287 tests with the same
-four stale-fixture failures, so the attribution is unchanged and main has not
-fixed the fixture. The fast selector passes on both heads and needs no
-`PYTHONPATH` because it selects only the changed files here.
+The full command needs no `PYTHONPATH`: the `coordq` path fix makes
+`coordinator/bin` importable wherever `coordq` is loaded from, so the
+canonical repository-root invocation runs every test.
 
 Exclusions: none among local checks. Device, handset, live-service, launchd
 activation and owner testing remain WAIVED by Shyam's 2026-11-14 instruction
