@@ -973,3 +973,18 @@ This is offline process evidence: it repeats without the live board and
 without any live service. The live dry pass above is a separate record, and
 neither is a claim about the installed driver or about a live shift. Device
 and handset testing remain waived, not failed.
+
+### Eval 9: fast-forward drift
+
+`overnight selftest` exercises `lane_driver.drift_ff` with injected Git,
+queue and filesystem responses. It checks one queued chore per origin SHA,
+a new chore for a new SHA, no action for equal refs, and a report without
+queue or ledger changes when Git rejects ancestry. A missing-chore negative
+control must fail. The adapter checks the observed immutable SHAs with
+`git merge-base --is-ancestor` before queueing; Git errors other than the
+non-ancestor exit remain item failures. The chore still owns the eventual
+fast-forward and must handle refs changing after this check.
+
+All nine registered evals and `python3 scripts/mac_ops_fast_check.py` pass.
+This is offline decision-path evidence; installed and live behavior are
+unverified. Evals 10–12 remain for their owning tickets.
