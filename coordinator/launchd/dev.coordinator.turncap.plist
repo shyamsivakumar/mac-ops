@@ -7,7 +7,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>@HOME@/Code/coordinator/loop/turn_cap.py</string>
+        <string>@HOME@/.local/bin/turn_cap.py</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
