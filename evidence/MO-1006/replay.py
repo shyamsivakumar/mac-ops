@@ -118,8 +118,7 @@ with tempfile.TemporaryDirectory(prefix="mo-1006-") as temporary:
     spec = importlib.util.spec_from_file_location("installer", ROOT / "install_coordinator.py")
     installer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(installer)
-    # The installer has no BIN_FILES constant any more: it installs every file
-    # under coordinator/bin. The executable mapping is the contract to check.
+    require("coord-watch" in installer.BIN_FILES, "missing BIN_FILES mapping")
     mapping = [(src, target, mode) for src, target, mode in installer.plan(ROOT, home)
                if target == home / ".local/bin/coord-watch"]
     require(mapping == [(ROOT / "coordinator/bin/coord-watch", home / ".local/bin/coord-watch", 0o755)],
@@ -128,12 +127,6 @@ with tempfile.TemporaryDirectory(prefix="mo-1006-") as temporary:
     installer.retire_jobs = lambda *_: []
     installer.manual_monitors = lambda *_: []
     installer.reload_jobs = lambda *_: []
-    # The real-HOME guard and the health smoke checks are host boundaries:
-    # the guard refuses a temporary HOME, and the smoke checks read the host
-    # tick log, launchctl and t3mcp. Both are inert fakes here, exactly like
-    # the launchctl and t3mcp calls above.
-    installer.require_real_home = lambda: None
-    installer.require_healthy = lambda home: None
     original_run = subprocess.run
     def forbidden(*args, **kwargs):
         raise AssertionError("installer attempted a host subprocess")
@@ -157,7 +150,6 @@ with tempfile.TemporaryDirectory(prefix="mo-1006-") as temporary:
     cycle("installed executable new event", 2300, ["EVENT rate-limit"])
     cycle("installed executable event dedup", 2300, [])
     print("temporary HOME installation: PASS mapping, bytes, executable 0755, receipt, installed command")
-    print("installer host guards: PASS require_real_home and require_healthy replaced with inert fakes")
     print("runtime write boundary: PASS only watch.json changed in every command invocation")
     print("synthetic private marker: PASS absent from stdout, stderr and persisted state")
     print("host boundaries: git_toplevel/retire_jobs/manual_monitors/reload_jobs replaced with inert fakes; subprocess forbidden during install")

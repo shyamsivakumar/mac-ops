@@ -2,7 +2,6 @@
 import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gate_bar import GATE_BAR
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")

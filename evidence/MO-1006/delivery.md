@@ -350,3 +350,16 @@ foreground loop and `--once`.
 
 Live watcher activation and authenticated service behavior remain unverified.
 The coordinator owns the separate Opus gate.
+
+## Rebase finish, 2026-11-16
+
+Rebased on current origin/main. Preserved main runtime fixes and restored all
+existing retry tests. Earlier runtime-repair claims apply only to their named
+historical heads. The final PR diff contains evidence only. One in-session
+review found and corrected removal of existing retry coverage. No remaining
+critical or major finding in the final diff. Final check results are in PR #359.
+
+### Left for later
+
+Live activation and production behavior remain unproved. Coordinator owns the
+Opus gate and merge. Missing proof is deferred under the finish brief.
