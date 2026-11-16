@@ -1480,7 +1480,7 @@ def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend):
              f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {pr} -R {repo} "
              f"--squash --match-head-commit {head}`; report the merge commit or refusal.")
     close = (" Ascend repo: do not close the issue." if ascend else
-             f" Only when that merge produced a merge commit, close the ticket: run `gh issue close "
+             f" Only when that merge produced a merge commit, verify every Provides claim from the ticket on that merge commit and report the commit SHA, evidence and result for each claim. If any Provides claim is false, missing or unverified, close nothing and report the refusal. Only after every Provides claim passes on the merge commit, close the ticket: run `gh issue close "
              f"{issue_number} -R {repo} --comment \"VERDICT: PASS. Merged via #{pr} "
              f"(<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it "
              f"with `gh pr view {pr} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge "
