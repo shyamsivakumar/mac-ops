@@ -1,0 +1,123 @@
+"""The action key of a board action.
+
+The board prints a command that carries the key of the action it wants
+(`overnight` builds it at overnight:3948-3949). The key belongs to one
+queue item, so the same board action is never sent twice, and the key is
+written into the dispatch log next to the item it started.
+"""
+
+import argparse
+import io
+import json
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
+
+from tests.test_gatekeep_backstop_reviewer import load_coordq
+
+PAYLOAD = json.dumps({"threadId": "mcp:launch:one",
+                       "message": "PR #1 at abc needs rebase: conflict."})
+KEY = "rebase:shyamsivakumar/mac-ops#1:abc123"
+
+
+class ActionKeyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.q = load_coordq()
+        self.q.DIR = self.tmp.name
+        self.q.cap = lambda: 6
+        # The queue is full, so a started item stays queued and the proof
+        # reads the item the start wrote.
+        self.q.live = lambda: 6
+        self.q.save({"next": 1, "items": []})
+
+    def start(self, key=None, payload=PAYLOAD):
+        args = argparse.Namespace(args=payload, title=None, priority=800,
+                                  tool="t3_thread_send", action_key=key)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            try:
+                self.q.cmd_start(args)
+            except SystemExit as e:
+                return e.code, out.getvalue(), err.getvalue()
+        return 0, out.getvalue(), err.getvalue()
+
+    def test_the_key_is_stored_on_the_queued_item(self):
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "queued #1")
+        queue = self.q.load()
+        self.assertEqual(queue["items"][0]["actionKey"], KEY)
+        self.assertEqual(queue["actionKeys"], {KEY: 1})
+
+    def test_a_start_without_the_key_still_queues(self):
+        code, out, err = self.start()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "queued #1")
+        queue = self.q.load()
+        self.assertNotIn("actionKey", queue["items"][0])
+        self.assertNotIn("actionKeys", queue)
+
+    def test_the_same_key_is_refused_and_names_the_first_item(self):
+        self.start(KEY)
+        before = self.q.load()
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 1)
+        self.assertIn(KEY, err)
+        self.assertIn("#1", err)
+        self.assertEqual(out.strip(), "")
+        after = self.q.load()
+        self.assertEqual(after["items"], before["items"])
+        self.assertEqual(after["actionKeys"], {KEY: 1})
+        self.assertEqual(after["next"], before["next"])
+
+    def test_a_dispatched_key_is_still_refused(self):
+        self.start(KEY)
+        # The dispatcher takes the item out of the queue and starts it. The
+        # send holds its slot until the thread it sent to ends, so the key
+        # is reserved.
+        self.q.live = lambda: 0
+        with patch.object(self.q, "active_thread_ids", return_value=set()), \
+                patch.object(self.q, "call", return_value=(0, "{}")):
+            self.q.drain()
+        self.assertEqual(self.q.load()["items"], [])
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 1)
+        self.assertIn("already reserved", err)
+        self.assertIn("#1", err)
+        self.assertEqual(len(self.q.load()["items"]), 0)
+
+    def test_another_head_is_another_key(self):
+        self.start(KEY)
+        code, out, err = self.start("rebase:shyamsivakumar/mac-ops#1:def456")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "queued #2")
+        self.assertEqual(self.q.load()["actionKeys"],
+                         {KEY: 1, "rebase:shyamsivakumar/mac-ops#1:def456": 2})
+
+    def test_the_started_line_carries_the_key(self):
+        self.start(KEY)
+        self.q.live = lambda: 0
+        with patch.object(self.q, "active_thread_ids", return_value=set()), \
+                patch.object(self.q, "call", return_value=(0, "{}")):
+            self.q.drain()
+        log = Path(self.tmp.name, "dispatch.log").read_text()
+        self.assertIn(f"started #1 t3_thread_send", log)
+        self.assertIn(f"key {KEY}", log)
+
+    def test_a_start_without_the_key_writes_no_key_in_the_log(self):
+        self.start()
+        self.q.live = lambda: 0
+        with patch.object(self.q, "active_thread_ids", return_value=set()), \
+                patch.object(self.q, "call", return_value=(0, "{}")):
+            self.q.drain()
+        log = Path(self.tmp.name, "dispatch.log").read_text()
+        self.assertIn("started #1 t3_thread_send", log)
+        self.assertNotIn(" key ", log)
+
+
+if __name__ == "__main__":
+    unittest.main()
