@@ -43,7 +43,11 @@ What it proves:
 15. a dry run of the real board refuses too when a thread cannot be
    read: it shows the failure, writes nothing, and exits non-zero,
 16. a pull request's snag entry quotes the receipt of its linked ticket,
-   never the receipt filed under the pull request's own number.
+   never the receipt filed under the pull request's own number,
+17. a pull request's threads come from its linked ticket's receipts and
+   the threads the board attaches, never from an unrelated ticket whose
+   number is the pull request's: that ticket's pending request is not
+   parked under the pull request's ticket.
 
 Run it from the mac-ops checkout:
 
@@ -621,6 +625,65 @@ def main() -> int:
         check(
             "has not been verified" in bare_text,
             "the entry does not say that the action was not verified",
+        )
+
+        # 17: a pull request never borrows an unrelated ticket's threads.
+        module = load_overnight()
+        pull = {
+            "kind": "pull-request",
+            "repo": "acme/widgets",
+            "number": 435,
+            "issue": 188,
+            "key": "MO-220",
+            "title": "A pull request linked to a different ticket's number",
+            "url": "",
+            "checks": {"failed": []},
+        }
+        # An unrelated ticket #435 has a builder thread; the pull request's
+        # own ticket #188 has none.
+        receipts = {"ticket:acme/widgets#435:a1": "mcp:launch:unrelated-435"}
+        threads = module.item_threads(pull, receipts)
+        print("=== 17: a pull request borrows no unrelated ticket's thread ===")
+        print(f"threads: {threads}")
+        check(
+            "mcp:launch:unrelated-435" not in threads,
+            "the pull request borrowed the thread of an unrelated ticket",
+        )
+        # The board's own attached threads are still taken as they are.
+        attached = dict(pull, builder={"threadId": "mcp:launch:attached-builder"})
+        threads = module.item_threads(attached, receipts)
+        print(f"threads with an attached builder: {threads}")
+        check(
+            threads[:1] == ["mcp:launch:attached-builder"],
+            "the board's attached thread was dropped",
+        )
+        check(
+            "mcp:launch:unrelated-435" not in threads,
+            "the attached item still borrowed the unrelated ticket's thread",
+        )
+        # The parking lot does not park the unrelated ticket's request.
+        _parked, snags, _incomplete = module.park_decisions(
+            [pull],
+            [],
+            receipts,
+            [],
+            time.monotonic() + 30,
+            module.normalise_budget({"soft": 5, "hard": 8, "retry_cap": 2}),
+            {},
+            {},
+        )
+        print(f"parked entries: {len(_parked)}")
+        check(
+            not _parked,
+            "the pull request parked a decision taken from an unrelated ticket",
+        )
+        # And with only the linked ticket's receipt, the thread is found.
+        linked = {"ticket:acme/widgets#188:a1": "mcp:launch:linked-188"}
+        threads = module.item_threads(pull, linked)
+        print(f"threads from the linked ticket's receipt: {threads}")
+        check(
+            threads == ["mcp:launch:linked-188"],
+            "the pull request did not find its linked ticket's builder thread",
         )
 
         # 3 and 5: a request whose text cannot be read, and a thread that

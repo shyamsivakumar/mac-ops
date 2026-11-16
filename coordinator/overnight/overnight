@@ -5399,11 +5399,14 @@ def read_thread_record(thread_id: str, deadline: float) -> tuple[dict, str]:
 def item_threads(item: dict, receipts: dict[str, str]) -> list[str]:
     """Return the threads that hold one item: its builder and its gate.
 
-    The board names the builder's and the gate's thread, and the queue's
-    dispatch receipts name them too. The board comes first: a pull
-    request's number is not its ticket's number, so a receipt looked up
-    by the pull request's number finds nothing and the pending request
-    of that pull request's builder is missed."""
+    Two sources, and only two. The threads the board attaches to the item
+    are taken as they are. The queue's dispatch receipts are looked up by
+    the ticket's number and by nothing else, because a pull request has
+    two numbers and its own number is not its ticket's: pull request #435
+    linked to issue #188 would otherwise pick up the threads of an
+    unrelated ticket #435, and park that ticket's pending request under
+    #188. A pull request with no linked ticket therefore contributes no
+    receipt thread at all."""
     threads: list[str] = []
     for name in ("builder", "gate"):
         entry = item.get(name)
@@ -5411,22 +5414,21 @@ def item_threads(item: dict, receipts: dict[str, str]) -> list[str]:
         if thread and thread not in threads:
             threads.append(thread)
     repo = str(item.get("repo") or "")
-    numbers: list[int] = []
-    for number in (item.get("issue"), item.get("number")):
+    number = receipt_number(item)
+    if number not in (None, ""):
         try:
             value = int(number)
         except (TypeError, ValueError):
-            continue
-        if value not in numbers:
-            numbers.append(value)
-    for number in numbers:
-        builder, _attempt = builder_thread(receipts, repo, number)
-        if builder and builder not in threads:
-            threads.append(builder)
-        prefix = f"gate:{repo}#{number}:"
-        for key, value in sorted(receipts.items()):
-            if key.startswith(prefix) and value and value not in threads:
-                threads.append(value)
+            value = 0
+        if value:
+            builder, _attempt = builder_thread(receipts, repo, value)
+            if builder and builder not in threads:
+                threads.append(builder)
+            prefix = f"gate:{repo}#{value}:"
+            for key, receipt_thread in sorted(receipts.items()):
+                if key.startswith(prefix) and receipt_thread:
+                    if receipt_thread not in threads:
+                        threads.append(receipt_thread)
     return threads
 
 

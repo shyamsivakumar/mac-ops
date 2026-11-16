@@ -230,6 +230,26 @@ The gate found one major defect and one stale document line.
 Device, handset and live-service testing is waived (Shyam, 2026-11-14).
 No device or live case was run, so none failed.
 
+## The fifth gate round (PR #435, VERDICT: FAIL at f80e0be)
+
+The gate found one major defect: the thread lookup still read the
+receipts under both the linked issue's number and the pull request's own
+number. Pull request #435 linked to issue #188 could therefore pick up
+the threads of an unrelated ticket #435, and park that ticket's pending
+approval under #188.
+
+`item_threads` reads two sources and only two now: the threads the board
+attaches to the item, taken as they are, and the queue's dispatch
+receipts looked up by the **ticket's** number alone (`receipt_number`).
+A pull request with no linked ticket contributes no receipt thread at
+all. The proof's case 17 files a builder receipt under an unrelated
+ticket #435 and shows that the pull request linked to #188 borrows
+nothing, parks no decision, keeps the board's own attached thread, and
+still finds its linked ticket's builder when that receipt exists.
+
+Device, handset and live-service testing is waived (Shyam, 2026-11-14).
+No device or live case was run, so none failed.
+
 ## The reviewer round
 
 One in-session reviewer round ran over the diff (`gpt-6.1-sol`, high
@@ -263,8 +283,8 @@ effort). It found eight defects, all fixed in this branch:
   local check): passed.
 - `python3 coordinator/overnight/overnight selftest`: all 12 fixture
   evals pass.
-- `python3 evidence/MO-220/prove-park.py`: passed (sixteen cases,
-  including every case the four gate rounds found).
+- `python3 evidence/MO-220/prove-park.py`: passed (seventeen cases,
+  including every case the five gate rounds found).
 - `python3 -m pytest tests/ -q`: 286 pass, 2 fail. Both failures are
   pre-existing on this branch's base and are unrelated to this part:
   `tests/test_gatekeep_retry_limit.py::NonAstraGateTest::test_a_dead_opus_gate_is_not_requeued`
