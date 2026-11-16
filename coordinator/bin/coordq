@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse, fcntl, json, os, re, signal, subprocess, sys, time
 
+from gate_bar import GATE_BAR
 from tick_health import tick_alarm
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
@@ -974,6 +975,7 @@ Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues
 Read the ticket and diff only: `git fetch origin && git diff origin/main...{head}`. Check out nothing. Do NOT rerun the suite.
 {check} Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
+{GATE_BAR}
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
 {merge}{fast_forward}{close} Never call emp. Never print secrets."""
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
