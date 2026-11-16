@@ -64,7 +64,7 @@ def board_snapshot(ledger, force=False):
     if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
-    fields = "number,state,headRefOid,body,mergeable,isDraft,statusCheckRollup"
+    fields = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup"
     for repo in LANE_REPOS:
         snapshot["repos"][repo] = {
             "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
@@ -418,6 +418,8 @@ def act_on_pr(repo, number, ledger):
     pr = next((p for p in SNAPSHOT["repos"][repo]["prs"] if p["number"] == number), {})
     if pr.get("state") != "OPEN":
         return None
+    if any((pr.get(field) or "").startswith("herdr/") for field in ("headRefName", "baseRefName")):
+        return f"skip #{number}: herdr branch, Shyam merges"
     state = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
                             "--json", "state,mergedAt"]))
     if state.get("state") != "OPEN" or state.get("mergedAt"):
