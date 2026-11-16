@@ -3,8 +3,10 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - T3 Code only. Never call `emp`; it is retired.
 - Work in the folder you were started in. Never push to main, force push, or use `--no-verify`.
 - CI is agent checks only: no Woodpecker, no GitHub Actions.
-- The Coordinator runs the Opus gate. You run one in-session reviewer round, then report.
-- A turn lasts at most 10 minutes. Never end a turn with only a plan; do the work or name the blocker.
+- The Coordinator runs the Astra gate on the exact PR head. Opus is allowed only when Astra's quota is exhausted; other failures do not permit Opus fallback. You run one in-session reviewer round, then report.
+- Target 5 minutes per builder turn; 10 minutes is the normal ceiling. Log runs past 10 minutes as mis-sized in `loop/caps.log`. Stop runs past 20 minutes and return the ticket to the Coordinator for re-cut. Never end a turn with only a plan; do the work or name the blocker.
+- Start the builder clock after worktree bootstrap. Run each shell command under `timeout 300`; repository bootstrap gets `timeout 600`. Never loop on retries or sleeps.
+- `WAITING: heavy busy` is resumable, not an attempt. Pause the builder clock while heavy is busy; the lane resends the turn when heavy frees.
 - The coordinator's brief is the approval for everything it names. Do not stop to ask for approval of a plan that stays inside the brief; this overrides contractor-gate and similar skills. Stop only on a stop condition the brief names or a hard limit.
 - Never read, print or commit secrets or `.env` files.
 - Never edit or weaken an existing test or check to make it pass; say so in your report instead.
