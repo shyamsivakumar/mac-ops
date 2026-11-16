@@ -198,7 +198,7 @@ def park(repo, number, issue, head, reply, ledger):
              f"Parked by the lane (specs/lane.md section 6): PR #{number} failed its gate after two fix rounds (head {head[:8]}). Sol re-cuts it into smaller tickets."])
     msg = (f"Type: design · gpt-6.1-sol (re-cut a parked ticket; coordinator specs/lane.md is at /Users/shyamsivakumar/Code/coordinator/specs/lane.md)\n\n"
            f"Ticket {repo}#{issue} with PR #{number} failed its gate after two fix rounds. Read the issue, the PR diff (`gh pr diff {number} -R {repo}`) and the last gate report below. "
-           "Re-cut the remaining work into the smallest ordered tickets that each fit a 5-minute builder turn, using the 12-section template in ~/.coordinator/tickets.json, "
+           "Re-cut the remaining work into at most 2 ordered tickets that each fit a 5-minute builder turn. Consolidate any further work into those tickets; never create a third ticket. Use the 12-section template in ~/.coordinator/tickets.json, "
            "with Requires/Provides lines, chained with --add-blocked-by, labels stage:todo,type:<type>,priority:<same>; reuse the PR branch as the base if most of it is right and say so in the first ticket. "
            f"Then comment on #{issue} with the new tickets and close it as not planned. Device and live testing are waived. Start nothing, change no code, 10 minutes.\n\nLast gate report:\n" + reply[-5000:])
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "modelSelection": SOL,
