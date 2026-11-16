@@ -45,7 +45,25 @@ def temp_home():
             "COORDQ_DIR": str(queue), "COORDQ_T3MCP": str(t3),
             "PATH": str(runtime_root) + os.pathsep + os.environ.get("PATH", ""),
         }):
-            yield td
+            original = subprocess.check_output
+            def fake_git(argv, **kwargs):
+                if argv[:3] != ["git", "-C", str(CHECKOUT)]:
+                    return original(argv, **kwargs)
+                answers = {
+                    ("rev-parse", "--show-toplevel"): str(CHECKOUT),
+                    ("rev-parse", "--path-format=absolute", "--git-common-dir"): str(CHECKOUT / ".git"),
+                    ("symbolic-ref", "--short", "HEAD"): "main",
+                    ("status", "--porcelain", "--untracked-files=all"): "",
+                    ("fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"): "",
+                    ("rev-parse", "HEAD"): "a" * 40,
+                    ("rev-parse", "refs/remotes/origin/main"): "a" * 40,
+                }
+                key = tuple(argv[3:])
+                if key in answers:
+                    return answers[key]
+                return original(argv, **kwargs)
+            with mock.patch.object(subprocess, "check_output", side_effect=fake_git):
+                yield td
 
 
 class TestTurncapPlist(unittest.TestCase):
