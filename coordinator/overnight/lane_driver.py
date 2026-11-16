@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+import shlex
 import json
 import os
 import re
@@ -90,6 +92,25 @@ def run(cmd, timeout=150):
     return output
 
 
+
+@contextmanager
+def item_boundary(repo, item, ledger):
+    try:
+        yield
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        ledger["_item_failures"] = ledger.get("_item_failures", 0) + 1
+        output = (exc.output or b"")
+        stderr = (exc.stderr or b"")
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        first = (output + stderr).splitlines()
+        code = getattr(exc, "returncode", "timeout")
+        command = shlex.join(exc.cmd) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd)
+        print(f"ITEM ERROR repo={repo} item={item} command={command!r} exit={code} output={(first[0] if first else '')!r}")
+
+
 def t3(tool, args):
     try:
         return json.loads(run(["t3mcp", "call", tool, json.dumps(args)]) or "{}")
@@ -162,7 +183,7 @@ def send(thread_id, message, title, ledger, lkey):
 
 SOL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
-              "shyamsivakumar/catalouge", "digitized/Concerning"]
+              "shyamsivakumar/catalouge"]
 NEVER_START = {("shyamsivakumar/strategy-replay-workbench", 468)}
 
 
@@ -289,37 +310,38 @@ def fast_forward_main(repo):
 
 def drift_ff(ledger):
     for repo, name in PATHS.items():
-        if repo not in LANE_REPOS:
-            continue
-        d = "/Users/shyamsivakumar/Code/" + name
-        if not os.path.isdir(d):
-            print(f"{CFG[repo]['key']:5} checkout absent: {d}; skipping")
-            continue
-        out = run(["git", "-C", d, "rev-parse", "main", "origin/main"], timeout=60)
-        ids = out.split()
-        if len(ids) != 2 or ids[0] == ids[1]:
-            continue
-        lkey = f"ff:{repo}:{ids[1]}"
-        if lkey in ledger or DRY:
-            print(f"{CFG[repo]['key']:5} main behind ({ids[0][:8]} vs {ids[1][:8]})" + (" DRY" if DRY else " queued"))
-            if lkey in ledger:
+        with item_boundary(repo, "main-refresh", ledger):
+            if repo not in LANE_REPOS:
                 continue
-            ledger[lkey] = "pending"
-            continue
-        msg = open("/Users/shyamsivakumar/Code/coordinator/loop/ff-chore.md").read().replace(
-            "Three repositories have a local main that trails their origin/main, so new tickets can branch from stale code:",
-            "This repository's local main trails origin/main, so tools read stale code:").replace(
-            "- /Users/shyamsivakumar/Code/strategy-replay-workbench: local ceb1c509, origin c9daf467\n- /Users/shyamsivakumar/Code/fantasy-football-toolkit: local 6d4611d5, origin 764832d1\n- /Users/shyamsivakumar/Code/concerning: local 30b1c55, origin b6206ab\n",
-            f"- {d}: local {ids[0][:9]}, origin {ids[1][:9]}\n").replace(
-            "For each checkout in order:", "For this checkout:").replace(
-            "Report one line per repo: the two commit ids before, the single commit id after (or \"left alone, not fast-forwardable\").",
-            "Report the two commit ids before and the single commit id after (or \"left alone, not fast-forwardable\").")
-        args = {"projectId": "f093cc9b-5332-48eb-a719-2187eb8cbabc", "title": f"Chore · level local main ({CFG[repo]['key']})",
-                "modelSelection": {"instanceId": "router", "model": "task/chore"}, "runtimeMode": "full-access",
-                "workspaceStrategy": {"type": "root"}, "message": msg}
-        out2 = run([COORDQ, "start", json.dumps(args), "--priority", "700"]).splitlines()[-1]
-        ledger[lkey] = out2
-        print(f"{CFG[repo]['key']:5} ff chore: {out2}")
+            d = "/Users/shyamsivakumar/Code/" + name
+            if not os.path.isdir(d):
+                print(f"{CFG[repo]['key']:5} checkout absent: {d}; skipping")
+                continue
+            out = run(["git", "-C", d, "rev-parse", "main", "origin/main"], timeout=60)
+            ids = out.split()
+            if len(ids) != 2 or ids[0] == ids[1]:
+                continue
+            lkey = f"ff:{repo}:{ids[1]}"
+            if lkey in ledger or DRY:
+                print(f"{CFG[repo]['key']:5} main behind ({ids[0][:8]} vs {ids[1][:8]})" + (" DRY" if DRY else " queued"))
+                if lkey in ledger:
+                    continue
+                ledger[lkey] = "pending"
+                continue
+            msg = open("/Users/shyamsivakumar/Code/coordinator/loop/ff-chore.md").read().replace(
+                "Three repositories have a local main that trails their origin/main, so new tickets can branch from stale code:",
+                "This repository's local main trails origin/main, so tools read stale code:").replace(
+                "- /Users/shyamsivakumar/Code/strategy-replay-workbench: local ceb1c509, origin c9daf467\n- /Users/shyamsivakumar/Code/fantasy-football-toolkit: local 6d4611d5, origin 764832d1\n- /Users/shyamsivakumar/Code/concerning: local 30b1c55, origin b6206ab\n",
+                f"- {d}: local {ids[0][:9]}, origin {ids[1][:9]}\n").replace(
+                "For each checkout in order:", "For this checkout:").replace(
+                "Report one line per repo: the two commit ids before, the single commit id after (or \"left alone, not fast-forwardable\").",
+                "Report the two commit ids before and the single commit id after (or \"left alone, not fast-forwardable\").")
+            args = {"projectId": "f093cc9b-5332-48eb-a719-2187eb8cbabc", "title": f"Chore · level local main ({CFG[repo]['key']})",
+                    "modelSelection": {"instanceId": "router", "model": "task/chore"}, "runtimeMode": "full-access",
+                    "workspaceStrategy": {"type": "root"}, "message": msg}
+            out2 = run([COORDQ, "start", json.dumps(args), "--priority", "700"]).splitlines()[-1]
+            ledger[lkey] = out2
+            print(f"{CFG[repo]['key']:5} ff chore: {out2}")
 
 
 def group_of(title):
@@ -339,25 +361,26 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
     now = _dt.datetime.now(_dt.timezone.utc)
     tries = 0
     for t in ready:
-        if (repo, t["number"]) in NEVER_START:
-            continue
-        ref = f"{repo}#{t['number']}"
-        r = ledger.get(f"refused:{ref}")
-        if isinstance(r, str) and (now - _dt.datetime.fromisoformat(r)).total_seconds() < 1800:
-            continue
-        if tries >= 3:
-            break
-        tries += 1
-        dry = run(["ticket", "start", ref, "--dry-run"], timeout=200)
-        if dry.startswith("refused: "):
-            ledger[f"refused:{ref}"] = now.isoformat()
-            print(f"refused:{ref}: {dry}")
-            continue
-        if DRY:
-            return f"DRY start {t['key']} #{t['number']}"
-        out = run(["ticket", "start", ref], timeout=200).splitlines()[-1]
-        ledger[f"start:{ref}:{len(ledger)}"] = out
-        return f"start {t['key']} #{t['number']}: {out[:60]}"
+        with item_boundary(repo, t["number"], ledger):
+            if (repo, t["number"]) in NEVER_START:
+                continue
+            ref = f"{repo}#{t['number']}"
+            r = ledger.get(f"refused:{ref}")
+            if isinstance(r, str) and (now - _dt.datetime.fromisoformat(r)).total_seconds() < 1800:
+                continue
+            if tries >= 3:
+                break
+            tries += 1
+            dry = run(["ticket", "start", ref, "--dry-run"], timeout=200)
+            if dry.startswith("refused: "):
+                ledger[f"refused:{ref}"] = now.isoformat()
+                print(f"refused:{ref}: {dry}")
+                continue
+            if DRY:
+                return f"DRY start {t['key']} #{t['number']}"
+            out = run(["ticket", "start", ref], timeout=200).splitlines()[-1]
+            ledger[f"start:{ref}:{len(ledger)}"] = out
+            return f"start {t['key']} #{t['number']}: {out[:60]}"
     return unstick(repo, ledger, excl)
 
 
@@ -374,27 +397,28 @@ def unstick(repo, ledger, excl=frozenset()):
         return "nothing ready"
     receipts = json.load(open(RECEIPTS))
     for n in orphans:
-        prefix = f"ticket:{repo}#{n}:a"
-        best = max(((int(k[len(prefix):]), v) for k, v in receipts.items()
-                    if k.startswith(prefix) and k[len(prefix):].isdigit()), default=None)
-        if not best:
-            continue
-        v = ledger.get(f"cont:{best[1]}")
-        if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
-            continue
-        if not t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread"):
+        with item_boundary(repo, n, ledger):
+            prefix = f"ticket:{repo}#{n}:a"
+            best = max(((int(k[len(prefix):]), v) for k, v in receipts.items()
+                        if k.startswith(prefix) and k[len(prefix):].isdigit()), default=None)
+            if not best:
+                continue
+            v = ledger.get(f"cont:{best[1]}")
+            if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
+                continue
+            if not t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread"):
+                if DRY:
+                    return f"DRY start #{n}"
+                out = run(["ticket", "start", f"{repo}#{n}"], timeout=200)
+                ledger[f"relaunch:{repo}#{n}"] = out
+                return f"start #{n}: {out}"
             if DRY:
-                return f"DRY start #{n}"
-            out = run(["ticket", "start", f"{repo}#{n}"], timeout=200)
-            ledger[f"relaunch:{repo}#{n}"] = out
-            return f"start #{n}: {out}"
-        if DRY:
-            return f"DRY continue #{n}"
-        msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
-        out = run([COORDQ, "start", json.dumps({"threadId": best[1], "message": msg}), "--tool", "t3_thread_send",
-                   "--priority", "900", "--title", f"{CFG[repo]['key']}#{n} continue"]).splitlines()[-1]
-        ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
-        return f"continue #{n}: {out}"
+                return f"DRY continue #{n}"
+            msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
+            out = run([COORDQ, "start", json.dumps({"threadId": best[1], "message": msg}), "--tool", "t3_thread_send",
+                       "--priority", "900", "--title", f"{CFG[repo]['key']}#{n} continue"]).splitlines()[-1]
+            ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
+            return f"continue #{n}: {out}"
     now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
     def marked(k):
         v = ledger.get(k)
@@ -481,46 +505,54 @@ def zero_merge(snapshot):
 
 def run_pass(ledger):
     global SNAPSHOT
+    ledger.pop("_item_failures", None)
     watchdog()
     drift_ff(ledger)
     SNAPSHOT = board_snapshot(ledger)
     tickets = SNAPSHOT["tickets"]
     for repo in LANE_REPOS:
-        prs = list(ORDER.get(repo, []))
-        others = SNAPSHOT["repos"][repo]["prs"]
-        prs += sorted(p["number"] for p in others if p["number"] not in prs and not p["isDraft"])
-        b = busy(repo)
-        if b:
-            print(f"{CFG[repo]['key']:5} busy ({b}); PR actions still run")
-        done = False
-        for number in prs:
-            result = act_on_pr(repo, number, ledger)
-            if result is None:
-                continue
-            print(f"{CFG[repo]['key']:5} {result}")
-            if result.startswith("skip "):
-                continue
-            done = True
-        if repo != "shyamsivakumar/strategy-replay-workbench" and done and not DRY and not b:
-            u = unstick(repo, ledger)
-            if not u.startswith("nothing ready"):
-                print(f"{CFG[repo]['key']:5} {u}")
-        if repo == "shyamsivakumar/strategy-replay-workbench":
-            response = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"],
-                          "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20})
-            live = response.get("threads") if isinstance(response, dict) else None
-            if not isinstance(live, list) or any(not isinstance(t, dict) or not isinstance(t.get("title"), str) for t in live):
-                print(f"{CFG[repo]['key']:5} refused: invalid thread-list response")
-                continue
-            excluded = {group_of(t.get("title") or "") for t in live}
-            if len(live) < 3:
-                if done:
-                    if not DRY:
-                        print(f"{CFG[repo]['key']:5} " + unstick(repo, ledger, excluded))
-                else:
-                    print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger, excluded))
-        elif not done and not b:
-            print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
+        with item_boundary(repo, "lane", ledger):
+            prs = list(ORDER.get(repo, []))
+            others = SNAPSHOT["repos"][repo]["prs"]
+            prs += sorted(p["number"] for p in others if p["number"] not in prs and not p["isDraft"])
+            b = busy(repo)
+            if b:
+                print(f"{CFG[repo]['key']:5} busy ({b}); PR actions still run")
+            done = False
+            for number in prs:
+                with item_boundary(repo, number, ledger):
+                    result = act_on_pr(repo, number, ledger)
+                    if result is None:
+                        continue
+                    print(f"{CFG[repo]['key']:5} {result}")
+                    if result.startswith("skip "):
+                        continue
+                    done = True
+            if repo != "shyamsivakumar/strategy-replay-workbench" and done and not DRY and not b:
+                u = unstick(repo, ledger)
+                if not u.startswith("nothing ready"):
+                    print(f"{CFG[repo]['key']:5} {u}")
+            if repo == "shyamsivakumar/strategy-replay-workbench":
+                response = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"],
+                              "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20})
+                live = response.get("threads") if isinstance(response, dict) else None
+                if not isinstance(live, list) or any(not isinstance(t, dict) or not isinstance(t.get("title"), str) for t in live):
+                    print(f"{CFG[repo]['key']:5} refused: invalid thread-list response")
+                    continue
+                excluded = {group_of(t.get("title") or "") for t in live}
+                if len(live) < 3:
+                    if done:
+                        if not DRY:
+                            print(f"{CFG[repo]['key']:5} " + unstick(repo, ledger, excluded))
+                    else:
+                        print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger, excluded))
+            elif not done and not b:
+                print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
+
+    failures = ledger.get("_item_failures", 0)
+    print(f"ITEM SUMMARY failures={failures}")
+    if failures:
+        raise RuntimeError(f"lane pass completed with {failures} item failures")
 
 
 def main():

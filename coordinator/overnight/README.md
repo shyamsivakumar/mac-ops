@@ -864,3 +864,78 @@ Verification: `overnight selftest` and `python3 scripts/mac_ops_fast_check.py`.
 No live service, installed loop or cutover is exercised. Left for later:
 failed snapshot collection retries, quota endpoint failures, and end-to-end
 live pass telemetry. The coordinator owns installation and the Opus gate.
+
+### Lane item failures
+
+The driver keeps subprocess commands strict and catches command failures and
+timeouts at PR, ticket-start, orphan-recovery and main-refresh item boundaries.
+A repository boundary also protects later lanes from a failed lane action.
+Each caught failure emits one ITEM ERROR line with repository, item, command,
+exit status and the first output line. The pass prints ITEM SUMMARY and raises
+after processing the lanes when any item failed, so shift health stays failed.
+The per-pass count is retained in the lane ledger. API budget exhaustion remains
+a pass-wide stop.
+
+The driver's LANE_REPOS list excludes digitized/Concerning; both board reads
+and main-refresh scheduling use that list. No installed lane configuration is
+changed until installation.
+
+#### Ticket #407 live dry pass
+
+The gate at 94f6a66ce7655b7d2473c6aebd4350445f988645 found no code defect
+and failed for missing proof: a real dry pass of the driver with one planted
+failing item. The fix round's brief applies the full proof bar to this diff,
+because the diff changes when a lane pass stops and raises failure, so the
+waiver that an earlier commit recorded for that proof is withdrawn and the
+pass was run.
+
+The pass ran the driver from this branch against the live board with the
+driver's own DRY flag set. The board snapshot, the `ticket list --json
+--fresh` read, the GitHub pull-request and issue reads, the thread lists and
+the per-repository `git rev-parse` checks were real reads of the live
+services; only the mutating actions were skipped, which is what the flag
+means. One real command was planted to fail: the mac-ops main-refresh
+`git rev-parse` exited 2 with "planted failure". Every other `git` and
+`ticket` call reached the real binary. The plant was a temporary PATH wrapper
+and it was removed after the run.
+
+The pass logged the planted failure once, processed the items and the lanes
+after it, and raised at the end so shift health stays failed:
+
+```text
+ITEM ERROR repo=shyamsivakumar/mac-ops item=main-refresh command='git -C /Users/shyamsivakumar/Code/mac-ops rev-parse main origin/main' exit=2 output='planted failure: local main could not be read'
+MO    busy (live: MO-1041 · Lane driver: one item's failure never stops the pa); PR actions still run
+MO    #408 fix: already done fix:shyamsivakumar/mac-ops#408:f1e77b1cde9151f90c65ba77651a9f647c4c5b15
+SRW   busy (live: SRW-1091 review #1188 a75eaef2); PR actions still run
+SRW   #1188: gate running
+FFBT  busy (live: FFBT-48 · Connect auction target shared evidence to live pro); PR actions still run
+CTL   nothing ready
+ITEM SUMMARY failures=1
+API USAGE used={'core': 1, 'graphql': 10} remaining={'core': 3266, 'graphql': 4889} floor=500
+RuntimeError: lane pass completed with 1 item failures
+```
+
+No call touched digitized/Concerning or /Users/shyamsivakumar/Code/concerning.
+The pass rewrote the coordinator's decisions.json the way every production
+pass does through the watchdog. The lane ledger was not written, because the
+dry flag skips it. No other live file changed. Installation and the live
+shift remain unverified.
+
+#### Repeatable offline dry-pass proof
+
+Run `python3 coordinator/overnight/proofs/item_failure.py`. The proof executes
+the complete driver main in a child process with DRY enabled. It relocates
+hardcoded filesystem paths into a temporary directory and supplies executable
+gh, ticket and t3mcp fixtures through PATH. No driver function is mocked or
+replaced. The ticket executable plants the reported gate-brief exit 2.
+
+The one-failure case logs the failing PR once, processes its successor and
+the remaining repositories, then exits nonzero with failures=1. The all-fail
+case logs all five attempted PRs and exits nonzero with failures=5. Command
+receipts assert that Concerning is never touched. The dry ledger is not written;
+temporary commands and files are removed after both passes.
+
+This is offline process evidence: it repeats without the live board and
+without any live service. The live dry pass above is a separate record, and
+neither is a claim about the installed driver or about a live shift. Device
+and handset testing remain waived, not failed.
