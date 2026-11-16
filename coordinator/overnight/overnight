@@ -121,7 +121,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tick_health import tick_alarm
+
+import stall
 
 from typing import NoReturn
 
@@ -1414,7 +1417,25 @@ def cmd_shift(args: argparse.Namespace) -> int:
             return 0
         try:
             lane_driver.print = emit
-            lane_driver.main()
+            # The shift measures the items against the state it kept, so
+            # the pass knows how long each item has been idle.
+            lane_driver.STALL_STATE = load_stall_state(root)
+            try:
+                lane_driver.main()
+            finally:
+                # The stall records of this pass are written even when the
+                # pass failed an item: a reported stall and a stalled board
+                # are the shift's own findings, not a side effect of the
+                # pass's success. The records come before the state is
+                # saved, so the state says the alert was delivered only
+                # after it was delivered.
+                try:
+                    for line in stall_records(
+                        root, lane_driver.STALL_EVENTS, None, lane_driver.STALL_STATE
+                    ):
+                        emit(f"overnight: {line}")
+                finally:
+                    save_stall_state(root, lane_driver.STALL_STATE)
             write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
             if report_cycle:
                 return write_morning_report(root)
@@ -1430,6 +1451,228 @@ def cmd_shift(args: argparse.Namespace) -> int:
             allowed=allowed,
         )
     )
+
+
+def load_stall_state(root: Path) -> dict:
+    """Return the stall state the shift keeps.
+
+    The state is the shift's own record of how long every item has been
+    idle. A state that cannot be read is an empty state: the shift measures
+    the items again from this tick on."""
+    text = read_text(stall.state_path(root))
+    if not text.strip():
+        return stall.new_state()
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return stall.new_state()
+    if not isinstance(data, dict):
+        return stall.new_state()
+    if not isinstance(data.get("items"), dict):
+        data["items"] = {}
+    return data
+
+
+def save_stall_state(root: Path, state: dict) -> Path:
+    """Write the stall state and return the path it went to.
+
+    The write is atomic, so a cycle that reads while the state is being
+    written reads the old state or the new one, never half of one."""
+    path = stall.state_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f"{path.name}.tmp"
+    write_record(tmp, json.dumps(state, indent=1) + "\n")
+    os.replace(tmp, path)
+    return path
+
+
+def stall_records(
+    root: Path,
+    events: list[dict],
+    board: str | None = None,
+    state: dict | None = None,
+) -> list[str]:
+    """Write the records of the stall events of one pass and return them.
+
+    An item that was reported as stalled gets a receipt that says so, so
+    the morning report names it under "Stuck". A board that stopped moving
+    gets a line in the shift log and an alert on the coordinator's board,
+    the same board the merge alert uses.
+
+    The board's alert flag is set only after the alert was written: a board
+    whose alert could not be written asks again on the next tick instead of
+    going quiet for good.
+
+    The shift does not end here: the sweep ran again and the shift keeps
+    running until every item is done or parked."""
+    written: list[str] = []
+    for event in events:
+        kind = event.get("kind")
+        if kind == "item":
+            item = {
+                "kind": "ticket",
+                "repo": event.get("repo") or "",
+                "number": event.get("number") or 0,
+                "key": event.get("key") or "",
+                "title": event.get("title") or "",
+                "url": event.get("url") or "",
+            }
+            body = receipt_text(
+                item,
+                STATE_STUCK,
+                None,
+                None,
+                0,
+                f"stall: no new commit or receipt for {event.get('idle')} ticks",
+                "the shift keeps working the item; Shyam sees it in the morning report",
+            )
+            outcome = write_receipt(root, item, body)
+            write_shift_line(
+                root,
+                f"stall: {event.get('item')} reported, no new commit or receipt "
+                f"for {event.get('idle')} ticks; the shift keeps working it",
+            )
+            written.append(f"{receipt_path(root, item)} ({outcome})")
+        elif kind == "board":
+            reason = (
+                f"The overnight shift saw no board progress for "
+                f"{event.get('idle')} ticks. The board was swept again and the "
+                "shift keeps running until every item is done or parked."
+            )
+            target = stall.alert(reason, board)
+            if target:
+                if isinstance(state, dict):
+                    stall.delivered(state)
+                write_shift_line(
+                    root,
+                    f"stall: no board progress for {event.get('idle')} ticks; the "
+                    "board was swept again and Shyam was alerted",
+                )
+                written.append(target)
+            else:
+                write_shift_line(
+                    root,
+                    f"stall: no board progress for {event.get('idle')} ticks; the "
+                    "board was swept again and the alert could not be written",
+                )
+                written.append("the alert could not be written")
+    return written
+
+
+def show_stall_state(explicit: str | None = None) -> int:
+    """Print the stall state the shift keeps.
+
+    The command reads only: it says which items are idle, for how many
+    ticks, and which of them were reported as stalled. A reported item is
+    not parked: the shift keeps working it."""
+    root = report_root(explicit)
+    state = load_stall_state(root)
+    items = state.get("items") or {}
+    if not items:
+        emit(f"overnight: no item has been measured yet ({stall.state_path(root)})")
+        return 0
+    emit("Overnight stall state")
+    for key, entry in sorted(items.items()):
+        if not isinstance(entry, dict):
+            continue
+        idle = int(entry.get("idle") or 0)
+        reported = " reported" if entry.get("stalled") else ""
+        emit(f"{key}: idle {idle} tick(s){reported}")
+    emit(f"Board idle: {int(state.get('board_idle') or 0)} tick(s)")
+    return 0
+
+
+def run_stall_fixture(args: argparse.Namespace) -> int:
+    """Run the stall rule over the ticks of a fixture.
+
+    The fixture names its items and its ticks. A tick maps every item to
+    its marker: the item's commit and the item's newest dispatch receipt.
+    The command runs the real rule, so the stall line and the alert come
+    from the same code the shift runs.
+
+    The records go to `--root`, so a fixture run never touches the live
+    records."""
+    path = Path(args.fixture).expanduser()
+    try:
+        data = json.loads(read_text(path))
+    except ValueError as exc:
+        die(f"the fixture {path} is not JSON: {exc}")
+    if not isinstance(data, dict):
+        die(f"the fixture {path} is not a JSON object")
+    items = data.get("items")
+    ticks = data.get("ticks")
+    if not isinstance(items, list) or not isinstance(ticks, list) or not ticks:
+        die(f"the fixture {path} must name its items and its ticks")
+    details: dict[str, dict] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = f"{item.get('repo') or ''}#{item.get('number') or ''}"
+        details[key] = item
+    state = stall.new_state()
+    events: list[dict] = []
+    for index, tick in enumerate(ticks, start=1):
+        if not isinstance(tick, dict):
+            die(f"tick {index} of the fixture {path} is not a mapping")
+        markers = {str(key): str(value) for key, value in tick.items()}
+        fresh = stall.arrived(state, set(markers))
+        progressed = any(
+            stall.moved(state, key, marker) for key, marker in markers.items()
+        ) or bool(fresh)
+        board_event = stall.board(state, progressed, len(markers))
+        for key, marker in sorted(markers.items()):
+            event = stall.observe(state, key, marker)
+            if not event:
+                continue
+            item = details.get(key) or {}
+            event.update(
+                {
+                    "repo": item.get("repo") or "",
+                    "number": item.get("number") or 0,
+                    "key": item.get("key") or "",
+                    "title": item.get("title") or "",
+                    "url": item.get("url") or "",
+                }
+            )
+            emit(
+                f"STALL {key}: no new commit or receipt for {event['idle']} ticks; "
+                "reported, the shift keeps working it"
+            )
+            events.append(event)
+        if board_event:
+            emit(
+                f"STALL board: no board progress for {board_event['idle']} ticks; "
+                "the board is swept again"
+            )
+            events.append(board_event)
+    if args.root:
+        root = Path(args.root).expanduser()
+        for folder in ("run", "receipts", "inbox", "staging"):
+            (root / folder).mkdir(parents=True, exist_ok=True)
+        board = root / "decisions.json"
+        if not board.exists():
+            write_record(board, json.dumps({"items": []}, indent=1) + "\n")
+        for line in stall_records(root, events, str(board), state):
+            emit(f"wrote {line}")
+        save_stall_state(root, state)
+    else:
+        emit("This run wrote nothing: give --root to write the records.")
+    return 0
+
+
+def cmd_stall(args: argparse.Namespace) -> int:
+    """Show the stall state, or run the stall rule over a fixture.
+
+    Without a fixture the command reads the shift's own stall state and
+    says which items are idle and for how many ticks. It writes nothing.
+
+    With `--fixture` the command runs the real rule over the ticks of the
+    fixture and writes the records the rule produces: the receipt of a
+    reported item, the line in the shift log and the alert on the
+    coordinator's board."""
+    if args.fixture:
+        return run_stall_fixture(args)
+    return show_stall_state(args.root)
 
 
 def report_root(explicit: str | None) -> Path:
@@ -1688,8 +1931,13 @@ def how_it_ended(root: Path, log: dict, receipts: list[dict], planned: int | Non
     statement. It reads it only when the records support it: "all done"
     needs every receipt to be done or parked, "deadline" needs the clock
     to be past the deadline, "STOP" needs the STOP file and "stall" needs
-    the stall in the log. A claim the records do not support is never
-    repeated."""
+    the shift to say it ended with a stall. A claim the records do not
+    support is never repeated.
+
+    A stall in the log is not the end of the shift (spec part T8b): a
+    stalled board is swept again and the shift keeps running until every
+    item is done or parked. So a stall line alone ends nothing, and only
+    a shift that states it ended with a stall ends that way."""
     if (root / "run" / "STOP").exists():
         return "STOP"
     states = [classify(receipt)[0] for receipt in receipts]
@@ -1712,8 +1960,6 @@ def how_it_ended(root: Path, log: dict, receipts: list[dict], planned: int | Non
     if claim == "deadline" and deadline_passed:
         return "deadline"
     if claim == "stall" and log["stall"]:
-        return "stall"
-    if log["stall"]:
         return "stall"
     if all_done:
         return "all done"
@@ -5491,6 +5737,13 @@ def main() -> int:
     selftest.add_argument("--live", action="store_true", help="run two bounded read-only GitHub/T3 smoke passes")
     selftest.set_defaults(func=lambda args: (__import__("live_smoke").main() if args.live
                                              else __import__("selftest").main()))
+    stall_cmd = sub.add_parser(
+        "stall",
+        help="show the stall state, or run the stall rule over a fixture",
+    )
+    stall_cmd.add_argument("--fixture", help="a JSON fixture of ticks")
+    stall_cmd.add_argument("--root", help="the folder the records go to")
+    stall_cmd.set_defaults(func=cmd_stall)
     args = parser.parse_args()
     return args.func(args)
 
