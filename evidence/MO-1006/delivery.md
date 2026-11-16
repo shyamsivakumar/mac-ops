@@ -140,3 +140,25 @@ with the reason; the fast check is separately reported PASS.
 
 Device, handset and live-service cases remain WAIVED, not failed. This turn
 only adds receipts and documentation; watcher runtime and installer unchanged.
+
+## Finish check correction
+
+The earlier full-suite FAIL receipt remains historical evidence. The finish
+fix moves the Astra identity guard into the quota fallback path, restoring
+ordinary terminal-run retries while preserving quota routing restrictions,
+retry limits and backoff. No tests or checks changed.
+
+Validation on the resulting source tree:
+- `timeout 300 python3 -m unittest tests.test_gatekeep_retry_limit`: PASS, 14 tests.
+- `timeout 300 python3 -m unittest discover -s tests -t .`: PASS, 287 tests.
+- `timeout 300 python3 scripts/mac_ops_fast_check.py`: PASS.
+
+Receipts: finish-full-check.log and finish-fast-check.log. The heavy-wrapped
+attempt was waiting in the queue; the direct full-suite command above completed.
+One in-session read-only review found no blocking findings. Diff comment review
+and bounded deslop inspection required no further changes.
+
+## Left for later
+
+Live watcher activation and authenticated service behavior remain unverified.
+The coordinator owns the separate Opus gate.
