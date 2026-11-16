@@ -1,0 +1,37 @@
+# Cycle health - 2026-11-16 05:08 PST
+
+- Cycle: 2026-11-16 05:08 PST
+- Findings: 8
+- Check: the coordinator tools under the interpreter launchd uses
+- Ran: the interpreter /opt/homebrew/bin/python3 (from the PATH of /Users/shyamsivakumar/Library/LaunchAgents/dev.coordinator.dispatch.plist)
+- Ran: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/.local/bin/coordq status` exit 1
+- Ran: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/.local/bin/overnight --help` exit 0
+- Ran: the last 40 lines of /tmp/mo245-stub/queue/dispatch.log
+- Ran: the last 40 lines of /tmp/mo245-stub/queue/gatekeep.log
+- Result: 1 finding(s)
+- Finding: coordq: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/.local/bin/coordq status` failed (exit 1) under the launchd interpreter:     with open(path("config.json")) as f: |          ~~~~^^^^^^^^^^^^^^^^^^^^^ | FileNotFoundError: [Errno 2] No such file or directory: '/tmp/mo245-stub/queue/config.json' (action: run the same command under the launchd interpreter and fix what it raises)
+- Check: the installed coordinator matches the merged main
+- Ran: `/opt/homebrew/bin/python3 /Users/shyamsivakumar/Code/mac-ops/install_coordinator.py status` exit 0
+- Result: 1 finding(s)
+- Finding: /Users/shyamsivakumar/Code/mac-ops/install_coordinator.py: the installed coordinator differs from the merged main: /Users/shyamsivakumar/.local/bin/coordq, /Users/shyamsivakumar/.local/bin/ticket, /Users/shyamsivakumar/.coordinator/AGENT-RULES.md, /Users/shyamsivakumar/.local/bin/selftest.py (action: find the branch the installed file came from, tell that builder to stop installing, and reinstall from main once the pull requests merge)
+- Check: a ticket started three or more times with no open pull request
+- Ran: the open issues of digitized/Concerning with their comments
+- Ran: the open pull requests of digitized/Concerning could not be read
+- Ran: the open issues of shyamsivakumar/catalouge with their comments
+- Ran: the open pull requests of shyamsivakumar/catalouge could not be read
+- Ran: the open issues of shyamsivakumar/fantasy-football-toolkit with their comments
+- Ran: the open pull requests of shyamsivakumar/fantasy-football-toolkit could not be read
+- Ran: the open issues of shyamsivakumar/mac-ops with their comments
+- Ran: the open pull requests of shyamsivakumar/mac-ops could not be read
+- Ran: the open issues of shyamsivakumar/strategy-replay-workbench with their comments
+- Ran: the open pull requests of shyamsivakumar/strategy-replay-workbench could not be read
+- Result: 5 finding(s)
+- Finding: digitized/Concerning: the open pull requests could not be read, so the tickets of this repository are not classified: /tmp/mo245-stub/gh pr list -R digitized/Concerning --state open --limit 100 --json number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body failed (1): gh: pr list failed (stub) (action: read the pull requests by hand)
+- Finding: shyamsivakumar/catalouge: the open pull requests could not be read, so the tickets of this repository are not classified: /tmp/mo245-stub/gh pr list -R shyamsivakumar/catalouge --state open --limit 100 --json number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body failed (1): gh: pr list failed (stub) (action: read the pull requests by hand)
+- Finding: shyamsivakumar/fantasy-football-toolkit: the open pull requests could not be read, so the tickets of this repository are not classified: /tmp/mo245-stub/gh pr list -R shyamsivakumar/fantasy-football-toolkit --state open --limit 100 --json number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body failed (1): gh: pr list failed (stub) (action: read the pull requests by hand)
+- Finding: shyamsivakumar/mac-ops: the open pull requests could not be read, so the tickets of this repository are not classified: /tmp/mo245-stub/gh pr list -R shyamsivakumar/mac-ops --state open --limit 100 --json number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body failed (1): gh: pr list failed (stub) (action: read the pull requests by hand)
+- Finding: shyamsivakumar/strategy-replay-workbench: the open pull requests could not be read, so the tickets of this repository are not classified: /tmp/mo245-stub/gh pr list -R shyamsivakumar/strategy-replay-workbench --state open --limit 100 --json number,title,url,isDraft,headRefName,baseRefName,headRefOid,updatedAt,body failed (1): gh: pr list failed (stub) (action: read the pull requests by hand)
+- Check: a text blockers refusal that names a closed issue
+- Ran: the last 400 lines of /tmp/mo245-stub/queue/dispatch.log
+- Result: 1 finding(s)
+- Finding: shyamsivakumar/strategy-replay-workbench#807: the state of shyamsivakumar/strategy-replay-workbench#680 could not be read, so the text blocker check is incomplete for it (action: read the issue, then reword the body so the Blocked by section names only real blockers)
