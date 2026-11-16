@@ -821,6 +821,26 @@ def consolidation_guard():
     builder = ticket.assemble_brief(cfg, item, "fixture-run", {"comments": []})
     gate = ticket.gate_brief("fixture/repo", {"key": "FIX"}, 1, 2,
                              "a" * 40, "main", False, False)
+    import ast
+    queue_path = Path(__file__).resolve().parents[1] / "bin" / "coordq"
+    tree = ast.parse(queue_path.read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "gate_args")
+    namespace = {"GATE_BAR": ticket.GATE_BAR}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(queue_path), "exec"), namespace)
+    for ascend in (False, True):
+        settings = {"key": "FIX", "projectId": "fixture", "ascend": ascend}
+        briefs = (ticket.gate_brief("shyamsivakumar/fixture", settings, 1, 2, "a" * 40, "main", False, ascend),
+                  namespace["gate_args"](settings, "shyamsivakumar/fixture", 1, 2, "a" * 40, False, "fixture")["message"])
+        for emitted in briefs:
+            exact("Builder check: PASS " + "a" * 40 in emitted, True)
+            if ascend:
+                exact("gh pr merge" in emitted, False)
+                exact("gh issue close" in emitted, False)
+            else:
+                exact("--match-head-commit " + "a" * 40 in emitted, True)
+                exact("verify every Provides claim" in emitted, True)
+                exact("false, missing or unverified, close nothing" in emitted, True)
+                exact(emitted.index("verify every Provides claim") < emitted.index("gh issue close"), True)
     for brief in (builder, gate):
         exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
     calls = []
