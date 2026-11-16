@@ -35,28 +35,34 @@ export const reviewThread = (group) => group.threads.filter((thread) => thread.k
 
 // The last agent activity of a group, when every thread that is really working on it has been silent past the stall ceiling.
 // Queued and preparing threads never stall: they are not working yet.
+// A board restored from the cache or kept stale has old thread times, so it reports no stall until fresh data arrives.
 export function stallOf(group, now) {
+  if (!group.trusted) return null;
   const working = group.threads.filter((thread) => thread.kind === "run" && (thread.status === "running" || thread.status === "starting"));
   if (!working.length) return null;
   const last = Math.max(...working.map((thread) => thread.at));
   return now - last > STALL_AFTER ? last : null;
 }
 
-// The feedback trail of an open PR: the failure that was reported, whether a round thread was started after it, and the commits since.
+// The feedback trail of an open PR: the failure that was reported, when it was first acted on, and the commits since.
+// A failure counts as acted on by a fix round started after it, any builder activity after it, a send-back from the board, or a fix commit.
 // `live` is false once CI no longer fails and the review no longer objects; the trail then shows the fix until the PR is approved.
+// The trail cannot see a settled round that pushed no commits.
 export function trailOf(group, now, reviewFailed) {
   const { status, gh, pr } = group.info;
   if (status !== "open" || !gh) return null;
   const review = reviewThread(group);
   const ci = gh.ci === "fail";
-  const changes = !ci && review && (gh.review === "CHANGES_REQUESTED" || reviewFailed());
-  const failure = ci || !changes ? gh.failure : { at: review.at, checks: [] };
+  const humanChanges = gh.review === "CHANGES_REQUESTED" && Boolean(gh.changesAt);
+  const changes = !ci && (humanChanges || (review && (gh.review === "CHANGES_REQUESTED" || reviewFailed())));
+  const failure = ci || !changes ? gh.failure : { at: humanChanges ? gh.changesAt : review.at, checks: [] };
   if (!failure) return null;
   const live = ci || Boolean(changes);
   const round = group.threads.filter((thread) => !thread.review && thread.created > failure.at).sort((a, b) => a.created - b.created)[0];
   const fixes = (gh.commits ?? []).filter((commit) => commit.at > failure.at).map((commit) => ({ ...commit, url: `https://github.com/${pr.repo}/commit/${commit.oid}` }));
-  const routedIn = round ? round.created - failure.at : null;
-  return { at: failure.at, live, review: !failure.checks.length, checks: failure.checks, routedIn, fixes, unrouted: live && routedIn === null && !fixes.length && !acting(group) && now - failure.at > UNROUTED_AFTER };
+  const actedAt = [round?.created, ...group.threads.filter((thread) => !thread.review).map((thread) => thread.at), group.sentAt, fixes[0]?.at].filter((at) => at > failure.at);
+  const routedIn = actedAt.length ? Math.min(...actedAt) - failure.at : null;
+  return { at: failure.at, live, review: !failure.checks.length, checks: failure.checks, routedIn, fixes, unrouted: Boolean(group.trusted) && live && routedIn === null && !acting(group) && now - failure.at > UNROUTED_AFTER };
 }
 
 // Why a group needs Shyam, in display order: a question, a stall, then the facts of its open PR when no thread is acting on it.

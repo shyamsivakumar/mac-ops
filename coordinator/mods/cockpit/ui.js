@@ -332,8 +332,8 @@ function trailText(trail) {
 
 function trailTip(trail) {
   const failed = trail.review ? "Review asked for changes" : `Failed: ${trail.checks.map((c) => c.name).join(", ")}`;
-  const routed = trail.routedIn === null ? "No fix round started yet" : `A fix round started ${elapsed(trail.routedIn)} after the failure`;
-  return [failed, routed, trail.fixes.length ? `Latest fix: ${trail.fixes.at(-1).head}` : "No fix commits yet"].join(". ");
+  const routed = trail.routedIn === null ? "No fix round started yet" : `Acted on ${elapsed(trail.routedIn)} after the failure`;
+  return [failed, routed, trail.fixes.length ? `Latest fix: ${trail.fixes.at(-1).head}` : "No fix commits yet", "A settled round that pushed no commits cannot be seen"].join(". ");
 }
 
 function trailRow(t, e, trail) {
@@ -344,7 +344,7 @@ function trailRow(t, e, trail) {
 function statusLine(v) {
   const { c, variant, now } = v;
   if (variant === "backlog") return c.issue ? issueRef(c.issue) : c.context;
-  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}` : "Running";
+  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}` : "Running";
   if (c.kind === "done") return v.reviewed ? "Ready to settle" : "Not reviewed yet";
   return c.context;
 }
@@ -406,7 +406,7 @@ export function card(t, e, v, input, cb) {
     : isPr
     ? prChips(t, v, fit).tooltip(v.plan?.sha ? `Relay #${v.plan.number} ${v.plan.sha.slice(0, 8)}` : "Checking merge plan").on_mouse_down("left", selectOnly(e.key, cb))
     : h_flex().flex_1().min_w(0).gap(5).items_center()
-      .child(div().size(6).flex_none().rounded(3).bg(v.quiet ? t.muted : t[TONE[c.kind]]))
+      .child(div().size(6).flex_none().rounded(3).bg(t[TONE[c.kind]]))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
   const foot = selected
     ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(isPr ? readyActions : quick)
