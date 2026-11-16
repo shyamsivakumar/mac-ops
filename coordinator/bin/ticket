@@ -32,6 +32,10 @@ ISSUE_PAGE_SIZE = 100
 ISSUE_PAGES = 200
 BLOCKER_URL = re.compile(r"^https?://[^/]+/([^/\s#]+/[^/\s#]+)/issues/\d+")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+# A label line: the section name, then a colon, then the section text. The
+# name may be wrapped in bold, and it may name the section with a separator
+# that differs from the configured one.
+LABEL = re.compile(r"^\s*(?:\*\*)?\s*(?P<label>[^:]+?)\s*(?:\*\*)?\s*:\s*(?:\*\*)?(?P<rest>.*)$")
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 DECISIONS_HEADING = "## Coordinator decisions (override the body)"
 RUN_ID = re.compile(r"ticket:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#\d+:a\d+")
@@ -497,21 +501,36 @@ def fetch_issue(repo, n):
     return gh_json(["issue", "view", str(n), "-R", repo, "--json", "id,number,title,body,state,labels,comments,url,blockedBy"])
 
 
+def canonical_section(text):
+    """The comparable form of a section name.
+
+    Case, spacing and separator punctuation do not change which section a
+    heading names. "/" and "," separate words and so does "and", so the
+    configured "Data/secrets and stop conditions" and the written "Data,
+    secrets and stop conditions" are one section.
+    """
+    words = [w for w in re.split(r"[^a-z0-9]+", text.lower()) if w and w != "and"]
+    return " ".join(words)
+
+
 def template_markers(cfg, lines):
-    names = {s.lower(): s for s in cfg["template"]}
+    names = {}
+    for section in cfg["template"]:
+        # The first configured section wins when two names read the same.
+        names.setdefault(canonical_section(section), section)
     markers = []
     for i, line in enumerate(lines):
         m = HEADING.match(line)
         if m:
-            text = m.group(2).strip().strip("*").strip().rstrip(":").strip().lower()
+            text = canonical_section(m.group(2).strip().strip("*").strip().rstrip(":").strip())
             if text in names:
                 markers.append((i, names[text], len(m.group(1)), ""))
             continue
-        for lower, section in names.items():
-            m = re.match(rf"\s*(?:\*\*)?\s*{re.escape(lower)}\s*(?:\*\*)?\s*:\s*(?:\*\*)?(.*)$", line, re.I)
-            if m:
-                markers.append((i, section, 0, m.group(1)))
-                break
+        m = LABEL.match(line)
+        if m:
+            text = canonical_section(m.group("label"))
+            if text in names:
+                markers.append((i, names[text], 0, m.group("rest")))
     return markers
 
 
