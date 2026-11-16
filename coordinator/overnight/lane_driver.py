@@ -573,9 +573,9 @@ def main():
             zero_merge(SNAPSHOT)
     except ApiBudgetExhausted as exc:
         print(f"API BUDGET {exc}")
-        failures = item_failure_summary(ledger)
-        if failures:
-            raise RuntimeError(f"lane pass completed with {failures} item failures") from exc
+        if ledger.get("_item_failures", 0):
+            item_failure_summary(ledger)
+            raise RuntimeError(f"lane pass completed with {ledger['_item_failures']} item failures") from exc
     finally:
         try:
             after = api_remaining()
