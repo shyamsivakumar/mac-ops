@@ -150,7 +150,7 @@ function card(thread, names) {
     ask: Boolean(thread.ask),
     context: thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : kind === "done" && thread.askText ? thread.askText : CONTEXT[kind] ?? "",
     error: kind === "fail" ? thread.lastError ?? CONTEXT.fail : undefined,
-    prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state })),
+    prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state ?? "unknown" })),
   };
 }
 
