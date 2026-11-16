@@ -269,7 +269,8 @@ def moment(value):
 
 
 def runtime_events(raw, previous, now):
-    seen = set(previous.get("runtimeEvents", []))
+    seen = {key for key in previous.get("runtimeEvents", []) if key.startswith("run:")}
+    active = set()
     events = []
     if raw.get("threadsComplete") is True:
         for thread in raw.get("threads", []):
@@ -282,9 +283,12 @@ def runtime_events(raw, previous, now):
             if started is None:
                 continue
             key = f"run:{identity}:{thread.get('runId') or started}"
+            active.add(key)
             if now - started > 1200 and key not in seen:
                 events.append(f"EVENT run-long {identity} {int((now - started) / 60)}")
                 seen.add(key)
+    if raw.get("threadsComplete") is True:
+        seen.intersection_update(active)
     return events, seen
 
 
@@ -321,16 +325,12 @@ def log_events(paths, previous, seen):
                 consumed = complete or (len(chunk) if len(chunk) == 65536 else 0)
                 skipping = bool(old.get("skipping")) if offset else False
                 position = offset
-                event_identity = identity if generation == 0 else f"{identity}:generation={generation}"
                 for line in chunk[:complete].splitlines(keepends=True):
-                    event_key = f"log:{event_identity}:{position}:" + hashlib.sha256(line).hexdigest()
-                    if not skipping and event_key not in seen:
+                    if not skipping:
                         if re.search(rb"rate[ -]?limit|too many requests|HTTP[/ ](?:[0-9.]+ )?429", line, re.I):
                             events.append("EVENT rate-limit")
-                            seen.add(event_key)
                         elif b"Traceback (most recent call last):" in line:
                             events.append("EVENT traceback " + path.name)
-                            seen.add(event_key)
                     position += len(line)
                     skipping = False
                 next_offset = offset + consumed

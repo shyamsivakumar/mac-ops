@@ -67,8 +67,11 @@ identical saved boundary cannot be distinguished from append.
 
 State is persisted before output to avoid duplicate alarms after restart;
 a crash between persistence and printing can lose an event. State-file loss
-can repeat events. Event history remains bounded by the existing 8 MiB state
-limit: reaching it fails the cycle visibly rather than dropping identities.
+can repeat events. Log deduplication uses persisted offsets and rotation generations, so consumed
+line identities are not retained. Legacy log identities are discarded on the
+next successful cycle. Run-long identities retain only current runs after a
+complete thread snapshot; incomplete snapshots preserve prior run identities.
+The 8 MiB state limit still applies to the remaining collection data.
 Log errors are skipped without printing source content. Reads never write logs.
 Device, live-service and owner testing were waived for #345. The fast
 selector is `timeout 300 python3 scripts/mac_ops_fast_check.py` and the full
