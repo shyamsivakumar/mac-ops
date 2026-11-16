@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import plistlib
@@ -21,6 +22,7 @@ from xml.sax.saxutils import escape
 RECEIPT_NAME = "coordinator-installation.json"
 HOME_TOKEN = "@HOME@"
 CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
+MODS_DIR = ".config/herdr-app/mods"
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
 # The pi coordinator's own files: guard extension, sandbox profile, settings,
@@ -102,7 +104,7 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
         items += [
             (
                 f,
-                home / ".config/herdr-app/mods" / mod / f.relative_to(base),
+                home / MODS_DIR / mod / f.relative_to(base),
                 0o755 if os.access(f, os.X_OK) else 0o644,
             )
             for f in sorted(base.rglob("*"))
@@ -621,6 +623,31 @@ def changes(
     return pending
 
 
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def recorded_mod_hashes(home: Path) -> dict[str, str]:
+    receipt = read_regular(home / ".local/state/mac-ops" / RECEIPT_NAME)
+    return json.loads(receipt[0]).get("mod_hashes", {}) if receipt else {}
+
+
+def split_local_mods(
+    pending: list[tuple[Path, bytes, int]], home: Path, recorded: dict[str, str]
+) -> tuple[list[tuple[Path, bytes, int]], list[Path]]:
+    mods = home / MODS_DIR
+    rest, kept = [], []
+    for item in pending:
+        target, data, _ = item
+        current = read_regular(target) if target.is_relative_to(mods) else None
+        owned = recorded.get(str(target), digest(data))
+        if current is not None and current[0] != data and digest(current[0]) != owned:
+            kept.append(target)
+        else:
+            rest.append(item)
+    return rest, kept
+
+
 def ensure_overnight_dirs(coordinator: Path, home: Path) -> list[Path]:
     """Create the overnight folders. A refused directory is reported and left
     alone; it must not fail the rest of the install."""
@@ -729,6 +756,7 @@ def install(
     dry_run: bool,
     home: Path | None = None,
     coordinator: Path | None = None,
+    overwrite_local_mods: bool = False,
 ) -> None:
     source_sha = require_main_source(checkout)
     require_real_home()
@@ -739,11 +767,24 @@ def install(
     receipt_target = state / RECEIPT_NAME
     # Validate the receipt before any installation writes, even on a no-op.
     read_regular(receipt_target)
+    recorded = recorded_mod_hashes(home)
+    kept: list[Path] = []
+    if not overwrite_local_mods:
+        pending, kept = split_local_mods(pending, home, recorded)
+    mod_hashes = {
+        **recorded,
+        **{
+            str(target): digest(source.read_bytes())
+            for source, target, _ in plan(checkout, home)
+            if target.is_relative_to(home / MODS_DIR) and target not in kept
+        },
+    }
     if dry_run:
         print(json.dumps(
             {
                 "action": "coordinator",
                 "would_write": [str(t) for t, _, _ in pending],
+                "kept_local": [str(t) for t in kept],
                 "would_retire": [str(path) for path in retired_plists(home)],
                 "would_reload": [
                     label or str(target)
@@ -775,7 +816,9 @@ def install(
             f"Warning: a hand-started turn-cap monitor is running (pid {pid}). "
             f"Stop it so only one monitor runs: kill {pid}"
         )
-    if not pending:
+    for target in kept:
+        print(f"Kept local edit: {target}")
+    if not pending and mod_hashes == recorded:
         require_healthy(home)
         print("Wrote 0 coordinator files. Already in sync and healthy.")
         return
@@ -793,6 +836,7 @@ def install(
             "source_sha": source_sha,
             "installed_at": time.time(),
             "written": [str(t) for t, _, _ in pending],
+            "mod_hashes": mod_hashes,
             "backups": str(backups),
         }
         write(receipt_target, json.dumps(receipt).encode(), 0o600, backups)
@@ -809,6 +853,7 @@ def status(checkout: Path, coordinator: Path | None = None) -> None:
     home = Path.home()
     coordinator = coordinator or coordinator_dir(home)
     pending = changes(checkout, home, coordinator)
+    _, kept = split_local_mods(pending, home, recorded_mod_hashes(home))
     missing = [d for d in overnight_dirs(coordinator) if not d.is_dir()]
     retired = [str(path) for path in retired_plists(home)]
     checks = smoke_checks(home)
@@ -819,6 +864,7 @@ def status(checkout: Path, coordinator: Path | None = None) -> None:
                 "healthy": all(check["healthy"] for check in checks),
                 "smoke_checks": checks,
                 "differs": [str(t) for t, _, _ in pending],
+                "kept_local": [str(t) for t in kept],
                 "overnight_root": str(overnight_root(coordinator)),
                 "overnight_missing": [str(d) for d in missing],
                 "retired_jobs": list(RETIRED_JOBS),
@@ -836,6 +882,11 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--overwrite-local-mods",
+        action="store_true",
+        help="Overwrite Herdr mod files edited locally since the last install",
+    )
+    parser.add_argument(
         "--coordinator-dir",
         help="Coordinator runtime folder that holds the overnight layout",
     )
@@ -847,7 +898,10 @@ def main() -> None:
         return
     if not args.dry_run and sys.platform != "darwin":
         raise RuntimeError("Coordinator install requires macOS")
-    install(checkout, args.dry_run, coordinator=coordinator)
+    install(
+        checkout, args.dry_run, coordinator=coordinator,
+        overwrite_local_mods=args.overwrite_local_mods,
+    )
 
 
 if __name__ == "__main__":
