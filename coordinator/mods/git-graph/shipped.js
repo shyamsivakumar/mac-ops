@@ -4,10 +4,10 @@ import { exec, home, layout, readTextFile, theme, settings } from "herdr";
 
 const OWNERS = ["shyamsivakumar", "slash-eureka"];
 const MINE = "shyamsivakumar";
-const DAYS = 7, STALE_DAYS = 2, LIMIT = 200, TIMEOUT = 60000, JOBS = 3, DAY_ROWS = 40, STALE_CHIPS = 8;
+const DAYS = 7, FLOW_DAYS = 14, STALE_DAYS = 2, LIMIT = 200, TIMEOUT = 60000, JOBS = 3, DAY_ROWS = 40, STALE_CHIPS = 8;
 export const EVERY = 300000;
 const DAY = 86400000;
-const MERGED_FIELDS = "repository,number,title,url,closedAt";
+const MERGED_FIELDS = "repository,number,title,url,closedAt,createdAt";
 const OPEN_FIELDS = "repository,number,title,url,createdAt";
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -36,10 +36,10 @@ function withTickets(merged, coordinator) {
 }
 const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-export function windowStart(now) {
+export function windowStart(now, days = DAYS) {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - (DAYS - 1));
+  d.setDate(d.getDate() - (days - 1));
   return d.getTime();
 }
 
@@ -75,7 +75,7 @@ export function loadShipped(force = false) {
 }
 
 async function fetchShipped(now = Date.now()) {
-  const start = windowStart(now), errors = [];
+  const start = windowStart(now, FLOW_DAYS), week = windowStart(now), errors = [];
   const dates = [];
   for (let ms = Date.parse(utcDay(start)); ms <= now; ms += DAY) dates.push(utcDay(ms));
   const recent = utcDay(now - DAY);
@@ -83,7 +83,7 @@ async function fetchShipped(now = Date.now()) {
 
   const jobs = [];
   const mergedSearch = (owner, range) => gh(["search", "prs", "--owner", owner, "--author", MINE, "--merged-at", range, "--json", MERGED_FIELDS, "--limit", String(LIMIT)]);
-  const mergedPr = (r) => ({ ...basics(r), at: Date.parse(r.closedAt) });
+  const mergedPr = (r) => ({ ...basics(r), at: Date.parse(r.closedAt), created: Date.parse(r.createdAt) });
   const dayJobs = (owner) => dates.filter((date) => !mergedDays.has(`${owner}|${date}`) || date >= recent).map((date) => async () => {
     const rows = await mergedSearch(owner, `${date}..${date}`);
     mergedDays.set(`${owner}|${date}`, { prs: rows.map(mergedPr), capped: rows.length >= LIMIT });
@@ -105,8 +105,9 @@ async function fetchShipped(now = Date.now()) {
   const coordinator = await coordinatorPrefixes();
 
   const days = [...mergedDays.values()];
+  const fortnight = withTickets([...mergedWeeks.values(), ...days.map((d) => d.prs)].flat().filter((p) => p.at >= start), coordinator).sort((a, b) => b.at - a.at);
   return {
-    merged: withTickets([...mergedWeeks.values(), ...days.map((d) => d.prs)].flat().filter((p) => p.at >= start), coordinator).sort((a, b) => b.at - a.at),
+    merged: fortnight.filter((p) => p.at >= week), fortnight,
     capped: days.some((d) => d.capped),
     open: [...openByOwner.values()].flat(),
     errors: [...new Set(errors)], at: Date.now(),
@@ -178,7 +179,7 @@ const graphHidden = () => {
   return Boolean(find(layout())?.hidden);
 };
 
-const since = (ms) => {
+export const since = (ms) => {
   const s = Math.max(0, (Date.now() - ms) / 1000);
   return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ago`;
 };
@@ -190,13 +191,15 @@ export class Shipped {
     this.open = new Set(); this.fullDays = new Set(); this.days = new Map();
   }
 
+  fetch(force) { return loadShipped(force); }
+
   refresh(cx, force = false) {
     if (this.loading) return;
     this.loading = true; this.stale = false;
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        this.data = await loadShipped(force);
+        this.data = await this.fetch(force);
       } finally {
         this.loading = false; cx.notify();
       }
