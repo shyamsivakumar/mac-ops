@@ -61,6 +61,11 @@ def board_snapshot(ledger, force=False):
     cached = ledger.get("_board_snapshot")
     current_pass = ledger.get("_pass", 0) + 1
     ledger["_pass"] = current_pass
+    if isinstance(cached, dict) and any(
+        "headRefName" not in pr or "baseRefName" not in pr
+        for data in cached.get("repos", {}).values() for pr in data.get("prs", [])
+    ):
+        force = True
     if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
