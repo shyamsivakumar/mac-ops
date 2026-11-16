@@ -6,6 +6,8 @@ import re
 import subprocess
 import time
 
+import stall
+
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
@@ -16,6 +18,13 @@ DRY = False
 SNAPSHOT = {}
 API_FLOOR = 500
 BOARD_REFRESH_PASSES = 5
+# The stall events of the last pass: an item that was parked as a stall and
+# a board that stopped moving. The shift writes the records for them.
+STALL_EVENTS = []
+# The stall state of the shift: how long every item has been idle. The
+# shift loads it before the pass and saves it after the pass, so the pass
+# itself keeps no file of its own.
+STALL_STATE = {}
 
 
 class ApiBudgetExhausted(RuntimeError):
@@ -48,11 +57,11 @@ def read_json(cmd):
     return json.loads(result.stdout)
 
 
-def board_snapshot(ledger):
+def board_snapshot(ledger, force=False):
     cached = ledger.get("_board_snapshot")
     current_pass = ledger.get("_pass", 0) + 1
     ledger["_pass"] = current_pass
-    if isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
+    if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
     fields = "number,state,headRefOid,body,mergeable,isDraft,statusCheckRollup"
@@ -130,6 +139,116 @@ def busy(repo):
         return f"live: {live[0].get('title', '')[:60]}"
     queue = json.loads(run([COORDQ, "list", "--json"]) or "[]") if False else []
     return ""
+
+
+def pr_item(repo, pr):
+    """Return the stall key of one pull request and the ticket it names.
+
+    A pull request that names a ticket is that ticket's work, so the key is
+    the ticket's. A pull request that names none is a record of its own, so
+    its key says so."""
+    body = pr.get("body") or ""
+    refs = re.findall(r"\bRefs #(\d+)", body)
+    if refs:
+        return f"{repo}#{refs[0]}", refs[0]
+    return f"{repo}!pr{pr.get('number')}", ""
+
+
+def stall_receipts():
+    """Return the queue's dispatch receipts, or none when they cannot be read.
+
+    A receipt is a new attempt on an item, so the receipt count is part of
+    the item's marker."""
+    try:
+        with open(RECEIPTS) as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def receipt_attempt(repo, number, receipts):
+    """Return the newest dispatch receipt of one ticket, or an empty string."""
+    if not number:
+        return ""
+    prefix = f"ticket:{repo}#{number}:a"
+    best = ""
+    for key in receipts:
+        if key.startswith(prefix) and key[len(prefix):].isdigit():
+            if key[len(prefix):] > best:
+                best = key[len(prefix):]
+    return best
+
+
+def stall_markers(snapshot, receipts):
+    """Return the marker of every item the shift works.
+
+    An item's marker is its commit and its newest dispatch receipt, so a
+    new commit or a new receipt is progress and nothing else is.
+
+    An item is measured when it has a commit or a receipt: an item the
+    shift never started has neither, so it is not a stalled item, it is an
+    item the shift still has to start."""
+    markers = {}
+    for repo in LANE_REPOS:
+        data = (snapshot.get("repos") or {}).get(repo) or {}
+        for pr in data.get("prs") or []:
+            key, issue = pr_item(repo, pr)
+            attempt = receipt_attempt(repo, issue, receipts)
+            if not pr.get("headRefOid") and not attempt:
+                continue
+            markers[key] = {
+                "marker": stall.marker(pr.get("headRefOid"), attempt),
+                "repo": repo,
+                "number": issue or pr.get("number"),
+                "key": "",
+                "title": "",
+                "url": "",
+            }
+    for ticket in snapshot.get("tickets") or []:
+        repo = ticket.get("repo") or ""
+        number = ticket.get("number")
+        if repo not in LANE_REPOS or not number:
+            continue
+        if (ticket.get("stage") or "") not in ("todo", "started"):
+            continue
+        key = f"{repo}#{number}"
+        entry = markers.get(key)
+        attempt = receipt_attempt(repo, number, receipts)
+        if entry is None:
+            if not attempt:
+                continue
+            markers[key] = {
+                "marker": stall.marker("", attempt),
+                "repo": repo,
+                "number": number,
+                "key": ticket.get("key") or "",
+                "title": ticket.get("title") or "",
+                "url": ticket.get("url") or "",
+            }
+            continue
+        entry["key"] = ticket.get("key") or entry.get("key") or ""
+        entry["title"] = ticket.get("title") or entry.get("title") or ""
+        entry["url"] = ticket.get("url") or entry.get("url") or ""
+    return markers
+
+
+def board_items(snapshot):
+    """Return how many items the board holds.
+
+    The board counts every item the shift may work, measured or not: a
+    board with work in it and nothing moving is a stalled board."""
+    count = 0
+    for repo in LANE_REPOS:
+        data = (snapshot.get("repos") or {}).get(repo) or {}
+        count += len(data.get("prs") or [])
+    for ticket in snapshot.get("tickets") or []:
+        if ticket.get("repo") not in LANE_REPOS:
+            continue
+        if (ticket.get("stage") or "") not in ("todo", "started"):
+            continue
+        count += 1
+    return count
 
 
 def builder_thread(repo, body):
@@ -380,8 +499,10 @@ def group_of(title):
 
 
 def start_next(repo, tickets, ledger, excl=frozenset()):
+    state = STALL_STATE if isinstance(STALL_STATE, dict) else {}
     ready = sorted((t for t in tickets if t["repo"] == repo and t.get("stage") == "todo" and not t.get("problems")
-                    and group_of(t.get("title") or "") not in excl),
+                    and group_of(t.get("title") or "") not in excl
+                    and not stall.stalled(state, f"{repo}#{t['number']}")),
                    key=lambda t: (t.get("priority") or 9, t["number"]))
     import datetime as _dt
     now = _dt.datetime.now(_dt.timezone.utc)
@@ -540,11 +661,37 @@ def item_failure_summary(ledger):
 
 
 def run_pass(ledger):
-    global SNAPSHOT
+    global SNAPSHOT, STALL_STATE
     ledger.pop("_item_failures", None)
     watchdog()
     drift_ff(ledger)
     SNAPSHOT = board_snapshot(ledger)
+    if not isinstance(STALL_STATE, dict):
+        STALL_STATE = {}
+    state = STALL_STATE
+    receipts = stall_receipts()
+    markers = stall_markers(SNAPSHOT, receipts)
+    progressed = any(
+        stall.moved(state, key, item["marker"]) for key, item in markers.items()
+    )
+    board_event = stall.board(state, progressed, board_items(SNAPSHOT))
+    for key, item in sorted(markers.items()):
+        event = stall.observe(state, key, item["marker"])
+        if not event:
+            continue
+        event.update(item)
+        print(
+            f"STALL {key}: no new commit or receipt for {event['idle']} ticks; "
+            "parked, the shift moves on"
+        )
+        STALL_EVENTS.append(event)
+    if board_event:
+        print(
+            f"STALL board: no board progress for {board_event['idle']} ticks; "
+            "the board is swept again"
+        )
+        STALL_EVENTS.append(board_event)
+        SNAPSHOT = board_snapshot(ledger, force=True)
     tickets = SNAPSHOT["tickets"]
     for repo in LANE_REPOS:
         with item_boundary(repo, "lane", ledger):
@@ -557,6 +704,17 @@ def run_pass(ledger):
             done = False
             for number in prs:
                 with item_boundary(repo, number, ledger):
+                    pr = next(
+                        (p for p in SNAPSHOT["repos"][repo]["prs"] if p["number"] == number),
+                        {},
+                    )
+                    key = pr_item(repo, pr)[0] if pr else f"{repo}!pr{number}"
+                    if stall.stalled(state, key):
+                        print(
+                            f"{CFG[repo]['key']:5} skip #{number}: stalled, the "
+                            "shift moved on"
+                        )
+                        continue
                     result = act_on_pr(repo, number, ledger)
                     if result is None:
                         continue
@@ -591,6 +749,7 @@ def run_pass(ledger):
 
 def main():
     global CFG
+    STALL_EVENTS.clear()
     with open("/Users/shyamsivakumar/.coordinator/tickets.json") as handle:
         CFG = json.load(handle)["repos"]
     try:
