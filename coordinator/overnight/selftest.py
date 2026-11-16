@@ -1030,6 +1030,30 @@ def cycle_health():
     exact(len(whole), 1)
     exact(whole[0]["check"], "attempts")
     exact("no open pull request" in whole[0]["detail"], True)
+    # An issue whose comments were cut off is not an issue with few
+    # comments: its starts are not known and it is not classified.
+    module.run = lambda argv, timeout, deadline: json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "a ticket",
+                "comments": [
+                    {"body": "Starting b attempt 1"},
+                    {"body": "Starting b attempt 2"},
+                    {"body": "Starting b attempt 3"},
+                ]
+                + [{"body": "a comment"} for _ in range(97)],
+            }
+        ]
+    )
+    module.read_pull_requests = lambda repo, deadline: ([], False)
+    ran, cut_comments = module.check_attempts(
+        [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
+    )
+    exact(len(cut_comments), 1)
+    exact(cut_comments[0]["check"], "attempts")
+    exact("cut off" in cut_comments[0]["detail"], True)
+    exact("not classified" in cut_comments[0]["detail"], True)
     # The board's blockers: a closed issue is a false blocker, an issue
     # whose state was never read is an incomplete check, not a clean one.
     refusal = {
