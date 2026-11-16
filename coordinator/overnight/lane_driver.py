@@ -79,7 +79,11 @@ def run(cmd, timeout=150):
     refusal = ("--dry-run" in cmd and cmd[:2] == ["ticket", "start"]
                and p.returncode == 2 and output.startswith("refused: ")
                and len(output.splitlines()) == 1)
-    if p.returncode and not refusal:
+    already_closed = (cmd[:2] == ["ticket", "close"] and p.returncode == 1
+                      and len(cmd) > 2 and re.fullmatch(
+                          rf"(?:gh failed \(error\): )?(?:[!✓] )?Issue {re.escape(cmd[2])} is already closed\.?",
+                          output) is not None)
+    if p.returncode and not (refusal or already_closed):
         raise subprocess.CalledProcessError(p.returncode, cmd, output=p.stdout, stderr=p.stderr)
     return output
 
@@ -218,18 +222,10 @@ def act_on_pr(repo, number, ledger):
         run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
         if issue:
             ref = f"{repo}#{issue}"
-            try:
-                run(["ticket", "close", ref, "--pr", str(number), "--head", head,
-                     "--gate-thread", gate["threadId"]])
-            except subprocess.CalledProcessError as exc:
-                output = ((exc.output or "") + (exc.stderr or "")).strip()
-                if exc.returncode != 1 or not re.fullmatch(
-                        r"(?:gh failed \(error\): )?(?:[!✓] )?Issue [^\n]+ is already closed\.?",
-                        output):
-                    raise
-                result = f"already-closed:{ref}"
-                ledger[result] = output
-                print(f"{result}: {output}")
+            output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
+                          "--gate-thread", gate["threadId"]])
+            if "is already closed" in output:
+                print(f"already-closed:{ref}: {output}")
         fast_forward_main(repo)
         return f"#{number}: merged {head}"
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
