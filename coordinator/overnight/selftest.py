@@ -485,6 +485,9 @@ def hourly_selftest_fixture():
             exact(command, ["fixture-only"])
             exact(options, {"capture_output": True, "text": True, "timeout": 120, "check": False})
             calls.append(command)
+            current = json.loads(decisions.read_text())
+            current["during_run"] = len(calls)
+            decisions.write_text(json.dumps(current))
             if isinstance(outcome[0], Exception):
                 raise outcome[0]
             return outcome[0]
@@ -510,7 +513,7 @@ def hourly_selftest_fixture():
         now[0] += 3600
         outcome[0] = SimpleNamespace(returncode=0, stdout="".join("PASS " + name + "\n" for name in sorted(adapter.EXPECTED)))
         exact(run(), "PASS")
-        exact(json.loads(decisions.read_text()), {"items": [{"id": "unrelated"}]})
+        exact(json.loads(decisions.read_text()), {"items": [{"id": "unrelated"}], "during_run": len(calls)})
         with patch.object(adapter, "hourly", return_value="PASS"):
             outcome[0] = SimpleNamespace(returncode=1, stdout="FAIL watchdog\n")
             now[0] += 3600

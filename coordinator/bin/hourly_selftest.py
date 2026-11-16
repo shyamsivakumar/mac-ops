@@ -22,7 +22,6 @@ def hourly(state_path, decisions_path, command, *, clock=time.time, runner=subpr
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     if "last_run" in state and now - state["last_run"] < 3600:
         return "not-due"
-    decisions = json.loads(decisions_path.read_text()) if decisions_path.exists() else {"items": []}
     try:
         result = runner(command, capture_output=True, text=True, timeout=120, check=False)
         lines = result.stdout.splitlines()
@@ -31,6 +30,7 @@ def hourly(state_path, decisions_path, command, *, clock=time.time, runner=subpr
         reason = "fixture suite failed" if not passed else ""
     except (OSError, subprocess.SubprocessError) as exc:
         passed, reason = False, type(exc).__name__
+    decisions = json.loads(decisions_path.read_text()) if decisions_path.exists() else {"items": []}
     decisions["items"] = [item for item in decisions.get("items", []) if item.get("id") != ALARM]
     if not passed:
         decisions["items"].append({"id": ALARM, "group": "Coordinator", "kind": "action",
