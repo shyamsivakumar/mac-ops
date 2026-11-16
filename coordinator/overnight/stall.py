@@ -66,6 +66,33 @@ def moved(state, key, item_marker):
     return previous is not None and previous != item_marker
 
 
+def appeared(state, key):
+    """Return True when the item was not on the board before.
+
+    A new item on the board is work that arrived, so the board moved."""
+    return key not in (state.get("items") or {})
+
+
+def pending(state, key, item_marker, cap=STALL_CAP):
+    """Return True when this tick could park the item.
+
+    The caller reads the board again before it parks, because the board
+    the shift holds is cached and a stale head is not evidence that the
+    item stopped moving."""
+    entry = (state.get("items") or {}).get(key)
+    if not isinstance(entry, dict):
+        return False
+    previous = entry.get("marker")
+    if previous is None or previous != item_marker:
+        return False
+    return int(entry.get("idle") or 0) + 1 >= cap
+
+
+def board_pending(state, cap=STALL_CAP):
+    """Return True when this tick could stall the board."""
+    return int(state.get("board_idle") or 0) + 1 >= cap
+
+
 def observe(state, key, item_marker, cap=STALL_CAP):
     """Record one tick of one item and return the stall event, or None.
 
@@ -104,11 +131,19 @@ def board(state, progressed, items=0, cap=STALL_CAP):
     """Record one tick of the board and return the board stall event, or
     None.
 
-    The board moved when any item moved. A board with no item in it is not
-    a stalled board: it is a board whose work is done."""
+    The board moved when any item moved or when new work arrived on it. A
+    board with no item in it is not a stalled board: it is a board whose
+    work is done.
+
+    The board's first tick is its baseline: there is nothing yet to compare
+    it with, so it counts as an idle tick, the way the first tick of an
+    item does."""
     if not items:
         state["board_idle"] = 0
         return None
+    if not state.get("board_seen"):
+        state["board_seen"] = True
+        progressed = False
     if progressed:
         state["board_idle"] = 0
         return None

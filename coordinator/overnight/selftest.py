@@ -980,6 +980,13 @@ def stall():
     exact(rule.board(state, True, 1), None)
     exact(rule.board(state, False, 0), None)
     exact(state["board_idle"], 0)
+    # The board's first tick is its baseline, and a board that keeps moving
+    # never stalls.
+    state = rule.new_state()
+    exact(rule.board(state, True, 1), None)
+    exact(state["board_idle"], 1)
+    exact(rule.board(state, True, 1), None)
+    exact(state["board_idle"], 0)
 
     # The driver: the item is worked until it is parked, and a parked item
     # is skipped, so the shift moves on.
@@ -1015,6 +1022,57 @@ def stall():
     exact(events[2][0]["item"], f"{repo}#9")
     exact(events[2][1]["kind"], "board")
     exact(rule.stalled(lane.STALL_STATE, f"{repo}#9"), True)
+
+    # A stale board must not park an item: the shift reads the board again
+    # before it parks, and the fresh head is progress.
+    stale = {"number": 8, "state": "OPEN", "headRefOid": "a" * 40, "body": "Refs #9",
+             "mergeable": "MERGEABLE", "isDraft": False}
+    fresh = dict(stale, headRefOid="b" * 40)
+    stale_board = {"tickets": [], "repos": {repo: {"prs": [stale], "issues": []}}}
+    fresh_board = {"tickets": [], "repos": {repo: {"prs": [fresh], "issues": []}}}
+    reads = []
+
+    def snapshot(ledger, force=False):
+        reads.append(force)
+        return fresh_board if force else stale_board
+
+    lane.STALL_STATE = {}
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", side_effect=snapshot), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+        for _ in range(4):
+            lane.run_pass({})
+    exact(rule.stalled(lane.STALL_STATE, f"{repo}#9"), False)
+    exact(True in reads, True)
+
+    # A draft is not work the shift does, so it is not measured.
+    draft = {"tickets": [], "repos": {repo: {"prs": [dict(stale, isDraft=True)],
+                                              "issues": []}}}
+    lane.STALL_STATE = {}
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", return_value=draft), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+        lane.run_pass({})
+    exact(lane.STALL_STATE.get("items", {}), {})
+
+    # A parked item is not recovered either: the shift moves on from it.
+    lane.STALL_STATE = {"items": {f"{repo}#9": {"marker": "a" * 40, "idle": 3,
+                                                "stalled": True}}}
+    orphan = {"tickets": [], "repos": {repo: {"prs": [], "issues": [
+        {"number": 9, "title": "bot repair", "labels": []}]}}}
+    from unittest.mock import mock_open
+    with patch.object(lane, "SNAPSHOT", orphan), patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", return_value={}), \
+         patch("builtins.open", mock_open(read_data="{}")):
+        exact(lane.unstick(repo, {}), "nothing ready")
 
 
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "stall": stall}

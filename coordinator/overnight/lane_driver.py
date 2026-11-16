@@ -168,16 +168,17 @@ def stall_receipts():
 
 
 def receipt_attempt(repo, number, receipts):
-    """Return the newest dispatch receipt of one ticket, or an empty string."""
+    """Return the newest dispatch receipt of one ticket, or an empty string.
+
+    The attempts are compared as numbers: `a10` is newer than `a9`."""
     if not number:
         return ""
     prefix = f"ticket:{repo}#{number}:a"
-    best = ""
+    best = 0
     for key in receipts:
         if key.startswith(prefix) and key[len(prefix):].isdigit():
-            if key[len(prefix):] > best:
-                best = key[len(prefix):]
-    return best
+            best = max(best, int(key[len(prefix):]))
+    return str(best) if best else ""
 
 
 def stall_markers(snapshot, receipts):
@@ -193,6 +194,10 @@ def stall_markers(snapshot, receipts):
     for repo in LANE_REPOS:
         data = (snapshot.get("repos") or {}).get(repo) or {}
         for pr in data.get("prs") or []:
+            if pr.get("isDraft"):
+                # The shift does not work a draft, so it does not measure
+                # one either.
+                continue
             key, issue = pr_item(repo, pr)
             attempt = receipt_attempt(repo, issue, receipts)
             if not pr.get("headRefOid") and not attempt:
@@ -532,12 +537,14 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
 
 
 def unstick(repo, ledger, excl=frozenset()):
+    state = STALL_STATE if isinstance(STALL_STATE, dict) else {}
     issues = SNAPSHOT["repos"][repo]["issues"]
     referenced = {int(x) for pr in SNAPSHOT["repos"][repo]["prs"]
                   for x in re.findall(r"\bRefs #(\d+)", pr.get("body") or "")}
     orphans = [i["number"] for i in issues if not any(l["name"].startswith("stage:") for l in i["labels"])
                and i["number"] not in referenced
                and (repo, i["number"]) not in NEVER_START
+               and not stall.stalled(state, f"{repo}#{i['number']}")
                and (not excl or (isinstance(i.get("title"), str) and i["title"]
                                  and group_of(i["title"]) not in excl))]
     if not orphans:
@@ -671,9 +678,21 @@ def run_pass(ledger):
     state = STALL_STATE
     receipts = stall_receipts()
     markers = stall_markers(SNAPSHOT, receipts)
+    swept = False
+    if stall.board_pending(state) or any(
+        stall.pending(state, key, item["marker"]) for key, item in markers.items()
+    ):
+        # The board the shift holds is cached for several passes, and a
+        # stale head is not evidence that an item stopped moving. A tick
+        # that could park an item or stall the board reads the board
+        # again first.
+        SNAPSHOT = board_snapshot(ledger, force=True)
+        receipts = stall_receipts()
+        markers = stall_markers(SNAPSHOT, receipts)
+        swept = True
     progressed = any(
         stall.moved(state, key, item["marker"]) for key, item in markers.items()
-    )
+    ) or any(stall.appeared(state, key) for key in markers)
     board_event = stall.board(state, progressed, board_items(SNAPSHOT))
     for key, item in sorted(markers.items()):
         event = stall.observe(state, key, item["marker"])
@@ -691,7 +710,8 @@ def run_pass(ledger):
             "the board is swept again"
         )
         STALL_EVENTS.append(board_event)
-        SNAPSHOT = board_snapshot(ledger, force=True)
+        if not swept:
+            SNAPSHOT = board_snapshot(ledger, force=True)
     tickets = SNAPSHOT["tickets"]
     for repo in LANE_REPOS:
         with item_boundary(repo, "lane", ledger):
