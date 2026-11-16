@@ -51,7 +51,7 @@ class ActionKeyTests(unittest.TestCase):
         self.assertEqual(out.strip(), "queued #1")
         queue = self.q.load()
         self.assertEqual(queue["items"][0]["actionKey"], KEY)
-        self.assertEqual(queue["actionKeys"], {KEY: 1})
+        self.assertEqual(queue["actionKeys"], {KEY: {"id": 1, "state": "queued"}})
 
     def test_a_start_without_the_key_still_queues(self):
         code, out, err = self.start()
@@ -71,14 +71,12 @@ class ActionKeyTests(unittest.TestCase):
         self.assertEqual(out.strip(), "")
         after = self.q.load()
         self.assertEqual(after["items"], before["items"])
-        self.assertEqual(after["actionKeys"], {KEY: 1})
+        self.assertEqual(after["actionKeys"], {KEY: {"id": 1, "state": "queued"}})
         self.assertEqual(after["next"], before["next"])
 
     def test_a_dispatched_key_is_still_refused(self):
         self.start(KEY)
-        # The dispatcher takes the item out of the queue and starts it. The
-        # send holds its slot until the thread it sent to ends, so the key
-        # is reserved.
+        # The dispatcher takes the item out of the queue and starts it.
         self.q.live = lambda: 0
         with patch.object(self.q, "active_thread_ids", return_value=set()), \
                 patch.object(self.q, "call", return_value=(0, "{}")):
@@ -86,9 +84,32 @@ class ActionKeyTests(unittest.TestCase):
         self.assertEqual(self.q.load()["items"], [])
         code, out, err = self.start(KEY)
         self.assertEqual(code, 1)
-        self.assertIn("already reserved", err)
+        self.assertIn("already dispatched", err)
         self.assertIn("#1", err)
         self.assertEqual(len(self.q.load()["items"]), 0)
+
+    def test_the_key_of_an_item_that_gave_up_is_released(self):
+        self.start(KEY)
+        # The item ran out of attempts and left the queue without ever
+        # reaching the thread, so the board action is still open.
+        queue = self.q.load()
+        queue["items"][0]["attempts"] = self.q.MAX_ATTEMPTS
+        self.q.save(queue)
+        self.q.drain()
+        self.assertEqual(self.q.load()["items"], [])
+        self.assertEqual(self.q.load()["actionKeys"], {})
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "queued #2")
+
+    def test_the_key_of_a_dropped_item_is_released(self):
+        self.start(KEY)
+        self.q.cmd_drop(argparse.Namespace(id=1))
+        self.assertEqual(self.q.load()["items"], [])
+        self.assertEqual(self.q.load()["actionKeys"], {})
+        code, out, err = self.start(KEY)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "queued #2")
 
     def test_another_head_is_another_key(self):
         self.start(KEY)
@@ -96,7 +117,8 @@ class ActionKeyTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(out.strip(), "queued #2")
         self.assertEqual(self.q.load()["actionKeys"],
-                         {KEY: 1, "rebase:shyamsivakumar/mac-ops#1:def456": 2})
+                         {KEY: {"id": 1, "state": "queued"},
+                          "rebase:shyamsivakumar/mac-ops#1:def456": {"id": 2, "state": "queued"}})
 
     def test_the_started_line_carries_the_key(self):
         self.start(KEY)
