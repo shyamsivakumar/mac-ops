@@ -557,7 +557,35 @@ def zero_merge():
                               "/Users/shyamsivakumar/Code/coordinator/decisions.json"))
 
 
-EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge}
+def board_integrity():
+    import board_integrity as audit
+    def issue(n, title, stages):
+        return dict(number=n, title=title, state="OPEN", labels=[{"name": "stage:" + stage} for stage in stages])
+    rows = [issue(1, "MO-1 missing", []), issue(2, "MO-2 duplicate", ["todo", "started"]),
+            issue(3, "bad key", ["todo"]), issue(4, "MO-4 duplicate", ["todo"]),
+            issue(5, "MO-4 duplicate", ["todo"]), issue(6, "MO-6 started", ["todo"]),
+            issue(7, "MO-7 parked", ["backlog"]), issue(8, "MO-8 blocked", ["todo"]),
+            issue(9, "MO-9 merged", ["todo"])]
+    rows[7]["blockedBy"] = {"totalCount": 1, "nodes": [{"number": 7}]}
+    snapshot = {"tickets": [{"repo": "fixture/repo", "number": 6, "stage": "started"}],
+                "repos": {"fixture/repo": {"key": "MO", "issues": rows, "prs": [
+                    {"number": 10, "state": "OPEN", "body": "Refs #7"},
+                    {"number": 11, "state": "MERGED", "body": "Refs #9"}]}}}
+    expected = sorted(["fixture/repo#1: expected exactly one stage",
+        "fixture/repo#2: expected exactly one stage", "fixture/repo#3: malformed key",
+        "fixture/repo: duplicate key MO-4: [4, 5]", "fixture/repo#6: started lost stage:started",
+        "fixture/repo#8: blocked by parked #7 with open PR #10",
+        "fixture/repo#9: merged PR #11 issue still open"])
+    exact(audit.defects(snapshot), expected)
+    with patch("sys.stdin", io.StringIO(json.dumps(snapshot))), contextlib.redirect_stdout(io.StringIO()) as output:
+        exact(audit.main(), 1)
+    exact(output.getvalue().splitlines(), expected)
+    clean = {"tickets": [], "repos": {"fixture/repo": {"key": "MO", "issues": [issue(1, "MO-1 healthy", ["started"])], "prs": []}}}
+    with patch("sys.stdin", io.StringIO(json.dumps(clean))):
+        exact(audit.main(), 0)
+
+
+EVALS = {"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity}
 
 
 def main():
@@ -575,6 +603,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "board-integrity":
+                        import board_integrity as audit
+                        with patch.object(audit, "defects", return_value=[]):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted missing board defects")
                     if name == "zero-merge":
                         import lane_driver
                         with patch.object(lane_driver, "zero_merge"):
