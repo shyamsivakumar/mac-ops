@@ -1608,7 +1608,8 @@ export default class Board extends View {
     if (!e || this.guard(true)) return;
     const g = e.group;
     g.info = this.prInfo(g);
-    if (laneOf(g, () => !this.reviewBlock(g)) !== "ready") return say("info", "Merge blocked", this.reviewBlock(g) ?? "Not ready to merge");
+    g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail");
+    if (laneOf(g, g.needs, () => !this.reviewBlock(g)) !== "ready") return say("info", "Merge blocked", this.reviewBlock(g) ?? "Not ready to merge");
     const refusal = this.refusalOf(g);
     const block = this.reviewBlock(g) || (refusal && !refusal.planned ? refusal.text : null);
     if (block) return say("info", "Merge blocked", block);
