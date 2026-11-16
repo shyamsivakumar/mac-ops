@@ -1,6 +1,6 @@
 # Coordinator board snapshots
 
-`coord-watch --once` prints one `BOARD <json>` line. The existing lane owns all actions. The command does not start threads, change labels, install packages or schedule another cycle. The installer copies it alongside `ticket` and `overnight`, whose issue normalization and PR linking adapters it reuses.
+`coord-watch --once` prints one `BOARD <json>` line. The existing lane owns all actions. The command does not start threads, change labels or install packages. The default invocation repeats the cycle in one foreground loop; `--once` runs a single cycle and exits. The installer copies it alongside `ticket` and `overnight`, whose issue normalization and PR linking adapters it reuses.
 
 The configured repositories come from the existing ticket config. Every open issue is included, including issues with no stage label. Each item has `repo`, `issue`, `stage`, `thread`, `pr`, `head` and `attempt`. Identity is repository plus GitHub issue number, not the display ticket number. The largest recorded builder attempt supplies the thread; queue entries use `args.clientRequestId`, and dispatch receipts use the same request ID. T3 supplies the observed thread status. The bounded dispatch log tail supplies source availability; it never proves completion.
 
@@ -52,7 +52,9 @@ start times remain unknown. Waiting and queued time do not trigger alarms.
 logs, live mode reads the queue's dispatch.log. Each cycle consumes at most
 64 KiB per log, retains byte offsets and device/inode identity, and detects
 replacement or truncation. Complete lines containing rate-limit or traceback
-markers emit `EVENT rate-limit` or `EVENT traceback <basename>`. No raw log
+markers emit `EVENT rate-limit` or `EVENT traceback <basename>`. Each matching
+line is its own event identity, so a log with many matching lines emits one
+event per line and keeps one identity per line in the state file. No raw log
 line is printed or persisted. Event identities use inode, persisted generation, byte offset and a
 line hash; state survives restart. File replacement, detected shrinkage, or a
 changed saved boundary increments the generation before rereading, so an
