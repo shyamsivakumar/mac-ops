@@ -357,27 +357,54 @@ def start(args, prio, ledger, lkey):
     return out
 
 
-def send(thread_id, message, title, ledger, lkey, repo=None, priority=800):
+def pr_action_skip(repo, number):
+    pr = read_json(["gh", "pr", "view", str(number), "-R", repo,
+                    "--json", "number,state,headRefName,baseRefName"])
+    branches = [pr.get(field) for field in ("headRefName", "baseRefName")]
+    if any(not isinstance(branch, str) or not branch for branch in branches):
+        return pr, f"skip #{number}: missing PR branch names"
+    if any(branch.startswith("herdr/") for branch in branches):
+        return pr, f"skip #{number}: herdr branch, Shyam merges"
+    if pr.get("state") != "OPEN":
+        return pr, f"skip #{number}: PR is merged or closed"
+    return pr, None
+
+
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None):
+    repo = repo or next((r for r in CFG if r in lkey), None)
+    pr = None
+    if pr_number is not None:
+        pr, skip = pr_action_skip(repo, pr_number)
+        if skip:
+            return skip
     if lkey in ledger:
         return f"already done {lkey}"
-    if DRY:
-        return f"DRY {lkey}"
     thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
+    for attached in thread.get("pullRequests") or []:
+        if attached.get("repository") == repo and attached.get("number"):
+            _, skip = pr_action_skip(repo, attached["number"])
+            if skip:
+                return skip
     sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     if sendable:
+        workspace = None
         args = {"threadId": thread_id, "message": message}
         options = ["--tool", "t3_thread_send", "--priority", str(priority), "--title", title]
     else:
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
+        if pr is None:
+            return f"skip {lkey}: no verified PR branch for relaunch"
+        workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         args = {"projectId": CFG[repo]["projectId"], "title": title,
                 "modelSelection": SOL, "runtimeMode": "full-access",
-                "workspaceStrategy": {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
-                if thread.get("worktreePath") else {"type": "root"}, "message": message}
+                "workspaceStrategy": workspace, "message": message}
         options = ["--priority", str(priority)]
+    if DRY:
+        return f"DRY {lkey}: {json.dumps(workspace) if workspace else 'send existing thread'}"
     receipt = run([COORDQ, "start", json.dumps(args), *options]).strip()
     if not receipt:
         raise RuntimeError(f"Empty dispatch receipt for {lkey}")
@@ -423,8 +450,10 @@ def act_on_pr(repo, number, ledger):
     pr = next((p for p in SNAPSHOT["repos"][repo]["prs"] if p["number"] == number), {})
     if pr.get("state") != "OPEN":
         return None
-    if any((pr.get(field) or "").startswith("herdr/") for field in ("headRefName", "baseRefName")):
-        return f"skip #{number}: herdr branch, Shyam merges"
+    current_pr, skip = pr_action_skip(repo, number)
+    if skip:
+        return skip
+    pr = {**pr, **current_pr}
     state = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
                             "--json", "state,mergedAt"]))
     if state.get("state") != "OPEN" or state.get("mergedAt"):
@@ -451,7 +480,7 @@ def act_on_pr(repo, number, ledger):
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, run the repo check "
                "(mac-ops: `python3 scripts/mac_ops_fast_check.py`; SRW: rely on srw/agent-check, do not run scripts/check.sh), push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
-        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}")
+        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number)
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
@@ -474,14 +503,14 @@ def act_on_pr(repo, number, ledger):
         if status in ("completed", "interrupted", "failed"):
             return f"#{number} continue: " + send(
                 builder, "Continue fixing the gate findings for this head. Push the fixes and report the new head.",
-                f"{CFG[repo]['key']}#{number} continue", ledger, f"continue:{repo}#{number}:{head}")
+                f"{CFG[repo]['key']}#{number} continue", ledger, f"continue:{repo}#{number}:{head}", pr_number=number)
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
         msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
-        return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}")
+        return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
     tag = "regate" if verdict == "none" else "gate"
     model = ASTRA
     if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
@@ -809,10 +838,15 @@ def recover_dead_runs(ledger):
                 issue = read_json(["gh", "issue", "view", str(ticket), "-R", repo, "--json", "state"])
                 moved = issue.get("state") == "CLOSED"
             unknown_open_pr = False
+            protected_pr = False
             for pr in thread.get("pullRequests") or []:
                 if pr.get("repository") != repo or not pr.get("number"):
                     continue
-                current_pr = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state,headRefOid"])
+                current_pr = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state,headRefOid,headRefName,baseRefName"])
+                _, skip = pr_action_skip(repo, pr["number"])
+                if skip:
+                    print(skip)
+                    protected_pr = True
                 if current_pr.get("state") in {"CLOSED", "MERGED"}:
                     moved = True
                 recorded_head = pr.get("headRefOid") or pr.get("headSha")
@@ -824,6 +858,8 @@ def recover_dead_runs(ledger):
                     moved = True
                 if current_pr.get("state") == "OPEN" and not recorded_head:
                     unknown_open_pr = True
+            if protected_pr:
+                continue
             attempt = re.search(r":a(\d+)$", receipt_key)
             live = []
             cursor = None
