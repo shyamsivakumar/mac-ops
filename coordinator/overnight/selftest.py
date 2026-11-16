@@ -454,7 +454,10 @@ def turncap(early_interrupt=False):
 
 
 def hourly_selftest_fixture():
-    loader = importlib.machinery.SourceFileLoader("fixture_coord_tick", str(ROOT.parent / "pi/bin/coord-tick"))
+    path = ROOT / "coord-tick"
+    if not path.is_file():
+        path = ROOT.parent / "pi/bin/coord-tick"
+    loader = importlib.machinery.SourceFileLoader("fixture_coord_tick", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     tick = importlib.util.module_from_spec(spec)
     loader.exec_module(tick)
