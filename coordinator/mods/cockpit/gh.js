@@ -14,7 +14,11 @@ const PENDING = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITIN
 const cache = new Map();
 
 export const prKey = (pr) => `${pr.repo}#${pr.number}`;
-export const prState = (pr) => cache.get(prKey(pr))?.data ?? null;
+export const prState = (pr) => {
+  const data = cache.get(prKey(pr))?.data ?? null;
+  const settled = pr.state === "merged" || pr.state === "closed";
+  return settled && data?.state?.toLowerCase() !== pr.state ? null : data;
+};
 export const prEntries = (prs) => prs.map((pr) => [prKey(pr), prState(pr), cache.get(prKey(pr))?.at ?? 0]);
 export const seedPrs = (entries) => entries.forEach(([key, data, at]) => cache.set(key, { at, data }));
 export const prFresh = (pr) => Date.now() - (cache.get(prKey(pr))?.at ?? 0) < FRESH;
