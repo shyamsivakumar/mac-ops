@@ -74,8 +74,14 @@ ORDER = {
 def run(cmd, timeout=150):
     if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list")):
         require_api_budget()
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=True)
-    return (p.stdout + p.stderr).strip()
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    output = (p.stdout + p.stderr).strip()
+    refusal = ("--dry-run" in cmd and cmd[:2] == ["ticket", "start"]
+               and p.returncode == 2 and output.startswith("refused: ")
+               and len(output.splitlines()) == 1)
+    if p.returncode and not refusal:
+        raise subprocess.CalledProcessError(p.returncode, cmd, output=p.stdout, stderr=p.stderr)
+    return output
 
 
 def t3(tool, args):
@@ -211,8 +217,19 @@ def act_on_pr(repo, number, ledger):
             return f"DRY merge #{number} {head}"
         run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
         if issue:
-            run(["ticket", "close", f"{repo}#{issue}", "--pr", str(number), "--head", head,
-                 "--gate-thread", gate["threadId"]])
+            ref = f"{repo}#{issue}"
+            try:
+                run(["ticket", "close", ref, "--pr", str(number), "--head", head,
+                     "--gate-thread", gate["threadId"]])
+            except subprocess.CalledProcessError as exc:
+                output = ((exc.output or "") + (exc.stderr or "")).strip()
+                if exc.returncode != 1 or not re.fullmatch(
+                        r"(?:gh failed \(error\): )?(?:[!✓] )?Issue [^\n]+ is already closed\.?",
+                        output):
+                    raise
+                result = f"already-closed:{ref}"
+                ledger[result] = output
+                print(f"{result}: {output}")
         fast_forward_main(repo)
         return f"#{number}: merged {head}"
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
@@ -334,8 +351,9 @@ def start_next(repo, tickets, ledger, excl=frozenset()):
             break
         tries += 1
         dry = run(["ticket", "start", ref, "--dry-run"], timeout=200)
-        if "refused" in dry.splitlines()[-1] if dry else True:
+        if dry.startswith("refused: "):
             ledger[f"refused:{ref}"] = now.isoformat()
+            print(f"refused:{ref}: {dry}")
             continue
         if DRY:
             return f"DRY start {t['key']} #{t['number']}"
