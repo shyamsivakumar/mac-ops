@@ -13,7 +13,7 @@ its exact text and left alone.
 - Ticket: MO-220
 - Kind: pending approval request
 - Thread: mcp:launch:t10-answered
-- Parked at: 2026-11-16 06:21 AM PT
+- Parked at: 2026-11-16 06:31 AM PT
 - Default: the request stays unanswered and the item stays parked
 - Recommend: answer the request in the morning; the shift never answers one
 - Next: Shyam answers the request, and the shift works the item again
@@ -41,7 +41,7 @@ its exact text and left alone.
 - Ticket: MO-224
 - Kind: pending approval request
 - Thread: mcp:launch:t10-fenced
-- Parked at: 2026-11-16 06:21 AM PT
+- Parked at: 2026-11-16 06:31 AM PT
 - Default: the request stays unanswered and the item stays parked
 - Recommend: answer the request in the morning; the shift never answers one
 - Next: Shyam answers the request, and the shift works the item again
@@ -66,7 +66,7 @@ Approve lines A-C?
 === 10: a request that carries its answer is not parked ===
 === 11: an empty thread record preserves the parking lot ===
 === 12: the snag entry records what was observed ===
-## 2026-11-16 06:21 AM PT · MO-999 (#7) · A synthetic item with a failing check
+## 2026-11-16 06:31 AM PT · MO-999 (#9) · A synthetic item with a failing check
 
 - Repo: acme/widgets
 - Ticket: MO-999
@@ -74,7 +74,7 @@ Approve lines A-C?
 - What the shift did: the board reports a failing check; builder delivery has not been verified
 - Next: the builder fixes the failing check
 === 12: the entry quotes the shift's own receipt ===
-## 2026-11-16 06:21 AM PT · MO-999 (#7) · A synthetic item with a failing check
+## 2026-11-16 06:31 AM PT · MO-999 (#9) · A synthetic item with a failing check
 
 - Repo: acme/widgets
 - Ticket: MO-999
@@ -96,7 +96,7 @@ its exact text and left alone.
 - Ticket: MO-227
 - Kind: pending request
 - Thread: mcp:launch:t10-latest-unreadable
-- Parked at: 2026-11-16 06:21 AM PT
+- Parked at: 2026-11-16 06:31 AM PT
 - Default: the request stays unanswered and the item stays parked
 - Recommend: answer the request in the morning; the shift never answers one
 - Next: Shyam answers the request, and the shift works the item again
@@ -105,15 +105,24 @@ its exact text and left alone.
 - Repo: shyamsivakumar/strategy-replay-workbench
 - Ticket: SRW-1068
 - Kind: open item in the decisions log — a decision the shift cannot make
-- Parked at: 2026-11-16 06:21 AM PT
+- Parked at: 2026-11-16 06:31 AM PT
 - Default: the ticket stays as it is and the shift does not work it
 - Recommend: answer the open question in the decisions log, and the shift works the ticket
 - Next: Shyam answers, and the shift works the ticket
 - 2026-11-12T22:45Z PARKED (needs Shyam): SRW-1068 #917 (last SRW-1033 build slice) replaces refusal-until-false exha...
 - Problem: a thread could not be read, so the parking lot was not rewritten
-- What the shift did: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpjpc5ubsm/dry/bin/t3mcp call t3_thread_read {"threadId": "mcp:launch:e16c478bd9fd305e9778a128d084451e8f78d554ef8cfe38a63d9cd3d5bff789", "maxCharsPerItem": 20000, "runLimit": 50} failed (1): stub t3mcp: the thread mcp:launch:e16c478bd9fd305e9778a128d084451e8f78d554ef8cfe38a63d9cd3d5bff789 could not be read
+- What the shift did: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpfhwo9dwj/dry/bin/t3mcp call t3_thread_read {"threadId": "mcp:launch:e16c478bd9fd305e9778a128d084451e8f78d554ef8cfe38a63d9cd3d5bff789", "maxCharsPerItem": 20000, "runLimit": 50} failed (1): stub t3mcp: the thread mcp:launch:e16c478bd9fd305e9778a128d084451e8f78d554ef8cfe38a63d9cd3d5bff789 could not be read
 - Next: the shift reads the thread again on the next cycle
-overnight: the preview below is INCOMPLETE; a thread could not be read: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpjpc5ubsm/dry/bin/t3mcp call t3_thread_read {"thre
+overnight: the preview below is INCOMPLETE; a thread could not be read: /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpfhwo9dwj/dry/bin/t3mcp call t3_thread_read {"thre
+=== 16: the pull request quotes its linked ticket's receipt ===
+## 2026-11-16 06:31 AM PT · MO-220 (#435) · A pull request whose number is another ticket's number
+
+- Repo: acme/widgets
+- Ticket: MO-220
+- Problem: a check is failing: build
+- What the shift did: the receipt records the state stuck: the linked ticket's own reason
+- Next: the builder fixes the failing check
+=== 16: a pull request with no linked ticket quotes nothing ===
 === 3: a request whose text cannot be read is still parked ===
 # Parking lot
 
@@ -128,7 +137,7 @@ its exact text and left alone.
 - Ticket: MO-221
 - Kind: pending request
 - Thread: mcp:launch:t10-unreadable
-- Parked at: 2026-11-16 06:21 AM PT
+- Parked at: 2026-11-16 06:31 AM PT
 - Default: the request stays unanswered and the item stays parked
 - Recommend: answer the request in the morning; the shift never answers one
 - Next: Shyam answers the request, and the shift works the item again
@@ -149,7 +158,7 @@ its exact text and left alone.
 - Repo: shyamsivakumar/strategy-replay-workbench
 - Ticket: SRW-1055
 - Kind: open item in the decisions log — a decision the shift cannot make
-- Parked at: 2026-11-16 06:22 AM PT
+- Parked at: 2026-11-16 06:32 AM PT
 - Default: the ticket stays as it is and the shift does not work it
 - Recommend: answer the open question in the decisions log, and the shift works the ticket
 - Next: Shyam answers, and the shift works the ticket

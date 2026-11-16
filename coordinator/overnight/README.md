@@ -563,17 +563,27 @@ What gets parked:
 What gets logged:
 
 - A **failing check** on a pull request: the check names and what the shift
-  did about it.
+  observed about it.
 - A **pending request whose text could not be read**: the item is parked
   without the text and the request is still not answered.
-- An **item the budget stopped**: over its hard builder-time budget, or out
-  of fix tries. The log says what the shift did (it stopped the item and
-  spent no further fix try on it) and what comes next.
+- An **item the shift's own budget rule holds back**: over its hard
+  builder-time budget, or out of fix tries. The entry records the
+  observation (the builder's own time and the queue's own count of fix
+  tries) and never states that the item was stopped or parked on the
+  strength of that observation alone.
 - A **thread that could not be read**: the parking lot is then not
   rewritten, because a decision that is still waiting must not leave the
-  file because one read failed.
+  file because one read failed. A dry run refuses the same way: it prints
+  an INCOMPLETE line, shows the failure, writes no file and exits
+  non-zero.
 
-Two rules keep the records honest:
+Three rules keep the records honest:
+
+- A snag entry that names an action quotes the shift's own receipt for the
+  item. The receipt is looked up by the **ticket's** number: a pull request
+  is looked up by the issue it is linked to, never by its own number, so an
+  entry never quotes another ticket's state because two numbers collided.
+  An item with no receipt says that the action has not been verified.
 
 - A quoted request is fenced, and the morning report's parser reads the
   fences, so a request that holds a heading or a `Default:` line cannot

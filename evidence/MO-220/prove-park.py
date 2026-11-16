@@ -41,7 +41,9 @@ What it proves:
    cannot be read, the shift says so instead of parking an older
    request in its place,
 15. a dry run of the real board refuses too when a thread cannot be
-   read: it shows the failure, writes nothing, and exits non-zero.
+   read: it shows the failure, writes nothing, and exits non-zero,
+16. a pull request's snag entry quotes the receipt of its linked ticket,
+   never the receipt filed under the pull request's own number.
 
 Run it from the mac-ops checkout:
 
@@ -379,7 +381,10 @@ def main() -> int:
         failing_item = {
             "kind": "pull-request",
             "repo": "acme/widgets",
-            "number": 7,
+            # The pull request and its ticket carry different numbers, as
+            # they do on GitHub: the receipt is filed under the ticket.
+            "number": 9,
+            "issue": 7,
             "key": "MO-999",
             "title": "A synthetic item with a failing check",
             "url": "",
@@ -550,6 +555,72 @@ def main() -> int:
         check(
             code != 0 and "REFUSED" in (out + err),
             f"the fixture dry run did not refuse: {out}{err}",
+        )
+
+        # 16: a pull request quotes its linked ticket's receipt, never the
+        # receipt filed under its own number.
+        module = load_overnight()
+        budget = module.normalise_budget({"soft": 5, "hard": 8, "retry_cap": 2})
+        pull = {
+            "kind": "pull-request",
+            "repo": "acme/widgets",
+            "number": 435,
+            "issue": 188,
+            "key": "MO-220",
+            "title": "A pull request whose number is another ticket's number",
+            "url": "",
+            "checks": {"failed": ["build"]},
+        }
+        receipts = {
+            ("acme/widgets", "188"): {
+                "state": "stuck",
+                "stopped because": "the linked ticket's own reason",
+            },
+            ("acme/widgets", "435"): {
+                "state": "parked",
+                "stopped because": "an unrelated ticket's reason",
+            },
+        }
+        _parked, snags, _incomplete = module.park_decisions(
+            [pull],
+            [],
+            {},
+            [],
+            time.monotonic() + 30,
+            budget,
+            {},
+            receipts,
+        )
+        text = "\n".join(
+            module.snag_section(title, fields) for title, fields in snags
+        )
+        print("=== 16: the pull request quotes its linked ticket's receipt ===")
+        print(text.strip())
+        check(
+            "the linked ticket's own reason" in text,
+            "the entry does not quote the linked ticket's receipt",
+        )
+        check(
+            "an unrelated ticket's reason" not in text,
+            "the entry quoted the receipt filed under the pull request's number",
+        )
+        # A pull request with no linked ticket quotes no receipt at all,
+        # even when one is filed under its own number.
+        bare = dict(pull, issue="")
+        _parked, snags, _incomplete = module.park_decisions(
+            [bare], [], {}, [], time.monotonic() + 30, budget, {}, receipts
+        )
+        bare_text = "\n".join(
+            module.snag_section(title, fields) for title, fields in snags
+        )
+        print("=== 16: a pull request with no linked ticket quotes nothing ===")
+        check(
+            "an unrelated ticket's reason" not in bare_text,
+            "a pull request with no linked ticket quoted a foreign receipt",
+        )
+        check(
+            "has not been verified" in bare_text,
+            "the entry does not say that the action was not verified",
         )
 
         # 3 and 5: a request whose text cannot be read, and a thread that
