@@ -142,7 +142,7 @@ def main():
           state["items"][0].get("actionKey") == key, json.dumps(state["items"][0]))
     check("the queued item carries the payload the board printed",
           state["items"][0]["args"] == payload)
-    check("the queue holds the key", state.get("actionKeys") == {key: 1},
+    check("the queue holds the key", state.get("actionKeys") == {key: {"id": 1, "state": "queued"}},
           json.dumps(state.get("actionKeys")))
 
     # 2. The same command a second time is refused, and nothing changes.
