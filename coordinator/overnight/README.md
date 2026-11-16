@@ -988,3 +988,25 @@ fast-forward and must handle refs changing after this check.
 All nine registered evals and `python3 scripts/mac_ops_fast_check.py` pass.
 This is offline decision-path evidence; installed and live behavior are
 unverified. Evals 10–12 remain for their owning tickets.
+
+## Script result fixtures and commands (Refs #383)
+
+`overnight selftest` includes `script-results`. It checks missing results past
+(deadline strictly less than now), pending results at the deadline, explicit
+PASS/FAIL results, and one re-cut action per failed record. The negative
+control removes reconciliation and must be rejected.
+
+`overnight script-results --now <epoch>` reads a JSON array from stdin. Each
+record has `repo`, `issue`, `deadline` (epoch seconds), `state`, and an optional
+`result` (`PASS` or `FAIL`). It prints updated records and re-cut actions;
+the coordinator must persist these records and consume those actions. It does
+not launch threads or mutate tickets. This PR does not wire a live loop.
+
+`overnight script-run --repo <repo> --issue <n> --sha <sha> --timeout <seconds>
+--artifact <path> -- <command> [args...]` runs the supplied script, then posts
+one RESULT comment. Nonzero exits, timeouts and launch errors post FAIL.
+Comment failures propagate as errors rather than claiming delivery. Callers
+must use scripts that do not post a second RESULT themselves, and must supply
+the SHA and artifact identity. The wrapper does not verify artifact contents
+or terminate detached descendants; it must not wrap scripts that daemonize.
+Default selftest intercepts all subprocess calls and performs no live posting.
