@@ -1459,16 +1459,45 @@ def read_stall_fixture(path: str) -> tuple[int, list[dict]]:
     for tick in ticks:
         if not isinstance(tick, dict) or not tick:
             die(f"the fixture {file} has a tick that names no item")
-        cleaned.append({str(k): str(v) for k, v in tick.items()})
+        row: dict = {}
+        for label, value in tick.items():
+            if isinstance(value, dict):
+                if not str(value.get("fingerprint") or ""):
+                    die(
+                        f"the fixture {file} has a tick of {label} with no "
+                        "fingerprint"
+                    )
+                row[str(label)] = {
+                    "fingerprint": str(value.get("fingerprint")),
+                    "state": str(value.get("state") or STATE_STUCK),
+                }
+            else:
+                row[str(label)] = {"fingerprint": str(value), "state": STATE_STUCK}
+        cleaned.append(row)
     return cap, cleaned
+
+
+def tick_evidence(value: dict) -> tuple[str, str]:
+    """Return the fingerprint and the state one fixture tick names.
+
+    A tick names the evidence the item showed. The state is the state the
+    receipt holds, so the command can show that an item which is done or
+    waits for Shyam's merge is counted out and still keeps its state: the
+    rule stops work, and it says nothing about work that is finished."""
+    return str(value.get("fingerprint") or ""), str(
+        value.get("state") or STATE_STUCK
+    )
 
 
 def run_ticks(cap: int, ticks: list[dict]) -> list[dict]:
     """Run the ticks through the stall rule and return what each one shows.
 
     An item is counted out when its fingerprint has not changed for the
-    cap. The board is counted out the same way: a tick in which no item's
-    fingerprint changed is a tick in which the board made no progress."""
+    cap, and it is parked only when that count is what stops it: an item
+    that is done, that waits for Shyam's merge or that is already parked
+    keeps its state. The board is counted out the same way: a tick in
+    which no item's fingerprint changed is a tick in which the board made
+    no progress."""
     entries: dict[str, dict] = {}
     board_idle = 0
     rows: list[dict] = []
@@ -1476,14 +1505,26 @@ def run_ticks(cap: int, ticks: list[dict]) -> list[dict]:
         changed = False
         items: list[dict] = []
         for label in sorted(tick):
-            step = advance_tick(entries.get(label), tick[label], cap)
+            fingerprint, state = tick_evidence(tick[label])
+            step = advance_tick(entries.get(label), fingerprint, cap)
             entries[label] = {
                 "fingerprint": step["fingerprint"],
                 "idle": step["idle"],
             }
             changed = changed or step["changed"]
+            parked = step["parked"] and state not in (
+                STATE_DONE,
+                STATE_READY,
+                STATE_PARKED,
+            )
             items.append(
-                {"label": label, "idle": step["idle"], "parked": step["parked"]}
+                {
+                    "label": label,
+                    "idle": step["idle"],
+                    "parked": parked,
+                    "counted_out": step["parked"],
+                    "state": state,
+                }
             )
         board_idle = 1 if changed else board_idle + 1
         rows.append({"tick": number, "board_idle": board_idle, "items": items})
@@ -1513,7 +1554,16 @@ def cmd_stall(args: argparse.Namespace) -> int:
                 f"Tick {row['tick']}: board idle {row['board_idle']} of {cap} | "
                 + " | ".join(
                     f"{item['label']} idle {item['idle']} of {cap}"
-                    + (", parked as a stall" if item["parked"] else "")
+                    + (
+                        ", parked as a stall"
+                        if item["parked"]
+                        else (
+                            f", {item['state']}, so it keeps its state and gets "
+                            "no stall line"
+                            if item["counted_out"]
+                            else ""
+                        )
+                    )
                     for item in row["items"]
                 )
             )
@@ -5417,6 +5467,14 @@ def write_receipts(
         facts = item_facts(item, receipts, deadline, budget, tries)
         label = progress_label(item)
         play = in_play(item, facts)
+        # The state the receipt holds now, read before the file is written:
+        # a receipt read after the write holds the new state and would
+        # never show a change, and the stall line is written only on a real
+        # transition to parked.
+        path = receipt_path(root, item)
+        previous = ""
+        if path.exists():
+            previous = (parse_receipt(path)["fields"].get("state") or "").strip()
         first_park = False
         if play:
             entry = advance_tick(
@@ -5432,22 +5490,22 @@ def write_receipts(
             progress["board"]["in_play"] += 1
             if entry["changed"]:
                 progress["board"]["changed"] = True
-            first_park = entry["parked"] and entry["idle"] == cap
             facts = apply_stall(facts, entry["idle"], cap)
+            # The item is counted out only when it really moved to parked:
+            # an item that is done or that waits for Shyam's merge keeps
+            # its state, so it gets no stall line and no false claim.
+            first_park = (
+                entry["parked"]
+                and facts["state"] == STATE_PARKED
+                and previous != STATE_PARKED
+            )
         observed = int(time.monotonic() - started + 0.5)
         body = receipt_body(item, facts, observed)
-        path = receipt_path(root, item)
         if dry_run:
             emit()
             emit(f"--- {label} (dry run, nothing written) ---")
             emit(body, end="")
             continue
-        # The state the receipt held before this run, read before the file
-        # is written: a receipt read after the write holds the new state
-        # and would never show a change.
-        previous = ""
-        if path.exists():
-            previous = (parse_receipt(path)["fields"].get("state") or "").strip()
         outcome = write_receipt(root, item, body)
         change = bool(previous) and previous != facts["state"]
         emit(
@@ -5465,7 +5523,7 @@ def write_receipts(
             + (f" | state {previous} -> {facts['state']}" if change else ""),
         )
         if first_park:
-            write_shift_line(root, stall_line(label, cap, cap))
+            write_shift_line(root, stall_line(label, entry["idle"], cap))
     progress["items"] = {
         label: entry for label, entry in progress["items"].items() if label in seen
     }

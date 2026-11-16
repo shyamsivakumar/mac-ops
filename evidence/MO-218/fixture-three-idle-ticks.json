@@ -1,18 +1,30 @@
 {
   "cap": 3,
-  "note": "Two items in play, three ticks, no new commit and no new receipt on any tick: each item is parked as a stall and the whole board is a stall, so the board sweep runs again and Shyam is alerted.",
+  "note": "Three items in play, three ticks, no new commit and no new receipt on any tick: the two stuck items are parked as a stall, the ready item is counted out but keeps its state and gets no stall line, and the whole board is a stall, so the board sweep runs again and Shyam is alerted.",
   "ticks": [
     {
       "MO-999": "head-a|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 301` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/301|thread-a",
-      "MO-1000": "head-b|stuck|FAIL|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 1||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-b"
+      "MO-1000": "head-b|stuck|FAIL|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 1||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-b",
+      "MO-1001": {
+        "fingerprint": "head-c|ready|PASS|`overnight check-head --repo shyamsivakumar/mac-ops --number 303` exit 0||4|https://github.com/shyamsivakumar/mac-ops/pull/303|thread-c",
+        "state": "ready"
+      }
     },
     {
       "MO-999": "head-a|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 301` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/301|thread-a",
-      "MO-1000": "head-b|stuck|FAIL|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 1||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-b"
+      "MO-1000": "head-b|stuck|FAIL|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 1||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-b",
+      "MO-1001": {
+        "fingerprint": "head-c|ready|PASS|`overnight check-head --repo shyamsivakumar/mac-ops --number 303` exit 0||4|https://github.com/shyamsivakumar/mac-ops/pull/303|thread-c",
+        "state": "ready"
+      }
     },
     {
       "MO-999": "head-a|stuck|UNKNOWN|`overnight check-head --repo shyamsivakumar/mac-ops --number 301` exit 2||0|https://github.com/shyamsivakumar/mac-ops/pull/301|thread-a",
-      "MO-1000": "head-b|stuck|FAIL|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 1||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-b"
+      "MO-1000": "head-b|stuck|FAIL|`overnight check-head --repo shyamsivakumar/mac-ops --number 302` exit 1||0|https://github.com/shyamsivakumar/mac-ops/pull/302|thread-b",
+      "MO-1001": {
+        "fingerprint": "head-c|ready|PASS|`overnight check-head --repo shyamsivakumar/mac-ops --number 303` exit 0||4|https://github.com/shyamsivakumar/mac-ops/pull/303|thread-c",
+        "state": "ready"
+      }
     }
   ]
 }
