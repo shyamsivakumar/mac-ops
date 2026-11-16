@@ -33,6 +33,7 @@ in the mac-ops checkout and is installed by the same installer.
 | `overnight check-head --repo <repo> --number <n>` | Checks a pull request's head against the checks that ran on it, and exits 0 only when such a check ran and passed. It is the command a receipt records. Exit 1 means a check ran and did not pass; exit 2 means no check ran on the head (or the head could not be read), which is a refusal. The builder's own line in the pull request body is a claim about the check, so it never counts. |
 | `overnight attend` | The attended first night (spec part T13). The command a person runs when they sit down to watch. The shift arms itself, reads the board, takes the small items the board shows and observes each one for real: its pull request, its checks, the gate's verdict and the files it touches. It writes one receipt per item, the shift log and the morning report. It runs no merge, no push and no builder. |
 | `overnight redact` | Prints a text with every secret pattern redacted (spec part T7a). It is the redaction the shift writes with, made visible: the fake key goes in and does not come out. It writes nothing. |
+| `overnight park` | Writes the shift's two inbox files (spec part T10): `inbox/parking-lot.md` holds the decisions the shift could not make, each with a default and a recommendation, and `inbox/snag-log.md` holds the problems it found and what it did about them. It reads the board, the queue's own records and the threads that hold the work, so it keeps no second queue. A pending approval request is parked with its exact text and is never answered: the module has no call that answers a request. `--dry-run` prints both files and writes none, and `--fixture` parks the pending request of one fixture thread. |
 
 Intake is the first part of the spec's rollout plan (T3). The later parts
 (filtering, ordering, the policy snapshot and the work parts) build on the
@@ -627,8 +628,8 @@ revision 3 changes them.
 | `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
 | `run/stall-state.json` | A cycle | How long every item the shift measured has been idle, and which items are parked as a stall. It holds no list of work: the board is the list. |
 | `receipts/<item>.md` | A cycle (`overnight receipt`) | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
-| `inbox/parking-lot.md` | A cycle | Decisions the shift could not make. Each with a default and a recommendation. |
-| `inbox/snag-log.md` | A cycle | Problems found (flaky test, conflict, dialog) and what the shift did. |
+| `inbox/parking-lot.md` | A cycle (`overnight park`) | Decisions the shift could not make. Each with a default and a recommendation. |
+| `inbox/snag-log.md` | A cycle (`overnight park`) | Problems found (flaky test, conflict, dialog) and what the shift did. |
 | `run/shift-log.md` | All steps | One line per event, with PT time. It also states how the night ended (`ended: deadline`, `ended: all done`, `ended: STOP` or `ended: stall`). |
 | `receipts/morning-YYYY-MM-DD.md` | Report step | The morning report: what merged, what is ready, what is stuck and why, and which decisions wait for Shyam. |
 
@@ -644,6 +645,65 @@ receipts sit beside it.
   cookie or `.env` value.
 - The folder is scratch for one shift. Nothing here changes merge, push, the
   slot cap or the Ascend rules.
+
+## The parking lot and the snag log
+
+The shift works the board on its own and cannot make every decision. What it
+cannot decide is parked; what it found is logged.
+
+| File | What it holds |
+| --- | --- |
+| `inbox/parking-lot.md` | The decisions that wait for Shyam now. One section per item, each with a `Default:` line (what happens when he says nothing) and a `Recommend:` line. The file is written whole, so a decision that is no longer waiting leaves it and the morning report never names a decision that is gone. |
+| `inbox/snag-log.md` | The problems the shift found and what it did about them. One section per problem, and a problem the shift finds twice is written once. |
+
+What gets parked:
+
+- A **pending approval request** on a thread that holds the work. The request
+  is parked with its exact text, quoted as the tool showed it, and it is
+  never answered. The shift has no call that answers a request: it reads the
+  thread and writes the record. The request that is parked is the last one
+  the thread holds that is still open, so a question that was already
+  answered is never parked as if it waited for an answer. The proof
+  (`evidence/MO-220/prove-park.py`) runs the command with a T3 stub that
+  fails on every call but a read, so an answer would fail loudly.
+- An **open decision in the coordinator's decisions log**. The log is the
+  coordinator's own parking lot, so the shift reads it, quotes the open
+  line and parks the ticket with it.
+- A ticket the filter **drops for a decision**: a ticket marked as needing
+  Shyam, a ticket marked as needing a design, a ticket with an open item or
+  a hold in the decisions log. A ticket dropped as Ascend work, or as being
+  off the allow list, is not a decision and is never parked.
+
+What gets logged:
+
+- A **failing check** on a pull request: the check names and what the shift
+  observed about it.
+- A **pending request whose text could not be read**: the item is parked
+  without the text and the request is still not answered.
+- An **item the shift's own budget rule holds back**: over its hard
+  builder-time budget, or out of fix tries. The entry records the
+  observation (the builder's own time and the queue's own count of fix
+  tries) and never states that the item was stopped or parked on the
+  strength of that observation alone.
+- A **thread that could not be read**: the parking lot is then not
+  rewritten, because a decision that is still waiting must not leave the
+  file because one read failed. A dry run refuses the same way: it prints
+  an INCOMPLETE line, shows the failure, writes no file and exits
+  non-zero.
+
+Three rules keep the records honest:
+
+- A snag entry that names an action quotes the shift's own receipt for the
+  item. The receipt is looked up by the **ticket's** number: a pull request
+  is looked up by the issue it is linked to, never by its own number, so an
+  entry never quotes another ticket's state because two numbers collided.
+  An item with no receipt says that the action has not been verified.
+
+- A quoted request is fenced, and the morning report's parser reads the
+  fences, so a request that holds a heading or a `Default:` line cannot
+  change the decision it is quoted in.
+- A decision keeps the time it was first parked, and a problem keeps its
+  first entry, so the records hold the state and not the cycles.
 
 ## What the morning report reads
 

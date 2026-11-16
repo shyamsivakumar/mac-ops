@@ -1,0 +1,51 @@
+--- parking lot (dry run, nothing written) ---
+# Parking lot
+
+The decisions the shift could not make. Each entry names the default
+that applies when Shyam says nothing and a recommendation. The shift
+never answers an approval request: a pending request is parked with
+its exact text and left alone.
+
+## SRW-1068 (#917) · Update finite admission proofs and staging cancellation coverage
+
+- Repo: shyamsivakumar/strategy-replay-workbench
+- Ticket: SRW-1068
+- Kind: open item in the decisions log — a decision the shift cannot make
+- Parked at: 2026-11-16 06:38 AM PT
+- Default: the ticket stays as it is and the shift does not work it
+- Recommend: answer the open question in the decisions log, and the shift works the ticket
+- Next: Shyam answers, and the shift works the ticket
+
+The open question, quoted exactly:
+
+```text
+- 2026-11-12T22:45Z PARKED (needs Shyam): SRW-1068 #917 (last SRW-1033 build slice) replaces refusal-until-false exha...
+```
+
+--- snag log (dry run, nothing written) ---
+# Snag log
+
+The problems the shift found and what it did about them. One section
+per problem. A problem the shift finds twice is written once.
+
+## 2026-11-16 06:38 AM PT · shyamsivakumar/mac-ops#435 · MO-220 · Overnight T10: Parking lot and snag log
+
+- Repo: shyamsivakumar/mac-ops
+- Problem: the builder used 43 min of its 8 min hard budget
+- What the shift did: the receipt records the state stuck: no pull request is open for this ticket
+- Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
+
+## 2026-11-16 06:38 AM PT · shyamsivakumar/mac-ops#431 · Complete PR state actions in the active lane (Refs #277)
+
+- Repo: shyamsivakumar/mac-ops
+- Problem: the builder used 10 min of its 8 min hard budget
+- What the shift did: the receipt records the state stuck: no pull request is open for this ticket
+- Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
+
+## 2026-11-16 06:38 AM PT · shyamsivakumar/strategy-replay-workbench#1167 · Bot 2: book recovered exit dollars by execution increment (Refs #1017)
+
+- Repo: shyamsivakumar/strategy-replay-workbench
+- Problem: the builder used 224 min of its 8 min hard budget
+- What the shift did: the receipt records the state stuck: the gate did not pass
+- Next: Shyam decides whether to give the item more time, to split it into a 5-minute part or to close it
+
