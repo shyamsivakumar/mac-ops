@@ -1,10 +1,11 @@
 """Stall detection for the overnight shift.
 
 An item that shows no new commit and no new receipt for three ticks is not
-moving. The shift parks it as `stall` and moves on to the next item. When
-the whole board shows no progress for three ticks, the shift logs the stall,
-sweeps the board again and alerts Shyam. The shift keeps running until every
-item is done or parked.
+moving. The shift reports it as stalled and keeps working it: the ticket's
+newer instruction keeps the no-parking policy from Refs #376, so a stall is
+reported, never parked. When the whole board shows no progress for three
+ticks, the shift logs the stall, sweeps the board again and alerts Shyam.
+The shift keeps running until every item is done or parked.
 
 The rule lives in this one place: `observe` decides one item and `board`
 decides the board. Both are pure: they read a state mapping and return the
@@ -74,9 +75,9 @@ def appeared(state, key):
 
 
 def pending(state, key, item_marker, cap=STALL_CAP):
-    """Return True when this tick could park the item.
+    """Return True when this tick could report the item as stalled.
 
-    The caller reads the board again before it parks, because the board
+    The caller reads the board again before it decides, because the board
     the shift holds is cached and a stale head is not evidence that the
     item stopped moving."""
     entry = (state.get("items") or {}).get(key)
@@ -133,9 +134,9 @@ def prune(state, keys):
 
 
 def stalled(state, key):
-    """Return True when the item is parked as a stall.
+    """Return True when the item was reported as stalled.
 
-    A parked item is skipped: the shift moves on to the next one."""
+    A reported item is not parked: the shift keeps working it."""
     entry = (state.get("items") or {}).get(key)
     if not isinstance(entry, dict):
         return False

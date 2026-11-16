@@ -18,8 +18,8 @@ DRY = False
 SNAPSHOT = {}
 API_FLOOR = 500
 BOARD_REFRESH_PASSES = 5
-# The stall events of the last pass: an item that was parked as a stall and
-# a board that stopped moving. The shift writes the records for them.
+# The stall events of the last pass: an item that was reported as stalled
+# and a board that stopped moving. The shift writes the records for them.
 STALL_EVENTS = []
 # The stall state of the shift: how long every item has been idle. The
 # shift loads it before the pass and saves it after the pass, so the pass
@@ -680,7 +680,7 @@ def run_pass(ledger):
     ):
         # The board the shift holds is cached for several passes, and a
         # stale head is not evidence that an item stopped moving. A tick
-        # that could park an item or stall the board reads the board
+        # that could report a stall or stall the board reads the board
         # again first.
         SNAPSHOT = board_snapshot(ledger, force=True)
         receipts = stall_receipts()
