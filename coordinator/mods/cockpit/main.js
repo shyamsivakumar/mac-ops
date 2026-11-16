@@ -7,6 +7,7 @@ import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, m
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
@@ -227,7 +228,10 @@ export default class Board extends View {
     this.search.on("submit", () => this.handle.focus());
     this.search.on("focus", () => (this.searching = true));
     this.search.on("blur", () => (this.searching = false));
+    this.copyId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    hydrateAlerts();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
+    cx.timer.every(CHECK_EVERY, (cx) => this.alertTick(cx));
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
     this.watchWorktrees(cx);
     this.restore();
@@ -242,6 +246,31 @@ export default class Board extends View {
 
   watching() {
     return Date.now() - this.drawn < IDLE_AFTER;
+  }
+
+  alertTick(cx) {
+    if (!this.watching() && alertState().on && leaseOpen(this.copyId, Date.now())) this.refresh(cx);
+  }
+
+  alertCheck() {
+    if (this.pop || this.dec || this.unsure() || !this.board) return;
+    const now = Date.now();
+    const rows = this.place(this.groups(), now).map(([g, lane]) => ({
+      key: g.key,
+      held: holds(lane, g.needs),
+      asleep: g.asleep,
+      unsettled: g.info.status === "open" && (g.info.gh?.ci ?? "loading") === "loading" || this.verdictFor(g) === LOADING_VERDICT,
+      label: this.cleanTitle(g).slice(0, 40),
+      pr: g.info.pr?.number,
+    }));
+    checkAlerts(rows, this.copyId, now);
+  }
+
+  toggleAlerts(cx) {
+    const on = !alertState().on;
+    setAlertsOn(on);
+    say("info", on ? "Phone alerts on" : "Phone alerts off");
+    cx.notify();
   }
 
   refresh(cx, force) {
@@ -479,6 +508,7 @@ export default class Board extends View {
       this.cap = await queueCap().catch(() => 6);
       const late = !this.unchanged("prs", this.prStamp());
       if (late) this.persist();
+      this.alertCheck();
       const planned = await this.planNext();
       return planned || late;
     }, cx, force);
@@ -526,17 +556,8 @@ export default class Board extends View {
     return reviewThread(g);
   }
 
-  columns(t, now) {
-    const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, total: 0, groups: [] }]));
-    const live = this.groups();
-    const replaced = new Set(this.issueGroups.map((g) => g.key));
-    const queued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))];
-    this.projects = tally([...live, ...queued]);
-    const inProject = (g) => !this.project || g.project === this.project;
-    const matches = this.filterOf();
-    const searching = Boolean(this.query.trim());
-    const keep = (g) => inProject(g) && matches(g) && (!g.asleep || searching);
-    const placed = live.map((g) => {
+  place(live, now) {
+    return live.map((g) => {
       g.info = this.prInfo(g);
       g.asleep = Boolean(this.sleeper(g, now));
       g.trusted = !this.unsure();
@@ -547,6 +568,19 @@ export default class Board extends View {
       g.trail = lane === "ready" ? null : trailOf(g, now, () => this.verdictFor(g)?.state === "fail");
       return [g, lane];
     });
+  }
+
+  columns(t, now) {
+    const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, total: 0, groups: [] }]));
+    const live = this.groups();
+    const replaced = new Set(this.issueGroups.map((g) => g.key));
+    const queued = [...this.issueGroups, ...this.backlog.filter((g) => !replaced.has(g.key))];
+    this.projects = tally([...live, ...queued]);
+    const inProject = (g) => !this.project || g.project === this.project;
+    const matches = this.filterOf();
+    const searching = Boolean(this.query.trim());
+    const keep = (g) => inProject(g) && matches(g) && (!g.asleep || searching);
+    const placed = this.place(live, now);
     this.asleepCount = live.filter((g) => g.asleep).length;
     this.pruneSnoozed(live, now);
     this.pruneSent(live);
@@ -577,6 +611,7 @@ export default class Board extends View {
       notice: (cx) => this.openNotice(shared("cockpit.notice"), cx),
       dismiss,
       panel: (id, cx) => this.openPanel(id, cx),
+      alerts: (cx) => this.toggleAlerts(cx),
       command: (name) => run(name),
       reply: (cx) => this.openReply(this.current(), cx),
       open: (cx) => this.openEntry(this.current(), cx),
