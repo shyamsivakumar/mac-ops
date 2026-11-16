@@ -27,6 +27,27 @@ So the shift reports a stall and keeps working the item. It does not skip
 the item, does not block its start, does not recover it, does not label it
 and does not re-cut it. The receipt says `State: stuck`, not `parked`.
 
+## The second gate round
+
+The gate ran again and returned the same report, against the same first
+head (`e0cddb0`): it says "Reconfirmed the exact head and PR-body line:
+`Builder check: PASS e0cddb00e55cdf36664e731034efe90b0475a9d9`". The four
+findings are the four above, and all four are already fixed in this
+revision. Where each one is fixed, at this head:
+
+| Finding | Where it is fixed now |
+| --- | --- |
+| The lane skipped stalled pull requests and blocked ticket starts. | `coordinator/overnight/lane_driver.py`: the pull request loop calls `act_on_pr` for every pull request (line 724), `start_next` filters the ready tickets by stage, problems and group only (line 506), and `unstick` lists its orphans without a stall condition (line 537). No stall state is read anywhere in the driver except to measure and report it. The receipt of a stalled item says `State: stuck`, and the shift log says the item was reported and the shift keeps working it. |
+| Progress was measured from a snapshot cached for five passes. | `coordinator/overnight/lane_driver.py` lines 678-689: a tick that could report a stall or stall the board reads the board again first (`stall.board_pending`, `stall.pending`, `board_snapshot(ledger, force=True)`), and the markers are taken from that fresh board. |
+| Receipt attempts were compared as strings. | `coordinator/overnight/lane_driver.py` line 170: `receipt_attempt` compares the attempts as numbers, so `a10` is newer than `a9`. |
+| The decisions file recorded only the selected fast check. | `evidence/MO-218/decisions.md`, "The repository checks": the fast check and the full local suite (`heavy timeout 300 python3 -m unittest discover -s tests -t .`, 288 tests, the two failures that also fail on `origin/main`). |
+
+The gate's own note that "the ticket's earlier detector gap has an
+implementation, but its no-parking requirement remains unresolved" is
+answered by decision 0: the shift reports a stalled item and keeps
+working it, and the lane's `park()` is never called by the stall path (or
+by anything else in the driver).
+
 ## The review round
 
 One reviewer round ran in-session (Codex, `gpt-6.1-sol`, high effort) over
