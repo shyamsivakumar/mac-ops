@@ -6,8 +6,8 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, props, 
 import { errorKind, load, loadBacklog, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedVerdicts, sendReply, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
-import { DEAD, laneOf } from "./asks.js";
+import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { DEAD, laneOf, needReasons } from "./asks.js";
 
 const CLICK_SLOP = 4;
 const POP_WIDTH = 900;
@@ -65,6 +65,8 @@ const whenText = (ms) => {
 };
 
 const conflicting = (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.mergeable === "CONFLICTING";
+
+const REBASE_LANES = [...PR_LANES, "needs"];
 
 const failedIn = (cols) => cols.needs.groups.filter((g) => g.kind === "fail" && !g.asleep);
 
@@ -535,7 +537,8 @@ export default class Board extends View {
     const placed = live.map((g) => {
       g.info = this.prInfo(g);
       g.asleep = Boolean(this.sleeper(g, now));
-      return [g, laneOf(g, () => !this.reviewBlock(g))];
+      g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail");
+      return [g, laneOf(g, g.needs, () => !this.reviewBlock(g))];
     });
     this.asleepCount = live.filter((g) => g.asleep).length;
     this.pruneSnoozed(live, now);
@@ -543,6 +546,7 @@ export default class Board extends View {
     for (const [, key] of placed) cols[key].total += 1;
     if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
     for (const [g, key] of placed) if (keep(g)) cols[key].groups.push(g);
+    cols.needs.groups = cols.needs.groups.map((g) => [this.enteredAt("needs", g), g]).sort((a, b) => a[0] - b[0]).map(([, g]) => g);
     cols.backlog.groups.push(...queued.filter(keep));
     const reviewed = cols.done.groups.flatMap((g) => g.threads).filter((c) => c.review);
     const cb = {
@@ -596,8 +600,8 @@ export default class Board extends View {
     for (const key of COLUMN_KEYS) {
       const col = cols[key];
       const narrow = this.colW < 220;
-      const variant = PR_LANES.has(key) ? "pr" : key === "backlog" ? "backlog" : "std";
       for (const g of col.groups) {
+        const variant = prCard(key, g.needs) ? "pr" : key === "backlog" ? "backlog" : "std";
         col.count += 1;
         if (this.isFolded(key) && key !== this.pop) continue;
         const gkey = `g:${key}:${g.key}`;
@@ -608,9 +612,9 @@ export default class Board extends View {
         const refusal = key === "ready" ? this.refusalOf(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
-        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, quiet: key === "run" && this.quiet(g, now), asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
-        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
+        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length)), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
         for (const th of g.threads.slice(1)) {
           const tkey = `t:${th.key}`;
@@ -633,7 +637,7 @@ export default class Board extends View {
     const why = [...BLOCK_BUCKETS.map(([, name]) => name), PLAN_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing };
-    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries([...PR_LANES].map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
+    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries(REBASE_LANES.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
 
   filterOf() {
@@ -697,18 +701,25 @@ export default class Board extends View {
   enteredAt(key, g) {
     if (key === "backlog") return g.issue ? g.at : g.primary.created;
     if (key === "run") return g.runSince ?? g.primary.at;
-    if (key === "needs") return g.primary.at;
     const seen = this.seen[g.key];
-    return Math.max(g.at, seen?.col === key ? seen.at : 0);
+    const since = Math.max(g.at, seen?.col === key ? seen.at : 0);
+    if (key !== "needs") return since;
+    const [first] = g.needs;
+    if (first === "question") return g.primary.at;
+    if (first === "ci") return g.info.gh.ciAt || since;
+    if (first === "changes") return this.reviewOf(g)?.at ?? since;
+    return since;
   }
 
   summary(key, col, now) {
     if (!col.groups.length) return [...(key === "backlog" ? this.ticketNote(now) : []), [key === "backlog" && !this.backlogLoaded ? "loading" : "empty", "dim"]];
     const groups = col.groups;
     const seg = (n, text, tone) => (n ? [[`${n} ${text}`, tone]] : []);
-    const oldest = ["oldest " + ago(Math.min(...groups.map((g) => g.at)), now), "dim"];
+    const oldest = ["oldest " + ago(Math.min(...groups.map((g) => (key === "needs" ? this.enteredAt(key, g) : g.at))), now), "dim"];
     if (key === "needs") {
-      return [...seg(groups.filter((g) => g.kind === "ask").length, "decisions", "blocked"), ...seg(groups.filter((g) => g.kind === "wait").length, "waiting", "blocked"), ...seg(groups.filter((g) => g.kind !== "ask" && g.kind !== "wait").length, "asked", "blocked"), oldest];
+      const asking = groups.filter((g) => g.needs.includes("question"));
+      const count = (reason) => groups.filter((g) => g.needs.includes(reason)).length;
+      return [...seg(asking.filter((g) => g.kind === "ask").length, "decisions", "blocked"), ...seg(asking.filter((g) => g.kind === "wait").length, "waiting", "blocked"), ...seg(asking.filter((g) => g.kind !== "ask" && g.kind !== "wait").length, "asked", "blocked"), ...seg(count("ci"), "CI failed", "blocked"), ...seg(count("changes"), "changes requested", "blocked"), ...seg(count("conflict"), "conflict", "blocked"), oldest];
     }
     if (key === DEAD) {
       return [...seg(groups.filter((g) => g.kind === "fail").length, "failed", "dim"), ...seg(groups.filter((g) => g.kind === "stop").length, "stopped", "dim"), oldest];
@@ -726,8 +737,7 @@ export default class Board extends View {
       if (key === "cifail") return [...seg(groups.length, "failing", "blocked"), ...conflict, oldest];
       if (key === "ready") return [...seg(groups.length - conflicts, "ready", "done"), ...conflict, oldest];
       const draft = groups.filter((g) => g.info.gh?.draft).length;
-      const changes = groups.filter((g) => !g.info.gh?.draft && this.verdictFor(g)?.state === "fail").length;
-      return [...seg(groups.length - draft - changes, "waiting", "working"), ...seg(changes, "changes requested", "blocked"), ...seg(draft, "draft", "dim"), ...conflict, oldest];
+      return [...seg(groups.length - draft, "waiting", "working"), ...seg(draft, "draft", "dim"), ...conflict, oldest];
     }
     if (key === "done") {
       const reviewedCards = groups.filter((g) => g.threads.some((c) => c.review)).length;
@@ -846,7 +856,7 @@ export default class Board extends View {
   jump() {
     if (this.pop) return;
     const order = ["needs", "cifail", "ready"]
-      .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => a.at - b.at).map((g) => ({ col: key, key: `g:${key}:${g.key}` })));
+      .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => (key === "needs" ? this.enteredAt(key, a) - this.enteredAt(key, b) : a.at - b.at)).map((g) => ({ col: key, key: `g:${key}:${g.key}` })));
     if (!order.length) return say("success", "Nothing needs you");
     const next = order[(order.findIndex((x) => x.key === this.cursor) + 1) % order.length];
     if (this.isFolded(next.col)) this.peeked.add(next.col);
@@ -863,7 +873,7 @@ export default class Board extends View {
   }
 
   needsCard() {
-    const order = [...this.layout.cols.needs.groups].sort((a, b) => a.at - b.at).map((g) => `g:needs:${g.key}`);
+    const order = this.layout.cols.needs.groups.map((g) => `g:needs:${g.key}`);
     if (!order.length) return say("info", "Nothing needs you");
     if (this.isFolded("needs")) this.peeked.add("needs");
     this.moveTo(order[(order.indexOf(this.cursor) + 1) % order.length]);
@@ -1037,14 +1047,14 @@ export default class Board extends View {
   }
 
   rebase(e, cx) {
-    if (!PR_LANES.has(e?.col) || this.guard(true)) return;
+    if (!e || !prCard(e.col, e.group.needs) || this.guard(true)) return;
     if (!this.rebasable(e.group)) return say("info", "Nothing to rebase", "This PR has no merge conflict, or its thread is running.");
     this.confirm("rebase", e.key, () => this.tellEach([[e.group, this.ask("Rebase", e.group, REBASE_NOTE)]], "Rebase", cx), cx);
   }
 
   rebaseTargets(lane, cols = this.layout.cols) {
-    const lanes = lane ? [lane] : [...PR_LANES].filter((k) => this.owns(k));
-    return lanes.flatMap((k) => cols[k].groups).filter((g) => this.rebasable(g) && !g.asleep);
+    const lanes = lane ? [lane] : REBASE_LANES.filter((k) => this.owns(k));
+    return lanes.flatMap((k) => cols[k].groups.filter((g) => prCard(k, g.needs))).filter((g) => this.rebasable(g) && !g.asleep);
   }
 
   rebaseAll(cx, lane) {
@@ -1598,7 +1608,8 @@ export default class Board extends View {
     if (!e || this.guard(true)) return;
     const g = e.group;
     g.info = this.prInfo(g);
-    if (laneOf(g, () => !this.reviewBlock(g)) !== "ready") return say("info", "Merge blocked", this.reviewBlock(g) ?? "Not ready to merge");
+    g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail");
+    if (laneOf(g, g.needs, () => !this.reviewBlock(g)) !== "ready") return say("info", "Merge blocked", this.reviewBlock(g) ?? "Not ready to merge");
     const refusal = this.refusalOf(g);
     const block = this.reviewBlock(g) || (refusal && !refusal.planned ? refusal.text : null);
     if (block) return say("info", "Merge blocked", block);
@@ -1679,7 +1690,7 @@ export default class Board extends View {
     } else if (k === "enter" && c) this.activate(c, cx);
     else if (k === "o" && c) this.openEntry(c, cx);
     else if (k === "r" && c) this.openReply(c, cx);
-    else if (k === "d" && c && DECIDES.has(c.col)) this.openReply(c, cx, PR_LANES.has(c.col) ? NOTE_LABEL : "Reply");
+    else if (k === "d" && c && DECIDES.has(c.col)) this.openReply(c, cx, prCard(c.col, c.group.needs) ? NOTE_LABEL : "Reply");
     else if (k === "S") this.settleReviewed(cx);
     else if (k === "A") this.settleAll(cx);
     else if (k === "a") this.approve(c, cx);
