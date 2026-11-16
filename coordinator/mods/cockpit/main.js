@@ -4,9 +4,9 @@ import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, props, readTextFile, run, setShared, shared, theme } from "herdr";
 import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
-import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
+import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
@@ -37,6 +37,7 @@ const DEC_FRESH = 60000;
 const STALE_RUN = 1800000;
 const NO_REVIEW_REFUSAL = /no review thread found/i;
 const PLAN_STALE = 60000;
+const BULK_KEYS = new Set(["S", "A", "M", "F", "U"]);
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
@@ -181,12 +182,14 @@ export default class Board extends View {
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["backlog"]'));
     this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["backlog","done"]'));
     this.deadOpen = localStorage.getItem("dead-open") === "1";
+    this.fanView = false;
+    this.fanFolded = new Set();
     this.compact = false;
     this.cap = 6;
     this.area = { width: 1200, height: 260 };
-    this.scrollY = Object.fromEntries([...COLUMN_KEYS, "compact"].map((k) => [k, 0]));
+    this.scrollY = Object.fromEntries([...COLUMN_KEYS, "compact", "fan"].map((k) => [k, 0]));
     this.reveal = null;
-    this.box = Object.fromEntries([...COLUMN_KEYS, "compact"].map((k) => [k, { width: 300, height: 200 }]));
+    this.box = Object.fromEntries([...COLUMN_KEYS, "compact", "fan"].map((k) => [k, { width: 300, height: 200 }]));
     this.drawn = Date.now();
     this.layout = { cols: {}, reviewed: [], finished: [], approvable: [], skipped: 0, nothing: "" };
     if (this.sheet) {
@@ -218,6 +221,8 @@ export default class Board extends View {
     }
     if (shared("cockpit.pop")) setShared("cockpit.pop", null);
     if (shared("cockpit.notice")) dismiss();
+    this.fanView = localStorage.getItem("fan") === "1";
+    this.fanFolded = new Set(JSON.parse(localStorage.getItem("fan-folded") ?? "[]"));
     this.search = InputState.new({ placeholder: "Ticket ID or title" });
     this.search.on("change", (_e, cx) => this.setQuery(this.search.value(), cx));
     this.search.on("submit", () => this.handle.focus());
@@ -463,7 +468,7 @@ export default class Board extends View {
       }
       return !this.unchanged("tickets", [this.issues, this.ticketError]);
     }, cx, force);
-    this.background("origins", () => loadOrigins(board.groups.flatMap((g) => (g.kind === "ask" ? [] : g.threads))), cx, force);
+    this.background("origins", () => loadOrigins([...board.groups.flatMap((g) => (g.kind === "ask" ? [] : g.threads)), ...this.issueGroups.flatMap((g) => g.threads)], this.issues?.issues ?? []), cx, force);
     this.background("sessions", () => loadSessions(board.groups.filter((g) => g.kind !== "ask" && !g.issue).map((g) => this.taskThread(g))), cx, force);
     this.background("prs", async () => {
       await refreshPrs(board.groups.filter((g) => !g.threads.some((c) => c.kind === "run")).flatMap((g) => g.prs).filter((p) => p.state === "open"));
@@ -598,6 +603,11 @@ export default class Board extends View {
         cx.notify();
       },
       expand: (key) => this.expand(key),
+      fan: (cx) => this.toggleFan(cx),
+      foldParent: (key, cx) => {
+        this.setParentFold(key, !this.fanFolded.has(key));
+        cx.notify();
+      },
       quick: (id, cx) => this.toggleQuick(id, cx),
       clearSearch: (cx) => this.clearSearch(cx),
       close: () => closeOverlay(this.overlay),
@@ -631,6 +641,7 @@ export default class Board extends View {
       }
       col.summary = this.summary(key, col, now);
     }
+    cols.fan = this.fanView ? this.fan(t, [...placed.filter(([g]) => keep(g)), ...cols.backlog.groups.filter((g) => g.issue && !placed.some(([live]) => live.task === g.task)).map((g) => [g, "backlog"])], cb, now) : { rows: [], count: 0, total: 0, groups: [] };
     this.scope = { shown: COLUMN_KEYS.reduce((sum, k) => sum + cols[k].count, 0), total: [...live, ...queued].filter(inProject).length };
     const open = [...cols.ready.groups, ...cols.review.groups].filter((g) => g.info.pr && !g.asleep);
     const approvable = [];
@@ -645,6 +656,49 @@ export default class Board extends View {
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing };
     return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries(REBASE_LANES.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
+  }
+
+  fan(t, placed, cb, now) {
+    const features = new Map();
+    const loose = [];
+    const join = (parent, entry) => (features.get(parent.key) ?? features.set(parent.key, { key: parent.key, title: parent.title, workers: [] }).get(parent.key)).workers.push(entry);
+    for (const [g, lane] of placed) {
+      const parent = g.kind === "ask" ? null : parentOf(originOf(this.taskThread(g)));
+      if (parent) join(parent, [g, lane]);
+      else loose.push([g, lane]);
+    }
+    const other = [];
+    for (const [g, lane] of loose) {
+      const ticket = originOf(this.taskThread(g))?.ticket;
+      const own = ticket && features.get(`ref:${ticket.repo}#${ticket.number}`);
+      if (own) own.workers.push([g, lane]);
+      else other.push([g, lane]);
+    }
+    const parents = [...features.values()].filter((f) => f.workers.length > 1);
+    for (const f of features.values()) if (f.workers.length === 1) other.push(...f.workers);
+    if (other.length) parents.push({ key: "other", title: "Other", workers: other, last: true });
+    const order = (list) => list.sort((a, b) => COMPACT_ORDER.indexOf(a[1]) - COMPACT_ORDER.indexOf(b[1]) || b[0].at - a[0].at);
+    const urgency = (f) => f.workers.filter(([, lane]) => lane === "needs").length;
+    parents.sort((a, b) => Number(a.last ?? false) - Number(b.last ?? false) || urgency(b) - urgency(a) || Math.max(...b.workers.map(([g]) => g.at)) - Math.max(...a.workers.map(([g]) => g.at)));
+    const rows = [];
+    const groups = [];
+    for (const f of parents) {
+      const counts = { merged: 0, review: 0, working: 0, needs: 0, queued: 0, other: 0 };
+      for (const [g, lane] of f.workers) counts[g.info?.status === "merged" ? "merged" : lane === "needs" ? "needs" : lane === "run" ? "working" : lane === "backlog" ? "queued" : PR_LANES.has(lane) ? "review" : "other"] += 1;
+      const folded = this.fanFolded.has(f.key);
+      const head = { key: f.key, title: f.title, total: f.workers.length, counts, parts: progressParts(counts, f.workers.length), hint: f.key === "other" ? "Cards with no parent feature, or the only card of one" : `${folded ? "Show" : "Hide"} the ${f.workers.length} workers (← → or f)` };
+      rows.push({ key: `fp:${f.key}`, h: H.fan, el: () => parentCard(t, head, { colW: this.colW, folded }, cb) });
+      if (folded) continue;
+      for (const [g, lane] of order(f.workers)) {
+        groups.push(g);
+        const key = `f:${g.key}`;
+        const author = this.taskThread(g);
+        const entry = { key, col: lane, group: g, thread: null, parent: f.key };
+        const view = { col: lane, now, selected: this.cursor === key, mark: this.cursorMark(false), c: { ...g.primary, title: g.title, task: g.task }, pr: g.info?.pr, gh: g.info?.gh, merged: g.info?.status === "merged", needs: g.needs, entered: this.enteredAt(lane, g), issue: g.issue, session: g.issue ? null : sessionOf(author) };
+        rows.push({ key, h: H.worker, entry, el: () => workerRow(t, entry, view, cb) });
+      }
+    }
+    return { rows, count: groups.length, total: groups.length, groups };
   }
 
   filterOf() {
@@ -769,6 +823,7 @@ export default class Board extends View {
 
   keys() {
     if (this.pop) return [this.pop];
+    if (this.fanView) return ["fan"];
     return this.compact ? COMPACT_ORDER : COLUMN_KEYS;
   }
 
@@ -806,7 +861,7 @@ export default class Board extends View {
   }
 
   entryOf(key) {
-    for (const k of COLUMN_KEYS) {
+    for (const k of [...COLUMN_KEYS, "fan"]) {
       const r = this.layout.cols[k]?.rows.find((x) => x.key === key);
       if (r) return r.entry;
     }
@@ -833,13 +888,14 @@ export default class Board extends View {
 
   step(by) {
     const cur = this.current();
-    const list = this.compact ? this.keys().flatMap((k) => this.entries(k)) : this.entries(cur?.col ?? COLUMN_KEYS.find((k) => this.entries(k).length));
+    const list = this.compact || this.fanView ? this.keys().flatMap((k) => this.entries(k)) : this.entries(cur?.col ?? COLUMN_KEYS.find((k) => this.entries(k).length));
     if (!list.length) return;
     const at = list.findIndex((r) => r.key === this.cursor);
     this.moveTo(list[Math.min(list.length - 1, Math.max(0, at < 0 ? 0 : at + by))].key);
   }
 
   shift(by) {
+    if (this.fanView) return;
     const cur = this.current();
     const keys = this.keys();
     const from = cur ? keys.indexOf(cur.col) : -1;
@@ -865,11 +921,36 @@ export default class Board extends View {
   jump() {
     if (this.pop) return;
     const order = ["needs", "cifail", "ready"]
-      .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => (key === "needs" ? this.enteredAt(key, a) - this.enteredAt(key, b) : a.at - b.at)).map((g) => ({ col: key, key: `g:${key}:${g.key}` })));
+      .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => (key === "needs" ? this.enteredAt(key, a) - this.enteredAt(key, b) : a.at - b.at)).map((g) => ({ col: key, key: this.rowKey(key, g) })));
     if (!order.length) return say("success", "Nothing needs you");
     const next = order[(order.findIndex((x) => x.key === this.cursor) + 1) % order.length];
-    if (this.isFolded(next.col)) this.peeked.add(next.col);
+    if (!this.fanView && this.isFolded(next.col)) this.peeked.add(next.col);
     this.moveTo(next.key);
+  }
+
+  rowKey(col, g) {
+    return this.fanView ? `f:${g.key}` : `g:${col}:${g.key}`;
+  }
+
+  toggleFan(cx) {
+    this.fanView = !this.fanView;
+    localStorage.setItem("fan", this.fanView ? "1" : "0");
+    this.armed = null;
+    this.scrollY.fan = 0;
+    this.reveal = this.cursor;
+    cx.notify();
+  }
+
+  setParentFold(key, folded) {
+    if (this.fanFolded.has(key) === folded) return;
+    const rows = this.entries("fan");
+    const own = rows.filter((r) => r.entry.parent === key);
+    if (folded && own.some((r) => r.key === this.cursor)) {
+      const next = rows[rows.indexOf(own.at(-1)) + 1] ?? rows[rows.indexOf(own[0]) - 1];
+      if (next) this.moveTo(next.key);
+    }
+    folded ? this.fanFolded.add(key) : this.fanFolded.delete(key);
+    localStorage.setItem("fan-folded", JSON.stringify([...this.fanFolded]));
   }
 
   focusBlockedAgent() {
@@ -882,9 +963,9 @@ export default class Board extends View {
   }
 
   needsCard() {
-    const order = this.layout.cols.needs.groups.map((g) => `g:needs:${g.key}`);
+    const order = this.layout.cols.needs.groups.map((g) => this.rowKey("needs", g));
     if (!order.length) return say("info", "Nothing needs you");
-    if (this.isFolded("needs")) this.peeked.add("needs");
+    if (!this.fanView && this.isFolded("needs")) this.peeked.add("needs");
     this.moveTo(order[(order.indexOf(this.cursor) + 1) % order.length]);
   }
 
@@ -1700,12 +1781,18 @@ export default class Board extends View {
     if (m.platform || m.control || m.alt) return false;
     const c = this.current();
     const k = m.shift && /^[a-z]$/.test(e.key) ? e.key.toUpperCase() : e.key;
+    if (this.fanView && BULK_KEYS.has(k)) {
+      say("info", "Bulk actions are off in the fan-out view", "Press v to go back to the board.");
+      return true;
+    }
     if (k === "j" || k === "down") this.step(1);
     else if (k === "k" || k === "up") this.step(-1);
     else if (k === "h") this.shift(-1);
     else if (k === "l") this.shift(1);
-    else if (k === "g") this.moveTo(this.entries(c?.col)[0]?.key);
-    else if (k === "G") this.moveTo(this.entries(c?.col).at(-1)?.key);
+    else if (k === "g") this.moveTo(this.entries(this.fanView ? "fan" : c?.col)[0]?.key);
+    else if (k === "G") this.moveTo(this.entries(this.fanView ? "fan" : c?.col).at(-1)?.key);
+    else if (k === "v" && !this.pop) this.toggleFan(cx);
+    else if (this.fanView && (k === "left" || k === "right" || k === "f") && c) this.setParentFold(c.parent, k === "f" ? !this.fanFolded.has(c.parent) : k === "left");
     else if (k === "?" || (k === "/" && m.shift)) this.openKeys(cx);
     else if (k === "/" && !this.pop) this.openSearch(cx);
     else if (k === "escape" && this.searchOpen) this.clearSearch();
@@ -1876,7 +1963,7 @@ export default class Board extends View {
     const notice = shared("cockpit.notice");
     if (notice && !this.pop) this.expireNotice(notice, cx);
     const folded = COLUMN_KEYS.filter((k) => this.isFolded(k)).length;
-    this.colW = this.pop ? POP_WIDTH : this.compact ? this.area.width : Math.max(MIN_COL, Math.floor((this.area.width - folded * H.folded) / Math.max(1, COLUMN_KEYS.length - folded)));
+    this.colW = this.pop ? POP_WIDTH : this.compact || this.fanView ? this.area.width : Math.max(MIN_COL, Math.floor((this.area.width - folded * H.folded) / Math.max(1, COLUMN_KEYS.length - folded)));
     const before = this.current();
     const slot = before ? this.entries(before.col).findIndex((r) => r.key === this.cursor) : -1;
     const replying = this.replyKey ? this.entryOf(this.replyKey) : null;
@@ -1912,7 +1999,7 @@ export default class Board extends View {
     return v_flex().id("ck-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
       .on_mouse_down("left", () => this.handle.focus())
-      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
+      .child(toolbar(t, this.area.width, { compact: this.compact, notice, stale: this.unsure() || (this.loading && now - this.loadingSince > STUCK_AFTER), worktrees: this.wt, slots: this.slots, fan: this.fanView, snoozed: this.asleepCount, project: this.project, projectCount: this.projects.find((p) => p.name === this.project)?.count ?? 0 }, cb))
       .when(this.searchOpen, (el) => el.child(searchRow(t, { quick: this.quick, searching: this.searching, compact: this.compact, ...this.scope }, this.search, cb)))
       .child(
         div().id("ck-area").flex_1().min_h(0).min_w(0).w_full()
@@ -1921,7 +2008,9 @@ export default class Board extends View {
             this.area = size;
             cx.notify();
           })
-          .child(this.compact
+          .child(this.fanView
+            ? v_flex().id("ck-fan").size_full().child(this.list(t, "fan", cols.fan.rows, !this.board ? (this.error ? "T3 unreachable. R to retry" : "Loading…") : this.filtering() ? "No cards match" : "Nothing to group"))
+            : this.compact
             ? this.lane(t, cols, state, cb)
             : h_flex().id("ck-cols").size_full().overflow_x_scroll()
               .children(COLUMN_KEYS.map((k) => (this.isFolded(k) ? foldedColumn(t, k, cols[k], state, cb) : this.column(t, k, cols[k], state, cb))))));
