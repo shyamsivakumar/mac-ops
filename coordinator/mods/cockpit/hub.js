@@ -400,6 +400,23 @@ function vendorGate(verdict, reviewModel, authorModel) {
 const newestRun = (read) => (read?.recentRuns ?? []).reduce((latest, run) =>
   !latest || run.ordinal > latest.ordinal ? run : latest, null);
 
+const finalMessage = (read, run) => [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
+
+const reviewTexts = new Map();
+const REVIEW_TEXTS_KEEP = 12;
+
+export async function readReview(thread) {
+  const stamp = `${thread.key}@${thread.at}`;
+  const known = reviewTexts.get(thread.key);
+  if (known?.stamp === stamp) return { text: known.text };
+  const read = await readAll({ threadId: thread.key, maxCharsPerItem: 50000 });
+  const text = finalMessage(read, newestRun(read))?.text ?? null;
+  reviewTexts.delete(thread.key);
+  reviewTexts.set(thread.key, { stamp, text });
+  if (reviewTexts.size > REVIEW_TEXTS_KEEP) reviewTexts.delete(reviewTexts.keys().next().value);
+  return { text };
+}
+
 const actualModel = (read, fallback) => {
   const run = newestRun(read)?.model;
   return vendorOf(run) ? run : fallback || "";
@@ -415,7 +432,7 @@ export async function loadVerdict(thread, author) {
       author ? call("t3_thread_read", { threadId: author.key, limit: 1 }) : null,
     ]);
     const run = newestRun(read);
-    const last = [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
+    const last = finalMessage(read, run);
     const runModel = run?.model ?? "";
     const verdict = vendorGate(judge(last?.text ?? ""), actualModel(read, thread.model), author ? actualModel(authorRead, author.model) : "");
     verdicts.set(thread.key, { stamp, verdict, runModel });

@@ -3,10 +3,10 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, InputState } from "gpui-base";
 import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, props, readTextFile, run, setShared, shared, theme } from "herdr";
-import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
+import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readReview, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
-import { cachedFiles, fetchPr, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
+import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
@@ -106,18 +106,23 @@ export default class Board extends View {
     this.pop = props()?.pop ?? null;
     this.overlay = props()?.overlay ?? null;
     this.dec = props()?.dec ?? null;
+    this.reviewMode = props()?.review ?? null;
     this.notice = props()?.notice ?? null;
     this.chooser = props()?.projects ?? props()?.snooze ?? null;
     this.rows = props()?.rows ?? null;
     this.sheet = Boolean(props()?.keys || this.notice || this.chooser || this.rows);
     this.chosen = this.chooser ? Math.max(0, this.chooser.list.findIndex((p) => p.name === this.chooser.current)) : 0;
     this.projects = [];
-    this.project = this.pop || this.dec || this.sheet ? null : localStorage.getItem(PROJECT_KEY);
+    this.project = this.pop || this.dec || this.reviewMode || this.sheet ? null : localStorage.getItem(PROJECT_KEY);
     this.projectSeen = shared("cockpit.project")?.rev ?? 0;
     this.outcome = null;
     this.noticeSeen = null;
     this.noticeTimer = null;
     this.deciding = null;
+    this.rvKey = null;
+    this.rvAt = 0;
+    this.rvDone = new Map();
+    this.rvDetails = new Map();
     this.files = null;
     this.ticket = null;
     this.picker = null;
@@ -220,6 +225,13 @@ export default class Board extends View {
       cx.timer.after(POP_FOLLOW, () => closeOverlay(this.overlay));
       return;
     }
+    if (this.reviewMode) {
+      this.apply(this.reviewMode.snap);
+      this.born = Date.now();
+      cx.timer.after(60, () => this.handle.focus());
+      cx.timer.after(POP_FOLLOW, () => closeOverlay(this.overlay));
+      return;
+    }
     cx.timer.every(TICK, (cx) => cx.notify());
     if (this.pop) {
       this.apply(props().snap);
@@ -287,7 +299,7 @@ export default class Board extends View {
   }
 
   refresh(cx, force) {
-    if (this.pop || this.dec) {
+    if (this.pop || this.dec || this.reviewMode) {
       setShared("cockpit.refresh", Date.now());
       return Promise.resolve();
     }
@@ -412,7 +424,6 @@ export default class Board extends View {
   apply(snap) {
     const own = snap.key === "backlog";
     this.applied = snap.rev;
-    this.armed = null;
     this.board = { groups: own ? [] : snap.groups, running: snap.running, at: snap.at };
     this.backlog = own ? snap.groups : [];
     this.backlogLoaded = true;
@@ -422,6 +433,8 @@ export default class Board extends View {
     seedVerdicts(snap.verdicts);
     seedOrigins(snap.origins);
     seedSessions(snap.sessions);
+    const live = this.armed && this.groups().find((g) => g.key === this.armed.key);
+    if (!(this.reviewMode && this.armed?.kind === "approve" && live && this.stamp(live) === this.armed.stamp)) this.armed = null;
   }
 
   snapshot(key) {
@@ -637,6 +650,7 @@ export default class Board extends View {
       },
       settleReviewed: (cx) => this.settleReviewed(cx),
       settleAll: (cx) => this.settleAll(cx),
+      review: (cx) => this.openReview(cx),
       approve: (cx) => this.approve(this.current(), cx),
       approveAll: (cx) => this.approveAll(cx),
       retry: (cx) => this.openRetry(cx),
@@ -1033,14 +1047,19 @@ export default class Board extends View {
     if (name === "expand" && e) this.expand(e.col);
   }
 
-  expand(key) {
+  watchPop(key) {
     const snap = this.snapshot(key);
     this.popKey = key;
     this.popWatch = Date.now();
     this.popStamp = JSON.stringify({ ...snap, at: 0 });
+    return { ...snap, rev: ++this.popRev };
+  }
+
+  expand(key) {
+    const snap = this.watchPop(key);
     const content = this.pairs(this.layout.cols[key]?.rows ?? []).reduce((sum, r) => sum + r.h, 0) || H.empty;
     const height = Math.min(POP_HEIGHT, H.head + POP_PAD + content);
-    openOverlay({ mod: "cockpit", kind: "dialog", width: POP_WIDTH, height, props: { pop: key, cursor: this.cursor, snap: { ...snap, rev: ++this.popRev } } });
+    openOverlay({ mod: "cockpit", kind: "dialog", width: POP_WIDTH, height, props: { pop: key, cursor: this.cursor, snap } });
   }
 
   expireNotice(notice, cx) {
@@ -1055,6 +1074,13 @@ export default class Board extends View {
     this.deciding = "notice";
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
     openOverlay({ mod: "cockpit", kind: "dialog", width: SHEET_WIDTH, height: noticeHeight(notice), props: { notice } });
+  }
+
+  openReview(cx) {
+    if (this.pop || this.deciding === "review") return;
+    this.deciding = "review";
+    cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
+    openOverlay({ mod: "cockpit", kind: "dialog", width: DEC_WIDTH, height: DEC_HEIGHT, props: { review: { snap: this.watchPop("ready") } } });
   }
 
   openKeys(cx) {
@@ -1516,8 +1542,13 @@ export default class Board extends View {
     if (!text || !this.replyKey || (!thread && !this.replyMarked)) return;
     if (this.replyMarked) return this.sendMarked(text, cx);
     if (thread.issue) return this.confirm("abandon", this.replyKey, () => this.abandon(thread, cx), cx);
+    const card = this.reviewMode ? this.reviewing(Date.now()).g : null;
     this.closeInput();
-    this.attempt(`Sent to ${thread.task || thread.title}`, () => sendReply(thread.key, text), cx);
+    this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
+      const sent = await sendReply(thread.key, text);
+      if (card) this.finishReview(card, "Sent back");
+      return sent;
+    }, cx);
   }
 
   abandon(thread, cx) {
@@ -1670,7 +1701,7 @@ export default class Board extends View {
     const refused = { ...shared("cockpit.refused") };
     groups.forEach((g) => delete refused[g.key]);
     setShared("cockpit.refused", refused);
-    if (this.dec) setShared("cockpit.acted", Date.now());
+    if (this.dec || this.reviewMode) setShared("cockpit.acted", Date.now());
     cx.spawn(async (cx) => {
       try {
         const results = [];
@@ -1680,14 +1711,15 @@ export default class Board extends View {
         const notice = mergeNotice(results);
         say(notice.level, left ? `${notice.text} (${left})` : notice.text, null, notice.items);
         const first = results.find((r) => !r.queued);
-        if (this.dec && first) this.outcome = { text: `Not merged: ${first.text}` };
+        if (first && (this.dec || this.reviewMode)) this.outcome = { text: `Not merged: ${first.text}` };
+        else if (this.reviewMode) this.finishReview(groups[0], "Merge queued");
         await this.refresh(cx, true);
       } finally {
         this.merging = false;
       }
       if (!this.dec) cx.notify();
       else if (!this.outcome) closeOverlay(this.overlay);
-    }, this.dec ? { owner: null } : undefined);
+    }, this.dec || this.reviewMode ? { owner: null } : undefined);
   }
 
   settleEntry(e, cx) {
@@ -1703,9 +1735,10 @@ export default class Board extends View {
       this.armed = null;
       return go(armed.seen);
     }
-    this.armed = { kind, key, at: Date.now(), seen };
+    const armed = { kind, key, at: Date.now(), seen };
+    this.armed = armed;
     cx.timer.after(ARM_FOR, (cx) => {
-      if (this.armed?.kind === kind && this.armed.key === key) this.armed = null;
+      if (this.armed === armed) this.armed = null;
       cx.notify();
     });
     cx.notify();
@@ -1929,12 +1962,12 @@ export default class Board extends View {
   }
 
   key(e, cx) {
-    if (e.is_held && (this.dec || this.sheet || !NAV_KEYS.has(e.key))) return;
+    if (e.is_held && (this.dec || this.reviewMode || this.sheet || !NAV_KEYS.has(e.key))) return;
     if (this.typing || this.searching) {
       if (e.key !== "escape") return;
       if (this.searching) this.clearSearch();
       else this.closeInput();
-    } else if (!(this.dec ? this.decideKey(e, cx) : this.sheet ? this.sheetKey(e, cx) : this.browse(e, cx))) return;
+    } else if (!(this.dec ? this.decideKey(e, cx) : this.reviewMode ? this.reviewKey(e, cx) : this.sheet ? this.sheetKey(e, cx) : this.browse(e, cx))) return;
     cx.stop_propagation();
     cx.notify();
   }
@@ -1975,6 +2008,7 @@ export default class Board extends View {
     else if (k === "A") this.settleAll(cx);
     else if (k === "a") this.approve(c, cx);
     else if (k === "M") this.approveAll(cx);
+    else if (k === "m" && !this.pop) this.openReview(cx);
     else if (k === "u") this.rebase(c, cx);
     else if (k === "U") this.rebaseAll(cx);
     else if (k === "z" && c) this.openSnoozeChooser(c, cx);
@@ -2099,10 +2133,152 @@ export default class Board extends View {
       .child(cur ? decisionView(t, view, this.input, cb) : div().w_full().p(16).text_size(13).line_height("19px").text_color(t.foreground).child(this.outcome?.text ?? "This card is gone"));
   }
 
+  reviewList(now) {
+    return this.place(this.groups(), now).filter(([, lane]) => lane === "ready").map(([g]) => g).filter((g) => g.info.pr && this.reviewOf(g)).sort((a, b) => this.enteredAt("ready", a) - this.enteredAt("ready", b));
+  }
+
+  reviewing(now) {
+    const list = this.reviewList(now);
+    const found = list.findIndex((g) => g.key === this.rvKey);
+    const i = found >= 0 ? found : Math.min(this.rvAt, list.length - 1);
+    const key = list[i]?.key ?? null;
+    if (key !== this.rvKey) {
+      this.rvKey = key;
+      this.outcome = null;
+      this.armed = null;
+    }
+    this.rvAt = Math.max(0, i);
+    return { list, i, g: list[i] ?? null };
+  }
+
+  stepReview(by) {
+    const { list, i } = this.reviewing(Date.now());
+    const to = Math.min(list.length - 1, Math.max(0, i + by));
+    if (to === i) return;
+    this.rvKey = list[to].key;
+    this.rvAt = to;
+    this.outcome = null;
+    this.armed = null;
+  }
+
+  doneKey(g) {
+    return `${g.key}@${this.reviewOf(g).at}`;
+  }
+
+  finishReview(card, label) {
+    this.rvDone.set(this.doneKey(card), label);
+    const { list, i } = this.reviewing(Date.now());
+    if (list[i]?.key !== card.key) return;
+    const next = [...list.slice(i + 1), ...list.slice(0, i)].find((g) => !this.rvDone.has(this.doneKey(g)));
+    if (next) {
+      this.rvKey = next.key;
+      this.rvAt = list.indexOf(next);
+    }
+    this.outcome = null;
+    this.armed = null;
+  }
+
+
+  mergeStop(g) {
+    return this.unsure() ? "Board data is out of date. Wait for the refresh." : this.approveBlock(g);
+  }
+
+  approveReview(g, cx) {
+    if (!g || this.rvDone.has(this.doneKey(g))) return;
+    const stop = this.mergeStop(g);
+    if (stop) {
+      this.outcome = { text: `Not merged: ${stop}` };
+      return;
+    }
+    this.outcome = null;
+    this.confirm("approve", g.key, (seen) => this.merge([g], cx, seen), cx, [g.info.gh]);
+    if (this.armed?.key === g.key) this.armed.stamp = this.stamp(g);
+  }
+
+  sendBackReview(g, cx) {
+    if (!g || this.rvDone.has(this.doneKey(g))) return;
+    const author = this.authorOf(g);
+    if (!author) {
+      this.outcome = { text: "No builder thread to send back to" };
+      return;
+    }
+    this.outcome = null;
+    this.openReply({ key: g.key, col: "ready", group: g, thread: author }, cx, NOTE_LABEL);
+  }
+
+  reviewKey(e, cx) {
+    const m = e.modifiers;
+    if (m.platform || m.control || m.alt || m.shift || !this.live()) return false;
+    const { g } = this.reviewing(Date.now());
+    if (e.key === "escape") closeOverlay(this.overlay);
+    else if (e.key === "j" || e.key === "right" || e.key === "s") this.stepReview(1);
+    else if (e.key === "k" || e.key === "left") this.stepReview(-1);
+    else if (e.key === "a") this.approveReview(g, cx);
+    else if (e.key === "d") this.sendBackReview(g, cx);
+    else return false;
+    return true;
+  }
+
+  loadDetails(g, cx) {
+    const { pr, gh } = g.info;
+    const review = this.reviewOf(g);
+    const id = `${g.key}@${gh?.sha}@${review.at}`
+    if (this.rvDetails.has(id)) return this.rvDetails.get(id);
+    const cached = cachedFiles(pr, gh?.sha);
+    const entry = { files: cached ? { status: "ok", ...cached } : { status: "loading" }, checks: { status: "loading" }, verdict: { status: "loading" } };
+    this.rvDetails.set(id, entry);
+    const jobs = [["checks", () => loadChecks(pr)], ["verdict", () => readReview(review)], ...(cached ? [] : [["files", () => loadFiles(pr)]])];
+    for (const [slot, work] of jobs) {
+      cx.spawn(async (cx) => {
+        try {
+          entry[slot] = { status: "ok", ...(await work()) };
+        } catch (error) {
+          entry[slot] = { status: "fail", error: error.message };
+        }
+        cx.notify();
+      });
+    }
+    return entry;
+  }
+
+  renderReview(t, cx) {
+    const popped = shared("cockpit.pop");
+    if (popped?.key === "ready" && popped.rev > this.applied) this.apply(popped);
+    const now = Date.now();
+    const { list, i, g } = this.reviewing(now);
+    if (this.replyKey && this.replyKey !== g?.key) this.closeInput();
+    const current = () => this.reviewing(Date.now()).g;
+    const cb = {
+      approve: (cx) => this.live() && this.approveReview(current(), cx),
+      sendBack: (cx) => this.live() && this.sendBackReview(current(), cx),
+      step: (by, cx) => {
+        this.stepReview(by);
+        cx.notify();
+      },
+      close: () => closeOverlay(this.overlay),
+      link: (url) => exec("open", [url]),
+    };
+    let view = null;
+    if (g) {
+      const { pr, gh } = g.info;
+      const author = this.authorOf(g);
+      const reviewer = this.reviewOf(g);
+      const verdict = this.verdictFor(g);
+      const done = this.rvDone.get(this.doneKey(g));
+      const detail = this.loadDetails(g, cx);
+      view = { pos: i + 1, total: list.length, g, pr, gh, url: gh?.url ?? pr.url, branch: gh?.branch ?? (author && sessionOf(author)?.branch) ?? null, builder: author && (runModelOf(author) || author.model), reviewer: runModelOf(reviewer) || reviewer.model, entered: this.enteredAt("ready", g), now, verdict, detail, trail: trailOf(g, now, () => verdict?.state === "fail"), done, block: done ? null : this.mergeStop(g), armed: this.armed?.kind === "approve" && this.armed.key === g.key, outcome: this.outcome, replying: Boolean(this.replyKey), replyLabel: this.replyLabel };
+    }
+    return v_flex().id("ck-review").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
+      .on_key_down((e, cx) => this.key(e, cx))
+      .on_mouse_down("left", () => this.handle.focus())
+      .child(reviewView(t, view, this.input, cb));
+  }
+
   render(cx) {
     const t = theme();
     if (this.sheet) return this.renderKeys(t);
     if (this.dec) return this.renderDecision(t);
+    if (this.reviewMode) return this.renderReview(t, cx);
     const now = Date.now();
     const resumed = !this.watching();
     this.drawn = now;

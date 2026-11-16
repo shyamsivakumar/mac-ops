@@ -79,6 +79,15 @@ export async function loadFiles(pr) {
   return entry;
 }
 
+const checkState = (state) => (FAILED.has(state) ? "fail" : PENDING.has(state) ? "pending" : state === "SUCCESS" ? "pass" : "skip");
+
+export async function loadChecks(pr) {
+  const r = await exec("gh", ["pr", "view", String(pr.number), "--repo", pr.repo, "--json", "statusCheckRollup"]);
+  if (r.code !== 0) throw new Error(r.stderr.trim() || "gh pr view failed");
+  const rollup = JSON.parse(r.stdout).statusCheckRollup ?? [];
+  return { checks: rollup.map((c) => ({ name: c.name ?? c.context ?? "unnamed check", state: checkState(stateOf(c)), url: c.detailsUrl ?? c.targetUrl ?? null })) };
+}
+
 export async function refreshPrs(prs) {
   const now = Date.now();
   const due = new Map();
