@@ -64,7 +64,7 @@ def board_snapshot(ledger, force=False):
     if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
-    fields = "number,title,updatedAt,state,headRefOid,body,mergeable,isDraft,statusCheckRollup"
+    fields = "number,state,headRefOid,body,mergeable,isDraft,statusCheckRollup"
     for repo in LANE_REPOS:
         snapshot["repos"][repo] = {
             "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
@@ -124,6 +124,16 @@ def t3(tool, args):
         return json.loads(run(["t3mcp", "call", tool, json.dumps(args)]) or "{}")
     except ValueError:
         return {}
+
+
+def settle_dead_run(thread_id):
+    try:
+        t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        parts = [getattr(exc, "output", None), getattr(exc, "stderr", None)]
+        reason = " ".join(part.decode(errors="replace") if isinstance(part, bytes) else part
+                          for part in parts if part) or str(exc)
+        print(f"DEAD {thread_id}: settle failed: {' '.join(reason.split())}; left for the next pass")
 
 
 def last_reply(thread_id):
@@ -273,26 +283,15 @@ def board_keys(snapshot):
     return keys
 
 
-def builder_thread(repo, body, title=""):
+def builder_thread(repo, body):
     refs = re.findall(r"\bRefs #(\d+)", body)
-    if not refs:
-        match = re.match(rf"{re.escape(CFG[repo]['key'])}[- #]+(\d+)", title)
-        refs = [match.group(1)] if match else []
-    with open(RECEIPTS) as handle:
-        receipts = json.load(handle)
+    receipts = json.load(open(RECEIPTS))
     for ref in refs:
         prefix = f"ticket:{repo}#{ref}:a"
         best = max(((int(k[len(prefix):]), v) for k, v in receipts.items()
                     if k.startswith(prefix) and k[len(prefix):].isdigit()), default=None)
         if best:
             return ref, best[1]
-        threads = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"],
-                     "titleContains": f"{CFG[repo]['key']}-{ref}", "limit": 100}).get("threads") or []
-        candidates = [t for t in threads if re.match(
-            rf"{re.escape(CFG[repo]['key'])}[- #]+{ref}\b", t.get("title") or "")
-            and not re.search(r"\b(review|gate)\b", t.get("title") or "", re.I)]
-        if candidates:
-            return ref, max(candidates, key=lambda t: t.get("updatedAt") or "")["threadId"]
     return (refs[0] if refs else None), None
 
 
@@ -348,7 +347,7 @@ def start(args, prio, ledger, lkey):
         return f"already done {lkey}"
     if DRY:
         return f"DRY {lkey}"
-    out = run([COORDQ, "start", json.dumps(args), "--action-key", lkey, "--priority", str(prio)]).splitlines()[-1]
+    out = run([COORDQ, "start", json.dumps(args), "--priority", str(prio)]).splitlines()[-1]
     ledger[lkey] = out
     return out
 
@@ -374,7 +373,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800):
                 "workspaceStrategy": {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
                 if thread.get("worktreePath") else {"type": "root"}, "message": message}
         options = ["--priority", str(priority)]
-    receipt = run([COORDQ, "start", json.dumps(args), *options, "--action-key", lkey]).strip()
+    receipt = run([COORDQ, "start", json.dumps(args), *options]).strip()
     if not receipt:
         raise RuntimeError(f"Empty dispatch receipt for {lkey}")
     out = receipt.splitlines()[-1]
@@ -428,36 +427,47 @@ def act_on_pr(repo, number, ledger):
     if re.search(rf"^#\d+ p-?\d+ \S+ {key}#{number}(?:\s|$)", waiting, re.MULTILINE):
         return f"skip #{number}: coordq action already waiting"
     head, body = pr["headRefOid"], pr.get("body") or ""
-    issue, builder = builder_thread(repo, body, pr.get("title") or "")
+    issue, builder = builder_thread(repo, body)
     if issue:
         issue_record = next((i for i in SNAPSHOT["repos"][repo]["issues"] if i["number"] == int(issue)), None)
         if issue_record is None:
             return None
         if any(label["name"] in ("stage:backlog", "stage:hold") for label in issue_record["labels"]):
             return None
+    agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "") and (c.get("state") or c.get("conclusion")) == "SUCCESS"
+                   for c in pr.get("statusCheckRollup") or [])
+    check_ok = f"Builder check: PASS {head}" in body or agent_ok
+    if pr.get("mergeable") == "CONFLICTING" or not check_ok:
+        why = "it conflicts with main" if pr.get("mergeable") == "CONFLICTING" else f"it has no passing check on head {head}"
+        if not builder:
+            return f"skip #{number}: {why}, no builder thread"
+        msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, run the repo check "
+               "(mac-ops: `python3 scripts/mac_ops_fast_check.py`; SRW: rely on srw/agent-check, do not run scripts/check.sh), push, set "
+               "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
+        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}")
     verdict, gate, reply = gate_verdict(repo, number, head)
-    state, action = pr_action(pr, builder, verdict)
-    if verdict == "PASS" and repo == "digitized/Concerning":
-        return f"#{number}: gate PASS, manual merge"
-    if action == "none":
-        return f"#{number}: {state}"
-    if action == "needs-you":
-        if not DRY:
-            ledger[f"needs-you:{repo}#{number}:{head}"] = "no builder thread found"
-        return f"#{number}: needs-you, no builder thread found"
-    if action in {"finish", "rebase", "link", "check"} or verdict == "PASS":
-        instruction = {
-            "finish": "Finish the implementation and mark the PR ready.",
-            "rebase": "Merge origin/main into the branch and resolve conflicts.",
-            "link": f"Add the correct Refs #n ticket reference to the PR body (ticket inferred: {issue}).",
-            "check": "Run or fix the repository check on this exact head.",
-            "fix": "The gate passed but the PR remains open. Update from origin/main if needed and report to the gate for completion.",
-        }[action]
-        msg = (f"Coordinator: PR #{number} at {head}: {instruction} "
-               "Run the repo check, push any changes, and put Builder check: PASS <full head sha> on its own line in the PR body. "
-               "Do not merge, close, or change labels. Device and live-service testing is waived. Every shell command under timeout 300.")
-        return f"#{number} {action}: " + send(builder, msg, f"{CFG[repo]['key']}#{number} {action}", ledger,
-                                               f"{action}:{repo}#{number}:{head}")
+    if verdict == "running":
+        return f"#{number}: gate running"
+    if verdict == "PASS":
+        if repo == "digitized/Concerning":
+            return f"skip #{number}: gate PASS, manual merge"
+        if DRY:
+            return f"DRY merge #{number} {head}"
+        run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+        if issue:
+            ref = f"{repo}#{issue}"
+            output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
+                          "--gate-thread", gate["threadId"]])
+            if "is already closed" in output:
+                print(f"already-closed:{ref}: {output}")
+        fast_forward_main(repo)
+        return f"#{number}: merged {head}"
+    if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
+        status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
+        if status in ("completed", "interrupted", "failed"):
+            return f"#{number} continue: " + send(
+                builder, "Continue fixing the gate findings for this head. Push the fixes and report the new head.",
+                f"{CFG[repo]['key']}#{number} continue", ledger, f"continue:{repo}#{number}:{head}")
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
@@ -465,24 +475,18 @@ def act_on_pr(repo, number, ledger):
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}")
-    if verdict == "none" and gate and f"regate:{repo}#{number}:{head}" not in ledger:
-        return f"#{number} regate: " + send(gate["threadId"],
-            f"Finish the review of PR #{number} at {head} and end with VERDICT: PASS or VERDICT: FAIL.",
-            f"{CFG[repo]['key']}#{number} finish gate", ledger, f"regate:{repo}#{number}:{head}")
-    tag = "regate-fresh" if verdict == "none" else "gate"
+    tag = "regate" if verdict == "none" else "gate"
     model = ASTRA
-    if verdict == "none" and f"regate-fresh:{repo}#{number}:{head}" in ledger:
+    if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
         if "astra" in reply.lower() and "quota" in reply.lower() and "exhaust" in reply.lower():
             tag, model = "opusgate", OPUS
         else:
-            if DRY:
-                return f"DRY needs-you #{number}: gate ended without verdict after retry"
             ledger[f"needs-you:{repo}#{number}:{head}"] = "gate ended without verdict after retry"
             return f"#{number}: needs-you, gate ended without verdict after retry"
     brief = run(["ticket", "gate", f"{repo}#{number}", "--print-brief"])
     if head not in brief:
         return f"#{number}: no gate brief ({brief[-120:]})"
-    brief += ("\nLane override: the gate owns completion under the standing exact-head gate rules. "
+    brief += ("\nLane override: review only. Do not merge or close issues; the lane owns completion. "
               f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
     key = CFG[repo]["key"]
@@ -781,7 +785,7 @@ def recover_dead_runs(ledger):
                 if closed_pr:
                     print(f"DEAD {thread_id}: settle, linked PR closed (model {thread.get('model')})")
                     if not DRY:
-                        t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                        settle_dead_run(thread_id)
                 else:
                     print(f"DEAD {thread_id}: coordinator needed, no ticket receipt or verified worktree (model {thread.get('model')})")
                 continue
@@ -838,7 +842,7 @@ def recover_dead_runs(ledger):
                 model = dead_run_model(full_thread, False)
                 print(f"DEAD {thread_id}: settle, work moved on (model {model['model']})")
                 if not DRY:
-                    t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                    settle_dead_run(thread_id)
                 continue
             failure = reply.lower()
             limit_failure = any(term in failure for term in ("rate limit", "spend limit", "quota", "individual spend"))
@@ -848,7 +852,7 @@ def recover_dead_runs(ledger):
             if ledger.get(f"dead-relaunch-thread:{thread_id}"):
                 print(f"DEAD {thread_id}: settle, relaunch already queued")
                 if not DRY:
-                    t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                    settle_dead_run(thread_id)
                 continue
             model = dead_run_model(full_thread, limit_failure)
             if count >= 2:
@@ -883,7 +887,7 @@ def recover_dead_runs(ledger):
                     raise RuntimeError(f"Empty dead-run dispatch receipt for {thread_id}")
                 ledger[count_key] = count + 1
                 ledger[f"dead-relaunch-thread:{thread_id}"] = result.splitlines()[-1]
-                t3("t3_thread_organize", {"threadId": thread_id, "action": "settle"})
+                settle_dead_run(thread_id)
 
 
 def run_pass(ledger):
@@ -939,7 +943,7 @@ def run_pass(ledger):
         with item_boundary(repo, "lane", ledger):
             prs = list(ORDER.get(repo, []))
             others = SNAPSHOT["repos"][repo]["prs"]
-            prs += sorted(p["number"] for p in others if p["number"] not in prs)
+            prs += sorted(p["number"] for p in others if p["number"] not in prs and not p["isDraft"])
             b = busy(repo)
             if b:
                 print(f"{CFG[repo]['key']:5} busy ({b}); PR actions still run")
