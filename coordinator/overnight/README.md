@@ -786,3 +786,15 @@ The installer's read-only `render_plists` preview decodes to:
 The installed payload and plist argument reference the same script.
 Device, handset and live-service testing were waived by Shyam, not failed.
 Live installation and behavior are unverified; the coordinator owns installation.
+
+### Active run interruption safety (Refs #397)
+
+Turncap skips reads with no running run or no running start timestamp.
+Completed runs and thread update timestamps cannot supply the cap clock.
+Interrupt requests include the observed `runId`, so a replacement run is not
+selected by a thread-only interrupt. The selftest requires that identity on
+both threshold and heavy-wait interruption paths; timing assertions are unchanged.
+
+Focused intercepted-call probes passed for empty and completed-only reads
+(no interruption), and selection of the running identity beside completed history.
+Device, handset and live-service testing remain waived, not failed.
