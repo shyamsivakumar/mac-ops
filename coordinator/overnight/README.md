@@ -547,12 +547,18 @@ What gets parked:
 - A **pending approval request** on a thread that holds the work. The request
   is parked with its exact text, quoted as the tool showed it, and it is
   never answered. The shift has no call that answers a request: it reads the
-  thread and writes the record. The proof
+  thread and writes the record. The request that is parked is the last one
+  the thread holds that is still open, so a question that was already
+  answered is never parked as if it waited for an answer. The proof
   (`evidence/MO-220/prove-park.py`) runs the command with a T3 stub that
   fails on every call but a read, so an answer would fail loudly.
 - An **open decision in the coordinator's decisions log**. The log is the
   coordinator's own parking lot, so the shift reads it, quotes the open
   line and parks the ticket with it.
+- A ticket the filter **drops for a decision**: a ticket marked as needing
+  Shyam, a ticket marked as needing a design, a ticket with an open item or
+  a hold in the decisions log. A ticket dropped as Ascend work, or as being
+  off the allow list, is not a decision and is never parked.
 
 What gets logged:
 
@@ -563,6 +569,17 @@ What gets logged:
 - An **item the budget stopped**: over its hard builder-time budget, or out
   of fix tries. The log says what the shift did (it stopped the item and
   spent no further fix try on it) and what comes next.
+- A **thread that could not be read**: the parking lot is then not
+  rewritten, because a decision that is still waiting must not leave the
+  file because one read failed.
+
+Two rules keep the records honest:
+
+- A quoted request is fenced, and the morning report's parser reads the
+  fences, so a request that holds a heading or a `Default:` line cannot
+  change the decision it is quoted in.
+- A decision keeps the time it was first parked, and a problem keeps its
+  first entry, so the records hold the state and not the cycles.
 
 ## What the morning report reads
 

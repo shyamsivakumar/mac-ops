@@ -1,0 +1,24 @@
+{
+  "thread": {
+    "threadId": "mcp:launch:t10-answered",
+    "title": "MO-220 · Overnight T10: Parking lot and snag log",
+    "status": "waiting_for_approval",
+    "pendingRequestCount": 1
+  },
+  "items": [
+    {
+      "type": "assistant_message",
+      "text": "I can widen the merge rule, or I can run the check again."
+    },
+    {
+      "type": "question",
+      "text": "Should I widen the merge rule?",
+      "status": "answered",
+      "resolved": true
+    },
+    {
+      "type": "question",
+      "text": "Approve running `python3 scripts/mac_ops_fast_check.py`?"
+    }
+  ]
+}
