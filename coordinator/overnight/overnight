@@ -99,6 +99,17 @@ condition.
 
     overnight policy
 
+`overnight park` (spec T10) writes the shift's two inbox files: the
+decisions the shift could not make, each with a default and a
+recommendation, in `inbox/parking-lot.md`, and the problems it found,
+with what it did about them, in `inbox/snag-log.md`. A pending approval
+request is parked with its exact text and is never answered: the module
+has no call that answers a request, and the proof runs the command with
+a T3 stub that fails on every call but a read.
+
+    overnight park
+    overnight park --fixture evidence/MO-220/fixtures/answered-then-pending.json
+
 `overnight redact` (spec T7a) is the one redaction the shift has. Every
 record it writes under `.overnight/` goes through it, so no receipt, no
 shift log line and no morning report holds a token, a key, a cookie or a
@@ -1514,6 +1525,10 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 finally:
                     save_stall_state(root, lane_driver.STALL_STATE)
             write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
+            # Part T10: the cycle parks what it cannot decide and logs what
+            # it found. A pending request is parked with its exact text and
+            # is never answered.
+            park_cycle(root, started + args.deadline)
             if report_cycle:
                 return write_morning_report(root)
             return 0
@@ -1936,12 +1951,29 @@ def parse_shift_log(text: str) -> dict:
 
 def parse_parking_lot(text: str) -> list[dict]:
     """Return the parked decisions, each with its default and its
-    recommendation."""
+    recommendation.
+
+    A quoted request can hold a line that looks like a field or a
+    heading, and it can hold a fence of its own, so the parser reads the
+    fences: what is inside a fence is the quoted text of a request and
+    never a field of the decision. A fence closes only on the exact
+    delimiter that opened it, so a fence inside the quoted text cannot
+    close the fence that quotes it and let the rest of the quote out."""
     entries: list[dict] = []
     title = ""
     body: list[str] = []
+    fence = ""
     for raw in text.splitlines():
         line = raw.rstrip()
+        stripped = line.strip()
+        if fence:
+            if stripped == fence:
+                fence = ""
+            continue
+        run = FENCE_RUN.match(stripped)
+        if run and len(run.group(0)) >= 3:
+            fence = run.group(0)
+            continue
         if line.startswith("## "):
             if title:
                 entries.append({"title": title, "body": body})
@@ -1954,6 +1986,7 @@ def parse_parking_lot(text: str) -> list[dict]:
     for entry in entries:
         entry["default"] = ""
         entry["recommend"] = ""
+        entry["parked"] = ""
         for line in entry["body"]:
             match = FIELD_LINE.match(line.strip())
             if not match:
@@ -1964,6 +1997,8 @@ def parse_parking_lot(text: str) -> list[dict]:
                 entry["default"] = value
             elif key.startswith("recommend"):
                 entry["recommend"] = value
+            elif key.startswith("parked at"):
+                entry["parked"] = value
     return entries
 
 
@@ -4987,7 +5022,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         return cmd_fixture_receipt(args)
     root = report_root(args.root)
     budget = budget_of(policy_snapshot(root))
-    items, receipts, error = read_work_items(
+    items, receipts, _drops, error = read_work_items(
         deadline, getattr(args, "allowed", None), budget
     )
     if error:
@@ -5167,7 +5202,7 @@ def cmd_budget(args: argparse.Namespace) -> int:
                 "the budget command needs a fixture, or both --repo and "
                 "--number; without them it would look for no item"
             )
-        items, receipts, error = read_work_items(deadline, None, budget)
+        items, receipts, _drops, error = read_work_items(deadline, None, budget)
         if error:
             emit(f"overnight: REFUSED: {error}", err=True)
             return 1
@@ -5204,21 +5239,26 @@ def cmd_budget(args: argparse.Namespace) -> int:
 
 def read_work_items(
     deadline: float, allowed: list[str] | None, budget: dict | None = None
-) -> tuple[list[dict], dict[str, str], str]:
-    """Return the items the shift works, the queue's receipts and an error.
+) -> tuple[list[dict], dict[str, str], list[tuple[dict, str]], str]:
+    """Return the items the shift works, the queue's receipts, the drops and
+    an error.
 
     The board is read with the same helpers the rest of the module uses, so
     the receipts are about the items of the shift's own order and the shift
     keeps no second queue. A board that cannot be trusted is an error, not
-    an empty list: a receipt about a board nobody could read is a claim."""
+    an empty list: a receipt about a board nobody could read is a claim.
+
+    The drops come with the items: a ticket the filter drops for a reason
+    that waits for Shyam is a decision the shift cannot make, and the
+    parking lot (part T10) holds it."""
     cfg = load_config()
     repos = policy_repos(cfg, allowed)
     flagged = ascend_flags(cfg)
     if not repos:
-        return [], {}, "the board config names no repositories"
+        return [], {}, [], "the board config names no repositories"
     issues, stale = read_board(deadline)
     if stale:
-        return [], {}, "the board list is stale, so the receipts cannot be trusted"
+        return [], {}, [], "the board list is stale, so the receipts cannot be trusted"
     bodies, unread, open_numbers = read_bodies(issues, deadline)
     decisions_path, lines = read_decisions()
     problems: list[str] = []
@@ -5233,14 +5273,14 @@ def read_work_items(
         issues, {r for r, _k in repos}, flagged, bodies, lines
     )
     if problems:
-        return [], {}, "; ".join(problems)
+        return [], {}, [], "; ".join(problems)
     receipts, _receipt_error = read_receipts()
     result = collect_items(
         deadline, repos, issues, bodies, open_numbers, drops, receipts, budget
     )
     if result.get("pr_error"):
-        return [], {}, str(result["pr_error"])
-    return receipt_items(result), receipts, ""
+        return [], {}, [], str(result["pr_error"])
+    return receipt_items(result), receipts, drops, ""
 
 
 def write_receipts(
@@ -6354,6 +6394,1105 @@ def cycle_receipts(receipts_dir: Path) -> list[tuple[str, list[str]]]:
     return found
 
 
+# --- Part T10: the parking lot and the snag log ---------------------------
+#
+# The shift works the board on its own and cannot make every decision. A
+# decision it cannot make is parked in `inbox/parking-lot.md`: the default
+# that applies when Shyam says nothing, and a recommendation. A problem the
+# shift finds is written to `inbox/snag-log.md` with what the shift did.
+#
+# The shift never answers an approval request. It reads the request from the
+# thread that holds it, parks it with its exact text and moves on. This
+# module has no call that answers a request, and the proof runs the command
+# with a T3 stub that fails on every call but a read.
+
+PARKING_FILE = "parking-lot.md"
+SNAG_FILE = "snag-log.md"
+# A thread that waits on a person says so in its status.
+PENDING_STATUS = frozenset(
+    {
+        "waiting",
+        "waiting_for_approval",
+        "waiting_for_input",
+        "awaiting_approval",
+        "pending_approval",
+        "needs_input",
+        "needs_approval",
+    }
+)
+# The item that holds a request says so in its type.
+REQUEST_ITEM = frozenset(
+    {
+        "question",
+        "user_question",
+        "approval",
+        "approval_request",
+        "pending_request",
+        "request",
+    }
+)
+# The drops that are decisions the shift cannot make. A ticket the
+# filter drops for one of these reasons waits for Shyam, so it belongs
+# in the parking lot. A ticket dropped as Ascend work, or as being off
+# the allow list, is not a decision: it is work the shift never touches.
+DECISION_DROP = (
+    "marked needs Shyam",
+    "marked design needed",
+    "open question in the decisions log",
+    "open item in the decisions log",
+    "hold in the decisions log",
+)
+# A quoted request can hold a fence of its own. The fence that quotes it
+# is longer than any fence in the request, and the parser closes a fence
+# only on the exact delimiter that opened it.
+FENCE_RUN = re.compile(r"`+")
+
+
+def code_fence(text: str) -> str:
+    """Return a fence delimiter that no fence inside the text can close."""
+    longest = 0
+    for run in FENCE_RUN.findall(text or ""):
+        longest = max(longest, len(run))
+    return "`" * max(3, longest + 1)
+
+
+def quoted_text(text: str) -> str:
+    """Return the text quoted in a fence that cannot be closed early.
+
+    The delimiter is longer than any fence in the text, so a fence inside
+    the quote never closes the fence that holds the quote. The parser
+    matches the delimiter exactly, so the quote ends where it ends."""
+    fence = code_fence(text)
+    return f"{fence}text\n{text}\n{fence}\n"
+
+
+def stamp_line() -> str:
+    """Return the time a record carries, in Pacific time."""
+    return datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
+
+
+def request_is_answered(item: dict) -> bool:
+    """Return True when a request item was already answered.
+
+    A request that carries an answer, a status that says it is closed or
+    a flag that says it was resolved is not waiting for anybody, and the
+    shift must not park it as if it were. The answer alone is enough: an
+    item that holds the answer payload was answered, whatever its flags
+    and its status say."""
+    for name in ("resolved", "answered", "done", "closed"):
+        if item.get(name) is True:
+            return True
+    status = str(item.get("status") or "").strip().lower()
+    if status in (
+        "answered",
+        "resolved",
+        "closed",
+        "cancelled",
+        "canceled",
+        "done",
+    ):
+        return True
+    return carries_answer(item)
+
+
+# The fields an item can carry its answer in. An item that holds one of
+# them, with something in it, was answered.
+ANSWER_PAYLOAD_FIELDS = (
+    "answer",
+    "answerText",
+    "answerPayload",
+    "answeredText",
+    "response",
+    "reply",
+    "resolution",
+)
+# A payload that says the answer is still to come is not an answer.
+NO_ANSWER_YET = frozenset(
+    {"", "none", "null", "nil", "pending", "unanswered", "waiting", "n/a", "-"}
+)
+
+
+def carries_answer(item: dict) -> bool:
+    """Return True when an item holds the payload of an answer."""
+    for name in ANSWER_PAYLOAD_FIELDS:
+        if name not in item:
+            continue
+        value = item.get(name)
+        if value is True:
+            return True
+        if isinstance(value, str):
+            if value.strip().lower() not in NO_ANSWER_YET:
+                return True
+            continue
+        if isinstance(value, (dict, list, tuple)) and value:
+            return True
+    return False
+
+
+def pending_request_from(data: dict) -> dict:
+    """Return the pending request of a thread, with its exact text.
+
+    A thread that waits on a person holds a pending request: an approval
+    it must be given, or a question it asked. The text is the request's
+    own text, read from the thread and never paraphrased, so the person
+    who answers it reads the same words the tool showed.
+
+    The request that is parked is the last one the thread holds that is
+    still open. A question that was answered is not a request any more,
+    and the shift must not park an old question as if it waited for an
+    answer. A thread that holds nothing but answered requests waits for
+    nobody, even when it says it holds a pending one. A thread that
+    waits on nobody holds no request at all."""
+    thread = data.get("thread") or {}
+    count = thread.get("pendingRequestCount")
+    try:
+        pending = int(count or 0) > 0
+    except (TypeError, ValueError):
+        pending = False
+    status = str(thread.get("status") or "").strip().lower()
+    if status in PENDING_STATUS:
+        pending = True
+    kind = "pending request"
+    text = ""
+    if pending:
+        requests = [
+            item
+            for item in (data.get("items") or [])
+            if isinstance(item, dict)
+            and str(item.get("type") or "").strip().lower() in REQUEST_ITEM
+        ]
+        open_requests = [item for item in requests if not request_is_answered(item)]
+        if requests and not open_requests:
+            # Every request the thread holds was answered, so the thread
+            # waits for nobody. A thread that says it holds a pending
+            # request and shows only answered ones is not a request the
+            # shift may park.
+            pending = False
+        if open_requests:
+            # The request that is parked is the last open one the thread
+            # holds. Its own text is the text that is parked: when it has
+            # no readable text, the shift says so and logs the problem
+            # instead of parking an older request in its place.
+            latest = open_requests[-1]
+            body = (
+                latest.get("text")
+                or latest.get("prompt")
+                or latest.get("question")
+                or latest.get("body")
+                or ""
+            )
+            text = str(body).strip()
+            item_type = str(latest.get("type") or "").strip().lower()
+            if "approval" in item_type or "approv" in text.lower():
+                kind = "pending approval request"
+    return {"pending": pending, "text": text, "kind": kind}
+
+
+def read_thread_record(thread_id: str, deadline: float) -> tuple[dict, str]:
+    """Return a thread's own record, read from T3, and why it could not be
+    read.
+
+    The read is the only call the shift makes on a thread that holds a
+    pending request. It never sends, approves or answers anything. A
+    read that fails says so, because a thread the shift could not read
+    may hold a request the shift does not know about."""
+    if not thread_id:
+        return {}, ""
+    payload = json.dumps(
+        {"threadId": thread_id, "maxCharsPerItem": 20000, "runLimit": 50}
+    )
+    try:
+        raw = run([T3MCP, "call", "t3_thread_read", payload], T3_TIMEOUT, deadline)
+    except RepoError as exc:
+        return {}, str(exc)
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        return {}, f"the thread {thread_id} did not return JSON: {exc}"
+    if not isinstance(data, dict):
+        return {}, f"the thread {thread_id} did not return an object"
+    thread = data.get("thread")
+    if (
+        not isinstance(thread, dict)
+        or not thread
+        or not isinstance(thread.get("status"), str)
+        or not thread["status"].strip()
+    ):
+        return {}, f"the thread {thread_id} returned an empty or malformed thread record"
+    return data, ""
+
+
+def item_threads(item: dict, receipts: dict[str, str]) -> list[str]:
+    """Return the threads that hold one item: its builder and its gate.
+
+    Two sources, and only two. The threads the board attaches to the item
+    are taken as they are. The queue's dispatch receipts are looked up by
+    the ticket's number and by nothing else, because a pull request has
+    two numbers and its own number is not its ticket's: pull request #435
+    linked to issue #188 would otherwise pick up the threads of an
+    unrelated ticket #435, and park that ticket's pending request under
+    #188. A pull request with no linked ticket therefore contributes no
+    receipt thread at all."""
+    threads: list[str] = []
+    for name in ("builder", "gate"):
+        entry = item.get(name)
+        thread = str(entry.get("threadId") or "") if isinstance(entry, dict) else ""
+        if thread and thread not in threads:
+            threads.append(thread)
+    repo = str(item.get("repo") or "")
+    number = receipt_number(item)
+    if number not in (None, ""):
+        try:
+            value = int(number)
+        except (TypeError, ValueError):
+            value = 0
+        if value:
+            builder, _attempt = builder_thread(receipts, repo, value)
+            if builder and builder not in threads:
+                threads.append(builder)
+            prefix = f"gate:{repo}#{value}:"
+            for key, receipt_thread in sorted(receipts.items()):
+                if key.startswith(prefix) and receipt_thread:
+                    if receipt_thread not in threads:
+                        threads.append(receipt_thread)
+    return threads
+
+
+def parking_section(title: str, fields: list[tuple[str, str]]) -> str:
+    """Return one parking lot entry.
+
+    The entry is markdown with one `- Key: value` line per field, the
+    shape the receipt holds, so the morning report reads the parking lot
+    with the parser it already has: a `Default:` line and a `Recommend:`
+    line are what make an entry a decision Shyam can take."""
+    lines = [f"## {title}", ""]
+    for key, value in fields:
+        if value:
+            lines.append(f"- {key}: {value}")
+    return "\n".join(lines) + "\n"
+
+
+def parking_lot_text(entries: list[str]) -> str:
+    """Return the parking lot file: the decisions that wait for Shyam."""
+    header = (
+        "# Parking lot\n"
+        "\n"
+        "The decisions the shift could not make. Each entry names the default\n"
+        "that applies when Shyam says nothing and a recommendation. The shift\n"
+        "never answers an approval request: a pending request is parked with\n"
+        "its exact text and left alone.\n"
+        "\n"
+    )
+    if not entries:
+        return header + (
+            "No decision is parked. The shift made every decision it could.\n"
+        )
+    return header + "\n".join(entries)
+
+
+def snag_section(title: str, fields: list[tuple[str, str]]) -> str:
+    """Return one snag log entry."""
+    lines = [f"## {title}", ""]
+    for key, value in fields:
+        if value:
+            lines.append(f"- {key}: {value}")
+    return "\n".join(lines) + "\n"
+
+
+def snag_log_text(entries: list[str]) -> str:
+    """Return the snag log file: the problems the shift found."""
+    header = (
+        "# Snag log\n"
+        "\n"
+        "The problems the shift found and what it did about them. One section\n"
+        "per problem. A problem the shift finds twice is written once.\n"
+        "\n"
+    )
+    if not entries:
+        return header + "No problem was found.\n"
+    return header + "\n".join(entries)
+
+
+def parse_snags(text: str) -> list[dict]:
+    """Return the snag entries the log holds.
+
+    Each entry is a section: a heading with the time and the item, and
+    the fields under it. The time changes every cycle, so the identity
+    of an entry is the item and the problem, not the time."""
+    entries: list[dict] = []
+    title = ""
+    body: list[str] = []
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("## "):
+            if title:
+                entries.append({"title": title, "body": body})
+            title = line[3:].strip()
+            body = []
+        elif title:
+            body.append(line)
+    if title:
+        entries.append({"title": title, "body": body})
+    for entry in entries:
+        fields = []
+        for line in entry["body"]:
+            match = FIELD_LINE.match(line.strip())
+            if not match:
+                continue
+            fields.append(
+                (match.group("key").strip(), match.group("value").strip())
+            )
+        entry["identity"] = snag_identity(entry["title"], fields)
+    return entries
+
+
+def snag_identity(
+    title: str, fields: list[tuple[str, str]]
+) -> tuple[str, str, str, str]:
+    """Return what makes a snag entry the same problem as another.
+
+    The identity is the repository, the ticket, the item's number and the
+    problem. Two tickets that share a title and a failing check are two
+    problems, so the identity holds the repository and the ticket as well
+    as the title. The time is not part of it: a problem the shift finds
+    every cycle is one problem, not one problem per cycle."""
+    repo = ""
+    ticket = ""
+    problem = ""
+    for key, value in fields:
+        name = key.strip().lower()
+        if name == "repo":
+            repo = value.strip().lower()
+        elif name == "ticket":
+            ticket = value.strip().upper()
+        elif name == "problem":
+            problem = value.strip()
+    number = ""
+    found = re.search(r"#\s*(\d+)", title)
+    if found:
+        number = found.group(1)
+    return (repo, ticket, number, problem)
+
+
+def keep_first_seen(entry: str, seen: dict[str, str]) -> str:
+    """Return the entry with the time the decision started waiting.
+
+    A decision that waits keeps the time it was first parked, so the
+    file does not change every cycle and the record says how long the
+    decision has waited."""
+    lines = entry.splitlines(keepends=True)
+    if not lines or not lines[0].startswith("## "):
+        return entry
+    old = seen.get(lines[0][3:].strip())
+    if not old:
+        return entry
+    for index, line in enumerate(lines):
+        if line.startswith("- Parked at:"):
+            lines[index] = f"- Parked at: {old}\n"
+            break
+    return "".join(lines)
+
+
+def write_parking_lot(root: Path, entries: list[str]) -> str:
+    """Write the parking lot and return what happened.
+
+    The file holds the decisions that wait for Shyam now. It is written
+    whole, so a decision that is no longer waiting leaves the file and
+    the morning report never names a decision that is gone. A decision
+    that is still waiting keeps the time it was first parked."""
+    path = root / "inbox" / PARKING_FILE
+    seen = {
+        entry["title"]: entry["parked"]
+        for entry in parse_parking_lot(read_text(path))
+        if entry["parked"]
+    }
+    text = redact(
+        parking_lot_text([keep_first_seen(entry, seen) for entry in entries])
+    )
+    if read_text(path) == text:
+        return "unchanged"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        scratch = path.with_name(path.name + ".tmp")
+        write_record(scratch, text)
+        os.replace(scratch, path)
+    except OSError as exc:
+        return f"failed: {exc}"
+    return "wrote"
+
+
+def write_snag_log(root: Path, entries: list[tuple[str, list[tuple[str, str]]]]) -> str:
+    """Write the snag log and return what happened.
+
+    The log is a history: a problem the shift found is written once and
+    stays. A problem that is still there is not written again, so the log
+    holds the problems and not the cycles. The identity of a problem is
+    the item and the problem itself, so the time in the heading does not
+    make a new problem out of an old one."""
+    path = root / "inbox" / SNAG_FILE
+    text = read_text(path) or snag_log_text([])
+    known = {entry["identity"] for entry in parse_snags(text)}
+    added = []
+    for title, fields in entries:
+        identity = snag_identity(title, fields)
+        if identity in known:
+            continue
+        known.add(identity)
+        added.append(snag_section(title, fields))
+    if not added:
+        return "unchanged"
+    body = text.rstrip("\n") + "\n\n" + "\n".join(added)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        scratch = path.with_name(path.name + ".tmp")
+        write_record(scratch, redact(body))
+        os.replace(scratch, path)
+    except OSError as exc:
+        return f"failed: {exc}"
+    return f"wrote {len(added)}"
+
+
+def item_title(item: dict) -> str:
+    """Return the name a parked entry carries for one item.
+
+    The board's title often starts with the ticket's own key, so the key
+    is dropped from it: an entry names the item once."""
+    key = str(item.get("key") or "")
+    number = item.get("number")
+    label = f"{key} (#{number})" if key else f"{item.get('repo')}#{number}"
+    title = " ".join(str(item.get("title") or "").split())
+    if key and title.upper().startswith(key.upper()):
+        title = title[len(key) :].strip(" -:·")
+    return f"{label} · {title}" if title else label
+
+
+def read_shift_receipts(root: Path) -> dict[tuple[str, str], dict]:
+    """Return the shift's own receipts, keyed by repository and ticket.
+
+    A receipt is the record of what the shift did with an item: its state
+    and why it stopped. A snag entry quotes it when there is one, so the
+    entry can say what was recorded rather than what it assumes."""
+    receipts: dict[tuple[str, str], dict] = {}
+    folder = root / "receipts"
+    if not folder.is_dir():
+        return receipts
+    for path in sorted(folder.glob("*.md")):
+        if not RECEIPT_FILE.match(path.name):
+            continue
+        fields = parse_receipt(path)["fields"]
+        repo = (fields.get("repo") or "").strip().lower()
+        found = re.search(r"#(\d+)\s*\)?\s*$", (fields.get("ticket") or "").strip())
+        if not repo or not found:
+            continue
+        receipts[(repo, found.group(1))] = fields
+    return receipts
+
+
+def receipt_number(item: dict) -> object:
+    """Return the number of the ticket an item's receipt is filed under.
+
+    A receipt is filed under a ticket's own issue number. A pull request
+    has two numbers, and its own number is not its ticket's: a pull
+    request #435 that belongs to issue #188 has a receipt under #188, and
+    a receipt under #435 belongs to some other ticket. So a pull request
+    is looked up by the issue it is linked to, and only a ticket is
+    looked up by its own number.
+
+    The linked issue is the number the item carries as `issue`, and the
+    receipt's own `Ticket` line is the cross-check: a receipt whose
+    ticket line names a different number is not this item's receipt."""
+    linked = item.get("issue")
+    if linked not in (None, ""):
+        return linked
+    if item.get("kind") == "pull-request":
+        return ""
+    return item.get("number")
+
+
+def receipt_says(
+    receipts: dict[tuple[str, str], dict], repo: str, number: object
+) -> str:
+    """Return what the shift's own receipt says about an item.
+
+    The receipt holds the state the shift recorded and why it stopped, so
+    an entry can quote the record instead of assuming what happened. An
+    item with no receipt gets no claim: the entry says that nothing was
+    recorded.
+
+    The receipt is looked up by the number the caller passes, and the
+    caller passes the ticket's number: an entry never quotes another
+    ticket's state because the two numbers happened to collide."""
+    if number in (None, ""):
+        return ""
+    try:
+        key = (str(repo or "").strip().lower(), str(int(number)))
+    except (TypeError, ValueError):
+        return ""
+    fields = receipts.get(key)
+    if not fields:
+        return ""
+    state = (fields.get("state") or "").strip() or "no state"
+    why = (fields.get("stopped because") or "").strip()
+    if why:
+        return f"the receipt records the state {state}: {why}"
+    return f"the receipt records the state {state}"
+
+
+def budget_observation(minutes: int, fix_tries: int, budget: dict) -> str:
+    """Return what the shift observed about an item's budget.
+
+    The observation is what was read: the builder's own time and the
+    queue's own count of fix tries. It does not say the item was stopped
+    or parked, because nothing here proves that: the shift's receipt
+    holds the state it recorded, and the snag entry quotes it when there
+    is one."""
+    reasons = []
+    if minutes >= budget["hard"]:
+        reasons.append(
+            f"the builder used {minutes} min of its {budget['hard']} min hard budget"
+        )
+    if fix_tries >= budget["retry_cap"]:
+        reasons.append(
+            f"the queue records {fix_tries} fix tries, the cap is "
+            f"{budget['retry_cap']}"
+        )
+    if not reasons:
+        reasons.append("the builder is within its budget")
+    return "; ".join(reasons)
+
+
+def park_decisions(
+    items: list[dict],
+    drops: list[tuple[dict, str]],
+    receipts: dict[str, str],
+    decision_lines: list[str],
+    deadline: float,
+    budget: dict,
+    queue_state: dict,
+    shift_receipts: dict[tuple[str, str], dict] | None = None,
+) -> tuple[list[str], list[tuple[str, list[tuple[str, str]]]], str]:
+    """Return the parking lot entries, the snag entries and what could not
+    be read.
+
+    Every entry is read: the pending request from the thread that holds
+    it, the open decision from the coordinator's decisions log, the
+    failing check from the pull request and the budget from the queue's
+    own record. The shift parks what it cannot decide and logs what it
+    found, and it never answers a request.
+
+    The decisions that wait for Shyam are the tickets the filter drops:
+    a ticket with an open question in the decisions log, a ticket marked
+    as needing Shyam and a ticket marked as needing a design are all
+    decisions the shift cannot make, so they are parked here.
+
+    The last value is why the pass was not complete: a thread that could
+    not be read may hold a request the shift does not know about, and a
+    parking lot written from an incomplete read would drop a decision
+    that is still waiting."""
+    parked: list[str] = []
+    snags: list[tuple[str, list[tuple[str, str]]]] = []
+    incomplete = ""
+    shift_receipts = shift_receipts or {}
+    stamp = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
+    for issue, reason in drops:
+        if not any(reason.startswith(prefix) for prefix in DECISION_DROP):
+            continue
+        key = str(issue.get("key") or "")
+        number = issue.get("number")
+        repo = str(issue.get("repo") or "")
+        label = f"{key} (#{number})" if key else f"{repo}#{number}"
+        title = " ".join(str(issue.get("title") or "").split())
+        if key and title.upper().startswith(key.upper()):
+            title = title[len(key) :].strip(" -:·")
+        heading = f"{label} · {title}" if title else label
+        if reason.startswith("marked"):
+            quote = reason.split(": ", 1)[1] if ": " in reason else ""
+            recommend = (
+                "decide the ticket with Shyam, and the shift works it"
+            )
+        else:
+            found = decision_reason(decision_lines, key, number)
+            quote = found[1] if found else ""
+            recommend = (
+                "answer the open question in the decisions log, and the shift "
+                "works the ticket"
+            )
+        kind = reason.split(": ", 1)[0]
+        parked.append(
+            parking_section(
+                heading,
+                [
+                    ("Repo", repo),
+                    ("Ticket", key),
+                    ("Kind", f"{kind} — a decision the shift cannot make"),
+                    ("Parked at", stamp),
+                    (
+                        "Default",
+                        "the ticket stays as it is and the shift does not work it",
+                    ),
+                    ("Recommend", recommend),
+                    ("Next", "Shyam answers, and the shift works the ticket"),
+                ],
+            )
+            + "\n"
+            + "The open question, quoted exactly:\n"
+            + "\n"
+            + quoted_text(quote)
+        )
+    for item in items:
+        repo = str(item.get("repo") or "")
+        number = item.get("number")
+        key = str(item.get("key") or "")
+        title = item_title(item)
+        request: dict | None = None
+        request_thread = ""
+        minutes = 0
+        for thread in item_threads(item, receipts):
+            record, error = read_thread_record(thread, deadline)
+            if error:
+                incomplete = incomplete or error
+                continue
+            if not record:
+                # A record that holds no thread is a read the shift cannot
+                # trust, so the parking lot is not rewritten from it.
+                incomplete = incomplete or (
+                    f"the thread {thread} returned no record"
+                )
+                continue
+            minutes = max(minutes, builder_minutes(record))
+            found = pending_request_from(record)
+            if found["pending"]:
+                request = found
+                request_thread = thread
+                break
+        if request is not None:
+            fields = [
+                ("Repo", repo),
+                ("Ticket", key),
+                ("Kind", request["kind"]),
+                ("Thread", request_thread),
+                ("Parked at", stamp),
+                (
+                    "Default",
+                    "the request stays unanswered and the item stays parked",
+                ),
+                (
+                    "Recommend",
+                    "answer the request in the morning; the shift never answers one",
+                ),
+                (
+                    "Next",
+                    "Shyam answers the request, and the shift works the item again",
+                ),
+            ]
+            parked.append(
+                parking_section(title, fields)
+                + "\n"
+                + "The request, quoted exactly as the tool showed it:\n"
+                + "\n"
+                + quoted_text(request["text"])
+            )
+            if not request["text"]:
+                snags.append(
+                    (
+                        f"{stamp} · {title}",
+                        [
+                            ("Repo", repo),
+                            ("Ticket", key),
+                            (
+                                "Problem",
+                                "a thread waits on a person and the request's text "
+                                "could not be read",
+                            ),
+                            ("Thread", request_thread),
+                            (
+                                "What the shift did",
+                                "the item was parked without the request's text, "
+                                "and the request was not answered",
+                            ),
+                            ("Next", "Shyam reads the thread and answers it"),
+                        ],
+                    )
+                )
+            continue
+        open_decision = decision_reason(decision_lines, key, number)
+        if open_decision:
+            reason, line = open_decision
+            parked.append(
+                parking_section(
+                    title,
+                    [
+                        ("Repo", repo),
+                        ("Ticket", key),
+                        ("Kind", f"{reason} — a decision the shift cannot make"),
+                        ("Parked at", stamp),
+                        (
+                            "Default",
+                            "the ticket stays as it is and the shift does not work it",
+                        ),
+                        (
+                            "Recommend",
+                            "answer the open question in the decisions log, and the "
+                            "shift works the ticket",
+                        ),
+                        ("Next", "Shyam answers the question in the decisions log"),
+                    ],
+                )
+                + "\n"
+                + "The open question, quoted exactly:\n"
+                + "\n"
+                + quoted_text(line)
+            )
+            continue
+        failing = (item.get("checks") or {}).get("failed") or []
+        if failing:
+            snags.append(
+                (
+                    f"{stamp} · {title}",
+                    [
+                        ("Repo", repo),
+                        ("Ticket", key),
+                        ("Problem", "a check is failing: " + ", ".join(failing)),
+                        (
+                            "What the shift did",
+                            receipt_says(
+                                shift_receipts, repo, receipt_number(item)
+                            )
+                            or (
+                                "the board reports a failing check; builder "
+                                "delivery has not been verified"
+                            ),
+                        ),
+                        ("Next", "the builder fixes the failing check"),
+                    ],
+                )
+            )
+            continue
+        tries = (
+            fix_tries(queue_state, repo, number)
+            if item.get("kind") == "pull-request"
+            else 0
+        )
+        verdict = budget_verdict(minutes, tries, budget)
+        if verdict["parked"]:
+            snags.append(
+                (
+                    f"{stamp} · {title}",
+                    [
+                        ("Repo", repo),
+                        ("Ticket", key),
+                        ("Problem", budget_observation(minutes, tries, budget)),
+                        (
+                            "What the shift did",
+                            receipt_says(
+                                shift_receipts, repo, receipt_number(item)
+                            )
+                            or (
+                                "the recorded elapsed time or retry count meets "
+                                "the parking threshold; stopping has not been "
+                                "verified"
+                            ),
+                        ),
+                        ("Next", verdict["next"]),
+                    ],
+                )
+            )
+    return parked, snags, incomplete
+
+
+def cmd_park(args: argparse.Namespace) -> int:
+    """Write the parking lot and the snag log (spec part T10).
+
+    The command reads the board, the queue's own records and the threads
+    that hold the work, and writes two files under the shift's folder:
+    `inbox/parking-lot.md` holds the decisions the shift could not make,
+    each with a default and a recommendation, and `inbox/snag-log.md`
+    holds the problems it found and what it did about them.
+
+    A pending approval request is parked with its exact text and is never
+    answered: this module has no path that sends an answer, and the proof
+    runs the command with a T3 stub that fails on every call but a read.
+
+    With `--fixture` it parks the pending request of one fixture thread,
+    which is how the rule is proved without a live approval dialog."""
+    deadline = time.monotonic() + args.deadline
+    root = report_root(args.root)
+    if args.fixture:
+        return cmd_fixture_park(args, root, deadline)
+    policy = policy_snapshot(root)
+    budget = budget_of(policy)
+    allowed = cycle_allow(policy)
+    items, receipts, drops, error = read_work_items(deadline, allowed or None, budget)
+    if error:
+        emit(f"overnight: REFUSED: {error}", err=True)
+        return 1
+    queue_state = read_queue_state()
+    _decisions_path, decision_lines = read_decisions()
+    parked, snags, incomplete = park_decisions(
+        items,
+        drops,
+        receipts,
+        decision_lines,
+        deadline,
+        budget,
+        queue_state,
+        read_shift_receipts(root),
+    )
+    # A thread that could not be read may hold a request the shift does
+    # not know about, so the record is incomplete. Both modes say so and
+    # refuse: a preview that hides a decision and calls itself complete is
+    # the same failure as a write that erases one.
+    if incomplete:
+        snags.append(
+            (
+                f"{stamp_line()} · the parking lot",
+                [
+                    (
+                        "Problem",
+                        "a thread could not be read, so the parking lot was not "
+                        "rewritten",
+                    ),
+                    ("What the shift did", incomplete),
+                    (
+                        "Next",
+                        "the shift reads the thread again on the next cycle",
+                    ),
+                ],
+            )
+        )
+    snag_text = snag_log_text(
+        [snag_section(title, fields) for title, fields in snags]
+    )
+    if args.dry_run:
+        if incomplete:
+            emit(
+                "overnight: the preview below is INCOMPLETE; a thread could not "
+                f"be read: {incomplete}",
+                err=True,
+            )
+        emit("--- parking lot (dry run, nothing written) ---")
+        emit(parking_lot_text(parked))
+        emit("--- snag log (dry run, nothing written) ---")
+        emit(snag_text)
+        if incomplete:
+            emit(
+                "overnight: REFUSED: the parking lot was not previewed in full: "
+                f"{incomplete}",
+                err=True,
+            )
+            emit(
+                "overnight: a decision that is still waiting may be missing from "
+                "the preview above.",
+                err=True,
+            )
+            return 1
+        return 0
+    if incomplete:
+        outcome = write_snag_log(root, snags)
+        emit(
+            f"overnight: REFUSED: the parking lot was not written: {incomplete}",
+            err=True,
+        )
+        emit(f"overnight: snag log {outcome}")
+        write_shift_line(root, f"park | refused | {incomplete}")
+        return 1
+    outcome = write_parking_lot(root, parked)
+    snag_outcome = write_snag_log(root, snags)
+    if outcome.startswith("failed") or snag_outcome.startswith("failed"):
+        emit(
+            f"overnight: the records were not written: {outcome}, {snag_outcome}",
+            err=True,
+        )
+        write_shift_line(root, f"park | failed | {outcome}, {snag_outcome}")
+        return 1
+    emit(
+        f"overnight: parking lot {outcome}; snag log {snag_outcome}; "
+        f"{len(parked)} parked, {len(snags)} problems"
+    )
+    write_shift_line(root, f"park | {len(parked)} parked | {len(snags)} problems")
+    return 0
+
+
+def cmd_fixture_park(args: argparse.Namespace, root: Path, deadline: float) -> int:
+    """Park a fixture's pending request, and never answer it.
+
+    The fixture names the thread that holds the request. The command
+    reads that thread through T3, exactly as it reads a real thread, so
+    the request it parks is the request the real path would park. The
+    proof runs it with a T3 stub that fails on every call but a read, so
+    an answer would fail loudly instead of passing quietly."""
+    file = Path(args.fixture).expanduser()
+    text = read_text(file)
+    if not text.strip():
+        die(f"the fixture {file} is empty or cannot be read")
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        die(f"the fixture {file} is not JSON: {exc}")
+    if not isinstance(data, dict):
+        die(f"the fixture {file} is not a JSON object")
+    thread = str(data.get("thread") or "")
+    if not thread:
+        die(f"the fixture {file} names no thread")
+    record, error = read_thread_record(thread, deadline)
+    if error:
+        snags = [
+            (
+                f"{stamp_line()} · {args.fixture}",
+                [
+                    (
+                        "Problem",
+                        "a thread could not be read, so the parking lot was not "
+                        "rewritten",
+                    ),
+                    ("What the shift did", error),
+                    (
+                        "Next",
+                        "the shift reads the thread again on the next cycle",
+                    ),
+                ],
+            )
+        ]
+        if args.dry_run:
+            emit(
+                f"overnight: REFUSED: the parking lot was not written: {error}",
+                err=True,
+            )
+            emit(snag_log_text([snag_section(title, fields) for title, fields in snags]))
+            return 1
+        outcome = write_snag_log(root, snags)
+        emit(
+            f"overnight: REFUSED: the parking lot was not written: {error}",
+            err=True,
+        )
+        emit(f"overnight: snag log {outcome}")
+        return 1
+    if not record:
+        emit(
+            f"overnight: REFUSED: the thread {thread} could not be read",
+            err=True,
+        )
+        return 1
+    request = pending_request_from(record)
+    if not request["pending"]:
+        emit(
+            f"overnight: REFUSED: the thread {thread} holds no pending request",
+            err=True,
+        )
+        return 1
+    repo = str(data.get("repo") or "")
+    key = str(data.get("key") or "")
+    number = data.get("number")
+    label = f"{key} (#{number})" if key else f"{repo}#{number}"
+    title = " ".join(str(data.get("title") or data.get("item") or "").split())
+    stamp = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
+    fields = [
+        ("Repo", repo),
+        ("Ticket", key),
+        ("Kind", request["kind"]),
+        ("Thread", thread),
+        ("Parked at", stamp),
+        (
+            "Default",
+            "the request stays unanswered and the item stays parked",
+        ),
+        (
+            "Recommend",
+            "answer the request in the morning; the shift never answers one",
+        ),
+        (
+            "Next",
+            "Shyam answers the request, and the shift works the item again",
+        ),
+    ]
+    heading = f"{label} · {title}" if title else label
+    if request["text"]:
+        parked = [
+            parking_section(heading, fields)
+            + "\n"
+            + "The request, quoted exactly as the tool showed it:\n"
+            + "\n"
+            + quoted_text(request["text"])
+        ]
+        snags: list[tuple[str, list[tuple[str, str]]]] = []
+    else:
+        parked = [
+            parking_section(
+                heading,
+                fields + [("Request", "the text of the request could not be read")],
+            )
+        ]
+        snags = [
+            (
+                f"{stamp} · {heading}",
+                [
+                    ("Repo", repo),
+                    ("Ticket", key),
+                    (
+                        "Problem",
+                        "a thread waits on a person and the request's text could "
+                        "not be read",
+                    ),
+                    ("Thread", thread),
+                    (
+                        "What the shift did",
+                        "the item was parked without the request's text, and the "
+                        "request was not answered",
+                    ),
+                    ("Next", "Shyam reads the thread and answers it"),
+                ],
+            )
+        ]
+    if args.dry_run:
+        emit("--- parking lot (dry run, nothing written) ---")
+        emit(parking_lot_text(parked))
+        emit("--- snag log (dry run, nothing written) ---")
+        emit(snag_log_text([snag_section(title, fields) for title, fields in snags]))
+        return 0
+    outcome = write_parking_lot(root, parked)
+    snag_outcome = write_snag_log(root, snags)
+    if outcome.startswith("failed") or snag_outcome.startswith("failed"):
+        emit(
+            f"overnight: the records were not written: {outcome}, {snag_outcome}",
+            err=True,
+        )
+        return 1
+    emit(f"overnight: parking lot {outcome}; snag log {snag_outcome}")
+    emit(parking_lot_text(parked))
+    if snags:
+        emit(snag_log_text([snag_section(title, fields) for title, fields in snags]))
+    return 0
+
+
+def park_cycle(root: Path, deadline: float) -> None:
+    """Park what this cycle cannot decide and log what it found.
+
+    A cycle that cannot read the board says so and goes on: the parking
+    lot and the snag log are records, and a record that is missing never
+    ends the shift. Nothing here raises out of the cycle: the shift's
+    own report is written after this step, and a parking problem must
+    not take the report with it."""
+    left = int(max(1, deadline - time.monotonic()))
+    try:
+        code = cmd_park(
+            argparse.Namespace(
+                dry_run=False, fixture=None, root=str(root), deadline=left
+            )
+        )
+    except SystemExit as exc:
+        emit(
+            f"overnight: the parking lot was not written: {exc}",
+            err=True,
+        )
+        return
+    except Exception as exc:  # a record that cannot be written is not the shift
+        emit(f"overnight: the parking lot was not written: {exc}", err=True)
+        return
+    if code:
+        emit("overnight: the parking step did not write its records", err=True)
+        return
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="overnight", description="The overnight shift's command line."
@@ -6643,6 +7782,32 @@ def main() -> int:
         help=f"seconds the whole command may take (default {DEFAULT_DEADLINE})",
     )
     budget_cmd.set_defaults(func=cmd_budget)
+    park = sub.add_parser(
+        "park",
+        help="write the parking lot and the snag log (spec part T10)",
+    )
+    park.add_argument(
+        "--fixture",
+        default=None,
+        help="a JSON file that names the thread that holds a pending request",
+    )
+    park.add_argument(
+        "--root",
+        default=None,
+        help="the folder that holds the shift's records (default the runtime folder)",
+    )
+    park.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the parking lot and the snag log and write no file",
+    )
+    park.add_argument(
+        "--deadline",
+        type=int,
+        default=DEFAULT_DEADLINE,
+        help=f"seconds the whole run may take (default {DEFAULT_DEADLINE})",
+    )
+    park.set_defaults(func=cmd_park)
     close = sub.add_parser(
         "close",
         help="close a ticket's issue when its receipt holds the evidence",
