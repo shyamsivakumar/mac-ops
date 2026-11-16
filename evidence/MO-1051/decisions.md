@@ -105,3 +105,64 @@ fixture through the real CLI, and by the unit tests in
 Verdict: sound. Confidence: medium. The real command runs on the real
 source; only the GitHub read is stubbed, and the live ticket shows that a
 ticket which passes today still passes.
+
+## Only the named separators are separators
+
+When: 2026-11-16, in the fix turn after the review round.
+
+Decision: the canonical form of a section name splits on whitespace, `/` and
+`,` only, and drops the word `and`. Every other character belongs to a word.
+
+Scenario: a ticket writes a heading `Contexte`. It is a different section
+from `Context`, and it is reported missing.
+
+Gap: the first turn split on every character that is not an ASCII letter or
+digit, so `Contexte` and `CI++` read as `Context` and `CI` and were accepted.
+The review round found it.
+
+Reach: every section name and every heading. The ticket names `/`, `,` and
+` and ` as the separators, and this is exactly those.
+
+Verdict: sound. Confidence: high. The named spellings still match, and a
+name that differs by a letter no longer matches.
+
+## A label line starts at the start of the line
+
+When: 2026-11-16, same turn.
+
+Decision: a label line is a line that begins, after optional whitespace and
+optional bold, with the section name and then a colon. A list item such as
+`- Context: ...` is not a label line.
+
+Scenario: a body writes `Context:` and then the bullet `- Context: The skill
+writes ...`. The bullet is body text. The `Context` section keeps that text
+and is not empty, so the ticket still starts.
+
+Gap: the first turn read the label as everything before the first colon, so a
+bullet that repeated a section name became a second marker for that section
+and cut the first one short, which turned a passing section into an empty
+one. The review round found it.
+
+Reach: every line of every ticket body that is not a heading. The old exact
+match read a label only at the start of the line, and this keeps that.
+
+Verdict: sound. Confidence: high. The old rule rejected a bullet for the
+same reason, and the old rule passed every body that passed today.
+
+## The matcher stays inside `template_markers`
+
+When: 2026-11-16, same turn.
+
+Decision: the canonical form and the label pattern live inside
+`template_markers`, and no new module-level name is added to the CLI.
+
+Scenario: a reader of `coordinator/bin/ticket` finds the whole rule in the
+one function the ticket names.
+
+Gap: the first turn added a module-level helper and a module-level pattern.
+The review round read that as wider than the ticket's scope.
+
+Reach: the file only. Nothing else reads either name.
+
+Verdict: sound. Confidence: medium. The behaviour is the same; the rule only
+says where the code sits.
