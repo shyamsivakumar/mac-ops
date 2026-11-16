@@ -376,6 +376,14 @@ def act_on_pr(repo, number, ledger):
     pr = next((p for p in SNAPSHOT["repos"][repo]["prs"] if p["number"] == number), {})
     if pr.get("state") != "OPEN":
         return None
+    state = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                            "--json", "state,mergedAt"]))
+    if state.get("state") != "OPEN" or state.get("mergedAt"):
+        return f"skip #{number}: PR is merged or closed"
+    waiting = run([COORDQ, "list"])
+    key = re.escape(CFG[repo]["key"])
+    if re.search(rf"^#\d+ p-?\d+ \S+ {key}#{number}(?:\s|$)", waiting, re.MULTILINE):
+        return f"skip #{number}: coordq action already waiting"
     head, body = pr["headRefOid"], pr.get("body") or ""
     issue, builder = builder_thread(repo, body)
     if issue:
