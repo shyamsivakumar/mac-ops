@@ -534,10 +534,8 @@ def hourly_selftest_fixture():
     import tempfile
     import hourly_selftest as adapter
     from types import SimpleNamespace
-    # The adapter's expected set is the suite's registered eval names. The
-    # fixture used to take its expectations from the adapter, so it agreed
-    # with a wrong adapter; this compares the two lists instead, and a
-    # missing eval or a stale name fails here rather than in production.
+    # The expected names come from the suite, not from the adapter, so the
+    # fixture cannot agree with a wrong adapter.
     exact(sorted(adapter.EXPECTED), sorted(EVALS))
     with tempfile.TemporaryDirectory() as directory:
         state = Path(directory) / "state.json"
@@ -586,10 +584,9 @@ def hourly_selftest_fixture():
                 pass
             else:
                 raise AssertionError("negative control accepted unconditional PASS")
-    # The adapter must run the executable that sits beside it. A stub that
-    # prints the suite's own names must pass, and an executable that is not
-    # there must fail with a reason of its own rather than the generic
-    # "fixture suite failed".
+    # The adapter must run the executable beside it: a stub that prints the
+    # suite's own names passes, and a missing executable fails with a reason
+    # of its own.
     stub_source = ("NAMES = %s\n"
                    "for name in NAMES:\n"
                    "    print('PASS ' + name)\n" % json.dumps(sorted(EVALS)))

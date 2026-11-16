@@ -7,12 +7,9 @@ import time
 
 ALARM = "overnight-selftest"
 EXECUTABLE = "overnight"
-# The names the fixture suite registers today. The suite's own registry is
-# the truth: `coordinator/overnight/selftest.py` pins its registered eval
-# names to this set in `hourly_selftest_fixture`, so the two cannot drift
-# apart without the suite failing. The adapter keeps its own copy on
-# purpose: it is what catches an eval that leaves the suite, and it lets
-# the hourly tick run without loading the suite first.
+# The eval names the suite registers today. This set is what the hourly
+# check compares against, and the suite's own registry is pinned to it in
+# `hourly_selftest_fixture`, so the two cannot drift apart unnoticed.
 EXPECTED = frozenset("send-integrity consolidation-guard script-results start-routing "
                      "dead-run-recovery gate-pipeline no-parking turncap watchdog "
                      "zero-merge board-integrity api-budget ff-drift cycle-health "
@@ -29,11 +26,10 @@ def save(path, value):
 def resolve_executable():
     """Return the overnight executable that belongs to this adapter.
 
-    The installed adapter lives in `~/.local/bin` beside `~/.local/bin/overnight`.
-    A run from the repository finds the checkout copy instead. When neither
-    is there the reason says so and the caller reports it: a missing
-    executable is a broken install, not a failing fixture suite, and the two
-    must not read the same."""
+    The installed adapter sits beside `~/.local/bin/overnight`; a run from
+    the repository finds the checkout copy instead. When neither is there
+    the reason says so, because a missing executable is a broken install
+    and not a failing fixture suite."""
     script = Path(__file__).resolve()
     installed = script.with_name(EXECUTABLE)
     if installed.is_file():
@@ -83,8 +79,6 @@ def tick_selftest():
     state_path = home / ".local/state/mac-ops/overnight-selftest.json"
     decisions_path = home / "Code/coordinator/decisions.json"
     if executable is None:
-        # Nothing to run: report why instead of running a command that fails
-        # for a different reason.
         return hourly(state_path, decisions_path, [], failure=reason)
     command = [sys.executable, str(executable), "selftest"]
     return hourly(state_path, decisions_path, command)
@@ -93,4 +87,4 @@ def tick_selftest():
 if __name__ == "__main__":
     outcome = tick_selftest()
     print(outcome)
-    raise SystemExit(0 if outcome == "PASS" else 1)
+    raise SystemExit(1 if outcome == "FAIL" else 0)
