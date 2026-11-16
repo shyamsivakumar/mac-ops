@@ -25,6 +25,8 @@ COORDQ_PRIORITY = {1: 3, 2: 2, 3: 1, 4: 0}
 NO_PRIORITY = 0
 LEDGER_LINE = re.compile(r"<!-- coordinator-ticket (\{.*\}) -->")
 TITLE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
+# The key and the title are joined the way a ticket reads: `MO-1017 · name`.
+KEY_SEPARATOR = " · "
 BLOCKER_URL = re.compile(r"^https?://[^/]+/([^/\s#]+/[^/\s#]+)/issues/\d+")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -340,6 +342,102 @@ def write_cache(data):
 
 def cache_age(cache):
     return time.time() - parse_time(cache["fetchedAt"]).replace(tzinfo=timezone.utc).timestamp()
+
+
+def repo_issues(repo):
+    """Every issue of the repo, open and closed, with the titles that hold keys."""
+    return gh_json(["issue", "list", "-R", repo, "--state", "all", "--limit", "1000", "--json", "number,title"])
+
+
+def keys_in_use(rcfg, issues):
+    """The `<KEY>-<n>` numbers this repo already uses, mapped to their issue number."""
+    used = {}
+    for issue in issues:
+        match = TITLE_KEY.match(issue["title"])
+        if match and match.group(1) == rcfg["key"]:
+            used[int(match.group(2))] = issue["number"]
+    return used
+
+
+def mint_key(rcfg, issues):
+    """The next free key for the repo: one past the repo's highest key.
+
+    The key prefix comes from tickets.json and the number from the repo's
+    own issues, so a minted key never collides with a ticket that exists.
+    """
+    used = keys_in_use(rcfg, issues)
+    number = max(used) + 1 if used else 1
+    while number in used:
+        number += 1
+    return f"{rcfg['key']}-{number}"
+
+
+def with_open_lock(repo):
+    """One minter per repo: a second open for the same repo is refused."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    f = open(os.path.join(CACHE_DIR, f"open-{repo.replace('/', '_')}.lock"), "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise Refuse("another ticket open for this repo is running")
+    return f
+
+
+def cmd_open(a):
+    """Open a ticket. The key is minted here, so a ticket is born startable."""
+    cfg = load_config()
+    repo = a.repo
+    try:
+        rcfg = repo_config(cfg, repo)
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    if rcfg.get("key") is None:
+        die(f"refused: repo {repo} has no key in tickets.json", 2)
+    title = " ".join(a.title.split())
+    if not title:
+        die("refused: the title is empty", 2)
+    allowed = {name for _, name in label_names(cfg)}
+    labels = [name.strip() for name in (a.label or "").split(",") if name.strip()]
+    unknown = [name for name in labels if name not in allowed]
+    if unknown:
+        die(f"refused: unknown labels: {', '.join(unknown)}", 2)
+    body = a.body or ""
+    if a.body_file:
+        with open(a.body_file) as handle:
+            body = handle.read()
+    try:
+        lock = with_open_lock(repo)
+        issues = repo_issues(repo)
+        match = TITLE_KEY.match(title)
+        if match:
+            if match.group(1) != rcfg["key"]:
+                die(f"refused: key prefix {match.group(1)} does not match repo key {rcfg['key']}", 2)
+            key = match.group(0)
+            clash = keys_in_use(rcfg, issues).get(int(match.group(2)))
+            if clash is not None:
+                die(f"refused: {key} is already used by issue #{clash}", 2)
+        else:
+            if a.require_key:
+                die(f"refused: missing key in title (the title must start with {rcfg['key']}-<n>)", 2)
+            key = mint_key(rcfg, issues)
+            title = f"{key}{KEY_SEPARATOR}{title}"
+        duplicate = next((i for i in issues if i["title"].strip() == title), None)
+        if duplicate is not None:
+            die(f"refused: issue #{duplicate['number']} already has this title", 2)
+        if a.dry_run:
+            print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "dryRun": True}))
+            return
+        args = ["issue", "create", "-R", repo, "--title", title]
+        if body:
+            args += ["--body", body]
+        if labels:
+            args += ["--label", ",".join(labels)]
+        url = gh(args).strip()
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    except GhError as e:
+        die(f"gh failed ({e.kind}): {e}")
+    print(json.dumps({"repo": repo, "key": key, "title": title, "labels": labels, "url": url}))
 
 
 def cmd_list(a):
@@ -1635,6 +1733,15 @@ def main():
     s = sub.add_parser("labels")
     s.add_argument("--apply", action="store_true")
     s.set_defaults(fn=ensure_labels)
+    s = sub.add_parser("open", help="open a ticket with a minted key")
+    s.add_argument("--repo", required=True, help="owner/repo")
+    s.add_argument("--title", required=True, help="the ticket title; the key is minted when it has none")
+    s.add_argument("--body", default="")
+    s.add_argument("--body-file")
+    s.add_argument("--label", default="", help="comma separated labels")
+    s.add_argument("--require-key", action="store_true", help="refuse a title without a key instead of minting one")
+    s.add_argument("--dry-run", action="store_true", help="print the title this would use and stop")
+    s.set_defaults(fn=cmd_open)
     s = sub.add_parser("list")
     s.add_argument("--json", action="store_true")
     s.add_argument("--fresh", action="store_true")
