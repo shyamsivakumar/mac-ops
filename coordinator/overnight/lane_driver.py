@@ -169,14 +169,35 @@ def start(args, prio, ledger, lkey):
     return out
 
 
-def send(thread_id, message, title, ledger, lkey):
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800):
     if lkey in ledger:
         return f"already done {lkey}"
     if DRY:
         return f"DRY {lkey}"
-    out = run([COORDQ, "start", json.dumps({"threadId": thread_id, "message": message}),
-               "--tool", "t3_thread_send", "--priority", "800", "--title", title]).splitlines()[-1]
+    thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
+    sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
+                and not thread.get("archived") and thread.get("sendable") is not False
+                and thread.get("canSend") is not False)
+    if sendable:
+        args = {"threadId": thread_id, "message": message}
+        options = ["--tool", "t3_thread_send", "--priority", str(priority), "--title", title]
+    else:
+        repo = repo or next((r for r in CFG if r in lkey), None)
+        if not repo:
+            raise ValueError(f"No repository for {lkey}")
+        args = {"projectId": CFG[repo]["projectId"], "title": title,
+                "modelSelection": SOL, "runtimeMode": "full-access",
+                "workspaceStrategy": {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
+                if thread.get("worktreePath") else {"type": "root"}, "message": message}
+        options = ["--priority", str(priority)]
+    receipt = run([COORDQ, "start", json.dumps(args), *options]).strip()
+    if not receipt:
+        raise RuntimeError(f"Empty dispatch receipt for {lkey}")
+    out = receipt.splitlines()[-1]
     ledger[lkey] = out
+    if not sendable:
+        print(f"SEND REROUTE {thread_id}: {out}")
+        return f"fresh ({thread_id} unreachable): {out}"
     return out
 
 
@@ -401,6 +422,7 @@ def unstick(repo, ledger, excl=frozenset()):
     if not orphans:
         return "nothing ready"
     receipts = json.load(open(RECEIPTS))
+    failures_before = ledger.get("_item_failures", 0)
     for n in orphans:
         with item_boundary(repo, n, ledger):
             prefix = f"ticket:{repo}#{n}:a"
@@ -416,14 +438,17 @@ def unstick(repo, ledger, excl=frozenset()):
                     return f"DRY start #{n}"
                 out = run(["ticket", "start", f"{repo}#{n}"], timeout=200)
                 ledger[f"relaunch:{repo}#{n}"] = out
+                print(f"SEND REROUTE {best[1]}: {out}")
                 return f"start #{n}: {out}"
             if DRY:
                 return f"DRY continue #{n}"
             msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
-            out = run([COORDQ, "start", json.dumps({"threadId": best[1], "message": msg}), "--tool", "t3_thread_send",
-                       "--priority", "900", "--title", f"{CFG[repo]['key']}#{n} continue"]).splitlines()[-1]
+            out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
+                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900)
             ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
             return f"continue #{n}: {out}"
+    if ledger.get("_item_failures", 0) > failures_before:
+        return "continue failed"
     now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
     def marked(k):
         v = ledger.get(k)

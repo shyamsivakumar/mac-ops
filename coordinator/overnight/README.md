@@ -1021,3 +1021,18 @@ uses the ledger receipt. Removing the dispatch must fail the negative control.
 This proves the dispatched instructions, not compliance by a live planner.
 Ticket bodies and coordinator comments are trusted inputs; the fixture covers
 the generated brief with a representative scoped body. No live thread is launched.
+
+### Send integrity (Refs #385)
+
+`overnight selftest` registers exactly 12 fixture evals, including send-integrity.
+The lane reads thread status before queueing a send. Missing, archived, unknown,
+or explicitly unsendable threads route to a fresh thread and print `SEND REROUTE`.
+Continuation uses the same handler and keeps its existing cooldown and priority.
+A failed command or empty receipt leaves sent bookkeeping unchanged. Failed
+continuations do not fall through to the unrelated unstick launch.
+
+The fixture covers allowed statuses, rejected statuses and flags, failed commands,
+empty receipts, dry mode, continuation routing, and an unchecked-send mutation
+that must fail. Fixtures replace T3, command execution, and file reads. They do
+not prove delivery after coordq accepts a request: a thread can change status
+between inspection and queue execution. Live-service checks and cutover are waived.
