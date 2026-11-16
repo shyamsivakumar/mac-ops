@@ -15,17 +15,21 @@ export function endsWithAsk(text) {
 }
 
 // The column a group of threads belongs to. Decisions and asked turns need Shyam; dead runs do not.
-export function columnOf(group) {
+function columnOf(group) {
   if (group.kind === "ask" || group.kind === "wait") return NEEDS;
   if (group.threads.some((thread) => thread.ask)) return NEEDS;
-  if (group.kind === "run") return "run";
+  if (group.threads.some((thread) => thread.kind === "run")) return "run";
   if (group.kind === "fail" || group.kind === "stop") return DEAD;
   return "done";
 }
 
-// Where a group lands: a real ask beats a mergeable PR, otherwise a mergeable PR is ready.
-export function place(group, ready) {
+// The lane of a group, from live facts only: thread state, then the open PR's CI, then its review.
+// `reviewCleared` is called only for an open PR whose CI is not failing or pending.
+export function laneOf(group, reviewCleared) {
   const column = columnOf(group);
-  if (column === NEEDS) return NEEDS;
-  return ready ? "ready" : column;
+  if (column !== "done" || group.info.status !== "open") return column;
+  const ci = group.info.gh?.ci ?? "loading";
+  if (ci === "fail") return "cifail";
+  if (ci === "pending" || ci === "loading") return "checks";
+  return reviewCleared() ? "ready" : "review";
 }
