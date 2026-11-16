@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import re
 from pathlib import Path
 import subprocess
 from unittest.mock import patch
@@ -736,7 +737,34 @@ def script_results():
               f"RESULT: {status} abc {reason}"], {"timeout": 60, "check": True})])
 
 
-EVALS = {"script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift}
+def consolidation_guard():
+    import lane_driver as lane
+    ticket = load_ticket()
+    cfg = {"types": {"review": "gate"}}
+    item = {"body": "Implement the scoped fixture. Report leftover work in the PR.",
+            "url": "https://fixture/issue/1"}
+    builder = ticket.assemble_brief(cfg, item, "fixture-run", {"comments": []})
+    gate = ticket.gate_brief("fixture/repo", {"key": "FIX"}, 1, 2,
+                             "a" * 40, "main", False, False)
+    for brief in (builder, gate):
+        exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return "fixture-receipt"
+    with patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
+         patch.object(lane, "CFG", {"fixture/repo": {"projectId": "fixture", "key": "FIX"}}):
+        ledger = {}
+        lane.park("fixture/repo", 2, 1, "a" * 40, "fixture verdict", ledger)
+        lane.park("fixture/repo", 2, 1, "a" * 40, "fixture verdict", ledger)
+    launches = [command for command in calls if command[:2] == [lane.COORDQ, "start"]]
+    exact(len(launches), 1)
+    message = json.loads(launches[0][2])["message"]
+    exact("at most 2 ordered tickets" in message, True)
+    exact("never create a third ticket" in message, True)
+
+
+EVALS = {"consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift}
 
 
 def main():
@@ -754,6 +782,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "consolidation-guard":
+                        import lane_driver
+                        with patch.object(lane_driver, "park", return_value="unguarded"):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted missing re-cut dispatch")
                     if name == "script-results":
                         import script_results as results
                         with patch.object(results, "reconcile", return_value=[]):
