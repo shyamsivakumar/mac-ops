@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Emit one read-only BOARD snapshot; invoke again for the next cycle."""
+"""Emit read-only coordinator events and BOARD snapshots."""
 import argparse
+from datetime import datetime
 import fcntl
+import hashlib
+import math
+import signal
+import stat
+import threading
 import json
 import os
 from pathlib import Path
 import re
 import runpy
 import subprocess
+import sys
 import time
 
 MAX_REPOS = 40
@@ -115,6 +122,20 @@ def collect(cfg, previous, deadline, now, read_gate):
         live, complete = threads(deadline)
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
         live, complete = [], False
+    for thread in live:
+        if thread.get("status") != "running":
+            continue
+        try:
+            detail = command(["t3mcp", "call", "t3_thread_read", "-"], deadline,
+                             json.dumps({"threadId": thread["threadId"], "limit": 1,
+                                         "maxCharsPerItem": 1, "runLimit": 1}))
+            active = detail["thread"].get("activeRunId")
+            run = next((run for run in detail.get("recentRuns", [])
+                        if run.get("runId") == active and run.get("status") == "running"), {})
+            thread["startedAt"] = run.get("startedAt")
+            thread["runId"] = run.get("runId")
+        except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+            thread["startedAt"] = None
     queue = queue_sources(Path(os.environ.get("COORDQ_DIR", str(Path.home() / "Code/coordinator/queue"))))
     gates = []
     receipts = queue.get("dispatch-receipts.json") or {}
@@ -237,13 +258,132 @@ def detect(board, raw, previous):
     return fresh, {"events": sorted(seen), "idle": idle}
 
 
+def moment(value):
+    try:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value) if math.isfinite(value) else None
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.timestamp() if parsed.tzinfo else None
+    except (TypeError, ValueError, AttributeError, OverflowError):
+        return None
+
+
+def runtime_events(raw, previous, now):
+    seen = {key for key in previous.get("runtimeEvents", []) if key.startswith("run:")}
+    active = set()
+    events = []
+    if raw.get("threadsComplete") is True:
+        for thread in raw.get("threads", []):
+            identity = thread.get("threadId", "")
+            if not isinstance(identity, str) or not re.fullmatch(r"[\w.-]{1,200}", identity):
+                continue
+            if thread.get("status") != "running":
+                continue
+            started = moment(thread.get("startedAt"))
+            if started is None:
+                prefix = f"run:{identity}:"
+                run_id = thread.get("runId")
+                active.update(key for key in seen if key.startswith(prefix)
+                              and (not run_id or key == f"{prefix}{run_id}"))
+                continue
+            key = f"run:{identity}:{thread.get('runId') or started}"
+            active.add(key)
+            if now - started > 1200 and key not in seen:
+                events.append(f"EVENT run-long {identity} {int((now - started) / 60)}")
+                seen.add(key)
+    if raw.get("threadsComplete") is True:
+        seen.intersection_update(active)
+    return events, seen
+
+
+def log_events(paths, previous, seen):
+    offsets = dict(previous.get("logOffsets", {}))
+    events = []
+    for path in paths:
+        key = str(path)
+        old = offsets.get(key, {})
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+            with os.fdopen(descriptor, "rb") as source:
+                info = os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                identity = f"{info.st_dev}:{info.st_ino}"
+                same_file = old.get("identity") == identity
+                generation = old.get("generation", 0)
+                if old and not same_file:
+                    generation += 1
+                offset = old.get("offset", 0) if same_file else 0
+                anchor = old.get("anchor")
+                if offset > info.st_size:
+                    generation += 1
+                    offset = 0
+                if offset and anchor:
+                    source.seek(max(0, offset - 128))
+                    if hashlib.sha256(source.read(min(offset, 128))).hexdigest() != anchor:
+                        generation += 1
+                        offset = 0
+                source.seek(offset)
+                chunk = source.read(65536)
+                complete = chunk.rfind(b"\n") + 1
+                consumed = complete or (len(chunk) if len(chunk) == 65536 else 0)
+                skipping = bool(old.get("skipping")) if offset else False
+                position = offset
+                for line in chunk[:complete].splitlines(keepends=True):
+                    if not skipping:
+                        if re.search(rb"rate[ -]?limit|too many requests|HTTP[/ ](?:[0-9.]+ )?429", line, re.I):
+                            events.append("EVENT rate-limit")
+                        elif b"Traceback (most recent call last):" in line:
+                            events.append("EVENT traceback " + path.name)
+                    position += len(line)
+                    skipping = False
+                next_offset = offset + consumed
+                source.seek(max(0, next_offset - 128))
+                anchor = hashlib.sha256(source.read(min(next_offset, 128))).hexdigest()
+                offsets[key] = {"identity": identity, "generation": generation,
+                                "offset": next_offset, "anchor": anchor,
+                                "skipping": not complete and (skipping or consumed > 0)}
+        except OSError:
+            continue
+    return events, offsets
+
+
+def cycle(args, cfg, previous, ticket, adapter):
+    raw = read_json(args.fake_input) if args.fake_input else collect(
+        cfg, previous, time.monotonic() + 120, time.time(), adapter["read_gate_report"])
+    if args.fake_input and not previous:
+        previous = raw.get("previous", {})
+    board = snapshot(cfg, raw, previous, ticket["normalize_issue"], adapter["linked_ticket"])
+    events, detection = detect(board, raw, previous)
+    alarms, seen = runtime_events(raw, previous, raw.get("now", time.time()) if args.fake_input else time.time())
+    logs, offsets = log_events(args.log, previous, seen)
+    state = {"github": raw["github"], "items": board["items"], **detection,
+             "runtimeEvents": sorted(seen), "logOffsets": offsets}
+    return state, events + alarms + logs, board
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--once", action="store_true", help="collect one cycle (also the default)")
+    parser.add_argument("--once", action="store_true", help="collect one cycle and exit")
     parser.add_argument("--fake-input", type=Path, help="JSON source envelope; no network calls; persists --state")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--state", type=Path, default=Path.home() / ".coordinator/coord-watch.json")
+    parser.add_argument("--interval", type=float, default=30, help="seconds between cycles (5..300)")
+    parser.add_argument("--log", type=Path, action="append", default=[], help="explicit runtime log (repeatable)")
     args = parser.parse_args()
+    if not math.isfinite(args.interval) or not 5 <= args.interval <= 300:
+        parser.error("interval must be between 5 and 300 seconds")
+    if len(args.log) > 16 or any(not re.fullmatch(r"[\w.-]{1,128}", path.name) or
+                               path.name.startswith(".env") for path in args.log):
+        parser.error("at most 16 logs with plain basenames are allowed")
+    if not args.log and not args.fake_input:
+        args.log = [Path(os.environ.get("COORDQ_DIR", str(Path.home() / "Code/coordinator/queue"))) / "dispatch.log"]
+    if any(part.startswith(".env") or part.lower() in {"credentials", "secrets", ".ssh"}
+           for path in args.log for part in path.parts):
+        parser.error("secret paths are forbidden")
+    stopped = threading.Event()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda *_: stopped.set())
     here = Path(__file__).resolve().parent
     ticket = runpy.run_path(str(here / "ticket"))
     overnight = here / "overnight"
@@ -251,26 +391,37 @@ def main():
         overnight = here.parent / "overnight/overnight"
     adapter = runpy.run_path(str(overnight))
     cfg = read_json(args.config) if args.config else ticket["load_config"]()
-    args.state.parent.mkdir(parents=True, exist_ok=True)
     with os.fdopen(os.open(args.state, os.O_RDWR | os.O_CREAT, 0o600), "r+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         content = stream.read(MAX_BYTES + 1)
         if len(content) > MAX_BYTES:
             raise ValueError("state exceeds byte limit")
         previous = json.loads(content) if content else {}
-        raw = read_json(args.fake_input) if args.fake_input else collect(
-            cfg, previous, time.monotonic() + 120, time.time(), adapter["read_gate_report"])
-        if args.fake_input and not previous:
-            previous = raw.get("previous", {})
-        board = snapshot(cfg, raw, previous, ticket["normalize_issue"], adapter["linked_ticket"])
-        events, detection = detect(board, raw, previous)
-        state = {"github": raw["github"], "items": board["items"], **detection}
-        stream.seek(0)
-        json.dump(state, stream)
-        stream.truncate()
-    for event in events:
-        print(event)
-    print("BOARD " + json.dumps(board, separators=(",", ":")))
+        failures = 0
+        while not stopped.is_set():
+            try:
+                state, events, board = cycle(args, cfg, previous, ticket, adapter)
+                encoded = json.dumps(state)
+                if len(encoded) > MAX_BYTES:
+                    raise ValueError("state exceeds byte limit")
+                stream.seek(0)
+                stream.write(encoded)
+                stream.truncate()
+                stream.flush()
+                os.fsync(stream.fileno())
+                previous = state
+                for event in events:
+                    print(event, flush=True)
+                print("BOARD " + json.dumps(board, separators=(",", ":")), flush=True)
+                failures = 0
+            except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+                if args.once:
+                    raise SystemExit("coord-watch: cycle failed") from None
+                failures = min(failures + 1, 6)
+                print("coord-watch: cycle failed", file=sys.stderr, flush=True)
+            if args.once:
+                break
+            stopped.wait(min(300, args.interval * 2 ** failures))
 
 
 if __name__ == "__main__":

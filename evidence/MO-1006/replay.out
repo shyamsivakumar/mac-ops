@@ -1,0 +1,30 @@
+below 20 minutes: PASS []
+exactly 20 minutes: PASS []
+over 20 minutes: PASS ["EVENT run-long builder-343 20"]
+restart run dedup: PASS []
+new run identity: PASS ["EVENT run-long builder-343 21"]
+partial thread source: PASS []
+waiting is not running: PASS []
+unknown start: PASS []
+log alarms: PASS ["EVENT rate-limit", "EVENT traceback runtime.log"]
+legacy state restart log dedup: PASS []
+partial line silent: PASS []
+completed partial line: PASS ["EVENT rate-limit"]
+replacement rotation: PASS ["EVENT traceback runtime.log", "EVENT rate-limit"]
+rotation restart dedup: PASS []
+copy truncate: PASS ["EVENT rate-limit"]
+truncate restart dedup: PASS []
+same-prefix before truncation: PASS []
+identical-line copy truncate: PASS ["EVENT rate-limit"]
+identical-line truncation restart dedup: PASS []
+anchor before regrow: PASS []
+anchor-detected truncate and regrow: PASS ["EVENT rate-limit"]
+anchor truncation restart dedup: PASS []
+installed executable restart dedup: PASS []
+installed executable new event: PASS ["EVENT rate-limit"]
+installed executable event dedup: PASS []
+temporary HOME installation: PASS mapping, bytes, executable 0755, receipt, installed command
+runtime write boundary: PASS only watch.json changed in every command invocation
+synthetic private marker: PASS absent from stdout, stderr and persisted state
+host boundaries: git_toplevel/retire_jobs/manual_monitors/reload_jobs replaced with inert fakes; subprocess forbidden during install
+device, handset and live-service cases: WAIVED by Shyam 2026-11-14; not failed
