@@ -438,7 +438,7 @@ export function decisionOf(col, g, info, verdict, now) {
   const name = g.task || g.title;
   const c = g.primary;
   const pr = info.status === "open" ? info.pr : null;
-  const settle = g.threads.some((x) => SETTLEABLE.includes(x.kind));
+  const settle = (col === "done" || col === "dead") && g.threads.some((x) => SETTLEABLE.includes(x.kind));
   const sendBack = (col === "ready" || col === "review") && pr && verdict?.state === "fail";
   const other = [
     { id: "open", key: "o", label: "Open thread" },
