@@ -28,7 +28,18 @@ What it proves:
 9. a parking step that raises SystemExit does not end the shift cycle:
    the cycle's own report is still written,
 10. a request that carries its answer is not parked: the shift does not
-   wait for an answer that already came.
+   wait for an answer that already came,
+11. a thread that returns an empty or malformed record leaves the
+   parking lot as it was: the shift does not erase a decision because a
+   read told it nothing,
+12. a snag entry records what was observed and quotes the shift's own
+   receipt when there is one: it never claims a stop or a delivery it
+   did not verify,
+13. two tickets that share a title and a failing check are two problems:
+   the snag log keeps both,
+14. the latest open request is the one that is parked: when its own text
+   cannot be read, the shift says so instead of parking an older
+   request in its place.
 
 Run it from the mac-ops checkout:
 
@@ -325,6 +336,165 @@ def main() -> int:
         check(
             "holds no pending request" in (out + err),
             f"the command did not say why it parked nothing: {out}{err}",
+        )
+
+        # 11: a thread that returns an empty record preserves the lot.
+        empty = FIXTURES / "empty-record-request.json"
+        threads = {
+            "mcp:launch:t10-empty": {},
+            "mcp:launch:t10-answered": json.loads(
+                (FIXTURES / "threads-answered.json").read_text()
+            ),
+        }
+        env = park_env(work / "empty", threads)
+        records = work / "records-11"
+        (records / "inbox").mkdir(parents=True)
+        code, out, err = park(env, FIXTURES / "answered-then-pending.json", records)
+        check(code == 0, f"the first park exited {code}: {err.strip()}")
+        before = (records / "inbox" / "parking-lot.md").read_text()
+        code, out, err = park(env, empty, records)
+        after = (records / "inbox" / "parking-lot.md").read_text()
+        print("=== 11: an empty thread record preserves the parking lot ===")
+        check(code != 0, "the command reported success after an empty record")
+        check(
+            before == after,
+            "the parking lot was rewritten from an empty thread record",
+        )
+        check(
+            "empty or malformed" in (out + err),
+            f"the command did not say why it wrote nothing: {out}{err}",
+        )
+
+        # 12: the snag entries record observations and quote the receipt.
+        module = load_overnight()
+        budget = module.normalise_budget({"soft": 5, "hard": 8, "retry_cap": 2})
+        failing_item = {
+            "kind": "pull-request",
+            "repo": "acme/widgets",
+            "number": 7,
+            "key": "MO-999",
+            "title": "A synthetic item with a failing check",
+            "url": "",
+            "checks": {"failed": ["build"]},
+        }
+        queue_state = {
+            "fixedHeads": {
+                "fix:acme/widgets#7:head1": "sent",
+                "fix:acme/widgets#7:head2": "sent",
+            }
+        }
+        _parked, snags, _incomplete = module.park_decisions(
+            [failing_item], [], {}, [], time.monotonic() + 30, budget, queue_state
+        )
+        text = "\n".join(
+            module.snag_section(title, fields) for title, fields in snags
+        )
+        print("=== 12: the snag entry records what was observed ===")
+        print(text.strip())
+        check(
+            "was sent the failing check" not in text,
+            "the entry claims the failing check was sent",
+        )
+        check(
+            "was stopped and parked" not in text,
+            "the entry claims the item was stopped and parked",
+        )
+        check(
+            "has not been verified" in text,
+            "the entry does not say what was not verified",
+        )
+        check(
+            "the builder used 0 min" not in text,
+            "the entry states a builder time it did not measure",
+        )
+        # The same item with the shift's own receipt: the entry quotes it.
+        receipts = {
+            ("acme/widgets", "7"): {
+                "state": "parked",
+                "stopped because": "the check failed twice",
+            }
+        }
+        _parked, snags, _incomplete = module.park_decisions(
+            [failing_item],
+            [],
+            {},
+            [],
+            time.monotonic() + 30,
+            budget,
+            queue_state,
+            receipts,
+        )
+        quoted = "\n".join(
+            module.snag_section(title, fields) for title, fields in snags
+        )
+        print("=== 12: the entry quotes the shift's own receipt ===")
+        print(quoted.strip())
+        check(
+            "the receipt records the state parked: the check failed twice"
+            in quoted,
+            "the entry does not quote the receipt the shift wrote",
+        )
+
+        # 13: two tickets with the same title and the same problem.
+        module = load_overnight()
+        budget = module.normalise_budget({"soft": 5, "hard": 8, "retry_cap": 2})
+        first = {
+            "kind": "pull-request",
+            "repo": "acme/one",
+            "number": 7,
+            "key": "ONE-1",
+            "title": "The same title",
+            "url": "",
+            "checks": {"failed": ["build"]},
+        }
+        second = dict(first, repo="acme/two", key="TWO-1")
+        _parked, snags, _incomplete = module.park_decisions(
+            [first, second], [], {}, [], time.monotonic() + 30, budget, {}
+        )
+        print("=== 13: two tickets with the same title are two problems ===")
+        check(
+            len(snags) == 2,
+            f"the two tickets with the same title collided: {len(snags)} entries",
+        )
+        log = work / "records-13"
+        (log / "inbox").mkdir(parents=True)
+        outcome = module.write_snag_log(log, snags)
+        text = (log / "inbox" / "snag-log.md").read_text()
+        check(
+            text.count("a check is failing: build") == 2,
+            "the snag log holds one entry for two tickets",
+        )
+        check(
+            "acme/one" in text and "acme/two" in text,
+            "the snag log does not name both repositories",
+        )
+
+        # 14: the latest open request is the one that is parked.
+        latest = FIXTURES / "latest-unreadable-request.json"
+        threads = {
+            "mcp:launch:t10-latest-unreadable": json.loads(
+                (FIXTURES / "threads-latest-unreadable.json").read_text()
+            )
+        }
+        env = park_env(work / "latest", threads)
+        records = work / "records-14"
+        (records / "inbox").mkdir(parents=True)
+        code, out, err = park(env, latest, records)
+        lot = (records / "inbox" / "parking-lot.md").read_text()
+        snag = (records / "inbox" / "snag-log.md").read_text()
+        print("=== 14: the latest request is the one that is parked ===")
+        print(lot.strip())
+        check(
+            "Approve the older request?" not in lot,
+            "an older request was parked in place of the latest one",
+        )
+        check(
+            "the text of the request could not be read" in lot,
+            "the shift did not say that the latest request's text is unreadable",
+        )
+        check(
+            "could not be read" in snag,
+            "the unreadable latest request was not logged as a problem",
         )
 
         # 3 and 5: a request whose text cannot be read, and a thread that
