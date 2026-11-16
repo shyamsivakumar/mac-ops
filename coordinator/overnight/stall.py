@@ -169,9 +169,11 @@ def board(state, progressed, items=0, cap=STALL_CAP):
     it with, so it counts as an idle tick, the way the first tick of an
     item does.
 
-    The board is alerted once per episode: the alert is not repeated until
-    the board moves again. The idle count stops at the cap, so the
-    tracking is bounded."""
+    The board is alerted once per episode, and the episode ends when the
+    board moves again. The flag is not set here: the rule does not know
+    whether the alert reached Shyam, so it keeps asking until the writer
+    says the alert was delivered (`delivered`). The idle count stops at
+    the cap, so the tracking is bounded."""
     if not items:
         state["board_idle"] = 0
         state.pop("board_alerted", None)
@@ -186,9 +188,18 @@ def board(state, progressed, items=0, cap=STALL_CAP):
     idle = min(int(state.get("board_idle") or 0) + 1, cap)
     state["board_idle"] = idle
     if idle >= cap and not state.get("board_alerted"):
-        state["board_alerted"] = True
         return {"kind": "board", "idle": idle, "cap": cap}
     return None
+
+
+def delivered(state):
+    """Record that the board alert reached Shyam.
+
+    The flag is set after the alert was written, so a board whose alert
+    could not be written asks again on the next tick instead of going
+    quiet for good."""
+    state["board_alerted"] = True
+    return state
 
 
 def alert(reason, path=None):

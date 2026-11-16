@@ -342,10 +342,13 @@ builder. The shift writes the receipt of a stalled item (`State: stuck`,
 "Stuck" and Shyam sees it.
 
 A board that stopped moving gets one alert, not one per tick: the alert
-is written again after the board moves and stalls a second time. The
-alert goes to the coordinator's board (`factory-overnight-stall`), the
-same board the merge alert and the watchdog use. The board is swept again
-in the same tick, so the shift keeps working on a fresh board.
+is written again after the board moves and stalls a second time. The flag
+that says "the board was alerted" is set only after the alert was written,
+so a board whose alert could not be written asks again on the next tick
+instead of going quiet for good. The alert goes to the coordinator's board
+(`factory-overnight-stall`), the same board the merge alert and the
+watchdog use. The board is swept again in the same tick, so the shift
+keeps working on a fresh board.
 
 The tracking is bounded: an item's idle count stops at the cap, and an
 item that leaves the board is not tracked any more.
