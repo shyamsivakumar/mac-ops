@@ -1,14 +1,26 @@
 // Proof for the board's "Needs you" column: the classifier on the shapes the board shows,
 // then the real board loaded through the real loader with the real T3 calls.
+// With --offline it stops after the classifier: no runtime adapter, no hub, no decisions
+// file, no T3 call.
 import { register } from "node:module";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-register("./loader.mjs", import.meta.url);
+const argv = process.argv.slice(2);
+const offline = argv.includes("--offline");
+const unknown = argv.filter((arg) => arg !== "--offline");
+if (unknown.length) {
+  console.error(`unknown argument(s): ${unknown.join(" ")}`);
+  console.error("usage: node proof.mjs [--offline]");
+  process.exit(2);
+}
+if (offline) console.log("offline mode: classifier only, no live T3 calls");
+
+// The herdr runtime adapter only exists for the live board; offline never loads it.
+if (!offline) register("./loader.mjs", import.meta.url);
 
 const { place, endsWithAsk } = await import("../../coordinator/mods/cockpit/asks.js");
-const { load } = await import("../../coordinator/mods/cockpit/hub.js");
 
 const fail = [];
 const check = (name, got, want) => {
@@ -56,6 +68,22 @@ check("quiet done with no PR", place(grp("done", [doneQuiet]), false), "done");
 check("dead run with no PR", place(grp("fail", [thread("fail")]), false), "dead");
 check("pending request with an open PR", place(grp("wait", [{ ...thread("wait"), prs: [prOpen] }]), false), "needs");
 
+console.log("mixed groups: a running group that also holds an asking thread");
+const running = thread("run", false, 0);
+const mixedAsking = thread("done", true, 1);
+const mixedQuiet = thread("done", false, 1);
+// The board sorts a group by urgency, so a running thread leads and the group kind is run.
+check("mixed run and done ask, run first", place(grp("run", [running, mixedAsking]), false), "needs");
+check("mixed run and done ask, ask first", place(grp("run", [mixedAsking, running]), false), "needs");
+check("mixed group led by the asking thread", place(grp("done", [mixedAsking, running]), false), "needs");
+check("mixed ask beats ready", place(grp("run", [running, mixedAsking]), true), "needs");
+check("mixed group counts as needs", classify([grp("run", [running, mixedAsking])]).needs, 1);
+check("mixed group is not counted as run", classify([grp("run", [running, mixedAsking])]).run, 0);
+check("quiet mixed run and done stays run", place(grp("run", [running, mixedQuiet]), false), "run");
+check("quiet mixed group is counted as run", classify([grp("run", [running, mixedQuiet])]).run, 1);
+check("quiet mixed group is not counted as needs", classify([grp("run", [running, mixedQuiet])]).needs, 0);
+check("mixed dead and quiet done stays dead", place(grp("fail", [thread("fail"), mixedQuiet]), false), "dead");
+
 console.log("how a turn ends:");
 check("question", endsWithAsk("Shall I run the migration now?"), true);
 check("waiting line", endsWithAsk("I need the Railway token.\n\nWAITING: Railway token"), true);
@@ -66,7 +94,17 @@ check("list question", endsWithAsk("- Is the frame allowed to reboot?"), true);
 check("statement", endsWithAsk("Merged. Nothing else needs you."), false);
 check("empty", endsWithAsk(""), false);
 
+if (offline) {
+  if (fail.length) {
+    console.log(`FAILED ${fail.length}: ${fail.join(", ")}`);
+    process.exit(1);
+  }
+  console.log("proof: all checks passed (offline)");
+  process.exit(0);
+}
+
 // The live board, through the real loader, with a decisions file of our choosing.
+const { load } = await import("../../coordinator/mods/cockpit/hub.js");
 const file = join(process.env.TMPDIR ?? tmpdir(), `proof-decisions-${process.pid}.json`);
 const decisions = JSON.parse(process.env.PROOF_DECISIONS_ITEMS ?? "[]");
 writeFileSync(file, JSON.stringify({ updated: new Date().toISOString(), items: decisions }, null, 2) + "\n");
