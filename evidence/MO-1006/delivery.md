@@ -109,3 +109,34 @@ runtime changes or activation occurred. The inherent identical truncate/regrow
 boundary detection limit remains documented. Diff review used the existing
 standard-library hash and state model, added no dependencies, comments or
 suppressions, and preserved all existing checks.
+
+## Full local check receipt
+
+The full-check finding at 4e9fa02277e572b769e39f67395306e2ff28ffcd is
+addressed with an executed full suite, not another selected-check claim:
+
+    timeout 300 ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
+
+Result: exit 1, 287 tests, four failures in test_gatekeep_retry_limit. The
+complete receipt is full-check.log. The independent required fast check
+passes; see full-check-fast.log. No check or test was weakened or modified.
+
+Failures: BackoffTest.test_a_second_retry_happens_after_the_backoff;
+FirstRetryTest.test_a_head_with_no_retry_yet_is_retried;
+FirstRetryTest.test_a_legacy_head_is_retried;
+GiveUpTest.test_an_odd_record_does_not_stop_the_run.
+
+Baseline isolation: git-show extracted coordinator/bin/coordq and
+tests/test_gatekeep_retry_limit.py from base
+8d6c70d4146cf857a59d0081159e784773837635 into a temporary directory with
+matching paths. Both extracted files were asserted byte-identical to the
+current checkout. Running `python3 -m unittest discover -s tests -p
+test_gatekeep_retry_limit.py` there ran 14 tests and reproduced the same four
+failures, exit 1; see full-check-baseline.log. This establishes an unchanged
+baseline failure rather than a watcher regression. No changes to unrelated
+coordq behavior or tests were made. The full suite result remains FAIL, not
+waived or represented as PASS. The PR builder marker therefore reports FAIL
+with the reason; the fast check is separately reported PASS.
+
+Device, handset and live-service cases remain WAIVED, not failed. This turn
+only adds receipts and documentation; watcher runtime and installer unchanged.
