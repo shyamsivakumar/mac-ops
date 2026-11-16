@@ -259,11 +259,16 @@ export default class Board extends View {
       key: g.key,
       held: holds(lane, g.needs),
       asleep: g.asleep,
-      unsettled: g.info.status === "open" && (g.info.gh?.ci ?? "loading") === "loading" || this.verdictFor(g) === LOADING_VERDICT,
+      unsettled: g.info.status === "open" && (g.info.gh?.ci ?? "loading") === "loading" || this.holdsAlerts(g),
       label: this.cleanTitle(g).slice(0, 40),
       pr: g.info.pr?.number,
     }));
     checkAlerts(rows, this.copyId, now);
+  }
+
+  holdsAlerts(g) {
+    const verdict = this.verdictFor(g);
+    return verdict === LOADING_VERDICT || verdict?.state === "unverified";
   }
 
   toggleAlerts(cx) {
