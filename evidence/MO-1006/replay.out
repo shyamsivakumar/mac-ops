@@ -1,3 +1,10 @@
+Source HEAD: 60ead1318fb8136a105f08aeb5c351093864f366
+Command: timeout 300 env PYTHONDONTWRITEBYTECODE=1 python3 evidence/MO-1006/replay.py
+Start: 2026-11-16T06:31:05Z
+End: 2026-11-16T06:31:13Z
+Exit: 0
+Result: isolated command acceptance and temporary-HOME installation, every case PASS.
+---
 below 20 minutes: PASS []
 exactly 20 minutes: PASS []
 over 20 minutes: PASS ["EVENT run-long builder-343 20"]
@@ -24,6 +31,7 @@ installed executable restart dedup: PASS []
 installed executable new event: PASS ["EVENT rate-limit"]
 installed executable event dedup: PASS []
 temporary HOME installation: PASS mapping, bytes, executable 0755, receipt, installed command
+installer host guards: PASS require_real_home and require_healthy replaced with inert fakes
 runtime write boundary: PASS only watch.json changed in every command invocation
 synthetic private marker: PASS absent from stdout, stderr and persisted state
 host boundaries: git_toplevel/retire_jobs/manual_monitors/reload_jobs replaced with inert fakes; subprocess forbidden during install
