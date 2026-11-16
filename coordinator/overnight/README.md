@@ -864,3 +864,20 @@ Verification: `overnight selftest` and `python3 scripts/mac_ops_fast_check.py`.
 No live service, installed loop or cutover is exercised. Left for later:
 failed snapshot collection retries, quota endpoint failures, and end-to-end
 live pass telemetry. The coordinator owns installation and the Opus gate.
+
+### Lane item failures
+
+The driver keeps subprocess commands strict and catches command failures and
+timeouts at PR, ticket-start, orphan-recovery and main-refresh item boundaries.
+A repository boundary also protects later lanes from a failed lane action.
+Each caught failure emits one ITEM ERROR line with repository, item, command,
+exit status and the first output line. The pass prints ITEM SUMMARY and raises
+after processing the lanes when any item failed, so shift health stays failed.
+The per-pass count is retained in the lane ledger. API budget exhaustion remains
+a pass-wide stop.
+
+The driver's LANE_REPOS list excludes digitized/Concerning; both board reads
+and main-refresh scheduling use that list. No installed lane configuration is
+changed until installation. A controlled dry-pass probe with a real subprocess
+exit 2 processed the following PR and all remaining lanes, then reported failure.
+Live-service verification is waived for ticket #407.
