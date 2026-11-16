@@ -1080,3 +1080,35 @@ allowlist negative control. These fixtures do not prove live authentication or
 service availability. Live-service testing and the two live receipts were waived
 for this ticket; they remain necessary evidence before a future loop cutover.
 No loop installation or cutover is included.
+
+
+## PR state actions (Refs #277)
+
+The active shift uses `lane_driver.act_on_pr`. The board and lane share
+`pr_action`: draft takes priority, then conflict, missing `Refs #n`, failed or
+missing exact-head check, and gate state. Drafts are included in lane passes.
+A missing builder becomes `needs-you`; the reason is retained in the lane ledger.
+Builder lookup prefers the newest ticket attempt receipt, then the newest
+non-review thread whose title starts with the ticket key. A PR title beginning
+with the ticket key supplies the lookup key when its body has no reference.
+
+Builder messages use finish, link, check, rebase, and fix keys. A gate that ends
+without a verdict receives one completion reminder, then one fresh gate on the
+next encounter. These phases have distinct regate and regate-fresh keys. Existing
+Astra/Opus routing remains in effect. A passed but unmerged PR receives a builder
+fix message; the shift does not merge or close it. The gate owns completion.
+
+`coordq start --action-key <action>:<repo>#<number>:<head>` records the key with
+queue insertion under the queue lock. Repeated insertion returns its existing
+receipt. This closes the gap between enqueueing and writing the lane ledger.
+The queue still owns the thread cap. A changed head produces a new key.
+
+`overnight board --json` adds states, oldestByState and noAction for open PRs.
+A live builder or gate can have action none; other eligible PRs have an action
+or needs-you. Held tickets remain excluded by the existing board/lane filters.
+Dry-run paths do not insert queue actions. No new scheduler is introduced.
+
+The required fast check currently fails its unchanged send-integrity,
+gate-pipeline and no-parking fixtures: they assert the previous command shape,
+lane-owned merge and immediate gate retry/continuation behavior. See
+`evidence/MO-254/status.md`. Device and live-service testing was waived.

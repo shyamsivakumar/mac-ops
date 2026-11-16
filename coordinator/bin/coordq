@@ -425,6 +425,7 @@ def drain():
 
 def cmd_start(a):
     args = json.loads(a.args)
+    action_key = str(getattr(a, "action_key", "") or "")
     tool = a.tool or tool_for(args)
     if tool not in DISPATCHABLE_TOOLS:
         die(f"refused: {tool_refusal(tool)}")
@@ -442,6 +443,10 @@ def cmd_start(a):
                 die(f"refused: {e}")
     with Lock(True):
         queue = load()
+        actions = queue.setdefault("actionHeads", {})
+        if action_key and action_key in actions:
+            print(f"already queued {action_key} as coordq #{actions[action_key]}")
+            return
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
         queue["next"] += 1
         queue["items"].append(item)
@@ -454,6 +459,8 @@ def cmd_start(a):
                 die(f"refused: a gate for this head is already recorded as "
                     f"{gate_label(gate_state(heads[request_id]))}")
             heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False}
+        if action_key:
+            actions[action_key] = item["id"]
         save(queue)
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
@@ -1428,6 +1435,7 @@ def main():
     s.add_argument("--title")
     s.add_argument("--priority", type=int, default=0)
     s.add_argument("--tool")
+    s.add_argument("--action-key", default="")
     s.set_defaults(fn=cmd_start)
     c = sub.add_parser("create")
     c.add_argument("args")
