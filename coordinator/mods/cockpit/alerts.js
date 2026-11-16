@@ -12,8 +12,10 @@ const LEASE_FOR = 600000;
 const RENEW_AFTER = 60000;
 const MIN_GAP = 300000;
 const MAX_ITEMS = 8;
+const MAX_PENDING = 20;
+const MAX_ABSENT = 2;
 const RELAY = "pi-coord-phone";
-const EMPTY = { on: true, owner: null, at: 0, seen: null, pending: [], sentAt: 0, sent: null, failed: "" };
+const EMPTY = { on: true, owner: null, at: 0, seen: null, pending: [], dropped: 0, absent: {}, sentAt: 0, sent: null, failed: "" };
 
 let primed = false;
 
@@ -27,7 +29,7 @@ export function hydrateAlerts() {
 
 export function setAlertsOn(on) {
   localStorage.setItem(ON_KEY, on ? "1" : "0");
-  write({ on, seen: on ? null : alertState().seen, pending: [], failed: "" });
+  write({ on, seen: on ? null : alertState().seen, pending: [], dropped: 0, failed: "" });
 }
 
 export const leaseOpen = (copy, now) => {
@@ -56,13 +58,13 @@ const itemOf = (row, news) => ({
 
 const LANE_NAME = { needs: "Needs you", ready: "Ready" };
 
-export function messageOf(items) {
+export function messageOf(items, dropped = 0) {
   const shown = items.slice(0, MAX_ITEMS);
   const parts = Object.keys(LANE_NAME).flatMap((lane) => {
     const texts = shown.filter((i) => i.lane === lane).map((i) => i.text);
     return texts.length ? [`${LANE_NAME[lane]}: ${texts.join("; ")}`] : [];
   });
-  const more = items.length - shown.length;
+  const more = items.length - shown.length + dropped;
   return `Mirror: Board: ${parts.join(" | ")}${more > 0 ? ` | +${more} more` : ""}`;
 }
 
@@ -81,13 +83,23 @@ async function deliver(text) {
   return sent.stdout.trim();
 }
 
-async function send(text, at) {
+const sameItem = (a, b) => a.key === b.key && a.tokens[0] === b.tokens[0];
+const unique = (items) => items.filter((item, i) => items.findIndex((x) => sameItem(x, item)) === i);
+
+function capped(items, dropped) {
+  const over = Math.max(0, items.length - MAX_PENDING);
+  return { pending: items.slice(over), dropped: dropped + over };
+}
+
+async function send(items, dropped, text, at) {
   try {
     const out = await deliver(text);
     write({ sent: { at, text, out }, failed: "" });
   } catch (error) {
-    write({ failed: String(error.message) });
-    notify({ title: "Board alert (phone relay down)", body: text.replace(/^Mirror: /, ""), level: "warning" });
+    const s = alertState();
+    const failed = String(error.message);
+    write({ failed, ...capped(unique([...items, ...s.pending]), dropped + s.dropped) });
+    if (failed !== s.failed) notify({ title: "Board alert (phone relay down)", body: text.replace(/^Mirror: /, ""), level: "warning" });
   }
 }
 
@@ -106,13 +118,22 @@ export function checkAlerts(rows, copy, now) {
     const news = row.held.filter((h) => !before.includes(h.token));
     if (news.length) fresh.push(itemOf(row, news));
   }
+  const absent = {};
+  for (const key of Object.keys(prev)) {
+    if (rows.some((row) => row.key === key)) continue;
+    const count = (s.absent[key] ?? 0) + 1;
+    if (count > MAX_ABSENT) continue;
+    seen[key] = prev[key];
+    absent[key] = count;
+  }
   primed = true;
-  const queued = [...s.pending, ...fresh].filter((item, i, all) => seen[item.key]?.includes(item.tokens[0]) && all.findIndex((x) => x.key === item.key && x.tokens[0] === item.tokens[0]) === i);
+  const queued = unique([...s.pending, ...fresh]).filter((item) => seen[item.key]?.includes(item.tokens[0]));
   const due = queued.length > 0 && now - s.sentAt >= MIN_GAP;
-  const text = due ? messageOf(queued) : "";
-  if (due || JSON.stringify([seen, queued]) !== JSON.stringify([s.seen, s.pending])) {
-    write({ seen, pending: due ? [] : queued, sentAt: due ? now : s.sentAt });
+  const backlog = capped(queued, s.dropped);
+  const text = due ? messageOf(backlog.pending, backlog.dropped) : "";
+  if (due || JSON.stringify([seen, absent, backlog]) !== JSON.stringify([s.seen, s.absent, { pending: s.pending, dropped: s.dropped }])) {
+    write({ seen, absent, ...(due ? { pending: [], dropped: 0, sentAt: now } : backlog) });
     localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
   }
-  if (due) send(text, now);
+  if (due) send(backlog.pending, backlog.dropped, text, now);
 }
