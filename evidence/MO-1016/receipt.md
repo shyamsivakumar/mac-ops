@@ -17,9 +17,11 @@ Both blockers named by the ticket are on origin/main:
 - coordq root import: e7b66a4 (#364, PR #422) inserts the `coordq` sibling
   directory on `sys.path`, so `from tick_health import tick_alarm` resolves
   when `coordq` is loaded by path.
-- retry fixture current: f0236b1 (#357, PR #359) repaired the stale
-  `DEAD_GATE` fixture in `tests/test_gatekeep_retry_limit.py` and pinned the
-  non-Astra no-requeue case. No assertion was removed.
+- retry fixture current: 661e2c8 (#352) repaired the stale `DEAD_GATE`
+  fixture in `tests/test_gatekeep_retry_limit.py` and pinned the non-Astra
+  no-requeue case. No assertion was removed. That commit is the last change
+  to that test file on origin/main; f0236b1 (#357, PR #359) changed only
+  evidence files and left the test blob untouched.
 
 The gate policy is unchanged: the complete local suite is
 `python3 -m unittest discover -s tests -t .`, run from the repository root
@@ -47,8 +49,9 @@ or skipped.
 
 ## Check results at head 688bc05fafaef40a0c5e60744490b48b33c25c21
 
-Commands, exits and logs, all from the repository root, all through
-`~/.local/bin/heavy` with a 300 second timeout:
+Commands, exits and logs, all from the repository root with a 300 second
+timeout. The full suite and the fast check run through `~/.local/bin/heavy`;
+the replay runs `python3` directly, as the ticket command specifies:
 
 | Check | Command | Exit | Receipt |
 | --- | --- | --- | --- |
@@ -70,10 +73,11 @@ truncation restart dedup) and the write-boundary and private-marker checks.
 The replay reads only synthetic sources and a temporary HOME. No live
 installation, no launchd activation and no production process was started.
 
-These receipts were produced on the head that becomes the receipt commit.
-The receipt commit changes HEAD, so the final logs are rerun at the final
-head and attached to the pull request externally, which is why the pull
-request body carries the final SHA and the final log tails.
+These committed receipts were produced at 688bc05, the commit that added
+them. Every later commit changes HEAD, so the final logs are rerun at the
+final head and attached to the pull request body externally. The pull
+request body carries the final SHA and the final log tails; the committed
+logs name the earlier head they were run at.
 
 ## Historical Builder check correction
 
