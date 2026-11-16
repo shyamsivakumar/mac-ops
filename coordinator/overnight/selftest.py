@@ -764,7 +764,88 @@ def consolidation_guard():
     exact("never create a third ticket" in message, True)
 
 
-EVALS = {"consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift}
+def send_integrity():
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    key = f"fix:{repo}#385:head"
+    cases = [(dict(status=status), True) for status in
+             ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
+    cases += [(thread, False) for thread in ({}, dict(status="deleted"),
+              dict(status="running", archived=True), dict(status="running", sendable=False),
+              dict(status="running", canSend=False))]
+    for thread, live in cases:
+        for failure in (None, "error", "empty"):
+            actions, reads, ledger = [], [], {}
+            def read(tool, args):
+                exact((tool, args), ("t3_thread_read", {"threadId": "old", "limit": 1}))
+                reads.append("read")
+                return {"thread": thread}
+            def command(cmd, timeout=150):
+                exact(reads, ["read"])
+                exact(cmd[:2], [lane.COORDQ, "start"])
+                payload = json.loads(cmd[2])
+                if live:
+                    exact(payload, {"threadId": "old", "message": "brief"})
+                    exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
+                else:
+                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
+                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": "brief"})
+                    exact(cmd[3:], ["--priority", "800"])
+                actions.append("send" if live else "fresh")
+                if failure == "error":
+                    raise subprocess.CalledProcessError(1, cmd)
+                return "" if failure == "empty" else "receipt"
+            output = io.StringIO()
+            with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
+                 patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
+                 patch.object(lane, "run", command), contextlib.redirect_stdout(output):
+                try:
+                    result = lane.send("old", "brief", "fix", ledger, key)
+                except (subprocess.CalledProcessError, RuntimeError):
+                    exact(failure in ("error", "empty"), True)
+                    exact(ledger, {})
+                else:
+                    exact(failure, None)
+                    exact(ledger, {key: "receipt"})
+                    exact(result, "receipt" if live else "fresh (old unreachable): receipt")
+                    exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
+                exact(actions, ["send" if live else "fresh"])
+    with patch.object(lane, "DRY", True), \
+         patch.object(lane, "t3", side_effect=AssertionError("dry read")), \
+         patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
+        ledger = {}
+        exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}")
+        exact(ledger, {})
+
+    snapshot = {"repos": {repo: {"issues": [{"number": 385, "labels": []}], "prs": []}}}
+    from unittest.mock import mock_open
+    for failure in (False, True):
+        ledger, actions = {}, []
+        def files(path, *args, **kwargs):
+            data = json.dumps({f"ticket:{repo}#385:a1": "old"}) if path == lane.RECEIPTS else "brief"
+            return mock_open(read_data=data)()
+        def command(cmd, timeout=150):
+            exact(json.loads(cmd[2])["projectId"], "fixture")
+            exact("t3_thread_send" in cmd, False)
+            actions.append("fresh")
+            if failure:
+                raise subprocess.CalledProcessError(1, cmd)
+            return "receipt"
+        with patch.object(lane, "SNAPSHOT", snapshot), \
+             patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "DRY", False), patch("builtins.open", files), \
+             patch.object(lane, "t3", return_value={"thread": {"status": "deleted"}}), \
+             patch.object(lane, "run", command):
+            result = lane.unstick(repo, ledger)
+        exact(actions, ["fresh"])
+        exact(f"cont:old" in ledger, not failure)
+        if failure:
+            exact("started" in result, False)
+        else:
+            exact(result, "continue #385: fresh (old unreachable): receipt")
+
+
+EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift}
 
 
 def main():
@@ -782,6 +863,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "send-integrity":
+                        import lane_driver
+                        with patch.object(lane_driver, "send", return_value="started"):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted unchecked send")
                     if name == "consolidation-guard":
                         import lane_driver
                         with patch.object(lane_driver, "park", return_value="unguarded"):
