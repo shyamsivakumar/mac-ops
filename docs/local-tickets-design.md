@@ -58,6 +58,7 @@ A fact lives in one place. The board reads both sides and shows disagreement (fo
 
 - The Coordinator mints `<KEY>-<n>` as today and puts it first in the issue title (`SRW-760 · Bot 2 lane system design`). The `repo#number` is the stable id; the key is what threads and review titles use, so existing grouping keeps working.
 - An issue Shyam opens without a key is a draft. The Coordinator keys it when it triages it.
+- A ticket opened by tooling carries a key from the moment it is opened: the key is mandatory and `ticket open` is the one minter (MO-370). `ticket open --repo <owner/repo> --title "<title>"` reads the repo's key from `~/.coordinator/tickets.json`, mints the number one past the repo's highest key (open and closed issues, so a number is never reused), and opens the issue as `<KEY>-<n> · <title>`. A title that already starts with the repo's key is kept as it is and refused when that key is taken. `--require-key` refuses a keyless title instead of minting one. `--dry-run` prints the title the call would use and opens nothing. One lock per repo keeps two opens from minting the same key.
 
 ## Dispatch (one path)
 
