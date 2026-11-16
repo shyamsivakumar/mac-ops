@@ -995,6 +995,40 @@ def cycle_health():
     exact(module.attempt_findings([{**record, "carried": True}]), [])
     exact(module.attempt_findings([{**record, "parked": True}]), [])
     exact(module.attempt_findings([{**record, "attempts": 2}]), [])
+    # A pull request list that was cut off at the limit is not a list
+    # with no pull requests: the tickets of that repository are not
+    # classified at all, and the check says the list was incomplete.
+    module.run = lambda argv, timeout, deadline: json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "a ticket",
+                "comments": [
+                    {"body": "Starting b attempt 1"},
+                    {"body": "Starting b attempt 2"},
+                    {"body": "Starting b attempt 3"},
+                ],
+            }
+        ]
+    )
+    module.read_decisions = lambda: (Path("/tmp/decisions.md"), [])
+    module.read_pull_requests = lambda repo, deadline: ([], True)
+    ran, cut = module.check_attempts(
+        [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
+    )
+    exact(len(cut), 1)
+    exact(cut[0]["check"], "attempts")
+    exact("not classified" in cut[0]["detail"], True)
+    exact("cut off" in cut[0]["detail"], True)
+    # The same board with a whole pull request list is classified: the
+    # ticket has no pull request, so it is a finding.
+    module.read_pull_requests = lambda repo, deadline: ([], False)
+    ran, whole = module.check_attempts(
+        [{"repo": "o/r", "number": 7, "key": "R-7"}], [("o/r", "")], 0
+    )
+    exact(len(whole), 1)
+    exact(whole[0]["check"], "attempts")
+    exact("no open pull request" in whole[0]["detail"], True)
     # The board's blockers: a closed issue is a false blocker, an issue
     # whose state was never read is an incomplete check, not a clean one.
     refusal = {

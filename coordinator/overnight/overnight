@@ -4014,6 +4014,7 @@ def cmd_attend(args: argparse.Namespace) -> int:
     log_path = root / "run" / "shift-log.md"
     write_record(log_path, "\n".join(log_lines) + "\n")
     pr_cache: dict[str, list[dict]] = {}
+    pr_cut: dict[str, bool] = {}
     for issue in items:
         item_start = time.monotonic()
         repo = issue.get("repo", "")
@@ -4031,11 +4032,13 @@ def cmd_attend(args: argparse.Namespace) -> int:
         }
         if repo not in pr_cache:
             try:
-                rows, _cut = read_pull_requests(repo, deadline)
+                rows, cut = read_pull_requests(repo, deadline)
             except RepoError as exc:
                 rows = []
+                cut = True
                 emit(f"overnight: {repo}: {exc}", err=True)
             pr_cache[repo] = rows
+            pr_cut[repo] = cut
         linked = []
         for row in pr_cache[repo]:
             target, _signal = linked_ticket(row, by_number, by_key)
@@ -4043,7 +4046,17 @@ def cmd_attend(args: argparse.Namespace) -> int:
                 linked.append(row)
         pr = linked[0] if linked else None
         observation = None
-        if pr:
+        if pr_cut.get(repo):
+            # A list that was cut off at the limit is not a list with no
+            # pull requests: the ones past the limit are missing, so the
+            # item's pull request is not known.
+            state = "stuck"
+            stopped = (
+                f"the open pull request list was cut off at {PR_LIMIT}, so "
+                "this ticket's pull request is not known"
+            )
+            nxt = "raise the pull request limit and read the board again"
+        elif pr:
             observation = observe_pull_request(repo, pr["number"], deadline)
             checks_code = observation["checks_exit"]
             gate = observation["gate"]
@@ -4088,7 +4101,11 @@ def cmd_attend(args: argparse.Namespace) -> int:
             f"{' (no checks yet)' if observation['no_checks'] else ''}, "
             f"gate {observation['gate']}"
             if observation
-            else "no pull request is open"
+            else (
+                f"the open pull request list was cut off at {PR_LIMIT}"
+                if pr_cut.get(repo)
+                else "no pull request is open"
+            )
         )
         log_lines.append(
             f"{datetime.now(PT).strftime('%Y-%m-%d %H:%M %Z')} | item "
@@ -5647,7 +5664,7 @@ def check_attempts(
                     count += 1
             attempts[number] = count
         try:
-            pulls, _cut = read_pull_requests(repo, deadline)
+            pulls, cut = read_pull_requests(repo, deadline)
         except RepoError as exc:
             findings.append(
                 {
@@ -5665,6 +5682,29 @@ def check_attempts(
             # and a ticket with no open pull request must not be reported
             # from a list nobody could read.
             ran.append(f"the open pull requests of {repo} could not be read")
+            continue
+        if cut:
+            # A list that was cut off at the limit is not a list with no
+            # pull requests: the ones past the limit are missing, so a
+            # ticket that has one would look like it has none. The
+            # tickets of this repository are not classified at all.
+            findings.append(
+                {
+                    "check": "attempts",
+                    "subject": repo,
+                    "detail": (
+                        f"the open pull request list was cut off at {PR_LIMIT}, "
+                        "so the tickets of this repository are not classified: "
+                        "a pull request past the limit would look like none"
+                    ),
+                    "action": (
+                        "raise the pull request limit and run the check again"
+                    ),
+                }
+            )
+            ran.append(
+                f"the open pull requests of {repo} were cut off at {PR_LIMIT}"
+            )
             continue
         ran.append(f"the open pull requests of {repo}")
         by_number = {item["number"]: item for item in tickets if item.get("number")}

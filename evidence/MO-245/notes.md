@@ -76,3 +76,17 @@ the checks the probes, the log tails, the install status, the ticket
 records and the issue states, and it proves the four checks find their
 breaks and that a read which failed is never a clean result. The output
 is `selftest.txt`; every eval in the file passes.
+
+## The cut-off pull request list
+
+`gh pr list` returns at most 100 pull requests of a repository, so a
+list that stops at the limit is missing the ones past it. The check
+must not classify a ticket from such a list, because a ticket whose
+pull request is past the limit would look like it has none.
+
+The proof is `cut-list.md`: it hands the check the inputs twice, once
+with a pull request list that was cut off and once with a whole one.
+The first run classifies no ticket and says the list was cut off; the
+second run classifies the ticket and reports it. The live cycle on this
+head is `cycle-live-cut.md`: all four checks ran against the live queue
+and the live board.
