@@ -101,6 +101,7 @@ def start_routing():
          patch.object(lane, "board_snapshot", return_value=snapshot), \
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
+         patch.object(lane, "recover_dead_runs"), \
          patch.object(lane, "t3", return_value={"threads": [{"title": "bot"}]}), \
          patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False):
@@ -130,6 +131,7 @@ def start_routing():
          patch.object(lane, "board_snapshot", return_value=orphan_snapshot), \
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
+         patch.object(lane, "recover_dead_runs"), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
          patch("builtins.open", __import__("unittest.mock", fromlist=["mock_open"]).mock_open(
              read_data=json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))):
@@ -168,6 +170,50 @@ def start_routing():
             exact(events, ["pr-launch", "refresh"])
             exact(actions, [])
             exact(ledger, {})
+
+
+def dead_run_recovery():
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    dead = {"threadId": "fixture-dead", "title": "review #7", "settled": False}
+    thread = {**dead, "providerInstanceId": "claudeAgent", "model": "claude-opus-5-5",
+              "worktreePath": "/tmp/fixture-worktree", "pullRequests": []}
+    launches, settled = [], []
+
+    def t3(tool, args):
+        if tool == "t3_thread_list":
+            return {"threads": [dead]} if args.get("statuses") == ["failed", "interrupted"] else {"threads": []}
+        if tool == "t3_thread_read" and args.get("view") == "messages":
+            return {"items": [{"type": "assistant_message", "text": "provider individual spend limit"}]}
+        if tool == "t3_thread_read":
+            return {"thread": thread}
+        if tool == "t3_thread_organize":
+            settled.append(args["threadId"])
+            return {}
+        raise AssertionError(f"unexpected T3 call {tool}")
+
+    def run(cmd):
+        if cmd[0] == "git":
+            exact(cmd, ["git", "-C", "/Users/shyamsivakumar/Code/" + lane.PATHS[repo],
+                        "worktree", "list", "--porcelain"])
+            return "worktree /tmp/fixture-worktree\n"
+        launches.append(json.loads(cmd[2]))
+        return "fixture-relaunch"
+
+    with patch.object(lane, "LANE_REPOS", [repo]), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture-project"}}), \
+         patch.object(lane, "DRY", False), patch.object(lane, "t3", side_effect=t3), \
+         patch.object(lane, "last_reply", return_value="provider individual spend limit"), \
+         patch.object(lane, "stall_receipts", return_value={f"ticket:{repo}#7:a1": "fixture-dead"}), \
+         patch.object(lane, "read_json", return_value={"state": "OPEN"}), patch.object(lane, "run", side_effect=run):
+        ledger = {}
+        lane.recover_dead_runs(ledger)
+        lane.recover_dead_runs(ledger)
+    exact(len(launches), 1)
+    exact(launches[0]["modelSelection"], lane.ASTRA)
+    exact(launches[0]["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/fixture-worktree"})
+    exact(ledger[f"dead-relaunch-thread:fixture-dead"], "fixture-relaunch")
+    exact(settled, ["fixture-dead", "fixture-dead"])
 
 
 def gate_pipeline():
@@ -1343,7 +1389,7 @@ def stall():
         exact(lane.unstick(repo, {}), "DRY unstick [9]")
 
 
-EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall}
+EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall}
 
 
 def main():
