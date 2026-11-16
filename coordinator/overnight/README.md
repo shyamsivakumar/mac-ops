@@ -913,23 +913,26 @@ after it, and raised at the end so shift health stays failed:
 ```text
 ITEM ERROR repo=shyamsivakumar/mac-ops item=main-refresh command='git -C /Users/shyamsivakumar/Code/mac-ops rev-parse main origin/main' exit=2 output='planted failure: local main could not be read'
 MO    busy (live: #408 fix 94f6a66c r1); PR actions still run
-SRW   busy (live: Reviewer round for SRW-1140 Lane 3 revalidation receipts); PR actions still run
-ITEM ERROR repo=shyamsivakumar/strategy-replay-workbench item=1084 command="ticket start 'shyamsivakumar/strategy-replay-workbench#1084' --dry-run" exit=2 output='merged PR #1094 changed only docs; not treated as delivery'
-SRW   nothing ready
+SRW   busy (live: SRW-1017 review #1167 df608018); PR actions still run
 FFBT  busy (live: FFBT-48 · Connect auction target shared evidence to live pro); PR actions still run
 CTL   nothing ready
-ITEM SUMMARY failures=2
-API USAGE used={'core': 15, 'graphql': 10} remaining={'core': 2553, 'graphql': 4550} floor=500
-RuntimeError: lane pass completed with 2 item failures
+ITEM SUMMARY failures=1
+API USAGE used={'core': 12, 'graphql': 13} remaining={'core': 2435, 'graphql': 4501} floor=500
+RuntimeError: lane pass completed with 1 item failures
 ```
 
-Two failures were logged, each once. The first is the planted one. The second
-came from the live board: the ticket CLI refused `ticket start` for SRW#1084
-with exit 2 and the message "merged PR #1094 changed only docs; not treated as
-delivery". That refusal is not the "refused: " form the driver already
-tolerates, so before this change it would have ended the whole pass; here it
-was caught at the ticket-start boundary, logged, and the pass continued
-through the fantasy-football-toolkit and catalogue lanes before it raised.
+The planted failure was logged once, the mac-ops, strategy-replay-workbench,
+fantasy-football-toolkit and catalogue lanes all ran after it, and the pass
+raised at the end so shift health stays failed.
+
+An earlier run of this pass, whose driver differs only in when the summary
+line prints, also caught a live failure the board produced on its own: the
+ticket CLI refused `ticket start` for SRW#1084 with exit 2 and the message
+"merged PR #1094 changed only docs; not treated as delivery". That refusal is
+not the "refused: " form the driver already tolerates, so before this change
+it would have ended the whole pass; here it was caught at the ticket-start
+boundary, logged once, and the pass continued through the remaining lanes
+before it raised.
 
 The command log of that run is the whole set of commands the driver ran:
 
@@ -939,7 +942,6 @@ GIT-CALL -C /Users/shyamsivakumar/Code/strategy-replay-workbench rev-parse main 
 GIT-CALL -C /Users/shyamsivakumar/Code/fantasy-football-toolkit rev-parse main origin/main
 GIT-CALL -C /Users/shyamsivakumar/Code/catalogue rev-parse main origin/main
 TICKET-CALL list --json --fresh
-TICKET-CALL start shyamsivakumar/strategy-replay-workbench#1084 --dry-run
 ```
 
 No call touched digitized/Concerning or /Users/shyamsivakumar/Code/concerning.
