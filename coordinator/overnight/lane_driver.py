@@ -252,11 +252,14 @@ def board_keys(snapshot):
     A pull request and the ticket it names are the same item, so a pull
     request is keyed by its ticket. A ticket the shift has not started is
     on the board too: the board is the list, and the shift does not keep
-    a list of its own."""
+    a list of its own. A draft is not on the board for the shift: the
+    shift does not work a draft, so it does not count one either."""
     keys = set()
     for repo in LANE_REPOS:
         data = (snapshot.get("repos") or {}).get(repo) or {}
         for pr in data.get("prs") or []:
+            if pr.get("isDraft"):
+                continue
             keys.add(pr_item(repo, pr)[0])
     for ticket in snapshot.get("tickets") or []:
         repo = ticket.get("repo") or ""

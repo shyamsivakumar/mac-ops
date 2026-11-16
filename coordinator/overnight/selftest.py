@@ -967,17 +967,25 @@ def stall():
     exact(event is not None, True)
     exact(event["kind"], "item")
 
-    # The board: three idle ticks stall the board, a board that moved does
-    # not, and a board with no item in it is not a stalled board.
+    # The board is alerted once per episode, and the flag is set only after
+    # the alert was delivered: an alert that could not be written asks
+    # again on the next tick.
     state = rule.new_state()
     exact(rule.board(state, False, 1), None)
     exact(rule.board(state, False, 1), None)
     event = rule.board(state, False, 1)
     exact(event["kind"], "board")
     exact(event["idle"], 3)
-    state = rule.new_state()
+    # The alert was not delivered, so the board asks again.
+    exact(rule.board(state, False, 1)["kind"], "board")
+    rule.delivered(state)
     exact(rule.board(state, False, 1), None)
+    # The board moved, so the episode is over and the flag is gone.
     exact(rule.board(state, True, 1), None)
+    exact(rule.board(state, False, 1), None)
+    exact(state.get("board_alerted"), None)
+    # A board with no item in it is not a stalled board.
+    state = rule.new_state()
     exact(rule.board(state, False, 0), None)
     exact(state["board_idle"], 0)
     # The board's first tick is its baseline, and a board that keeps moving
@@ -1017,10 +1025,14 @@ def stall():
             events.append(list(lane.STALL_EVENTS))
             lane.STALL_EVENTS.clear()
     exact(acted, [7, 7, 7, 7])
-    exact([len(found) for found in events], [0, 0, 2, 0])
+    # The board asks again on the next tick, because the alert was never
+    # delivered: the flag is set only after the alert was written.
+    exact([len(found) for found in events], [0, 0, 2, 1])
     exact(events[2][0]["kind"], "item")
     exact(events[2][0]["item"], f"{repo}#9")
     exact(events[2][1]["kind"], "board")
+    exact(events[3][0]["kind"], "board")
+    exact(lane.STALL_STATE.get("board_alerted"), None)
     exact(rule.stalled(lane.STALL_STATE, f"{repo}#9"), True)
 
     # New work on the board is progress, whether the shift has measured the

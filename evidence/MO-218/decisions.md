@@ -27,6 +27,29 @@ So the shift reports a stall and keeps working the item. It does not skip
 the item, does not block its start, does not recover it, does not label it
 and does not re-cut it. The receipt says `State: stuck`, not `parked`.
 
+## The fourth gate round
+
+The gate ran against `1c8fd42` and returned one major finding: the board
+was marked as alerted before the alert was delivered, so a decisions file
+that was temporarily unreadable or unwritable left the board quiet for
+good. It is fixed:
+
+- The rule (`stall.board`) no longer sets the flag. It asks while the
+  board is idle and the alert was not delivered.
+- The writer (`stall_records`) sets the flag with `stall.delivered` only
+  after the alert was written, and says so in the shift log.
+- The shift writes the records before it saves the state, so the persisted
+  flag says "delivered" only when the alert was delivered. A tick whose
+  alert could not be written leaves the flag unset, and the next idle
+  tick asks again.
+
+The `stall` eval covers it: the board asks again while the alert was not
+delivered, and stops asking once it was.
+
+The gate's note that "drafts are excluded from item measurement, but still
+counted toward board stalls" is fixed too: a draft is not on the board
+for the shift, so it is not measured and it is not counted.
+
 ## The third gate round
 
 The gate ran against `ab4bb8b` and returned the same two major findings.

@@ -1424,12 +1424,18 @@ def cmd_shift(args: argparse.Namespace) -> int:
                 lane_driver.main()
             finally:
                 # The stall records of this pass are written even when the
-                # pass failed an item: a parked item and a stalled board
+                # pass failed an item: a reported stall and a stalled board
                 # are the shift's own findings, not a side effect of the
-                # pass's success.
-                save_stall_state(root, lane_driver.STALL_STATE)
-                for line in stall_records(root, lane_driver.STALL_EVENTS):
-                    emit(f"overnight: {line}")
+                # pass's success. The records come before the state is
+                # saved, so the state says the alert was delivered only
+                # after it was delivered.
+                try:
+                    for line in stall_records(
+                        root, lane_driver.STALL_EVENTS, None, lane_driver.STALL_STATE
+                    ):
+                        emit(f"overnight: {line}")
+                finally:
+                    save_stall_state(root, lane_driver.STALL_STATE)
             write_shift_line(root, "lane pass finished; board reads use the lane snapshot")
             if report_cycle:
                 return write_morning_report(root)
@@ -1480,13 +1486,22 @@ def save_stall_state(root: Path, state: dict) -> Path:
     return path
 
 
-def stall_records(root: Path, events: list[dict], board: str | None = None) -> list[str]:
+def stall_records(
+    root: Path,
+    events: list[dict],
+    board: str | None = None,
+    state: dict | None = None,
+) -> list[str]:
     """Write the records of the stall events of one pass and return them.
 
-    An item that was parked as a stall gets a receipt that says so, so the
-    morning report counts it as parked instead of leaving it in the dark. A
-    board that stopped moving gets a line in the shift log and an alert on
-    the coordinator's board, the same board the merge alert uses.
+    An item that was reported as stalled gets a receipt that says so, so
+    the morning report names it under "Stuck". A board that stopped moving
+    gets a line in the shift log and an alert on the coordinator's board,
+    the same board the merge alert uses.
+
+    The board's alert flag is set only after the alert was written: a board
+    whose alert could not be written asks again on the next tick instead of
+    going quiet for good.
 
     The shift does not end here: the sweep ran again and the shift keeps
     running until every item is done or parked."""
@@ -1526,6 +1541,8 @@ def stall_records(root: Path, events: list[dict], board: str | None = None) -> l
             )
             target = stall.alert(reason, board)
             if target:
+                if isinstance(state, dict):
+                    stall.delivered(state)
                 write_shift_line(
                     root,
                     f"stall: no board progress for {event.get('idle')} ticks; the "
@@ -1631,12 +1648,12 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
         root = Path(args.root).expanduser()
         for folder in ("run", "receipts", "inbox", "staging"):
             (root / folder).mkdir(parents=True, exist_ok=True)
-        save_stall_state(root, state)
         board = root / "decisions.json"
         if not board.exists():
             write_record(board, json.dumps({"items": []}, indent=1) + "\n")
-        for line in stall_records(root, events, str(board)):
+        for line in stall_records(root, events, str(board), state):
             emit(f"wrote {line}")
+        save_stall_state(root, state)
     else:
         emit("This run wrote nothing: give --root to write the records.")
     return 0
