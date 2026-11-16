@@ -103,13 +103,16 @@ export function columnHead(t, key, col, state, cb) {
     : key === "ready" && col.count > 0
     ? { id: "approve-all", hint: "M", label: state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, run: (cx) => cb.approveAll(cx), tip: state.approvable ? `Approve all ${state.approvable} (M)` : `${state.nothing} (M)`, dim: state.approvable === 0 }
     : null;
+  const review = key === "ready" && col.count > 0 && !state.popup
+    ? { id: "review-ready", hint: "m", label: `Review ${col.count}`, run: (cx) => cb.review(cx), tip: `Go through the ${col.count} ready cards one at a time: verdict, CI and changed files, then approve or send back (m)` }
+    : null;
   const retry = key === "needs" && state.failed > 0
     ? { id: "retry-failed", hint: "F", label: `Retry ${state.failed}`, run: (cx) => cb.retry(cx), tip: `Retry the ${state.failed} failed cards, grouped by error (F)` }
     : null;
   const rebase = state.conflicts[key] > 0
     ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" && state.armed.key === key ? `Confirm ${state.conflicts[key]}` : `Rebase ${state.conflicts[key]}`, run: (cx) => cb.rebaseAll(cx, key), tip: `Send the ${state.conflicts[key]} conflicting PRs here back for a rebase (U does every lane)` }
     : null;
-  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, retry, rebase, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
+  const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, review, retry, rebase, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
   const buttons = [settleReviewed, retry, rebase, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
   return v_flex().id(`fold-${key}`).h(H.head).flex_none().border_b(1).border_color(t.border)
     .when(!state.popup, (el) => el.cursor_pointer().on_click((_e, cx) => cb.fold(key, cx)))
@@ -126,6 +129,7 @@ export function columnHead(t, key, col, state, cb) {
       .when(!summary.length, (el) => el.child(div().flex_1().min_w(0).truncate().text_size(9.5).text_color(col.summary[0][1] === "dim" ? t.muted : t[col.summary[0][1]]).child(col.summary[0][0])))
       .child(div().flex_1())
       .when(Boolean(settleReviewed), (el) => el.child(action(t, "settle-reviewed", "S", settleReviewed.label, (cx) => cb.settleReviewed(cx))))
+      .when(Boolean(review), (el) => el.child(action(t, review.id, review.hint, review.label, review.run, review.tip, tight)))
       .children([retry, rebase].filter(Boolean).map((x) => action(t, x.id, x.hint, x.label, x.run, x.tip, tight, "blocked")))
       .when(Boolean(bulk), (el) => el.child(action(t, bulk.id, bulk.hint, bulk.label, bulk.run, bulk.tip, tight).when(Boolean(bulk.dim), (d) => d.opacity(0.5)))));
 }
@@ -868,6 +872,99 @@ export function decisionView(t, v, input, cb) {
       .child(v.issue ? issuePanel(t, v, cb) : ticketPanel(t, v, cb)));
 }
 
+const REVIEW_HEAD = (t, right, close) => h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
+  .child(div().size(7).flex_none().rounded(4).bg(t.accent))
+  .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Review Approved/Ready"))
+  .when(Boolean(right), (el) => el.child(div().flex_none().text_size(11).font_medium().text_color(t.muted).child(right)))
+  .child(headButton(t, "rv-close", "✕", "Close (Esc)", close));
+
+const CHECK_MARK = { pass: OK, fail: BAD, pending: WAIT, skip: ["–", "dim"] };
+
+function ciRows(t, runs, cb) {
+  const ok = runs.status === "ok";
+  const checks = ok ? [...runs.checks].sort((a, b) => Number(b.state === "fail") - Number(a.state === "fail")) : [];
+  const failed = checks.filter((c) => c.state === "fail").length;
+  const summary = ok ? (failed ? `${failed} of ${checks.length} failed` : `${checks.length} checks`) : null;
+  const body = !ok
+    ? [div().w_full().py(4).text_size(11.5).line_height("17px").text_color(runs.status === "fail" ? t.blocked : t.dim).child(runs.status === "fail" ? `Could not load the CI runs: ${runs.error}` : "Loading CI runs…")]
+    : checks.length
+      ? checks.map((c, i) => {
+        const [mark, tone] = CHECK_MARK[c.state];
+        const link = c.state === "fail" && c.url;
+        return h_flex().id(`rv-ci-${i}`).w_full().min_h(20).gap(8).items_start().py(2)
+          .when(Boolean(link), (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)).tooltip(c.url).on_click(() => cb.link(c.url)))
+          .child(div().w(14).flex_none().text_size(12).font_semibold().text_color(t[tone === "dim" ? "muted" : tone]).child(mark))
+          .child(div().flex_1().min_w(0).text_size(11.5).line_height("16px").text_color(c.state === "fail" ? t.blocked : t.foreground).child(c.name));
+      })
+      : [div().w_full().py(4).text_size(11.5).text_color(t.dim).child("No CI runs")];
+  return v_flex().w_full().gap(2).child(section(t, "CI runs", summary)).children(body);
+}
+
+function verdictBody(t, v) {
+  const { status, text, error } = v.detail.verdict;
+  if (status === "loading") return div().text_size(12.5).text_color(t.dim).child("Loading the review…");
+  if (status === "fail") return div().w_full().text_size(12.5).line_height("18px").text_color(t.blocked).child(`Could not load the review: ${error}`);
+  if (text === null) return div().text_size(12.5).text_color(t.dim).child("The review thread has no final message.");
+  return TextView.markdown(`rv-md-${v.g.key}`, text).selectable(true).scrollable(true).size_full();
+}
+
+function approveButton(t, v, run) {
+  const off = Boolean(v.block || v.done);
+  return h_flex().id("rv-approve").h(30).px(14).gap(8).items_center().flex_none().rounded(6)
+    .bg(v.armed ? t.blocked : t.solid).text_color(v.armed ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
+    .cursor_pointer().hover((s) => s.opacity(0.9)).on_click((e, cx) => e.click_count > 1 || run(cx))
+    .when(off, (el) => el.opacity(0.5))
+    .child(v.armed ? "Confirm approve" : "Approve merge")
+    .child(div().text_size(10.5).font_medium().child("a"));
+}
+
+const banner = (t, tone, text) => div().w_full().p(8).rounded(6).border_1().border_color(t[tone]).text_size(12).line_height("17px").text_color(t.foreground).child(text);
+
+export function reviewView(t, v, input, cb) {
+  if (!v) {
+    return v_flex().size_full().min_h(0)
+      .child(REVIEW_HEAD(t, null, () => cb.close()))
+      .child(div().w_full().p(16).text_size(13).line_height("19px").text_color(t.muted).child("Ready is empty"));
+  }
+  const { g, verdict } = v;
+  const hint = v.replying ? "Type the note and press Enter to send it to the builder. Esc cancels." : v.armed ? "Press a again to queue the merge." : "a approve (press twice) · d send back with a note · j k next or previous · s skip · Esc close";
+  return v_flex().size_full().min_h(0)
+    .child(REVIEW_HEAD(t, `${v.pos} of ${v.total}`, () => cb.close()))
+    .child(v_flex().id("rv-strip").w_full().flex_none().max_h(DEC_STRIP).overflow_y_scrollbar().border_b(1).border_color(t.border)
+      .child(v_flex().w_full().flex_none().px(16).py(12).gap(10)
+        .child(div().w_full().text_size(18).line_height("24px").font_semibold().text_color(t.foreground).child(g.task ? `${g.task} · ${g.title}` : g.title))
+        .child(h_flex().w_full().gap(6).items_center().flex_wrap()
+          .child(action(t, "rv-pr", "", `PR #${v.pr.number}`, () => cb.link(v.url), v.url, true))
+          .when(Boolean(v.branch), (el) => el.child(chip(t, v.branch, "dim", `Branch ${v.branch}`)))
+          .when(Boolean(v.builder), (el) => el.child(chip(t, `built ${shortModel(v.builder)}`, "dim", `Built on ${v.builder}`)))
+          .when(Boolean(v.reviewer), (el) => el.child(chip(t, `review ${shortModel(v.reviewer)}`, "dim", `Reviewed on ${v.reviewer}`)))
+          .child(chip(t, `ready ${ago(v.entered, v.now)}`, "dim", "How long the card has been in Approved/Ready"))
+          .when(Boolean(verdict), (el) => el.child(chip(t, `${VERDICT_MARK[verdict.state]} ${VERDICT_TEXT(verdict)}`, VERDICT_TONE[verdict.state], "The agent review verdict"))))
+        .when(Boolean(v.done), (el) => el.child(banner(t, "done", v.done)))
+        .when(Boolean(v.block), (el) => el.child(banner(t, "blocked", `Can't approve: ${v.block}`)))
+        .when(Boolean(v.outcome), (el) => el.child(banner(t, "blocked", v.outcome.text)))
+        .child(h_flex().gap(6).items_center().flex_wrap()
+          .child(approveButton(t, v, (cx) => cb.approve(cx)))
+          .child(action(t, "rv-back", "d", "Send back", (cx) => cb.sendBack(cx), "Write a note and send it to the builder"))
+          .child(action(t, "rv-skip", "s", "Skip", (cx) => cb.step(1, cx), "Next card without acting"))
+          .child(action(t, "rv-prev", "k", "Previous", (cx) => cb.step(-1, cx)))
+          .child(action(t, "rv-next", "j", "Next", (cx) => cb.step(1, cx))))
+        .child(div().w_full().text_size(10.5).text_color(t.dim).child(hint))
+        .when(v.replying, (el) => el.child(h_flex().w_full().h(30).gap(8).items_center()
+          .when(Boolean(v.replyLabel), (r) => r.child(div().flex_none().text_size(11).font_medium().text_color(t.accent).child(v.replyLabel)))
+          .child(Input.new(input).flex_1().min_w(0).h(30).px(8).rounded(6).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))))))
+    .child(h_flex().flex_1().min_h(0).w_full()
+      .child(v_flex().flex_1().min_w(0).min_h(0).h_full()
+        .child(div().w_full().flex_none().px(16).pt(10).child(section(t, "Review verdict", verdict ? verdict.label : null)))
+        .child(div().id("rv-verdict").flex_1().min_h(0).w_full().overflow_hidden().px(16).py(8).text_size(12.5).line_height("19px").text_color(t.foreground).child(verdictBody(t, v))))
+      .child(v_flex().id("rv-side").w(DEC_SIDE).h_full().min_h(0).flex_none().overflow_y_scrollbar().border_l(1).border_color(t.border)
+        .child(v_flex().w_full().flex_none().px(14).py(12).gap(10)
+          .child(checkRows(t, checksOf(v.gh, verdict)))
+          .child(ciRows(t, v.detail.checks, cb))
+          .child(fileRows(t, v.detail.files, `${v.url}/files`, cb))
+          .when(Boolean(v.trail), (el) => el.child(trailRows(t, v.trail, cb))))));
+}
+
 export const DECIDES = new Set(["needs", "cifail", "review", "ready"]);
 export const KEY_TABLE = [
   { keys: "⏎", group: "Card", all: "Open the card's ticket and decision pop-up" },
@@ -899,6 +996,7 @@ export const KEY_TABLE = [
   { keys: "S", group: "Board", all: "Settle every reviewed card, press twice (Done)" },
   { keys: "A", group: "Board", all: "Settle every finished card, press twice (Done)" },
   { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (Approved/Ready)" },
+  { keys: "m", group: "Board", all: "Review the Approved/Ready cards one at a time, oldest first: verdict, CI and changed files. In it: a approves (press twice), d sends back with a note, j k or → ← move, s skips, Esc closes" },
   { keys: "F", group: "Board", all: "Retry failed cards in groups by error kind (Needs you)" },
   { keys: "U", group: "Board", all: "Send every conflicting PR back for a rebase, press twice (every PR lane; the lane head button does one lane)" },
   { keys: "Z", group: "Board", all: "List snoozed cards, wake one or all" },
