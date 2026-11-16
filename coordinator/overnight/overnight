@@ -4014,7 +4014,6 @@ def cmd_attend(args: argparse.Namespace) -> int:
     log_path = root / "run" / "shift-log.md"
     write_record(log_path, "\n".join(log_lines) + "\n")
     pr_cache: dict[str, list[dict]] = {}
-    pr_cut: dict[str, bool] = {}
     for issue in items:
         item_start = time.monotonic()
         repo = issue.get("repo", "")
@@ -4032,13 +4031,11 @@ def cmd_attend(args: argparse.Namespace) -> int:
         }
         if repo not in pr_cache:
             try:
-                rows, cut = read_pull_requests(repo, deadline)
+                rows, _cut = read_pull_requests(repo, deadline)
             except RepoError as exc:
                 rows = []
-                cut = True
                 emit(f"overnight: {repo}: {exc}", err=True)
             pr_cache[repo] = rows
-            pr_cut[repo] = cut
         linked = []
         for row in pr_cache[repo]:
             target, _signal = linked_ticket(row, by_number, by_key)
@@ -4046,17 +4043,7 @@ def cmd_attend(args: argparse.Namespace) -> int:
                 linked.append(row)
         pr = linked[0] if linked else None
         observation = None
-        if pr_cut.get(repo):
-            # A list that was cut off at the limit is not a list with no
-            # pull requests: the ones past the limit are missing, so the
-            # item's pull request is not known.
-            state = "stuck"
-            stopped = (
-                f"the open pull request list was cut off at {PR_LIMIT}, so "
-                "this ticket's pull request is not known"
-            )
-            nxt = "raise the pull request limit and read the board again"
-        elif pr:
+        if pr:
             observation = observe_pull_request(repo, pr["number"], deadline)
             checks_code = observation["checks_exit"]
             gate = observation["gate"]
@@ -4101,11 +4088,7 @@ def cmd_attend(args: argparse.Namespace) -> int:
             f"{' (no checks yet)' if observation['no_checks'] else ''}, "
             f"gate {observation['gate']}"
             if observation
-            else (
-                f"the open pull request list was cut off at {PR_LIMIT}"
-                if pr_cut.get(repo)
-                else "no pull request is open"
-            )
+            else "no pull request is open"
         )
         log_lines.append(
             f"{datetime.now(PT).strftime('%Y-%m-%d %H:%M %Z')} | item "
@@ -5380,13 +5363,33 @@ def launchd_python() -> tuple[str, str]:
     return "", ""
 
 
-def queue_log_tail(name: str, lines: int) -> list[str]:
-    """Return the last lines of one queue log, or none when it is missing."""
+def queue_log_tail(name: str, lines: int) -> tuple[list[str], str]:
+    """Return the last lines of one queue log, and why they are missing.
+
+    A log that cannot be read is not an empty log: the caller has to
+    say the check is incomplete instead of reporting that the log holds
+    nothing."""
     try:
         text = (QUEUE_DIR / name).read_text(errors="replace")
-    except OSError:
-        return []
-    return text.splitlines()[-lines:]
+    except OSError as exc:
+        return [], f"the log could not be read: {exc}"
+    return text.splitlines()[-lines:], ""
+
+
+def log_read_finding(check: str, path: str, error: str) -> dict:
+    """Return the finding of a log that could not be read.
+
+    A read that failed is never a clean result: the check that needed
+    the log is incomplete, and the receipt must say so."""
+    return {
+        "check": check,
+        "subject": str(path),
+        "detail": (
+            f"the log could not be read, so the {check} check is incomplete "
+            f"for it: {error}"
+        ),
+        "action": "read the log by hand and fix what it says",
+    }
 
 
 def health_run(argv: list[str], deadline: float) -> tuple[int, str, str]:
@@ -5453,9 +5456,12 @@ def check_tools(deadline: float) -> tuple[list[str], list[dict]]:
     logs: list[dict] = []
     for name in ("dispatch.log", "gatekeep.log"):
         path = QUEUE_DIR / name
-        lines = queue_log_tail(name, LOG_TAIL)
-        ran.append(f"the last {LOG_TAIL} lines of {path}")
-        logs.append({"path": str(path), "lines": lines})
+        lines, error = queue_log_tail(name, LOG_TAIL)
+        if error:
+            ran.append(f"the last {LOG_TAIL} lines of {path} could not be read")
+        else:
+            ran.append(f"the last {LOG_TAIL} lines of {path}")
+        logs.append({"path": str(path), "lines": lines, "error": error})
     return ran, tool_findings(probes, logs)
 
 
@@ -5486,6 +5492,15 @@ def tool_findings(probes: list[dict], logs: list[dict]) -> list[dict]:
             }
         )
     for entry in logs:
+        error = entry.get("error")
+        if error:
+            # The log could not be read, so the crash check is
+            # incomplete for it: a log nobody could read is not a log
+            # without a traceback.
+            findings.append(
+                log_read_finding("tools", str(entry.get("path", "")), str(error))
+            )
+            continue
         for line in entry.get("lines") or []:
             if "Traceback" in line:
                 findings.append(
@@ -5777,7 +5792,13 @@ def check_blockers(deadline: float) -> tuple[list[str], list[dict]]:
     (2026-11-13: four FFBT tickets were held by a false text blocker)."""
     ran: list[str] = []
     path = QUEUE_DIR / "dispatch.log"
-    lines = queue_log_tail("dispatch.log", REFUSAL_TAIL)
+    lines, error = queue_log_tail("dispatch.log", REFUSAL_TAIL)
+    if error:
+        # The log could not be read, so the text blocker check is
+        # incomplete: a log nobody could read is not a log without a
+        # refusal. The receipt must not claim the log was read.
+        ran.append(f"the last {REFUSAL_TAIL} lines of {path} could not be read")
+        return ran, [log_read_finding("blockers", str(path), error)]
     ran.append(f"the last {REFUSAL_TAIL} lines of {path}")
     latest: dict[tuple[str, str], str] = {}
     now = datetime.now()

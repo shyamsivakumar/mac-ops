@@ -53,9 +53,5 @@ ticket is reported as having no open pull request. The second run, with
 a whole list, classifies the ticket and reports it. The same rule is in
 the `cycle-health` eval of `coordinator/overnight/selftest.py`.
 
-The same rule holds in the attended night: a cut-off list leaves the
-item's pull request unknown, so the receipt says the list was cut off
-instead of saying no pull request is open.
-
 The live cycle on this head is `cycle-live-cut.md`: all four checks ran
 against the live queue and the live board.
