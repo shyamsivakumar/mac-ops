@@ -3830,6 +3830,12 @@ def collect_items(
                 "actionReason": "",
                 "actionCommand": "",
             }
+            if record.get("stage") == "started":
+                item["reason"] = "stage started"
+                item["actionReason"] = "the ticket is already started"
+                in_flight.append(item)
+                count_for(repo)["in_flight"] += 1
+                continue
             if record.get("stage") != READY_STAGE:
                 item["reason"] = f"stage {record.get('stage') or 'unknown'}"
                 item["actionReason"] = "the board stage is not todo"
@@ -5363,6 +5369,7 @@ def board_item(order: int, group: str, item: dict) -> dict:
         "number": item.get("number"),
         "key": item.get("key") or "",
         "title": item.get("title") or "",
+        "stage": item.get("stage"),
         "action": action,
         "actionReason": item.get("actionReason") or "",
         "actionCommand": item.get("actionCommand") or "",
