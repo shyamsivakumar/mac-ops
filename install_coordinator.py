@@ -52,7 +52,7 @@ RETIRED_JOBS: tuple[str, ...] = ()
 # queue here: the board is the list.
 OVERNIGHT_DIRS = ("run", "receipts", "inbox", "staging")
 OVERNIGHT_README = ("overnight", "README.md")
-OVERNIGHT_BIN_FILES = ("overnight", "lane_driver.py", "selftest.py")
+OVERNIGHT_BIN_FILES = ("overnight", "lane_driver.py", "selftest.py", "turn_cap.py")
 GITIGNORE_ENTRY = ".overnight/"
 GITIGNORE_BLOCK = (
     "# Overnight runner scratch, installed by mac-ops\n"
@@ -61,7 +61,7 @@ GITIGNORE_BLOCK = (
 )
 # A python interpreter running the monitor script and nothing else. A page of
 # the script, a grep of it, or a build job that mentions it does not match.
-MONITOR_PATTERN = r"[Pp]ython[0-9.]* .*/loop/turn_cap\.py( --[A-Za-z0-9-]+)*$"
+MONITOR_PATTERN = r"[Pp]ython[0-9.]* .*/\.local/bin/turn_cap\.py( --[A-Za-z0-9-]+)*$"
 
 
 def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
