@@ -7,7 +7,7 @@ import { needReasons, stallOf, trailOf } from "./asks.js";
 import { shortModel } from "./hub.js";
 import { changedSinceLaunch, issueRef, pickerOptions, startBlock } from "./tickets.js";
 
-export const H = { bar: 26, search: 30, head: 46, sub: 20, card: 86, foot: 18, title: 30, reason: 28, trail: 15, child: 24, reply: 34, chips: 18, session: 15, empty: 50, folded: 44 };
+export const H = { bar: 26, search: 30, head: 46, sub: 20, card: 86, foot: 18, title: 30, reason: 28, trail: 15, child: 24, reply: 34, chips: 18, session: 15, empty: 50, folded: 44, fan: 56, worker: 40 };
 const TONE = { ask: "blocked", wait: "blocked", fail: "blocked", stop: "working", run: "working", done: "done", idle: "idle" };
 const CI_TONE = { pass: "done", fail: "blocked", pending: "working", none: "dim" };
 const CI_MARK = { pass: "✓", fail: "✗", pending: "…", none: "—" };
@@ -22,7 +22,7 @@ export const COLUMNS = [["needs", "Needs you", "blocked", "Needs you"], ["run", 
 export const PR_LANES = new Set(["checks", "cifail", "review", "ready"]);
 const PR_REASONS = new Set(["unrouted", "ci", "changes", "conflict"]);
 export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "needs" && PR_REASONS.has(reasons?.[0]));
-const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
+export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
 const COLUMN_NAME = Object.fromEntries(COLUMNS.map((c) => [c[0], c[3]]));
 export const COLUMN_LIMIT = { needs: 10, ready: 10 };
 const AGED_COLUMNS = new Set(["needs", "cifail", "ready"]);
@@ -138,6 +138,14 @@ function projectItem(v) {
   return { id: "project", prio: -1, label: `Project · ${v.project}${v.projectCount ? "" : " · no cards"}`, tone: "working", tip: `Showing only ${v.project}. Bulk actions touch only these cards. Click to change (P).` };
 }
 
+function alertsItem() {
+  const a = shared("cockpit.alerts");
+  if (a && !a.on) return { id: "alerts", prio: 3, label: "Alerts · off", tip: "Phone alerts are off. Click to turn them on." };
+  const last = a?.sent ? `Last sent ${ago(a.sent.at, Date.now())} ago: ${a.sent.text.replace(/^Mirror: /, "")}.` : "Nothing sent yet.";
+  if (a?.failed) return { id: "alerts", prio: -1, label: "Alerts · relay down", tone: "blocked", tip: `The last phone alert failed, so Herdr showed a desktop notification instead: ${a.failed}. ${last} Click to turn alerts off.` };
+  return { id: "alerts", prio: 3, label: a?.sent ? `Alerts · on · ${ago(a.sent.at, Date.now())}` : "Alerts · on", tip: `A card entering Needs you or becoming Ready is sent to your phone relay, at most one message every 5 minutes. ${last} Click to turn off.` };
+}
+
 function barItems(v) {
   const { worktrees: w, slots } = v;
   const asks = shared("co.asks")?.items ?? [];
@@ -153,6 +161,8 @@ function barItems(v) {
     ...failedScan,
     { id: "wt", prio: 0, label: hasCounts ? `Worktrees · ${w.stale} stale${old}` : "Worktrees", more: hasCounts && w.look ? ` · ${w.look} need a look` : "", tone: hasCounts && w.stale && !w.failed ? "working" : undefined, tip: hasCounts ? `${w.stale} safe to clean or prune · ${w.look} need a look${w.failed ? ` (from the last good scan, ${ago(w.scannedAt, Date.now())} ago)` : ""}. Click to review and clean.` : "Linked Git worktrees. Click to review and clean them." },
     projectItem(v),
+    alertsItem(),
+    { id: "fan", prio: v.fan ? -1 : 2, toggle: true, label: v.fan ? "Fan-out · on" : "Fan-out", tone: v.fan ? "accent" : undefined, tip: "Group workers under the feature they belong to, so one big ask shows as several PRs (v). Bulk actions are off in this view." },
     ...(v.snoozed ? [{ id: "snoozed", prio: 2, label: `Snoozed ${v.snoozed}`, tip: `${v.snoozed} snoozed cards are hidden but still count toward the column limits. Click to list or wake them (Z).` }] : []),
     { id: "queue", prio: 4, label: slots ? `Queue · ${slots.live}/${slots.cap} · ${slots.queued} queued` : "Queue · unavailable", tone: slots && slots.live >= slots.cap ? "working" : undefined, tip: "Running tasks against the cap, and what is waiting. Click to open." },
   ];
@@ -179,7 +189,7 @@ function noticeLine(t, notice, cb) {
 
 export function toolbar(t, width, v, cb) {
   return h_flex().id("ck-bar").h(H.bar).px(10).gap(BAR_GAP).items_center().flex_none().overflow_hidden().border_b(1).border_color(t.border)
-    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
+    .children(fitBar(width, v).map((x) => action(t, `bar-${x.id}`, "", x.label + (x.more ?? ""), (cx) => (x.toggle ? cb.fan(cx) : x.id === "alerts" ? cb.alerts(cx) : x.command ? cb.command(x.command) : cb.panel(x.id, cx)), x.tip, true, x.tone)))
     .when(Boolean(v.notice), (el) => el.child(noticeLine(t, v.notice, cb)))
     .when(!v.notice, (el) => el.child(div().flex_1()))
     .when(v.stale, (el) => el.child(div().flex_none().text_size(9.5).text_color(t.working).child("stale")))
@@ -331,8 +341,8 @@ function trailText(trail) {
 
 function trailTip(trail) {
   const failed = trail.review ? "Review asked for changes" : `Failed: ${trail.checks.map((c) => c.name).join(", ")}`;
-  const routed = trail.routedIn === null ? "No fix round started yet" : `A fix round started ${elapsed(trail.routedIn)} after the failure`;
-  return [failed, routed, trail.fixes.length ? `Latest fix: ${trail.fixes.at(-1).head}` : "No fix commits yet"].join(". ");
+  const routed = trail.routedIn === null ? "No fix round started yet" : `Acted on ${elapsed(trail.routedIn)} after the failure`;
+  return [failed, routed, trail.fixes.length ? `Latest fix: ${trail.fixes.at(-1).head}` : "No fix commits yet", "A settled round that pushed no commits cannot be seen"].join(". ");
 }
 
 function trailRow(t, e, trail) {
@@ -343,7 +353,7 @@ function trailRow(t, e, trail) {
 function statusLine(v) {
   const { c, variant, now } = v;
   if (variant === "backlog") return c.issue ? issueRef(c.issue) : c.context;
-  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}${v.quiet ? ` · quiet ${elapsed(now - c.at)}` : ""}` : "Running";
+  if (c.kind === "run") return c.status === "queued" ? "Queued" : v.since ? `Running ${elapsed(now - v.since)}` : "Running";
   if (c.kind === "done") return v.reviewed ? "Ready to settle" : "Not reviewed yet";
   return c.context;
 }
@@ -405,7 +415,7 @@ export function card(t, e, v, input, cb) {
     : isPr
     ? prChips(t, v, fit).tooltip(v.plan?.sha ? `Relay #${v.plan.number} ${v.plan.sha.slice(0, 8)}` : "Checking merge plan").on_mouse_down("left", selectOnly(e.key, cb))
     : h_flex().flex_1().min_w(0).gap(5).items_center()
-      .child(div().size(6).flex_none().rounded(3).bg(v.quiet ? t.muted : t[TONE[c.kind]]))
+      .child(div().size(6).flex_none().rounded(3).bg(t[TONE[c.kind]]))
       .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.muted).child(line));
   const foot = selected
     ? h_flex().h(H.foot).w_full().flex_none().gap(6).items_center().child(isPr ? readyActions : quick)
@@ -453,6 +463,54 @@ export function childRow(t, e, v, cb) {
     .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(c.title))
     .when(selected, (el) => el.child(actions(t, e.key, c.kind === "done", cb)))
     .child(opening === e.key ? div().flex_none().text_size(9.5).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(9.5).text_color(t.muted).child(ago(c.at, now)));
+}
+
+const LANE_TONE = Object.fromEntries(COLUMNS.map((c) => [c[0], c[2]]));
+const PROGRESS_TONE = { merged: "done", review: "accent", working: "working", needs: "blocked", queued: "dim", other: "dim" };
+const PROGRESS_WORD = { review: "in review", working: "working", needs: "needs you", queued: "queued", other: "idle" };
+
+export function progressParts(counts, total) {
+  return [[`${counts.merged}/${total} PRs merged`, counts.merged === total ? "done" : "muted"], ...["review", "working", "needs", "queued", "other"].filter((k) => counts[k]).map((k) => [`${counts[k]} ${PROGRESS_WORD[k]}`, PROGRESS_TONE[k] === "dim" ? "muted" : PROGRESS_TONE[k]])];
+}
+
+export function parentCard(t, p, v, cb) {
+  const barWidth = Math.max(40, v.colW - 32);
+  return div().id(`fan-${p.key}`).h(H.fan).w_full().flex_none().px(6).pb(4)
+    .child(v_flex().h(H.fan - 4).w_full().overflow_hidden().rounded(6).bg(t.surface).border_1().border_color(t.border).px(8).py(5).gap(3)
+      .cursor_pointer().hover((s) => s.bg(t.raised)).on_click((_e, cx) => cb.foldParent(p.key, cx))
+      .tooltip(p.hint)
+      .child(h_flex().h(18).flex_none().gap(6).items_center()
+        .child(div().w(10).flex_none().text_size(9).text_color(t.dim).child(v.folded ? "▸" : "▾"))
+        .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.foreground).child(p.title))
+        .child(chip(t, `${p.total} workers`, "dim")))
+      .child(h_flex().h(14).flex_none().gap(5).items_center().overflow_hidden()
+        .children(p.parts.map(([text, tone], i) => h_flex().flex_none().gap(5).child(div().text_size(10.5).text_color(tone === "muted" ? t.muted : t[tone]).child(text)).when(i < p.parts.length - 1, (el) => el.child(div().text_size(10.5).text_color(t.dim).child("·"))))))
+      .child(h_flex().h(3).w(barWidth).flex_none().rounded(2).overflow_hidden().bg(t.border)
+        .children(["merged", "review", "working", "needs", "queued", "other"].filter((k) => p.counts[k]).map((k) => div().h(3).w(Math.round(barWidth * p.counts[k] / p.total)).flex_none().bg(t[PROGRESS_TONE[k] === "dim" ? "muted" : PROGRESS_TONE[k]])))));
+}
+
+export function workerRow(t, e, v, cb) {
+  const { c, selected, mark, now, pr, gh } = v;
+  const word = v.col === "needs" && v.needs?.length ? NEED_WORD[v.needs[0]] : COLUMN_NAME[v.col];
+  const branch = v.session?.branch;
+  const tree = v.session?.worktree?.split("/").at(-1);
+  const where = v.issue ? `${issueRef(v.issue)} · ${v.issue.stage ?? "no stage"}` : [branch, tree && `worktree ${tree}`].filter(Boolean).join(" · ");
+  const body = v_flex().id(`worker-${e.key}`).w_full().h(H.worker - 4).overflow_hidden().rounded(5).bg(selected ? t.raised : t.surface).border_1()
+    .border_color(selected ? (mark === "focus" ? t.accent : t.input) : t.border).px(8).py(3).gap(1)
+    .when(!selected, (el) => el.cursor_pointer().hover((s) => s.bg(t.raised)))
+    .on_mouse_down("left", (ev, cx) => cb.press(e.key, ev, cx))
+    .on_mouse_move((ev) => cb.drag(ev))
+    .on_click((_e, cx) => cb.click(e.key, cx))
+    .child(h_flex().h(18).flex_none().gap(6).items_center()
+      .child(chip(t, word, LANE_TONE[v.col] === "idle" ? "dim" : LANE_TONE[v.col]))
+      .when(Boolean(c.task), (el) => el.child(div().flex_none().text_size(11).font_semibold().text_color(t.foreground).child(c.task)))
+      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.foreground).child(c.title))
+      .when(Boolean(pr), (el) => el.child(v.merged ? chip(t, `#${pr.number} merged`, "done") : chip(t, `#${pr.number}`, "accent", `PR #${pr.number}${gh?.draft ? " (draft)" : ""}`)))
+      .when(Boolean(pr) && !v.merged, (el) => el.child(chip(t, `CI ${gh ? CI_MARK[gh.ci] ?? "?" : "…"}`, CI_TONE[gh?.ci] ?? "dim", gh ? `CI ${gh.ci}` : "CI loading")))
+      .child(div().flex_none().text_size(10).text_color(t.muted).child(ago(v.entered, now))))
+    .child(h_flex().h(H.session).w_full().flex_none().items_center().overflow_hidden()
+      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.dim).tooltip(where || "No worktree yet").child(where || (v.session ? "no worktree" : "…"))));
+  return div().h(H.worker).w_full().flex_none().pl(22).pr(6).pb(4).child(body);
 }
 
 export const DEC_WIDTH = 920;
@@ -813,6 +871,7 @@ export const KEY_TABLE = [
   { keys: "f", group: "Board", all: "Fold or show this column" },
   { keys: "e", group: "Board", all: "Open this column in a pop-up" },
   { keys: "b", group: "Board", all: "Fold or show Backlog" },
+  { keys: "v", group: "Board", all: "Switch to the fan-out view: one card per feature with its worker cards under it (bulk actions are off there; ← → or f fold a feature)" },
   { keys: "P", group: "Board", all: "Choose one project to show, or all projects" },
   { keys: "/", group: "Board", all: "Search cards by ticket ID or title, with quick filters. Enter returns to the board, Esc clears" },
   { keys: "R", group: "Board", all: "Reload the board now" },

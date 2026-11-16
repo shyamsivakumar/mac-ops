@@ -356,7 +356,7 @@ export async function queueStatus() {
 
 export async function loadBacklog() {
   const [idle, names] = await Promise.all([idleList(), projectNames()]);
-  const queued = idle.filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
+  const queued = idle.filter((t) => !t.parentThreadId && !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
   return { backlog: group(queued).sort((a, b) => a.at - b.at), tasks: taskMap(queued) };
 }
 
