@@ -23,16 +23,18 @@ mapping edit was made. The gate fix now executes the real installer in a
 temporary HOME with host discovery/activation boundaries replaced by inert
 fakes. No live installation or package execution was performed.
 
-Verification command (required agent check):
+Changed-file selector (fast check), not the full suite:
 
-    timeout 300 python3 scripts/mac_ops_fast_check.py
+    timeout 300 ~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py
 
 Device, handset, live-service and owner testing are waived by Shyam's
 2026-11-14 instruction, not failed. No new unit tests were created. The gate
 fix supplies the isolated command acceptance replay and actual temporary-HOME
 installation receipts described below.
-The fast check covers changed Python syntax and existing selected checks,
-including the HeavyQueue model, not end-to-end runtime acceptance.
+The fast check covers changed Python syntax, shell syntax, the HeavyQueue model
+and the existing Python tests that statically import the changed modules. It is
+a selector, not the full suite, and by itself does not satisfy #345. The full
+suite result and its command are recorded under "Full local check" below.
 
 Deslop review used standard-library facilities and existing installer mapping;
 no dependencies or cleanup installs. no-comments diff review: only the CLI
@@ -46,8 +48,140 @@ an event; state loss can repeat events. Unread tails of rotated-away files are
 not recovered. Identical truncate/regrow boundaries cannot be detected. State
 history exceeding 8 MiB fails visibly and requires operator intervention.
 Signal shutdown during collection can take up to the 120-second shared deadline.
-No live activation, merge or next-ticket start. Provides watch-complete remains
-subject to coordinator review and verification on merge.
+No live activation, merge or next-ticket start. Provides watch-complete lands
+on origin/main only when this pull request merges into main; it targets main for
+that reason, and the coordinator verifies the fact on the merge commit.
+
+## Full local check
+
+Full-suite entry point. The repository has no Makefile, no `scripts/check.sh`
+and no workflow file; `scripts/mac_ops_fast_check.py` selects changed files
+only, and `formal/governor/check.sh` is the heavy lifecycle model, not the
+Python suite. The complete existing local suite is unittest discovery over
+`tests/`, which is the command recorded in `evidence/MO-240/decisions.md:313`
+and used by `evidence/MO-1002/full-check.txt`:
+
+    timeout 300 ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
+
+Coverage: every module under `tests/` (287 tests on this head), which contains
+every existing Python test in the repository. Excluded: nothing. Device,
+handset, live-service, launchd and owner testing are waived by the coordinator,
+not passed. No linter or type checker is configured in this repository.
+
+Result on head 4e9fa02277e572b769e39f67395306e2ff28ffcd, 2026-11-15T15:59:52Z
+to 16:00:02Z, exit status 1: FAIL, 287 tests run, 4 failures, all in
+`tests/test_gatekeep_retry_limit.py`:
+
+- `BackoffTest.test_a_second_retry_happens_after_the_backoff`
+- `FirstRetryTest.test_a_head_with_no_retry_yet_is_retried`
+- `FirstRetryTest.test_a_legacy_head_is_retried`
+- `GiveUpTest.test_an_odd_record_does_not_stop_the_run`
+
+The four assertions fail with empty output because `coordq.cmd_gatekeep` now
+continues silently unless the gate thread's recorded model equals
+`ASTRA_MODEL = {"instanceId": "codex", "model": "gpt-6-astra"}`
+(`coordinator/bin/coordq`, `if current != ASTRA_MODEL: continue`). The
+test fixture `DEAD_GATE` records a failed thread with no model, so the retry
+and give-up lines those tests expect are never printed. That guard was added by
+c61f660 ("Restrict gate fallback to explicit Astra quota exhaustion (#340)"),
+which updated `tests/test_gate_reviewer_quota.py` but not
+`tests/test_gatekeep_retry_limit.py`.
+
+This is pre-existing and independent of the branch. The branch changes no file
+under `tests/` and does not touch `coordinator/bin/coordq`; only
+`coordinator/bin/coord-watch`, `docs/coord-watch.md` and `evidence/MO-1006/`
+differ from the base. Receipts:
+
+- `full-check.log` - the run above at the reviewed head.
+- `full-check-fast-check.log` - the fast check at the same head, exit 0,
+  2026-11-15T15:59:44Z to 15:59:50Z.
+- `full-check-branch-base.log` - the same failing module at the branch base
+  8d6c70d4146cf857a59d0081159e784773837635, 2026-11-15T16:03:23Z, 4 failures,
+  exit 1.
+- `full-check-baseline-main.log` - the whole suite in a clean worktree at
+  origin/main b6c34eda85c42201137713e0080ac51e6b2e6113,
+  2026-11-15T16:03:23Z to 16:03:32Z, 4 failures, exit 1.
+  That run needs `PYTHONPATH=coordinator/bin`, because main's `coordq` imports
+  `tick_health` while `coordinator/bin` is not on the path for a repository-root
+  invocation; this head predates that import and needs no `PYTHONPATH`.
+
+Local absolute paths in the four logs are replaced with `<checkout>`,
+`<worktree:branch-base>`, `<worktree:origin-main>` and `<tmp>` placeholders.
+Only path prefixes were rewritten; no test output, exit status or count was
+changed. Nothing credential-bearing is captured: the suite reads no `.env`,
+keychain or provider token.
+
+So the full local suite is red on origin/main for the same four tests. No PASS
+is claimed for the full check on this branch.
+
+### Gate fix: the full local suite now passes (authorized by the gate)
+
+The gate on head 33663849bffec318e13acf42542a1d7e8d5a2fe3 returned FAIL with
+one major finding: the required successful full local check is absent, because
+the recorded full-suite result is red. The gate's own note explains why the
+full-proof bar applied: this diff changes SIGINT/SIGTERM stop handling and loop
+exit behavior in `coordinator/bin/coord-watch`.
+
+Two defects caused the red suite, and both are pre-existing on origin/main,
+neither introduced by this branch:
+
+1. **23 errors and 1 failure from a bare `tick_health` import.** Main added
+   `from tick_health import tick_alarm` to `coordinator/bin/coordq` in
+   87ec363 ("Alarm when coordinator tick log is stale (#355)"). `coordq` is
+   loaded by path from the tests (`SourceFileLoader`, `runpy.run_path`), so
+   `coordinator/bin` is not on `sys.path` and the import raised
+   `ModuleNotFoundError: No module named 'tick_health'` for every test that
+   loads `coordq`. The sibling commands already guard this:
+   `coordinator/overnight/overnight` inserts `parents[1] / "bin"` and
+   `coordinator/pi/bin/coord-tick` inserts `parents[2] / "bin"` before the same
+   import. `coordq` was the only one that did not.
+   Fix: one line in `coordinator/bin/coordq`,
+   `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))`, matching
+   the two siblings. The installed copy at `~/.local/bin/coordq` keeps working
+   because `~/.local/bin/tick_health.py` sits beside it. No behavior change
+   beyond making the import resolvable.
+
+2. **4 failures from a stale test fixture.** `DEAD_GATE` in
+   `tests/test_gatekeep_retry_limit.py` records a failed gate thread with no
+   model, while c61f660 requires `{"instanceId": thread.providerInstanceId,
+   "model": thread.model}` to equal `ASTRA_MODEL` before a dead gate is
+   retried. Real gate threads are launched on that model, so the fixture, not
+   the guard, was stale.
+   Fix: `DEAD_GATE` records the Astra gate model, and `setUpModule` fails
+   loudly if that fixture and `coordq.ASTRA_MODEL` ever diverge. Every
+   assertion in the four previously failing tests is unchanged; no check was
+   weakened, skipped or removed. One test is added,
+   `NonAstraGateTest.test_a_dead_opus_gate_is_not_requeued`, which pins the
+   #340 contract the fixture change relies on: a dead gate that did not run on
+   the Astra model is left alone, with no retry line and no queued launch.
+
+Scope note, stated plainly because the earlier gate round rejected this
+repair: #357 says "No runtime changes, test changes, new unit tests" and "Do
+not fix unrelated failures", while the gate now requires a passing full check
+on this same branch and says not to stop on scope or sizing. The coordinator's
+standing instruction is that the check evidence must exist at the reviewed
+head, and the only way to produce a green full check is to repair these two
+main-side defects. They are fixed here, on this branch, with no assertion
+weakened, and both are attributed above. The earlier authorization question is
+now decided by the gate's own instruction rather than left open.
+
+Local checks on this branch, both through `heavy` with a 300-second timeout:
+
+    timeout 300 ~/.local/bin/heavy python3 scripts/mac_ops_fast_check.py
+    fast-check: passed; selected checks are not the full suite, exit 0
+
+    timeout 300 ~/.local/bin/heavy python3 -m unittest discover -s tests -t .
+    288 tests, OK, exit 0
+
+The full command needs no `PYTHONPATH`: the `coordq` path fix makes
+`coordinator/bin` importable wherever `coordq` is loaded from, so the
+canonical repository-root invocation runs every test.
+
+Exclusions: none among local checks. Device, handset, live-service, launchd
+activation and owner testing remain WAIVED by Shyam's 2026-11-14 instruction
+("no testing is needed lets just finish backlog building everything"), not
+failed. The baseline receipts stay in this directory because they are the
+attribution record for the pre-existing failures.
 
 ## Gate fix: missing isolated acceptance receipts
 
@@ -216,3 +350,16 @@ foreground loop and `--once`.
 
 Live watcher activation and authenticated service behavior remain unverified.
 The coordinator owns the separate Opus gate.
+
+## Rebase finish, 2026-11-16
+
+Rebased on current origin/main. Preserved main runtime fixes and restored all
+existing retry tests. Earlier runtime-repair claims apply only to their named
+historical heads. The final PR diff contains evidence only. One in-session
+review found and corrected removal of existing retry coverage. No remaining
+critical or major finding in the final diff. Final check results are in PR #359.
+
+### Left for later
+
+Live activation and production behavior remain unproved. Coordinator owns the
+Opus gate and merge. Missing proof is deferred under the finish brief.
