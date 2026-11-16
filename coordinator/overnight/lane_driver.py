@@ -71,7 +71,6 @@ ORDER = {
     "shyamsivakumar/strategy-replay-workbench": [1082, 1089, 1090, 1071, 1072],
     "shyamsivakumar/fantasy-football-toolkit": [423, 444],
     "shyamsivakumar/catalouge": [117, 121],
-    "digitized/Concerning": [59, 57, 76],
 }
 
 
@@ -105,7 +104,7 @@ def item_boundary(repo, item, ledger):
             output = output.decode(errors="replace")
         if isinstance(stderr, bytes):
             stderr = stderr.decode(errors="replace")
-        first = (output + stderr).splitlines()
+        first = output.splitlines() + stderr.splitlines()
         code = getattr(exc, "returncode", "timeout")
         command = shlex.join(exc.cmd) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd)
         print(f"ITEM ERROR repo={repo} item={item} command={command!r} exit={code} output={(first[0] if first else '')!r}")
@@ -286,8 +285,7 @@ def act_on_pr(repo, number, ledger):
 
 
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
-         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue",
-         "digitized/Concerning": "concerning"}
+         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
 
 
 def fast_forward_main(repo):
@@ -503,6 +501,12 @@ def zero_merge(snapshot):
     os.replace(path + ".tmp", path)
 
 
+def item_failure_summary(ledger):
+    failures = ledger.get("_item_failures", 0)
+    print(f"ITEM SUMMARY failures={failures}")
+    return failures
+
+
 def run_pass(ledger):
     global SNAPSHOT
     ledger.pop("_item_failures", None)
@@ -549,10 +553,8 @@ def run_pass(ledger):
             elif not done and not b:
                 print(f"{CFG[repo]['key']:5} " + start_next(repo, tickets, ledger))
 
-    failures = ledger.get("_item_failures", 0)
-    print(f"ITEM SUMMARY failures={failures}")
-    if failures:
-        raise RuntimeError(f"lane pass completed with {failures} item failures")
+    if item_failure_summary(ledger):
+        raise RuntimeError(f"lane pass completed with {ledger['_item_failures']} item failures")
 
 
 def main():
@@ -571,6 +573,9 @@ def main():
             zero_merge(SNAPSHOT)
     except ApiBudgetExhausted as exc:
         print(f"API BUDGET {exc}")
+        if ledger.get("_item_failures", 0):
+            item_failure_summary(ledger)
+            raise RuntimeError(f"lane pass completed with {ledger['_item_failures']} item failures") from exc
     finally:
         try:
             after = api_remaining()
