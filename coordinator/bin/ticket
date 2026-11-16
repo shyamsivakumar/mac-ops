@@ -498,20 +498,43 @@ def fetch_issue(repo, n):
 
 
 def template_markers(cfg, lines):
-    names = {s.lower(): s for s in cfg["template"]}
+    """The markers that carry the sections of a ticket body.
+
+    A section name is read by its words, not by its separator. Case, spacing,
+    the separators "/" and ",", and the word "and" between the words do not
+    change which section a heading names, so the configured "Data/secrets and
+    stop conditions" and the written "Data, secrets and stop conditions" are
+    one section. Only those separators are separators: every other character
+    is part of a word, so "Contexte" names another section than "Context".
+    """
+
+    def canonical(text):
+        words = [w for w in re.split(r"[\s/,]+", text.lower()) if w and w != "and"]
+        return " ".join(words)
+
+    # A label line: the section name, then a colon, then the section text. The
+    # name may be wrapped in bold, and it may name the section with a
+    # separator that differs from the configured one. The name starts the
+    # line, so a list item such as "- Context: ..." is not a label line.
+    label = re.compile(r"^\s*(?:\*\*)?\s*(?P<label>[0-9A-Za-z][^:]*?)\s*(?:\*\*)?\s*:\s*(?:\*\*)?(?P<rest>.*)$")
+
+    names = {}
+    for section in cfg["template"]:
+        # The first configured section wins when two names read the same.
+        names.setdefault(canonical(section), section)
     markers = []
     for i, line in enumerate(lines):
         m = HEADING.match(line)
         if m:
-            text = m.group(2).strip().strip("*").strip().rstrip(":").strip().lower()
+            text = canonical(m.group(2).strip().strip("*").strip().rstrip(":").strip())
             if text in names:
                 markers.append((i, names[text], len(m.group(1)), ""))
             continue
-        for lower, section in names.items():
-            m = re.match(rf"\s*(?:\*\*)?\s*{re.escape(lower)}\s*(?:\*\*)?\s*:\s*(?:\*\*)?(.*)$", line, re.I)
-            if m:
-                markers.append((i, section, 0, m.group(1)))
-                break
+        m = label.match(line)
+        if m:
+            text = canonical(m.group("label"))
+            if text in names:
+                markers.append((i, names[text], 0, m.group("rest")))
     return markers
 
 
