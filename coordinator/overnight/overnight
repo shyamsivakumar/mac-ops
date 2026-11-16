@@ -1425,7 +1425,7 @@ def cmd_shift(args: argparse.Namespace) -> int:
     # The checks get half the cycle, so the board work still has time.
     health_deadline = started + max(60, args.deadline // 2)
     health_lines, health_findings = health_cycle(
-        root, board, repos, health_deadline
+        root, board, repos, health_deadline, board_stale
     )
     receipt = write_cycle_receipt(
         root, stamp, now_pt.strftime("%Y-%m-%d-%H%M"), health_lines, health_findings
@@ -5589,16 +5589,40 @@ def install_findings(status: dict) -> list[dict]:
 
 
 def check_attempts(
-    issues: list[dict], repos: list[tuple[str, str]], deadline: float
+    issues: list[dict],
+    repos: list[tuple[str, str]],
+    deadline: float,
+    stale: bool = False,
 ) -> tuple[list[str], list[dict]]:
     """Check the tickets that were started again and again with no pull request.
 
     A ticket the ticket CLI started three or more times has a broken
     spec: the builder reads the same brief and stops the same way. The
     check counts the `Starting ... attempt` comments and asks the open
-    pull requests whether one of them carries the ticket."""
+    pull requests whether one of them carries the ticket.
+
+    A stale board is not a board with no tickets: the list could not be
+    refreshed, so the tickets it names are not known, and the check is
+    incomplete rather than clean."""
     ran: list[str] = []
     findings: list[dict] = []
+    if stale:
+        # The board could not be refreshed. An empty stale board would
+        # skip every repository and report no finding, so the receipt
+        # would show a clean check that never ran.
+        findings.append(
+            {
+                "check": "attempts",
+                "subject": "the board",
+                "detail": (
+                    "the board list is stale, so the attempts check is "
+                    "incomplete: no ticket is classified"
+                ),
+                "action": "read the board again and run the check again",
+            }
+        )
+        ran.append("the board list is stale, so no ticket was classified")
+        return ran, findings
     _path, decisions = read_decisions()
     board: dict[str, list[dict]] = {}
     for issue in issues:
@@ -5922,12 +5946,16 @@ def health_cycle(
     issues: list[dict],
     repos: list[tuple[str, str]],
     deadline: float,
+    stale: bool = False,
 ) -> tuple[list[str], list[dict]]:
     """Run the four health checks of one cycle.
 
     Every check says what it ran and what it found, so a reader can tell
     a check that passed from a check that never ran. The receipt holds
-    one line per finding."""
+    one line per finding.
+
+    The board is stale when it could not be refreshed: the check that
+    reads the board is then incomplete, and says so."""
     lines: list[str] = []
     findings: list[dict] = []
     checks = (
@@ -5941,7 +5969,7 @@ def health_cycle(
         ),
         (
             "a ticket started three or more times with no open pull request",
-            lambda: check_attempts(issues, repos, deadline),
+            lambda: check_attempts(issues, repos, deadline, stale),
         ),
         (
             "a text blockers refusal that names a closed issue",

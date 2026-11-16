@@ -107,3 +107,22 @@ The receipt is `cycle-unreadable-log.md`. It shows the two queue logs
 reported as "could not be read", the tools check and the blockers check
 each reporting an incomplete check, and no finding claimed from a log
 nobody could read. The `cycle-health` eval holds the same cases.
+
+## The stale board
+
+The ticket CLI owns the board's cache. When it cannot reach GitHub it
+falls back to that cache and says the list is stale. A stale list is
+not a list with no tickets: the board could not be refreshed, so the
+tickets it names are not known, and the check that reads the board is
+incomplete rather than clean.
+
+The proof is a cycle whose ticket CLI is a stub that returns a stale
+board with no tickets:
+
+    OVERNIGHT_TICKET=<stub> OVERNIGHT_ROOT=<root> \
+    python3 coordinator/overnight/overnight shift --dry-run
+
+The receipt is `cycle-stale-board.md`. The attempts check says "the
+board list is stale, so no ticket was classified" and reports an
+incomplete check, instead of the clean "no finding" an empty stale
+board used to produce. The `cycle-health` eval holds the same case.

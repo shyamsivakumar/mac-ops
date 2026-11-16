@@ -1072,6 +1072,13 @@ def cycle_health():
     exact(failed[0]["check"], "blockers")
     exact("incomplete" in failed[0]["detail"], True)
     exact(any("could not be read" in line for line in ran), True)
+    # A stale board is not a board with no tickets: the attempts check
+    # is incomplete and classifies nothing.
+    ran, stale = module.check_attempts([], [("o/r", "")], 0, True)
+    exact(len(stale), 1)
+    exact(stale[0]["check"], "attempts")
+    exact("incomplete" in stale[0]["detail"], True)
+    exact(any("stale" in line for line in ran), True)
 
 
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health}
