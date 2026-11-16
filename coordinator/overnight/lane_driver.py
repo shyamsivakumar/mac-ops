@@ -223,7 +223,9 @@ def act_on_pr(repo, number, ledger):
                      "--gate-thread", gate["threadId"]])
             except subprocess.CalledProcessError as exc:
                 output = ((exc.output or "") + (exc.stderr or "")).strip()
-                if not re.fullmatch(r"[^\n]*issue[^\n]*already closed[^\n]*", output, re.IGNORECASE):
+                if exc.returncode != 1 or not re.fullmatch(
+                        r"(?:gh failed \(error\): )?(?:[!✓] )?Issue [^\n]+ is already closed\.?",
+                        output):
                     raise
                 result = f"already-closed:{ref}"
                 ledger[result] = output
