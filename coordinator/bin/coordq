@@ -454,7 +454,10 @@ def action_key_record(queue, key):
     else:
         item_id, state = record, None
     if item_id is None:
-        return None
+        # A record without an item id cannot be read. The key stays held:
+        # a held key costs one refused start, while a released key sends
+        # the same board action twice.
+        return {"id": None, "state": "dispatched"}
     return {"id": item_id, "state": action_key_state(queue, item_id, state)}
 
 
@@ -491,10 +494,12 @@ def action_key_state(queue, item_id, state=None):
     """
     if state in {"queued", "reserved", "dispatched"}:
         return state
-    if any(item.get("id") == item_id for item in queue.get("items", [])):
-        return "queued"
-    if str(item_id) in (queue.get("reserved") or {}):
-        return "reserved"
+    if item_id is not None:
+        wanted = str(item_id)
+        if any(str(item.get("id")) == wanted for item in queue.get("items", [])):
+            return "queued"
+        if wanted in (queue.get("reserved") or {}):
+            return "reserved"
     return "dispatched"
 
 
@@ -521,9 +526,11 @@ def cmd_start(a):
         if key:
             record = action_key_record(queue, key)
             if record is not None:
+                where = (f"as coordq #{record['id']}" if record.get("id") is not None
+                         else "with an unreadable queue item")
                 die(f"refused: the action key {key} is already "
-                    f"{action_key_state(queue, record['id'], record.get('state'))} "
-                    f"as coordq #{record['id']}")
+                    f"{action_key_state(queue, record.get('id'), record.get('state'))} "
+                    f"{where}")
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
         if key:
             item["actionKey"] = key
