@@ -735,16 +735,66 @@ eval to fail, so missing fix dispatches cannot produce a passing result.
 
 ### Turncap eval (Refs #377)
 
-`overnight turncap [--dry-run]` delegates to the canonical handler at
-`~/Code/coordinator/loop/turn_cap.py`. The repository adapter contains no
-turncap policy and does not install or modify that external runtime.
-Imports are inert until the command or fixture explicitly loads the handler.
+`overnight turncap [--dry-run]` uses the owned `turn_cap.py` installed in
+`~/.local/bin`. The launchd plist uses the same installed script. The old
+`~/Code/coordinator/loop/turn_cap.py` remains untouched for rollback.
 
-`overnight selftest` exercises that handler with intercepted T3 calls,
-filesystem writes, clock and sleep. Threshold expectations, wait/resume
-accounting and preserved attempts remain strict. The negative control mutates
-the canonical handler threshold in memory and must fail the same assertions.
-The external source is required; missing source is FAIL. The old canonical
-policy fails these expectations; no passing canonical acceptance is claimed.
-Source availability and revision are external dependencies. Device, handset
-and live-service testing are waived, not failed.
+`overnight selftest` intercepts T3 calls, filesystem writes, clock and sleep.
+It checks per-run clocks, heavy-wait pauses, warnings after 10 active minutes,
+and interruption and parking after 20 active minutes. Attempts stay unchanged.
+Its planted early-interrupt negative control must fail the same assertions.
+
+### Turncap gate receipts (Refs #397)
+
+These command outputs were captured from the implementation reviewed in PR #398.
+No real install or launchctl mutation was performed.
+
+Command: `timeout 300 heavy env PYTHONPATH="$PWD/coordinator/overnight" overnight selftest`
+
+```text
+PASS start-routing
+PASS gate-pipeline
+PASS no-parking
+PASS turncap
+```
+
+Command: `timeout 300 python3 install_coordinator.py install --dry-run`
+
+```json
+{
+  "action": "coordinator",
+  "would_write": [
+    "/Users/shyamsivakumar/.local/bin/turn_cap.py",
+    "/Users/shyamsivakumar/Library/LaunchAgents/dev.coordinator.turncap.plist"
+  ],
+  "would_retire": [],
+  "would_reload": [
+    "dev.coordinator.turncap"
+  ],
+  "overnight_root": "/Users/shyamsivakumar/Code/coordinator/.overnight",
+  "would_create": []
+}
+```
+
+The installer's read-only `render_plists` preview decodes to:
+
+```text
+/Users/shyamsivakumar/Library/LaunchAgents/dev.coordinator.turncap.plist
+['/usr/bin/python3', '/Users/shyamsivakumar/.local/bin/turn_cap.py']
+```
+
+The installed payload and plist argument reference the same script.
+Device, handset and live-service testing were waived by Shyam, not failed.
+Live installation and behavior are unverified; the coordinator owns installation.
+
+### Active run interruption safety (Refs #397)
+
+Turncap skips reads with no running run or no running start timestamp.
+Completed runs and thread update timestamps cannot supply the cap clock.
+Interrupt requests include the observed `runId`, so a replacement run is not
+selected by a thread-only interrupt. The selftest requires that identity on
+both threshold and heavy-wait interruption paths; timing assertions are unchanged.
+
+Focused intercepted-call probes passed for empty and completed-only reads
+(no interruption), and selection of the running identity beside completed history.
+Device, handset and live-service testing remain waived, not failed.
