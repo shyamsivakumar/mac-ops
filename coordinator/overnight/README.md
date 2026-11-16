@@ -892,3 +892,21 @@ pass against live services is therefore waived, not failed. It was not run.
 The controlled subprocess probe above remains local evidence only; it does
 not establish live-service behavior. No runtime change is required for this
 finding. Installation and live behavior remain unverified.
+
+#### Repeatable offline dry-pass proof
+
+Run `python3 coordinator/overnight/proofs/item_failure.py`. The proof executes
+the complete driver main in a child process with DRY enabled. It relocates
+hardcoded filesystem paths into a temporary directory and supplies executable
+gh, ticket and t3mcp fixtures through PATH. No driver function is mocked or
+replaced. The ticket executable plants the reported gate-brief exit 2.
+
+The one-failure case logs the failing PR once, processes its successor and
+the remaining repositories, then exits nonzero with failures=1. The all-fail
+case logs all five attempted PRs and exits nonzero with failures=5. Command
+receipts assert that Concerning is never touched. The dry ledger is not written;
+temporary commands and files are removed after both passes.
+
+This is offline process evidence, not live-service evidence. Device, handset
+and live-service testing remain waived, not failed. No claim is made that a
+dry pass against live services was performed.
