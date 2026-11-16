@@ -503,20 +503,86 @@ def stage_todo(candidate):
     return [name for name in names if name.startswith("stage:")] == [STAGE]
 
 
+def live_lane_repositories(config):
+    occupied = set()
+    try:
+        with open(path("dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+    except FileNotFoundError:
+        receipts = {}
+    cursor = None
+    while True:
+        args = {"allProjects": True, "limit": 100, "statuses": LIVE_STATUSES,
+                "includeSubagents": False}
+        if cursor is not None:
+            args["cursor"] = cursor
+        code, out = call("t3_thread_list", args)
+        if code:
+            raise RuntimeError("cannot read live lane threads")
+        result = json.loads(out)
+        for thread in result["threads"]:
+            identities = [key for key, value in receipts.items()
+                          if value == thread["threadId"]]
+            identities.append(str(thread.get("clientRequestId") or ""))
+            for repo, settings in config["repos"].items():
+                title = str(thread.get("title") or "")
+                prefix = settings.get("key", "") + "-"
+                if (any(re.match(r"(?:ticket|gate):" + re.escape(repo) + r"#\d+:", key)
+                        for key in identities)
+                        or (settings.get("key") and title.startswith(prefix))):
+                    occupied.add(repo)
+        next_cursor = result.get("nextCursor")
+        if next_cursor is None:
+            return occupied
+        if cursor is not None and next_cursor <= cursor:
+            raise RuntimeError("live lane pagination did not advance")
+        cursor = next_cursor
+
+
+def lane_candidates(rows, occupied):
+    def order(row):
+        names = [label["name"] if isinstance(label, dict) else str(label)
+                 for label in row.get("labels") or []]
+        priorities = [int(name.split(":")[1]) for name in names
+                      if re.fullmatch(r"priority:\d+", name)]
+        section = re.search(r"(?im)^## Blocked by\s*\n(.*?)(?=^## |\Z)",
+                            row.get("body") or "", re.S)
+        blockers = [int(n) for n in re.findall(r"#(\d+)", section.group(1))] if section else []
+        return (min(priorities, default=999), tuple(blockers), row["number"],
+                row["repository"]["nameWithOwner"])
+
+    busy = set(occupied)
+    for row in rows:
+        names = [label["name"] if isinstance(label, dict) else str(label)
+                 for label in row.get("labels") or []]
+        if "stage:started" in names:
+            busy.add(row["repository"]["nameWithOwner"])
+    selected = []
+    for row in sorted(rows, key=order):
+        repo = row["repository"]["nameWithOwner"]
+        if repo not in busy and stage_todo(row):
+            selected.append(row)
+            busy.add(repo)
+    return selected
+
+
 def board_candidates():
-    """The open stage:todo issues of the repos in tickets.json, oldest first."""
     with open(TICKETS_CONFIG) as f:
         cfg = json.load(f)
-    repos = set(cfg["repos"])
-    owners = sorted({repo.split("/")[0] for repo in repos})
-    found = {}
-    for owner in owners:
-        for row in search_stage_todo(owner):
-            repo = row["repository"]["nameWithOwner"]
-            if repo in repos and stage_todo(row):
-                found[(repo, row["number"])] = row
-    return sorted(found.values(),
-                  key=lambda r: (r["createdAt"], r["repository"]["nameWithOwner"], r["number"]))
+    occupied = live_lane_repositories(cfg)
+    rows = []
+    for repo in cfg["repos"]:
+        run = subprocess.run(["gh", "api", "--paginate", "--slurp",
+                              f"repos/{repo}/issues?state=open&per_page=100"],
+                             capture_output=True, text=True, timeout=40)
+        if run.returncode:
+            raise RuntimeError(f"open issue snapshot failed for {repo}")
+        for page in json.loads(run.stdout):
+            for row in page:
+                if "pull_request" not in row:
+                    rows.append({**row, "repository": {"nameWithOwner": repo},
+                                 "updatedAt": row["updated_at"]})
+    return lane_candidates(rows, occupied)
 
 
 def ticket_start(repo, number, dry_run):
