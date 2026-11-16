@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bin"))
 from tick_health import tick_alarm
+from hourly_selftest import tick_selftest
 
 HOME = Path.home()
 COORD_DIR = HOME / "Code/coordinator"
@@ -299,6 +300,7 @@ def main() -> int:
         log("skipped: another tick holds the lock")
         return 0
     try:
+        log(f"overnight selftest: {tick_selftest()}")
         if not model_available(env):
             log(f"WAITING: {MODEL} is not available on the provider")
             return 75

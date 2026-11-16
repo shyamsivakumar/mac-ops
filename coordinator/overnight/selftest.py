@@ -453,7 +453,77 @@ def turncap(early_interrupt=False):
         raise AssertionError("; ".join(failures))
 
 
+def hourly_selftest_fixture():
+    loader = importlib.machinery.SourceFileLoader("fixture_coord_tick", str(ROOT.parent / "pi/bin/coord-tick"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    tick = importlib.util.module_from_spec(spec)
+    loader.exec_module(tick)
+    actions = []
+    with patch.object(tick, "tick_alarm", return_value=""), \
+         patch.object(tick, "child_env", return_value={}), \
+         patch.object(tick.signal, "signal"), \
+         patch.object(tick, "take_lock", return_value=123), \
+         patch.object(tick.fcntl, "flock"), patch.object(tick.os, "close"), \
+         patch.object(tick, "log"), \
+         patch.object(tick, "tick_selftest", side_effect=lambda: actions.append("selftest") or "PASS"), \
+         patch.object(tick, "model_available", side_effect=lambda env: actions.append("model") or False), \
+         patch.object(tick, "run_tick", side_effect=AssertionError("live tick forbidden")):
+        exact(tick.main(), 75)
+        exact(actions, ["selftest", "model"])
+    import tempfile
+    import hourly_selftest as adapter
+    from types import SimpleNamespace
+    with tempfile.TemporaryDirectory() as directory:
+        state = Path(directory) / "state.json"
+        decisions = Path(directory) / "decisions.json"
+        decisions.write_text(json.dumps({"items": [{"id": "unrelated"}]}))
+        now = [10000]
+        calls = []
+        outcome = [SimpleNamespace(returncode=0, stdout="".join("PASS " + name + "\n" for name in sorted(adapter.EXPECTED)))]
+
+        def runner(command, **options):
+            exact(command, ["fixture-only"])
+            exact(options, {"capture_output": True, "text": True, "timeout": 120, "check": False})
+            calls.append(command)
+            if isinstance(outcome[0], Exception):
+                raise outcome[0]
+            return outcome[0]
+
+        def run():
+            return adapter.hourly(state, decisions, ["fixture-only"], clock=lambda: now[0], runner=runner)
+
+        exact(run(), "PASS")
+        exact(json.loads(state.read_text()), {"last_run": 10000, "passed": True})
+        exact(run(), "not-due")
+        exact(len(calls), 1)
+        now[0] += 3599
+        exact(run(), "not-due")
+        for failure in (SimpleNamespace(returncode=1, stdout="FAIL watchdog\n"),
+                        subprocess.TimeoutExpired("fixture", 120), OSError("fixture"),
+                        SimpleNamespace(returncode=0, stdout="PASS invented\n")):
+            now[0] += 3600
+            outcome[0] = failure
+            exact(run(), "FAIL")
+            exact([item["id"] for item in json.loads(decisions.read_text())["items"]],
+                  ["unrelated", adapter.ALARM])
+            exact(run(), "not-due")
+        now[0] += 3600
+        outcome[0] = SimpleNamespace(returncode=0, stdout="".join("PASS " + name + "\n" for name in sorted(adapter.EXPECTED)))
+        exact(run(), "PASS")
+        exact(json.loads(decisions.read_text()), {"items": [{"id": "unrelated"}]})
+        with patch.object(adapter, "hourly", return_value="PASS"):
+            outcome[0] = SimpleNamespace(returncode=1, stdout="FAIL watchdog\n")
+            now[0] += 3600
+            try:
+                exact(run(), "FAIL")
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("negative control accepted unconditional PASS")
+
+
 def watchdog():
+    hourly_selftest_fixture()
     import lane_driver as lane
     import os
     import time
