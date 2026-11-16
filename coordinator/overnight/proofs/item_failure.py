@@ -34,7 +34,10 @@ args = sys.argv[1:]
 with open(os.environ["PROOF_COMMAND_LOG"], "a") as log:
     log.write(json.dumps([name] + args) + "\n")
 if name == "gh" and args == ["api", "rate_limit"]:
-    print(json.dumps({"resources": {k: {"remaining": 9000} for k in ("core", "graphql")}}))
+    if os.environ.get("PROOF_EXHAUST_AFTER") == "1" and Path(os.environ["PROOF_EXHAUST_MARKER"]).exists():
+        print(json.dumps({"resources": {k: {"remaining": 0} for k in ("core", "graphql")}}))
+    else:
+        print(json.dumps({"resources": {k: {"remaining": 9000} for k in ("core", "graphql")}}))
 elif name == "gh" and args[:2] == ["pr", "list"]:
     repo = args[args.index("-R") + 1]
     numbers = [90001, 90002] if repo.endswith("/mac-ops") else [90003]
@@ -49,6 +52,8 @@ elif name == "ticket" and args[:1] == ["gate"]:
     if args[1].endswith("#90001") or os.environ.get("PROOF_ALL_FAIL") == "1":
         print("planted gate refusal")
         sys.exit(2)
+    if os.environ.get("PROOF_EXHAUST_AFTER") == "1" and args[1].endswith("#90002"):
+        Path(os.environ["PROOF_EXHAUST_MARKER"]).write_text("exhausted")
     print("offline gate brief " + "a" * 40)
 elif name == "t3mcp":
     print('{"threads":[]}')
@@ -64,28 +69,44 @@ else:
         driver.write_text(SOURCE.read_text().replace("/Users/shyamsivakumar", str(home))
                           + "\nDRY = True\nmain()\n")
         log = root / "commands.jsonl"
+        marker = root / "exhausted"
         env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
-                   PROOF_COMMAND_LOG=str(log))
-        for all_fail in (False, True):
+                   PROOF_COMMAND_LOG=str(log), PROOF_EXHAUST_MARKER=str(marker))
+        cases = (("one item fails", False, False),
+                 ("all items fail", True, False),
+                 ("the API budget stops after an item failed", False, True))
+        for label, all_fail, exhaust in cases:
             log.write_text("")
+            marker.unlink(missing_ok=True)
             result = subprocess.run([sys.executable, str(driver)], env=dict(
-                env, PROOF_ALL_FAIL="1" if all_fail else "0"),
+                env, PROOF_ALL_FAIL="1" if all_fail else "0",
+                PROOF_EXHAUST_AFTER="1" if exhaust else "0"),
                 capture_output=True, text=True, timeout=60)
-            print("CASE", "all items fail" if all_fail else "one item fails")
+            print("CASE", label)
             print(result.stdout, end="")
             assert result.returncode != 0, result.stderr
             expected = 5 if all_fail else 1
             assert f"lane pass completed with {expected} item failures" in result.stderr
             errors = [line for line in result.stdout.splitlines() if line.startswith("ITEM ERROR")]
             assert len(errors) == expected, (len(errors), result.stdout, result.stderr)
+            first = errors[0]
+            assert f"repo={REPOS[0]}" in first, first
+            assert "item=90001" in first, first
+            assert "exit=2" in first, first
+            assert "output='planted gate refusal'" in first, first
+            assert "ticket gate" in first and "--print-brief" in first, first
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             gates = [call[2] for call in calls if call[:2] == ["ticket", "gate"]]
             assert gates.index(REPOS[0] + "#90001") < gates.index(REPOS[0] + "#90002")
-            assert REPOS[-1] + "#90003" in gates
             assert "Concerning" not in log.read_text()
             assert "ITEM SUMMARY failures=" + str(expected) in result.stdout
             assert not (coordinator / "loop/lanes-ledger.json").exists()
-            print("PASS: later items and lanes processed; nonzero health; Concerning untouched")
+            if exhaust:
+                assert "API BUDGET" in result.stdout, result.stdout
+                assert REPOS[-1] + "#90003" not in gates, gates
+            else:
+                assert REPOS[-1] + "#90003" in gates
+            print("PASS: " + label + "; nonzero health; Concerning untouched")
     print("PASS: temporary plant and sandbox removed")
 
 
