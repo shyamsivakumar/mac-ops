@@ -881,3 +881,14 @@ and main-refresh scheduling use that list. No installed lane configuration is
 changed until installation. A controlled dry-pass probe with a real subprocess
 exit 2 processed the following PR and all remaining lanes, then reported failure.
 Live-service verification is waived for ticket #407.
+
+#### Ticket #407 gate receipt
+
+The gate at 94f6a66ce7655b7d2473c6aebd4350445f988645 found no concrete code
+defect and failed only for missing live dry-pass evidence. The coordinator's
+gate-response instruction explicitly waives device, handset and live-service
+testing, including findings asking only for live results. The real driver dry
+pass against live services is therefore waived, not failed. It was not run.
+The controlled subprocess probe above remains local evidence only; it does
+not establish live-service behavior. No runtime change is required for this
+finding. Installation and live behavior remain unverified.
