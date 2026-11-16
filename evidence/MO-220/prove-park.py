@@ -21,18 +21,28 @@ What it proves:
    decision that was waiting stays, and the failure is logged,
 6. a problem that is still there is written once, not once a cycle,
 7. a ticket the filter drops for an open question in the coordinator's
-   decisions log is parked: it is a decision the shift cannot make.
+   decisions log is parked: it is a decision the shift cannot make,
+8. a quoted request that holds a fence of its own cannot break the
+   morning report: the fence that quotes it is longer than any fence in
+   the request and the parser closes it only on the exact delimiter,
+9. a parking step that raises SystemExit does not end the shift cycle:
+   the cycle's own report is still written,
+10. a request that carries its answer is not parked: the shift does not
+   wait for an answer that already came.
 
 Run it from the mac-ops checkout:
 
     python3 evidence/MO-220/prove-park.py
 """
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -140,6 +150,15 @@ def decisions_of(out):
     return "\n".join(lines).strip()
 
 
+def load_overnight():
+    """Return the shift's own module, loaded from its script path."""
+    loader = importlib.machinery.SourceFileLoader("overnight_t10", str(OVERNIGHT))
+    spec = importlib.util.spec_from_loader("overnight_t10", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as work:
         work = Path(work)
@@ -207,6 +226,105 @@ def main() -> int:
         check(
             "approve lines A-C" not in section,
             "the quoted request overrode the decision's own recommendation",
+        )
+
+        # 8: a quoted request that holds a fence of its own.
+        fenced = FIXTURES / "fenced-request.json"
+        threads = {
+            "mcp:launch:t10-fenced": json.loads(
+                (FIXTURES / "threads-fenced.json").read_text()
+            )
+        }
+        env = park_env(work / "fenced", threads)
+        records = work / "records-8"
+        (records / "inbox").mkdir(parents=True)
+        code, out, err = park(env, fenced, records)
+        check(code == 0, f"the fenced park exited {code}: {err.strip()}")
+        lot = (records / "inbox" / "parking-lot.md").read_text()
+        print("=== 8: the quoted request holds a fence of its own ===")
+        print(lot.strip())
+        check(
+            "a default inside the request" in lot,
+            "the request text was not parked exactly",
+        )
+        code, out, err = report(env, records)
+        section = decisions_of(out)
+        print("=== 8: the report reads the fenced quote as one decision ===")
+        print(section)
+        numbered = [
+            line
+            for line in section.splitlines()
+            if line.strip()[:1].isdigit() and line.strip()[1:2] == "."
+        ]
+        check(
+            len(numbered) == 1,
+            f"the report does not name exactly one decision: {numbered}",
+        )
+        check(
+            "the request stays unanswered" in section,
+            "the quoted fence overrode the decision's own default",
+        )
+        check(
+            "a default inside the request" not in section,
+            "the quoted fence became a field of the decision",
+        )
+        check(
+            "a recommendation inside the request" not in section,
+            "the quoted fence became the decision's recommendation",
+        )
+
+        # 9: a parking step that raises SystemExit does not end the cycle.
+        module = load_overnight()
+        source = OVERNIGHT.read_text()
+        check(
+            source.count("def park_cycle(") == 1,
+            "the module holds more than one park_cycle, so a later one "
+            "replaces the one that catches SystemExit",
+        )
+
+        def refuse(args):
+            raise SystemExit(2)
+
+        original = module.cmd_park
+        module.cmd_park = refuse
+        try:
+            module.park_cycle(work / "records-9", time.monotonic() + 30)
+            ended = False
+        except SystemExit:
+            ended = True
+        finally:
+            module.cmd_park = original
+        print("=== 9: the parking step cannot end the cycle ===")
+        check(
+            not ended,
+            "a parking step that raised SystemExit ended the shift cycle",
+        )
+
+        # 10: a request that carries its answer is not parked.
+        answered_payload = FIXTURES / "answer-payload-request.json"
+        threads = {
+            "mcp:launch:t10-answer-payload": json.loads(
+                (FIXTURES / "threads-answer-payload.json").read_text()
+            )
+        }
+        env = park_env(work / "payload", threads)
+        records = work / "records-10"
+        (records / "inbox").mkdir(parents=True)
+        code, out, err = park(env, answered_payload, records)
+        lot_path = records / "inbox" / "parking-lot.md"
+        lot = lot_path.read_text() if lot_path.exists() else ""
+        print("=== 10: a request that carries its answer is not parked ===")
+        check(
+            code != 0,
+            "the shift parked a request that was already answered",
+        )
+        check(
+            "MO-225" not in lot,
+            "the answered request is in the parking lot",
+        )
+        check(
+            "holds no pending request" in (out + err),
+            f"the command did not say why it parked nothing: {out}{err}",
         )
 
         # 3 and 5: a request whose text cannot be read, and a thread that

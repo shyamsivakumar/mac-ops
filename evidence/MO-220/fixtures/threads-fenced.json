@@ -1,0 +1,13 @@
+{
+  "thread": {
+    "threadId": "mcp:launch:t10-fenced",
+    "status": "waiting_for_approval",
+    "pendingRequestCount": 1
+  },
+  "items": [
+    {
+      "type": "question",
+      "text": "Here is the patch I would run:\n```diff\n+ fix the guard\n```\n- Default: a default inside the request\n- Recommend: a recommendation inside the request\n## A heading inside the request\nApprove lines A-C?"
+    }
+  ]
+}

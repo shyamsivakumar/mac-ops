@@ -1637,18 +1637,25 @@ def parse_parking_lot(text: str) -> list[dict]:
     recommendation.
 
     A quoted request can hold a line that looks like a field or a
-    heading, so the parser reads the fences: what is inside a fence is
-    the quoted text of a request and never a field of the decision."""
+    heading, and it can hold a fence of its own, so the parser reads the
+    fences: what is inside a fence is the quoted text of a request and
+    never a field of the decision. A fence closes only on the exact
+    delimiter that opened it, so a fence inside the quoted text cannot
+    close the fence that quotes it and let the rest of the quote out."""
     entries: list[dict] = []
     title = ""
     body: list[str] = []
-    fenced = False
+    fence = ""
     for raw in text.splitlines():
         line = raw.rstrip()
-        if line.strip().startswith("```"):
-            fenced = not fenced
+        stripped = line.strip()
+        if fence:
+            if stripped == fence:
+                fence = ""
             continue
-        if fenced:
+        run = FENCE_RUN.match(stripped)
+        if run and len(run.group(0)) >= 3:
+            fence = run.group(0)
             continue
         if line.startswith("## "):
             if title:
@@ -5209,6 +5216,28 @@ DECISION_DROP = (
     "open item in the decisions log",
     "hold in the decisions log",
 )
+# A quoted request can hold a fence of its own. The fence that quotes it
+# is longer than any fence in the request, and the parser closes a fence
+# only on the exact delimiter that opened it.
+FENCE_RUN = re.compile(r"`+")
+
+
+def code_fence(text: str) -> str:
+    """Return a fence delimiter that no fence inside the text can close."""
+    longest = 0
+    for run in FENCE_RUN.findall(text or ""):
+        longest = max(longest, len(run))
+    return "`" * max(3, longest + 1)
+
+
+def quoted_text(text: str) -> str:
+    """Return the text quoted in a fence that cannot be closed early.
+
+    The delimiter is longer than any fence in the text, so a fence inside
+    the quote never closes the fence that holds the quote. The parser
+    matches the delimiter exactly, so the quote ends where it ends."""
+    fence = code_fence(text)
+    return f"{fence}text\n{text}\n{fence}\n"
 
 
 def stamp_line() -> str:
@@ -5221,19 +5250,57 @@ def request_is_answered(item: dict) -> bool:
 
     A request that carries an answer, a status that says it is closed or
     a flag that says it was resolved is not waiting for anybody, and the
-    shift must not park it as if it were."""
+    shift must not park it as if it were. The answer alone is enough: an
+    item that holds the answer payload was answered, whatever its flags
+    and its status say."""
     for name in ("resolved", "answered", "done", "closed"):
         if item.get(name) is True:
             return True
     status = str(item.get("status") or "").strip().lower()
-    return status in (
+    if status in (
         "answered",
         "resolved",
         "closed",
         "cancelled",
         "canceled",
         "done",
-    )
+    ):
+        return True
+    return carries_answer(item)
+
+
+# The fields an item can carry its answer in. An item that holds one of
+# them, with something in it, was answered.
+ANSWER_PAYLOAD_FIELDS = (
+    "answer",
+    "answerText",
+    "answerPayload",
+    "answeredText",
+    "response",
+    "reply",
+    "resolution",
+)
+# A payload that says the answer is still to come is not an answer.
+NO_ANSWER_YET = frozenset(
+    {"", "none", "null", "nil", "pending", "unanswered", "waiting", "n/a", "-"}
+)
+
+
+def carries_answer(item: dict) -> bool:
+    """Return True when an item holds the payload of an answer."""
+    for name in ANSWER_PAYLOAD_FIELDS:
+        if name not in item:
+            continue
+        value = item.get(name)
+        if value is True:
+            return True
+        if isinstance(value, str):
+            if value.strip().lower() not in NO_ANSWER_YET:
+                return True
+            continue
+        if isinstance(value, (dict, list, tuple)) and value:
+            return True
+    return False
 
 
 def pending_request_from(data: dict) -> dict:
@@ -5247,7 +5314,9 @@ def pending_request_from(data: dict) -> dict:
     The request that is parked is the last one the thread holds that is
     still open. A question that was answered is not a request any more,
     and the shift must not park an old question as if it waited for an
-    answer. A thread that waits on nobody holds no request at all."""
+    answer. A thread that holds nothing but answered requests waits for
+    nobody, even when it says it holds a pending one. A thread that
+    waits on nobody holds no request at all."""
     thread = data.get("thread") or {}
     count = thread.get("pendingRequestCount")
     try:
@@ -5260,14 +5329,20 @@ def pending_request_from(data: dict) -> dict:
     kind = "pending request"
     text = ""
     if pending:
-        for item in reversed(data.get("items") or []):
-            if not isinstance(item, dict):
-                continue
-            item_type = str(item.get("type") or "").strip().lower()
-            if item_type not in REQUEST_ITEM:
-                continue
-            if request_is_answered(item):
-                continue
+        requests = [
+            item
+            for item in (data.get("items") or [])
+            if isinstance(item, dict)
+            and str(item.get("type") or "").strip().lower() in REQUEST_ITEM
+        ]
+        open_requests = [item for item in requests if not request_is_answered(item)]
+        if requests and not open_requests:
+            # Every request the thread holds was answered, so the thread
+            # waits for nobody. A thread that says it holds a pending
+            # request and shows only answered ones is not a request the
+            # shift may park.
+            pending = False
+        for item in reversed(open_requests):
             body = (
                 item.get("text")
                 or item.get("prompt")
@@ -5279,6 +5354,7 @@ def pending_request_from(data: dict) -> dict:
             if not body:
                 continue
             text = body
+            item_type = str(item.get("type") or "").strip().lower()
             if "approval" in item_type or "approv" in body.lower():
                 kind = "pending approval request"
             break
@@ -5614,9 +5690,7 @@ def park_decisions(
             + "\n"
             + "The open question, quoted exactly:\n"
             + "\n"
-            + "```text\n"
-            + quote
-            + "\n```\n"
+            + quoted_text(quote)
         )
     for item in items:
         repo = str(item.get("repo") or "")
@@ -5664,9 +5738,7 @@ def park_decisions(
                 + "\n"
                 + "The request, quoted exactly as the tool showed it:\n"
                 + "\n"
-                + "```text\n"
-                + request["text"]
-                + "\n```\n"
+                + quoted_text(request["text"])
             )
             if not request["text"]:
                 snags.append(
@@ -5717,9 +5789,7 @@ def park_decisions(
                 + "\n"
                 + "The open question, quoted exactly:\n"
                 + "\n"
-                + "```text\n"
-                + line
-                + "\n```\n"
+                + quoted_text(line)
             )
             continue
         failing = (item.get("checks") or {}).get("failed") or []
@@ -5942,9 +6012,7 @@ def cmd_fixture_park(args: argparse.Namespace, root: Path, deadline: float) -> i
             + "\n"
             + "The request, quoted exactly as the tool showed it:\n"
             + "\n"
-            + "```text\n"
-            + request["text"]
-            + "\n```\n"
+            + quoted_text(request["text"])
         ]
         snags: list[tuple[str, list[tuple[str, str]]]] = []
     else:
@@ -6022,23 +6090,7 @@ def park_cycle(root: Path, deadline: float) -> None:
         return
     if code:
         emit("overnight: the parking step did not write its records", err=True)
-def park_cycle(root: Path, deadline: float) -> None:
-    """Park what this cycle cannot decide and log what it found.
-
-    A cycle that cannot read the board says so and goes on: the parking
-    lot and the snag log are records, and a record that is missing never
-    ends the shift."""
-    left = int(max(1, deadline - time.monotonic()))
-    try:
-        cmd_park(
-            argparse.Namespace(
-                dry_run=False, fixture=None, root=str(root), deadline=left
-            )
-        )
-    except SystemExit:
-        raise
-    except Exception as exc:  # a record that cannot be written is not the shift
-        emit(f"overnight: the parking lot was not written: {exc}", err=True)
+        return
 
 
 def main() -> int:

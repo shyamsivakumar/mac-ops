@@ -118,6 +118,42 @@ The live dry run (`park-live-dry-run.log`) shows the same command on the
 real board: nothing is parked today, and the problems the shift found
 (items whose builder is over its hard budget) are logged.
 
+## The gate round (PR #435, VERDICT: FAIL at 3055473)
+
+The gate on the first head of this PR found two major defects and marked
+the earlier answer-payload finding as partly unresolved. All three are
+fixed here.
+
+1. **Major, the duplicate `park_cycle`.** The module held two
+   `park_cycle` definitions. The second one overrode the corrected one
+   and rethrew `SystemExit`, so a parking step that raised `SystemExit`
+   ended the shift cycle before its morning report. The duplicate is
+   removed and the module now holds exactly one. The proof counts the
+   definitions in the module's own source and drives the one definition
+   with a `cmd_park` that raises `SystemExit`: the cycle ends without
+   the exception.
+2. **Major, the fence of a quoted request.** The parser toggled on every
+   triple-backtick line, so a request that carries a fence of its own
+   let the lines after it out of the fence: a quoted `Default:`,
+   `Recommend:` or heading became a field of the decision and the
+   morning report was corrupted. The fence that quotes a request is now
+   longer than any fence inside it (`code_fence`), and the parser closes
+   a fence only on the exact delimiter that opened it (`parse_parking_lot`).
+   The proof parks a request that carries its own fence and shows that
+   the report still names one decision with its own default and its own
+   recommendation.
+3. **Answered requests (the earlier finding, partly resolved).** An
+   item that carries the answer itself, with no flag and no status that
+   says so, was parked as if it waited for an answer. `carries_answer`
+   now reads the answer payload (`answer`, `answerText`, `answerPayload`,
+   `answeredText`, `response`, `reply`, `resolution`), and a thread that
+   holds nothing but answered requests waits for nobody, so nothing is
+   parked. The proof parks a request that carries its answer and shows
+   that the shift parks nothing and says why.
+
+Device, handset and live-service testing is waived (Shyam, 2026-11-14).
+No device or live case was run, so none failed.
+
 ## The reviewer round
 
 One in-session reviewer round ran over the diff (`gpt-6.1-sol`, high
@@ -151,7 +187,8 @@ effort). It found eight defects, all fixed in this branch:
   local check): passed.
 - `python3 coordinator/overnight/overnight selftest`: all 12 fixture
   evals pass.
-- `python3 evidence/MO-220/prove-park.py`: passed (seven cases).
+- `python3 evidence/MO-220/prove-park.py`: passed (ten cases, including
+  the three the gate round found).
 - `python3 -m pytest tests/ -q`: 286 pass, 2 fail. Both failures are
   pre-existing on this branch's base and are unrelated to this part:
   `tests/test_gatekeep_retry_limit.py::NonAstraGateTest::test_a_dead_opus_gate_is_not_requeued`

@@ -1,0 +1,14 @@
+{
+  "thread": {
+    "threadId": "mcp:launch:t10-answer-payload",
+    "status": "waiting_for_approval",
+    "pendingRequestCount": 1
+  },
+  "items": [
+    {
+      "type": "question",
+      "text": "Approve running `python3 scripts/mac_ops_fast_check.py`?",
+      "answer": "Approved by Shyam at 05:00. Go ahead."
+    }
+  ]
+}

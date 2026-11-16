@@ -1,3 +1,4 @@
+overnight: the parking lot was not written: 2
 === 1 and 2: the pending approval is parked, the answered question is not ===
 # Parking lot
 
@@ -12,7 +13,7 @@ its exact text and left alone.
 - Ticket: MO-220
 - Kind: pending approval request
 - Thread: mcp:launch:t10-answered
-- Parked at: 2026-11-16 05:42 AM PT
+- Parked at: 2026-11-16 05:54 AM PT
 - Default: the request stays unanswered and the item stays parked
 - Recommend: answer the request in the morning; the shift never answers one
 - Next: Shyam answers the request, and the shift works the item again
@@ -26,6 +27,43 @@ Approve running `python3 scripts/mac_ops_fast_check.py`?
 ## Decisions for you (one at a time, each with my recommendation)
 
 1. MO-222 (#190) · Overnight T10: a request that holds markdown — Recommend: answer the request in the morning; the shift never answers one. Default if you say nothing: the request stays unanswered and the item stays parked
+=== 8: the quoted request holds a fence of its own ===
+# Parking lot
+
+The decisions the shift could not make. Each entry names the default
+that applies when Shyam says nothing and a recommendation. The shift
+never answers an approval request: a pending request is parked with
+its exact text and left alone.
+
+## MO-224 (#192) · Overnight T10: a request that holds a fence
+
+- Repo: shyamsivakumar/mac-ops
+- Ticket: MO-224
+- Kind: pending approval request
+- Thread: mcp:launch:t10-fenced
+- Parked at: 2026-11-16 05:54 AM PT
+- Default: the request stays unanswered and the item stays parked
+- Recommend: answer the request in the morning; the shift never answers one
+- Next: Shyam answers the request, and the shift works the item again
+
+The request, quoted exactly as the tool showed it:
+
+````text
+Here is the patch I would run:
+```diff
++ fix the guard
+```
+- Default: a default inside the request
+- Recommend: a recommendation inside the request
+## A heading inside the request
+Approve lines A-C?
+````
+=== 8: the report reads the fenced quote as one decision ===
+## Decisions for you (one at a time, each with my recommendation)
+
+1. MO-224 (#192) · Overnight T10: a request that holds a fence — Recommend: answer the request in the morning; the shift never answers one. Default if you say nothing: the request stays unanswered and the item stays parked
+=== 9: the parking step cannot end the cycle ===
+=== 10: a request that carries its answer is not parked ===
 === 3: a request whose text cannot be read is still parked ===
 # Parking lot
 
@@ -40,7 +78,7 @@ its exact text and left alone.
 - Ticket: MO-221
 - Kind: pending request
 - Thread: mcp:launch:t10-unreadable
-- Parked at: 2026-11-16 05:42 AM PT
+- Parked at: 2026-11-16 05:54 AM PT
 - Default: the request stays unanswered and the item stays parked
 - Recommend: answer the request in the morning; the shift never answers one
 - Next: Shyam answers the request, and the shift works the item again
@@ -61,7 +99,7 @@ its exact text and left alone.
 - Repo: shyamsivakumar/strategy-replay-workbench
 - Ticket: SRW-1055
 - Kind: open item in the decisions log — a decision the shift cannot make
-- Parked at: 2026-11-16 05:42 AM PT
+- Parked at: 2026-11-16 05:55 AM PT
 - Default: the ticket stays as it is and the shift does not work it
 - Recommend: answer the open question in the decisions log, and the shift works the ticket
 - Next: Shyam answers, and the shift works the ticket
