@@ -1127,9 +1127,9 @@ def cmd_gatekeep(a):
                         continue
                     current = {"instanceId": thread.get("providerInstanceId"),
                                "model": thread.get("model")}
+                    if current != ASTRA_MODEL:
+                        continue
                     if quota_failure(data):
-                        if current != ASTRA_MODEL:
-                            continue
                         model = fallback_reviewer(queue, key, current, event.get("builderModels", []))
                         if model is None:
                             if not a.dry_run:
