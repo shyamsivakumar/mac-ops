@@ -844,3 +844,23 @@ started-state history, cross-repository PR references, and periodic loop wiring.
 The command reports defects and does not repair or mutate the board. Live
 service checks are waived for this ticket; fixture evidence proves the supplied
 snapshot boundary, not live GitHub state.
+
+### Eval 8: api-budget (Refs #381)
+
+The canonical lane driver caches a successful board snapshot for five passes.
+The first pass collects it; passes 6 and 11 refresh it. The persisted pass
+counter replaces the former 900-second cache so rapid passes cannot exceed
+the budget. An older snapshot without a pass marker refreshes once.
+
+`overnight selftest` exercises the actual snapshot, start, quota and main
+handlers with canned subprocess responses, clock and file handles. It checks
+exact read counts across eleven passes, at most three refused dry-runs per
+repo, suppression at 1799 seconds and retry at 1800 seconds, both quota
+resources below the floor, reads at the floor, and usage logging on normal
+and quota-aborted passes. A one-pass refresh negative control must fail.
+All eight registered evals pass; evals 9 through 12 are not registered.
+
+Verification: `overnight selftest` and `python3 scripts/mac_ops_fast_check.py`.
+No live service, installed loop or cutover is exercised. Left for later:
+failed snapshot collection retries, quota endpoint failures, and end-to-end
+live pass telemetry. The coordinator owns installation and the Opus gate.
