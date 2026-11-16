@@ -815,7 +815,8 @@ def recover_dead_runs(ledger):
             if unknown_open_pr:
                 print(f"DEAD {thread_id}: coordinator needed, open PR head cannot be compared")
                 continue
-            worktrees = run(["git", "worktree", "list", "--porcelain"])
+            worktrees = run(["git", "-C", "/Users/shyamsivakumar/Code/" + PATHS[repo],
+                             "worktree", "list", "--porcelain"])
             if not any(line == f"worktree {path}" for line in worktrees.splitlines()):
                 print(f"DEAD {thread_id}: coordinator needed, worktree is unavailable")
                 continue

@@ -20,3 +20,7 @@ DEAD mcp:2bfaf463-f73b-42ec-8caf-8121cb672b09: settle, linked PR closed (model c
 ## Left for later
 
 The Astra staging run has no ticket dispatch receipt, linked PR, or recorded worktree. It cannot safely satisfy the required existing_worktree relaunch. The coordinator must identify its original checkout and work identity. Consequently the acceptance requirement that every real dead run print settle or relaunch is not fully met. No live thread was relaunched or settled during verification. Installation remains the coordinator's action after merge.
+
+## Gate fix
+
+The final gate found that worktree discovery used the lane driver's current repository. Recovery now runs git with `-C` against the target lane's canonical repository from the existing PATHS map. The existing recovery fixture checks the complete git invocation. The minor unmapped staging-run limitation remains under Left for later above. Device, handset, owner and live-service testing are waived, not failed.

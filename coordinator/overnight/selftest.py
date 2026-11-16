@@ -193,7 +193,9 @@ def dead_run_recovery():
         raise AssertionError(f"unexpected T3 call {tool}")
 
     def run(cmd):
-        if cmd[:3] == ["git", "worktree", "list"]:
+        if cmd[0] == "git":
+            exact(cmd, ["git", "-C", "/Users/shyamsivakumar/Code/" + lane.PATHS[repo],
+                        "worktree", "list", "--porcelain"])
             return "worktree /tmp/fixture-worktree\n"
         launches.append(json.loads(cmd[2]))
         return "fixture-relaunch"
