@@ -657,6 +657,8 @@ def board_integrity():
 
 
 def api_budget():
+    from live_smoke import fixture as live_fixture
+    live_fixture()
     import datetime as dt
     import lane_driver as lane
     from unittest.mock import mock_open
