@@ -192,6 +192,26 @@ commands were re-run at the final head with the same results. Device,
 handset and live-service cases remain WAIVED, not failed. Live watcher
 activation and authenticated service behavior remain unverified.
 
+### In-session reviewer round
+
+One read-only reviewer round ran on the fix-round head. It confirmed the
+scope claim (`coordinator/bin/coordq` is unchanged from the merge base), that
+the fixture change removes no assertion and that the new case really pins the
+non-Astra no-requeue behavior, and that both local checks pass. It raised one
+major: a rate-limit storm emits one event per matching line, so the output
+floods and the state file reaches the 8 MiB cap after roughly 85 chunks, after
+which the documented `state exceeds byte limit` failure repeats every cycle.
+
+That behavior is what #345 specifies: rate-limit and traceback events fire
+exactly once per event identity, and an event identity is one matching line.
+Collapsing a storm to one event per log per cycle would change that contract
+and the replay proof, so the ticket decides it and the behavior stays. The
+consequences are now stated in docs/coord-watch.md: one event per matching
+line, one identity per line in the state file, and the visible failure at the
+8 MiB cap. The same reviewer noted that the overview paragraph still said the
+command never schedules another cycle; the paragraph now describes the default
+foreground loop and `--once`.
+
 ## Left for later
 
 Live watcher activation and authenticated service behavior remain unverified.
