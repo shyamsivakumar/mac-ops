@@ -219,6 +219,8 @@ def dead_run_recovery():
     # gate chain (Shyam 2026-11-17).
     exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.1-sol",
                                "title": "MO-2 gate findings"}, False), lane.GLM)
+    exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.1-sol",
+                               "title": "MO-42 Fix preview rendering"}, True), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6-luna",
                                "title": "MO-3 build"}, True), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.2-astra",
