@@ -890,27 +890,38 @@ def watchdog():
     d = json.load(open(p))
     present = any(i.get("id") == "factory-watchdog" for i in d["items"])
     d["items"] = [i for i in d["items"] if i.get("id") != "factory-watchdog"]
+    state = alarms.load_state()
     if stale:
         cause = "; ".join(stale)
-        if alarms.decide(d, "factory-watchdog", cause, present) == "quiet":
+        action = alarms.decide(state, "factory-watchdog", cause, present)
+        if action == "quiet":
             # The alarm was answered or routed, so the same cause stays
             # quiet for four hours. The tick still says what it did not
             # raise, and the board holds no item for it.
             print("WATCHDOG quiet: " + cause)
+        elif action == "hold":
+            # The item went off the board. One tick is not proof that the
+            # coordinator routed it, so the tick writes no item and asks
+            # again on the next tick.
+            print("WATCHDOG held: " + cause)
         else:
             print("WATCHDOG " + cause)
-            alarms.raised(d, "factory-watchdog", cause)
+            alarms.raised(state, "factory-watchdog", cause)
             d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
                                "title": "Factory job stopped or failing: " + cause,
                                "cause": alarms.cause_of(cause),
                                "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
     else:
-        # The alarm is not true any more, so its keys go and the same
-        # cause can alarm again the next time it is true.
-        alarms.forget(d, "factory-watchdog")
+        # The alarm is not true any more, so the same cause can alarm
+        # again the next time it is true. An acknowledgement that is
+        # still running keeps the key quiet.
+        alarms.gone(state, "factory-watchdog")
     d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     json.dump(d, open(p + ".tmp", "w"), indent=1)
     os.replace(p + ".tmp", p)
+    # The mute state is written after the board, so the state never says
+    # the alarm is on the board when the board does not hold it.
+    alarms.save_state(state)
 
 
 def zero_merge(snapshot):

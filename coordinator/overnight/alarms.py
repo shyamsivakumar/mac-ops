@@ -12,15 +12,22 @@ different cause is a different key, and it alarms at once. A muted alarm
 still logs one line per tick, so the shift's log says what it did not
 raise.
 
-The mute state lives in the board's own file, under "alarms", so the board
-and the shift read one state and the shift keeps no second list.
+The mute state lives in the shift's own records, under
+`run/mute-state.json` next to the stall state, and not in the board file:
+the coordinator rewrites the board file, and a board file that is
+rewritten must not take the mute with it.
 
-Two things mute a key. An explicit acknowledgement is a record in that
-map with an "acked" time and the "until" time the mute ends. A routed
-alarm is a key that was raised and whose board item is gone: the
-coordinator took the item off the board, so the key is muted from that
-moment. An alarm that is not true any more drops its keys, so the same
-cause can alarm again the next time it is true.
+Two things mute a key. An explicit acknowledgement is a record with the
+time it was given and the time the mute ends; the `alarms ack <alarm-id>`
+command writes it. A routed alarm is a key that was raised and whose
+board item stayed gone: the coordinator took the item off the board, so
+the key is muted from that moment. One tick of absence is not proof: the
+board has more than one writer and one of them can lose the item for a
+tick, so the alarm waits a tick before it believes it.
+
+An alarm that is not true any more drops its "raised" mark, so the same
+cause can alarm again the next time it is true, but an acknowledgement
+that is still running keeps the key quiet.
 """
 
 import datetime as dt
@@ -28,18 +35,22 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 # How long a key stays quiet after it was answered or routed.
 MUTE_SECONDS = 4 * 60 * 60
-# The key of the mute state inside the board file.
+# The key of the mute state inside the state file.
 STATE_KEY = "alarms"
 # The minutes of a quiet log and the minutes of a stuck run change on
 # every tick, so they are not part of the cause.
 VOLATILE = re.compile(r"\d+ min \(limit \d+\)|running \d+ min")
-# The board file, so the module can be used on its own.
-BOARD_FILE = os.environ.get(
-    "OVERNIGHT_BOARD", str(os.path.expanduser("~/Code/coordinator/decisions.json"))
+# The shift's own records: the mute state lives beside the stall state.
+MUTE_PATH = os.environ.get(
+    "OVERNIGHT_MUTE_STATE",
+    "/Users/shyamsivakumar/Code/coordinator/.overnight/run/mute-state.json",
 )
+# A tick that finds the alarm's item gone does not believe it at once.
+ABSENT_TICKS = 2
 
 
 def stamp(now=None):
@@ -74,88 +85,122 @@ def key_of(alarm_id, cause):
     return f"{alarm_id}|{cause_of(cause)}"
 
 
-def read(decisions):
-    """Return the mute state the board keeps."""
-    state = decisions.get(STATE_KEY) if isinstance(decisions, dict) else None
+def state_path():
+    """Return the path of the file that holds the mute state."""
+    return Path(MUTE_PATH)
+
+
+def load_state():
+    """Return the mute state the shift keeps.
+
+    A state that cannot be read is an empty state: every alarm is
+    measured again from this tick on."""
+    try:
+        text = state_path().read_text()
+    except OSError:
+        return {}
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {}
+    state = data.get(STATE_KEY) if isinstance(data, dict) else None
     return state if isinstance(state, dict) else {}
 
 
-def entry(decisions, key):
+def save_state(state):
+    """Write the mute state and return True when it went to the file.
+
+    The write is atomic, so a tick that reads while the state is being
+    written reads the old state or the new one, never half of one."""
+    path = state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.parent / f"{path.name}.tmp"
+        temporary.write_text(json.dumps({STATE_KEY: state}, indent=1) + "\n")
+        os.replace(temporary, path)
+    except OSError:
+        return False
+    return True
+
+
+def entry(state, key):
     """Return the record of one key, or an empty record."""
-    value = read(decisions).get(key)
+    value = state.get(key) if isinstance(state, dict) else None
     return value if isinstance(value, dict) else {}
 
 
-def until(decisions, key):
+def until(state, key):
     """Return the epoch second the key stays quiet until, or None."""
-    return moment(entry(decisions, key).get("until"))
+    return moment(entry(state, key).get("until"))
 
 
-def muted(decisions, key, now=None):
+def muted(state, key, now=None):
     """Return True when the key is quiet right now."""
-    stop = until(decisions, key)
+    stop = until(state, key)
     if stop is None:
         return False
     current = now or dt.datetime.now(dt.timezone.utc)
     return current.timestamp() < stop
 
 
-def acknowledge(decisions, key, now=None):
+def acknowledge(state, key, now=None):
     """Quiet one key for four hours and return the record it wrote.
 
     The acknowledgement is the answer: the key stays quiet until the four
     hours are over, and a different cause is a different key."""
     current = now or dt.datetime.now(dt.timezone.utc)
-    state = read(decisions)
-    record = dict(entry(decisions, key))
+    record = dict(entry(state, key))
     record["acked"] = stamp(current)
     record["until"] = stamp(current + dt.timedelta(seconds=MUTE_SECONDS))
     state[key] = record
-    decisions[STATE_KEY] = state
     return record
 
 
-def raised(decisions, alarm_id, cause, now=None):
+def raised(state, alarm_id, cause, now=None):
     """Record that the key is on the board and return the record it wrote.
 
     A raised key has no acknowledgement: the alarm is on the board and
     waits for an answer."""
     current = now or dt.datetime.now(dt.timezone.utc)
-    state = read(decisions)
     key = key_of(alarm_id, cause)
-    record = {"cause": cause_of(cause), "raised": stamp(current)}
-    state[key] = record
-    decisions[STATE_KEY] = state
-    return record
+    state[key] = {"cause": cause_of(cause), "raised": stamp(current), "absent": 0}
+    return state[key]
 
 
-def forget(decisions, alarm_id):
-    """Drop every key of one alarm and return the keys it dropped.
+def gone(state, alarm_id):
+    """Mark every key of one alarm as not true any more.
 
-    An alarm that is not true any more is over, so its keys go and the
-    same cause can alarm again the next time it is true."""
-    state = read(decisions)
+    The key keeps its acknowledgement, so an alarm that was answered
+    stays quiet for the rest of the four hours, but the "raised" mark
+    goes, so the same cause can alarm again when it is true again."""
     prefix = f"{alarm_id}|"
-    dropped = [key for key in state if key.startswith(prefix)]
-    for key in dropped:
-        del state[key]
-    if dropped:
-        decisions[STATE_KEY] = state
-    return dropped
+    for key in list(state or {}):
+        if not key.startswith(prefix):
+            continue
+        record = state[key]
+        if not isinstance(record, dict):
+            continue
+        record.pop("raised", None)
+        record["absent"] = 0
 
 
-def decide(decisions, alarm_id, cause, present, now=None):
-    """Return what the shift does with one alarm: "raise" or "quiet".
+def decide(state, alarm_id, cause, present, now=None):
+    """Return what the shift does with one alarm.
+
+    "raise" writes the board item, "quiet" writes nothing and mutes the
+    key for four hours, and "hold" writes nothing for this tick because
+    the board item went missing and one tick is not proof that the
+    coordinator routed it.
 
     The rule: a key that was answered or routed stays quiet for four
-    hours. A key that was raised and whose board item is gone was routed,
-    so it is muted from that moment. A key that was never raised, or whose
-    cause changed, is raised at once.
+    hours. A key that was raised and whose board item stayed gone was
+    routed. A key that was never raised, or whose cause changed, is
+    raised at once.
 
     `present` says whether the board holds the alarm's item right now."""
     current = now or dt.datetime.now(dt.timezone.utc)
     key = key_of(alarm_id, cause)
-    record = entry(decisions, key)
+    record = entry(state, key)
     if record.get("acked"):
         stop = moment(record.get("until"))
         if stop is not None and current.timestamp() < stop:
@@ -163,33 +208,24 @@ def decide(decisions, alarm_id, cause, present, now=None):
         # The four hours are over, so the alarm is raised again.
         return "raise"
     if record.get("raised") and not present:
-        acknowledge(decisions, key, current)
-        return "quiet"
+        count = int(record.get("absent") or 0) + 1
+        record["absent"] = count
+        state[key] = record
+        if count >= ABSENT_TICKS:
+            acknowledge(state, key, current)
+            return "quiet"
+        # The item was on the board and is gone. The board has more than
+        # one writer, and one of them can lose the item for a tick, so
+        # the alarm waits a tick before it believes it was routed.
+        return "hold"
+    if present:
+        record["absent"] = 0
+        state[key] = record
     return "raise"
 
 
-def board(path=None):
-    """Return the board file as a mapping, or an empty one."""
-    target = path or BOARD_FILE
-    try:
-        with open(target) as handle:
-            decisions = json.load(handle)
-    except (OSError, ValueError):
-        return {}
-    return decisions if isinstance(decisions, dict) else {}
-
-
-def write(decisions, path=None):
-    """Write the board file and return the path it went to."""
-    target = path or BOARD_FILE
-    with open(str(target) + ".tmp", "w") as handle:
-        json.dump(decisions, handle, indent=1)
-    os.replace(str(target) + ".tmp", str(target))
-    return str(target)
-
-
 def main(argv):
-    """Quiet one alarm on the board and print what it did.
+    """Quiet one alarm and print what it did.
 
     `alarms ack <alarm-id>` records the acknowledgement of every cause of
     that alarm, so the coordinator can answer an alarm without taking its
@@ -198,16 +234,17 @@ def main(argv):
     if len(argv) != 2 or argv[0] != "ack":
         sys.stderr.write("usage: alarms ack <alarm-id>\n")
         return 2
-    decisions = board()
-    state = read(decisions)
+    state = load_state()
     prefix = f"{argv[1]}|"
     keys = [key for key in state if key.startswith(prefix)]
     if not keys:
         sys.stderr.write(f"alarms: no raised key for {argv[1]}\n")
         return 1
     for key in keys:
-        acknowledge(decisions, key)
-    write(decisions)
+        acknowledge(state, key)
+    if not save_state(state):
+        sys.stderr.write("alarms: the mute state could not be written\n")
+        return 1
     print(f"alarms: {argv[1]} quiet for {MUTE_SECONDS // 3600} hours ({len(keys)} key(s))")
     return 0
 

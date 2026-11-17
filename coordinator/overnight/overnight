@@ -156,6 +156,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tick_health import tick_alarm
 
+import alarms
 import stall
 
 from typing import NoReturn
@@ -1455,6 +1456,10 @@ def cmd_shift(args: argparse.Namespace) -> int:
     now_pt = datetime.now(PT)
     stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
     root = report_root(args.root)
+    # The mute for the alarms lives in the shift's own records, beside
+    # the stall state, so a board file the coordinator rewrites cannot
+    # take the mute with it.
+    alarms.MUTE_PATH = str(root / "run" / "mute-state.json")
     if now_local.utcoffset() != now_pt.utcoffset():
         emit(
             "overnight: the Mac's clock is not on Pacific time, so the job "
@@ -1710,7 +1715,8 @@ def stall_records(
                 f"{event.get('idle')} ticks. The board was swept again and the "
                 "shift keeps running until every item is done or parked."
             )
-            target, action = stall.alert(reason, board)
+            cause = stall.alarm_cause(reason, state)
+            target, action = stall.alert(reason, cause, board)
             if action == "wrote":
                 if isinstance(state, dict):
                     stall.delivered(state)
@@ -1731,6 +1737,17 @@ def stall_records(
                     "cause",
                 )
                 written.append("the alarm stays quiet for the same cause")
+            elif action == "held":
+                # The alarm's item went off the board. One tick is not
+                # proof that the coordinator routed it, so the shift asks
+                # again on the next tick.
+                write_shift_line(
+                    root,
+                    f"stall: no board progress for {event.get('idle')} ticks; the "
+                    "board was swept again and the alarm's item is off the board, "
+                    "so the shift asks again on the next tick",
+                )
+                written.append("the alarm's item is off the board")
             else:
                 write_shift_line(
                     root,
