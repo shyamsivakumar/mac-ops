@@ -19,7 +19,8 @@ from pathlib import Path
 
 HOME = Path.home()
 LOGS = HOME / "Library/Logs/coordinator"
-QUEUE = HOME / "Code/coordinator/queue"
+COORD = HOME / "Code/coordinator"
+QUEUE = COORD / "queue"
 
 
 def age(path: Path) -> str:
@@ -65,14 +66,16 @@ def launchd(label: str) -> str:
 
 def main() -> int:
     checks = [
-        ("lanes", f"log age {age(LOGS / 'lanes.log')}"),
+        # The lane driver's log is the one loop/tick.md names:
+        # `loop/lanes.log`, in the coordinator's own folder.
+        ("lanes", f"loop/lanes.log age {age(COORD / 'loop' / 'lanes.log')}"),
         ("dispatch", f"last write age {age(QUEUE / 'dispatch.last')}"),
         ("overnight", f"log age {age(LOGS / 'overnight.log')}"),
         ("traceback", f"dispatch {tracebacks(QUEUE / 'dispatch.log')}"),
         ("gatekeep", f"traceback {tracebacks(QUEUE / 'gatekeep.log')}"),
         ("launchd", f"dev.coordinator.lanes {launchd('dev.coordinator.lanes')}"),
     ]
-    decisions = HOME / "Code/coordinator/decisions.json"
+    decisions = COORD / "decisions.json"
     try:
         items = len(json.loads(decisions.read_text()).get("items") or [])
         checks.append(("decisions", f"{items} item(s)"))
