@@ -5641,13 +5641,20 @@ def cmd_board(args: argparse.Namespace) -> int:
     bodies, unread, open_numbers = read_bodies(issues, deadline)
     decisions_path, lines = read_decisions()
     problems: list[str] = []
-    if unread:
-        problems.append(
-            "the ticket text of these repositories could not be read: "
-            + ", ".join(unread)
-        )
     if not lines:
         problems.append(f"the decisions log {decisions_path} could not be read")
+    # A repository whose ticket text could not be read is not on the board:
+    # its tickets cannot be classified, and a ticket that cannot be
+    # classified is never acted on. The repositories are named, so the tick
+    # says that it did not see them instead of working a board it did not
+    # read.
+    if unread:
+        emit(
+            "overnight: the ticket text of these repositories could not be "
+            "read, so they are not on the board: " + ", ".join(unread),
+            err=True,
+        )
+        issues = [issue for issue in issues if issue.get("repo") not in unread]
     kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
     if problems:
         for problem in problems:
@@ -5712,6 +5719,7 @@ def cmd_board(args: argparse.Namespace) -> int:
             "openPullRequests": pull_requests,
             "pullRequestsWithoutAGate": len(no_gate),
         },
+        "unreadRepositories": unread,
         "actions": actions,
         "groups": {name: len(bucket) for name, bucket in groups},
         "gates": {
