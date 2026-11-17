@@ -867,7 +867,7 @@ def _capacity_decision(helper, sample, census, compressor, previous, current, bo
     critical = _critical_pressure(helper, sample, load_proxy=valid)
     proposed = detail["target"]
     target = (0 if critical else max(floor, proposed) if valid
-              else min(max(current, floor), detail["ceiling"]))
+              else min(current, detail["ceiling"]))
     detail.update(floor=floor, critical=critical, adaptive_target=proposed, target=target)
     if critical:
         detail["reason"] = "critical_pressure"
@@ -1277,7 +1277,7 @@ def controller_tick(*, board_control=True, cfg=None):
             sample_usable = sample is not None and helper._sample_invalid_reason(sample, now_mono) is None
             critical = sample is not None and _critical_pressure(
                 helper, sample, load_proxy=sample_usable)
-            fallback_slots = 0 if critical else 2 if sample_usable else min(max(prior_capacity, 1), 2)
+            fallback_slots = 0 if critical else 2 if sample_usable else min(prior_capacity, 2)
             capacity_state = {"schema": 1, "boot_id": boot_id, "heavy_slots": fallback_slots,
                               "healthy_since_monotonic": None, "last_sample_monotonic": now_mono}
             payload = {"heavy_slots": fallback_slots, "updated_at": now_wall, "boot_id": boot_id}
@@ -1289,7 +1289,7 @@ def controller_tick(*, board_control=True, cfg=None):
     if payload is not None:
         atomic_json(CAPACITY, payload)
         atomic_json(CAPACITY_STATE, capacity_state)
-        if sample is not None and _critical_pressure(helper, sample, load_proxy=False):
+        if sample is not None and _critical_pressure(helper, sample):
             try:
                 entry["critical_curtailment"] = {"requested": helper.request_critical_pauses()}
             except Exception as exc:

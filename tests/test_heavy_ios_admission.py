@@ -108,6 +108,10 @@ class SmallHostAdmissionTests(unittest.TestCase):
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
         )
 
+    def test_the_simulator_credit_does_not_relax_the_pause_threshold(self):
+        reason = heavy._host_reason(sample(16, 1))
+        self.assertEqual(reason, "memory-headroom-or-swap-pressure")
+
     def test_the_simulator_credit_does_not_relax_a_large_host(self):
         reason = heavy.admission_block_reason(
             sample(48, 7),
@@ -174,8 +178,13 @@ class GovernorRecoveryTests(unittest.TestCase):
         self.assertEqual(detail["target"], 2)
         self.assertEqual(state["heavy_slots"], 2)
 
-    def test_a_telemetry_error_does_not_pin_the_governor_at_zero_slots(self):
+    def test_an_unreadable_sample_holds_the_capacity_it_has(self):
         state, detail = self.decide(0, sample(16, 5, captured=600.0))
+        self.assertEqual(detail["target"], 0)
+        self.assertEqual(state["heavy_slots"], 0)
+
+    def test_the_next_good_sample_restores_the_slots(self):
+        state, detail = self.decide(0, sample(16, 5))
         self.assertEqual(detail["target"], 2)
         self.assertEqual(state["heavy_slots"], 2)
 
@@ -221,7 +230,7 @@ class TelemetryGapTests(unittest.TestCase):
         )
         self.assertAlmostEqual(reading, 98.0)
 
-    def test_a_missing_cpu_reading_does_not_kill_running_work(self):
+    def test_a_missing_cpu_reading_still_counts_as_critical_pressure(self):
         gap = heavy.Sample(
             pressure_level=1, cpu_busy_pct=None, memory_used_pct=50.0,
             headroom_bytes=5 * heavy.GIB, physical_bytes=16 * heavy.GIB,

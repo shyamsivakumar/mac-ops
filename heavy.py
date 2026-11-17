@@ -63,6 +63,7 @@ JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
 SIMULATOR_DESTINATION_MARKER = "platform=iOS Simulator"
+SIMULATOR_RUNTIME_MARKER = "SimulatorRuntime"
 SIMULATOR_MEMORY_CREDIT_FRACTION = 0.125
 
 
@@ -496,9 +497,11 @@ def _simulator_process_bytes(
         rows.append((pid, ppid, rss, parts[3]))
     children: Dict[int, List[int]] = {}
     resident: Dict[int, int] = {}
-    for pid, ppid, rss, _command in rows:
+    commands: Dict[int, str] = {}
+    for pid, ppid, rss, command in rows:
         children.setdefault(ppid, []).append(pid)
         resident[pid] = rss
+        commands[pid] = command
     roots = [pid for pid, _ppid, _rss, command in rows if udid in command]
     if not roots:
         return 0
@@ -510,6 +513,9 @@ def _simulator_process_bytes(
         if pid in seen:
             continue
         seen.add(pid)
+        command = commands.get(pid, "")
+        if not (udid in command or SIMULATOR_RUNTIME_MARKER in command):
+            continue
         total += resident.get(pid, 0)
         stack.extend(children.get(pid, []))
     return total * 1024
@@ -1904,7 +1910,6 @@ def _host_reason(
     sample: Sample,
     load_high_count: int = 0,
     paused: bool = False,
-    allowance_bytes: int = 0,
 ) -> Optional[str]:
     if sample.pressure_level == CRITICAL_PRESSURE_LEVEL:
         return "critical-pressure"
@@ -1922,7 +1927,6 @@ def _host_reason(
         headroom_fraction=(
             HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
         ),
-        allowance_bytes=allowance_bytes,
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
     return None
@@ -2718,7 +2722,6 @@ def _supervise_running(
     workload = _workload_identity(record)
     if workload is None:
         raise HeavyError("workload identity missing")
-    memory_credit = int(record.get("memory_credit_bytes") or 0)
     pressure_since: Optional[float] = None
     healthy_since: Optional[float] = None
     last_pause_retry: Optional[float] = None
@@ -2781,19 +2784,14 @@ def _supervise_running(
                     now=deps.wall_clock(),
                     boot_id=deps.boot_reader(),
                 )
-                pressure_reason = _host_reason(
-                    sample, allowance_bytes=memory_credit
-                )
+                pressure_reason = _host_reason(sample)
                 resume_blocked = (
                     pressure_reason is None
-                    and _host_reason(
-                        sample, paused=True, allowance_bytes=memory_credit
-                    )
-                    is not None
+                    and _host_reason(sample, paused=True) is not None
                 )
             except Exception:
                 invalid_reason = "capacity-unavailable"
-        critical = sample is not None and critical_pressure(sample, load_proxy=False)
+        critical = sample is not None and critical_pressure(sample)
         unhealthy_reason = (
             "critical-pressure" if critical else (invalid_reason or pressure_reason)
         )
