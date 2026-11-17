@@ -413,3 +413,20 @@ class XcodebuildExclusionTests(unittest.TestCase):
         job_id, reason = self.reserve('only')
         self.assertIsNotNone(job_id)
         self.assertIsNone(reason)
+
+
+class SimulatorProcessOwnershipTests(unittest.TestCase):
+    """Only the simulator's own processes carry the credit."""
+
+    def rows(self):
+        return (
+            "  100     1     1 launchd_sim /Users/x/Library/Developer/CoreSimulator/Devices/UDID-1/data/x\n"
+            "   50    99     1 /private/var/run/cryptex/iPhoneOS.SimulatorRuntime-v1/SpringBoard\n"
+            "  900     2     1 tail -f /Users/x/Library/Developer/CoreSimulator/Devices/UDID-1/data/log\n"
+            "   10     3     1 /bin/sh -c something\n"
+        )
+
+    def test_only_the_device_launchd_and_its_runtime_count(self):
+        runner = lambda argv, timeout: self.rows()
+        credit = heavy._simulator_process_bytes("UDID-1", command_runner=runner)
+        self.assertEqual(credit, (100 + 50) * 1024)
