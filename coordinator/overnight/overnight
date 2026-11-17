@@ -172,6 +172,9 @@ DEFAULT_DEADLINE = 540
 # first call. The read gets a budget of its own, so a slow GitHub cannot
 # use the whole tick and leave the tick nothing to report with.
 BOARD_DEADLINE = 240
+# Where a skipped call is written down. The stderr of a read reaches the
+# caller, which may be a model; this file reaches the next reader.
+SKIP_LOG = Path.home() / "Library/Logs/coordinator/skips.log"
 PR_LIMIT = 100
 # The open issues of one repository, read for the marks a ticket body
 # carries. The board's tickets are a small part of that list.
@@ -715,11 +718,21 @@ def run(
         # hangs cannot hold the tick past the timeout it was given.
         end_group(process)
         if optional:
-            emit(
+            line = (
                 f"overnight: skipped {command} after {seconds}s "
-                f"(the call timed out)",
-                err=True,
+                f"(the call timed out)"
             )
+            emit(line, err=True)
+            # The skip is written down where it cannot be lost: the
+            # caller of a read may be a model, and a model may not
+            # repeat it.
+            try:
+                SKIP_LOG.parent.mkdir(parents=True, exist_ok=True)
+                with open(SKIP_LOG, "a") as stream:
+                    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+                    stream.write(f"{stamp} | skipped | {command} after {seconds}s\n")
+            except OSError:
+                pass
             return None
         die(f"{command} timed out")
     if process.returncode != 0:

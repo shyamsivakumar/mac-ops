@@ -1,13 +1,21 @@
-NOOP the board read skipped 8 calls; the other checks ran
+NOOP the board read skipped 8 calls; the other checks ran: lanes: log age 71s
 tick exit=0 elapsed=126s
 --- the tick log
-2026-11-17 09:19 PST | tick | overnight selftest: not-due
-2026-11-17 09:21 PST | tick | exit=0 reply=NOOP the board read skipped 8 calls; the other checks ran
+2026-11-17 09:30 PST | tick | overnight selftest: not-due
+2026-11-17 09:32 PST | tick | exit=0 reply=NOOP the board read skipped 8 calls; the other checks ran: lanes: log age 71s
 --- the calls the tick skipped
-overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp997tg8mk/blackhole/gh issue list -R digitized/Concerning --state open --limit 500 --json number,title,body after 60s (the call timed out)
-overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp997tg8mk/blackhole/gh issue list -R shyamsivakumar/mac-ops --state open --limit 500 --json number,title,body after 60s (the call timed out)
-overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmp997tg8mk/blackhole/gh issue list -R shyamsivakumar/CineJar --state open --limit 500 --json number,title,body after 60s (the call timed out)
+overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpuujk_765/blackhole/gh issue list -R shyamsivakumar/mac-ops --state open --limit 500 --json number,title,body after 60s (the call timed out)
+overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpuujk_765/blackhole/gh issue list -R shyamsivakumar/CineJar --state open --limit 500 --json number,title,body after 60s (the call timed out)
+overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpuujk_765/blackhole/gh issue list -R shyamsivakumar/recoup --state open --limit 500 --json number,title,body after 60s (the call timed out)
 --- skipped calls: 8
---- the rest of the tick's work
-the lanes pass and the jobs are alive
+--- the rest of the tick's work, read for real
+lanes: log age 71s
+dispatch: last write age 23s
+overnight: log age 218s
+traceback: dispatch 0
+gatekeep: traceback 0
+launchd: dev.coordinator.lanes state = not running
+decisions: 0 item(s)
+read at 2026-11-17 09:32 PST
+--- the checks that ran after the hung call: 5
 --- the tick finished under 600 seconds: True

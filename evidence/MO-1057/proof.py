@@ -13,6 +13,7 @@ rest of its work and replies.
 """
 import importlib.util
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -41,12 +42,14 @@ if [ "$1" = "--list-models" ]; then
 fi
 {board} > "$TICK_PROOF_DIR/board.out" 2> "$TICK_PROOF_DIR/board.err"
 skipped=$(grep -c '^overnight: skipped' "$TICK_PROOF_DIR/board.err")
-# The rest of the tick still runs after the hung call.
-echo "the lanes pass and the jobs are alive" > "$TICK_PROOF_DIR/other-work.txt"
+# The rest of the tick still runs after the hung call: the checks of
+# loop/tick.md that need no GitHub, read for real.
+{other_work} > "$TICK_PROOF_DIR/other-work.txt"
+lanes=$(grep '^lanes: ' "$TICK_PROOF_DIR/other-work.txt")
 if [ "$skipped" -gt 0 ]; then
-  echo "NOOP the board read skipped $skipped calls; the other checks ran"
+  echo "NOOP the board read skipped $skipped calls; the other checks ran: $lanes"
 else
-  echo "NOOP the board read was not skipped"
+  echo "NOOP the board read was not skipped; the other checks ran: $lanes"
 fi
 """
 
@@ -100,7 +103,8 @@ def main() -> int:
             agent = home / "pi"
             agent.write_text(
                 AGENT_TURN.format(
-                    board=f"{PYTHON} {OVERNIGHT} board --json --action"
+                    board=f"{PYTHON} {OVERNIGHT} board --json --action",
+                    other_work=f"{PYTHON} {ROOT / 'evidence/MO-1057/other_work.py'}",
                 )
             )
             agent.chmod(0o755)
@@ -130,14 +134,26 @@ def main() -> int:
             for line in skips[:3]:
                 print(line)
             print(f"--- skipped calls: {len(skips)}")
-            print("--- the rest of the tick's work")
-            print((home / "other-work.txt").read_text().rstrip())
+            print("--- the rest of the tick's work, read for real")
+            other = (home / "other-work.txt").read_text().rstrip()
+            print(other)
+            # The continuation is only proved when the other checks ran
+            # and read real values: a measured age, a counted traceback
+            # and the state of the launchd job.
+            measured = [
+                line
+                for line in other.splitlines()
+                if re.search(r"age \d+s", line)
+                or re.search(r"traceback \d+", line)
+                or line.startswith("launchd: ")
+            ]
             ok = (
                 elapsed < 600
                 and code == 0
                 and bool(skips)
-                and (home / "other-work.txt").exists()
+                and len(measured) >= 4
             )
+            print(f"--- the checks that ran after the hung call: {len(measured)}")
             print(f"--- the tick finished under 600 seconds: {ok}")
             return 0 if ok else 1
     finally:
