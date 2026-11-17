@@ -1281,13 +1281,16 @@ label of each job beside its log and its silence limit, and the watchdog asks
 launchd what the state of the job is.
 
 The signal is `launchctl print gui/<uid>/<label>`. A job that launchd holds
-and that exits clean is alive, whatever its log says, and the watchdog says so
+and that ends clean is alive, whatever its log says, and the watchdog says so
 in a `WATCH <job>: signal=launchd ...` line. A job that launchd no longer
-holds is stopped and alarms. A job whose last exit code is not zero is
-failing and alarms. A job that is still running past its limit is stuck and
-alarms. When launchd cannot say, the log age is the only evidence left and
-the old silence rule applies, so a watchdog that cannot read launchd does not
-silence a real alarm. The plists under `coordinator/launchd/` stay the source
+holds is stopped and alarms. A job whose last exit code is not zero, or that
+launchd killed with a signal, is failing and alarms. A job that is still
+running past its limit is stuck and alarms. When launchd cannot say, the log
+age is the only evidence left and the old silence rule applies, so a watchdog
+that cannot read launchd does not silence a real alarm. That fallback covers
+a launchctl that cannot run, a launchctl failure that is not a missing
+service, a job that never ran and so reports no exit code, and a running job
+that nobody can time. The plists under `coordinator/launchd/` stay the source
 of truth for which jobs exist, and the tick, dispatch and refill thresholds
 and the `dev.coordinator.*` schedules are unchanged.
 
@@ -1304,6 +1307,7 @@ the live board file and never installs anything.
 
 `overnight selftest` covers the same ground with a fake launchd and a fake
 clock: a stale log with a live job raises nothing, a stopped job, a failing
-job and a stuck job each raise one alarm that names the job, a launchd that
-cannot say falls back to the log age, and the item stays a single item over
+job, a job killed by a signal and a stuck job each raise one alarm that names
+the job, a launchd that cannot say or cannot be read falls back to the log
+age, the silence limit is a limit, and the item stays a single item over
 repeated passes.

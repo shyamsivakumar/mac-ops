@@ -663,16 +663,17 @@ def watchdog():
     mtimes = {path: now for path, _, _ in lane.WATCH.values()}
     decisions = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
     # The launchd state of every job, by label. None means launchd cannot
-    # say. "not-loaded" means the job is no longer held by launchd.
+    # run. "not-loaded" means the job is no longer held by launchd.
+    # "unreadable" means launchctl failed for another reason.
     jobs = {label: {"loaded": True, "runs": 12, "exit": 0, "running": False}
             for label in labels.values()}
     elapsed = {}
 
     class Result:
-        def __init__(self, returncode, stdout=""):
+        def __init__(self, returncode, stdout="", stderr=""):
             self.returncode = returncode
             self.stdout = stdout
-            self.stderr = ""
+            self.stderr = stderr
 
     def fake_run(cmd, **kwargs):
         if cmd[0] == "launchctl":
@@ -681,15 +682,24 @@ def watchdog():
             if spec is None:
                 raise OSError("launchctl is not available")
             if spec == "not-loaded":
-                return Result(113, "")
+                return Result(113, "", 'Could not find service "%s" in domain '
+                             'for user gui: 501\n' % label)
+            if spec == "unreadable":
+                return Result(1, "", "Operation not permitted\n")
             body = "\tstate = running\n" if spec["running"] else "\tstate = not running\n"
             if spec.get("pid"):
                 body += "\tpid = %d\n" % spec["pid"]
             body += "\truns = %d\n" % spec["runs"]
-            body += "\tlast exit code = %d\n" % spec["exit"]
+            if spec.get("exit") is not None:
+                body += "\tlast exit code = %d\n" % spec["exit"]
+            if spec.get("signal"):
+                body += "\tlast terminating signal = %d\n" % spec["signal"]
             return Result(0, body)
         if cmd[0] == "ps":
-            seconds = elapsed.get(int(cmd[-1]), 5)
+            pid = int(cmd[-1])
+            if pid not in elapsed:
+                raise OSError("ps is not available")
+            seconds = elapsed[pid]
             return Result(0, "%02d:%02d:%02d\n" % (seconds // 3600,
                                                    (seconds % 3600) // 60,
                                                    seconds % 60))
@@ -748,6 +758,16 @@ def watchdog():
                                     "failing (last exit code 1)"))
         exact("WATCHDOG" in output, True)
 
+        # A job that launchd killed with a signal never reports an exit
+        # code, and it is a dead job.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": None, "signal": 9,
+                                            "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "killed (last terminating signal 9)"))
+        exact("WATCHDOG" in output, True)
+
         # A job that is still running past its limit is stuck, whatever its
         # log says.
         jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 14, "exit": 0,
@@ -756,6 +776,16 @@ def watchdog():
         output = pass_once()
         exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
                                     "stuck (running 200 min, limit 120)"))
+        exact("WATCHDOG" in output, True)
+
+        # A job that is running and that nobody can time is not known to be
+        # healthy, so the log age decides and a stale log still alarms.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 14, "exit": 0,
+                                            "running": True, "pid": 5151}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "silent 200 min (limit 120)"))
+        exact("signal=log-age" in output, True)
         exact("WATCHDOG" in output, True)
 
         # The healthy job raises nothing, so the item goes away.
@@ -775,6 +805,41 @@ def watchdog():
                                     "(limit 120); dispatch silent 200 min (limit 10); "
                                     "lanes silent 200 min (limit 10)"))
         exact("signal=log-age" in output, True)
+        exact("WATCHDOG" in output, True)
+
+        # A launchctl failure that is not a missing service is a failure to
+        # read, not a stopped job, so the log age decides.
+        for label in labels.values():
+            jobs[label] = "unreadable"
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: tick silent "
+                                    "200 min (limit 65); gatekeep silent 200 min "
+                                    "(limit 120); dispatch silent 200 min (limit 10); "
+                                    "lanes silent 200 min (limit 10)"))
+        exact("signal=log-age" in output, True)
+
+        # A job that launchd holds but that never ran reports no exit code,
+        # so the log age decides and a fresh log raises nothing.
+        for label in labels.values():
+            jobs[label] = {"loaded": True, "runs": 0, "exit": None,
+                            "running": False}
+        for path in mtimes:
+            mtimes[path] = now
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+
+        # The silence limit is a limit: a log exactly at the limit is quiet
+        # enough, a log one minute past it is not.
+        jobs["dev.coordinator.gatekeep"] = None
+        mtimes[lane.WATCH["gatekeep"][0]] = now - limits["gatekeep"] * 60
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+        mtimes[lane.WATCH["gatekeep"][0]] = now - (limits["gatekeep"] + 1) * 60
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "silent 121 min (limit 120)"))
         exact("WATCHDOG" in output, True)
 
         for label in labels.values():
