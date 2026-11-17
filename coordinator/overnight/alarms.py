@@ -171,12 +171,11 @@ def locked():
     lands between the read and the replace of the other writer is lost.
     The lock is held across the whole read, merge and replace."""
     path = Path(str(MUTE_PATH) + ".lock")
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    except OSError:
-        yield
-        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A lock that cannot be taken is not a lock. A writer that cannot take
+    # it must fail its write, not write the file unlocked and take a
+    # concurrent acknowledgement with it.
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     handle = os.fdopen(descriptor, "r+")
     try:
         fcntl.flock(handle, fcntl.LOCK_EX)
@@ -212,8 +211,11 @@ def save_state(state):
     The file is read again under the lock and merged, so an
     acknowledgement that landed while the tick was running is kept, and
     no other writer can land one between that read and the replace."""
-    with locked():
-        return write_state(merge(load_state(), state))
+    try:
+        with locked():
+            return write_state(merge(load_state(), state))
+    except OSError:
+        return False
 
 
 def entry(state, key):
@@ -324,17 +326,21 @@ def main(argv):
         sys.stderr.write(USAGE)
         return 2
     key = key_of(argv[1], argv[2])
-    with locked():
-        state = load_state()
-        if key not in state:
-            sys.stderr.write(f"alarms: no raised key for {key}\n")
-            return 1
-        acknowledge(state, key)
-        if not write_state(merge(load_state(), state)):
-            # The acknowledgement did not reach the file, so the alarm
-            # will raise again on the next tick. The caller has to say so.
-            sys.stderr.write("alarms: the mute state could not be written\n")
-            return 3
+    try:
+        with locked():
+            state = load_state()
+            if key not in state:
+                sys.stderr.write(f"alarms: no raised key for {key}\n")
+                return 1
+            acknowledge(state, key)
+            if not write_state(merge(load_state(), state)):
+                # The acknowledgement did not reach the file, so the alarm
+                # will raise again on the next tick. The caller has to say so.
+                sys.stderr.write("alarms: the mute state could not be written\n")
+                return 3
+    except OSError as error:
+        sys.stderr.write(f"alarms: the mute state could not be locked: {error}\n")
+        return 3
     print(f"alarms: {key} quiet for {MUTE_SECONDS // 3600} hours")
     return 0
 

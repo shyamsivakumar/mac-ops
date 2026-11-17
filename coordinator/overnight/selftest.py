@@ -1964,6 +1964,17 @@ def alarm_mute():
             exact(alarms.muted(alarms.load_state(),
                                 alarms.key_of("factory-watchdog", cause), now), True)
 
+    # A lock that cannot be taken is not a lock: the write fails and the
+    # file is left alone, rather than written unlocked.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            state = alarms.load_state()
+            alarms.raised(state, "factory-watchdog", cause, now)
+            with patch.object(alarms.os, "open", side_effect=OSError("read-only")):
+                exact(alarms.save_state(state), False)
+            exact(alarms.load_state(), {})
+
     # The stall's cause names the stalled repos, so two stalls on
     # different repos are different causes.
     stalled = {"items": {"a/one#1": {"stalled": True}, "b/two#2": {"stalled": False}}}
@@ -2141,6 +2152,15 @@ def alarm_mute():
             output = pass_once(now + dt.timedelta(hours=4, minutes=13))
             exact(json.loads(board.read_text())["items"], [])
             exact("WATCHDOG quiet" in output, True)
+
+            # An alarm on the board always has a key: the key is written
+            # before the alarm is published, and a key that cannot be
+            # written stops the publication and is said out loud.
+            codes["code"] = 78
+            with patch.object(alarms, "save_state", return_value=False):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=14))
+            exact(json.loads(board.read_text())["items"], [])
+            exact("could not record the alarm key" in output, True)
 
 
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
