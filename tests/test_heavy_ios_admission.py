@@ -108,9 +108,23 @@ class SmallHostAdmissionTests(unittest.TestCase):
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
         )
 
-    def test_the_simulator_credit_does_not_relax_the_pause_threshold(self):
-        reason = heavy._host_reason(sample(16, 1))
+    def test_a_running_job_keeps_the_original_pause_threshold(self):
+        reason = heavy._host_reason(sample(16, 3))
         self.assertEqual(reason, "memory-headroom-or-swap-pressure")
+
+    def test_the_simulator_a_job_drives_is_credited_against_the_pause_threshold(self):
+        reason = heavy._host_reason(sample(16, 4), allowance_bytes=2 * heavy.GIB)
+        self.assertIsNone(reason)
+
+    def test_a_large_host_pause_threshold_is_unchanged(self):
+        self.assertEqual(
+            heavy.pause_headroom_bytes(48 * heavy.GIB),
+            max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
+        )
+        self.assertEqual(
+            heavy.pause_headroom_bytes(16 * heavy.GIB),
+            max(6 * heavy.GIB, int(16 * heavy.GIB * 0.125)),
+        )
 
     def test_the_simulator_credit_does_not_relax_a_large_host(self):
         reason = heavy.admission_block_reason(

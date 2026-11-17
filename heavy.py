@@ -371,6 +371,7 @@ def memory_load_block_reason(
     physical,
     headroom_fraction=HEADROOM_FRACTION,
     allowance_bytes: int = 0,
+    required_bytes: Optional[int] = None,
 ):
     """Return the reason memory blocks admission, or None."""
     if pressure == CRITICAL_PRESSURE_LEVEL:
@@ -395,11 +396,22 @@ def memory_load_block_reason(
     credit = 0
     if physical < SMALL_HOST_MEMORY_BYTES:
         credit = min(max(0, allowance_bytes), physical // 8)
-    if headroom + credit < required_headroom_bytes(
-        physical, headroom_fraction
-    ):
+    if required_bytes is None:
+        required_bytes = required_headroom_bytes(physical, headroom_fraction)
+    if headroom + credit < required_bytes:
         return "memory-headroom"
     return None
+
+
+def pause_headroom_bytes(
+    physical_bytes: int, headroom_fraction: float = PAUSE_HEADROOM_FRACTION
+) -> int:
+    """Return the headroom a running job needs, with the original rule.
+
+    A running job keeps the host's original pause threshold on every host;
+    only the headroom a job needs to start scales with the host's memory.
+    """
+    return max(MIN_HEADROOM_BYTES, int(physical_bytes * headroom_fraction))
 
 
 def required_headroom_bytes(
@@ -1910,6 +1922,7 @@ def _host_reason(
     sample: Sample,
     load_high_count: int = 0,
     paused: bool = False,
+    allowance_bytes: int = 0,
 ) -> Optional[str]:
     if sample.pressure_level == CRITICAL_PRESSURE_LEVEL:
         return "critical-pressure"
@@ -1927,6 +1940,8 @@ def _host_reason(
         headroom_fraction=(
             HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
         ),
+        required_bytes=pause_headroom_bytes(sample.physical_bytes),
+        allowance_bytes=allowance_bytes,
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
     return None
@@ -2722,6 +2737,7 @@ def _supervise_running(
     workload = _workload_identity(record)
     if workload is None:
         raise HeavyError("workload identity missing")
+    memory_credit = int(record.get("memory_credit_bytes") or 0)
     pressure_since: Optional[float] = None
     healthy_since: Optional[float] = None
     last_pause_retry: Optional[float] = None
@@ -2784,10 +2800,15 @@ def _supervise_running(
                     now=deps.wall_clock(),
                     boot_id=deps.boot_reader(),
                 )
-                pressure_reason = _host_reason(sample)
+                pressure_reason = _host_reason(
+                    sample, allowance_bytes=memory_credit
+                )
                 resume_blocked = (
                     pressure_reason is None
-                    and _host_reason(sample, paused=True) is not None
+                    and _host_reason(
+                        sample, paused=True, allowance_bytes=memory_credit
+                    )
+                    is not None
                 )
             except Exception:
                 invalid_reason = "capacity-unavailable"
