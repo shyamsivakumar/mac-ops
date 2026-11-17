@@ -1289,7 +1289,7 @@ def controller_tick(*, board_control=True, cfg=None):
     if payload is not None:
         atomic_json(CAPACITY, payload)
         atomic_json(CAPACITY_STATE, capacity_state)
-        if sample is not None and _critical_pressure(helper, sample):
+        if sample is not None and _critical_pressure(helper, sample, load_proxy=False):
             try:
                 entry["critical_curtailment"] = {"requested": helper.request_critical_pauses()}
             except Exception as exc:
