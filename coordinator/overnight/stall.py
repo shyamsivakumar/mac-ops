@@ -187,6 +187,21 @@ def delivered(state):
     return state
 
 
+def continues(state, cap=STALL_CAP):
+    """Return True when the board stall is still on.
+
+    The board is alerted once per episode and the flag says the alert was
+    delivered, so the rule stops asking. The shift keeps asking anyway:
+    the writer knows whether the alarm is due, it is quiet while the mute
+    runs, and it comes back when the four hours are over. Without this
+    the alarm could never come back during a stall that does not end."""
+    if not isinstance(state, dict):
+        return False
+    if not state.get("board_alerted"):
+        return False
+    return int(state.get("board_idle") or 0) >= cap
+
+
 def alarm_cause(reason, state):
     """Return the cause of the board stall: the reason and the stalled repos.
 

@@ -12,6 +12,16 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent
 
 
+def load_runner():
+    """Return the overnight runner as a module, so an eval runs the real path."""
+    path = ROOT / "overnight" if (ROOT / "overnight").is_file() else ROOT.parent / "overnight" / "overnight"
+    loader = importlib.machinery.SourceFileLoader("overnight_runner", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 def load_ticket():
     path = ROOT / "ticket" if (ROOT / "ticket").is_file() else ROOT.parent / "bin" / "ticket"
     loader = importlib.machinery.SourceFileLoader("fixture_ticket", str(path))
@@ -1879,6 +1889,12 @@ def alarm_mute():
             with contextlib.redirect_stderr(io.StringIO()):
                 exact(alarms.main(["ack", "factory-nothing"]), 1)
 
+    # The idle tick count is not part of a cause: the same stall reported
+    # on the fourth tick is the same stall as the one reported on the
+    # third, so it does not raise again inside the mute window.
+    exact(alarms.key_of("factory-overnight-stall", "no board progress for 3 ticks"),
+          alarms.key_of("factory-overnight-stall", "no board progress for 4 ticks"))
+
     # The stall's cause names the stalled repos, so two stalls on
     # different repos are different causes.
     stalled = {"items": {"a/one#1": {"stalled": True}, "b/two#2": {"stalled": False}}}
@@ -1900,7 +1916,7 @@ def alarm_mute():
             items = json.loads(board.read_text())["items"]
             exact(len(items), 1)
             exact(items[0]["id"], "factory-overnight-stall")
-            exact(items[0]["cause"], "no board progress for 3 ticks")
+            exact(items[0]["cause"], "no board progress for <ticks>")
             # The coordinator took the item off the board: the next tick
             # waits, and the tick after that mutes the key.
             data = json.loads(board.read_text())
@@ -1916,6 +1932,41 @@ def alarm_mute():
             target, action = rule.alert("the board stopped for another reason", None, board)
             exact(action, "wrote")
             exact(len(json.loads(board.read_text())["items"]), 1)
+
+    # The real path: the shift asks again on every tick of a stall that
+    # continues, so the alarm can come back when the four hours are over
+    # and the log says one line per tick.
+    runner = load_runner()
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        board = Path(scratch) / "decisions.json"
+        with patch.object(alarms, "MUTE_PATH", mute), \
+             patch.object(rule, "BOARD_FILE", str(board)):
+            board.write_text(json.dumps({"items": []}))
+            state = rule.new_state()
+            state["board_idle"] = 3
+            event = {"kind": "board", "idle": 3, "cap": 3}
+            written = runner.stall_records(Path(scratch), [event], str(board), state)
+            exact(len(written), 1)
+            items = [i for i in json.loads(board.read_text())["items"]
+                     if i["id"] == "factory-overnight-stall"]
+            exact(len(items), 1)
+            # The rule stops asking once the alert was delivered, and the
+            # shift asks anyway.
+            exact(rule.continues(state), True)
+            # The coordinator takes the item off the board.
+            data = json.loads(board.read_text())
+            data["items"] = []
+            board.write_text(json.dumps(data))
+            # The next tick has no event: the shift asks, and the alarm
+            # waits one tick before it believes it was routed.
+            runner.stall_records(Path(scratch), [], str(board), state)
+            exact(json.loads(board.read_text())["items"], [])
+            runner.stall_records(Path(scratch), [], str(board), state)
+            exact(json.loads(board.read_text())["items"], [])
+            # The shift's log says one line per tick.
+            log = (Path(scratch) / "run" / "shift-log.md").read_text()
+            exact(log.count("stall: no board progress"), 3)
 
     # The watchdog raises the alarm, and the same cause stays quiet after
     # the coordinator took the item off the board. A changed cause alarms

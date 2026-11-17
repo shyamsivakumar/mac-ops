@@ -22,6 +22,8 @@ touched.
 """
 import contextlib
 import datetime as dt
+import importlib.machinery
+import importlib.util
 import io
 import json
 from pathlib import Path
@@ -50,6 +52,12 @@ def clock_at(moment):
     return Clock
 
 
+def at(moment, fn, *args):
+    """Call a function with the clock at the given moment."""
+    with patch.object(dt, "datetime", clock_at(moment)):
+        return fn(*args)
+
+
 def items_of(board):
     """Return the board items of a board file."""
     return json.loads(board.read_text())["items"]
@@ -68,11 +76,19 @@ def take_off_the_board(board):
     board.write_text(json.dumps(data, indent=1))
 
 
-def stall_tick(board, cause, moment):
-    """Run one stall tick and return the action it took."""
-    with patch.object(dt, "datetime", clock_at(moment)):
-        target, action = rule.alert(REASON, cause, board)
-    return action
+def load_runner():
+    """Return the overnight runner as a module, so the proof runs the real path.
+
+    The runner is what decides to alert: it asks the writer on every tick
+    of a stall that continues, and the writer decides whether the alarm
+    is due. A proof that called the writer alone would skip exactly that.
+    """
+    loader = importlib.machinery.SourceFileLoader(
+        "overnight_runner", str(ROOT / "coordinator/overnight/overnight"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def watchdog_tick(board, exit_code, moment):
@@ -96,48 +112,63 @@ def watchdog_tick(board, exit_code, moment):
     return buffer.getvalue(), items_of(board)
 
 
-def replay_stall(board, cause):
-    """Replay the overnight stall alarm and print what happened."""
-    action = stall_tick(board, cause, NOW)
-    print(f"--- tick one: the shift raises the alarm ({action})")
+def replay_stall(board, runner):
+    """Replay the overnight stall alarm on the real path and print what happened.
+
+    The runner is the shift: it holds the stall state, it decides when to
+    ask, and it writes the shift log. The proof drives it the way a cycle
+    drives it: a board event on the first tick, and then a tick with no
+    event because the board has not moved since.
+    """
+    root = board.parent
+    state = rule.new_state()
+    state["board_idle"] = 3
+    event = {"kind": "board", "idle": 3, "cap": 3}
+    written = at(NOW, runner.stall_records, root, [event], str(board), state)
     alarms_on_board = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
+    print("--- tick one: the shift raises the alarm")
     print(f"factory-overnight-stall items: {len(alarms_on_board)}")
-    if action != "wrote" or len(alarms_on_board) != 1:
+    if len(alarms_on_board) != 1 or not written:
         print("FAIL the first tick did not raise the stall alarm")
         return False
     print("PASS the first tick raised the stall alarm")
 
     # The coordinator answers the alarm and takes its item off the board.
     take_off_the_board(board)
-    action = stall_tick(board, cause, NOW + dt.timedelta(minutes=3))
-    print(f"--- tick after the answer (+3 min): {action}")
-    if action != "held" or [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]:
+    at(NOW + dt.timedelta(minutes=3), runner.stall_records, root, [], str(board), state)
+    print("--- tick after the answer (+3 min)")
+    if [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]:
         print("FAIL the tick after the answer raised again")
         return False
-    action = stall_tick(board, cause, NOW + dt.timedelta(minutes=6))
-    print(f"--- the tick after that (+6 min): {action}")
-    if action != "quiet" or [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]:
+    at(NOW + dt.timedelta(minutes=6), runner.stall_records, root, [], str(board), state)
+    print("--- the tick after that (+6 min)")
+    if [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]:
         print("FAIL an acknowledged alarm raised again")
         return False
+    log = (root / "run" / "shift-log.md").read_text()
+    print(f"shift log lines: {log.count('stall: no board progress')}")
     print("PASS the next ticks wrote no item and no alert for the same cause")
 
     # A different cause is a different key and alarms at once. A stall on
     # other repos is a different cause.
-    other = rule.alarm_cause(REASON, {"items": {"a/other#9": {"stalled": True}}})
-    action = stall_tick(board, other, NOW + dt.timedelta(minutes=9))
-    print(f"--- a stall on other repos (+9 min): {action}")
+    state["items"] = {"a/other#9": {"stalled": True}}
+    at(NOW + dt.timedelta(minutes=9), runner.stall_records, root, [], str(board), state)
     items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
-    if action != "wrote" or len(items) != 1:
+    print(f"--- a stall on other repos (+9 min): {len(items)} item(s)")
+    if len(items) != 1:
         print("FAIL a changed cause did not alarm at once")
         return False
     print("PASS a changed cause alarmed at once")
 
     # The same cause comes back when the four hours are over.
+    state["items"] = {}
     take_off_the_board(board)
-    action = stall_tick(board, cause, NOW + dt.timedelta(hours=4, minutes=20))
-    print(f"--- the same cause after four hours: {action}")
+    later = NOW + dt.timedelta(hours=4, minutes=20)
+    at(later, runner.stall_records, root, [], str(board), state)
+    at(later, runner.stall_records, root, [], str(board), state)
     items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
-    if action != "wrote" or len(items) != 1:
+    print(f"--- the same cause after four hours: {len(items)} item(s)")
+    if len(items) != 1:
         print("FAIL the alarm did not come back after four hours")
         return False
     print("PASS the same cause alarmed again after four hours")
@@ -216,8 +247,8 @@ def main():
         board = root / "decisions.json"
         board.write_text(json.dumps({"items": []}, indent=1))
         alarms.MUTE_PATH = str(root / "mute-state.json")
-        cause = rule.alarm_cause(REASON, {"items": {"a/one#1": {"stalled": True}}})
-        if not replay_stall(board, cause):
+        runner = load_runner()
+        if not replay_stall(board, runner):
             return 1
         board.write_text(json.dumps({"items": []}, indent=1))
         if not replay_watchdog(board):

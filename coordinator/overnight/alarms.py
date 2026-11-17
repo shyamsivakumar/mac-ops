@@ -42,8 +42,12 @@ MUTE_SECONDS = 4 * 60 * 60
 # The key of the mute state inside the state file.
 STATE_KEY = "alarms"
 # The minutes of a quiet log and the minutes of a stuck run change on
-# every tick, so they are not part of the cause.
+# every tick, so they are not part of the cause. The idle tick count of a
+# stall is the same: a stall that is reported on the fourth tick is the
+# same stall as the one reported on the third.
 VOLATILE = re.compile(r"\d+ min \(limit \d+\)|running \d+ min")
+# The idle tick count of a stall changes with the tick it is reported on.
+VOLATILE_TICKS = re.compile(r"\d+ ticks")
 # The shift's own records: the mute state lives beside the stall state.
 MUTE_PATH = os.environ.get(
     "OVERNIGHT_MUTE_STATE",
@@ -77,7 +81,8 @@ def cause_of(text):
     every tick, so they are not part of the cause: the same quiet log is
     the same cause. The exit code and the signal are part of it: a job
     that fails with a new code is a new cause and alarms at once."""
-    return VOLATILE.sub("<time>", str(text or "")).strip()
+    cause = VOLATILE.sub("<time>", str(text or "")).strip()
+    return VOLATILE_TICKS.sub("<ticks>", cause)
 
 
 def key_of(alarm_id, cause):
