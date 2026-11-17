@@ -22,6 +22,12 @@ from xml.sax.saxutils import escape
 RECEIPT_NAME = "coordinator-installation.json"
 HOME_TOKEN = "@HOME@"
 CONFIG_FILES = ("AGENT-RULES.md", "hooks.json", "agents/code-reviewer.md", "tickets.json")
+# The board config belongs to the machine. The policy the coordinator runs
+# with is decided on the Mac, so the installed copy is the live file and the
+# repository copy is only the seed for a machine that has none. A local
+# policy edit is not installed drift, the status check does not report it
+# and an install never writes over it.
+LOCAL_CONFIG_FILES = ("tickets.json",)
 MODS_DIR = ".config/herdr-app/mods"
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
@@ -82,6 +88,8 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     items += [
         (root / "config" / name, home / ".coordinator" / name, 0o644)
         for name in CONFIG_FILES
+        if name not in LOCAL_CONFIG_FILES
+        or not (home / ".coordinator" / name).exists()
     ]
     items += [
         (root / "overnight" / name, home / ".local/bin" / name, 0o755)
@@ -865,6 +873,11 @@ def status(checkout: Path, coordinator: Path | None = None) -> None:
                 "smoke_checks": checks,
                 "differs": [str(t) for t, _, _ in pending],
                 "kept_local": [str(t) for t in kept],
+                "locally_owned": [
+                    str(home / ".coordinator" / name)
+                    for name in LOCAL_CONFIG_FILES
+                    if (home / ".coordinator" / name).exists()
+                ],
                 "overnight_root": str(overnight_root(coordinator)),
                 "overnight_missing": [str(d) for d in missing],
                 "retired_jobs": list(RETIRED_JOBS),
