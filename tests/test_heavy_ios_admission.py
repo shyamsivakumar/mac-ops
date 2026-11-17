@@ -1,4 +1,6 @@
 """iOS build admission tests cover small hosts and simulator-backed jobs."""
+import contextlib
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -228,3 +230,85 @@ class TelemetryGapTests(unittest.TestCase):
             physical_cores=10)
         self.assertFalse(heavy.critical_pressure(gap, load_proxy=False))
         self.assertTrue(heavy.critical_pressure(gap))
+
+
+class XcodebuildExclusionTests(unittest.TestCase):
+    """One xcodebuild runs at a time, whatever the slot count says."""
+
+    def setUp(self):
+        self.active = []
+        self.queues = []
+        self.registry = Mock()
+        self.registry.uid = 501
+        self.registry.directory = Path('/nonexistent-heavy-test')
+        self.registry.lock.side_effect = contextlib.nullcontext
+        self.registry.records.side_effect = lambda: list(self.active)
+        self.registry.create.side_effect = self.active.append
+        self.registry.remove_queue.side_effect = lambda qid: self.queues.__setitem__(
+            slice(None), [q for q in self.queues if q['queue_id'] != qid])
+        self.registry.update.side_effect = self.update
+        self.deps = heavy.SupervisorDeps(
+            monotonic_ns=lambda: 700_000_000_000, clock=lambda: 700,
+            wall_clock=lambda: 700, boot_reader=lambda: 'boot',
+            process_table_reader=lambda: {}, legacy_slots=lambda table: 0)
+        self.sample = sample(16, 5)
+        patches = {
+            '_legacy_draining': False, '_prune_finished_locked': None,
+            '_supervisor_identity': {'pid': os.getpid()},
+            '_identity_matches': True, '_read_capacity_config': {'heavy_slots': 2},
+            '_record_live': (True, True), '_signal_owned_group': True,
+            '_log_event': None,
+        }
+        for name, value in patches.items():
+            p = patch.object(heavy, name, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = patch.object(heavy, '_prune_queue_records_locked',
+                         side_effect=lambda *args: list(self.queues))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def update(self, jid, fn):
+        row = next(r for r in self.active if r['job_id'] == jid)
+        changed = fn(dict(row))
+        if changed is not None:
+            row.clear()
+            row.update(changed)
+        return changed
+
+    def running(self, key, command='xcodebuild'):
+        row = dict(job_id=key, task_key=key, task_id=key, role='ordinary',
+                   command_basename=command, state='running', created_ns=1,
+                   supervisor={'boot_id': 'boot'}, workload={'pid': 100})
+        self.active.append(row)
+        return row
+
+    def queue(self, key):
+        row = dict(queue_id=key, task_key=key, role='ordinary',
+                   created_ns=699_000_000_000, process={'pid': os.getpid()})
+        self.queues.append(row)
+        return row
+
+    def reserve(self, key, command='xcodebuild'):
+        return heavy._reserve_job(self.registry, key, key, command,
+                                  self.sample, self.deps, queue_id=key)
+
+    def test_a_second_xcodebuild_waits_for_the_first(self):
+        self.running('first')
+        self.queue('second')
+        job_id, reason = self.reserve('second')
+        self.assertIsNone(job_id)
+        self.assertEqual(reason, 'xcodebuild-busy')
+
+    def test_another_workload_may_start_beside_a_build(self):
+        self.running('first')
+        self.queue('other')
+        job_id, reason = self.reserve('other', command='check.sh')
+        self.assertIsNotNone(job_id)
+        self.assertIsNone(reason)
+
+    def test_a_build_starts_when_no_build_runs(self):
+        self.queue('only')
+        job_id, reason = self.reserve('only')
+        self.assertIsNotNone(job_id)
+        self.assertIsNone(reason)

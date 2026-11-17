@@ -2041,6 +2041,12 @@ def _reserve_job(
             row for row in records if row.get("state") not in ("complete", "removed")
         ]
         same_task = any(row.get("task_key") == task_key for row in active)
+        if command_basename == "xcodebuild" and any(
+            row.get("command_basename") == "xcodebuild" for row in active
+        ):
+            if ephemeral_queue:
+                registry.remove_queue(queue_id)
+            return None, "xcodebuild-busy"
         reason = admission_block_reason(
             sample,
             now=deps.clock(),
