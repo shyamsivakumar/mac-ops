@@ -709,6 +709,31 @@ WATCH = {"tick": ("/Users/shyamsivakumar/Library/Logs/coordinator/tick.log", 65,
          "lanes": ("/Users/shyamsivakumar/Library/Logs/coordinator/lanes.log", 10, "dev.coordinator.lanes")}
 
 
+def exit_status(text):
+    """Return the exit status of the last run: a code, or None when unknown.
+
+    launchd prints a plain code (`0`), a code with its name
+    (`78: EX_CONFIG`) and, for a job that never ran, `(never exited)`.
+    Anything that is not a number keeps the status unknown.
+    """
+    if text is None:
+        return None
+    match = re.match(r"\s*(-?\d+)", text)
+    return int(match.group(1)) if match else None
+
+
+def signal_status(text):
+    """Return the signal that ended the last run, or 0 when there was none.
+
+    launchd prints the number (`9`) and sometimes the name with it
+    (`Killed: 9`).
+    """
+    if text is None:
+        return 0
+    match = re.search(r"(\d+)\s*$", text)
+    return int(match.group(1)) if match else 0
+
+
 def launchd_state(label):
     """Return the launchd state of one job, or None when launchd cannot say.
 
@@ -734,11 +759,10 @@ def launchd_state(label):
         match = re.search(pattern, text, re.MULTILINE)
         return match.group(1) if match else None
 
-    exit_code = field(r"^\tlast exit code = (-?\d+)$")
     return {"loaded": True,
             "runs": int(field(r"^\truns = (\d+)$") or 0),
-            "exit_code": int(exit_code) if exit_code is not None else None,
-            "signal": int(field(r"^\tlast terminating signal = (\d+)$") or 0),
+            "exit_code": exit_status(field(r"^\tlast exit code = (.+)$")),
+            "signal": signal_status(field(r"^\tlast terminating signal = (.+)$")),
             "running": field(r"^\tstate = (.+)$") == "running",
             "pid": int(field(r"^\tpid = (\d+)$") or 0)}
 
@@ -811,11 +835,12 @@ def watchdog_signal(name, minutes, label, age, state):
         return "launchd", f"{name} stopped (launchd job {label} is not loaded)"
     if state["signal"]:
         return "launchd", f"{name} killed (last terminating signal {state['signal']})"
-    if state["exit_code"] is None:
-        return "log-age", silence_alarm(name, minutes, age)
     if state["exit_code"]:
         return "launchd", f"{name} failing (last exit code {state['exit_code']})"
     if state["running"] and state["pid"]:
+        # The job is running now, so it is alive whatever the last run left
+        # behind. Only a run that overruns its limit is a problem, and the
+        # exit status of an earlier run says nothing about this one.
         elapsed = process_seconds(state["pid"])
         if elapsed is None:
             # The job is running but nobody can say for how long, so the
@@ -823,6 +848,11 @@ def watchdog_signal(name, minutes, label, age, state):
             return "log-age", silence_alarm(name, minutes, age)
         if elapsed > minutes * 60:
             return "launchd", f"{name} stuck (running {elapsed // 60} min, limit {minutes})"
+        return "launchd", None
+    if state["exit_code"] is None:
+        # launchd does not say how the last run ended, so the log age is
+        # the only evidence left.
+        return "log-age", silence_alarm(name, minutes, age)
     return "launchd", None
 
 

@@ -690,9 +690,13 @@ def watchdog():
             if spec.get("pid"):
                 body += "\tpid = %d\n" % spec["pid"]
             body += "\truns = %d\n" % spec["runs"]
-            if spec.get("exit") is not None:
+            if spec.get("exit_text") is not None:
+                body += "\tlast exit code = %s\n" % spec["exit_text"]
+            elif spec.get("exit") is not None:
                 body += "\tlast exit code = %d\n" % spec["exit"]
-            if spec.get("signal"):
+            if spec.get("signal_text") is not None:
+                body += "\tlast terminating signal = %s\n" % spec["signal_text"]
+            elif spec.get("signal"):
                 body += "\tlast terminating signal = %d\n" % spec["signal"]
             return Result(0, body)
         if cmd[0] == "ps":
@@ -766,6 +770,54 @@ def watchdog():
         output = pass_once()
         exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
                                     "killed (last terminating signal 9)"))
+        exact("WATCHDOG" in output, True)
+
+        # launchd prints the name with the signal when it knows it.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": None, "signal_text": "Killed: 9",
+                                            "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "killed (last terminating signal 9)"))
+        exact("WATCHDOG" in output, True)
+
+        # launchd prints the name with the exit code when it knows it.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit_text": "78: EX_CONFIG",
+                                            "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "failing (last exit code 78)"))
+        exact("WATCHDOG" in output, True)
+
+        # A job that never ran reports no exit code. It is not a failure
+        # while it is running, so a run that is on time raises nothing.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 0,
+                                            "exit_text": "(never exited)",
+                                            "running": True, "pid": 6161}
+        elapsed[6161] = 5
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+
+        # A run that never ended and overran its limit is stuck, whatever
+        # the log says.
+        elapsed[6161] = 200 * 60
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "stuck (running 200 min, limit 120)"))
+        exact("WATCHDOG" in output, True)
+        del elapsed[6161]
+
+        # A job that never ran and is not running now leaves the log age as
+        # the only evidence, so a stale log still alarms.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 0,
+                                            "exit_text": "(never exited)",
+                                            "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "silent 200 min (limit 120)"))
+        exact("signal=log-age" in output, True)
         exact("WATCHDOG" in output, True)
 
         # A job that is still running past its limit is stuck, whatever its

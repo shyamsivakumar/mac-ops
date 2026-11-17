@@ -17,9 +17,11 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "coordinator/overnight"))
@@ -29,20 +31,35 @@ import lane_driver as lane  # noqa: E402
 GATEKEEP = "dev.coordinator.gatekeep"
 STALE_MINUTES = 200
 LIMIT = 120
+LAUNCHD_STATE = lane.launchd_state
 
 
 def load_state(label):
     """Return the live launchd state of one job, read only."""
-    return lane.launchd_state(label)
+    return LAUNCHD_STATE(label)
 
 
-def run_pass(decisions_path, log_path):
-    """Run one watchdog pass against the given files and return (output, items)."""
+def run_pass(decisions_path, log_path, launchctl=None):
+    """Run one watchdog pass against the given files and return (output, items).
+
+    With launchctl text, the pass reads that text instead of the live
+    launchd state, so the parser is exercised on real launchctl output.
+    """
     lane.DECISIONS_PATH = str(decisions_path)
     lane.WATCH = {"gatekeep": (str(log_path), LIMIT, GATEKEEP)}
     buffer = io.StringIO()
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "launchctl":
+            return subprocess.CompletedProcess(cmd, 0, launchctl, "")
+        raise AssertionError(f"unexpected subprocess: {cmd}")
+
     with contextlib.redirect_stdout(buffer):
-        lane.watchdog()
+        if launchctl is None:
+            lane.watchdog()
+        else:
+            with patch.object(lane.subprocess, "run", side_effect=fake_run):
+                lane.watchdog()
     items = json.loads(decisions_path.read_text())["items"]
     return buffer.getvalue(), items
 
@@ -98,6 +115,26 @@ def main():
             print("FAIL the alarm does not name the stopped job")
             return 1
         print(f"PASS the alarm names the stopped job: {alarms[0]['title']}")
+
+        # Pass three feeds real launchctl output through the parser: a job
+        # that launchd killed with a signal reports the signal and no exit
+        # code, and the alarm must still name the job.
+        lane.launchd_state = LAUNCHD_STATE
+        killed = ("\tstate = not running\n"
+                  "\truns = 7\n"
+                  "\tlast terminating signal = Killed: 9\n")
+        output, items = run_pass(decisions, log, launchctl=killed)
+        print("--- pass three: launchctl reports a job killed by a signal")
+        print(output.strip() or "(no output)")
+        alarms = [i for i in items if i["id"] == "factory-watchdog"]
+        print(f"factory-watchdog items: {len(alarms)}")
+        if "WATCHDOG" not in output or len(alarms) != 1:
+            print("FAIL a job killed by a signal raised no single alarm")
+            return 1
+        if "killed (last terminating signal 9)" not in alarms[0]["title"]:
+            print(f"FAIL the alarm does not name the signal: {alarms[0]['title']}")
+            return 1
+        print(f"PASS the alarm names the killed job: {alarms[0]['title']}")
     return 0
 
 
