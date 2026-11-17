@@ -1041,8 +1041,12 @@ def watchdog():
             mtimes[path] = now
         pass_once()
         exact(state["items"], [other])
-        for call in replace.call_args_list:
-            exact(str(call.args[0]) in (decisions + ".tmp", mute + ".tmp"), True)
+        # The pass replaces the board file and the mute state file, each
+        # from its own temporary file, and nothing else.
+        replaced = {(str(call.args[0]), str(call.args[1])) for call in replace.call_args_list}
+        exact(replaced - {(decisions + ".tmp", decisions),
+                          (mute + ".tmp", mute),
+                          (f"{mute}.{os.getpid()}.tmp", mute)}, set())
 
 
 def zero_merge():
@@ -1888,8 +1892,20 @@ def alarm_mute():
             alarms.raised(state, "factory-watchdog", cause, now)
             exact(alarms.save_state(state), True)
             exact(alarms.load_state()[key]["raised"], alarms.stamp(now))
-            exact(alarms.main(["ack", "factory-watchdog", cause]), 0)
+
+            class StateClock(dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now
+
+            with patch.object(dt, "datetime", StateClock):
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 0)
             exact(alarms.muted(alarms.load_state(), key, now), True)
+            # The command that cannot write the state says so, so the
+            # panel can warn that the alarm will raise again.
+            with patch.object(alarms, "write_state", return_value=False), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 3)
             with contextlib.redirect_stderr(io.StringIO()):
                 exact(alarms.main(["ack", "factory-nothing", cause]), 1)
 
@@ -1916,6 +1932,35 @@ def alarm_mute():
             alarms.save_state(fresh)
             # The tick writes its older snapshot.
             alarms.save_state(stale)
+            exact(alarms.muted(alarms.load_state(),
+                                alarms.key_of("factory-watchdog", cause), now), True)
+
+    # Two writers of the same file at once: the tick writes its older
+    # snapshot while the panel records the acknowledgement, and the
+    # acknowledgement survives.
+    import threading
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            stale = alarms.load_state()
+            alarms.raised(stale, "factory-watchdog", cause, now)
+            alarms.save_state(stale)
+            written = []
+
+            def panel():
+                fresh = alarms.load_state()
+                alarms.acknowledge(fresh, alarms.key_of("factory-watchdog", cause), now)
+                written.append(alarms.save_state(fresh))
+
+            def tick():
+                written.append(alarms.save_state(stale))
+
+            threads = [threading.Thread(target=panel), threading.Thread(target=tick)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            exact(all(written), True)
             exact(alarms.muted(alarms.load_state(),
                                 alarms.key_of("factory-watchdog", cause), now), True)
 

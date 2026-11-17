@@ -1385,7 +1385,15 @@ panel runs it as a command.
 The state is written with a merge: a tick reads the state, the panel records
 an acknowledgement and writes the file, and the tick writes its older
 snapshot. The newer acknowledgement of a key wins, so the tick cannot take
-it with it.
+it with it. The read, the merge and the replace happen under a lock file
+beside the state, so the two writers cannot land in each other, and each
+writer replaces the file from a temporary file of its own.
+
+The command exits 0 when the acknowledgement was written, 1 when there is
+no raised key for that cause, 2 when the usage is wrong, and 3 when the
+acknowledgement could not be written. The panel warns on every exit but 0
+and 1, because an acknowledgement that was not written means the alarm can
+raise again on the next tick.
 
 The record is the whole rule. A board item that went missing is not an
 acknowledgement: the board has more than one writer and one of them can lose

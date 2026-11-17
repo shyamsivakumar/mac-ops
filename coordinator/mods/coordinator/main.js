@@ -61,8 +61,12 @@ const DECISIONS_FILE = `${home()}/Code/coordinator/decisions.json`;
 async function acknowledgeAlarm(id, cause) {
   if (!cause) return;
   const r = await exec(`${home()}/.local/bin/alarms.py`, ["ack", id, cause]);
+  // The command exits 0 when the acknowledgement was written and 1 when
+  // there is no raised key for that cause, which is nothing to quiet.
+  // Any other exit means the acknowledgement did not reach the file, and
+  // the alarm can raise again on the next tick, so Shyam is told.
   if (r.code !== 0 && r.code !== 1) {
-    notify({ title: "The alarm was not acknowledged", body: `${id}: ${(r.stderr || "").trim() || `alarms exited ${r.code}`}`, level: "warning" });
+    notify({ title: "The alarm was not acknowledged", body: `${id}: ${(r.stderr || "").trim() || `alarms exited ${r.code}`}. The alarm can raise again on the next tick.`, level: "warning" });
   }
 }
 
