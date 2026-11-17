@@ -493,3 +493,44 @@ class SimulatorProcessOwnershipTests(unittest.TestCase):
         runner = lambda argv, timeout: self.rows()
         credit = heavy._simulator_process_bytes("UDID-1", command_runner=runner)
         self.assertEqual(credit, (100 + 50) * 1024)
+
+
+class WrappedBuildCommandTests(unittest.TestCase):
+    """A taskpolicy-wrapped build still names its simulator."""
+
+    wrapped = [
+        "/usr/sbin/taskpolicy", "-b", "xcodebuild",
+        "-project", "Recoup.xcodeproj", "-scheme", "Recoup",
+        "-destination", "platform=iOS Simulator,name=CI-iPhone",
+        "-configuration", "Debug", "build",
+    ]
+
+    def test_a_wrapped_command_still_names_its_simulator(self):
+        self.assertEqual(
+            heavy.simulator_destination_device(self.wrapped),
+            ("CI-iPhone", None, "iOS"),
+        )
+
+    def test_the_credit_probe_reads_a_wrapped_command(self):
+        listing = json.dumps(
+            {
+                "devices": {
+                    "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [
+                        {"name": "CI-iPhone", "udid": "BBB"}
+                    ]
+                }
+            }
+        )
+        table = (
+            "  100     1     1 launchd_sim /Users/x/Library/Developer/CoreSimulator/Devices/BBB/data/x\n"
+        )
+
+        def runner(argv, timeout):
+            if "simctl" in " ".join(str(arg) for arg in argv):
+                return listing
+            return table
+
+        credit = heavy.simulator_memory_credit_bytes(
+            self.wrapped, command_runner=runner
+        )
+        self.assertEqual(credit, 100 * 1024)
