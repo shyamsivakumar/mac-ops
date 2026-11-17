@@ -118,7 +118,7 @@ class SmallHostAdmissionTests(unittest.TestCase):
 
     def test_a_large_host_pause_threshold_is_unchanged(self):
         self.assertEqual(
-            heavy.pause_headroom_bytes(48 * heavy.GIB),
+            heavy.required_headroom_bytes(48 * heavy.GIB, heavy.PAUSE_HEADROOM_FRACTION),
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
         )
         self.assertEqual(
@@ -493,6 +493,33 @@ class SimulatorProcessOwnershipTests(unittest.TestCase):
         runner = lambda argv, timeout: self.rows()
         credit = heavy._simulator_process_bytes("UDID-1", command_runner=runner)
         self.assertEqual(credit, (100 + 50) * 1024)
+
+    def test_a_program_that_only_mentions_the_device_is_not_its_simulator(self):
+        rows = (
+            " 4096     7     1 tail -f /Users/x/Library/Developer/CoreSimulator/Devices/UDID-1/data/log\n"
+            " 4096     8     1 grep UDID-1 /Users/x/Library/Developer/CoreSimulator/Devices/UDID-1/data/log\n"
+        )
+        runner = lambda argv, timeout: rows
+        credit = heavy._simulator_process_bytes("UDID-1", command_runner=runner)
+        self.assertEqual(credit, 0)
+
+
+class SimulatorCreditRefreshTests(unittest.TestCase):
+    """The credit is measured again for every admission attempt."""
+
+    def test_the_credit_is_measured_inside_the_admission_loop(self):
+        source = inspect.getsource(heavy._launch_job)
+        loop = source.index("while job_id is None:")
+        credit = source.index("simulator_memory_credit_bytes(", loop)
+        reserve = source.index("_reserve_job(", credit)
+        self.assertLess(loop, credit)
+        self.assertLess(credit, reserve)
+
+    def test_the_credit_is_not_measured_before_the_job_is_queued(self):
+        source = inspect.getsource(heavy._launch_job)
+        queue = source.index("_enqueue_job(")
+        credit = source.index("simulator_memory_credit_bytes(")
+        self.assertLess(queue, credit)
 
 
 class WrappedBuildCommandTests(unittest.TestCase):
