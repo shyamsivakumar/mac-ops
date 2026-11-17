@@ -81,7 +81,9 @@ ATTRIBUTED = re.compile(
 QUOTE_WINDOW = 60
 # The review gate: the rules live in the coordinator CLAUDE.md sections
 # "Review gate" and "Ten minutes start to finish".
-GATE_ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
+from gate_reviewers import REVIEWER_CHAIN
+
+GATE_ASTRA = REVIEWER_CHAIN[0]
 GATE_PRIORITY = 400
 GATE_CHECK_CONTEXT = "srw/agent-check"
 GATE_PUBLISHER_REPO = "shyamsivakumar/strategy-replay-workbench"
