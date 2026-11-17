@@ -31,6 +31,8 @@ MAX_CPU_PCT = 95.0
 WARNING_CPU_PCT = 80.0
 MAX_MEMORY_PCT = 95.0
 MIN_HEADROOM_BYTES = 6 * GIB
+SMALL_HOST_MEMORY_BYTES = 24 * GIB
+SMALL_HOST_HEADROOM_FLOOR_BYTES = 2 * GIB
 HEADROOM_FRACTION = 0.15
 PAUSE_HEADROOM_FRACTION = 0.125
 SAMPLE_INTERVAL = 2.0
@@ -60,6 +62,8 @@ LEGACY_SLOTS = Path("/tmp/heavy-slots")
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
+SIMULATOR_DESTINATION_MARKER = "platform=iOS Simulator"
+SIMULATOR_MEMORY_CREDIT_FRACTION = 0.125
 
 
 def monotonic_ns() -> int:
@@ -295,6 +299,7 @@ def admission_block_reason(
     active_count: int,
     task_already_active: bool,
     slot_limit: Optional[int] = None,
+    allowance_bytes: int = 0,
 ) -> Optional[str]:
     """Return the reason a sample blocks admission, or None if it admits."""
     values = (
@@ -342,6 +347,7 @@ def admission_block_reason(
         swapout_rate=sample.swapout_bytes_per_second,
         headroom=sample.headroom_bytes,
         physical=sample.physical_bytes,
+        allowance_bytes=allowance_bytes,
     )
     if reason:
         return reason
@@ -361,6 +367,7 @@ def memory_load_block_reason(
     headroom,
     physical,
     headroom_fraction=HEADROOM_FRACTION,
+    allowance_bytes: int = 0,
 ):
     """Return the reason memory blocks admission, or None."""
     if pressure == CRITICAL_PRESSURE_LEVEL:
@@ -382,9 +389,145 @@ def memory_load_block_reason(
         return "memory-pressure-warning-low-free"
     if not all(_finite_nonnegative(rate) for rate in rates):
         return "first swap sample; normal wait, a few seconds"
-    if headroom < max(MIN_HEADROOM_BYTES, int(physical * headroom_fraction)):
+    credit = min(max(0, allowance_bytes), physical // 8)
+    if headroom + credit < required_headroom_bytes(
+        physical, headroom_fraction
+    ):
         return "memory-headroom"
     return None
+
+
+def required_headroom_bytes(
+    physical_bytes: int, headroom_fraction: float = HEADROOM_FRACTION
+) -> int:
+    """Return the headroom a job needs, scaled to the host's memory size.
+
+    A host with less than 24 GiB of memory cannot keep 6 GiB free and still
+    run one build, so its requirement scales with its size instead.
+    """
+    if physical_bytes >= SMALL_HOST_MEMORY_BYTES:
+        return MIN_HEADROOM_BYTES
+    return max(
+        SMALL_HOST_HEADROOM_FLOOR_BYTES, int(physical_bytes * headroom_fraction)
+    )
+
+
+def simulator_destination_device(argv: Sequence[str]) -> Optional[str]:
+    """Return the simulator device a command targets, or None."""
+    if not argv or os.path.basename(str(argv[0])) != "xcodebuild":
+        return None
+    destinations: List[str] = []
+    for index, arg in enumerate(argv):
+        text = str(arg)
+        if text == "-destination" and index + 1 < len(argv):
+            destinations.append(str(argv[index + 1]))
+        elif text.startswith("-destination="):
+            destinations.append(text.split("=", 1)[1])
+    for value in destinations:
+        if SIMULATOR_DESTINATION_MARKER not in value:
+            continue
+        for part in value.split(","):
+            part = part.strip()
+            if part.startswith("id="):
+                return part[3:].strip()
+            if part.startswith("name="):
+                return part[5:].strip()
+    return None
+
+
+def _booted_simulator_udid(
+    device: str, *, command_runner: Callable[[Sequence[str], float], str] = _run_native
+) -> Optional[str]:
+    """Return the UDID of the booted simulator device matching a name or UDID."""
+    try:
+        raw = command_runner(
+            ["/usr/bin/xcrun", "simctl", "list", "devices", "booted", "-j"],
+            NATIVE_TIMEOUT * 4,
+        )
+    except TelemetryError:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    devices = payload.get("devices") if isinstance(payload, dict) else None
+    if not isinstance(devices, dict):
+        return None
+    for rows in devices.values():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name", ""))
+            udid = str(row.get("udid", ""))
+            if not udid:
+                continue
+            if name.lower() == device.lower() or udid.lower() == device.lower():
+                return udid
+    return None
+
+
+def _simulator_process_bytes(
+    udid: str, *, command_runner: Callable[[Sequence[str], float], str] = _run_native
+) -> int:
+    """Return the resident memory of a simulator device's own process tree."""
+    try:
+        raw = command_runner(
+            ["/bin/ps", "-axo", "rss=,pid=,ppid=,command="], NATIVE_TIMEOUT * 4
+        )
+    except TelemetryError:
+        return 0
+    rows: List[Tuple[int, int, int, str]] = []
+    for line in raw.splitlines():
+        parts = line.strip().split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            rss = int(parts[0])
+            pid = int(parts[1])
+            ppid = int(parts[2])
+        except ValueError:
+            continue
+        rows.append((pid, ppid, rss, parts[3]))
+    children: Dict[int, List[int]] = {}
+    resident: Dict[int, int] = {}
+    for pid, ppid, rss, _command in rows:
+        children.setdefault(ppid, []).append(pid)
+        resident[pid] = rss
+    roots = [pid for pid, _ppid, _rss, command in rows if udid in command]
+    if not roots:
+        return 0
+    seen: set = set()
+    stack = list(roots)
+    total = 0
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        total += resident.get(pid, 0)
+        stack.extend(children.get(pid, []))
+    return total * 1024
+
+
+def simulator_memory_credit_bytes(
+    argv: Sequence[str],
+    *,
+    command_runner: Callable[[Sequence[str], float], str] = _run_native,
+) -> int:
+    """Return the host memory the simulator a command targets already holds.
+
+    The simulator a job drives is that job's own memory, so it does not count
+    against the headroom the job needs.
+    """
+    device = simulator_destination_device(argv)
+    if not device:
+        return 0
+    udid = _booted_simulator_udid(device, command_runner=command_runner)
+    if not udid:
+        return 0
+    return _simulator_process_bytes(udid, command_runner=command_runner)
 
 
 def _start_epoch(token: str) -> float:
@@ -1754,7 +1897,10 @@ def critical_pressure(sample: Sample, *, load_proxy: bool = True) -> bool:
 
 
 def _host_reason(
-    sample: Sample, load_high_count: int = 0, paused: bool = False
+    sample: Sample,
+    load_high_count: int = 0,
+    paused: bool = False,
+    allowance_bytes: int = 0,
 ) -> Optional[str]:
     if sample.pressure_level == CRITICAL_PRESSURE_LEVEL:
         return "critical-pressure"
@@ -1772,6 +1918,7 @@ def _host_reason(
         headroom_fraction=(
             HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
         ),
+        allowance_bytes=allowance_bytes,
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
     return None
@@ -1806,6 +1953,7 @@ def _reserve_job(
     *,
     queue_id: Optional[str] = None,
     role: str = "ordinary",
+    allowance_bytes: int = 0,
 ) -> Tuple[Optional[str], Optional[str]]:
     ephemeral_queue = queue_id is None
     snapshot_started_ns = deps.monotonic_ns()
@@ -1895,6 +2043,7 @@ def _reserve_job(
             active_count=len(active) + legacy_count,
             task_already_active=same_task,
             slot_limit=slot_limit,
+            allowance_bytes=allowance_bytes,
         )
         if reason:
             if ephemeral_queue:
@@ -1912,6 +2061,7 @@ def _reserve_job(
             "role": role,
             "created_ns": deps.monotonic_ns(),
             "state": "starting",
+            "memory_credit_bytes": int(allowance_bytes),
             "supervisor": supervisor,
             "workload": None,
             "curtail_request": None,
@@ -2556,6 +2706,7 @@ def _supervise_running(
     workload = _workload_identity(record)
     if workload is None:
         raise HeavyError("workload identity missing")
+    memory_credit = int(record.get("memory_credit_bytes") or 0)
     pressure_since: Optional[float] = None
     healthy_since: Optional[float] = None
     last_pause_retry: Optional[float] = None
@@ -2618,10 +2769,15 @@ def _supervise_running(
                     now=deps.wall_clock(),
                     boot_id=deps.boot_reader(),
                 )
-                pressure_reason = _host_reason(sample)
+                pressure_reason = _host_reason(
+                    sample, allowance_bytes=memory_credit
+                )
                 resume_blocked = (
                     pressure_reason is None
-                    and _host_reason(sample, paused=True) is not None
+                    and _host_reason(
+                        sample, paused=True, allowance_bytes=memory_credit
+                    )
+                    is not None
                 )
             except Exception:
                 invalid_reason = "capacity-unavailable"
@@ -2712,6 +2868,10 @@ def _launch_job(
     started = deps.clock()
     last_message = 0.0
     job_id = None
+    try:
+        memory_credit = simulator_memory_credit_bytes(argv)
+    except Exception:
+        memory_credit = 0
     queue_id = _enqueue_job(
         registry,
         task_key=task_key,
@@ -2748,6 +2908,7 @@ def _launch_job(
                     deps,
                     queue_id=queue_id,
                     role=role,
+                    allowance_bytes=memory_credit,
                 )
             except Exception as exc:
                 raise HeavyError("cannot safely reserve a heavy job") from exc
@@ -3200,7 +3361,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "Usage: heavy [--review|--deploy] <command...> | status | request-curtail\n"
             "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
-            "Admission requires stable swap, CPU and memory below 95%, and at least max(6 GiB, 15% RAM) headroom to start or resume (a running job pauses only below max(6 GiB, 12.5% RAM)); level 2 is allowed above 30% free memory, level 4 is blocked.\n"
+            "Admission requires stable swap, CPU and memory below 95%, and enough headroom to start or resume: 6 GiB on a host with 24 GiB or more of memory, 15% of the host's memory (at least 2 GiB) on a smaller host. The simulator a job drives counts as that job's own memory. A running job pauses only below the lower threshold; level 2 is allowed above 30% free memory, level 4 is blocked.\n"
             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
             "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
         )

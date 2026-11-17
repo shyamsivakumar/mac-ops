@@ -863,11 +863,11 @@ def _capacity_decision(helper, sample, census, compressor, previous, current, bo
     state, detail = _adaptive_capacity_decision(
         helper, sample, census, compressor, previous, current, boot_id, now_mono)
     floor = min(2, detail["ceiling"])
-    critical = _critical_pressure(helper, sample)
     valid = helper._sample_invalid_reason(sample, now_mono) is None
+    critical = _critical_pressure(helper, sample, load_proxy=valid)
     proposed = detail["target"]
     target = (0 if critical else max(floor, proposed) if valid
-              else min(current, floor, detail["ceiling"]))
+              else min(max(current, floor), detail["ceiling"]))
     detail.update(floor=floor, critical=critical, adaptive_target=proposed, target=target)
     if critical:
         detail["reason"] = "critical_pressure"
@@ -1210,8 +1210,8 @@ def _smoothed_cpu_sample(helper, sample):
     return dataclasses.replace(sample, cpu_busy_pct=sum(_cpu_history) / len(_cpu_history))
 
 
-def _critical_pressure(helper, sample):
-    return helper.critical_pressure(sample) or (
+def _critical_pressure(helper, sample, *, load_proxy: bool = True):
+    return helper.critical_pressure(sample, load_proxy=load_proxy) or (
         helper._finite_nonnegative(sample.cpu_busy_pct) and sample.cpu_busy_pct >= helper.MAX_CPU_PCT)
 
 
@@ -1273,10 +1273,11 @@ def controller_tick(*, board_control=True, cfg=None):
                 raise ValueError("Kernel boot identity is invalid")
             now_wall = time.time()
             now_mono = helper.monotonic()
-            critical = sample is not None and _critical_pressure(helper, sample)
             prior_capacity = _capacity_current(boot_id, now_wall)
             sample_usable = sample is not None and helper._sample_invalid_reason(sample, now_mono) is None
-            fallback_slots = 0 if critical else 2 if sample_usable else min(prior_capacity, 2)
+            critical = sample is not None and _critical_pressure(
+                helper, sample, load_proxy=sample_usable)
+            fallback_slots = 0 if critical else 2 if sample_usable else min(max(prior_capacity, 1), 2)
             capacity_state = {"schema": 1, "boot_id": boot_id, "heavy_slots": fallback_slots,
                               "healthy_since_monotonic": None, "last_sample_monotonic": now_mono}
             payload = {"heavy_slots": fallback_slots, "updated_at": now_wall, "boot_id": boot_id}
