@@ -56,8 +56,9 @@ const DECISIONS_FILE = `${home()}/Code/coordinator/decisions.json`;
 // than one writer, so a lost board item says nothing. The command writes
 // the record for the cause the panel showed, so another cause of the same
 // alarm, which nobody answered, is not silenced. The command is the
-// installed one; an alarm that was never raised has no record and the
-// command says so, which is not a failure.
+// installed one. An alarm that was never raised has no record: the
+// command says so, and the panel says so too, because an alarm that
+// cannot be acknowledged is an alarm that raises again.
 async function acknowledgeAlarm(id, cause) {
   if (!cause) return;
   const r = await exec(`${home()}/.local/bin/alarms.py`, ["ack", id, cause]);
