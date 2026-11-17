@@ -24,7 +24,7 @@ The slot limit is the minimum of fresh controller `heavy_slots`, physical CPU co
 
 ## Headroom a job needs
 
-A job needs headroom to start: 6 GiB on a host with 24 GiB or more of memory, and 15% of the host's memory (at least 2 GiB) on a smaller host. A 16 GiB host therefore needs 2.4 GiB, so one iOS build fits beside the simulator it drives. The simulator a job drives is that job's own memory: its resident bytes count towards the job's headroom, capped at an eighth of the host's memory. A running job pauses only below the lower threshold, 12.5% of a smaller host's memory.
+A job needs headroom to start: `max(6 GiB, 15% of RAM)` on a host with 24 GiB or more of memory, and 15% of the host's memory with a 2 GiB floor on a smaller host. A 16 GiB host therefore needs 2.4 GiB instead of 6 GiB, so one iOS build fits beside the simulator it drives. On a smaller host the simulator a job drives is that job's own memory: its resident bytes count towards the job's headroom, capped at an eighth of the host's memory. A running job pauses only below the lower threshold, 12.5% of a smaller host's memory.
 
 ## Running and pause recovery
 

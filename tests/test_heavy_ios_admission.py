@@ -34,15 +34,25 @@ class SmallHostAdmissionTests(unittest.TestCase):
         )
         self.assertIsNone(reason)
 
-    def test_a_large_host_still_needs_six_gigabytes_of_headroom(self):
+    def test_a_large_host_still_needs_its_own_scaled_headroom(self):
         reason = heavy.admission_block_reason(
-            sample(48, 5),
+            sample(48, 7),
             now=700.0,
             active_count=0,
             task_already_active=False,
             slot_limit=2,
         )
         self.assertEqual(reason, "memory-headroom")
+
+    def test_a_large_host_admits_a_job_with_the_old_headroom(self):
+        reason = heavy.admission_block_reason(
+            sample(48, 7.5),
+            now=700.0,
+            active_count=0,
+            task_already_active=False,
+            slot_limit=2,
+        )
+        self.assertIsNone(reason)
 
     def test_a_small_host_still_refuses_when_the_host_has_no_room(self):
         reason = heavy.admission_block_reason(
@@ -82,8 +92,30 @@ class SmallHostAdmissionTests(unittest.TestCase):
             int(16 * heavy.GIB * 0.15),
         )
         self.assertEqual(
-            heavy.required_headroom_bytes(48 * heavy.GIB), 6 * heavy.GIB
+            heavy.required_headroom_bytes(48 * heavy.GIB),
+            int(48 * heavy.GIB * 0.15),
         )
+
+    def test_a_large_host_keeps_the_old_max_of_six_gigabytes_and_a_share_of_ram(self):
+        self.assertEqual(
+            heavy.required_headroom_bytes(48 * heavy.GIB),
+            max(6 * heavy.GIB, int(48 * heavy.GIB * 0.15)),
+        )
+        self.assertEqual(
+            heavy.required_headroom_bytes(48 * heavy.GIB, 0.125),
+            max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
+        )
+
+    def test_the_simulator_credit_does_not_relax_a_large_host(self):
+        reason = heavy.admission_block_reason(
+            sample(48, 7),
+            now=700.0,
+            active_count=0,
+            task_already_active=False,
+            slot_limit=2,
+            allowance_bytes=4 * heavy.GIB,
+        )
+        self.assertEqual(reason, "memory-headroom")
 
 
 class SimulatorCreditTests(unittest.TestCase):
