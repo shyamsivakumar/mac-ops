@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import datetime as dt
 import fcntl
@@ -24,6 +25,8 @@ ARCHIVE_ROOT = Path.home() / ".local/state/archive/worktrees"
 
 SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycache__", "DerivedData"}
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
+GITHUB_ORIGIN_RE = re.compile(r"^(?:https://(?:[^@/\s]+@)?|ssh://git@|git@)github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+WORKERS = 8
 
 
 class SafetyError(RuntimeError):
@@ -167,7 +170,9 @@ def process_cwds(*, refresh: bool = False) -> list[Path]:
         result = run(["lsof", "-d", "cwd", "-Fn"])
         if not result.stdout:
             raise SafetyError("process_cwd_unavailable")
-        process_cwd_cache[:] = [Path(line[1:]) for line in result.stdout.splitlines() if line.startswith("n/")]
+        fresh = [Path(line[1:]) for line in result.stdout.splitlines() if line.startswith("n/")]
+        process_cwd_cache[:] = fresh
+        return fresh
     return process_cwd_cache
 
 
@@ -326,6 +331,14 @@ class GitHub:
         if key in self.repos and not refresh:
             return self.repos[key]
         try:
+            origin = run(["git", "-C", str(root), "remote", "get-url", "origin"])
+        except SafetyError:
+            origin = None
+        matched = GITHUB_ORIGIN_RE.fullmatch(origin.stdout.strip()) if origin and origin.returncode == 0 else None
+        if matched and re.fullmatch(r"[^/\s]+/[^/\s]+", matched.group(1)):
+            self.repos[key] = matched.group(1)
+            return self.repos[key]
+        try:
             result = run(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], cwd=root)
         except SafetyError:
             result = None
@@ -477,20 +490,23 @@ def excluded_row(repo_root: Path, record: dict[str, Any], reason: str, t3_state:
 
 
 def inventory(code_root: Path, github: GitHub, t3_state: T3State) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
-    rows: list[dict[str, Any]] = []
     excluded = 0
-    excluded_rows: list[dict[str, Any]] = []
-    for repo_root in discover_repositories(code_root):
-        repo_slug = github.repo(repo_root)
-        if excluded_repo(repo_root, repo_slug):
-            excluded += 1
-            reason = "SRW repository" if srw_repo(repo_root, repo_slug) else "Slash dbt or omni repository"
-            excluded_rows.extend(excluded_row(repo_root, record, reason, t3_state) for record in worktrees(repo_root) if canonical(record["path"]) != canonical(repo_root))
-            continue
-        records = worktrees(repo_root)
-        for record in records:
-            row = evaluate(repo_root, record, code_root, github, t3_state)
-            rows.append(row)
+    process_cwds()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        excluded_futures = []
+        row_futures = []
+        for repo_root in discover_repositories(code_root):
+            repo_slug = github.repo(repo_root)
+            if excluded_repo(repo_root, repo_slug):
+                excluded += 1
+                reason = "SRW repository" if srw_repo(repo_root, repo_slug) else "Slash dbt or omni repository"
+                excluded_futures.extend(pool.submit(excluded_row, repo_root, record, reason, t3_state) for record in worktrees(repo_root) if canonical(record["path"]) != canonical(repo_root))
+                continue
+            records = worktrees(repo_root)
+            for record in records:
+                row_futures.append(pool.submit(evaluate, repo_root, record, code_root, github, t3_state))
+        rows = [future.result() for future in row_futures]
+        excluded_rows = [future.result() for future in excluded_futures]
     return rows, excluded, excluded_rows
 
 
@@ -604,18 +620,27 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
         eligible = [row for row in rows if row["eligible"]]
         removed = 0
         if apply:
-            for candidate in eligible:
+            def refreshed(candidate: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | SafetyError | None]:
                 repo_root = Path(candidate["repo"])
                 current = next((r for r in worktrees(repo_root) if canonical(r["path"]) == canonical(candidate["path"])), None)
+                if current is None:
+                    return None, None
+                try:
+                    return current, evaluate(repo_root, current, code_root, github, T3State(), refresh=True)
+                except SafetyError as exc:
+                    return current, exc
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                checks = list(pool.map(refreshed, eligible))
+            for candidate, (current, final) in zip(eligible, checks):
+                repo_root = Path(candidate["repo"])
                 if current is None:
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_registration_changed"]
                     continue
-                try:
-                    final = evaluate(repo_root, current, code_root, github, T3State(), refresh=True)
-                except SafetyError as exc:
+                if isinstance(final, SafetyError):
                     candidate["eligible"] = False
-                    candidate["reasons"] = [str(exc)]
+                    candidate["reasons"] = [str(final)]
                     continue
                 if current.get("head") != candidate.get("head") or current.get("branch") != candidate.get("branch"):
                     final["eligible"] = False
@@ -681,14 +706,22 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
             row["category"] = categorize(row)
         pruned = 0
         if apply and prune:
-            for row in [r for r in rows if r["category"] == "prune"]:
+            def prune_check(row: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
                 repo_root = Path(row["repo"])
                 current = next((r for r in worktrees(repo_root) if canonical(r["path"]) == canonical(row["path"])), None)
                 if current is None:
-                    continue
+                    return None, None
                 try:
-                    final = evaluate(repo_root, current, code_root, github, T3State(), refresh=True)
+                    return current, evaluate(repo_root, current, code_root, github, T3State(), refresh=True)
                 except SafetyError:
+                    return current, None
+
+            prune_rows = [r for r in rows if r["category"] == "prune"]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                prune_checks = list(pool.map(prune_check, prune_rows))
+            for row, (current, final) in zip(prune_rows, prune_checks):
+                repo_root = Path(row["repo"])
+                if current is None or final is None:
                     continue
                 if not final["prunable"] or current.get("head") != row.get("head"):
                     continue
