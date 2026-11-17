@@ -733,6 +733,7 @@ def hourly_selftest_fixture():
 
 def watchdog():
     hourly_selftest_fixture()
+    import alarms
     import lane_driver as lane
     import os
     import time
@@ -814,8 +815,10 @@ def watchdog():
         state.update(json.loads(json.dumps(value)))
 
     def alarm(title):
+        cause = title.split("Factory job stopped or failing: ", 1)[1]
         return [other, {"id": "factory-watchdog", "group": "Coordinator",
                         "kind": "action", "title": title,
+                        "cause": alarms.cause_of(cause),
                         "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."}]
 
     def pass_once():
@@ -1798,7 +1801,142 @@ def stall():
         exact(lane.unstick(repo, {}), "DRY unstick [9]")
 
 
-EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall}
+def alarm_mute():
+    import datetime as dt
+    import alarms
+    import lane_driver as lane
+    import stall as rule
+
+    now = dt.datetime(2026, 11, 17, 12, 0, tzinfo=dt.timezone.utc)
+    cause = "gatekeep failing (last exit code 1)"
+
+    # The rule: a key that was never raised is raised, a key that was
+    # raised and whose board item is gone was routed, so it is quiet for
+    # four hours, and a different cause is a different key.
+    decisions = {}
+    exact(alarms.decide(decisions, "factory-watchdog", cause, False, now), "raise")
+    alarms.raised(decisions, "factory-watchdog", cause, now)
+    exact(alarms.decide(decisions, "factory-watchdog", cause, True, now), "raise")
+    exact(alarms.decide(decisions, "factory-watchdog", cause, False, now), "quiet")
+    key = alarms.key_of("factory-watchdog", cause)
+    exact(alarms.muted(decisions, key, now), True)
+    exact(alarms.decide(decisions, "factory-watchdog", "gatekeep failing (last exit code 2)",
+                         False, now), "raise")
+    # The quiet key stays quiet for four hours and then alarms again.
+    exact(alarms.decide(decisions, "factory-watchdog", cause, False,
+                         now + dt.timedelta(hours=3)), "quiet")
+    exact(alarms.decide(decisions, "factory-watchdog", cause, False,
+                         now + dt.timedelta(hours=4, minutes=1)), "raise")
+
+    # The minutes of a quiet log are not part of the cause, so the same
+    # quiet log is the same cause. The exit code is part of it.
+    exact(alarms.key_of("factory-watchdog", "gatekeep silent 200 min (limit 120)"),
+          alarms.key_of("factory-watchdog", "gatekeep silent 261 min (limit 120)"))
+    exact(alarms.key_of("factory-watchdog", "gatekeep failing (last exit code 1)") ==
+          alarms.key_of("factory-watchdog", "gatekeep failing (last exit code 2)"), False)
+
+    # An alarm that is not true any more drops its keys, so the same
+    # cause can alarm again.
+    alarms.raised(decisions, "factory-watchdog", cause, now)
+    exact(alarms.forget(decisions, "factory-watchdog"), [key])
+    exact(alarms.decide(decisions, "factory-watchdog", cause, False, now), "raise")
+
+    # An answered alarm is quiet even when its item is still on the board.
+    decisions = {}
+    alarms.raised(decisions, "factory-watchdog", cause, now)
+    alarms.acknowledge(decisions, key, now)
+    exact(alarms.decide(decisions, "factory-watchdog", cause, True, now), "quiet")
+
+    # The stall writes the alarm, and the same cause stays quiet after
+    # the coordinator took the item off the board.
+    with tempfile.TemporaryDirectory() as scratch:
+        board = Path(scratch) / "decisions.json"
+        board.write_text(json.dumps({"items": []}))
+        target, action = rule.alert("no board progress for 3 ticks", board)
+        exact(action, "wrote")
+        exact(target, str(board))
+        items = json.loads(board.read_text())["items"]
+        exact(len(items), 1)
+        exact(items[0]["id"], "factory-overnight-stall")
+        exact(items[0]["cause"], "no board progress for 3 ticks")
+        # The coordinator took the item off the board: the next tick is
+        # quiet and the board holds no item for the alarm.
+        data = json.loads(board.read_text())
+        data["items"] = []
+        board.write_text(json.dumps(data))
+        target, action = rule.alert("no board progress for 3 ticks", board)
+        exact(action, "quiet")
+        exact(json.loads(board.read_text())["items"], [])
+        # A different cause is a different alarm and is written at once.
+        target, action = rule.alert("the board stopped for another reason", board)
+        exact(action, "wrote")
+        exact(len(json.loads(board.read_text())["items"]), 1)
+
+    # The watchdog raises the alarm, and the same cause stays quiet after
+    # the coordinator took the item off the board. A changed cause alarms
+    # at once, and the alarm comes back after four hours.
+    with tempfile.TemporaryDirectory() as scratch:
+        board = Path(scratch) / "decisions.json"
+        board.write_text(json.dumps({"items": []}))
+        states = {}
+
+        def state(label):
+            if label == "dev.coordinator.gatekeep":
+                return {"loaded": True, "runs": 3, "exit_code": states.get("code", 1),
+                        "signal": None, "running": False, "pid": 0}
+            return {"loaded": True, "runs": 3, "exit_code": 0, "signal": None,
+                    "running": False, "pid": 0}
+
+        def pass_once(clock):
+            class Clock(dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return clock
+
+            buffer = io.StringIO()
+            with patch.object(lane, "DECISIONS_PATH", str(board)), \
+                 patch.object(lane, "log_age", return_value=1.0), \
+                 patch.object(lane, "launchd_state", side_effect=state), \
+                 patch.object(dt, "datetime", Clock):
+                with contextlib.redirect_stdout(buffer):
+                    lane.watchdog()
+            return buffer.getvalue()
+
+        output = pass_once(now)
+        items = json.loads(board.read_text())["items"]
+        exact(len(items), 1)
+        exact(items[0]["id"], "factory-watchdog")
+        exact(items[0]["cause"], "gatekeep failing (last exit code 1)")
+        exact("WATCHDOG" in output, True)
+
+        # The coordinator took the item off the board: the next tick is
+        # quiet, the board holds no item, and the tick says so.
+        data = json.loads(board.read_text())
+        data["items"] = []
+        board.write_text(json.dumps(data))
+        output = pass_once(now + dt.timedelta(minutes=3))
+        exact(json.loads(board.read_text())["items"], [])
+        exact("WATCHDOG quiet" in output, True)
+
+        # A changed cause is a different key and alarms at once.
+        states["code"] = 78
+        output = pass_once(now + dt.timedelta(minutes=6))
+        items = json.loads(board.read_text())["items"]
+        exact(len(items), 1)
+        exact(items[0]["cause"], "gatekeep failing (last exit code 78)")
+
+        # The same cause comes back after four hours.
+        data = json.loads(board.read_text())
+        data["items"] = []
+        board.write_text(json.dumps(data))
+        states["code"] = 1
+        output = pass_once(now + dt.timedelta(hours=4, minutes=10))
+        items = json.loads(board.read_text())["items"]
+        exact(len(items), 1)
+        exact(items[0]["cause"], "gatekeep failing (last exit code 1)")
+
+
+EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():

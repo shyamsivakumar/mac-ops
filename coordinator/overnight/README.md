@@ -1345,3 +1345,53 @@ is a limit, and the item stays a single item over repeated passes.
 `evidence/MO-1056/proof.py` runs three passes: the live launchd state with a
 stale log, a stopped job, and real launchctl output that reports a job
 killed by a signal, so the parser is exercised on the text launchd prints.
+
+### An acknowledged alarm stays quiet for four hours (Refs #496)
+
+The tick's alarms reached Shyam five times on one day for causes that were
+already known and being fixed. Marking one item Done on the decisions board
+does not stop the alarm: the next tick raises it again, the board holds the
+item again, and the phone relay sends it again. Shyam's decision (2026-11-17)
+is that an alarm that was acknowledged or routed stays quiet for four hours,
+unless its cause changes.
+
+The rule lives in one place (`coordinator/overnight/alarms.py`), beside the
+two places that raise these alarms: the watchdog (`factory-watchdog`, in
+`lane_driver.py`) and the stall rule (`factory-overnight-stall`, in
+`stall.py`). There is no second alerting path and no new alarm.
+
+| Thing | What it is |
+| --- | --- |
+| The key of an alarm | The alarm's id and its cause, as one string: `factory-watchdog\|gatekeep failing (last exit code 1)`. |
+| The cause | What is wrong, without the parts that change on every tick. The minutes of a quiet log and the minutes of a stuck run are not part of the cause; the exit code and the signal are. |
+| The mute state | The `alarms` map in the coordinator's own board file, `~/Code/coordinator/decisions.json`. The board and the shift read one state, and the shift keeps no second list. |
+| The mute | Four hours (`MUTE_SECONDS`) from the acknowledgement. |
+
+Two things mute a key. An explicit acknowledgement is a record in the
+`alarms` map with the time it was given and the time the mute ends; the
+`alarms ack <alarm-id>` command writes it, so the coordinator can answer an
+alarm without taking its item off the board. A routed alarm is a key that was
+raised and whose board item is gone: the coordinator took the item off the
+board, so the key is muted from that moment. That is the case that stopped
+the five alarms: the answer removed the item, and the next tick put it back.
+
+A muted alarm writes no board item and raises no alert for that key, and the
+shift logs one line per tick so the log says what it did not raise. A
+different cause is a different key and alarms at once: the tick job that
+fails with a new exit code, or the board that stalls for another reason, is
+a new alarm and is not silenced. An alarm that is not true any more drops
+its keys, so the same cause can alarm again the next time it is true. After
+the four hours are over the alarm comes back, if it is still true.
+
+The other board items are untouched: the merge alert (`factory-zero-merge`),
+the hourly fixture selftest (`overnight-selftest`) and every item a person
+put on the board keep their own rule and are never muted by this one.
+
+Run `python3 evidence/MO-496/proof.py` for the proof. It replays both
+alarms on a copy of the board file with a fixture clock: the first tick
+raises the alarm, the coordinator takes the item off the board, the next
+ticks write no item and no alert and log one line each, a changed cause
+alarms at once, and the same cause alarms again after four hours. The
+`alarm-mute` eval in `overnight selftest` covers the same ground with the
+fake clock and a copy of the board file, and the changed expectations in the
+`watchdog` eval are the alarm's new `cause` field.

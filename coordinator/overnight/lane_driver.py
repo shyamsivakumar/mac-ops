@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 
+import alarms
 import stall
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
@@ -887,12 +888,26 @@ def watchdog():
             stale.append(alarm)
     p = DECISIONS_PATH
     d = json.load(open(p))
+    present = any(i.get("id") == "factory-watchdog" for i in d["items"])
     d["items"] = [i for i in d["items"] if i.get("id") != "factory-watchdog"]
     if stale:
-        print("WATCHDOG " + "; ".join(stale))
-        d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                           "title": "Factory job stopped or failing: " + "; ".join(stale),
-                           "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
+        cause = "; ".join(stale)
+        if alarms.decide(d, "factory-watchdog", cause, present) == "quiet":
+            # The alarm was answered or routed, so the same cause stays
+            # quiet for four hours. The tick still says what it did not
+            # raise, and the board holds no item for it.
+            print("WATCHDOG quiet: " + cause)
+        else:
+            print("WATCHDOG " + cause)
+            alarms.raised(d, "factory-watchdog", cause)
+            d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
+                               "title": "Factory job stopped or failing: " + cause,
+                               "cause": alarms.cause_of(cause),
+                               "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
+    else:
+        # The alarm is not true any more, so its keys go and the same
+        # cause can alarm again the next time it is true.
+        alarms.forget(d, "factory-watchdog")
     d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     json.dump(d, open(p + ".tmp", "w"), indent=1)
     os.replace(p + ".tmp", p)

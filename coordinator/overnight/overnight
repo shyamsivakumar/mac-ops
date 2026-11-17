@@ -1710,8 +1710,8 @@ def stall_records(
                 f"{event.get('idle')} ticks. The board was swept again and the "
                 "shift keeps running until every item is done or parked."
             )
-            target = stall.alert(reason, board)
-            if target:
+            target, action = stall.alert(reason, board)
+            if action == "wrote":
                 if isinstance(state, dict):
                     stall.delivered(state)
                 write_shift_line(
@@ -1720,6 +1720,17 @@ def stall_records(
                     "board was swept again and Shyam was alerted",
                 )
                 written.append(target)
+            elif action == "quiet":
+                # The alarm was answered or routed, so the same cause
+                # stays quiet for four hours. The shift logs one line
+                # per tick and the board holds no item for it.
+                write_shift_line(
+                    root,
+                    f"stall: no board progress for {event.get('idle')} ticks; the "
+                    "board was swept again and the alarm stays quiet for the same "
+                    "cause",
+                )
+                written.append("the alarm stays quiet for the same cause")
             else:
                 write_shift_line(
                     root,
