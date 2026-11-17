@@ -644,6 +644,7 @@ revision 3 changes them.
 | `run/deadline` | The attended first night only | UNIX epoch the rehearsal ends at. The shift has no deadline (revision 3). |
 | `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
 | `run/stall-state.json` | A cycle | How long every item the shift measured has been idle, and which items are parked as a stall. It holds no list of work: the board is the list. |
+| `run/mute-state.json` | A cycle | Which alarm keys are quiet and until when. It is the mute for the alarms the shift raises (Refs #496), and it lives here and not in the board file, because the coordinator rewrites the board file. |
 | `receipts/<item>.md` | A cycle (`overnight receipt`) | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
 | `inbox/parking-lot.md` | A cycle (`overnight park`) | Decisions the shift could not make. Each with a default and a recommendation. |
 | `inbox/snag-log.md` | A cycle (`overnight park`) | Problems found (flaky test, conflict, dialog) and what the shift did. |
@@ -1363,25 +1364,32 @@ two places that raise these alarms: the watchdog (`factory-watchdog`, in
 | Thing | What it is |
 | --- | --- |
 | The key of an alarm | The alarm's id and its cause, as one string: `factory-watchdog\|gatekeep failing (last exit code 1)`. |
-| The cause | What is wrong, without the parts that change on every tick. The minutes of a quiet log and the minutes of a stuck run are not part of the cause; the exit code and the signal are. |
-| The mute state | The `alarms` map in the coordinator's own board file, `~/Code/coordinator/decisions.json`. The board and the shift read one state, and the shift keeps no second list. |
+| The cause | What is wrong, without the parts that change on every tick. The minutes of a quiet log and the minutes of a stuck run are not part of the cause; the exit code and the signal are. The stall's cause names the stalled repos. |
+| The mute state | `run/mute-state.json`, in the shift's own folder, next to the stall state. It is not in the board file: the coordinator rewrites the board file, and a board file that is rewritten must not take the mute with it. |
 | The mute | Four hours (`MUTE_SECONDS`) from the acknowledgement. |
 
-Two things mute a key. An explicit acknowledgement is a record in the
-`alarms` map with the time it was given and the time the mute ends; the
-`alarms ack <alarm-id>` command writes it, so the coordinator can answer an
-alarm without taking its item off the board. A routed alarm is a key that was
-raised and whose board item is gone: the coordinator took the item off the
-board, so the key is muted from that moment. That is the case that stopped
-the five alarms: the answer removed the item, and the next tick put it back.
+Two things mute a key. An explicit acknowledgement is a record with the time
+it was given and the time the mute ends; the `alarms ack <alarm-id>` command
+writes it, so the coordinator can answer an alarm without taking its item off
+the board. A routed alarm is a key that was raised and whose board item
+stayed gone: the coordinator took the item off the board, so the key is muted
+from that moment. That is the case that stopped the five alarms: the answer
+removed the item, and the next tick put it back.
+
+One tick of absence is not proof. The board has more than one writer and one
+of them can lose the item for a tick, so the alarm waits one tick before it
+believes it was routed: that tick writes no item and logs one line, and the
+tick after it mutes the key.
 
 A muted alarm writes no board item and raises no alert for that key, and the
 shift logs one line per tick so the log says what it did not raise. A
 different cause is a different key and alarms at once: the tick job that
-fails with a new exit code, or the board that stalls for another reason, is
-a new alarm and is not silenced. An alarm that is not true any more drops
-its keys, so the same cause can alarm again the next time it is true. After
-the four hours are over the alarm comes back, if it is still true.
+fails with a new exit code, or the board that stalls on other repos, is a new
+alarm and is not silenced. An alarm that is not true any more drops its
+"raised" mark, so the same cause can alarm again the next time it is true,
+but an acknowledgement that is still running keeps the key quiet: one healthy
+tick does not take the mute with it. After the four hours are over the alarm
+comes back, if it is still true.
 
 The other board items are untouched: the merge alert (`factory-zero-merge`),
 the hourly fixture selftest (`overnight-selftest`) and every item a person
@@ -1389,9 +1397,11 @@ put on the board keep their own rule and are never muted by this one.
 
 Run `python3 evidence/MO-496/proof.py` for the proof. It replays both
 alarms on a copy of the board file with a fixture clock: the first tick
-raises the alarm, the coordinator takes the item off the board, the next
-ticks write no item and no alert and log one line each, a changed cause
-alarms at once, and the same cause alarms again after four hours. The
+raises the alarm, the coordinator takes the item off the board, the next tick
+waits, the tick after that mutes the key, the ticks in between log one line
+each, a changed cause alarms at once, the same cause alarms again after four
+hours, and the mute survives a tick where the job was healthy. The
 `alarm-mute` eval in `overnight selftest` covers the same ground with the
-fake clock and a copy of the board file, and the changed expectations in the
-`watchdog` eval are the alarm's new `cause` field.
+fake clock, and the changed expectations in the `watchdog` eval are the
+alarm's new `cause` field and the mute state the pass writes beside the
+board.

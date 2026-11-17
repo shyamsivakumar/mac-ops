@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """Proof for #496: an acknowledged alarm stays quiet for four hours.
 
-Scenario one, the overnight stall. The shift raises factory-overnight-stall
+Scenario one, the factory watchdog. The tick job fails with an exit code,
+the watchdog raises the alarm, and the coordinator takes the item off the
+board. The next tick must not write the item (one tick of absence is not
+proof that the alarm was routed), the tick after that must mute the key
+for four hours, and the ticks in between must log one line each. A
+different exit code is a different cause and must alarm at once, and the
+same exit code must alarm again once the four hours are over and the cause
+still holds.
+
+Scenario two, the overnight stall. The shift raises factory-overnight-stall
 on the coordinator's board. The coordinator answers it and takes the item off
-the board. The next ticks must write no board item for that alarm and no
-alert for it, and the shift must log one line per tick. A changed cause must
-alarm at once, and the same cause must alarm again once the four hours are
-over and the cause still holds.
+the board, and the same rule holds. A stall on different repos is a
+different cause and alarms at once.
 
-Scenario two, the factory watchdog. The same replay for the
-factory-watchdog alarm: the tick job fails with an exit code, the alarm is
-raised, the coordinator takes the item off the board, and the next ticks
-write no item and raise no alarm. A different exit code is a different cause
-and alarms at once.
-
-The proof never touches the live board file: every run writes a copy in a
-temporary folder, and the clock is a fixture. The live jobs are not read
-and not touched.
+The proof never touches the live board file or the live shift's folder:
+every run writes copies in a temporary folder, the mute state goes beside
+them, and the clock is a fixture. The live jobs are not read and not
+touched.
 """
 import contextlib
 import datetime as dt
@@ -35,6 +37,7 @@ import lane_driver as lane  # noqa: E402
 import stall as rule  # noqa: E402
 
 NOW = dt.datetime(2026, 11, 17, 9, 0, tzinfo=dt.timezone.utc)
+REASON = "The overnight shift saw no board progress for 3 ticks."
 
 
 def clock_at(moment):
@@ -56,7 +59,8 @@ def take_off_the_board(board):
     """Return the board as the coordinator leaves it after answering.
 
     The coordinator takes the alarm's item off the board. The rest of the
-    board file, the mute state among it, stays."""
+    board file stays, and so does the mute state, which lives in its own
+    file and not in the board."""
     data = json.loads(board.read_text())
     data["items"] = [item for item in data["items"]
                      if item.get("id") != "factory-overnight-stall"
@@ -64,13 +68,11 @@ def take_off_the_board(board):
     board.write_text(json.dumps(data, indent=1))
 
 
-def stall_tick(board, reason, moment):
-    """Run one stall tick and return (action, output)."""
-    buffer = io.StringIO()
+def stall_tick(board, cause, moment):
+    """Run one stall tick and return the action it took."""
     with patch.object(dt, "datetime", clock_at(moment)):
-        with contextlib.redirect_stdout(buffer):
-            target, action = rule.alert(reason, board)
-    return action, buffer.getvalue()
+        target, action = rule.alert(REASON, cause, board)
+    return action
 
 
 def watchdog_tick(board, exit_code, moment):
@@ -94,10 +96,9 @@ def watchdog_tick(board, exit_code, moment):
     return buffer.getvalue(), items_of(board)
 
 
-def replay_stall(board):
+def replay_stall(board, cause):
     """Replay the overnight stall alarm and print what happened."""
-    reason = "The overnight shift saw no board progress for 3 ticks."
-    action, _ = stall_tick(board, reason, NOW)
+    action = stall_tick(board, cause, NOW)
     print(f"--- tick one: the shift raises the alarm ({action})")
     alarms_on_board = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
     print(f"factory-overnight-stall items: {len(alarms_on_board)}")
@@ -108,20 +109,24 @@ def replay_stall(board):
 
     # The coordinator answers the alarm and takes its item off the board.
     take_off_the_board(board)
-    for minute in (3, 6, 9):
-        action, _ = stall_tick(board, reason, NOW + dt.timedelta(minutes=minute))
-        items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
-        print(f"--- tick after the answer (+{minute} min): {action}")
-        if action != "quiet" or items:
-            print("FAIL an acknowledged alarm raised again")
-            return False
-    print("PASS the next three ticks wrote no item and no alert for the same cause")
+    action = stall_tick(board, cause, NOW + dt.timedelta(minutes=3))
+    print(f"--- tick after the answer (+3 min): {action}")
+    if action != "held" or [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]:
+        print("FAIL the tick after the answer raised again")
+        return False
+    action = stall_tick(board, cause, NOW + dt.timedelta(minutes=6))
+    print(f"--- the tick after that (+6 min): {action}")
+    if action != "quiet" or [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]:
+        print("FAIL an acknowledged alarm raised again")
+        return False
+    print("PASS the next ticks wrote no item and no alert for the same cause")
 
-    # A different cause is a different key and alarms at once.
-    action, _ = stall_tick(board, "The board stopped for another reason.",
-                           NOW + dt.timedelta(minutes=12))
+    # A different cause is a different key and alarms at once. A stall on
+    # other repos is a different cause.
+    other = rule.alarm_cause(REASON, {"items": {"a/other#9": {"stalled": True}}})
+    action = stall_tick(board, other, NOW + dt.timedelta(minutes=9))
+    print(f"--- a stall on other repos (+9 min): {action}")
     items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
-    print(f"--- a changed cause: {action}")
     if action != "wrote" or len(items) != 1:
         print("FAIL a changed cause did not alarm at once")
         return False
@@ -129,9 +134,9 @@ def replay_stall(board):
 
     # The same cause comes back when the four hours are over.
     take_off_the_board(board)
-    action, _ = stall_tick(board, reason, NOW + dt.timedelta(hours=4, minutes=5))
-    items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
+    action = stall_tick(board, cause, NOW + dt.timedelta(hours=4, minutes=20))
     print(f"--- the same cause after four hours: {action}")
+    items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
     if action != "wrote" or len(items) != 1:
         print("FAIL the alarm did not come back after four hours")
         return False
@@ -153,19 +158,22 @@ def replay_watchdog(board):
 
     # The coordinator takes the item off the board.
     take_off_the_board(board)
-    for minute in (3, 6):
-        output, items = watchdog_tick(board, 1, NOW + dt.timedelta(minutes=minute))
-        alarms_on_board = [i for i in items if i["id"] == "factory-watchdog"]
-        print(f"--- tick after the answer (+{minute} min): {output.strip()}")
-        if alarms_on_board or "WATCHDOG quiet" not in output:
-            print("FAIL an acknowledged alarm raised again")
-            return False
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(minutes=3))
+    print(f"--- tick after the answer (+3 min): {output.strip().splitlines()[-1]}")
+    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG held" not in output:
+        print("FAIL the tick after the answer raised again")
+        return False
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(minutes=6))
+    print(f"--- the tick after that (+6 min): {output.strip().splitlines()[-1]}")
+    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG quiet" not in output:
+        print("FAIL an acknowledged alarm raised again")
+        return False
     print("PASS the next ticks wrote no item and logged one line each")
 
     # A different exit code is a different cause and alarms at once.
     output, items = watchdog_tick(board, 78, NOW + dt.timedelta(minutes=9))
+    print(f"--- a changed exit code (+9 min): {output.strip().splitlines()[-1]}")
     alarms_on_board = [i for i in items if i["id"] == "factory-watchdog"]
-    print(f"--- a changed exit code: {output.strip()}")
     if len(alarms_on_board) != 1:
         print("FAIL a changed cause did not alarm at once")
         return False
@@ -173,13 +181,32 @@ def replay_watchdog(board):
 
     # The same cause comes back when the four hours are over.
     take_off_the_board(board)
-    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=5))
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=20))
+    print(f"--- the same exit code after four hours: {output.strip().splitlines()[-1]}")
     alarms_on_board = [i for i in items if i["id"] == "factory-watchdog"]
-    print(f"--- the same exit code after four hours: {output.strip()}")
     if len(alarms_on_board) != 1:
         print("FAIL the alarm did not come back after four hours")
         return False
     print("PASS the same exit code alarmed again after four hours")
+
+    # A tick where the job is healthy does not take the mute with it.
+    take_off_the_board(board)
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=23))
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=26))
+    print(f"--- the same exit code again (+4 h 26 min): {output.strip().splitlines()[-1]}")
+    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG quiet" not in output:
+        print("FAIL the alarm was not muted after the coordinator routed it")
+        return False
+    # A tick where the job is healthy: the alarm is not true any more.
+    output, items = watchdog_tick(board, 0, NOW + dt.timedelta(hours=4, minutes=29))
+    print(f"--- the job recovers (+4 h 29 min): {output.strip().splitlines()[-1]}")
+    # The job fails again with the same exit code.
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=32))
+    print(f"--- the same exit code again (+4 h 32 min): {output.strip().splitlines()[-1]}")
+    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG quiet" not in output:
+        print("FAIL the mute did not survive a healthy tick")
+        return False
+    print("PASS the mute survived a tick where the job was healthy")
     return True
 
 
@@ -188,7 +215,9 @@ def main():
         root = Path(directory)
         board = root / "decisions.json"
         board.write_text(json.dumps({"items": []}, indent=1))
-        if not replay_stall(board):
+        alarms.MUTE_PATH = str(root / "mute-state.json")
+        cause = rule.alarm_cause(REASON, {"items": {"a/one#1": {"stalled": True}}})
+        if not replay_stall(board, cause):
             return 1
         board.write_text(json.dumps({"items": []}, indent=1))
         if not replay_watchdog(board):

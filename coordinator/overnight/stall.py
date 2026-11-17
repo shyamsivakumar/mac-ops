@@ -187,7 +187,22 @@ def delivered(state):
     return state
 
 
-def alert(reason, path=None):
+def alarm_cause(reason, state):
+    """Return the cause of the board stall: the reason and the stalled repos.
+
+    The board stall is one alarm, and its cause names what is stuck: the
+    items the shift reported as stalled. Two stalls on different repos are
+    different causes, and a stall on the same repos is the same cause, so
+    the second one stays quiet after the first one was answered."""
+    items = state.get("items") if isinstance(state, dict) else None
+    stalled = sorted(
+        key for key, entry in (items or {}).items()
+        if isinstance(entry, dict) and entry.get("stalled")
+    )
+    return reason + " | stalled: " + (", ".join(stalled) if stalled else "none")
+
+
+def alert(reason, cause=None, path=None):
     """Write the alert that tells Shyam the board stopped moving.
 
     The alert is one item on the coordinator's board, the same board the
@@ -198,7 +213,7 @@ def alert(reason, path=None):
     board holds no item for it and the shift logs one line per tick. A
     different cause is a different alert and is written at once.
 
-    Return the path it wrote and what it did: "wrote", "quiet" or
+    Return the path it wrote and what it did: "wrote", "quiet", "held" or
     "failed"."""
     target = Path(path or BOARD_FILE)
     try:
@@ -219,20 +234,27 @@ def alert(reason, path=None):
         for item in items
         if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
     ]
-    if alarms.decide(decisions, ALERT_ID, reason, present) == "quiet":
+    state = alarms.load_state()
+    action = alarms.decide(state, ALERT_ID, cause or reason, present)
+    if action in ("quiet", "hold"):
         decisions["items"] = kept
         decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         if not write_board(target, decisions):
             return "", "failed"
-        return "", "quiet"
-    alarms.raised(decisions, ALERT_ID, reason)
+        # The state changed: a tick of absence, or the acknowledgement
+        # that mutes the key.
+        alarms.save_state(state)
+        if action == "quiet":
+            return "", "quiet"
+        return "", "held"
+    alarms.raised(state, ALERT_ID, cause or reason)
     kept.append(
         {
             "id": ALERT_ID,
             "group": "Coordinator",
             "kind": "action",
             "title": "Overnight shift stalled: no board progress for 3 ticks",
-            "cause": alarms.cause_of(reason),
+            "cause": alarms.cause_of(cause or reason),
             "why": reason,
         }
     )
@@ -240,6 +262,9 @@ def alert(reason, path=None):
     decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if not write_board(target, decisions):
         return "", "failed"
+    # The mute state is written after the board, so the state never says
+    # the alarm is on the board when the board does not hold it.
+    alarms.save_state(state)
     return str(target), "wrote"
 
 
