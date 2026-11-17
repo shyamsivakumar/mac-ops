@@ -1825,27 +1825,30 @@ def alarm_mute():
     cause = "gatekeep failing (last exit code 1)"
     key = alarms.key_of("factory-watchdog", cause)
 
-    # The rule: a key that was never raised is raised, a key that was
-    # raised and whose board item stayed gone was routed, so it is quiet
-    # for four hours, and a different cause is a different key.
+    # The rule: a key with an acknowledgement stays quiet for four hours,
+    # and every other key is raised at once.
     state = {}
-    exact(alarms.decide(state, "factory-watchdog", cause, False, now), "raise")
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
     alarms.raised(state, "factory-watchdog", cause, now)
-    exact(alarms.decide(state, "factory-watchdog", cause, True, now), "raise")
-    # One tick of absence is not proof: the board has more than one
-    # writer and one of them can lose the item for a tick.
-    exact(alarms.decide(state, "factory-watchdog", cause, False, now), "hold")
-    exact(alarms.decide(state, "factory-watchdog", cause, False,
-                         now + dt.timedelta(minutes=3)), "quiet")
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
+
+    # A board item that went missing is not an acknowledgement. The board
+    # has more than one writer and one of them can lose the item, so an
+    # alarm nobody answered is raised again and never silenced.
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
+
+    # The acknowledgement is what quiets the key.
+    alarms.acknowledge(state, key, now)
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "quiet")
     exact(alarms.muted(state, key, now), True)
     # A different cause is a different key and alarms at once.
     exact(alarms.decide(state, "factory-watchdog", "gatekeep failing (last exit code 2)",
-                         False, now), "raise")
+                         now), "raise")
     # The quiet key stays quiet for four hours and then alarms again.
-    exact(alarms.decide(state, "factory-watchdog", cause, False,
+    exact(alarms.decide(state, "factory-watchdog", cause,
                          now + dt.timedelta(hours=3)), "quiet")
-    exact(alarms.decide(state, "factory-watchdog", cause, False,
-                         now + dt.timedelta(hours=4, minutes=10)), "raise")
+    exact(alarms.decide(state, "factory-watchdog", cause,
+                         now + dt.timedelta(hours=4, minutes=1)), "raise")
 
     # The minutes of a quiet log are not part of the cause, so the same
     # quiet log is the same cause. The exit code is part of it.
@@ -1854,25 +1857,26 @@ def alarm_mute():
     exact(alarms.key_of("factory-watchdog", "gatekeep failing (last exit code 1)") ==
           alarms.key_of("factory-watchdog", "gatekeep failing (last exit code 2)"), False)
 
-    # A tick where the alarm is not true does not take the mute with it:
-    # the key keeps its acknowledgement, so the same cause stays quiet
-    # for the rest of the four hours, and the same cause alarms again
-    # when no acknowledgement is running.
-    state = {}
-    alarms.raised(state, "factory-watchdog", cause, now)
-    alarms.acknowledge(state, key, now)
-    alarms.gone(state, "factory-watchdog")
-    exact(alarms.decide(state, "factory-watchdog", cause, True, now), "quiet")
-    state = {}
-    alarms.raised(state, "factory-watchdog", cause, now)
-    alarms.gone(state, "factory-watchdog")
-    exact(alarms.decide(state, "factory-watchdog", cause, True, now), "raise")
+    # The idle tick count is not part of a cause: the same stall reported
+    # on the fourth tick is the same stall as the one reported on the
+    # third, so it does not raise again inside the mute window.
+    exact(alarms.key_of("factory-overnight-stall", "no board progress for 3 ticks"),
+          alarms.key_of("factory-overnight-stall", "no board progress for 4 ticks"))
 
-    # An answered alarm is quiet even when its item is still on the board.
+    # A tick where the alarm is not true any more does not take the mute
+    # with it: the key keeps its acknowledgement, so the same cause stays
+    # quiet for the rest of the four hours.
     state = {}
     alarms.raised(state, "factory-watchdog", cause, now)
     alarms.acknowledge(state, key, now)
-    exact(alarms.decide(state, "factory-watchdog", cause, True, now), "quiet")
+    alarms.gone(state, "factory-watchdog")
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "quiet")
+    # And a cause that was never acknowledged alarms again when it is
+    # true again.
+    state = {}
+    alarms.raised(state, "factory-watchdog", cause, now)
+    alarms.gone(state, "factory-watchdog")
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
 
     # The mute state lives in its own file, so a board file that the
     # coordinator rewrites cannot take the mute with it, and the command
@@ -1889,12 +1893,6 @@ def alarm_mute():
             with contextlib.redirect_stderr(io.StringIO()):
                 exact(alarms.main(["ack", "factory-nothing"]), 1)
 
-    # The idle tick count is not part of a cause: the same stall reported
-    # on the fourth tick is the same stall as the one reported on the
-    # third, so it does not raise again inside the mute window.
-    exact(alarms.key_of("factory-overnight-stall", "no board progress for 3 ticks"),
-          alarms.key_of("factory-overnight-stall", "no board progress for 4 ticks"))
-
     # The stall's cause names the stalled repos, so two stalls on
     # different repos are different causes.
     stalled = {"items": {"a/one#1": {"stalled": True}, "b/two#2": {"stalled": False}}}
@@ -1903,8 +1901,8 @@ def alarm_mute():
     exact(rule.alarm_cause("no board progress for 3 ticks", {"items": {}}),
           "no board progress for 3 ticks | stalled: none")
 
-    # The stall writes the alarm, and the same cause stays quiet after
-    # the coordinator took the item off the board.
+    # The stall writes the alarm, and the same cause stays quiet once it
+    # is acknowledged.
     with tempfile.TemporaryDirectory() as scratch:
         mute = str(Path(scratch) / "mute-state.json")
         with patch.object(alarms, "MUTE_PATH", mute):
@@ -1917,14 +1915,16 @@ def alarm_mute():
             exact(len(items), 1)
             exact(items[0]["id"], "factory-overnight-stall")
             exact(items[0]["cause"], "no board progress for <ticks>")
-            # The coordinator took the item off the board: the next tick
-            # waits, and the tick after that mutes the key.
+            # An alarm nobody answered is raised again: the board item
+            # going missing says nothing.
             data = json.loads(board.read_text())
             data["items"] = []
             board.write_text(json.dumps(data))
             target, action = rule.alert("no board progress for 3 ticks", None, board)
-            exact(action, "held")
-            exact(json.loads(board.read_text())["items"], [])
+            exact(action, "wrote")
+            exact(len(json.loads(board.read_text())["items"]), 1)
+            # The acknowledgement quiets it.
+            exact(alarms.main(["ack", "factory-overnight-stall"]), 0)
             target, action = rule.alert("no board progress for 3 ticks", None, board)
             exact(action, "quiet")
             exact(json.loads(board.read_text())["items"], [])
@@ -1954,12 +1954,9 @@ def alarm_mute():
             # The rule stops asking once the alert was delivered, and the
             # shift asks anyway.
             exact(rule.continues(state), True)
-            # The coordinator takes the item off the board.
-            data = json.loads(board.read_text())
-            data["items"] = []
-            board.write_text(json.dumps(data))
-            # The next tick has no event: the shift asks, and the alarm
-            # waits one tick before it believes it was routed.
+            # Shyam answers the alarm: the acknowledgement is recorded.
+            exact(alarms.main(["ack", "factory-overnight-stall"]), 0)
+            # The next tick has no event, and the alarm stays quiet.
             runner.stall_records(Path(scratch), [], str(board), state)
             exact(json.loads(board.read_text())["items"], [])
             runner.stall_records(Path(scratch), [], str(board), state)
@@ -1968,9 +1965,9 @@ def alarm_mute():
             log = (Path(scratch) / "run" / "shift-log.md").read_text()
             exact(log.count("stall: no board progress"), 3)
 
-    # The watchdog raises the alarm, and the same cause stays quiet after
-    # the coordinator took the item off the board. A changed cause alarms
-    # at once, and the alarm comes back after four hours.
+    # The watchdog raises the alarm, and the same cause stays quiet once
+    # it is acknowledged. A changed cause alarms at once, and the alarm
+    # comes back after four hours.
     with tempfile.TemporaryDirectory() as scratch:
         mute = str(Path(scratch) / "mute-state.json")
         with patch.object(alarms, "MUTE_PATH", mute):
@@ -2007,17 +2004,29 @@ def alarm_mute():
             exact(items[0]["cause"], "gatekeep failing (last exit code 1)")
             exact("WATCHDOG" in output, True)
 
-            # The coordinator took the item off the board: the next tick
-            # waits, the tick after that mutes the key, and the board
-            # holds no item in between.
+            # An alarm nobody answered is raised again, even when its
+            # board item went missing.
             data = json.loads(board.read_text())
             data["items"] = []
             board.write_text(json.dumps(data))
             output = pass_once(now + dt.timedelta(minutes=3))
-            exact(json.loads(board.read_text())["items"], [])
-            exact("WATCHDOG held" in output, True)
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact("WATCHDOG quiet" in output, False)
+
+            # The acknowledgement quiets it: the board holds no item and
+            # the tick says so. The command runs on the clock the tick
+            # runs on.
+            class AckClock(dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now + dt.timedelta(minutes=6)
+
+            with patch.object(dt, "datetime", AckClock):
+                exact(alarms.main(["ack", "factory-watchdog"]), 0)
             output = pass_once(now + dt.timedelta(minutes=6))
-            exact(json.loads(board.read_text())["items"], [])
+            items = json.loads(board.read_text())["items"]
+            exact(items, [])
             exact("WATCHDOG quiet" in output, True)
 
             # A changed cause is a different key and alarms at once.
@@ -2037,26 +2046,24 @@ def alarm_mute():
             exact(len(items), 1)
             exact(items[0]["cause"], "gatekeep failing (last exit code 1)")
 
-            # The coordinator takes the item off the board again: the
-            # next tick waits and the tick after that mutes the key.
+            # A tick where the job is healthy does not take the mute with
+            # it: the same cause stays quiet for the rest of the four
+            # hours.
+            class LaterClock(dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now + dt.timedelta(hours=4, minutes=11)
+
+            with patch.object(dt, "datetime", LaterClock):
+                exact(alarms.main(["ack", "factory-watchdog"]), 0)
             data = json.loads(board.read_text())
             data["items"] = []
             board.write_text(json.dumps(data))
-            output = pass_once(now + dt.timedelta(hours=4, minutes=13))
-            exact(json.loads(board.read_text())["items"], [])
-            exact("WATCHDOG held" in output, True)
-            output = pass_once(now + dt.timedelta(hours=4, minutes=16))
-            exact(json.loads(board.read_text())["items"], [])
-            exact("WATCHDOG quiet" in output, True)
-
-            # A tick where the job is healthy does not take the mute
-            # with it: the same cause stays quiet for the rest of the
-            # four hours.
             codes["code"] = 0
-            output = pass_once(now + dt.timedelta(hours=4, minutes=20))
+            output = pass_once(now + dt.timedelta(hours=4, minutes=12))
             exact(json.loads(board.read_text())["items"], [])
             codes["code"] = 1
-            output = pass_once(now + dt.timedelta(hours=4, minutes=23))
+            output = pass_once(now + dt.timedelta(hours=4, minutes=13))
             exact(json.loads(board.read_text())["items"], [])
             exact("WATCHDOG quiet" in output, True)
 

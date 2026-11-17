@@ -1368,24 +1368,23 @@ two places that raise these alarms: the watchdog (`factory-watchdog`, in
 | The mute state | `run/mute-state.json`, in the shift's own folder, next to the stall state. It is not in the board file: the coordinator rewrites the board file, and a board file that is rewritten must not take the mute with it. |
 | The mute | Four hours (`MUTE_SECONDS`) from the acknowledgement. |
 
-Two things mute a key. An explicit acknowledgement is a record with the time
-it was given and the time the mute ends; the `alarms ack <alarm-id>` command
-writes it, so the coordinator can answer an alarm without taking its item off
-the board. A routed alarm is a key that was raised and whose board item
-stayed gone: the coordinator took the item off the board, so the key is muted
-from that moment. That is the case that stopped the five alarms: the answer
-removed the item, and the next tick put it back.
+One thing mutes a key: an explicit acknowledgement. It is a record with the
+time it was given and the time the mute ends, and it is written when the
+alarm was answered on the decisions board or when the coordinator recorded
+it as routed. The coordinator panel writes it when Shyam answers, through
+the `alarms ack <alarm-id>` command, and the command is there for the
+coordinator and for a person.
+
+The record is the whole rule. A board item that went missing is not an
+acknowledgement: the board has more than one writer and one of them can lose
+the item for a tick, so an alarm that nobody answered is never silenced. It
+is raised again on the next tick.
 
 The shift asks again on every tick of a stall that continues. The rule
 stops asking once the alert was delivered, but the shift does not: the
 writer knows whether the alarm is due, it is quiet while the mute runs,
 and it comes back when the four hours are over and the board still has not
 moved.
-
-One tick of absence is not proof. The board has more than one writer and one
-of them can lose the item for a tick, so the alarm waits one tick before it
-believes it was routed: that tick writes no item and logs one line, and the
-tick after it mutes the key.
 
 A muted alarm writes no board item and raises no alert for that key, and the
 shift logs one line per tick so the log says what it did not raise. A
@@ -1406,10 +1405,11 @@ alarms on a copy of the board file with a fixture clock. The stall is
 replayed on the real path: the proof loads the overnight runner and drives
 `stall_records`, so the shift's own decision to ask again on a stall that
 continues is part of the proof and not skipped. The first tick raises the
-alarm, the coordinator takes the item off the board, the next tick waits,
-the tick after that mutes the key, the ticks in between log one line each,
-a changed cause alarms at once, the same cause alarms again after four
-hours, and the mute survives a tick where the job was healthy. The
+alarm, the alarm's item goes missing and nobody answered, so the alarm is
+raised again, the answer records the acknowledgement, the next tick is
+quiet and logs one line, a changed cause alarms at once, the same cause
+alarms again after four hours, and the mute survives a tick where the job
+was healthy. The
 `alarm-mute` eval in `overnight selftest` covers the same ground with the
 fake clock, and the changed expectations in the `watchdog` eval are the
 alarm's new `cause` field and the mute state the pass writes beside the

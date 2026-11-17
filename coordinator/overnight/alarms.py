@@ -17,14 +17,16 @@ The mute state lives in the shift's own records, under
 the coordinator rewrites the board file, and a board file that is
 rewritten must not take the mute with it.
 
-Two things mute a key. An explicit acknowledgement is a record with the
-time it was given and the time the mute ends; the `alarms ack <alarm-id>`
-command writes it. A routed alarm is a key that was raised and whose
-board item stayed gone: the coordinator took the item off the board, so
-the key is muted from that moment. One tick of absence is not proof: the
-board has more than one writer and one of them can lose the item for a
-tick, so the alarm waits a tick before it believes it.
+One thing mutes a key: an explicit acknowledgement. It is a record with
+the time it was given and the time the mute ends, and it is written when
+the alarm was answered on the decisions board or when the coordinator
+recorded it as routed. The coordinator panel writes it when Shyam answers
+(the `alarms ack <alarm-id>` command), and the command is there for the
+coordinator and for a person.
 
+The record is the whole rule. A board item that went missing is not an
+acknowledgement: the board has more than one writer and one of them can
+lose the item for a tick, so an alarm nobody answered is never silenced.
 An alarm that is not true any more drops its "raised" mark, so the same
 cause can alarm again the next time it is true, but an acknowledgement
 that is still running keeps the key quiet.
@@ -49,12 +51,26 @@ VOLATILE = re.compile(r"\d+ min \(limit \d+\)|running \d+ min")
 # The idle tick count of a stall changes with the tick it is reported on.
 VOLATILE_TICKS = re.compile(r"\d+ ticks")
 # The shift's own records: the mute state lives beside the stall state.
-MUTE_PATH = os.environ.get(
-    "OVERNIGHT_MUTE_STATE",
-    "/Users/shyamsivakumar/Code/coordinator/.overnight/run/mute-state.json",
-)
-# A tick that finds the alarm's item gone does not believe it at once.
-ABSENT_TICKS = 2
+# The path follows the shift's root, so the command the coordinator runs
+# and the shift that reads the state write the same file.
+MUTE_PATH = os.environ.get("OVERNIGHT_MUTE_STATE")
+
+
+def default_mute_path():
+    """Return the path of the mute state in the shift's own folder.
+
+    The folder is the shift's root, which the installer creates and
+    which `OVERNIGHT_ROOT` or `MAC_OPS_COORDINATOR_DIR` can move."""
+    root = os.environ.get("OVERNIGHT_ROOT")
+    if root:
+        return Path(root).expanduser() / "run" / "mute-state.json"
+    coordinator = os.environ.get("MAC_OPS_COORDINATOR_DIR")
+    if coordinator:
+        return Path(coordinator).expanduser() / ".overnight" / "run" / "mute-state.json"
+    return Path.home() / "Code" / "coordinator" / ".overnight" / "run" / "mute-state.json"
+
+
+MUTE_PATH = MUTE_PATH or str(default_mute_path())
 
 
 def stamp(now=None):
@@ -168,7 +184,7 @@ def raised(state, alarm_id, cause, now=None):
     waits for an answer."""
     current = now or dt.datetime.now(dt.timezone.utc)
     key = key_of(alarm_id, cause)
-    state[key] = {"cause": cause_of(cause), "raised": stamp(current), "absent": 0}
+    state[key] = {"cause": cause_of(cause), "raised": stamp(current)}
     return state[key]
 
 
@@ -186,23 +202,15 @@ def gone(state, alarm_id):
         if not isinstance(record, dict):
             continue
         record.pop("raised", None)
-        record["absent"] = 0
 
 
-def decide(state, alarm_id, cause, present, now=None):
-    """Return what the shift does with one alarm.
+def decide(state, alarm_id, cause, now=None):
+    """Return what the shift does with one alarm: "raise" or "quiet".
 
-    "raise" writes the board item, "quiet" writes nothing and mutes the
-    key for four hours, and "hold" writes nothing for this tick because
-    the board item went missing and one tick is not proof that the
-    coordinator routed it.
-
-    The rule: a key that was answered or routed stays quiet for four
-    hours. A key that was raised and whose board item stayed gone was
-    routed. A key that was never raised, or whose cause changed, is
-    raised at once.
-
-    `present` says whether the board holds the alarm's item right now."""
+    The rule: a key with an acknowledgement stays quiet for four hours,
+    and every other key is raised at once. Nothing else quiets an alarm.
+    A board item that went missing is not an acknowledgement, so an alarm
+    that nobody answered is never silenced."""
     current = now or dt.datetime.now(dt.timezone.utc)
     key = key_of(alarm_id, cause)
     record = entry(state, key)
@@ -211,21 +219,6 @@ def decide(state, alarm_id, cause, present, now=None):
         if stop is not None and current.timestamp() < stop:
             return "quiet"
         # The four hours are over, so the alarm is raised again.
-        return "raise"
-    if record.get("raised") and not present:
-        count = int(record.get("absent") or 0) + 1
-        record["absent"] = count
-        state[key] = record
-        if count >= ABSENT_TICKS:
-            acknowledge(state, key, current)
-            return "quiet"
-        # The item was on the board and is gone. The board has more than
-        # one writer, and one of them can lose the item for a tick, so
-        # the alarm waits a tick before it believes it was routed.
-        return "hold"
-    if present:
-        record["absent"] = 0
-        state[key] = record
     return "raise"
 
 

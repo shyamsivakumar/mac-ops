@@ -888,22 +888,16 @@ def watchdog():
             stale.append(alarm)
     p = DECISIONS_PATH
     d = json.load(open(p))
-    present = any(i.get("id") == "factory-watchdog" for i in d["items"])
     d["items"] = [i for i in d["items"] if i.get("id") != "factory-watchdog"]
     state = alarms.load_state()
     if stale:
         cause = "; ".join(stale)
-        action = alarms.decide(state, "factory-watchdog", cause, present)
+        action = alarms.decide(state, "factory-watchdog", cause)
         if action == "quiet":
-            # The alarm was answered or routed, so the same cause stays
-            # quiet for four hours. The tick still says what it did not
-            # raise, and the board holds no item for it.
+            # The alarm was acknowledged, so the same cause stays quiet
+            # for four hours. The tick still says what it did not raise,
+            # and the board holds no item for it.
             print("WATCHDOG quiet: " + cause)
-        elif action == "hold":
-            # The item went off the board. One tick is not proof that the
-            # coordinator routed it, so the tick writes no item and asks
-            # again on the next tick.
-            print("WATCHDOG held: " + cause)
         else:
             print("WATCHDOG " + cause)
             alarms.raised(state, "factory-watchdog", cause)
