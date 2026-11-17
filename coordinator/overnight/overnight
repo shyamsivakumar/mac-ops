@@ -1856,6 +1856,10 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
         board = root / "decisions.json"
         if not board.exists():
             write_record(board, json.dumps({"items": []}, indent=1) + "\n")
+        # The mute state belongs to the root the fixture chose, so a
+        # fixture run never writes a synthetic alarm key into the live
+        # state and never reads a live acknowledgement.
+        alarms.MUTE_PATH = str(root / "run" / "mute-state.json")
         for line in stall_records(root, events, str(board), state):
             emit(f"wrote {line}")
         save_stall_state(root, state)

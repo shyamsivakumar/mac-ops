@@ -1396,10 +1396,16 @@ key that cannot be written is a fault the shift says out loud, and the
 alarm is published anyway: a storage failure must not hide a real failure
 from Shyam.
 
-The panel's answer is bound to the cause it showed when he chose it. When
-the alarm is replaced between the answer and the send, the answer is
-dropped and Shyam is told, because sending it would answer the alarm that
-is there now, and he never answered that one.
+The panel's answer is bound to the cause it showed when he chose it: the
+choice and the free-text reply alike take the cause when the answer
+starts, not when it is sent. When the alarm is replaced between the answer
+and the send, the answer is dropped and Shyam is told, because sending it
+would answer the alarm that is there now, and he never answered that one.
+
+The mute state lives under the root the run chose. A shift run and a
+fixture run with `--root` each write their own state under their own root,
+so a fixture never writes a synthetic alarm key into the live state and
+never reads a live acknowledgement.
 
 The command exits 0 when the acknowledgement was written, 1 when there is
 no raised key for that cause, 2 when the usage is wrong, and 3 when the

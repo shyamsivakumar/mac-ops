@@ -1976,6 +1976,8 @@ def alarm_mute():
     exact("await acknowledgeAlarm(a.id, a.cause)" in panel, True)
     exact("if (r.code !== 0) {" in panel, True)
     exact("`${home()}/.local/bin/alarms.py`" in panel, True)
+    exact("this.replyCauses.set(q, this.causeOf(q))" in panel, True)
+    exact("cause: this.replyCauses.get(q) ?? this.causeOf(q)" in panel, True)
     send = panel.index("send(cx) {")
     body = panel[send:send + 400]
     exact(body.index("this.dropStaleDrafts()") < body.index("this.message()"), True)
@@ -2070,6 +2072,25 @@ def alarm_mute():
     # continues, so the alarm can come back when the four hours are over
     # and the log says one line per tick.
     runner = load_runner()
+
+    # The fixture writes its records under the root it chose, the mute
+    # state included: a fixture run never writes a synthetic alarm key
+    # into the live state, and never reads a live acknowledgement.
+    from argparse import Namespace
+    with tempfile.TemporaryDirectory() as scratch:
+        fixture = Path(scratch) / "fixture.json"
+        fixture.write_text(json.dumps({
+            "items": [{"repo": "a/one", "number": 1}],
+            "ticks": [{"a/one#1": "same|1"}] * 4,
+        }))
+        root = Path(scratch) / "root"
+        live = str(Path(scratch) / "live-mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", live):
+            runner.run_stall_fixture(Namespace(root=str(root), fixture=str(fixture)))
+            exact(alarms.MUTE_PATH, str(root / "run" / "mute-state.json"))
+            exact((root / "run" / "mute-state.json").exists(), True)
+            exact(Path(live).exists(), False)
+
     with tempfile.TemporaryDirectory() as scratch:
         mute = str(Path(scratch) / "mute-state.json")
         board = Path(scratch) / "decisions.json"
