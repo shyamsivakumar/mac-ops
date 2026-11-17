@@ -300,6 +300,14 @@ class XcodebuildExclusionTests(unittest.TestCase):
         self.assertIsNone(job_id)
         self.assertEqual(reason, 'xcodebuild-busy')
 
+    def test_a_large_host_keeps_its_build_concurrency(self):
+        self.sample = sample(48, 30)
+        self.running('first')
+        self.queue('second')
+        job_id, reason = self.reserve('second')
+        self.assertIsNotNone(job_id)
+        self.assertIsNone(reason)
+
     def test_another_workload_may_start_beside_a_build(self):
         self.running('first')
         self.queue('other')

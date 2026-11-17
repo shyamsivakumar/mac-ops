@@ -2041,8 +2041,10 @@ def _reserve_job(
             row for row in records if row.get("state") not in ("complete", "removed")
         ]
         same_task = any(row.get("task_key") == task_key for row in active)
-        if command_basename == "xcodebuild" and any(
-            row.get("command_basename") == "xcodebuild" for row in active
+        if (
+            command_basename == "xcodebuild"
+            and sample.physical_bytes < SMALL_HOST_MEMORY_BYTES
+            and any(row.get("command_basename") == "xcodebuild" for row in active)
         ):
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
