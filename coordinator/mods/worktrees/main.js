@@ -6,7 +6,7 @@ const STATE = `${home()}/.local/state/herdr-worktrees`;
 const SCAN = `${appHome()}/mods/worktrees/scan.sh`;
 const CONFIRM_GAP = 400;
 const ARM_FOR = 6000;
-const FRESH_MS = 60000;
+const FRESH_MS = 300000;
 const POLL_MS = 2000;
 const PORT_POLL_MS = 5000;
 const HANG_MS = 660000;
@@ -152,6 +152,7 @@ export default class Worktrees extends View {
     this.selected = new Set();
     this.armed = null;
     this.armedArchive = null;
+    this.queued = null;
     this.pressedAt = 0;
     this.polling = false;
     this.ports = new Map();
@@ -231,8 +232,12 @@ export default class Worktrees extends View {
           this.scanning = false;
           this.cleaning = false;
           this.archiving = false;
+          const queued = this.queued;
+          this.queued = null;
+          if (queued) this.launch(queued, cx);
         }
       } catch (error) {
+        this.queued = null;
         this.scanning = false;
         this.cleaning = false;
         this.archiving = false;
@@ -313,13 +318,29 @@ export default class Worktrees extends View {
 
   press(cx) {
     const n = this.cleanable();
-    if (!this.live() || this.scanning || this.cleaning || !n) return;
-    if (!this.confirmed("armed", cx)) return;
-    this.shown = n;
-    this.cleaning = true;
+    if (!this.live() || this.cleaning || this.archiving) return;
+    if (this.queued) {
+      if (this.queued.mode === "clean") this.queued = null;
+      cx.notify();
+      return;
+    }
+    if (!n || !this.confirmed("armed", cx)) return;
+    if (this.scanning) {
+      this.queued = { mode: "clean" };
+      cx.notify();
+      return;
+    }
+    this.launch({ mode: "clean" }, cx);
+  }
+
+  launch({ mode, paths }, cx) {
+    if (mode === "clean") {
+      this.shown = this.cleanable();
+      this.cleaning = true;
+    } else this.archiving = true;
     this.result = null;
     this.archiveResult = null;
-    this.start("clean", cx);
+    this.start(mode, cx, paths);
   }
 
   archivable() {
@@ -344,12 +365,20 @@ export default class Worktrees extends View {
 
   pressArchive(cx) {
     const chosen = this.chosen();
-    if (!this.live() || this.scanning || !chosen.length) return;
-    if (!this.confirmed("armedArchive", cx)) return;
-    this.archiving = true;
-    this.result = null;
-    this.archiveResult = null;
-    this.start("archive", cx, chosen.map((r) => r.path));
+    if (!this.live() || this.cleaning || this.archiving) return;
+    if (this.queued) {
+      if (this.queued.mode === "archive") this.queued = null;
+      cx.notify();
+      return;
+    }
+    if (!chosen.length || !this.confirmed("armedArchive", cx)) return;
+    const paths = chosen.map((r) => r.path);
+    if (this.scanning) {
+      this.queued = { mode: "archive", paths };
+      cx.notify();
+      return;
+    }
+    this.launch({ mode: "archive", paths }, cx);
   }
 
   openFolder(row) {
@@ -444,12 +473,13 @@ export default class Worktrees extends View {
     const c = this.data?.categories;
     const n = this.cleanable();
     const armed = this.armed !== null;
-    const label = this.cleaning ? "Cleaning…" : armed ? `Press again to remove ${n}` : n ? `Clean ${n} safe` : "Nothing safe to clean";
+    const label = this.cleaning ? "Cleaning…" : this.queued?.mode === "clean" ? "Clean after scan" : armed ? `Press again to remove ${n}` : n ? `Clean ${n} safe` : "Nothing safe to clean";
     const idle = !this.scanning && !this.cleaning && !this.archiving;
     const look = this.archivable();
     const chosen = this.chosen().length;
     const armedArchive = this.armedArchive !== null;
-    const archiveLabel = this.archiving ? "Archiving…" : armedArchive ? `Press again to archive ${chosen}` : chosen ? `Archive ${chosen}` : "Archive";
+    const running = this.cleaning || this.archiving;
+    const archiveLabel = this.archiving ? "Archiving…" : this.queued?.mode === "archive" ? `Archive ${this.queued.paths.length} after scan` : armedArchive ? `Press again to archive ${chosen}` : chosen ? `Archive ${chosen}` : "Archive";
     const archived = this.archiveResult?.archived ?? [];
     const refused = this.archiveResult?.refused ?? [];
     const result = this.result?.rows?.filter((r) => r.category === "removed") ?? [];
@@ -459,7 +489,7 @@ export default class Worktrees extends View {
       .child(h_flex().px(14).py(10).gap(10).items_center().flex_none().border_b(1).border_color(t.border)
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Worktrees"))
         .child(div().flex_1().text_size(12).text_color(this.error ? t.blocked : t.muted)
-          .child(this.error ? `Couldn't scan: ${this.error}` : this.scanning ? (this.cleaning ? "Cleaning, then rescanning…" : this.archiving ? "Archiving, then rescanning…" : "Scanning…") : this.finished ? `Last scan ${clock(this.finished)}` : ""))
+          .child(this.error ? `Couldn't scan: ${this.error}` : this.scanning ? (this.cleaning ? "Cleaning, then rescanning…" : this.archiving ? "Archiving, then rescanning…" : this.queued ? `Scanning, then ${this.queued.mode === "clean" ? "cleaning" : "archiving"}…` : "Scanning…") : this.finished ? `Last scan ${clock(this.finished)}` : ""))
         .child(this.small(t, "wt-rescan", this.scanning ? "Scanning…" : "Rescan", (cx) => idle && this.live() && this.start("scan", cx)))
         .child(this.small(t, "wt-close", "Close", () => closeOverlay(this.overlay))))
       .when(Boolean(c), (el) => el.child(h_flex().gap(10).p(14).flex_none()
@@ -484,12 +514,12 @@ export default class Worktrees extends View {
           .child(div().text_size(12).line_height("17px").text_color(t.muted).child("Clean removes worktrees that pass every check. Archive moves the folder to ~/.local/state/archive, keeps the branch and pins the commit. Nothing is deleted.")))
         .child(h_flex().id("wt-archive").h(30).px(14).flex_none().items_center().rounded(6)
           .bg(armedArchive ? t.blocked : t.solid).text_color(armedArchive ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
-          .opacity(chosen && idle ? 1 : 0.45).cursor_pointer()
+          .opacity((chosen || this.queued?.mode === "archive") && !running ? 1 : 0.45).cursor_pointer()
           .on_click((e, cx) => e.click_count > 1 || this.pressArchive(cx))
           .child(archiveLabel))
         .child(h_flex().id("wt-clean").h(30).px(14).flex_none().items_center().rounded(6)
           .bg(armed ? t.blocked : t.solid).text_color(armed ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
-          .opacity(n && idle ? 1 : 0.45).cursor_pointer()
+          .opacity(n && !running ? 1 : 0.45).cursor_pointer()
           .on_click((e, cx) => e.click_count > 1 || this.press(cx))
           .child(label)));
   }
