@@ -23,6 +23,8 @@ import json
 import os
 from pathlib import Path
 
+import alarms
+
 # The cap the spec names: three ticks with no new commit and no new receipt.
 STALL_CAP = 3
 # The alert the coordinator's board shows Shyam.
@@ -190,38 +192,63 @@ def alert(reason, path=None):
 
     The alert is one item on the coordinator's board, the same board the
     merge alert and the watchdog use. The item is replaced, so one stalled
-    board shows one alert and not one per tick."""
+    board shows one alert and not one per tick.
+
+    An alert that was answered or routed stays quiet for four hours: the
+    board holds no item for it and the shift logs one line per tick. A
+    different cause is a different alert and is written at once.
+
+    Return the path it wrote and what it did: "wrote", "quiet" or
+    "failed"."""
     target = Path(path or BOARD_FILE)
     try:
         with open(target) as handle:
             decisions = json.load(handle)
     except (OSError, ValueError):
-        return ""
+        return "", "failed"
     if not isinstance(decisions, dict):
-        return ""
+        return "", "failed"
     items = decisions.get("items")
     if not isinstance(items, list):
-        return ""
+        return "", "failed"
+    present = any(
+        isinstance(item, dict) and item.get("id") == ALERT_ID for item in items
+    )
     kept = [
         item
         for item in items
         if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
     ]
+    if alarms.decide(decisions, ALERT_ID, reason, present) == "quiet":
+        decisions["items"] = kept
+        decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not write_board(target, decisions):
+            return "", "failed"
+        return "", "quiet"
+    alarms.raised(decisions, ALERT_ID, reason)
     kept.append(
         {
             "id": ALERT_ID,
             "group": "Coordinator",
             "kind": "action",
             "title": "Overnight shift stalled: no board progress for 3 ticks",
+            "cause": alarms.cause_of(reason),
             "why": reason,
         }
     )
     decisions["items"] = kept
     decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not write_board(target, decisions):
+        return "", "failed"
+    return str(target), "wrote"
+
+
+def write_board(target, decisions):
+    """Write the board file and return True when it went to the board."""
     try:
         with open(str(target) + ".tmp", "w") as handle:
             json.dump(decisions, handle, indent=1)
         os.replace(str(target) + ".tmp", str(target))
     except OSError:
-        return ""
-    return str(target)
+        return False
+    return True

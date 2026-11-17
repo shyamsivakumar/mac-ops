@@ -13,7 +13,7 @@ EXECUTABLE = "overnight"
 EXPECTED = frozenset("send-integrity consolidation-guard script-results start-routing "
                      "dead-run-recovery gate-pipeline no-parking turncap watchdog "
                      "zero-merge board-integrity api-budget ff-drift cycle-health "
-                     "stall".split())
+                     "stall alarm-mute".split())
 
 
 def save(path, value):
