@@ -653,12 +653,69 @@ def watchdog():
     from unittest.mock import mock_open
 
     limits = {"tick": 65, "gatekeep": 120, "dispatch": 10, "lanes": 10}
-    exact({name: minutes for name, (_, minutes) in lane.WATCH.items()}, limits)
+    labels = {"tick": "dev.coordinator.tick", "gatekeep": "dev.coordinator.gatekeep",
+              "dispatch": "dev.coordinator.dispatch", "lanes": "dev.coordinator.lanes"}
+    exact({name: minutes for name, (_, minutes, _) in lane.WATCH.items()}, limits)
+    exact({name: label for name, (_, _, label) in lane.WATCH.items()}, labels)
+    # launchd prints its status in more than one shape and every shape
+    # carries the same number.
+    exact(lane.exit_status("0"), 0)
+    exact(lane.exit_status("78: EX_CONFIG"), 78)
+    exact(lane.exit_status("(never exited)"), None)
+    exact(lane.signal_status("9"), 9)
+    exact(lane.signal_status("Killed: 9"), 9)
+    exact(lane.signal_status(None), 0)
     now = 1000000
     other = {"id": "unrelated", "title": "preserve"}
     state = {"items": [other]}
-    mtimes = {path: now for path, _ in lane.WATCH.values()}
+    mtimes = {path: now for path, _, _ in lane.WATCH.values()}
     decisions = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
+    # The launchd state of every job, by label. None means launchd cannot
+    # run. "not-loaded" means the job is no longer held by launchd.
+    # "unreadable" means launchctl failed for another reason.
+    jobs = {label: {"loaded": True, "runs": 12, "exit": 0, "running": False}
+            for label in labels.values()}
+    elapsed = {}
+
+    class Result:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "launchctl":
+            label = cmd[2].split("/")[-1]
+            spec = jobs[label]
+            if spec is None:
+                raise OSError("launchctl is not available")
+            if spec == "not-loaded":
+                return Result(113, "", 'Could not find service "%s" in domain '
+                             'for user gui: 501\n' % label)
+            if spec == "unreadable":
+                return Result(1, "", "Operation not permitted\n")
+            body = "\tstate = running\n" if spec["running"] else "\tstate = not running\n"
+            if spec.get("pid"):
+                body += "\tpid = %d\n" % spec["pid"]
+            body += "\truns = %d\n" % spec["runs"]
+            if spec.get("exit_text") is not None:
+                body += "\tlast exit code = %s\n" % spec["exit_text"]
+            elif spec.get("exit") is not None:
+                body += "\tlast exit code = %d\n" % spec["exit"]
+            if spec.get("signal_text") is not None:
+                body += "\tlast terminating signal = %s\n" % spec["signal_text"]
+            elif spec.get("signal"):
+                body += "\tlast terminating signal = %d\n" % spec["signal"]
+            return Result(0, body)
+        if cmd[0] == "ps":
+            pid = int(cmd[-1])
+            if pid not in elapsed:
+                raise OSError("ps is not available")
+            seconds = elapsed[pid]
+            return Result(0, "%02d:%02d:%02d\n" % (seconds // 3600,
+                                                   (seconds % 3600) // 60,
+                                                   seconds % 60))
+        raise AssertionError(f"unexpected subprocess: {cmd}")
 
     def opened(path, mode="r"):
         exact(str(path), decisions + (".tmp" if mode == "w" else ""))
@@ -670,24 +727,217 @@ def watchdog():
         state.clear()
         state.update(json.loads(json.dumps(value)))
 
-    with patch("builtins.open", side_effect=opened),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace:
-        for name, minutes in limits.items():
-            path = lane.WATCH[name][0]
-            mtimes[path] = now - minutes * 60
+    def alarm(title):
+        return [other, {"id": "factory-watchdog", "group": "Coordinator",
+                        "kind": "action", "title": title,
+                        "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."}]
+
+    def pass_once():
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
             lane.watchdog()
-            exact(state["items"], [other])
-            mtimes[path] -= 60
-            expected = [other, {"id": "factory-watchdog", "group": "Coordinator",
-                "kind": "action",
-                "title": f"Factory job silent: {name} silent {minutes + 1} min (limit {minutes})",
-                "why": "A coordinator job stopped writing its log. The coordinator is routing a fix; nothing for you unless this stays up."}]
-            for _ in range(2):
-                lane.watchdog()
-                exact(state["items"], expected)
+        return buffer.getvalue()
+
+    with patch("builtins.open", side_effect=opened),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace,          patch.object(lane.subprocess, "run", side_effect=fake_run):
+        # A quiet log is not a dead job. Every job is loaded and exits
+        # clean, so the stale gatekeep log must not raise an alarm.
+        stale = {path: now - 200 * 60 for path in mtimes}
+        mtimes.update(stale)
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+        exact("WATCH gatekeep: signal=launchd" in output, True)
+        exact("alarm=" in output, False)
+
+        # A job launchd no longer holds is a dead job, and the alarm names
+        # it. The item stays a single item over repeated passes.
+        jobs["dev.coordinator.gatekeep"] = "not-loaded"
+        output = pass_once()
+        expected = alarm("Factory job stopped or failing: gatekeep stopped "
+                         "(launchd job dev.coordinator.gatekeep is not loaded)")
+        exact(state["items"], expected)
+        exact("WATCHDOG" in output, True)
+        pass_once()
+        exact(state["items"], expected)
+        exact(len([item for item in state["items"]
+                   if item["id"] == "factory-watchdog"]), 1)
+
+        # A job that launchd holds but that fails is a dead job too.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": 1, "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "failing (last exit code 1)"))
+        exact("WATCHDOG" in output, True)
+
+        # A job that launchd killed with a signal never reports an exit
+        # code, and it is a dead job.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": None, "signal": 9,
+                                            "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "killed (last terminating signal 9)"))
+        exact("WATCHDOG" in output, True)
+
+        # launchd prints the name with the signal when it knows it.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": None, "signal_text": "Killed: 9",
+                                            "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "killed (last terminating signal 9)"))
+        exact("WATCHDOG" in output, True)
+
+        # launchd prints the name with the exit code when it knows it.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit_text": "78: EX_CONFIG",
+                                            "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "failing (last exit code 78)"))
+        exact("WATCHDOG" in output, True)
+
+        # A job that never ran reports no exit code. It is not a failure
+        # while it is running, so a run that is on time raises nothing.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 0,
+                                            "exit_text": "(never exited)",
+                                            "running": True, "pid": 6161}
+        elapsed[6161] = 5
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+
+        # The run in flight decides. A job that is running now is judged by
+        # that run, so what an earlier run left behind raises nothing: a
+        # previous nonzero exit, then a previous signal.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": 1, "running": True,
+                                            "pid": 6161}
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+        exact("signal=launchd" in output, True)
+
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": None, "signal": 9,
+                                            "running": True, "pid": 6161}
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+
+        # The same previous failures raise the alarm once the job is idle
+        # again, so a job that keeps failing is never silenced.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": 1, "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "failing (last exit code 1)"))
+        exact("WATCHDOG" in output, True)
+
+        # A run that never ended and overran its limit is stuck, whatever
+        # the log says.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 0,
+                                            "exit_text": "(never exited)",
+                                            "running": True, "pid": 6161}
+        elapsed[6161] = 200 * 60
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "stuck (running 200 min, limit 120)"))
+        exact("WATCHDOG" in output, True)
+        del elapsed[6161]
+
+        # A job that never ran and is not running now leaves the log age as
+        # the only evidence, so a stale log still alarms.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 0,
+                                            "exit_text": "(never exited)",
+                                            "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "silent 200 min (limit 120)"))
+        exact("signal=log-age" in output, True)
+        exact("WATCHDOG" in output, True)
+
+        # A job that is still running past its limit is stuck, whatever its
+        # log says.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 14, "exit": 0,
+                                            "running": True, "pid": 4242}
+        elapsed[4242] = 200 * 60
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "stuck (running 200 min, limit 120)"))
+        exact("WATCHDOG" in output, True)
+
+        # A job that is running and that nobody can time is not known to be
+        # healthy, so the log age decides and a stale log still alarms.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 14, "exit": 0,
+                                            "running": True, "pid": 5151}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "silent 200 min (limit 120)"))
+        exact("signal=log-age" in output, True)
+        exact("WATCHDOG" in output, True)
+
+        # The healthy job raises nothing, so the item goes away.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 15,
+                                            "exit": 0, "running": False}
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+
+        # When launchd cannot say, the log age is the only evidence left,
+        # so a stale log still alarms.
+        for label in labels.values():
+            jobs[label] = None
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: tick silent "
+                                    "200 min (limit 65); gatekeep silent 200 min "
+                                    "(limit 120); dispatch silent 200 min (limit 10); "
+                                    "lanes silent 200 min (limit 10)"))
+        exact("signal=log-age" in output, True)
+        exact("WATCHDOG" in output, True)
+
+        # A launchctl failure that is not a missing service is a failure to
+        # read, not a stopped job, so the log age decides.
+        for label in labels.values():
+            jobs[label] = "unreadable"
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: tick silent "
+                                    "200 min (limit 65); gatekeep silent 200 min "
+                                    "(limit 120); dispatch silent 200 min (limit 10); "
+                                    "lanes silent 200 min (limit 10)"))
+        exact("signal=log-age" in output, True)
+
+        # A job that launchd holds but that never ran reports no exit code,
+        # so the log age decides and a fresh log raises nothing.
+        for label in labels.values():
+            jobs[label] = {"loaded": True, "runs": 0, "exit": None,
+                            "running": False}
+        for path in mtimes:
             mtimes[path] = now
-            lane.watchdog()
-            exact(state["items"], [other])
-        exact(replace.call_count, 16)
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+
+        # The silence limit is a limit: a log exactly at the limit is quiet
+        # enough, a log one minute past it is not.
+        jobs["dev.coordinator.gatekeep"] = None
+        mtimes[lane.WATCH["gatekeep"][0]] = now - limits["gatekeep"] * 60
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+        mtimes[lane.WATCH["gatekeep"][0]] = now - (limits["gatekeep"] + 1) * 60
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "silent 121 min (limit 120)"))
+        exact("WATCHDOG" in output, True)
+
+        for label in labels.values():
+            jobs[label] = {"loaded": True, "runs": 16, "exit": 0, "running": False}
+        for path in mtimes:
+            mtimes[path] = now
+        pass_once()
+        exact(state["items"], [other])
         for call in replace.call_args_list:
             exact(call.args, (decisions + ".tmp", decisions))
 
