@@ -222,15 +222,33 @@ def decide(state, alarm_id, cause, now=None):
     return "raise"
 
 
+USAGE = """usage: alarms ack <alarm-id>   quiet every cause of that alarm for four hours
+       alarms status             show the alarm keys and until when they are quiet
+"""
+
+
 def main(argv):
-    """Quiet one alarm and print what it did.
+    """Quiet one alarm, or show what is quiet, and print what it did.
 
     `alarms ack <alarm-id>` records the acknowledgement of every cause of
     that alarm, so the coordinator can answer an alarm without taking its
     item off the board. The item stays on the board until the coordinator
     routes it."""
+    if argv[:1] in (["--help"], ["-h"]):
+        sys.stdout.write(USAGE)
+        return 0
+    if argv[:1] == ["status"]:
+        state = load_state()
+        if not state:
+            print("alarms: no alarm key is recorded")
+            return 0
+        for key in sorted(state):
+            record = entry(state, key)
+            until = record.get("until") or "not acknowledged"
+            print(f"{key}: quiet until {until}")
+        return 0
     if len(argv) != 2 or argv[0] != "ack":
-        sys.stderr.write("usage: alarms ack <alarm-id>\n")
+        sys.stderr.write(USAGE)
         return 2
     state = load_state()
     prefix = f"{argv[1]}|"
