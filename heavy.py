@@ -3367,7 +3367,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "Usage: heavy [--review|--deploy] <command...> | status | request-curtail\n"
             "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
-            "Admission requires stable swap, CPU and memory below 95%, and enough headroom to start or resume: 6 GiB on a host with 24 GiB or more of memory, 15% of the host's memory (at least 2 GiB) on a smaller host. The simulator a job drives counts as that job's own memory. A running job pauses only below the lower threshold; level 2 is allowed above 30% free memory, level 4 is blocked.\n"
+            "Admission requires stable swap, CPU and memory below 95%, and enough headroom to start or resume: max(6 GiB, 15% of the host's memory) on a host with 24 GiB or more of memory, 15% of the host's memory (at least 2 GiB) on a smaller host. The simulator a job drives counts as that job's own memory. A running job pauses only below the lower threshold; level 2 is allowed above 30% free memory, level 4 is blocked.\n"
             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
             "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
         )
