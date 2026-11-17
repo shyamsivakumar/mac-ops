@@ -431,7 +431,9 @@ def simulator_destination_device(
     argv: Sequence[str],
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Return the simulator device and OS version a command targets."""
-    if not argv or os.path.basename(str(argv[0])) != "xcodebuild":
+    if not argv or not any(
+        os.path.basename(str(arg)) == "xcodebuild" for arg in argv
+    ):
         return None, None, None
     destinations: List[str] = []
     for index, arg in enumerate(argv):
@@ -2946,6 +2948,7 @@ def _launch_job(
     role: str = "ordinary",
     project_key: Optional[str] = None,
     stop_event: Callable[[], bool] = lambda: False,
+    probe_argv: Optional[Sequence[str]] = None,
 ) -> int:
     started = deps.clock()
     last_message = 0.0
@@ -2980,7 +2983,9 @@ def _launch_job(
                 memory_credit = 0
                 if sample.physical_bytes < SMALL_HOST_MEMORY_BYTES:
                     try:
-                        memory_credit = simulator_memory_credit_bytes(argv)
+                        memory_credit = simulator_memory_credit_bytes(
+                            probe_argv if probe_argv is not None else argv
+                        )
                     except Exception:
                         memory_credit = 0
                 job_id, reason = _reserve_job(
@@ -3396,7 +3401,8 @@ def run_supervisor(
         inferred_key, inferred_id = _task_identity()
         task_key = task_key or inferred_key
         task_id = task_id or inferred_id
-    command, project_key = _project_build_args(argv, os.getcwd())
+    original = list(argv)
+    command, project_key = _project_build_args(original, os.getcwd())
     command_basename = os.path.basename(command[0])
     if command_basename == "xcodebuild" and role != "review":
         taskpolicy = "/usr/sbin/taskpolicy"
@@ -3413,6 +3419,7 @@ def run_supervisor(
         role=role,
         project_key=project_key,
         stop_event=stop_event,
+        probe_argv=original,
     )
 
 
