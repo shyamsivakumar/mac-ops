@@ -30,6 +30,12 @@ lose the item for a tick, so an alarm nobody answered is never silenced.
 An alarm that is not true any more drops its "raised" mark, so the same
 cause can alarm again the next time it is true, but an acknowledgement
 that is still running keeps the key quiet.
+
+Two writers write the state: the tick and the panel. They take the lock
+beside the state for the whole read, merge and replace, and a writer that
+cannot take the lock fails its write. A lock that is not held is not a
+lock: a write that goes on without one can replace the file under a
+concurrent acknowledgement and take that acknowledgement with it.
 """
 
 import contextlib
@@ -308,7 +314,13 @@ def main(argv):
     one cause, so the coordinator can answer an alarm without taking its
     item off the board. The item stays on the board until the coordinator
     routes it. Only the cause that was answered is quiet: another cause
-    of the same alarm was not answered and is not silenced."""
+    of the same alarm was not answered and is not silenced.
+
+    It exits 0 when the acknowledgement was written, 1 when there is no
+    raised key for that cause, 2 when the usage is wrong, and 3 when the
+    state could not be locked or written. The caller has to say so: an
+    acknowledgement that did not reach the file leaves the alarm free to
+    raise again on the next tick."""
     if argv[:1] in (["--help"], ["-h"]):
         sys.stdout.write(USAGE)
         return 0

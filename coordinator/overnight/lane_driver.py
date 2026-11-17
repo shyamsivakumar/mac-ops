@@ -904,15 +904,15 @@ def watchdog():
             # The key is written before the alarm is published: an alarm
             # on the board must have a key, so the answer Shyam gives it
             # has something to acknowledge. A key that cannot be written
-            # is a failure the tick says out loud, and the alarm waits for
-            # the next tick.
+            # is a fault the tick says out loud, and the alarm is
+            # published anyway: a storage failure must not hide a real
+            # failure from Shyam.
             if not alarms.save_state(state):
-                print("WATCHDOG could not record the alarm key; the alarm is not published")
-            else:
-                d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                                   "title": "Factory job stopped or failing: " + cause,
-                                   "cause": alarms.cause_of(cause),
-                                   "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
+                print("WATCHDOG the alarm key could not be written; the answer to this alarm cannot be recorded")
+            d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
+                               "title": "Factory job stopped or failing: " + cause,
+                               "cause": alarms.cause_of(cause),
+                               "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
     else:
         # The alarm is not true any more, so the same cause can alarm
         # again the next time it is true. An acknowledgement that is
@@ -922,8 +922,11 @@ def watchdog():
     json.dump(d, open(p + ".tmp", "w"), indent=1)
     os.replace(p + ".tmp", p)
     # The mute state is written again after the board, so the state never
-    # says the alarm is on the board when the board does not hold it.
-    alarms.save_state(state)
+    # says the alarm is on the board when the board does not hold it. A
+    # write that fails is said out loud: the tick did not record what it
+    # did, and the next tick measures the alarms again.
+    if not alarms.save_state(state):
+        print("WATCHDOG could not write the mute state; the alarm is not muted")
 
 
 def zero_merge(snapshot):

@@ -337,7 +337,31 @@ export default class Coordinator extends View {
   }
 
   answers(drafts) {
-    return this.asks().flatMap((a, n) => (drafts.has(a.id) ? [{ n: n + 1, id: a.id, q: a.text, cause: a.cause ?? "", ...drafts.get(a.id) }] : []));
+    return this.asks().flatMap((a, n) => {
+      if (!drafts.has(a.id)) return [];
+      const draft = drafts.get(a.id);
+      // The answer carries the cause it was bound to when it was made,
+      // not the cause the board shows now: an alarm that was replaced in
+      // between is not acknowledged in the answer's place.
+      return [{ n: n + 1, id: a.id, q: a.text, shown: a.cause ?? "", cause: draft.cause ?? a.cause ?? "", kind: draft.kind, text: draft.text }];
+    });
+  }
+
+  // An answer belongs to the alarm it was given for. When the alarm is
+  // replaced between the answer and the send, the answer is dropped and
+  // Shyam is told: sending it would answer the alarm that is there now,
+  // and he never answered that one.
+  dropStaleDrafts() {
+    const drafts = this.drafts();
+    const stale = [];
+    for (const [id, draft] of drafts) {
+      const shown = this.asks().find((a) => a.id === id)?.cause ?? "";
+      if (draft.cause && shown && draft.cause !== shown) stale.push(id);
+    }
+    if (!stale.length) return;
+    for (const id of stale) drafts.delete(id);
+    this.setDrafts(drafts);
+    notify({ title: "The answer was dropped", body: `${stale.length} answer(s) went to an alarm that changed. Choose the answer again.`, level: "warning" });
   }
 
   editor(q) {
@@ -417,8 +441,9 @@ export default class Coordinator extends View {
   }
 
   // The cause of the ask as it is shown now. The answer is bound to it,
-  // so an alarm that is replaced between the answer and the send is not
-  // acknowledged in the answer's place.
+  // and the cause is half of the alarm's key, so an alarm that is
+  // replaced between the answer and the send is not acknowledged in the
+  // answer's place.
   causeOf(q) {
     return this.asks().find((a) => a.id === q)?.cause ?? "";
   }
@@ -428,9 +453,14 @@ export default class Coordinator extends View {
     const at = list.findIndex((a) => a.id === q);
     if (at < 0) return;
     const drafts = this.drafts();
-    const same = drafts.get(q)?.kind === choice.kind && drafts.get(q).text === choice.text;
+    const cause = this.causeOf(q);
+    // The same choice for a cause that is not the one the draft was
+    // bound to is a new answer, for the cause that is shown now.
+    const same = drafts.get(q)?.kind === choice.kind
+      && drafts.get(q).text === choice.text
+      && (drafts.get(q)?.cause ?? "") === cause;
     if (same) drafts.delete(q);
-    else drafts.set(q, { kind: choice.kind, text: choice.text, cause: this.causeOf(q) });
+    else drafts.set(q, { kind: choice.kind, text: choice.text, cause });
     this.setDrafts(drafts);
     this.keepTyping(q, "");
     this.editing.delete(q);
@@ -505,7 +535,9 @@ export default class Coordinator extends View {
     for (const a of this.asks()) {
       const rec = a.choices.find((c) => c.rec);
       if (!rec || drafts.has(a.id) || decided[a.id]) continue;
-      drafts.set(a.id, { kind: rec.kind, text: rec.text });
+      // The answer is bound to the cause that is shown now, like every
+      // other answer.
+      drafts.set(a.id, { kind: rec.kind, text: rec.text, cause: a.cause ?? "" });
     }
     this.setDrafts(drafts);
     this.stepTo(this.asks().length, cx);
@@ -566,6 +598,7 @@ export default class Coordinator extends View {
   }
 
   send(cx) {
+    this.dropStaleDrafts();
     const text = this.message();
     const answered = this.answers(this.drafts());
     const typed = this.pop ? "" : draftText(this.input.content()).trim();
