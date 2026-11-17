@@ -45,7 +45,10 @@ class CoordqBuilderGuard(unittest.TestCase):
             for selection in ({"instanceId": "openai-api", "model": "openai/gpt-6.2-astra"},
                               {"instanceId": "codex", "model": "gpt-6.2-astra"},
                               {"instanceId": "codex", "model": "gpt-6-luna"},
-                              {"instanceId": "codex", "model": "gpt-6.1-terra"}):
+                              {"instanceId": "codex", "model": "gpt-6.1-terra"},
+                              {"instanceId": "codex", "model": "gpt-5.5"},
+                              {"instanceId": "codex", "model": "o3"},
+                              {"instanceId": "pi", "model": "openai/gpt-6-astra"}):
                 with self.subTest(task_type=task_type, selection=selection):
                     resolved, refusal = coordq.with_model(
                         {"taskType": task_type, "modelSelection": selection})
@@ -67,6 +70,7 @@ class CoordqBuilderGuard(unittest.TestCase):
     def test_allowed_builders_pass(self):
         for selection in ({"instanceId": "glm", "model": "zai/glm-5.3"},
                           {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
+                          {"instanceId": "codex", "model": "zai-coding/glm-5.3"},
                           {"instanceId": "router", "model": "task/standard"}):
             with self.subTest(selection=selection):
                 resolved, refusal = coordq.with_model(

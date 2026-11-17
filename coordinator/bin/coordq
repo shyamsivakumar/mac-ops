@@ -48,6 +48,11 @@ TASK_MODELS = {
     "review": ASTRA_MODEL,
 }
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
+# The OpenAI model names, on any instance: the gpt family and the o-series.
+# A build never runs on one of these; a review runs on the gate chain only
+# (Shyam 2026-11-17).
+OPENAI_MODEL_PREFIXES = ("gpt-", "openai/")
+OPENAI_MODEL_NAME = re.compile(r"^(o1|o3|o4)([-./]|$)")
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
 # The board refill. When the machine has free slots,
@@ -180,15 +185,17 @@ def is_gate_model(selection):
 
 def is_forbidden_builder(selection):
     """True for a model no build may ever run on: the OpenAI API instance
-    and the OpenAI models on the Codex instance (Sol, Terra, Luna, GPT).
-    A launch that names a gate model must say taskType review; an omitted
-    taskType is not evidence of a gate."""
+    and every OpenAI model, on any instance (Sol, Terra, Luna, GPT, the
+    o-series). A launch that names a gate model must say taskType review;
+    an omitted taskType is not evidence of a gate."""
     if not isinstance(selection, dict):
         return False
     if selection.get("instanceId") == "openai-api":
         return True
-    return (selection.get("instanceId") == "codex"
-            and str(selection.get("model") or "").startswith("gpt-6"))
+    model = str(selection.get("model") or "").lower()
+    if model.startswith(OPENAI_MODEL_PREFIXES):
+        return True
+    return bool(OPENAI_MODEL_NAME.match(model))
 
 
 def tool_refusal(tool):

@@ -225,6 +225,14 @@ def dead_run_recovery():
                                "title": "MO-3 build"}, True), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.2-astra",
                                "title": "MO-4 review #9 aaaaaaaa"}, True), lane.ASTRA)
+    # A dead gate on the chain head relaunches on the next reviewer, so a
+    # quota failure on the API credits never retries that provider.
+    exact(lane.dead_run_model({"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra",
+                               "title": "MO-7 review #9 aaaaaaaa"}, True),
+          lane.REVIEWER_CHAIN[1])
+    exact(lane.dead_run_model({"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra",
+                               "title": "MO-8 review #9 aaaaaaaa"}, False),
+          lane.REVIEWER_CHAIN[1])
     exact(lane.dead_run_model({"providerInstanceId": "glm", "model": "zai/glm-5.3",
                                "title": "MO-5 widget"}, False),
           {"instanceId": "glm", "model": "zai/glm-5.3"})
