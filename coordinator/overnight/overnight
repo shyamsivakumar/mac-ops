@@ -1755,17 +1755,6 @@ def stall_alert(root, idle, state, board=None):
             "cause",
         )
         return "the alarm stays quiet for the same cause"
-    if action == "held":
-        # The alarm's item went off the board. One tick is not proof that
-        # the coordinator routed it, so the shift asks again on the next
-        # tick.
-        write_shift_line(
-            root,
-            f"stall: no board progress for {idle} ticks; the "
-            "board was swept again and the alarm's item is off the board, "
-            "so the shift asks again on the next tick",
-        )
-        return "the alarm's item is off the board"
     write_shift_line(
         root,
         f"stall: no board progress for {idle} ticks; the "

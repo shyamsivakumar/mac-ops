@@ -50,6 +50,19 @@ const POP_WIDTH = 640;
 const POP_HEIGHT = 560;
 const DECISIONS_FILE = `${home()}/Code/coordinator/decisions.json`;
 
+// An alarm Shyam answered stays quiet for four hours. The acknowledgement
+// is a record the shift reads, not a guess about the board: the shift
+// never silences an alarm nobody answered, and the board file has more
+// than one writer, so a lost board item says nothing. The command writes
+// the record; an alarm that was never raised has no record and the
+// command says so, which is not a failure.
+async function acknowledgeAlarm(id) {
+  const r = await exec(`${home()}/.local/bin/alarms`, ["ack", id]);
+  if (r.code !== 0 && r.code !== 1) {
+    notify({ title: "The alarm was not acknowledged", body: `${id}: ${(r.stderr || "").trim() || `alarms exited ${r.code}`}`, level: "warning" });
+  }
+}
+
 const askOf = ({ id, group, title, why, kind, options }) => ({
   id,
   group,
@@ -565,6 +578,10 @@ export default class Coordinator extends View {
           typing.delete(a.id);
           this.editing.delete(a.id);
           this.editors.get(a.id)?.set_value("");
+          // The answer is the acknowledgement: the alarm stays quiet for
+          // four hours. The shift reads the record, so the alarm comes
+          // back on its own when the four hours are over.
+          await acknowledgeAlarm(a.id);
         }
         setShared("co.decided", decided);
         this.setDrafts(drafts);

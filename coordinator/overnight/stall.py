@@ -224,11 +224,11 @@ def alert(reason, cause=None, path=None):
     merge alert and the watchdog use. The item is replaced, so one stalled
     board shows one alert and not one per tick.
 
-    An alert that was answered or routed stays quiet for four hours: the
-    board holds no item for it and the shift logs one line per tick. A
+    An alert that was acknowledged stays quiet for four hours: the board
+    holds no item for it and the shift logs one line per tick. A
     different cause is a different alert and is written at once.
 
-    Return the path it wrote and what it did: "wrote", "quiet", "held" or
+    Return the path it wrote and what it did: "wrote", "quiet" or
     "failed"."""
     target = Path(path or BOARD_FILE)
     try:
@@ -241,27 +241,19 @@ def alert(reason, cause=None, path=None):
     items = decisions.get("items")
     if not isinstance(items, list):
         return "", "failed"
-    present = any(
-        isinstance(item, dict) and item.get("id") == ALERT_ID for item in items
-    )
     kept = [
         item
         for item in items
         if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
     ]
     state = alarms.load_state()
-    action = alarms.decide(state, ALERT_ID, cause or reason, present)
-    if action in ("quiet", "hold"):
+    action = alarms.decide(state, ALERT_ID, cause or reason)
+    if action == "quiet":
         decisions["items"] = kept
         decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         if not write_board(target, decisions):
             return "", "failed"
-        # The state changed: a tick of absence, or the acknowledgement
-        # that mutes the key.
-        alarms.save_state(state)
-        if action == "quiet":
-            return "", "quiet"
-        return "", "held"
+        return "", "quiet"
     alarms.raised(state, ALERT_ID, cause or reason)
     kept.append(
         {

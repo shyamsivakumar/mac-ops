@@ -58,6 +58,17 @@ def at(moment, fn, *args):
         return fn(*args)
 
 
+def ack(alarm_id, moment):
+    """Record the acknowledgement of an alarm, the way the panel does."""
+    class Clock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment
+
+    with patch.object(dt, "datetime", Clock):
+        return alarms.main(["ack", alarm_id])
+
+
 def items_of(board):
     """Return the board items of a board file."""
     return json.loads(board.read_text())["items"]
@@ -133,16 +144,25 @@ def replay_stall(board, runner):
         return False
     print("PASS the first tick raised the stall alarm")
 
-    # The coordinator answers the alarm and takes its item off the board.
+    # The alarm's item goes off the board and nobody answered it: the
+    # alarm is raised again, because a missing item is not an answer.
     take_off_the_board(board)
     at(NOW + dt.timedelta(minutes=3), runner.stall_records, root, [], str(board), state)
-    print("--- tick after the answer (+3 min)")
-    if [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]:
-        print("FAIL the tick after the answer raised again")
+    items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
+    print(f"--- the item goes missing, nobody answered (+3 min): {len(items)} item(s)")
+    if len(items) != 1:
+        print("FAIL an alarm nobody answered was silenced")
+        return False
+    print("PASS an alarm nobody answered was raised again")
+
+    # Shyam answers the alarm: the acknowledgement is the record.
+    if ack("factory-overnight-stall", NOW + dt.timedelta(minutes=4)) != 0:
+        print("FAIL the acknowledgement could not be recorded")
         return False
     at(NOW + dt.timedelta(minutes=6), runner.stall_records, root, [], str(board), state)
-    print("--- the tick after that (+6 min)")
-    if [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]:
+    items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
+    print(f"--- the tick after the answer (+6 min): {len(items)} item(s)")
+    if items:
         print("FAIL an acknowledged alarm raised again")
         return False
     log = (root / "run" / "shift-log.md").read_text()
@@ -162,9 +182,7 @@ def replay_stall(board, runner):
 
     # The same cause comes back when the four hours are over.
     state["items"] = {}
-    take_off_the_board(board)
     later = NOW + dt.timedelta(hours=4, minutes=20)
-    at(later, runner.stall_records, root, [], str(board), state)
     at(later, runner.stall_records, root, [], str(board), state)
     items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
     print(f"--- the same cause after four hours: {len(items)} item(s)")
@@ -187,16 +205,25 @@ def replay_watchdog(board):
         return False
     print("PASS the first tick raised the watchdog alarm")
 
-    # The coordinator takes the item off the board.
+    # The item goes off the board and nobody answered: the alarm is
+    # raised again.
     take_off_the_board(board)
     output, items = watchdog_tick(board, 1, NOW + dt.timedelta(minutes=3))
-    print(f"--- tick after the answer (+3 min): {output.strip().splitlines()[-1]}")
-    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG held" not in output:
-        print("FAIL the tick after the answer raised again")
+    alarms_on_board = [i for i in items if i["id"] == "factory-watchdog"]
+    print(f"--- the item goes missing, nobody answered (+3 min): {len(alarms_on_board)} item(s)")
+    if len(alarms_on_board) != 1:
+        print("FAIL an alarm nobody answered was silenced")
+        return False
+    print("PASS an alarm nobody answered was raised again")
+
+    # Shyam answers the alarm: the acknowledgement is the record.
+    if ack("factory-watchdog", NOW + dt.timedelta(minutes=4)) != 0:
+        print("FAIL the acknowledgement could not be recorded")
         return False
     output, items = watchdog_tick(board, 1, NOW + dt.timedelta(minutes=6))
-    print(f"--- the tick after that (+6 min): {output.strip().splitlines()[-1]}")
-    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG quiet" not in output:
+    alarms_on_board = [i for i in items if i["id"] == "factory-watchdog"]
+    print(f"--- the tick after the answer (+6 min): {output.strip().splitlines()[-1]}")
+    if alarms_on_board or "WATCHDOG quiet" not in output:
         print("FAIL an acknowledged alarm raised again")
         return False
     print("PASS the next ticks wrote no item and logged one line each")
@@ -221,19 +248,12 @@ def replay_watchdog(board):
     print("PASS the same exit code alarmed again after four hours")
 
     # A tick where the job is healthy does not take the mute with it.
-    take_off_the_board(board)
-    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=23))
-    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=26))
-    print(f"--- the same exit code again (+4 h 26 min): {output.strip().splitlines()[-1]}")
-    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG quiet" not in output:
-        print("FAIL the alarm was not muted after the coordinator routed it")
+    if ack("factory-watchdog", NOW + dt.timedelta(hours=4, minutes=21)) != 0:
+        print("FAIL the acknowledgement could not be recorded")
         return False
-    # A tick where the job is healthy: the alarm is not true any more.
-    output, items = watchdog_tick(board, 0, NOW + dt.timedelta(hours=4, minutes=29))
-    print(f"--- the job recovers (+4 h 29 min): {output.strip().splitlines()[-1]}")
-    # The job fails again with the same exit code.
-    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=32))
-    print(f"--- the same exit code again (+4 h 32 min): {output.strip().splitlines()[-1]}")
+    watchdog_tick(board, 0, NOW + dt.timedelta(hours=4, minutes=22))
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=23))
+    print(f"--- the job recovers and fails again (+4 h 23 min): {output.strip().splitlines()[-1]}")
     if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG quiet" not in output:
         print("FAIL the mute did not survive a healthy tick")
         return False
