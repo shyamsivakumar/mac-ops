@@ -56,9 +56,10 @@ DEFAULT_PROMPT = (
     "needs. Do not start tickets: the shift and `coordq`'s refill own board "
     "intake, so the tick decides, gates, routes failures and reports "
     "drift. Keep it cheap: filter command output, act only on what changed, "
-    "reply NOOP or ALERT lines only. Every call is bounded: a call that "
-    "hangs is skipped, named in the reply and not retried, so the tick "
-    "finishes its other work."
+    "reply NOOP or ALERT lines only. The coordinator's own calls are "
+    "bounded, and a call of yours that hangs is bounded by the 120 seconds "
+    "your shell gives it: skip it, name it in the reply and do not retry "
+    "it, so the tick finishes its other work."
 )
 LOCK_NAME = "coord-tick.lock"
 CHILD_PATH = ":".join(

@@ -158,6 +158,49 @@ class BoardReadBoundTests(unittest.TestCase):
         self.assertIn("skipped", stderr.getvalue())
 
 
+class SkipLogTests(unittest.TestCase):
+    """A skipped call is written down where it cannot be lost."""
+
+    def setUp(self):
+        self.overnight = load_overnight()
+
+    def test_the_skip_is_written_to_the_skip_log(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            log = Path(scratch) / "skips.log"
+            with patch.object(self.overnight, "SKIP_LOG", log):
+                with redirect_stderr(io.StringIO()):
+                    self.overnight.run(
+                        ["/bin/sh", "-c", "sleep 30"],
+                        1,
+                        time.monotonic() + 60,
+                        optional=True,
+                    )
+            written = log.read_text()
+        self.assertIn("skipped", written)
+        self.assertIn("sleep 30", written)
+
+
+class CoordqCallBoundTests(unittest.TestCase):
+    """The t3mcp call the tick makes with `coordq status` is bounded."""
+
+    def setUp(self):
+        self.coordq = load(ROOT / "coordinator" / "bin" / "coordq", "coordq_bounds")
+
+    def test_a_hanging_t3mcp_call_is_named_and_does_not_wait(self):
+        scratch = tempfile.mkdtemp()
+        script = Path(scratch) / "t3mcp"
+        script.write_text("#!/bin/sh\nsleep 30\n")
+        script.chmod(0o755)
+        with patch.object(self.coordq, "T3MCP", str(script)):
+            with patch.object(self.coordq, "T3MCP_TIMEOUT", 1):
+                started = time.monotonic()
+                code, out = self.coordq.call("t3_thread_list", {})
+                elapsed = time.monotonic() - started
+        self.assertEqual(code, 1)
+        self.assertIn("timed out", out)
+        self.assertLess(elapsed, 15, "the t3mcp call was not bounded")
+
+
 class ModelCheckBoundTests(unittest.TestCase):
     """The tick's model check is bounded and names the skip."""
 
