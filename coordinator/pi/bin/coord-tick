@@ -44,6 +44,10 @@ LOG_PATH = Path(
 )
 MODEL = os.environ.get("COORD_TICK_MODEL", "deepseek/deepseek-flash")
 TIMEOUT_S = int(os.environ.get("COORD_TICK_TIMEOUT", "600"))
+# The model check is an external call of its own. It gets a bound and a
+# process group, so a check that hangs is killed and named in the tick log
+# instead of holding the tick past the budget the tick has.
+MODEL_CHECK_TIMEOUT = 60
 DEFAULT_PROMPT = (
     "Tick (launchd). Run one tick per loop/tick.md. Read the whole board "
     "with `overnight board --json --action`: it returns every board ticket "
@@ -52,7 +56,10 @@ DEFAULT_PROMPT = (
     "needs. Do not start tickets: the shift and `coordq`'s refill own board "
     "intake, so the tick decides, gates, routes failures and reports "
     "drift. Keep it cheap: filter command output, act only on what changed, "
-    "reply NOOP or ALERT lines only."
+    "reply NOOP or ALERT lines only. The coordinator's own calls are "
+    "bounded, and a call of yours that hangs is bounded by the 120 seconds "
+    "your shell gives it: skip it, name it in the reply and do not retry "
+    "it, so the tick finishes its other work."
 )
 LOCK_NAME = "coord-tick.lock"
 CHILD_PATH = ":".join(
@@ -106,7 +113,12 @@ def child_env() -> dict:
 
 def model_available(env: dict) -> bool:
     """True when the provider still offers the tick model. A check that cannot
-    answer says yes: the run itself reports a real failure."""
+    answer says yes: the run itself reports a real failure.
+
+    The check is bounded: the call runs in a process group of its own and
+    gets a timeout, and a check that hangs has its group killed. The skip
+    is named in the tick log, so a tick that ran on an unchecked model says
+    so instead of looking like a clean run."""
     command = [
         "/usr/bin/sandbox-exec",
         "-f",
@@ -115,12 +127,26 @@ def model_available(env: dict) -> bool:
         "--list-models",
     ]
     try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=60, env=env
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            start_new_session=True,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError:
         return True
-    output = (result.stdout or "") + (result.stderr or "")
+    try:
+        stdout, stderr = process.communicate(timeout=MODEL_CHECK_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        end_group(process)
+        log(
+            f"skipped: the model check for {MODEL} timed out after "
+            f"{MODEL_CHECK_TIMEOUT}s"
+        )
+        return True
+    output = (stdout or "") + (stderr or "")
     if not output.strip():
         return True
     return MODEL.split("/", 1)[-1] in output
@@ -191,6 +217,32 @@ def kill_group(process, sig: int) -> None:
         pass
 
 
+def end_group(process, grace: int = 5) -> tuple[str, str]:
+    """End the whole group of the run and return what it wrote.
+
+    The group is what has to die, and the group is emptied after the leader
+    is gone and not only when the wait ends: a descendant that ignored the
+    first signal and closed or redirected its output lets the wait finish
+    while it keeps running, and it would then outlive the run."""
+    kill_group(process, signal.SIGTERM)
+    try:
+        stdout, stderr = process.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        kill_group(process, signal.SIGKILL)
+        try:
+            stdout, stderr = process.communicate(timeout=grace)
+        except subprocess.TimeoutExpired:
+            # The pipes are still held by a descendant that the signals did
+            # not reach, so they are closed here rather than left to the
+            # collector: the run is over either way.
+            stdout, stderr = "", ""
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+    kill_group(process, signal.SIGKILL)
+    return stdout or "", stderr or ""
+
+
 def stop_on_signal(signum, _frame):
     """A stopped launcher (launchctl bootout, Ctrl-C) must not leave the pi
     it started running: that would be a second tick."""
@@ -230,15 +282,7 @@ def run_tick(env: dict, lock_fd: int) -> int:
         try:
             stdout, stderr = process.communicate(timeout=TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            kill_group(process, signal.SIGTERM)
-            try:
-                stdout, stderr = process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                kill_group(process, signal.SIGKILL)
-                try:
-                    stdout, stderr = process.communicate(timeout=15)
-                except subprocess.TimeoutExpired:
-                    stdout, stderr = "", ""
+            stdout, stderr = end_group(process, 10)
             log(f"tick killed after {TIMEOUT_S}s")
             deliver(alert_lines(stdout or ""))
             return 124

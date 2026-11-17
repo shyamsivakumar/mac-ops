@@ -144,6 +144,7 @@ import os
 import plistlib
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -167,6 +168,13 @@ GH_TIMEOUT = 60
 # The whole intake runs inside the turn cap, so every subprocess gets what
 # is left of one overall deadline.
 DEFAULT_DEADLINE = 540
+# The tick that reads the board has 600 seconds and the board read is its
+# first call. The read gets a budget of its own, so a slow GitHub cannot
+# use the whole tick and leave the tick nothing to report with.
+BOARD_DEADLINE = 240
+# Where a skipped call is written down. The stderr of a read reaches the
+# caller, which may be a model; this file reaches the next reader.
+SKIP_LOG = Path.home() / "Library/Logs/coordinator/skips.log"
 PR_LIMIT = 100
 # The open issues of one repository, read for the marks a ticket body
 # carries. The board's tickets are a small part of that list.
@@ -640,29 +648,99 @@ def allowed_repos(cfg: dict) -> list[tuple[str, str]]:
     return sorted((repo, entry.get("key", "")) for repo, entry in repos.items())
 
 
-def run(argv: list[str], timeout: int, deadline: float) -> str:
-    """Run a command and return its stdout, or fail with the error tail."""
+def kill_group(process, number: int) -> None:
+    """Signal the whole group of a call.
+
+    The call runs in a process group of its own, so the group is what has
+    to die: a descendant that ignored the first signal and closed its
+    output would otherwise outlive the call and keep the tick's work
+    alive behind it."""
+    try:
+        os.killpg(process.pid, number)
+    except OSError:
+        pass
+
+
+def end_group(process, grace: int = 5) -> None:
+    """End the whole group of a call and close what it wrote.
+
+    The group is what has to die, and the group is emptied after the leader
+    is gone and not only when the wait ends: a descendant that ignored the
+    first signal and closed or redirected its output lets the wait finish
+    while it keeps running, and it would then outlive the call."""
+    kill_group(process, signal.SIGTERM)
+    try:
+        process.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        kill_group(process, signal.SIGKILL)
+        try:
+            process.communicate(timeout=grace)
+        except subprocess.TimeoutExpired:
+            # The pipes are still held by a descendant that the signals did
+            # not reach, so they are closed here rather than left to the
+            # collector: the call is over either way.
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+    kill_group(process, signal.SIGKILL)
+
+
+def run(
+    argv: list[str], timeout: int, deadline: float, optional: bool = False
+) -> str | None:
+    """Run a command and return its stdout, or fail with the error tail.
+
+    Every call is bounded: the command runs in a process group of its own
+    and gets a timeout, and a call that hangs has its whole group killed,
+    so the wait ends when the timeout ends and not later. A call the
+    caller can do without is optional: it is skipped, the skip names the
+    command that was skipped, and None comes back. The default still ends
+    the read, because a call that failed is a refusal and never a pass."""
     left = deadline - time.monotonic()
     if left <= 0:
         die("the intake deadline passed before the next command could run")
+    seconds = max(1, min(timeout, int(left)))
+    command = " ".join(argv)
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             argv,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=max(1, min(timeout, int(left))),
-            check=False,
+            start_new_session=True,
         )
     except FileNotFoundError:
         die(f"{argv[0]} is not on PATH")
+    try:
+        stdout, stderr = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
-        die(f"{' '.join(argv)} timed out")
-    if result.returncode != 0:
-        tail = (result.stderr or result.stdout or "").strip().splitlines()[-3:]
+        # The bound is real: the whole group is killed, so a call that
+        # hangs cannot hold the tick past the timeout it was given.
+        end_group(process)
+        if optional:
+            line = (
+                f"overnight: skipped {command} after {seconds}s "
+                f"(the call timed out)"
+            )
+            emit(line, err=True)
+            # The skip is written down where it cannot be lost: the
+            # caller of a read may be a model, and a model may not
+            # repeat it.
+            try:
+                SKIP_LOG.parent.mkdir(parents=True, exist_ok=True)
+                with open(SKIP_LOG, "a") as stream:
+                    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+                    stream.write(f"{stamp} | skipped | {command} after {seconds}s\n")
+            except OSError:
+                pass
+            return None
+        die(f"{command} timed out")
+    if process.returncode != 0:
+        tail = (stderr or stdout or "").strip().splitlines()[-3:]
         raise RepoError(
-            f"{' '.join(argv)} failed ({result.returncode}): " + " | ".join(tail)
+            f"{command} failed ({process.returncode}): " + " | ".join(tail)
         )
-    return result.stdout
+    return stdout
 
 
 def read_board(deadline: float) -> tuple[list[dict], bool]:
@@ -2445,7 +2523,13 @@ def read_bodies(
         number = issue.get("number")
         if repo and number:
             wanted.setdefault(repo, set()).add(number)
-    for repo in sorted(wanted):
+
+    def read_one(repo: str) -> tuple[dict[int, str], set[int], str]:
+        """Return the bodies and the open numbers of one repository.
+
+        The empty string is the reason the text is unknown: a repository
+        whose list could not be read leaves its text unknown, and the
+        caller says so instead of reading it as empty."""
         try:
             raw = run(
                 [
@@ -2463,30 +2547,53 @@ def read_bodies(
                 ],
                 GH_TIMEOUT,
                 deadline,
+                optional=True,
             )
-            rows = json.loads(raw)
         except (RepoError, ValueError) as exc:
-            unread.append(repo)
             emit(f"overnight: {repo}: {exc}", err=True)
-            continue
-        rows = rows if isinstance(rows, list) else []
+            return {}, set(), str(exc)
+        if raw is None:
+            return {}, set(), "the open issue list could not be read"
+        try:
+            rows = json.loads(raw)
+        except ValueError as exc:
+            emit(f"overnight: {repo}: {exc}", err=True)
+            return {}, set(), str(exc)
+        if not isinstance(rows, list):
+            return {}, set(), "the open issue list did not return a list"
         if len(rows) >= ISSUE_LIMIT:
-            unread.append(repo)
             emit(
                 f"overnight: {repo}: the open issue list was cut off at "
                 f"{ISSUE_LIMIT}, so the ticket text is not known",
                 err=True,
             )
-            continue
-        numbers = open_numbers.setdefault(repo, set())
+            return {}, set(), "the open issue list was cut off"
+        found: dict[int, str] = {}
+        numbers: set[int] = set()
         for row in rows:
             number = row.get("number")
             if isinstance(number, int):
                 numbers.add(number)
-            if number in wanted[repo]:
-                bodies[(repo, number)] = (row.get("body") or "") + "\n" + (
-                    row.get("title") or ""
-                )
+                if number in wanted[repo]:
+                    found[number] = (row.get("body") or "") + "\n" + (
+                        row.get("title") or ""
+                    )
+        return found, numbers, ""
+
+    # The repositories are read at the same time: one stalled repository
+    # must not cost the tick a timeout for every repository in turn.
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            repo: pool.submit(read_one, repo) for repo in sorted(wanted)
+        }
+        for repo, future in futures.items():
+            found, numbers, reason = future.result()
+            if reason:
+                unread.append(repo)
+                continue
+            for number, text in found.items():
+                bodies[(repo, number)] = text
+            open_numbers[repo] = numbers
     return bodies, unread, open_numbers
 
 
@@ -2904,7 +3011,13 @@ def read_closed_issues(
     closed_numbers: dict[str, set[int]] = {}
     closed_keys: dict[str, set[str]] = {}
     unread: list[str] = []
-    for repo, _key in repos:
+
+    def read_one(repo: str) -> tuple[set[int], set[str], str]:
+        """Return the closed issue numbers and keys of one repository.
+
+        The empty string is the reason they are unknown: a repository
+        whose closed issues cannot be read leaves its blockers unchecked,
+        and an unchecked blocker is not a met blocker."""
         try:
             raw = run(
                 [
@@ -2922,25 +3035,29 @@ def read_closed_issues(
                 ],
                 GH_TIMEOUT,
                 deadline,
+                optional=True,
             )
-            rows = json.loads(raw)
         except (RepoError, ValueError) as exc:
-            unread.append(repo)
             emit(f"overnight: {repo}: {exc}", err=True)
-            continue
+            return set(), set(), str(exc)
+        if raw is None:
+            return set(), set(), "the closed issue list could not be read"
+        try:
+            rows = json.loads(raw)
+        except ValueError as exc:
+            emit(f"overnight: {repo}: {exc}", err=True)
+            return set(), set(), str(exc)
         if not isinstance(rows, list):
-            unread.append(repo)
-            continue
+            return set(), set(), "the closed issue list did not return a list"
         if len(rows) >= ISSUE_LIMIT:
-            unread.append(repo)
             emit(
                 f"overnight: {repo}: the closed issue list was cut off at "
                 f"{ISSUE_LIMIT}, so the blockers are not known",
                 err=True,
             )
-            continue
-        numbers = closed_numbers.setdefault(repo, set())
-        keys = closed_keys.setdefault(repo, set())
+            return set(), set(), "the closed issue list was cut off"
+        numbers: set[int] = set()
+        keys: set[str] = set()
         for row in rows:
             number = row.get("number")
             if isinstance(number, int):
@@ -2948,6 +3065,21 @@ def read_closed_issues(
             key = issue_title_key(row.get("title") or "")
             if key:
                 keys.add(key)
+        return numbers, keys, ""
+
+    # The repositories are read at the same time: one stalled repository
+    # must not cost the tick a timeout for every repository in turn.
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            repo: pool.submit(read_one, repo) for repo, _key in repos
+        }
+        for repo, future in futures.items():
+            numbers, keys, reason = future.result()
+            if reason:
+                unread.append(repo)
+                continue
+            closed_numbers[repo] = numbers
+            closed_keys[repo] = keys
     return closed_numbers, closed_keys, unread
 
 
@@ -5490,7 +5622,7 @@ def cmd_board(args: argparse.Namespace) -> int:
     of it: it starts the ready work, queues a gate for every open pull
     request head that has none, and sends a failed gate's findings back to
     the builder that holds the pull request."""
-    deadline = time.monotonic() + args.deadline
+    deadline = time.monotonic() + min(args.deadline, BOARD_DEADLINE)
     cfg = load_config()
     budget = budget_of(policy_snapshot(report_root(getattr(args, "root", None))))
     repos = policy_repos(cfg, getattr(args, "allowed", None))
@@ -5509,13 +5641,20 @@ def cmd_board(args: argparse.Namespace) -> int:
     bodies, unread, open_numbers = read_bodies(issues, deadline)
     decisions_path, lines = read_decisions()
     problems: list[str] = []
-    if unread:
-        problems.append(
-            "the ticket text of these repositories could not be read: "
-            + ", ".join(unread)
-        )
     if not lines:
         problems.append(f"the decisions log {decisions_path} could not be read")
+    # A repository whose ticket text could not be read is not on the board:
+    # its tickets cannot be classified, and a ticket that cannot be
+    # classified is never acted on. The repositories are named, so the tick
+    # says that it did not see them instead of working a board it did not
+    # read.
+    if unread:
+        emit(
+            "overnight: the ticket text of these repositories could not be "
+            "read, so they are not on the board: " + ", ".join(unread),
+            err=True,
+        )
+        issues = [issue for issue in issues if issue.get("repo") not in unread]
     kept, drops = filter_issues(issues, allowed, flagged, bodies, lines)
     if problems:
         for problem in problems:
@@ -5580,6 +5719,7 @@ def cmd_board(args: argparse.Namespace) -> int:
             "openPullRequests": pull_requests,
             "pullRequestsWithoutAGate": len(no_gate),
         },
+        "unreadRepositories": unread,
         "actions": actions,
         "groups": {name: len(bucket) for name, bucket in groups},
         "gates": {

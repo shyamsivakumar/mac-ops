@@ -14,6 +14,10 @@ from tick_health import tick_alarm
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
+# The tick reads the threads with `coordq status`, so the t3mcp call it
+# makes is bounded: a call that hangs is skipped and named, never waited
+# on without end.
+T3MCP_TIMEOUT = 60
 LIVE_STATUSES = ["running", "starting", "preparing", "queued"]
 MAX_ATTEMPTS = 3
 TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_back"]
@@ -202,7 +206,13 @@ def call(tool, args, rules=None):
             if rules is None:
                 return 1, "agent rules were not loaded"
             args = with_rules(args, rules)
-    run = subprocess.run([T3MCP, "call", tool, "-"], input=json.dumps(args), capture_output=True, text=True)
+    # The call is bounded: a t3mcp that hangs must not hold the tick that
+    # asked for it, and the answer says which call was skipped.
+    try:
+        run = subprocess.run([T3MCP, "call", tool, "-"], input=json.dumps(args),
+                             capture_output=True, text=True, timeout=T3MCP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return 1, f"t3 call {tool} timed out after {T3MCP_TIMEOUT}s"
     return run.returncode, (run.stdout if run.returncode == 0 else run.stderr).strip()
 
 
