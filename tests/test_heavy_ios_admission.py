@@ -1,5 +1,7 @@
 """iOS build admission tests cover small hosts and simulator-backed jobs."""
 import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 import board_governor
 import heavy
@@ -146,3 +148,21 @@ class GovernorRecoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SmallHostSlotTests(unittest.TestCase):
+    def test_a_small_host_runs_one_heavy_job_at_a_time(self):
+        registry = Mock()
+        registry.uid = 501
+        registry.directory = Path('/nonexistent-heavy-test')
+        with patch.object(heavy, "_read_capacity_config", return_value={"heavy_slots": 2}):
+            limit = heavy._effective_slot_limit(registry, sample(16, 5), now=700.0, boot_id="1")
+        self.assertEqual(limit, 1)
+
+    def test_a_large_host_keeps_its_slot_ceiling(self):
+        registry = Mock()
+        registry.uid = 501
+        registry.directory = Path('/nonexistent-heavy-test')
+        with patch.object(heavy, "_read_capacity_config", return_value={"heavy_slots": 2}):
+            limit = heavy._effective_slot_limit(registry, sample(48, 30), now=700.0, boot_id="1")
+        self.assertEqual(limit, 2)

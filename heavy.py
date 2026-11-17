@@ -790,7 +790,11 @@ def _effective_slot_limit(
         or physical_bytes <= 0
     ):
         raise TelemetryError("physical memory size is unavailable")
-    memory_limit = physical_bytes // (6 * GIB)
+    memory_limit = (
+        1
+        if physical_bytes < SMALL_HOST_MEMORY_BYTES
+        else physical_bytes // (6 * GIB)
+    )
     return min(int(value["heavy_slots"]), cores, memory_limit)
 
 
