@@ -513,7 +513,11 @@ def _simulator_process_bytes(
         children.setdefault(ppid, []).append(pid)
         resident[pid] = rss
         commands[pid] = command
-    roots = [pid for pid, _ppid, _rss, command in rows if udid in command]
+    roots = [
+        pid
+        for pid, _ppid, _rss, command in rows
+        if udid in command and os.path.basename(command.split()[0]) == "launchd_sim"
+    ]
     if not roots:
         return 0
     seen: set = set()
@@ -525,7 +529,7 @@ def _simulator_process_bytes(
             continue
         seen.add(pid)
         command = commands.get(pid, "")
-        if not (udid in command or SIMULATOR_RUNTIME_MARKER in command):
+        if pid not in roots and SIMULATOR_RUNTIME_MARKER not in command:
             continue
         total += resident.get(pid, 0)
         stack.extend(children.get(pid, []))
@@ -2889,10 +2893,6 @@ def _launch_job(
     started = deps.clock()
     last_message = 0.0
     job_id = None
-    try:
-        memory_credit = simulator_memory_credit_bytes(argv)
-    except Exception:
-        memory_credit = 0
     queue_id = _enqueue_job(
         registry,
         task_key=task_key,
@@ -2920,6 +2920,10 @@ def _launch_job(
                 deps.sleep(max(0.0, next_sample - deps.clock()))
                 continue
             try:
+                try:
+                    memory_credit = simulator_memory_credit_bytes(argv)
+                except Exception:
+                    memory_credit = 0
                 job_id, reason = _reserve_job(
                     registry,
                     task_key,
