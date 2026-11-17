@@ -1210,8 +1210,8 @@ def _smoothed_cpu_sample(helper, sample):
     return dataclasses.replace(sample, cpu_busy_pct=sum(_cpu_history) / len(_cpu_history))
 
 
-def _critical_pressure(helper, sample, *, load_proxy: bool = True):
-    return helper.critical_pressure(sample, load_proxy=load_proxy) or (
+def _critical_pressure(helper, sample):
+    return helper.critical_pressure(sample) or (
         helper._finite_nonnegative(sample.cpu_busy_pct) and sample.cpu_busy_pct >= helper.MAX_CPU_PCT)
 
 
