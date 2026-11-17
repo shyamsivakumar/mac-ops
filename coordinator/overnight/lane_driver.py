@@ -1015,9 +1015,10 @@ def dead_reference_outcome(repo, number):
     """Return (settle, note) for one number a dead thread names.
 
     A pull request that is merged or closed settles the thread, and an open
-    pull request is unfinished work that keeps it. An issue settles when it
-    is closed, and an open issue settles through a merged or closed pull
-    request that names it."""
+    pull request is unfinished work that keeps it. An issue is settled only
+    after the pull requests that name it are read: an issue can close before
+    its pull request lands, and an open pull request is unfinished work even
+    then. An open issue settles through a merged or closed pull request."""
     found = dead_reference(repo, number)
     if not found:
         return False, ""
@@ -1025,20 +1026,20 @@ def dead_reference_outcome(repo, number):
         if found["state"] == "closed":
             return True, f"PR {repo}#{number} {'merged' if found['merged'] else 'closed'}"
         return False, f"PR {repo}#{number} is open"
-    if found["state"] == "closed":
-        return True, f"issue {repo}#{number} closed"
-    open_note, settled_note = "", ""
+    open_note, landed_note = "", ""
     for pr in dead_ticket_prs(repo, number):
         state = str(pr.get("state") or "").upper()
         if state == "OPEN":
             open_note = open_note or f"PR {repo}#{pr.get('number')} is open"
-        elif state == "CLOSED":
-            settled_note = settled_note or (
-                f"PR {repo}#{pr.get('number')} {'merged' if pr.get('mergedAt') else 'closed'}")
+        elif state in {"MERGED", "CLOSED"}:
+            landed_note = landed_note or (
+                f"PR {repo}#{pr.get('number')} {'merged' if state == 'MERGED' or pr.get('mergedAt') else 'closed'}")
     if open_note:
         return False, open_note
-    if settled_note:
-        return True, settled_note
+    if found["state"] == "closed":
+        return True, f"issue {repo}#{number} closed"
+    if landed_note:
+        return True, landed_note
     return False, f"issue {repo}#{number} is open"
 
 

@@ -226,17 +226,33 @@ def dead_run_no_receipt():
         {"threadId": "fixture-open", "title": "review #12", "settled": False,
          "pullRequests": [{"repository": repo, "number": 13}]},
         {"threadId": "fixture-key", "title": "CTL-7 hand launch", "settled": False},
-        {"threadId": "fixture-nothing", "title": "hand launch", "settled": False}]
+        {"threadId": "fixture-nothing", "title": "hand launch", "settled": False},
+        {"threadId": "fixture-closed-key", "title": "MO-8 hand launch", "settled": False},
+        {"threadId": "fixture-landed-key", "title": "MO-9 hand launch", "settled": False}]
     states = {
         (repo, 11): {"kind": "pr", "state": "closed", "merged": True},
         (repo, 12): {"kind": "pr", "state": "open", "merged": False},
         (repo, 13): {"kind": "pr", "state": "open", "merged": False},
-        (catalog, 7): {"kind": "issue", "state": "closed", "merged": False}}
+        (catalog, 7): {"kind": "issue", "state": "closed", "merged": False},
+        (repo, 8): {"kind": "issue", "state": "closed", "merged": False},
+        (repo, 9): {"kind": "issue", "state": "open", "merged": False}}
+    # A closed issue can close before its pull request lands, and a merged
+    # pull request reports MERGED, not CLOSED.
+    linked = {(catalog, 7): [{"number": 8, "state": "OPEN", "mergedAt": None}],
+              (repo, 8): [{"number": 15, "state": "CLOSED", "mergedAt": None}],
+              (repo, 9): [{"number": 16, "state": "MERGED", "mergedAt": "2026-11-17T00:00:00Z"}]}
     reads, settled = [], []
 
     def reference(target, number):
         reads.append((target, number))
         return states.get((target, number))
+
+    def ticket_prs(target, number):
+        reads.append((target, number))
+        return linked.get((target, number), [])
+
+    def ticket_numbers(target, token):
+        return {"CTL-7": [7], "MO-8": [8], "MO-9": [9]}.get(token, [])
 
     def t3(tool, args):
         if tool == "t3_thread_list":
@@ -253,7 +269,8 @@ def dead_run_no_receipt():
          patch.object(lane, "DRY", False), patch.object(lane, "t3", side_effect=t3), \
          patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "dead_reference", side_effect=reference), \
-         patch.object(lane, "dead_ticket_numbers", side_effect=lambda target, token: [7] if token == "CTL-7" else []):
+         patch.object(lane, "dead_ticket_prs", side_effect=ticket_prs), \
+         patch.object(lane, "dead_ticket_numbers", side_effect=ticket_numbers):
         lines = io.StringIO()
         with contextlib.redirect_stdout(lines):
             lane.recover_dead_runs(ledger)
@@ -263,18 +280,22 @@ def dead_run_no_receipt():
         with contextlib.redirect_stdout(lines):
             lane.recover_dead_runs(ledger)
         second = lines.getvalue().strip()
-    exact(settled, ["fixture-merged", "fixture-key"])
+    exact(settled, ["fixture-merged", "fixture-closed-key", "fixture-landed-key"])
     exact(second, "")
     exact(reads, [])
-    exact(len(first), 4)
+    exact(len(first), 6)
     exact("settle, PR shyamsivakumar/mac-ops#11 merged" in first[0], True)
     exact("flagged once" in first[1] and "PR shyamsivakumar/mac-ops#13 is open" in first[1], True)
-    exact("settle, issue shyamsivakumar/catalouge#7 closed" in first[2], True)
+    exact("flagged once" in first[2] and "PR shyamsivakumar/catalouge#8 is open" in first[2], True)
     exact("no pull request or ticket in the title" in first[3], True)
+    exact("settle, issue shyamsivakumar/mac-ops#8 closed" in first[4], True)
+    exact("settle, PR shyamsivakumar/mac-ops#16 merged" in first[5], True)
     exact(ledger["dead-run:fixture-merged"].startswith("settled "), True)
     exact(ledger["dead-run:fixture-open"].startswith("flagged "), True)
-    exact(ledger["dead-run:fixture-key"].startswith("settled "), True)
+    exact(ledger["dead-run:fixture-key"].startswith("flagged "), True)
     exact(ledger["dead-run:fixture-nothing"].startswith("flagged "), True)
+    exact(ledger["dead-run:fixture-closed-key"].startswith("settled "), True)
+    exact(ledger["dead-run:fixture-landed-key"].startswith("settled "), True)
 
 
 def gate_pipeline():
