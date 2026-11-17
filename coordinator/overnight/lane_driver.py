@@ -901,10 +901,18 @@ def watchdog():
         else:
             print("WATCHDOG " + cause)
             alarms.raised(state, "factory-watchdog", cause)
-            d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                               "title": "Factory job stopped or failing: " + cause,
-                               "cause": alarms.cause_of(cause),
-                               "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
+            # The key is written before the alarm is published: an alarm
+            # on the board must have a key, so the answer Shyam gives it
+            # has something to acknowledge. A key that cannot be written
+            # is a failure the tick says out loud, and the alarm waits for
+            # the next tick.
+            if not alarms.save_state(state):
+                print("WATCHDOG could not record the alarm key; the alarm is not published")
+            else:
+                d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
+                                   "title": "Factory job stopped or failing: " + cause,
+                                   "cause": alarms.cause_of(cause),
+                                   "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
     else:
         # The alarm is not true any more, so the same cause can alarm
         # again the next time it is true. An acknowledgement that is
@@ -913,8 +921,8 @@ def watchdog():
     d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     json.dump(d, open(p + ".tmp", "w"), indent=1)
     os.replace(p + ".tmp", p)
-    # The mute state is written after the board, so the state never says
-    # the alarm is on the board when the board does not hold it.
+    # The mute state is written again after the board, so the state never
+    # says the alarm is on the board when the board does not hold it.
     alarms.save_state(state)
 
 

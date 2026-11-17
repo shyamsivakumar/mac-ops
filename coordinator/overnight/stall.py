@@ -255,6 +255,12 @@ def alert(reason, cause=None, path=None):
             return "", "failed"
         return "", "quiet"
     alarms.raised(state, ALERT_ID, cause or reason)
+    # The key is written before the alarm is published: an alarm on the
+    # board must have a key, so the answer Shyam gives it has something to
+    # acknowledge. A key that cannot be written is a failure the shift
+    # says out loud, and the alarm waits for the next tick.
+    if not alarms.save_state(state):
+        return "", "failed"
     kept.append(
         {
             "id": ALERT_ID,
@@ -269,9 +275,6 @@ def alert(reason, cause=None, path=None):
     decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if not write_board(target, decisions):
         return "", "failed"
-    # The mute state is written after the board, so the state never says
-    # the alarm is on the board when the board does not hold it.
-    alarms.save_state(state)
     return str(target), "wrote"
 
 

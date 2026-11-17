@@ -1387,7 +1387,15 @@ an acknowledgement and writes the file, and the tick writes its older
 snapshot. The newer acknowledgement of a key wins, so the tick cannot take
 it with it. The read, the merge and the replace happen under a lock file
 beside the state, so the two writers cannot land in each other, and each
-writer replaces the file from a temporary file of its own.
+writer replaces the file from a temporary file of its own. A lock that cannot
+be taken is not a lock: the write fails rather than going on unlocked.
+
+An alarm on the board always has a key. The key is written before the alarm
+is published, so the answer Shyam gives it has something to acknowledge, and
+a key that cannot be written stops the publication and is said out loud in
+the shift's log. The panel's answer is bound to the cause it showed when he
+chose it, so an alarm that is replaced between the answer and the send is
+not acknowledged in the answer's place.
 
 The command exits 0 when the acknowledgement was written, 1 when there is
 no raised key for that cause, 2 when the usage is wrong, and 3 when the

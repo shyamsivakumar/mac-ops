@@ -61,11 +61,12 @@ const DECISIONS_FILE = `${home()}/Code/coordinator/decisions.json`;
 async function acknowledgeAlarm(id, cause) {
   if (!cause) return;
   const r = await exec(`${home()}/.local/bin/alarms.py`, ["ack", id, cause]);
-  // The command exits 0 when the acknowledgement was written and 1 when
-  // there is no raised key for that cause, which is nothing to quiet.
-  // Any other exit means the acknowledgement did not reach the file, and
-  // the alarm can raise again on the next tick, so Shyam is told.
-  if (r.code !== 0 && r.code !== 1) {
+  // The command exits 0 when the acknowledgement was written. Any other
+  // exit means the acknowledgement did not reach the file, and the alarm
+  // can raise again on the next tick, so Shyam is told. An alarm on the
+  // board always has a key, so even the "no raised key" exit is a fault
+  // worth naming.
+  if (r.code !== 0) {
     notify({ title: "The alarm was not acknowledged", body: `${id}: ${(r.stderr || "").trim() || `alarms exited ${r.code}`}. The alarm can raise again on the next tick.`, level: "warning" });
   }
 }
@@ -415,6 +416,13 @@ export default class Coordinator extends View {
     cx.notify();
   }
 
+  // The cause of the ask as it is shown now. The answer is bound to it,
+  // so an alarm that is replaced between the answer and the send is not
+  // acknowledged in the answer's place.
+  causeOf(q) {
+    return this.asks().find((a) => a.id === q)?.cause ?? "";
+  }
+
   pick(q, choice, cx) {
     const list = this.asks();
     const at = list.findIndex((a) => a.id === q);
@@ -422,7 +430,7 @@ export default class Coordinator extends View {
     const drafts = this.drafts();
     const same = drafts.get(q)?.kind === choice.kind && drafts.get(q).text === choice.text;
     if (same) drafts.delete(q);
-    else drafts.set(q, { kind: choice.kind, text: choice.text });
+    else drafts.set(q, { kind: choice.kind, text: choice.text, cause: this.causeOf(q) });
     this.setDrafts(drafts);
     this.keepTyping(q, "");
     this.editing.delete(q);
@@ -482,7 +490,7 @@ export default class Coordinator extends View {
   commit(q, cx) {
     const text = this.editor(q).value().trim();
     const drafts = this.drafts();
-    if (text) drafts.set(q, { kind: "reply", text });
+    if (text) drafts.set(q, { kind: "reply", text, cause: this.causeOf(q) });
     else if (drafts.get(q)?.kind === "reply") drafts.delete(q);
     this.setDrafts(drafts);
     this.keepTyping(q, "");
