@@ -1964,6 +1964,22 @@ def alarm_mute():
             exact(alarms.muted(alarms.load_state(),
                                 alarms.key_of("factory-watchdog", cause), now), True)
 
+    # The panel is JavaScript, so the contract it holds for the answer is
+    # read from its source: the answer carries the cause it was given
+    # for, an answer whose alarm changed is dropped before the send, the
+    # acknowledgement names that cause, and the panel warns when the
+    # command did not record it.
+    panel = (ROOT.parent / "mods" / "coordinator" / "main.js").read_text()
+    exact('shown: a.cause ?? ""' in panel, True)
+    exact('cause: draft.cause ?? a.cause ?? ""' in panel, True)
+    exact("draft.cause && shown && draft.cause !== shown" in panel, True)
+    exact("await acknowledgeAlarm(a.id, a.cause)" in panel, True)
+    exact("if (r.code !== 0) {" in panel, True)
+    exact("`${home()}/.local/bin/alarms.py`" in panel, True)
+    send = panel.index("send(cx) {")
+    body = panel[send:send + 400]
+    exact(body.index("this.dropStaleDrafts()") < body.index("this.message()"), True)
+
     # A lock that cannot be taken is not a lock: the write fails and the
     # file is left alone, rather than written unlocked.
     with tempfile.TemporaryDirectory() as scratch:
