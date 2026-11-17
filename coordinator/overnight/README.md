@@ -1391,17 +1391,22 @@ writer replaces the file from a temporary file of its own. A lock that cannot
 be taken is not a lock: the write fails rather than going on unlocked.
 
 An alarm on the board always has a key. The key is written before the alarm
-is published, so the answer Shyam gives it has something to acknowledge, and
-a key that cannot be written stops the publication and is said out loud in
-the shift's log. The panel's answer is bound to the cause it showed when he
-chose it, so an alarm that is replaced between the answer and the send is
-not acknowledged in the answer's place.
+is published, so the answer Shyam gives it has something to acknowledge. A
+key that cannot be written is a fault the shift says out loud, and the
+alarm is published anyway: a storage failure must not hide a real failure
+from Shyam.
+
+The panel's answer is bound to the cause it showed when he chose it. When
+the alarm is replaced between the answer and the send, the answer is
+dropped and Shyam is told, because sending it would answer the alarm that
+is there now, and he never answered that one.
 
 The command exits 0 when the acknowledgement was written, 1 when there is
 no raised key for that cause, 2 when the usage is wrong, and 3 when the
-acknowledgement could not be written. The panel warns on every exit but 0
-and 1, because an acknowledgement that was not written means the alarm can
-raise again on the next tick.
+state could not be locked or written. The panel warns on every exit but 0,
+because an acknowledgement that was not written means the alarm can raise
+again on the next tick, and an alarm on the board always has a key, so a
+missing key is a fault and not a quiet success.
 
 The record is the whole rule. A board item that went missing is not an
 acknowledgement: the board has more than one writer and one of them can lose

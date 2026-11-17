@@ -257,10 +257,11 @@ def alert(reason, cause=None, path=None):
     alarms.raised(state, ALERT_ID, cause or reason)
     # The key is written before the alarm is published: an alarm on the
     # board must have a key, so the answer Shyam gives it has something to
-    # acknowledge. A key that cannot be written is a failure the shift
-    # says out loud, and the alarm waits for the next tick.
+    # acknowledge. A key that cannot be written is a fault the shift says
+    # out loud, and the alarm is published anyway: a storage failure must
+    # not hide a real failure from Shyam.
     if not alarms.save_state(state):
-        return "", "failed"
+        print("stall: the alarm key could not be written; the answer to this alarm cannot be recorded")
     kept.append(
         {
             "id": ALERT_ID,

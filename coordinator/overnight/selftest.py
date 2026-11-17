@@ -1975,6 +1975,21 @@ def alarm_mute():
                 exact(alarms.save_state(state), False)
             exact(alarms.load_state(), {})
 
+    # A lock that cannot be taken fails the command too: the
+    # acknowledgement did not land, the command says so, and the alarm is
+    # not muted.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            state = alarms.load_state()
+            alarms.raised(state, "factory-watchdog", cause, now)
+            alarms.save_state(state)
+            with patch.object(alarms.os, "open", side_effect=OSError("read-only")), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 3)
+            exact(alarms.muted(alarms.load_state(),
+                                alarms.key_of("factory-watchdog", cause), now), False)
+
     # The stall's cause names the stalled repos, so two stalls on
     # different repos are different causes.
     stalled = {"items": {"a/one#1": {"stalled": True}, "b/two#2": {"stalled": False}}}
@@ -2016,6 +2031,24 @@ def alarm_mute():
             target, action = rule.alert("the board stopped for another reason", None, board)
             exact(action, "wrote")
             exact(len(json.loads(board.read_text())["items"]), 1)
+
+    # An alarm on the board always has a key: the stall writes no board
+    # item is published anyway when its key cannot be written, and the
+    # fault is said out loud: a storage failure must not hide a real
+    # failure.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            board = Path(scratch) / "decisions.json"
+            board.write_text(json.dumps({"items": []}))
+            buffer = io.StringIO()
+            with patch.object(alarms, "save_state", return_value=False), \
+                 contextlib.redirect_stdout(buffer):
+                target, action = rule.alert("no board progress for 3 ticks", None, board)
+            exact(action, "wrote")
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact("the alarm key could not be written" in buffer.getvalue(), True)
 
     # The real path: the shift asks again on every tick of a stall that
     # continues, so the alarm can come back when the four hours are over
@@ -2154,13 +2187,16 @@ def alarm_mute():
             exact("WATCHDOG quiet" in output, True)
 
             # An alarm on the board always has a key: the key is written
-            # before the alarm is published, and a key that cannot be
-            # written stops the publication and is said out loud.
+            # before the alarm is published. A key that cannot be written
+            # is said out loud, and the alarm is published anyway: a
+            # storage failure must not hide a real failure.
             codes["code"] = 78
             with patch.object(alarms, "save_state", return_value=False):
                 output = pass_once(now + dt.timedelta(hours=4, minutes=14))
-            exact(json.loads(board.read_text())["items"], [])
-            exact("could not record the alarm key" in output, True)
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact(items[0]["id"], "factory-watchdog")
+            exact("the alarm key could not be written" in output, True)
 
 
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
