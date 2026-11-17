@@ -389,7 +389,9 @@ def memory_load_block_reason(
         return "memory-pressure-warning-low-free"
     if not all(_finite_nonnegative(rate) for rate in rates):
         return "first swap sample; normal wait, a few seconds"
-    credit = min(max(0, allowance_bytes), physical // 8)
+    credit = 0
+    if physical < SMALL_HOST_MEMORY_BYTES:
+        credit = min(max(0, allowance_bytes), physical // 8)
     if headroom + credit < required_headroom_bytes(
         physical, headroom_fraction
     ):
@@ -403,13 +405,13 @@ def required_headroom_bytes(
     """Return the headroom a job needs, scaled to the host's memory size.
 
     A host with less than 24 GiB of memory cannot keep 6 GiB free and still
-    run one build, so its requirement scales with its size instead.
+    run one build, so its requirement scales with its size instead. Every
+    other host keeps the original max(6 GiB, a share of RAM) rule.
     """
+    scaled = int(physical_bytes * headroom_fraction)
     if physical_bytes >= SMALL_HOST_MEMORY_BYTES:
-        return MIN_HEADROOM_BYTES
-    return max(
-        SMALL_HOST_HEADROOM_FLOOR_BYTES, int(physical_bytes * headroom_fraction)
-    )
+        return max(MIN_HEADROOM_BYTES, scaled)
+    return max(SMALL_HOST_HEADROOM_FLOOR_BYTES, scaled)
 
 
 def simulator_destination_device(argv: Sequence[str]) -> Optional[str]:
