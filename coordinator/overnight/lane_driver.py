@@ -14,6 +14,7 @@ ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
 OPUS = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
 CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
+DECISIONS_PATH = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
 DRY = False
 SNAPSHOT = {}
 API_FLOOR = 500
@@ -699,30 +700,138 @@ def unstick(repo, ledger, excl=frozenset()):
     return f"unstick {lst}: {out}"
 
 
-WATCH = {"tick": ("/Users/shyamsivakumar/Library/Logs/coordinator/tick.log", 65),
-         "gatekeep": ("/Users/shyamsivakumar/Code/coordinator/queue/gatekeep.log", 120),
-         "dispatch": ("/Users/shyamsivakumar/Code/coordinator/queue/dispatch.log", 10),
-         "lanes": ("/Users/shyamsivakumar/Library/Logs/coordinator/lanes.log", 10)}
+# Every watched job: its log, the silence limit in minutes and its launchd
+# label. The label names the plist under coordinator/launchd, which stays the
+# source of truth for which jobs exist.
+WATCH = {"tick": ("/Users/shyamsivakumar/Library/Logs/coordinator/tick.log", 65, "dev.coordinator.tick"),
+         "gatekeep": ("/Users/shyamsivakumar/Code/coordinator/queue/gatekeep.log", 120, "dev.coordinator.gatekeep"),
+         "dispatch": ("/Users/shyamsivakumar/Code/coordinator/queue/dispatch.log", 10, "dev.coordinator.dispatch"),
+         "lanes": ("/Users/shyamsivakumar/Library/Logs/coordinator/lanes.log", 10, "dev.coordinator.lanes")}
+
+
+def launchd_state(label):
+    """Return the launchd state of one job, or None when launchd cannot say.
+
+    A job that launchd no longer holds has no state: `launchctl print` fails
+    for it. That is the difference between a stopped job and a job that is
+    loaded and idle, which is the difference the watchdog has to see.
+    """
+    try:
+        result = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return {"loaded": False}
+    text = result.stdout
+
+    def field(pattern):
+        match = re.search(pattern, text, re.MULTILINE)
+        return match.group(1) if match else None
+
+    return {"loaded": True,
+            "runs": int(field(r"^\truns = (\d+)$") or 0),
+            "exit_code": int(field(r"^\tlast exit code = (-?\d+)$") or 0),
+            "running": field(r"^\tstate = (.+)$") == "running",
+            "pid": int(field(r"^\tpid = (\d+)$") or 0)}
+
+
+def process_seconds(pid):
+    """Return how long a process has been running, or None when it cannot say.
+
+    macOS ps has no `etimes`, so the elapsed time is read as `etime`, which
+    prints `[[dd-]hh:]mm:ss`.
+    """
+    try:
+        result = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    text = result.stdout.strip()
+    days = 0
+    if "-" in text:
+        head, _, text = text.partition("-")
+        try:
+            days = int(head)
+        except ValueError:
+            return None
+    parts = text.split(":")
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if len(numbers) == 3:
+        hours, minutes, seconds = numbers
+    elif len(numbers) == 2:
+        hours, minutes, seconds = 0, numbers[0], numbers[1]
+    else:
+        return None
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def log_age(path):
+    """Return the age of a log in minutes, or None when the log is missing."""
+    try:
+        return (time.time() - os.path.getmtime(path)) / 60
+    except OSError:
+        return None
+
+
+def watchdog_signal(name, minutes, label, age, state):
+    """Return the signal and the alarm for one watched job.
+
+    The signal names the evidence used. The alarm is None when the job is
+    healthy. A job that launchd holds and that exits clean is alive even
+    when its log is quiet, because a job with nothing to write writes
+    nothing. A job that launchd no longer holds, or that fails, or that
+    runs past its limit, is not alive.
+    """
+    if state is None:
+        # launchd cannot say, so the log age is the only evidence left.
+        if age is None or age > minutes:
+            silence = "no log" if age is None else f"{age:.0f} min"
+            return "log-age", f"{name} silent {silence} (limit {minutes})"
+        return "log-age", None
+    if not state["loaded"]:
+        return "launchd", f"{name} stopped (launchd job {label} is not loaded)"
+    if state["exit_code"]:
+        return "launchd", f"{name} failing (last exit code {state['exit_code']})"
+    if state["running"] and state["pid"]:
+        elapsed = process_seconds(state["pid"])
+        if elapsed is not None and elapsed > minutes * 60:
+            return "launchd", f"{name} stuck (running {elapsed // 60} min, limit {minutes})"
+    return "launchd", None
 
 
 def watchdog():
-    import os, time, datetime as dt
+    import datetime as dt
     stale = []
-    for name, (path, minutes) in WATCH.items():
-        try:
-            age = (time.time() - os.path.getmtime(path)) / 60
-        except OSError:
-            age = 9999
-        if age > minutes:
-            stale.append(f"{name} silent {age:.0f} min (limit {minutes})")
-    p = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
+    for name, (path, minutes, label) in WATCH.items():
+        age = log_age(path)
+        state = launchd_state(label)
+        signal, alarm = watchdog_signal(name, minutes, label, age, state)
+        detail = "log_age=missing" if age is None else f"log_age={age:.0f} min"
+        if state is None:
+            detail += " launchd=unavailable"
+        elif not state["loaded"]:
+            detail += " launchd=not-loaded runs=0 exit=0"
+        else:
+            detail += (f" launchd=loaded runs={state['runs']} exit={state['exit_code']}"
+                       f" running={'yes' if state['running'] else 'no'}")
+        print(f"WATCH {name}: signal={signal} limit={minutes} min {detail}"
+              + (f" alarm={alarm}" if alarm else ""))
+        if alarm:
+            stale.append(alarm)
+    p = DECISIONS_PATH
     d = json.load(open(p))
     d["items"] = [i for i in d["items"] if i.get("id") != "factory-watchdog"]
     if stale:
         print("WATCHDOG " + "; ".join(stale))
         d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                           "title": "Factory job silent: " + "; ".join(stale),
-                           "why": "A coordinator job stopped writing its log. The coordinator is routing a fix; nothing for you unless this stays up."})
+                           "title": "Factory job stopped or failing: " + "; ".join(stale),
+                           "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
     d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     json.dump(d, open(p + ".tmp", "w"), indent=1)
     os.replace(p + ".tmp", p)
@@ -745,7 +854,7 @@ def zero_merge(snapshot):
                 stamp = dt.datetime.fromisoformat(row["mergedAt"].replace("Z", "+00:00"))
                 if cutoff <= stamp <= now:
                     recent = True
-    path = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
+    path = DECISIONS_PATH
     with open(path) as handle:
         decisions = json.load(handle)
     decisions["items"] = [item for item in decisions["items"]
