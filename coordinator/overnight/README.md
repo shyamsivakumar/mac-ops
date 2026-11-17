@@ -1364,7 +1364,7 @@ two places that raise these alarms: the watchdog (`factory-watchdog`, in
 | Thing | What it is |
 | --- | --- |
 | The key of an alarm | The alarm's id and its cause, as one string: `factory-watchdog\|gatekeep failing (last exit code 1)`. |
-| The cause | What is wrong, without the parts that change on every tick. The minutes of a quiet log and the minutes of a stuck run are not part of the cause; the exit code and the signal are. The stall's cause names the stalled repos. |
+| The cause | What is wrong, without the parts that change on every tick. The minutes of a quiet log and the minutes of a stuck run are not part of the cause; the exit code and the signal are. The stall's cause names the stalled repos. The idle tick count is not part of a cause: the same stall reported on the fourth tick is the same stall as the one reported on the third. |
 | The mute state | `run/mute-state.json`, in the shift's own folder, next to the stall state. It is not in the board file: the coordinator rewrites the board file, and a board file that is rewritten must not take the mute with it. |
 | The mute | Four hours (`MUTE_SECONDS`) from the acknowledgement. |
 
@@ -1375,6 +1375,12 @@ the board. A routed alarm is a key that was raised and whose board item
 stayed gone: the coordinator took the item off the board, so the key is muted
 from that moment. That is the case that stopped the five alarms: the answer
 removed the item, and the next tick put it back.
+
+The shift asks again on every tick of a stall that continues. The rule
+stops asking once the alert was delivered, but the shift does not: the
+writer knows whether the alarm is due, it is quiet while the mute runs,
+and it comes back when the four hours are over and the board still has not
+moved.
 
 One tick of absence is not proof. The board has more than one writer and one
 of them can lose the item for a tick, so the alarm waits one tick before it
@@ -1396,10 +1402,13 @@ the hourly fixture selftest (`overnight-selftest`) and every item a person
 put on the board keep their own rule and are never muted by this one.
 
 Run `python3 evidence/MO-496/proof.py` for the proof. It replays both
-alarms on a copy of the board file with a fixture clock: the first tick
-raises the alarm, the coordinator takes the item off the board, the next tick
-waits, the tick after that mutes the key, the ticks in between log one line
-each, a changed cause alarms at once, the same cause alarms again after four
+alarms on a copy of the board file with a fixture clock. The stall is
+replayed on the real path: the proof loads the overnight runner and drives
+`stall_records`, so the shift's own decision to ask again on a stall that
+continues is part of the proof and not skipped. The first tick raises the
+alarm, the coordinator takes the item off the board, the next tick waits,
+the tick after that mutes the key, the ticks in between log one line each,
+a changed cause alarms at once, the same cause alarms again after four
 hours, and the mute survives a tick where the job was healthy. The
 `alarm-mute` eval in `overnight selftest` covers the same ground with the
 fake clock, and the changed expectations in the `watchdog` eval are the
