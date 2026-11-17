@@ -185,9 +185,7 @@ def parse_cpu_busy(output: str) -> float:
     ):
         raise TelemetryError("invalid iostat CPU sample")
     if abs((user + system + idle) - 100.0) > 5.0:
-        # iostat's columns can omit a category or round badly under load; the
-        # idle share still gives a usable busy reading.
-        return max(0.0, min(100.0, 100.0 - idle))
+        raise TelemetryError("inconsistent iostat CPU sample")
     return user + system
 
 
@@ -403,6 +401,17 @@ def memory_load_block_reason(
     return None
 
 
+def pause_headroom_bytes(physical_bytes: int, paused: bool = False) -> int:
+    """Return the headroom a running job needs, with the original rule.
+
+    A running job keeps the host's original pause and resume thresholds on
+    every host; only the headroom a job needs to start scales with the host's
+    memory.
+    """
+    fraction = HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
+    return max(MIN_HEADROOM_BYTES, int(physical_bytes * fraction))
+
+
 def required_headroom_bytes(
     physical_bytes: int, headroom_fraction: float = HEADROOM_FRACTION
 ) -> int:
@@ -418,10 +427,12 @@ def required_headroom_bytes(
     return max(SMALL_HOST_HEADROOM_FLOOR_BYTES, scaled)
 
 
-def simulator_destination_device(argv: Sequence[str]) -> Optional[str]:
-    """Return the simulator device a command targets, or None."""
+def simulator_destination_device(
+    argv: Sequence[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return the simulator device and OS version a command targets."""
     if not argv or os.path.basename(str(argv[0])) != "xcodebuild":
-        return None
+        return None, None
     destinations: List[str] = []
     for index, arg in enumerate(argv):
         text = str(arg)
@@ -432,13 +443,19 @@ def simulator_destination_device(argv: Sequence[str]) -> Optional[str]:
     for value in destinations:
         if SIMULATOR_DESTINATION_MARKER not in value:
             continue
+        device = None
+        os_version = None
         for part in value.split(","):
             part = part.strip()
             if part.startswith("id="):
-                return part[3:].strip()
-            if part.startswith("name="):
-                return part[5:].strip()
-    return None
+                device = part[3:].strip()
+            elif part.startswith("name="):
+                device = part[5:].strip()
+            elif part.startswith("OS="):
+                os_version = part[3:].strip()
+        if device:
+            return device, os_version
+    return None, None
 
 
 def _device_key(value: str) -> str:
@@ -450,10 +467,26 @@ def _device_key(value: str) -> str:
     return str(value).strip().strip('"').strip().lower()
 
 
+def _runtime_version(identifier: str) -> Optional[str]:
+    """Return the OS version a simulator runtime identifier names."""
+    parts = str(identifier).rsplit(".", 1)[-1].split("-")
+    if len(parts) < 2:
+        return None
+    version = ".".join(parts[1:])
+    return version or None
+
+
 def _booted_simulator_udid(
-    device: str, *, command_runner: Callable[[Sequence[str], float], str] = _run_native
+    device: str,
+    os_version: Optional[str] = None,
+    *,
+    command_runner: Callable[[Sequence[str], float], str] = _run_native,
 ) -> Optional[str]:
-    """Return the UDID of the booted simulator device matching a name or UDID."""
+    """Return the UDID of the one booted simulator device that matches.
+
+    A name that matches more than one booted runtime, or a name whose runtime
+    is not the requested one, claims no credit.
+    """
     try:
         raw = command_runner(
             ["/usr/bin/xcrun", "simctl", "list", "devices", "booted", "-j"],
@@ -469,7 +502,11 @@ def _booted_simulator_udid(
     if not isinstance(devices, dict):
         return None
     key = _device_key(device)
-    for rows in devices.values():
+    matches: List[str] = []
+    for runtime, rows in devices.items():
+        version = _runtime_version(str(runtime))
+        if os_version and version != os_version:
+            continue
         if not isinstance(rows, list):
             continue
         for row in rows:
@@ -480,8 +517,10 @@ def _booted_simulator_udid(
             if not udid:
                 continue
             if _device_key(name) == key or _device_key(udid) == key:
-                return udid
-    return None
+                matches.append(udid)
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 def _simulator_process_bytes(
@@ -546,10 +585,12 @@ def simulator_memory_credit_bytes(
     The simulator a job drives is that job's own memory, so it does not count
     against the headroom the job needs.
     """
-    device = simulator_destination_device(argv)
+    device, os_version = simulator_destination_device(argv)
     if not device:
         return 0
-    udid = _booted_simulator_udid(device, command_runner=command_runner)
+    udid = _booted_simulator_udid(
+        device, os_version, command_runner=command_runner
+    )
     if not udid:
         return 0
     return _simulator_process_bytes(udid, command_runner=command_runner)
@@ -1942,6 +1983,7 @@ def _host_reason(
         headroom_fraction=(
             HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
         ),
+        required_bytes=pause_headroom_bytes(sample.physical_bytes, paused),
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
     return None
