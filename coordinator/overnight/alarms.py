@@ -128,16 +128,50 @@ def load_state():
     return state if isinstance(state, dict) else {}
 
 
+def acked_at(record):
+    """Return the epoch second of a record's acknowledgement, or 0."""
+    return moment(record.get("acked")) or 0
+
+
+def merge(current, state):
+    """Return the two states merged, and the newer acknowledgement wins.
+
+    A tick reads the state, the panel records an acknowledgement and
+    writes the file, and the tick writes its older snapshot. The
+    acknowledgement is newer, so it wins: the tick must not take it with
+    it. A record with no acknowledgement and no raised mark says nothing
+    and is dropped, so the state stays bounded."""
+    merged = {}
+    for key in set(current) | set(state):
+        mine = state.get(key) if isinstance(state.get(key), dict) else {}
+        theirs = current.get(key) if isinstance(current.get(key), dict) else {}
+        if not mine:
+            record = dict(theirs)
+        elif not theirs:
+            record = dict(mine)
+        else:
+            record = dict(mine)
+            if acked_at(theirs) > acked_at(mine):
+                record["acked"] = theirs.get("acked")
+                record["until"] = theirs.get("until")
+        if not record.get("acked") and not record.get("raised"):
+            continue
+        merged[key] = record
+    return merged
+
+
 def save_state(state):
     """Write the mute state and return True when it went to the file.
 
     The write is atomic, so a tick that reads while the state is being
-    written reads the old state or the new one, never half of one."""
+    written reads the old state or the new one, never half of one. The
+    file is read again just before the write, so an acknowledgement that
+    landed while the tick was running is kept."""
     path = state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.parent / f"{path.name}.tmp"
-        temporary.write_text(json.dumps({STATE_KEY: state}, indent=1) + "\n")
+        temporary.write_text(json.dumps({STATE_KEY: merge(load_state(), state)}, indent=1) + "\n")
         os.replace(temporary, path)
     except OSError:
         return False
@@ -222,18 +256,19 @@ def decide(state, alarm_id, cause, now=None):
     return "raise"
 
 
-USAGE = """usage: alarms ack <alarm-id>   quiet every cause of that alarm for four hours
-       alarms status             show the alarm keys and until when they are quiet
+USAGE = """usage: alarms ack <alarm-id> <cause>   quiet that cause of that alarm for four hours
+       alarms status                       show the alarm keys and until when they are quiet
 """
 
 
 def main(argv):
     """Quiet one alarm, or show what is quiet, and print what it did.
 
-    `alarms ack <alarm-id>` records the acknowledgement of every cause of
-    that alarm, so the coordinator can answer an alarm without taking its
+    `alarms ack <alarm-id> <cause>` records the acknowledgement of that
+    one cause, so the coordinator can answer an alarm without taking its
     item off the board. The item stays on the board until the coordinator
-    routes it."""
+    routes it. Only the cause that was answered is quiet: another cause
+    of the same alarm was not answered and is not silenced."""
     if argv[:1] in (["--help"], ["-h"]):
         sys.stdout.write(USAGE)
         return 0
@@ -245,23 +280,21 @@ def main(argv):
         for key in sorted(state):
             record = entry(state, key)
             until = record.get("until") or "not acknowledged"
-            print(f"{key}: quiet until {until}")
+            print(f"{key}\n  cause: {record.get('cause', '')}\n  quiet until: {until}")
         return 0
-    if len(argv) != 2 or argv[0] != "ack":
+    if len(argv) != 3 or argv[0] != "ack":
         sys.stderr.write(USAGE)
         return 2
     state = load_state()
-    prefix = f"{argv[1]}|"
-    keys = [key for key in state if key.startswith(prefix)]
-    if not keys:
-        sys.stderr.write(f"alarms: no raised key for {argv[1]}\n")
+    key = key_of(argv[1], argv[2])
+    if key not in state:
+        sys.stderr.write(f"alarms: no raised key for {key}\n")
         return 1
-    for key in keys:
-        acknowledge(state, key)
+    acknowledge(state, key)
     if not save_state(state):
         sys.stderr.write("alarms: the mute state could not be written\n")
         return 1
-    print(f"alarms: {argv[1]} quiet for {MUTE_SECONDS // 3600} hours ({len(keys)} key(s))")
+    print(f"alarms: {key} quiet for {MUTE_SECONDS // 3600} hours")
     return 0
 
 

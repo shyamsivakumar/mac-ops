@@ -644,7 +644,7 @@ revision 3 changes them.
 | `run/deadline` | The attended first night only | UNIX epoch the rehearsal ends at. The shift has no deadline (revision 3). |
 | `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
 | `run/stall-state.json` | A cycle | How long every item the shift measured has been idle, and which items are parked as a stall. It holds no list of work: the board is the list. |
-| `run/mute-state.json` | A cycle | Which alarm keys are quiet and until when. It is the mute for the alarms the shift raises (Refs #496), and it lives here and not in the board file, because the coordinator rewrites the board file. |
+| `run/mute-state.json` | A cycle | Which alarm keys are quiet and until when. It is the mute for the alarms the shift raises (Refs #496), and it lives here and not in the board file, because the coordinator rewrites the board file. The write merges, so a tick cannot take an acknowledgement that landed while it ran with it. |
 | `receipts/<item>.md` | A cycle (`overnight receipt`) | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
 | `inbox/parking-lot.md` | A cycle (`overnight park`) | Decisions the shift could not make. Each with a default and a recommendation. |
 | `inbox/snag-log.md` | A cycle (`overnight park`) | Problems found (flaky test, conflict, dialog) and what the shift did. |
@@ -1372,9 +1372,20 @@ One thing mutes a key: an explicit acknowledgement. It is a record with the
 time it was given and the time the mute ends, and it is written when the
 alarm was answered on the decisions board or when the coordinator recorded
 it as routed. The coordinator panel writes it when Shyam answers, through
-the `alarms ack <alarm-id>` command, and the command is there for the
-coordinator and for a person. `alarms status` prints the alarm keys and
+the `alarms ack <alarm-id> <cause>` command, and the command is there for
+the coordinator and for a person. `alarms status` prints the alarm keys and
 until when each one is quiet, and `alarms --help` prints the usage.
+
+The acknowledgement names the cause the panel showed, so only that cause is
+quiet: another cause of the same alarm was not answered and is not silenced.
+The command is the installed one (`~/.local/bin/alarms.py`, installed with
+the rest of the shift's commands), and it is a file with a shebang, so the
+panel runs it as a command.
+
+The state is written with a merge: a tick reads the state, the panel records
+an acknowledgement and writes the file, and the tick writes its older
+snapshot. The newer acknowledgement of a key wins, so the tick cannot take
+it with it.
 
 The record is the whole rule. A board item that went missing is not an
 acknowledgement: the board has more than one writer and one of them can lose

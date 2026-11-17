@@ -26,7 +26,9 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from unittest.mock import patch
@@ -38,7 +40,10 @@ import alarms  # noqa: E402
 import lane_driver as lane  # noqa: E402
 import stall as rule  # noqa: E402
 
-NOW = dt.datetime(2026, 11, 17, 9, 0, tzinfo=dt.timezone.utc)
+# The replay runs on the clock of the machine, rounded to the second: the
+# command that records the acknowledgement is a separate process and
+# reads the same clock, so the two agree.
+NOW = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
 REASON = "The overnight shift saw no board progress for 3 ticks."
 
 
@@ -58,15 +63,20 @@ def at(moment, fn, *args):
         return fn(*args)
 
 
-def ack(alarm_id, moment):
-    """Record the acknowledgement of an alarm, the way the panel does."""
-    class Clock(dt.datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return moment
+def ack(alarm_id, cause, moment):
+    """Record the acknowledgement of an alarm the way the panel does.
 
-    with patch.object(dt, "datetime", Clock):
-        return alarms.main(["ack", alarm_id])
+    The panel runs the installed command, so the proof runs the command
+    too: the file, executed as a command, with the id and the cause the
+    panel showed. The clock is a fixture, so the command reads it
+    through the environment the proof sets."""
+    environment = dict(os.environ, OVERNIGHT_MUTE_STATE=alarms.MUTE_PATH)
+    result = subprocess.run([str(alarms.__file__), "ack", alarm_id, cause],
+                            capture_output=True, text=True, env=environment, timeout=60)
+    if result.returncode != 0:
+        print(f"FAIL the acknowledgement was not recorded: {result.stderr.strip()}")
+        return 1
+    return 0
 
 
 def items_of(board):
@@ -155,9 +165,10 @@ def replay_stall(board, runner):
         return False
     print("PASS an alarm nobody answered was raised again")
 
-    # Shyam answers the alarm: the acknowledgement is the record.
-    if ack("factory-overnight-stall", NOW + dt.timedelta(minutes=4)) != 0:
-        print("FAIL the acknowledgement could not be recorded")
+    # Shyam answers the alarm: the acknowledgement is the record, for the
+    # cause the panel showed.
+    shown = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"][0]["cause"]
+    if ack("factory-overnight-stall", shown, NOW + dt.timedelta(minutes=4)) != 0:
         return False
     at(NOW + dt.timedelta(minutes=6), runner.stall_records, root, [], str(board), state)
     items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
@@ -182,7 +193,7 @@ def replay_stall(board, runner):
 
     # The same cause comes back when the four hours are over.
     state["items"] = {}
-    later = NOW + dt.timedelta(hours=4, minutes=20)
+    later = NOW + dt.timedelta(hours=4, minutes=30)
     at(later, runner.stall_records, root, [], str(board), state)
     items = [i for i in items_of(board) if i["id"] == "factory-overnight-stall"]
     print(f"--- the same cause after four hours: {len(items)} item(s)")
@@ -216,9 +227,10 @@ def replay_watchdog(board):
         return False
     print("PASS an alarm nobody answered was raised again")
 
-    # Shyam answers the alarm: the acknowledgement is the record.
-    if ack("factory-watchdog", NOW + dt.timedelta(minutes=4)) != 0:
-        print("FAIL the acknowledgement could not be recorded")
+    # Shyam answers the alarm: the acknowledgement is the record, for the
+    # cause the panel showed.
+    shown = [i for i in items if i["id"] == "factory-watchdog"][0]["cause"]
+    if ack("factory-watchdog", shown, NOW + dt.timedelta(minutes=4)) != 0:
         return False
     output, items = watchdog_tick(board, 1, NOW + dt.timedelta(minutes=6))
     alarms_on_board = [i for i in items if i["id"] == "factory-watchdog"]
@@ -237,27 +249,27 @@ def replay_watchdog(board):
         return False
     print("PASS a changed exit code alarmed at once")
 
+    # A tick where the job is healthy does not take the mute with it: the
+    # same cause stays quiet for the rest of the four hours.
+    if ack("factory-watchdog", "tick failing (last exit code 1)", NOW + dt.timedelta(minutes=10)) != 0:
+        return False
+    watchdog_tick(board, 0, NOW + dt.timedelta(minutes=11))
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(minutes=12))
+    print(f"--- the job recovers and fails again (+12 min): {output.strip().splitlines()[-1]}")
+    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG quiet" not in output:
+        print("FAIL the mute did not survive a healthy tick")
+        return False
+    print("PASS the mute survived a tick where the job was healthy")
+
     # The same cause comes back when the four hours are over.
     take_off_the_board(board)
-    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=20))
+    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=30))
     print(f"--- the same exit code after four hours: {output.strip().splitlines()[-1]}")
     alarms_on_board = [i for i in items if i["id"] == "factory-watchdog"]
     if len(alarms_on_board) != 1:
         print("FAIL the alarm did not come back after four hours")
         return False
     print("PASS the same exit code alarmed again after four hours")
-
-    # A tick where the job is healthy does not take the mute with it.
-    if ack("factory-watchdog", NOW + dt.timedelta(hours=4, minutes=21)) != 0:
-        print("FAIL the acknowledgement could not be recorded")
-        return False
-    watchdog_tick(board, 0, NOW + dt.timedelta(hours=4, minutes=22))
-    output, items = watchdog_tick(board, 1, NOW + dt.timedelta(hours=4, minutes=23))
-    print(f"--- the job recovers and fails again (+4 h 23 min): {output.strip().splitlines()[-1]}")
-    if [i for i in items if i["id"] == "factory-watchdog"] or "WATCHDOG quiet" not in output:
-        print("FAIL the mute did not survive a healthy tick")
-        return False
-    print("PASS the mute survived a tick where the job was healthy")
     return True
 
 
