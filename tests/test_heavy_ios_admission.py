@@ -110,25 +110,25 @@ class SmallHostAdmissionTests(unittest.TestCase):
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
         )
 
-    def test_a_running_job_on_a_small_host_pauses_below_the_scaled_threshold(self):
-        self.assertIsNone(heavy._host_reason(sample(16, 3)))
+    def test_a_running_job_keeps_the_original_pause_threshold(self):
         self.assertEqual(
-            heavy._host_reason(sample(16, 1)), "memory-headroom-or-swap-pressure"
+            heavy._host_reason(sample(16, 3)), "memory-headroom-or-swap-pressure"
         )
+        self.assertIsNone(heavy._host_reason(sample(16, 7)))
 
     def test_a_large_host_pause_threshold_is_unchanged(self):
         self.assertEqual(
-            heavy.required_headroom_bytes(48 * heavy.GIB, heavy.PAUSE_HEADROOM_FRACTION),
+            heavy.pause_headroom_bytes(48 * heavy.GIB),
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
         )
         self.assertEqual(
-            heavy.required_headroom_bytes(16 * heavy.GIB, heavy.PAUSE_HEADROOM_FRACTION),
-            max(2 * heavy.GIB, int(16 * heavy.GIB * 0.125)),
+            heavy.pause_headroom_bytes(16 * heavy.GIB),
+            max(6 * heavy.GIB, int(16 * heavy.GIB * 0.125)),
         )
 
     def test_the_resume_threshold_keeps_the_old_share_of_ram(self):
         self.assertEqual(
-            heavy.required_headroom_bytes(48 * heavy.GIB, heavy.HEADROOM_FRACTION),
+            heavy.pause_headroom_bytes(48 * heavy.GIB, True),
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.15)),
         )
         reason = heavy._host_reason(sample(48, 7), paused=True)
@@ -149,14 +149,62 @@ class SmallHostAdmissionTests(unittest.TestCase):
 
 class SimulatorCreditTests(unittest.TestCase):
     def test_only_an_xcodebuild_simulator_destination_claims_a_credit(self):
-        self.assertIsNone(
-            heavy.simulator_destination_device(["swift", "build"])
+        self.assertEqual(
+            heavy.simulator_destination_device(["swift", "build"]),
+            (None, None),
         )
         self.assertEqual(
             heavy.simulator_destination_device(
                 ["xcodebuild", "-destination", "platform=iOS Simulator,name=CI-iPhone"]
             ),
-            "CI-iPhone",
+            ("CI-iPhone", None),
+        )
+        self.assertEqual(
+            heavy.simulator_destination_device(
+                [
+                    "xcodebuild",
+                    "-destination",
+                    "platform=iOS Simulator,name=CI-iPhone,OS=27.2",
+                ]
+            ),
+            ("CI-iPhone", "27.2"),
+        )
+
+    def test_a_destination_with_an_os_claims_only_that_runtime(self):
+        listing = json.dumps(
+            {
+                "devices": {
+                    "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [
+                        {"name": "CI-iPhone", "udid": "AAA"}
+                    ],
+                    "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [
+                        {"name": "CI-iPhone", "udid": "BBB"}
+                    ],
+                }
+            }
+        )
+        runner = lambda argv, timeout: listing
+        self.assertEqual(
+            heavy._booted_simulator_udid("CI-iPhone", "27.2", command_runner=runner),
+            "BBB",
+        )
+
+    def test_an_ambiguous_device_name_claims_no_credit(self):
+        listing = json.dumps(
+            {
+                "devices": {
+                    "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [
+                        {"name": "CI-iPhone", "udid": "AAA"}
+                    ],
+                    "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [
+                        {"name": "CI-iPhone", "udid": "BBB"}
+                    ],
+                }
+            }
+        )
+        runner = lambda argv, timeout: listing
+        self.assertIsNone(
+            heavy._booted_simulator_udid("CI-iPhone", command_runner=runner)
         )
 
     def test_a_command_without_a_booted_simulator_claims_no_credit(self):
@@ -305,14 +353,14 @@ class TelemetryGapTests(unittest.TestCase):
         )
         self.assertAlmostEqual(reading, 79.0)
 
-    def test_an_inconsistent_cpu_sample_falls_back_to_the_idle_share(self):
-        reading = heavy.parse_cpu_busy(
-            "      cpu    load average\n"
-            " us sy id   1m   5m   15m\n"
-            " 23 13 64  20.81 23.02 26.55\n"
-            " 60 30  2  20.90 23.00 26.52\n"
-        )
-        self.assertAlmostEqual(reading, 98.0)
+    def test_an_inconsistent_cpu_sample_is_rejected(self):
+        with self.assertRaises(heavy.TelemetryError):
+            heavy.parse_cpu_busy(
+                "      cpu    load average\n"
+                " us sy id   1m   5m   15m\n"
+                " 23 13 64  20.81 23.02 26.55\n"
+                " 60 30  2  20.90 23.00 26.52\n"
+            )
 
     def test_a_missing_cpu_reading_still_counts_as_critical_pressure(self):
         gap = heavy.Sample(
