@@ -66,21 +66,6 @@ def link(source: Path, target: Path, backups: Path) -> None:
     target.symlink_to(source)
 
 
-def copy_file(source: Path, target: Path, backups: Path) -> None:
-    """Install a file the live agent home owns as a real file, not a link.
-
-    The task router is loaded and reloaded by pi itself, so the installed
-    copy is a plain file. An unchanged copy is left alone, so a local edit
-    is never rewritten by a reinstall that carries the same content.
-    """
-    text = source.read_text()
-    if target.is_file() and not target.is_symlink() and target.read_text() == text:
-        return
-    if target.exists() or target.is_symlink():
-        backup(target, backups)
-    atomic_write(target, text, 0o644)
-
-
 def merge_unique(existing: list, additions: list) -> list:
     seen = set()
     out = []
@@ -359,13 +344,6 @@ def install(checkout: Path, refresh_models: bool, prove: bool, use_heavy: bool) 
 
     link(checkout / "runtime/pi/AGENTS.md", pi_agent / "AGENTS.md", backups)
     report["actions"].append("linked pi AGENTS.md")
-
-    copy_file(
-        checkout / "runtime/pi/extensions/task-router.ts",
-        pi_agent / "extensions/task-router.ts",
-        backups,
-    )
-    report["actions"].append("installed pi task-router extension")
 
     link(omp_runtime / "AGENTS.md", omp_agent / "AGENTS.md", backups)
     link(omp_runtime / "WATCHDOG.md", omp_agent / "WATCHDOG.md", backups)

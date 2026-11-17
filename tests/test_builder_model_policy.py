@@ -39,8 +39,11 @@ class CoordqBuilderGuard(unittest.TestCase):
         self.assertIn("gpt-6.1-sol", refusal)
 
     def test_every_openai_builder_selection_is_refused(self):
-        for task_type in ("standard", "risky", "design", "large"):
+        # An omitted taskType is not evidence of a gate: the exact API Astra
+        # selection is refused too unless the launch says taskType review.
+        for task_type in ("standard", "risky", "design", "large", None):
             for selection in ({"instanceId": "openai-api", "model": "openai/gpt-6.2-astra"},
+                              {"instanceId": "codex", "model": "gpt-6.2-astra"},
                               {"instanceId": "codex", "model": "gpt-6-luna"},
                               {"instanceId": "codex", "model": "gpt-6.1-terra"}):
                 with self.subTest(task_type=task_type, selection=selection):
@@ -49,22 +52,17 @@ class CoordqBuilderGuard(unittest.TestCase):
                     self.assertIsNone(resolved)
                     self.assertIn("never on an OpenAI model", refusal)
 
-    def test_a_hand_launch_without_task_type_still_refuses_retired_models(self):
-        for selection in ({"instanceId": "codex", "model": "gpt-6.1-sol"},
-                          {"instanceId": "openai-api", "model": "openai/gpt-6-astra"}):
-            with self.subTest(selection=selection):
-                resolved, refusal = coordq.with_model({"modelSelection": selection})
-                self.assertIsNone(resolved)
-                self.assertIn("never on an OpenAI model", refusal)
-
-    def test_the_gate_models_still_pass(self):
+    def test_the_gate_models_pass_only_as_declared_reviews(self):
         for selection in coordq.REVIEWER_CHAIN:
             with self.subTest(selection=selection):
-                for task_type in ("review", None):
-                    resolved, refusal = coordq.with_model(
-                        {"taskType": task_type, "modelSelection": dict(selection)})
-                    self.assertIsNone(refusal)
-                    self.assertEqual(resolved["modelSelection"], selection)
+                resolved, refusal = coordq.with_model(
+                    {"taskType": "review", "modelSelection": dict(selection)})
+                self.assertIsNone(refusal)
+                self.assertEqual(resolved["modelSelection"], selection)
+                self.assertNotIn("taskType", resolved)
+                resolved, refusal = coordq.with_model({"modelSelection": dict(selection)})
+                self.assertIsNone(resolved)
+                self.assertIn("never on an OpenAI model", refusal)
 
     def test_allowed_builders_pass(self):
         for selection in ({"instanceId": "glm", "model": "zai/glm-5.3"},

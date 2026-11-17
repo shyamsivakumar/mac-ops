@@ -447,6 +447,10 @@ ALLOWED_BUILDER_MODELS = {"zai/glm-5.3", "minimax/MiniMax-M3.1-Flash", "deepseek
 # otherwise.
 REVIEWER_CLASS_MODELS = {"gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-6.2-astra",
                          "openai/gpt-6-astra", "openai/gpt-6.2-astra", "claude-opus-5-5"}
+# Gate titles are built as "<key>-<issue> review #<pr> <head>" by ticket,
+# coordq and this driver, so this pattern identifies a gate or review run;
+# a builder titled "Fix preview rendering" does not match it.
+GATE_TITLE = re.compile(r"review #\d+")
 
 
 def allowed_builder(thread):
@@ -570,6 +574,7 @@ def act_on_pr(repo, number, ledger):
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
     key = CFG[repo]["key"]
     args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "modelSelection": model,
+            "taskType": "review",
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
@@ -983,12 +988,10 @@ def dead_run_model(thread, limit_failure):
     if provider == "router":
         return {"instanceId": provider, "model": model}
     # Why the run died does not change what may relaunch: a review-class
-    # run whose title names a review goes to the gate chain, every other
+    # run whose title is a gate title goes to the gate chain, every other
     # run builds only on an allowed builder, and anything else (Sol, Terra,
-    # Luna, Opus, unknown) falls to GLM (Shyam 2026-11-17). Gate titles are
-    # built as "<key>-<issue> review #<pr> <head>", so the word "review"
-    # identifies them; a fix round titled "gate findings" does not match.
-    if model in REVIEWER_CLASS_MODELS and "review" in title:
+    # Luna, Opus, unknown) falls to GLM (Shyam 2026-11-17).
+    if model in REVIEWER_CLASS_MODELS and GATE_TITLE.search(title):
         return ASTRA
     if model in ALLOWED_BUILDER_MODELS:
         return {"instanceId": provider or "codex", "model": model}
@@ -1280,6 +1283,7 @@ def recover_dead_runs(ledger):
                                 and (match := re.search(r":a(\d+)$", key))), default=0) + 1
             args = {"projectId": project_id, "clientRequestId": f"{work_key}:a{next_attempt}",
                     "title": f"Continue {repo}#{ticket}: {title}", "modelSelection": model,
+                    **({"taskType": "review"} if model in REVIEWER_CHAIN else {}),
                     "runtimeMode": "full-access", "workspaceStrategy": {"type": "existing_worktree", "worktreePath": path}, "message": message}
             print(f"DEAD {thread_id}: relaunch {model['model']}")
             if not DRY:

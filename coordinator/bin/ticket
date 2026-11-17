@@ -1548,6 +1548,7 @@ def cmd_gate(a):
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend)
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "modelSelection": model,
+                   "taskType": "review",
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
                    "clientRequestId": gate_id, "message": brief}
         command = [COORDQ, "start", json.dumps(payload), "--title", title, "--priority", str(GATE_PRIORITY)]
