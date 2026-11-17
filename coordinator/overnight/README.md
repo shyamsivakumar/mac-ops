@@ -1283,15 +1283,17 @@ launchd what the state of the job is.
 The signal is `launchctl print gui/<uid>/<label>`. A job that launchd holds
 and that ends clean is alive, whatever its log says, and the watchdog says so
 in a `WATCH <job>: signal=launchd ...` line. A job that launchd no longer
-holds is stopped and alarms. A job whose last exit code is not zero, or that
-launchd killed with a signal, is failing and alarms. A job that is running
-now is alive whatever an earlier run left behind, so only a run that
-overruns its limit is a problem and it is stuck. When launchd cannot say how
-the job ended, the log age is the only evidence left and the old silence
-rule applies, so a watchdog that cannot read launchd does not silence a real
-alarm. That fallback covers a launchctl that cannot run, a launchctl failure
-that is not a missing service, a job that never ran and so reports no exit
-code, and a running job that nobody can time.
+holds is stopped and alarms. A job that is idle now and whose last exit code
+is not zero, or that launchd killed with a signal, is failing and alarms. A
+job that is running now is judged by the run in flight alone: what an
+earlier run left behind says nothing about the run that is going on, so a
+job that started a moment ago after a failure does not raise an alarm, and
+only a run that overruns its limit is a problem and it is stuck. When
+launchd cannot say how the job ended, the log age is the only evidence left
+and the old silence rule applies, so a watchdog that cannot read launchd
+does not silence a real alarm. That fallback covers a launchctl that cannot
+run, a launchctl failure that is not a missing service, a job that never ran
+and so reports no exit code, and a running job that nobody can time.
 
 launchd prints its status in more than one shape, and the watchdog reads all
 of them: `last exit code = 0`, a code with its name (`78: EX_CONFIG`), a
@@ -1318,9 +1320,10 @@ the live board file and never installs anything.
 clock: a stale log with a live job raises nothing, a stopped job, a failing
 job, a job killed by a signal in both launchd shapes and a job stuck past
 its limit each raise one alarm that names the job, a launchd that cannot say
-or cannot be read falls back to the log age, a job that never ran is judged
-by how long it has been running, the silence limit is a limit, and the item
-stays a single item over repeated passes.
+or cannot be read falls back to the log age, a job that is running now is
+judged by its own run and ignores what an earlier run left behind, a job
+that never ran is judged by how long it has been running, the silence limit
+is a limit, and the item stays a single item over repeated passes.
 
 `evidence/MO-1056/proof.py` runs three passes: the live launchd state with a
 stale log, a stopped job, and real launchctl output that reports a job

@@ -725,13 +725,14 @@ def exit_status(text):
 def signal_status(text):
     """Return the signal that ended the last run, or 0 when there was none.
 
-    launchd prints the number (`9`) and sometimes the name with it
-    (`Killed: 9`).
+    launchd prints the number (`9`) and often the name with it
+    (`Killed: 9`). The number is the signal, so the name is read past. A
+    field without a number says nothing, and that is not a signal.
     """
     if text is None:
         return 0
-    match = re.search(r"(\d+)\s*$", text)
-    return int(match.group(1)) if match else 0
+    numbers = re.findall(r"\d+", text)
+    return int(numbers[-1]) if numbers else 0
 
 
 def launchd_state(label):
@@ -828,20 +829,21 @@ def watchdog_signal(name, minutes, label, age, state):
     limit, is not alive. When launchd cannot say how the job ended, the age
     of the log is the only evidence left, so the old silence rule applies and
     a real alarm is never silenced.
+
+    A job that is running now is judged by the run in flight alone. A job
+    that is idle now is judged by what its last run left behind.
     """
     if state is None:
         return "log-age", silence_alarm(name, minutes, age)
     if not state["loaded"]:
         return "launchd", f"{name} stopped (launchd job {label} is not loaded)"
-    if state["signal"]:
-        return "launchd", f"{name} killed (last terminating signal {state['signal']})"
-    if state["exit_code"]:
-        return "launchd", f"{name} failing (last exit code {state['exit_code']})"
-    if state["running"] and state["pid"]:
-        # The job is running now, so it is alive whatever the last run left
-        # behind. Only a run that overruns its limit is a problem, and the
-        # exit status of an earlier run says nothing about this one.
-        elapsed = process_seconds(state["pid"])
+    if state["running"]:
+        # The run in flight decides. What an earlier run left behind, an
+        # exit code or a signal, says nothing about the run that is going
+        # on now, so a job that started a moment ago after a failure does
+        # not raise an alarm. Only a run that overruns its limit is a
+        # problem now.
+        elapsed = process_seconds(state["pid"]) if state["pid"] else None
         if elapsed is None:
             # The job is running but nobody can say for how long, so the
             # log age is the only evidence left.
@@ -849,6 +851,11 @@ def watchdog_signal(name, minutes, label, age, state):
         if elapsed > minutes * 60:
             return "launchd", f"{name} stuck (running {elapsed // 60} min, limit {minutes})"
         return "launchd", None
+    # The job is idle now, so what its last run left behind is the evidence.
+    if state["signal"]:
+        return "launchd", f"{name} killed (last terminating signal {state['signal']})"
+    if state["exit_code"]:
+        return "launchd", f"{name} failing (last exit code {state['exit_code']})"
     if state["exit_code"] is None:
         # launchd does not say how the last run ended, so the log age is
         # the only evidence left.
