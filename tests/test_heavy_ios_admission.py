@@ -151,13 +151,13 @@ class SimulatorCreditTests(unittest.TestCase):
     def test_only_an_xcodebuild_simulator_destination_claims_a_credit(self):
         self.assertEqual(
             heavy.simulator_destination_device(["swift", "build"]),
-            (None, None),
+            (None, None, None),
         )
         self.assertEqual(
             heavy.simulator_destination_device(
                 ["xcodebuild", "-destination", "platform=iOS Simulator,name=CI-iPhone"]
             ),
-            ("CI-iPhone", None),
+            ("CI-iPhone", None, "iOS"),
         )
         self.assertEqual(
             heavy.simulator_destination_device(
@@ -167,7 +167,22 @@ class SimulatorCreditTests(unittest.TestCase):
                     "platform=iOS Simulator,name=CI-iPhone,OS=27.2",
                 ]
             ),
-            ("CI-iPhone", "27.2"),
+            ("CI-iPhone", "27.2", "iOS"),
+        )
+
+    def test_a_tvos_device_claims_no_credit_for_an_ios_build(self):
+        listing = json.dumps(
+            {
+                "devices": {
+                    "com.apple.CoreSimulator.SimRuntime.tvOS-27-2": [
+                        {"name": "CI", "udid": "AAA"}
+                    ]
+                }
+            }
+        )
+        runner = lambda argv, timeout: listing
+        self.assertIsNone(
+            heavy._booted_simulator_udid("CI", command_runner=runner)
         )
 
     def test_a_destination_with_an_os_claims_only_that_runtime(self):
