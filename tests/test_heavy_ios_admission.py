@@ -1,5 +1,7 @@
 """iOS build admission tests cover small hosts and simulator-backed jobs."""
 import contextlib
+import inspect
+import json
 import os
 import unittest
 from pathlib import Path
@@ -160,6 +162,67 @@ class SimulatorCreditTests(unittest.TestCase):
     def test_a_command_without_a_booted_simulator_claims_no_credit(self):
         self.assertEqual(heavy.simulator_memory_credit_bytes(["swift", "build"]), 0)
 
+    def test_a_quoted_simulator_name_still_matches_its_destination(self):
+        payload = json.dumps(
+            {
+                "devices": {
+                    "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [
+                        {
+                            "name": '"CI-iPhone"',
+                            "udid": "UDID-1",
+                            "state": "Booted",
+                        }
+                    ]
+                }
+            }
+        )
+
+        def runner(argv, timeout):
+            return payload
+
+        self.assertEqual(
+            heavy._booted_simulator_udid("CI-iPhone", command_runner=runner),
+            "UDID-1",
+        )
+        self.assertEqual(
+            heavy._booted_simulator_udid("UDID-1", command_runner=runner),
+            "UDID-1",
+        )
+
+    def test_the_credit_counts_the_simulator_processes_it_names(self):
+        listing = json.dumps(
+            {
+                "devices": {
+                    "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [
+                        {
+                            "name": '"CI-iPhone"',
+                            "udid": "UDID-1",
+                            "state": "Booted",
+                        }
+                    ]
+                }
+            }
+        )
+        table = (
+            "  1024   100     1 /usr/libexec/launchd_sim UDID-1\n"
+            " 2048   101   100 /iPhoneOS.SimulatorRuntime SpringBoard\n"
+        )
+
+        def runner(argv, timeout):
+            if "simctl" in argv:
+                return listing
+            return table
+
+        credit = heavy.simulator_memory_credit_bytes(
+            ["xcodebuild", "-destination", "platform=iOS Simulator,name=CI-iPhone"],
+            command_runner=runner,
+        )
+        self.assertEqual(credit, (1024 + 2048) * 1024)
+
+    def test_the_running_job_path_never_claims_the_simulator_credit(self):
+        self.assertNotIn(
+            "allowance_bytes", inspect.signature(heavy._host_reason).parameters
+        )
 
 class GovernorRecoveryTests(unittest.TestCase):
     def census(self):
