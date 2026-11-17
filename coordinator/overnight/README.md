@@ -1373,7 +1373,8 @@ time it was given and the time the mute ends, and it is written when the
 alarm was answered on the decisions board or when the coordinator recorded
 it as routed. The coordinator panel writes it when Shyam answers, through
 the `alarms ack <alarm-id>` command, and the command is there for the
-coordinator and for a person.
+coordinator and for a person. `alarms status` prints the alarm keys and
+until when each one is quiet, and `alarms --help` prints the usage.
 
 The record is the whole rule. A board item that went missing is not an
 acknowledgement: the board has more than one writer and one of them can lose
