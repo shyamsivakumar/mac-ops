@@ -47,6 +47,23 @@ starts queued items and refills slots every 30 s, `dev.coordinator.gatekeep`
 queues a gate for every open pull request head every 60 s, and
 `dev.coordinator.turncap` caps turns.
 
+## The board's calls are bounded
+
+Every call the module makes to the outside world (`gh`, the ticket CLI,
+`t3mcp`) runs in a process group of its own and gets a timeout. A call that
+hangs has its whole group killed, so the wait ends when the timeout ends and
+not later, and no member of the group outlives the call.
+
+A call the caller can do without is skipped: the skip names the command that
+was skipped, it is written to `~/Library/Logs/coordinator/skips.log` where
+the next reader finds it even when the reader was a model, and the read
+carries on. The board read (`overnight board --json`) reads its
+repositories at the same time, so one stalled repository costs one timeout
+and not one per repository, and it has a budget of its own (240 seconds) so
+a slow GitHub cannot use the whole tick. A repository whose ticket text
+could not be read is not on the board: its tickets are never classified and
+never acted on, and it is named in the output and in the board's payload.
+
 ## The policy snapshot
 
 The shift runs 24x7 and is never unarmed (spec revision 3). There is no
