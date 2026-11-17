@@ -32,7 +32,9 @@ cause can alarm again the next time it is true, but an acknowledgement
 that is still running keeps the key quiet.
 """
 
+import contextlib
 import datetime as dt
+import fcntl
 import json
 import os
 import re
@@ -160,22 +162,58 @@ def merge(current, state):
     return merged
 
 
-def save_state(state):
+@contextlib.contextmanager
+def locked():
+    """Hold the state lock while the state is read and written.
+
+    Two writers of the same file must not read, merge and replace it at
+    the same time: the tick and the panel both write it, and a write that
+    lands between the read and the replace of the other writer is lost.
+    The lock is held across the whole read, merge and replace."""
+    path = Path(str(MUTE_PATH) + ".lock")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        yield
+        return
+    handle = os.fdopen(descriptor, "r+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def write_state(state):
     """Write the mute state and return True when it went to the file.
 
     The write is atomic, so a tick that reads while the state is being
     written reads the old state or the new one, never half of one. The
-    file is read again just before the write, so an acknowledgement that
-    landed while the tick was running is kept."""
+    temporary file carries the writer's own name, so two writers never
+    share one."""
     path = state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.parent / f"{path.name}.tmp"
-        temporary.write_text(json.dumps({STATE_KEY: merge(load_state(), state)}, indent=1) + "\n")
+        temporary = path.parent / f"{path.name}.{os.getpid()}.tmp"
+        temporary.write_text(json.dumps({STATE_KEY: state}, indent=1) + "\n")
         os.replace(temporary, path)
     except OSError:
         return False
     return True
+
+
+def save_state(state):
+    """Write the mute state and return True when it went to the file.
+
+    The file is read again under the lock and merged, so an
+    acknowledgement that landed while the tick was running is kept, and
+    no other writer can land one between that read and the replace."""
+    with locked():
+        return write_state(merge(load_state(), state))
 
 
 def entry(state, key):
@@ -285,15 +323,18 @@ def main(argv):
     if len(argv) != 3 or argv[0] != "ack":
         sys.stderr.write(USAGE)
         return 2
-    state = load_state()
     key = key_of(argv[1], argv[2])
-    if key not in state:
-        sys.stderr.write(f"alarms: no raised key for {key}\n")
-        return 1
-    acknowledge(state, key)
-    if not save_state(state):
-        sys.stderr.write("alarms: the mute state could not be written\n")
-        return 1
+    with locked():
+        state = load_state()
+        if key not in state:
+            sys.stderr.write(f"alarms: no raised key for {key}\n")
+            return 1
+        acknowledge(state, key)
+        if not write_state(merge(load_state(), state)):
+            # The acknowledgement did not reach the file, so the alarm
+            # will raise again on the next tick. The caller has to say so.
+            sys.stderr.write("alarms: the mute state could not be written\n")
+            return 3
     print(f"alarms: {key} quiet for {MUTE_SECONDS // 3600} hours")
     return 0
 
