@@ -1563,7 +1563,10 @@ def cmd_gate(a):
     if a.dry_run:
         print("checks passed")
         print(f"title: {title}")
-        print(f"reviewer: {model['model']}")
+        print("reviewer chain:")
+        for i, selection in enumerate(REVIEWER_CHAIN, 1):
+            print(f"  {i}. {selection['instanceId']} {selection['model']}")
+        print(f"gate launches on: {model['instanceId']} {model['model']}")
         print(f"builder model: {models[0] if models else ('unknown, builder is live' if live else 'unknown')}")
         print("command:\n" + shlex.join(command) + "\n")
         print("brief:\n" + brief)

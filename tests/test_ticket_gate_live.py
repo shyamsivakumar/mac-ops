@@ -4,12 +4,17 @@ The CLI is a script without a .py suffix, so it is loaded by path.
 """
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# The CLI imports its neighbours (gate_bar, gate_reviewers) as top-level
+# modules, so the folder they live in goes on the path before it is loaded;
+# standalone runs of this file do not get that from another test module.
+sys.path.insert(0, str(ROOT / "coordinator" / "bin"))
 
 # The schema of the T3 tool caps the page size. A larger value is refused by
 # the server, which stopped the gate before any of the real checks ran.

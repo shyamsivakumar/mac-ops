@@ -14,7 +14,7 @@ class ReviewerQuotaTests(unittest.TestCase):
         queue = {}
         current = C['ASTRA_MODEL']
         next_model = C['fallback_reviewer'](queue, 'head', current, ['deepseek/flash'])
-        self.assertEqual(next_model, C['OPUS_MODEL'])
+        self.assertEqual(next_model, C['GATE_FALLBACK_MODEL'])
         self.assertIsNone(C['fallback_reviewer'](queue, 'head', next_model, ['deepseek/flash']))
 
     def test_quota_markers(self):
@@ -51,9 +51,9 @@ class ReviewerQuotaTests(unittest.TestCase):
                     # queue one reviewer, not two.
                     gate_candidates=lambda cfg: [event, event], load_receipts=lambda: receipts,
                     path=lambda name: d + '/' + name,
-                    call=lambda *a: (0, json.dumps({'thread': {'status': 'failed', 'model': 'gpt-6-astra', 'providerInstanceId': 'codex', 'error': {'code': 'insufficient_quota'}}, 'items': [{'type': 'assistant_message', 'text': 'spend limit'}]}))):
+                    call=lambda *a: (0, json.dumps({'thread': {'status': 'failed', 'model': 'openai/gpt-6.2-astra', 'providerInstanceId': 'openai-api', 'error': {'code': 'insufficient_quota'}}, 'items': [{'type': 'assistant_message', 'text': 'spend limit'}]}))):
                 with redirect_stdout(io.StringIO()):
                     c.cmd_gatekeep(argparse.Namespace(config=config, dry_run=False))
                     c.cmd_gatekeep(argparse.Namespace(config=config, dry_run=False))
             self.assertEqual(len(queue['items']), 1)
-            self.assertEqual(queue['items'][0]['args']['modelSelection'], c.OPUS_MODEL)
+            self.assertEqual(queue['items'][0]['args']['modelSelection'], c.GATE_FALLBACK_MODEL)

@@ -477,7 +477,7 @@ export async function mergePlan(card) {
     const last = [...read.items].reverse().find((i) => i.type === "assistant_message" && i.runId === run?.runId);
     const lines = (last?.text ?? "").trim().split("\n").map((l) => l.trim());
     if (run?.status !== "completed" || lines.at(-1) !== "VERDICT: PASS" || last?.textTruncated) return { refused: "Review must end with VERDICT: PASS" };
-    if ((run.executedModel ?? run.model).replace(/^subscriptions\//, "") !== "claude-opus-5-5") return { refused: "Reviewer run must use claude-opus-5-5" };
+    if (!/^(openai\/)?gpt-6\.2-astra$/.test((run.executedModel ?? run.model).replace(/^subscriptions\//, ""))) return { refused: "Reviewer run must use GPT-6.2 Astra" };
     const checks = lines.filter((l) => /^CHECK:/.test(l));
     const checked = checks.length === 1 ? /^CHECK: PASS ([a-f0-9]{40})$/.exec(checks[0]) : null;
     if (checked?.[1] !== head.headRefOid) return { refused: "Review CHECK must PASS the current head SHA" };

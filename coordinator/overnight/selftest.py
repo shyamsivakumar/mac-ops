@@ -315,7 +315,7 @@ def gate_pipeline():
         ("second-no-verdict", repo, "none", "interrupted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"]),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
         ("ascend", "ascend/fixture", "absent", "", {}, []),
     ]
@@ -357,7 +357,7 @@ def gate_pipeline():
                 else:
                     exact(head in payload["message"], True)
                     model = payload["modelSelection"]["model"]
-                    actions.append("astra" if model == "gpt-6-astra" else "opus" if "opus" in model else model)
+                    actions.append("astra" if "gpt-6.2-astra" in model else model)
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
@@ -1339,7 +1339,7 @@ def send_integrity():
                     exact(payload, {"threadId": "old", "message": "brief"})
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
-                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
+                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.GLM,
                           "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief"})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
