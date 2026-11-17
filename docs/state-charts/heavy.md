@@ -26,7 +26,7 @@ A sample the governor cannot read holds the capacity it already published (`min(
 
 ## Headroom a job needs
 
-A job needs headroom to start: `max(6 GiB, 15% of RAM)` on a host with 24 GiB or more of memory, and 15% of the host's memory with a 2 GiB floor on a smaller host. A 16 GiB host therefore needs 2.4 GiB instead of 6 GiB, so one iOS build fits beside the simulator it drives. On a smaller host the simulator a job drives is that job's own memory: the resident bytes of that simulator's own processes count towards the headroom the job needs to start, capped at an eighth of the host's memory. A running job pauses only below the lower threshold, 12.5% of a smaller host's memory.
+A job needs headroom to start: `max(6 GiB, 15% of RAM)` on a host with 24 GiB or more of memory, and 15% of the host's memory with a 2 GiB floor on a smaller host. A 16 GiB host therefore needs 2.4 GiB instead of 6 GiB, so one iOS build fits beside the simulator it drives. On a smaller host the simulator a job drives is that job's own memory: the resident bytes of that simulator's own processes count towards the headroom the job needs to start, capped at an eighth of the host's memory. A running job pauses below `max(6 GiB, 12.5% of RAM)` and resumes above `max(6 GiB, 15% of RAM)` on every host, so the 16 GiB host still pauses at 6 GiB. The 2.4 GiB figure is the admission threshold on a 16 GiB host only.
 
 ## Running and pause recovery
 

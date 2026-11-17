@@ -429,10 +429,10 @@ def required_headroom_bytes(
 
 def simulator_destination_device(
     argv: Sequence[str],
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Return the simulator device and OS version a command targets."""
     if not argv or os.path.basename(str(argv[0])) != "xcodebuild":
-        return None, None
+        return None, None, None
     destinations: List[str] = []
     for index, arg in enumerate(argv):
         text = str(arg)
@@ -445,6 +445,7 @@ def simulator_destination_device(
             continue
         device = None
         os_version = None
+        platform = "iOS"
         for part in value.split(","):
             part = part.strip()
             if part.startswith("id="):
@@ -453,9 +454,11 @@ def simulator_destination_device(
                 device = part[5:].strip()
             elif part.startswith("OS="):
                 os_version = part[3:].strip()
+            elif part.startswith("platform="):
+                platform = part[9:].strip().split()[0]
         if device:
-            return device, os_version
-    return None, None
+            return device, os_version, platform
+    return None, None, None
 
 
 def _device_key(value: str) -> str:
@@ -465,6 +468,14 @@ def _device_key(value: str) -> str:
     as "CI-iPhone" in the listing and CI-iPhone in a destination.
     """
     return str(value).strip().strip('"').strip().lower()
+
+
+def _runtime_platform(identifier: str) -> Optional[str]:
+    """Return the platform a simulator runtime identifier names."""
+    parts = str(identifier).rsplit(".", 1)[-1].split("-")
+    if len(parts) < 2:
+        return None
+    return parts[0] or None
 
 
 def _runtime_version(identifier: str) -> Optional[str]:
@@ -479,6 +490,7 @@ def _runtime_version(identifier: str) -> Optional[str]:
 def _booted_simulator_udid(
     device: str,
     os_version: Optional[str] = None,
+    platform: str = "iOS",
     *,
     command_runner: Callable[[Sequence[str], float], str] = _run_native,
 ) -> Optional[str]:
@@ -506,6 +518,9 @@ def _booted_simulator_udid(
     for runtime, rows in devices.items():
         version = _runtime_version(str(runtime))
         if os_version and version != os_version:
+            continue
+        runtime_platform = _runtime_platform(str(runtime))
+        if runtime_platform and runtime_platform.lower() != platform.lower():
             continue
         if not isinstance(rows, list):
             continue
@@ -585,11 +600,11 @@ def simulator_memory_credit_bytes(
     The simulator a job drives is that job's own memory, so it does not count
     against the headroom the job needs.
     """
-    device, os_version = simulator_destination_device(argv)
+    device, os_version, platform = simulator_destination_device(argv)
     if not device:
         return 0
     udid = _booted_simulator_udid(
-        device, os_version, command_runner=command_runner
+        device, os_version, platform or "iOS", command_runner=command_runner
     )
     if not udid:
         return 0
@@ -2962,10 +2977,12 @@ def _launch_job(
                 deps.sleep(max(0.0, next_sample - deps.clock()))
                 continue
             try:
-                try:
-                    memory_credit = simulator_memory_credit_bytes(argv)
-                except Exception:
-                    memory_credit = 0
+                memory_credit = 0
+                if sample.physical_bytes < SMALL_HOST_MEMORY_BYTES:
+                    try:
+                        memory_credit = simulator_memory_credit_bytes(argv)
+                    except Exception:
+                        memory_credit = 0
                 job_id, reason = _reserve_job(
                     registry,
                     task_key,
@@ -3428,7 +3445,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "Usage: heavy [--review|--deploy] <command...> | status | request-curtail\n"
             "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
-            "Admission requires stable swap, CPU and memory below 95%, and enough headroom to start or resume: max(6 GiB, 15% of the host's memory) on a host with 24 GiB or more of memory, 15% of the host's memory (at least 2 GiB) on a smaller host. The simulator a job drives counts as that job's own memory. A running job pauses only below the lower threshold; level 2 is allowed above 30% free memory, level 4 is blocked.\n"
+            "Admission requires stable swap, CPU and memory below 95%, and enough headroom to start: max(6 GiB, 15% of the host's memory) on a host with 24 GiB or more of memory, 15% of the host's memory (at least 2 GiB) on a smaller host. On a smaller host the simulator a job drives counts as that job's own memory. A running job pauses below max(6 GiB, 12.5% of RAM) and resumes above max(6 GiB, 15% of RAM) on every host; level 2 is allowed above 30% free memory, level 4 is blocked.\n"
             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
             "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
         )
