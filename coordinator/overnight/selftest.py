@@ -1888,10 +1888,36 @@ def alarm_mute():
             alarms.raised(state, "factory-watchdog", cause, now)
             exact(alarms.save_state(state), True)
             exact(alarms.load_state()[key]["raised"], alarms.stamp(now))
-            exact(alarms.main(["ack", "factory-watchdog"]), 0)
+            exact(alarms.main(["ack", "factory-watchdog", cause]), 0)
             exact(alarms.muted(alarms.load_state(), key, now), True)
             with contextlib.redirect_stderr(io.StringIO()):
-                exact(alarms.main(["ack", "factory-nothing"]), 1)
+                exact(alarms.main(["ack", "factory-nothing", cause]), 1)
+
+    # The command acknowledges one cause. Another cause of the same alarm
+    # was not answered and is not silenced.
+    state = {}
+    alarms.raised(state, "factory-watchdog", cause, now)
+    other = "gatekeep failing (last exit code 2)"
+    alarms.raised(state, "factory-watchdog", other, now)
+    alarms.acknowledge(state, alarms.key_of("factory-watchdog", other), now)
+    exact(alarms.decide(state, "factory-watchdog", other, now), "quiet")
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
+
+    # A tick that read the state before the acknowledgement was recorded
+    # does not take that acknowledgement with it when it writes.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            stale = alarms.load_state()
+            alarms.raised(stale, "factory-watchdog", cause, now)
+            alarms.save_state(stale)
+            fresh = alarms.load_state()
+            alarms.acknowledge(fresh, alarms.key_of("factory-watchdog", cause), now)
+            alarms.save_state(fresh)
+            # The tick writes its older snapshot.
+            alarms.save_state(stale)
+            exact(alarms.muted(alarms.load_state(),
+                                alarms.key_of("factory-watchdog", cause), now), True)
 
     # The stall's cause names the stalled repos, so two stalls on
     # different repos are different causes.
@@ -1923,8 +1949,10 @@ def alarm_mute():
             target, action = rule.alert("no board progress for 3 ticks", None, board)
             exact(action, "wrote")
             exact(len(json.loads(board.read_text())["items"]), 1)
-            # The acknowledgement quiets it.
-            exact(alarms.main(["ack", "factory-overnight-stall"]), 0)
+            # The acknowledgement quiets it. The panel passes the cause
+            # the item shows, and only that cause is quiet.
+            shown = json.loads(board.read_text())["items"][0]["cause"]
+            exact(alarms.main(["ack", "factory-overnight-stall", shown]), 0)
             target, action = rule.alert("no board progress for 3 ticks", None, board)
             exact(action, "quiet")
             exact(json.loads(board.read_text())["items"], [])
@@ -1954,8 +1982,10 @@ def alarm_mute():
             # The rule stops asking once the alert was delivered, and the
             # shift asks anyway.
             exact(rule.continues(state), True)
-            # Shyam answers the alarm: the acknowledgement is recorded.
-            exact(alarms.main(["ack", "factory-overnight-stall"]), 0)
+            # Shyam answers the alarm: the acknowledgement is recorded,
+            # for the cause the panel showed.
+            shown = json.loads(board.read_text())["items"][0]["cause"]
+            exact(alarms.main(["ack", "factory-overnight-stall", shown]), 0)
             # The next tick has no event, and the alarm stays quiet.
             runner.stall_records(Path(scratch), [], str(board), state)
             exact(json.loads(board.read_text())["items"], [])
@@ -2023,7 +2053,7 @@ def alarm_mute():
                     return now + dt.timedelta(minutes=6)
 
             with patch.object(dt, "datetime", AckClock):
-                exact(alarms.main(["ack", "factory-watchdog"]), 0)
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 0)
             output = pass_once(now + dt.timedelta(minutes=6))
             items = json.loads(board.read_text())["items"]
             exact(items, [])
@@ -2055,7 +2085,7 @@ def alarm_mute():
                     return now + dt.timedelta(hours=4, minutes=11)
 
             with patch.object(dt, "datetime", LaterClock):
-                exact(alarms.main(["ack", "factory-watchdog"]), 0)
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 0)
             data = json.loads(board.read_text())
             data["items"] = []
             board.write_text(json.dumps(data))

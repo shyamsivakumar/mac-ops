@@ -54,20 +54,24 @@ const DECISIONS_FILE = `${home()}/Code/coordinator/decisions.json`;
 // is a record the shift reads, not a guess about the board: the shift
 // never silences an alarm nobody answered, and the board file has more
 // than one writer, so a lost board item says nothing. The command writes
-// the record; an alarm that was never raised has no record and the
+// the record for the cause the panel showed, so another cause of the same
+// alarm, which nobody answered, is not silenced. The command is the
+// installed one; an alarm that was never raised has no record and the
 // command says so, which is not a failure.
-async function acknowledgeAlarm(id) {
-  const r = await exec(`${home()}/.local/bin/alarms`, ["ack", id]);
+async function acknowledgeAlarm(id, cause) {
+  if (!cause) return;
+  const r = await exec(`${home()}/.local/bin/alarms.py`, ["ack", id, cause]);
   if (r.code !== 0 && r.code !== 1) {
     notify({ title: "The alarm was not acknowledged", body: `${id}: ${(r.stderr || "").trim() || `alarms exited ${r.code}`}`, level: "warning" });
   }
 }
 
-const askOf = ({ id, group, title, why, kind, options }) => ({
+const askOf = ({ id, group, title, why, cause, kind, options }) => ({
   id,
   group,
   text: title,
   why,
+  cause: cause ?? "",
   action: kind === "action",
   choices: kind === "action"
     ? [{ kind: "done", text: "Done", label: "Done", detail: "", rec: false }]
@@ -328,7 +332,7 @@ export default class Coordinator extends View {
   }
 
   answers(drafts) {
-    return this.asks().flatMap((a, n) => (drafts.has(a.id) ? [{ n: n + 1, id: a.id, q: a.text, ...drafts.get(a.id) }] : []));
+    return this.asks().flatMap((a, n) => (drafts.has(a.id) ? [{ n: n + 1, id: a.id, q: a.text, cause: a.cause ?? "", ...drafts.get(a.id) }] : []));
   }
 
   editor(q) {
@@ -581,7 +585,7 @@ export default class Coordinator extends View {
           // The answer is the acknowledgement: the alarm stays quiet for
           // four hours. The shift reads the record, so the alarm comes
           // back on its own when the four hours are over.
-          await acknowledgeAlarm(a.id);
+          await acknowledgeAlarm(a.id, a.cause);
         }
         setShared("co.decided", decided);
         this.setDrafts(drafts);
