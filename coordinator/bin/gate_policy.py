@@ -22,11 +22,16 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
                     "Report `git rev-parse main origin/main` (one hash twice) or the exact refusal. Fast-forward no other repository.")
     close = (" Ascend repo: do not close the issue." if ascend else
              f" Only when that merge produced a merge commit, verify every Provides claim from the ticket on that merge commit and report the commit SHA, evidence and result for each claim. If any Provides claim is false, missing or unverified, close nothing and report the refusal. Only after every Provides claim passes on the merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
+    if issue is None:
+        close = " No ticket is associated with this PR; close no issue."
     check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
              if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
-    message = f"""{settings['key']}-{issue} review and merge · #{number} {head}
-Type: review gate · finish in 4 minutes. Task: https://github.com/{repo}/issues/{issue}
-Read the ticket and diff only: `git fetch origin && git diff origin/{base}...{head}`. Check out nothing. Do NOT rerun the suite.
+    task = f"https://github.com/{repo}/issues/{issue}" if issue is not None else f"https://github.com/{repo}/pull/{number}"
+    label = f"{settings['key']}-{issue}" if issue is not None else f"{settings['key']} PR"
+    source = "ticket" if issue is not None else "PR description"
+    message = f"""{label} review and merge · #{number} {head}
+Type: review gate · finish in 4 minutes. Task: {task}
+Read the {source} and diff only: `git fetch origin && git diff origin/{base}...{head}`. Check out nothing. Do NOT rerun the suite.
 {check} Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
 {GATE_BAR}

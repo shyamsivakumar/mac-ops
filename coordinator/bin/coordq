@@ -1144,7 +1144,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model):
     key = f"gate:{repo}#{number}:{head}"
     from gate_policy import build_gate_brief
     message = build_gate_brief(settings, repo, issue, number, head, publisher)
-    return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue} review #{number} {head[:8]}",
+    return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
             "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
 
@@ -1220,6 +1220,12 @@ def gate_candidates(config):
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
                        "builderModels": models, "args": gate_args(settings, repo, issue, number, head, publisher, model)}
                 break
+            else:
+                found = gate_request(repo, pr, settings, config, receipts, login)
+                if found:
+                    key, args, models = found
+                    yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head,
+                           "key": key, "builderModels": models, "args": args}
 
 
 def executed_models(value):
@@ -1458,7 +1464,7 @@ def check_names_head(body, head, publisher, checks):
     publishes on the head. A trailing note after the head (the command
     that produced it) does not change the verdict."""
     for line in (body or "").splitlines():
-        if line.strip().startswith(f"Builder check: PASS {head}"):
+        if re.match(rf"^Builder check: PASS {re.escape(head)}(?:\s|$)", line.strip()):
             return True
     if publisher:
         return bool(checks) and checks[0]["state"] == "success"
@@ -1487,7 +1493,13 @@ def gate_request(repo, pr, settings, config, receipts, login):
             return None
         key = f"gate:{repo}#{number}:{head}"
         return key, gate_args(settings, repo, issue, number, head, publisher, model), builder_models(thread, runs)
-    return None
+    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
+    checks = [x for x in statuses if x["context"] == "srw/agent-check"]
+    publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
+    if not check_names_head(body, head, publisher, checks):
+        return None
+    key = f"gate:{repo}#{number}:{head}"
+    return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, [])), []
 
 
 def parse_ref(ref):
@@ -1539,7 +1551,7 @@ def cmd_gate(a):
     found = gate_request(repo, pr, settings, config, load_receipts(), login)
     if not found:
         die(
-            f"refused: the builder check of {repo}#{number} does not name the "
+            f"refused: no passing builder check of {repo}#{number} names the "
             f"head {head}, so a gate for this head would only report CHECK: "
             "FAIL and would block the head from then on. Wait for the builder "
             "to push the check for this head."
