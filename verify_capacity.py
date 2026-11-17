@@ -220,7 +220,7 @@ def explore_measured_board_veto(module, cfg):
     helper = SimpleNamespace(
         monotonic=lambda: 1000.0,
         admission_block_reason=heavy.admission_block_reason,
-        critical_pressure=lambda sample: False,
+        critical_pressure=lambda sample, **kwargs: False,
         _sample_invalid_reason=lambda sample, now: None,
         _finite_nonnegative=heavy._finite_nonnegative,
         SAMPLE_MAX_AGE=4.5,
@@ -272,7 +272,7 @@ def explore_active_catchup(module, cfg):
     helper = SimpleNamespace(
         monotonic=lambda: 1000.0,
         admission_block_reason=heavy.admission_block_reason,
-        critical_pressure=lambda sample: False,
+        critical_pressure=lambda sample, **kwargs: False,
         _sample_invalid_reason=lambda sample, now: None,
         _finite_nonnegative=heavy._finite_nonnegative,
         SAMPLE_MAX_AGE=4.5,
