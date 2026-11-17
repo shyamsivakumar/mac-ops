@@ -228,14 +228,16 @@ def dead_run_no_receipt():
         {"threadId": "fixture-key", "title": "CTL-7 hand launch", "settled": False},
         {"threadId": "fixture-nothing", "title": "hand launch", "settled": False},
         {"threadId": "fixture-closed-key", "title": "MO-8 hand launch", "settled": False},
-        {"threadId": "fixture-landed-key", "title": "MO-9 hand launch", "settled": False}]
+        {"threadId": "fixture-landed-key", "title": "MO-9 hand launch", "settled": False},
+        {"threadId": "fixture-full", "title": "MO-10 hand launch", "settled": False}]
     states = {
         (repo, 11): {"kind": "pr", "state": "closed", "merged": True},
         (repo, 12): {"kind": "pr", "state": "open", "merged": False},
         (repo, 13): {"kind": "pr", "state": "open", "merged": False},
         (catalog, 7): {"kind": "issue", "state": "closed", "merged": False},
         (repo, 8): {"kind": "issue", "state": "closed", "merged": False},
-        (repo, 9): {"kind": "issue", "state": "open", "merged": False}}
+        (repo, 9): {"kind": "issue", "state": "open", "merged": False},
+        (repo, 10): {"kind": "issue", "state": "closed", "merged": False}}
     # A closed issue can close before its pull request lands, and a merged
     # pull request reports MERGED, not CLOSED.
     linked = {(catalog, 7): [{"number": 8, "state": "OPEN", "mergedAt": None}],
@@ -249,10 +251,10 @@ def dead_run_no_receipt():
 
     def ticket_prs(target, number):
         reads.append((target, number))
-        return linked.get((target, number), [])
+        return linked.get((target, number), []), (target, number) == (repo, 10)
 
     def ticket_numbers(target, token):
-        return {"CTL-7": [7], "MO-8": [8], "MO-9": [9]}.get(token, [])
+        return {"CTL-7": [7], "MO-8": [8], "MO-9": [9], "MO-10": [10]}.get(token, [])
 
     def t3(tool, args):
         if tool == "t3_thread_list":
@@ -283,19 +285,21 @@ def dead_run_no_receipt():
     exact(settled, ["fixture-merged", "fixture-closed-key", "fixture-landed-key"])
     exact(second, "")
     exact(reads, [])
-    exact(len(first), 6)
+    exact(len(first), 7)
     exact("settle, PR shyamsivakumar/mac-ops#11 merged" in first[0], True)
     exact("flagged once" in first[1] and "PR shyamsivakumar/mac-ops#13 is open" in first[1], True)
     exact("flagged once" in first[2] and "PR shyamsivakumar/catalouge#8 is open" in first[2], True)
     exact("no pull request or ticket in the title" in first[3], True)
     exact("settle, issue shyamsivakumar/mac-ops#8 closed" in first[4], True)
     exact("settle, PR shyamsivakumar/mac-ops#16 merged" in first[5], True)
+    exact("flagged once" in first[6] and "an unseen open one cannot be ruled out" in first[6], True)
     exact(ledger["dead-run:fixture-merged"].startswith("settled "), True)
     exact(ledger["dead-run:fixture-open"].startswith("flagged "), True)
     exact(ledger["dead-run:fixture-key"].startswith("flagged "), True)
     exact(ledger["dead-run:fixture-nothing"].startswith("flagged "), True)
     exact(ledger["dead-run:fixture-closed-key"].startswith("settled "), True)
     exact(ledger["dead-run:fixture-landed-key"].startswith("settled "), True)
+    exact(ledger["dead-run:fixture-full"].startswith("flagged "), True)
 
 
 def gate_pipeline():

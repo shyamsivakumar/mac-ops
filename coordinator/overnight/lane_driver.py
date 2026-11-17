@@ -972,24 +972,28 @@ def dead_reference(repo, number):
             "merged": bool(isinstance(pull, dict) and pull.get("merged_at"))}
 
 
+DEAD_PR_PAGE = 50
+
+
 def dead_ticket_prs(repo, number):
-    """Return the pull requests whose body names one ticket.
+    """Return the pull requests whose body names one ticket, and whether that list was cut short.
 
     A ticket key names an issue, and the pull requests that name it say
-    whether the work landed. One page is enough: a ticket with more than
-    fifty pull requests is unsettled work by any reading."""
+    whether the work landed. A full page is not a complete list: a ticket
+    with more than a page of pull requests has an open one the read did not
+    return, so the caller cannot settle on it."""
     require_api_budget()
     result = subprocess.run(["gh", "pr", "list", "-R", repo, "--state", "all",
-                             "--limit", "50", "--search", f"#{number} in:body",
+                             "--limit", str(DEAD_PR_PAGE), "--search", f"#{number} in:body",
                              "--json", "number,state,mergedAt,body"],
                             capture_output=True, text=True, timeout=120)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(
             f"{repo}#{number} pull requests: {first[0] if first else result.returncode}")
-    rows = json.loads(result.stdout or "[]")
-    return [row for row in rows if isinstance(row, dict)
-            and re.search(rf"#{number}\b", row.get("body") or "")]
+    rows = [row for row in json.loads(result.stdout or "[]") if isinstance(row, dict)]
+    return ([row for row in rows if re.search(rf"#{number}\b", row.get("body") or "")],
+            len(rows) >= DEAD_PR_PAGE)
 
 
 def dead_ticket_numbers(repo, token):
@@ -1018,7 +1022,8 @@ def dead_reference_outcome(repo, number):
     pull request is unfinished work that keeps it. An issue is settled only
     after the pull requests that name it are read: an issue can close before
     its pull request lands, and an open pull request is unfinished work even
-    then. An open issue settles through a merged or closed pull request."""
+    then. A list that was cut short settles nothing: the unseen pull request
+    could be the open one."""
     found = dead_reference(repo, number)
     if not found:
         return False, ""
@@ -1026,8 +1031,9 @@ def dead_reference_outcome(repo, number):
         if found["state"] == "closed":
             return True, f"PR {repo}#{number} {'merged' if found['merged'] else 'closed'}"
         return False, f"PR {repo}#{number} is open"
+    linked, truncated = dead_ticket_prs(repo, number)
     open_note, landed_note = "", ""
-    for pr in dead_ticket_prs(repo, number):
+    for pr in linked:
         state = str(pr.get("state") or "").upper()
         if state == "OPEN":
             open_note = open_note or f"PR {repo}#{pr.get('number')} is open"
@@ -1036,6 +1042,9 @@ def dead_reference_outcome(repo, number):
                 f"PR {repo}#{pr.get('number')} {'merged' if state == 'MERGED' or pr.get('mergedAt') else 'closed'}")
     if open_note:
         return False, open_note
+    if truncated:
+        return False, (f"issue {repo}#{number} names more pull requests than one read returns, "
+                       "so an unseen open one cannot be ruled out")
     if found["state"] == "closed":
         return True, f"issue {repo}#{number} closed"
     if landed_note:
