@@ -10,6 +10,7 @@ if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 
 from gate_bar import GATE_BAR
+from gate_reviewers import REVIEWER_CHAIN
 from tick_health import tick_alarm
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
@@ -23,8 +24,6 @@ LAUNCH_RECORD = "launch:"
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
-from gate_reviewers import REVIEWER_CHAIN
-
 ASTRA_MODEL = REVIEWER_CHAIN[0]
 OPUS_MODEL = REVIEWER_CHAIN[-1]
 TASK_MODELS = {
@@ -1121,7 +1120,7 @@ def fallback_reviewer(queue, key, current, models=()):
     tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
     for selection in REVIEWER_CHAIN[REVIEWER_CHAIN.index(current) + 1:]:
         identity = f"{selection['instanceId']}:{selection['model']}"
-        if identity not in tried:
+        if identity not in tried and selection["model"] not in tried:
             tried.append(identity)
             return selection
     return None
@@ -1131,7 +1130,7 @@ def failed_gate_reviewer(queue, key, current, failure):
     selection = fallback_reviewer(queue, key, current)
     if selection is not None:
         return selection
-    state = queue.setdefault("gateInfrastructure", {}).setdefault(key, {"retries": 0})
+    state = queue.setdefault("gateInfrastructure", {}).setdefault(key, {})
     state.update(status="needs-you", reason="Gate reviewer chain exhausted")
     return None
 
