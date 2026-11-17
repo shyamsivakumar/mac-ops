@@ -653,12 +653,47 @@ def watchdog():
     from unittest.mock import mock_open
 
     limits = {"tick": 65, "gatekeep": 120, "dispatch": 10, "lanes": 10}
-    exact({name: minutes for name, (_, minutes) in lane.WATCH.items()}, limits)
+    labels = {"tick": "dev.coordinator.tick", "gatekeep": "dev.coordinator.gatekeep",
+              "dispatch": "dev.coordinator.dispatch", "lanes": "dev.coordinator.lanes"}
+    exact({name: minutes for name, (_, minutes, _) in lane.WATCH.items()}, limits)
+    exact({name: label for name, (_, _, label) in lane.WATCH.items()}, labels)
     now = 1000000
     other = {"id": "unrelated", "title": "preserve"}
     state = {"items": [other]}
-    mtimes = {path: now for path, _ in lane.WATCH.values()}
+    mtimes = {path: now for path, _, _ in lane.WATCH.values()}
     decisions = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
+    # The launchd state of every job, by label. None means launchd cannot
+    # say. "not-loaded" means the job is no longer held by launchd.
+    jobs = {label: {"loaded": True, "runs": 12, "exit": 0, "running": False}
+            for label in labels.values()}
+    elapsed = {}
+
+    class Result:
+        def __init__(self, returncode, stdout=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "launchctl":
+            label = cmd[2].split("/")[-1]
+            spec = jobs[label]
+            if spec is None:
+                raise OSError("launchctl is not available")
+            if spec == "not-loaded":
+                return Result(113, "")
+            body = "\tstate = running\n" if spec["running"] else "\tstate = not running\n"
+            if spec.get("pid"):
+                body += "\tpid = %d\n" % spec["pid"]
+            body += "\truns = %d\n" % spec["runs"]
+            body += "\tlast exit code = %d\n" % spec["exit"]
+            return Result(0, body)
+        if cmd[0] == "ps":
+            seconds = elapsed.get(int(cmd[-1]), 5)
+            return Result(0, "%02d:%02d:%02d\n" % (seconds // 3600,
+                                                   (seconds % 3600) // 60,
+                                                   seconds % 60))
+        raise AssertionError(f"unexpected subprocess: {cmd}")
 
     def opened(path, mode="r"):
         exact(str(path), decisions + (".tmp" if mode == "w" else ""))
@@ -670,24 +705,84 @@ def watchdog():
         state.clear()
         state.update(json.loads(json.dumps(value)))
 
-    with patch("builtins.open", side_effect=opened),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace:
-        for name, minutes in limits.items():
-            path = lane.WATCH[name][0]
-            mtimes[path] = now - minutes * 60
+    def alarm(title):
+        return [other, {"id": "factory-watchdog", "group": "Coordinator",
+                        "kind": "action", "title": title,
+                        "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."}]
+
+    def pass_once():
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
             lane.watchdog()
-            exact(state["items"], [other])
-            mtimes[path] -= 60
-            expected = [other, {"id": "factory-watchdog", "group": "Coordinator",
-                "kind": "action",
-                "title": f"Factory job silent: {name} silent {minutes + 1} min (limit {minutes})",
-                "why": "A coordinator job stopped writing its log. The coordinator is routing a fix; nothing for you unless this stays up."}]
-            for _ in range(2):
-                lane.watchdog()
-                exact(state["items"], expected)
+        return buffer.getvalue()
+
+    with patch("builtins.open", side_effect=opened),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace,          patch.object(lane.subprocess, "run", side_effect=fake_run):
+        # A quiet log is not a dead job. Every job is loaded and exits
+        # clean, so the stale gatekeep log must not raise an alarm.
+        stale = {path: now - 200 * 60 for path in mtimes}
+        mtimes.update(stale)
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+        exact("WATCH gatekeep: signal=launchd" in output, True)
+        exact("alarm=" in output, False)
+
+        # A job launchd no longer holds is a dead job, and the alarm names
+        # it. The item stays a single item over repeated passes.
+        jobs["dev.coordinator.gatekeep"] = "not-loaded"
+        output = pass_once()
+        expected = alarm("Factory job stopped or failing: gatekeep stopped "
+                         "(launchd job dev.coordinator.gatekeep is not loaded)")
+        exact(state["items"], expected)
+        exact("WATCHDOG" in output, True)
+        pass_once()
+        exact(state["items"], expected)
+        exact(len([item for item in state["items"]
+                   if item["id"] == "factory-watchdog"]), 1)
+
+        # A job that launchd holds but that fails is a dead job too.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": 1, "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "failing (last exit code 1)"))
+        exact("WATCHDOG" in output, True)
+
+        # A job that is still running past its limit is stuck, whatever its
+        # log says.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 14, "exit": 0,
+                                            "running": True, "pid": 4242}
+        elapsed[4242] = 200 * 60
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "stuck (running 200 min, limit 120)"))
+        exact("WATCHDOG" in output, True)
+
+        # The healthy job raises nothing, so the item goes away.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 15,
+                                            "exit": 0, "running": False}
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+
+        # When launchd cannot say, the log age is the only evidence left,
+        # so a stale log still alarms.
+        for label in labels.values():
+            jobs[label] = None
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: tick silent "
+                                    "200 min (limit 65); gatekeep silent 200 min "
+                                    "(limit 120); dispatch silent 200 min (limit 10); "
+                                    "lanes silent 200 min (limit 10)"))
+        exact("signal=log-age" in output, True)
+        exact("WATCHDOG" in output, True)
+
+        for label in labels.values():
+            jobs[label] = {"loaded": True, "runs": 16, "exit": 0, "running": False}
+        for path in mtimes:
             mtimes[path] = now
-            lane.watchdog()
-            exact(state["items"], [other])
-        exact(replace.call_count, 16)
+        pass_once()
+        exact(state["items"], [other])
         for call in replace.call_args_list:
             exact(call.args, (decisions + ".tmp", decisions))
 
