@@ -97,6 +97,10 @@ export default class Coordinator extends View {
     this.typingTimers = new Map();
     this.opening = null;
     this.editing = new Set(this.pop ? this.typing().keys() : []);
+    // The cause each open reply is bound to: the one the panel showed
+    // when the reply started, not the one it shows when the reply is
+    // sent.
+    this.replyCauses = new Map();
     this.sent = "";
     this.box = { width: 800, height: 240 };
     this.contentH = 0;
@@ -511,6 +515,10 @@ export default class Coordinator extends View {
 
   reply(q, cx) {
     const state = this.editor(q);
+    // The reply is bound to the cause the panel shows now. When the
+    // alarm changes while he types, the answer is dropped instead of
+    // being sent for the alarm that is there now.
+    this.replyCauses.set(q, this.causeOf(q));
     const draft = this.drafts().get(q);
     state.set_value(this.typing().get(q) ?? (draft?.kind === "reply" ? draft.text : ""));
     this.editing.add(q);
@@ -521,7 +529,7 @@ export default class Coordinator extends View {
   commit(q, cx) {
     const text = this.editor(q).value().trim();
     const drafts = this.drafts();
-    if (text) drafts.set(q, { kind: "reply", text, cause: this.causeOf(q) });
+    if (text) drafts.set(q, { kind: "reply", text, cause: this.replyCauses.get(q) ?? this.causeOf(q) });
     else if (drafts.get(q)?.kind === "reply") drafts.delete(q);
     this.setDrafts(drafts);
     this.keepTyping(q, "");
