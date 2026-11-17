@@ -404,14 +404,15 @@ def memory_load_block_reason(
 
 
 def pause_headroom_bytes(
-    physical_bytes: int, headroom_fraction: float = PAUSE_HEADROOM_FRACTION
+    physical_bytes: int, paused: bool = False
 ) -> int:
     """Return the headroom a running job needs, with the original rule.
 
     A running job keeps the host's original pause threshold on every host;
     only the headroom a job needs to start scales with the host's memory.
     """
-    return max(MIN_HEADROOM_BYTES, int(physical_bytes * headroom_fraction))
+    fraction = HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
+    return max(MIN_HEADROOM_BYTES, int(physical_bytes * fraction))
 
 
 def required_headroom_bytes(
@@ -1940,7 +1941,7 @@ def _host_reason(
         headroom_fraction=(
             HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
         ),
-        required_bytes=pause_headroom_bytes(sample.physical_bytes),
+        required_bytes=pause_headroom_bytes(sample.physical_bytes, paused),
         allowance_bytes=allowance_bytes,
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
