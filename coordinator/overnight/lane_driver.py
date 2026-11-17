@@ -4,14 +4,27 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 
 import stall
 
+# The gate reviewer list lives in gate_reviewers.py next to coordq. In the
+# repository that folder is ../bin from here; installed, everything sits in
+# ~/.local/bin together. Both layouts are tried so the chain has one source.
+_GATE_DIR = os.path.dirname(os.path.realpath(__file__))
+for _candidate in (_GATE_DIR, os.path.join(os.path.dirname(_GATE_DIR), "bin")):
+    if os.path.exists(os.path.join(_candidate, "gate_reviewers.py")):
+        if _candidate not in sys.path:
+            sys.path.insert(0, _candidate)
+        break
+from gate_reviewers import REVIEWER_CHAIN
+
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
-ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
-OPUS = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
+# The gate reviewer: GPT-6.2 Astra only, API credits first, Codex
+# subscription second, no Opus fallback (Shyam 2026-11-17).
+ASTRA = REVIEWER_CHAIN[0]
 CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DECISIONS_PATH = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
@@ -403,7 +416,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             return f"skip {lkey}: no verified PR branch for relaunch"
         workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         args = {"projectId": CFG[repo]["projectId"], "title": title,
-                "modelSelection": SOL, "runtimeMode": "full-access",
+                "modelSelection": GLM, "runtimeMode": "full-access",
                 "workspaceStrategy": workspace, "message": message}
         options = ["--priority", str(priority)]
     if DRY:
@@ -419,7 +432,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     return out
 
 
-SOL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+GLM = {"instanceId": "glm", "model": "zai/glm-5.3"}
 LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
               "shyamsivakumar/catalouge"]
 NEVER_START = {("shyamsivakumar/strategy-replay-workbench", 468)}
@@ -434,13 +447,13 @@ def park(repo, number, issue, head, reply, ledger):
     if issue:
         run(["gh", "issue", "edit", str(issue), "-R", repo, "--remove-label", "stage:todo", "--add-label", "stage:backlog"])
         run(["gh", "issue", "comment", str(issue), "-R", repo, "--body",
-             f"Parked by the lane (specs/lane.md section 6): PR #{number} failed its gate after two fix rounds (head {head[:8]}). Sol re-cuts it into smaller tickets."])
-    msg = (f"Type: design · gpt-6.1-sol (re-cut a parked ticket; coordinator specs/lane.md is at /Users/shyamsivakumar/Code/coordinator/specs/lane.md)\n\n"
+             f"Parked by the lane (specs/lane.md section 6): PR #{number} failed its gate after two fix rounds (head {head[:8]}). GLM re-cuts it into smaller tickets."])
+    msg = (f"Type: design · glm-5.3 (re-cut a parked ticket; coordinator specs/lane.md is at /Users/shyamsivakumar/Code/coordinator/specs/lane.md)\n\n"
            f"Ticket {repo}#{issue} with PR #{number} failed its gate after two fix rounds. Read the issue, the PR diff (`gh pr diff {number} -R {repo}`) and the last gate report below. "
            "Re-cut the remaining work into at most 2 ordered tickets that each fit a 5-minute builder turn. Consolidate any further work into those tickets; never create a third ticket. Use the 12-section template in ~/.coordinator/tickets.json, "
            "with Requires/Provides lines, chained with --add-blocked-by, labels stage:todo,type:<type>,priority:<same>; reuse the PR branch as the base if most of it is right and say so in the first ticket. "
            f"Then comment on #{issue} with the new tickets and close it as not planned. Open every new ticket with `ticket open --repo {repo} --title \"<title>\" --body-file <file> --label stage:todo,type:<type>,priority:<n>`; the tool mints the key, so never type the key yourself and never use `gh issue create`. Device and live testing are waived. Start nothing, change no code, 10 minutes.\n\nLast gate report:\n" + reply[-5000:])
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "modelSelection": SOL,
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "modelSelection": GLM,
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "900"]).splitlines()[-1]
     ledger[lkey] = out
@@ -517,11 +530,11 @@ def act_on_pr(repo, number, ledger):
     tag = "regate" if verdict == "none" else "gate"
     model = ASTRA
     if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
-        if "astra" in reply.lower() and "quota" in reply.lower() and "exhaust" in reply.lower():
-            tag, model = "opusgate", OPUS
-        else:
-            ledger[f"needs-you:{repo}#{number}:{head}"] = "gate ended without verdict after retry"
-            return f"#{number}: needs-you, gate ended without verdict after retry"
+        # No Opus escalation any more: a gate that ended without a verdict
+        # twice waits for Shyam instead of running on another model
+        # (Shyam 2026-11-17: reviews on GPT-6.2 Astra only).
+        ledger[f"needs-you:{repo}#{number}:{head}"] = "gate ended without verdict after retry"
+        return f"#{number}: needs-you, gate ended without verdict after retry"
     brief = run(["ticket", "gate", f"{repo}#{number}", "--print-brief"])
     if head not in brief:
         return f"#{number}: no gate brief ({brief[-120:]})"
@@ -693,7 +706,7 @@ def unstick(repo, ledger, excl=frozenset()):
         return f"DRY unstick {batch}"
     lst = ", ".join(f"#{n}" for n in batch)
     msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "modelSelection": SOL,
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "modelSelection": GLM,
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).splitlines()[-1]
     stamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
@@ -942,10 +955,13 @@ def dead_run_model(thread, limit_failure):
     title = (thread.get("title") or "").lower()
     if not limit_failure or provider == "router":
         return {"instanceId": provider or "codex", "model": model}
-    if model == "claude-opus-5-5":
-        return ASTRA if any(word in title for word in ("review", "test", "gate")) else SOL
-    if model in {"gpt-6.1-sol", "gpt-6-astra"}:
-        return {"instanceId": "codex", "model": "gpt-6.1-terra"}
+    # A dead run on an OpenAI model or on Opus never relaunches on one:
+    # reviews go to the gate chain, builds go to GLM (Shyam 2026-11-17:
+    # no Sol, Terra, Luna or OpenAI builder, no Opus reviewer).
+    retired = {"gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra", "gpt-6.2-astra",
+               "openai/gpt-6-astra", "openai/gpt-6.2-astra", "claude-opus-5-5"}
+    if model in retired:
+        return ASTRA if any(word in title for word in ("review", "test", "gate")) else GLM
     return {"instanceId": provider or "codex", "model": model}
 
 

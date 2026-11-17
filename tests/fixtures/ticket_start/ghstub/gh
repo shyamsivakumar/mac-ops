@@ -18,7 +18,7 @@ ISSUE = {
     "title": "MO-9001 · Fixture for the ticket section matcher",
     "state": "OPEN",
     "labels": [{"name": name} for name in
-               ("stage:todo", "type:chore", "priority:2", "builder:sol", "reviewer:opus")],
+               ("stage:todo", "type:chore", "priority:2", "builder:glm-5.3", "reviewer:astra")],
     "comments": [],
     "url": f"https://github.com/shyamsivakumar/mac-ops/issues/9001",
     "blockedBy": {"totalCount": 0, "nodes": []},
