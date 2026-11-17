@@ -210,34 +210,33 @@ def dead_run_recovery():
         lane.recover_dead_runs(ledger)
         lane.recover_dead_runs(ledger)
     exact(len(launches), 1)
-    exact(launches[0]["modelSelection"], lane.ASTRA)
+    # The fixture thread is a ticket builder (its receipt is a ticket: start
+    # key) that ran on Opus and happens to be titled like a review: recovery
+    # relaunches it on GLM, because dead-run recovery only ever serves
+    # builders — no title can send it to a reviewer (Shyam 2026-11-17).
+    exact(launches[0]["modelSelection"], lane.GLM)
     exact(launches[0]["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/fixture-worktree"})
     exact(ledger[f"dead-relaunch-thread:fixture-dead"], "fixture-relaunch")
     exact(settled, ["fixture-dead", "fixture-dead"])
-    # The recovery model is the same whatever killed the run: no OpenAI
-    # model ever relaunches as a builder, and only a review title takes the
-    # gate chain (Shyam 2026-11-17).
+    # No title and no failure reason changes it: every thread here is a
+    # ticket builder, so no OpenAI model or Opus ever relaunches one.
     exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.1-sol",
-                               "title": "MO-2 gate findings"}, False), lane.GLM)
+                               "title": "MO-2 gate findings"}), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.1-sol",
-                               "title": "MO-42 Fix preview rendering"}, True), lane.GLM)
+                               "title": "MO-42 Fix preview rendering"}), lane.GLM)
+    exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.1-sol",
+                               "title": "MO-42 Fix review #17 rendering"}), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6-luna",
-                               "title": "MO-3 build"}, True), lane.GLM)
+                               "title": "MO-3 build"}), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.2-astra",
-                               "title": "MO-4 review #9 aaaaaaaa"}, True), lane.ASTRA)
-    # A dead gate on the chain head relaunches on the next reviewer, so a
-    # quota failure on the API credits never retries that provider.
+                               "title": "MO-4 review #9 aaaaaaaa"}), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra",
-                               "title": "MO-7 review #9 aaaaaaaa"}, True),
-          lane.REVIEWER_CHAIN[1])
-    exact(lane.dead_run_model({"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra",
-                               "title": "MO-8 review #9 aaaaaaaa"}, False),
-          lane.REVIEWER_CHAIN[1])
+                               "title": "MO-7 review #9 aaaaaaaa"}), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "glm", "model": "zai/glm-5.3",
-                               "title": "MO-5 widget"}, False),
+                               "title": "MO-5 widget"}),
           {"instanceId": "glm", "model": "zai/glm-5.3"})
     exact(lane.dead_run_model({"providerInstanceId": "router", "model": "task/standard",
-                               "title": "MO-6"}, True),
+                               "title": "MO-6"}),
           {"instanceId": "router", "model": "task/standard"})
     dead_run_no_receipt()
 
