@@ -288,7 +288,7 @@ export default class Worktrees extends View {
   }
 
   rows() {
-    return (this.data?.rows ?? []).filter((r) => !r.main_checkout);
+    return (this.data?.rows ?? []).filter((r) => !r.main_checkout && r.category !== "removed");
   }
 
   cleanable() {

@@ -94,8 +94,12 @@ for flag in $needs; do
 done
 if [ -z "$failed" ]; then
   [ "$mode" = archive ] && { step "--archive" archive "$ARCHIVE_LIMIT" "$@" || failed=$(reason); }
-  [ "$mode" = clean ] && { step "--apply --prune --no-report" clean "$CLEAN_LIMIT" || failed=$(reason); }
-  step "--dry-run --no-report" last "$SCAN_LIMIT" || failed=${failed:-$(reason)}
+  if [ "$mode" = clean ] && step "--apply --prune --no-report" clean "$CLEAN_LIMIT"; then
+    cp "$STATE/clean.json" "$STATE/last.tmp" && mv "$STATE/last.tmp" "$STATE/last.json" || failed="could not publish clean result"
+  else
+    [ "$mode" = clean ] && failed=$(reason)
+    step "--dry-run --no-report" last "$SCAN_LIMIT" || failed=${failed:-$(reason)}
+  fi
 fi
 finished=$(date +%s)
 if [ -z "$failed" ]; then
