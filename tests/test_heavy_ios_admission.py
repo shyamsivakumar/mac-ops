@@ -126,6 +126,15 @@ class SmallHostAdmissionTests(unittest.TestCase):
             max(6 * heavy.GIB, int(16 * heavy.GIB * 0.125)),
         )
 
+    def test_the_resume_threshold_keeps_the_old_share_of_ram(self):
+        self.assertEqual(
+            heavy.pause_headroom_bytes(48 * heavy.GIB, True),
+            max(6 * heavy.GIB, int(48 * heavy.GIB * 0.15)),
+        )
+        reason = heavy._host_reason(sample(48, 7), paused=True)
+        self.assertEqual(reason, "memory-headroom-or-swap-pressure")
+        self.assertIsNone(heavy._host_reason(sample(48, 7.5), paused=True))
+
     def test_the_simulator_credit_does_not_relax_a_large_host(self):
         reason = heavy.admission_block_reason(
             sample(48, 7),
