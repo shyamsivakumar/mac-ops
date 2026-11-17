@@ -16,25 +16,25 @@ $ /opt/homebrew/bin/python3 evidence/MO-1057/proof.py
 The output of that run is in `tick-proof.out`:
 
 ```
-    NOOP the board read skipped 8 calls; the other checks ran: lanes: log age 71s
+    NOOP the board read skipped 8 calls; the other checks ran: lanes: loop/lanes.log age 96s
     tick exit=0 elapsed=126s
     --- the tick log
-    2026-11-17 09:30 PST | tick | overnight selftest: not-due
-    2026-11-17 09:32 PST | tick | exit=0 reply=NOOP the board read skipped 8 calls; the other checks ran: lanes: log age 71s
+    2026-11-17 09:38 PST | tick | overnight selftest: not-due
+    2026-11-17 09:40 PST | tick | exit=0 reply=NOOP the board read skipped 8 calls; the other checks ran: lanes: loop/lanes.log age 96s
     --- the calls the tick skipped
-    overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpuujk_765/blackhole/gh issue list -R shyamsivakumar/mac-ops --state open --limit 500 --json number,title,body after 60s (the call timed out)
-    overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpuujk_765/blackhole/gh issue list -R shyamsivakumar/CineJar --state open --limit 500 --json number,title,body after 60s (the call timed out)
-    overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpuujk_765/blackhole/gh issue list -R shyamsivakumar/recoup --state open --limit 500 --json number,title,body after 60s (the call timed out)
+    overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpc1jak674/blackhole/gh issue list -R digitized/Concerning --state open --limit 500 --json number,title,body after 60s (the call timed out)
+    overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpc1jak674/blackhole/gh issue list -R shyamsivakumar/CineJar --state open --limit 500 --json number,title,body after 60s (the call timed out)
+    overnight: skipped /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tmpc1jak674/blackhole/gh issue list -R shyamsivakumar/mac-ops --state open --limit 500 --json number,title,body after 60s (the call timed out)
     --- skipped calls: 8
     --- the rest of the tick's work, read for real
-    lanes: log age 71s
-    dispatch: last write age 23s
-    overnight: log age 218s
+    lanes: loop/lanes.log age 96s
+    dispatch: last write age 4s
+    overnight: log age 10s
     traceback: dispatch 0
     gatekeep: traceback 0
     launchd: dev.coordinator.lanes state = not running
-    decisions: 0 item(s)
-    read at 2026-11-17 09:32 PST
+    decisions: 1 item(s)
+    read at 2026-11-17 09:40 PST
     --- the checks that ran after the hung call: 5
     --- the tick finished under 600 seconds: True
 ```
@@ -49,11 +49,14 @@ The output of that run is in `tick-proof.out`:
   `~/Library/Logs/coordinator/skips.log`, so they do not depend on a model
   repeating them.
 - The tick's other work ran after the hung call and read real values: the
-  lane driver's log age, the dispatcher's last write, the shift's log age,
-  the tracebacks in the last lines of the two queue logs, the state of the
-  launchd job and the decisions log. Those checks are
-  `evidence/MO-1057/other_work.py`, and they read the live files; nothing
-  in the receipt is written by hand.
+  lane driver's log age (`loop/lanes.log`, the file `loop/tick.md` names),
+  the dispatcher's last write, the shift's log age, the tracebacks in the
+  last lines of the two queue logs, the state of the launchd job and the
+  decisions log. Those checks are `evidence/MO-1057/other_work.py`, and
+  they read the live files; nothing in the receipt is written by hand.
+  The proof fails when those checks do not run or do not measure: it
+  counts the lines that carry a measured value, and it needs four of
+  them, so a stand-in that only claims to have run them does not pass.
 
 The board read on its own, with the same blackhole call, ends in 128 seconds
 with the same eight skips (`blackhole-proof.md`).
