@@ -657,6 +657,14 @@ def watchdog():
               "dispatch": "dev.coordinator.dispatch", "lanes": "dev.coordinator.lanes"}
     exact({name: minutes for name, (_, minutes, _) in lane.WATCH.items()}, limits)
     exact({name: label for name, (_, _, label) in lane.WATCH.items()}, labels)
+    # launchd prints its status in more than one shape and every shape
+    # carries the same number.
+    exact(lane.exit_status("0"), 0)
+    exact(lane.exit_status("78: EX_CONFIG"), 78)
+    exact(lane.exit_status("(never exited)"), None)
+    exact(lane.signal_status("9"), 9)
+    exact(lane.signal_status("Killed: 9"), 9)
+    exact(lane.signal_status(None), 0)
     now = 1000000
     other = {"id": "unrelated", "title": "preserve"}
     state = {"items": [other]}
@@ -800,8 +808,38 @@ def watchdog():
         exact(state["items"], [other])
         exact("WATCHDOG" in output, False)
 
+        # The run in flight decides. A job that is running now is judged by
+        # that run, so what an earlier run left behind raises nothing: a
+        # previous nonzero exit, then a previous signal.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": 1, "running": True,
+                                            "pid": 6161}
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+        exact("signal=launchd" in output, True)
+
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": None, "signal": 9,
+                                            "running": True, "pid": 6161}
+        output = pass_once()
+        exact(state["items"], [other])
+        exact("WATCHDOG" in output, False)
+
+        # The same previous failures raise the alarm once the job is idle
+        # again, so a job that keeps failing is never silenced.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 13,
+                                            "exit": 1, "running": False}
+        output = pass_once()
+        exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
+                                    "failing (last exit code 1)"))
+        exact("WATCHDOG" in output, True)
+
         # A run that never ended and overran its limit is stuck, whatever
         # the log says.
+        jobs["dev.coordinator.gatekeep"] = {"loaded": True, "runs": 0,
+                                            "exit_text": "(never exited)",
+                                            "running": True, "pid": 6161}
         elapsed[6161] = 200 * 60
         output = pass_once()
         exact(state["items"], alarm("Factory job stopped or failing: gatekeep "
