@@ -1246,7 +1246,6 @@ def recover_dead_runs(ledger):
                 if not DRY:
                     settle_dead_run(thread_id)
                 continue
-            failure = reply.lower()
             day = time.strftime("%Y-%m-%d")
             count_key = f"dead-relaunch:{day}:{work_key}"
             count = int(ledger.get(count_key, 0))
