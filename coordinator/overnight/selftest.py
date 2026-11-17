@@ -214,6 +214,21 @@ def dead_run_recovery():
     exact(launches[0]["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/fixture-worktree"})
     exact(ledger[f"dead-relaunch-thread:fixture-dead"], "fixture-relaunch")
     exact(settled, ["fixture-dead", "fixture-dead"])
+    # The recovery model is the same whatever killed the run: no OpenAI
+    # model ever relaunches as a builder, and only a review title takes the
+    # gate chain (Shyam 2026-11-17).
+    exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.1-sol",
+                               "title": "MO-2 gate findings"}, False), lane.GLM)
+    exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6-luna",
+                               "title": "MO-3 build"}, True), lane.GLM)
+    exact(lane.dead_run_model({"providerInstanceId": "codex", "model": "gpt-6.2-astra",
+                               "title": "MO-4 review #9 aaaaaaaa"}, True), lane.ASTRA)
+    exact(lane.dead_run_model({"providerInstanceId": "glm", "model": "zai/glm-5.3",
+                               "title": "MO-5 widget"}, False),
+          {"instanceId": "glm", "model": "zai/glm-5.3"})
+    exact(lane.dead_run_model({"providerInstanceId": "router", "model": "task/standard",
+                               "title": "MO-6"}, True),
+          {"instanceId": "router", "model": "task/standard"})
     dead_run_no_receipt()
 
 
@@ -308,13 +323,13 @@ def gate_pipeline():
     head = "a" * 40
     failures = []
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["astra"]),
+        ("checked-head", repo, "absent", "", {}, ["openai-api:openai/gpt-6.2-astra"]),
         ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
-        ("no-verdict", repo, "none", "interrupted", {}, ["astra"]),
-        ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+        ("no-verdict", repo, "none", "interrupted", {}, ["codex:gpt-6.2-astra"]),
         ("quota", repo, "none", "Astra quota exhausted",
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+        ("second-no-verdict", repo, "none", "interrupted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
         ("ascend", "ascend/fixture", "absent", "", {}, []),
@@ -356,8 +371,8 @@ def gate_pipeline():
                     actions.append("builder")
                 else:
                     exact(head in payload["message"], True)
-                    model = payload["modelSelection"]["model"]
-                    actions.append("astra" if "gpt-6.2-astra" in model else model)
+                    selection = payload["modelSelection"]
+                    actions.append(f"{selection['instanceId']}:{selection['model']}")
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
@@ -368,7 +383,8 @@ def gate_pipeline():
                     dict(threadId="gate", status="completed", updatedAt="fixture")]}
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
-                    return {"thread": {"status": "running", "sendable": True}}
+                    return {"thread": {"status": "running", "sendable": True,
+                                       "providerInstanceId": "glm", "model": "zai/glm-5.3"}}
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
@@ -491,7 +507,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
          patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
          patch.object(lane, "run", command), \
-         patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
+         patch.object(lane, "t3", return_value={"thread": {"status": status, "providerInstanceId": "glm", "model": "zai/glm-5.3"}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
@@ -1319,11 +1335,14 @@ def send_integrity():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     key = f"fix:{repo}#385:head"
-    cases = [(dict(status=status), True) for status in
+    cases = [(dict(status=status, providerInstanceId="glm", model="zai/glm-5.3"), True) for status in
              ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
     cases += [(thread, False) for thread in ({}, dict(status="deleted"),
               dict(status="running", archived=True), dict(status="running", sendable=False),
-              dict(status="running", canSend=False))]
+              dict(status="running", canSend=False),
+              # A Sol builder thread is never continued, whatever its state:
+              # the fix round relaunches on GLM instead (Shyam 2026-11-17).
+              dict(status="running", providerInstanceId="codex", model="gpt-6.1-sol"))]
     for thread, live in cases:
         for failure in (None, "error", "empty"):
             actions, reads, ledger = [], [], {}
@@ -1363,7 +1382,7 @@ def send_integrity():
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
-         patch.object(lane, "t3", return_value={"thread": {"status": "running"}}), \
+         patch.object(lane, "t3", return_value={"thread": {"status": "running", "providerInstanceId": "glm", "model": "zai/glm-5.3"}}), \
          patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
         ledger = {}
         exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}: send existing thread")
