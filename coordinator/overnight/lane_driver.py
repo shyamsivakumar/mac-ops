@@ -140,6 +140,8 @@ def settle_dead_run(thread_id):
         reason = " ".join(part.decode(errors="replace") if isinstance(part, bytes) else part
                           for part in parts if part) or str(exc)
         print(f"DEAD {thread_id}: settle failed: {' '.join(reason.split())}; left for the next pass")
+        return False
+    return True
 
 
 def last_reply(thread_id):
@@ -947,6 +949,129 @@ def dead_run_model(thread, limit_failure):
     return {"instanceId": provider or "codex", "model": model}
 
 
+def dead_reference(repo, number):
+    """Return the issue or pull request one number names, or none.
+
+    A number that names nothing returns none, so a stale `#12` in a title
+    does not stop the pass. A read that fails raises: a thread is never
+    settled or flagged on a state the driver could not see."""
+    require_api_budget()
+    result = subprocess.run(["gh", "api", f"repos/{repo}/issues/{number}"],
+                            capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        output = result.stdout + result.stderr
+        if "HTTP 404" in output or "Not Found" in output:
+            return None
+        first = output.strip().splitlines()
+        raise RuntimeError(
+            f"{repo}#{number}: {first[0] if first else result.returncode}")
+    data = json.loads(result.stdout)
+    pull = data.get("pull_request") if isinstance(data, dict) else None
+    return {"kind": "pr" if isinstance(pull, dict) else "issue",
+            "state": str((data or {}).get("state") or "").lower(),
+            "merged": bool(isinstance(pull, dict) and pull.get("merged_at"))}
+
+
+def dead_ticket_prs(repo, number):
+    """Return the pull requests whose body names one ticket.
+
+    A ticket key names an issue, and the pull requests that name it say
+    whether the work landed. One page is enough: a ticket with more than
+    fifty pull requests is unsettled work by any reading."""
+    require_api_budget()
+    result = subprocess.run(["gh", "pr", "list", "-R", repo, "--state", "all",
+                             "--limit", "50", "--search", f"#{number} in:body",
+                             "--json", "number,state,mergedAt,body"],
+                            capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        first = (result.stdout + result.stderr).strip().splitlines()
+        raise RuntimeError(
+            f"{repo}#{number} pull requests: {first[0] if first else result.returncode}")
+    rows = json.loads(result.stdout or "[]")
+    return [row for row in rows if isinstance(row, dict)
+            and re.search(rf"#{number}\b", row.get("body") or "")]
+
+
+def dead_ticket_numbers(repo, token):
+    """Return the issues whose title names one ticket key.
+
+    A ticket key (`MO-1058`) is the ticket tool's name for an issue, not the
+    issue number, so the issue is found by its key in the title. Closed
+    issues count: finished work is what settles a thread."""
+    require_api_budget()
+    result = subprocess.run(["gh", "issue", "list", "-R", repo, "--state", "all",
+                             "--limit", "10", "--search", f"{token} in:title",
+                             "--json", "number,title"],
+                            capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        first = (result.stdout + result.stderr).strip().splitlines()
+        raise RuntimeError(f"{repo} {token}: {first[0] if first else result.returncode}")
+    rows = json.loads(result.stdout or "[]")
+    return [int(row["number"]) for row in rows if isinstance(row, dict)
+            and re.search(rf"\b{re.escape(token)}\b", row.get("title") or "", re.I)]
+
+
+def dead_reference_outcome(repo, number):
+    """Return (settle, note) for one number a dead thread names.
+
+    A pull request that is merged or closed settles the thread, and an open
+    pull request is unfinished work that keeps it. An issue settles when it
+    is closed, and an open issue settles through a merged or closed pull
+    request that names it."""
+    found = dead_reference(repo, number)
+    if not found:
+        return False, ""
+    if found["kind"] == "pr":
+        if found["state"] == "closed":
+            return True, f"PR {repo}#{number} {'merged' if found['merged'] else 'closed'}"
+        return False, f"PR {repo}#{number} is open"
+    if found["state"] == "closed":
+        return True, f"issue {repo}#{number} closed"
+    open_note, settled_note = "", ""
+    for pr in dead_ticket_prs(repo, number):
+        state = str(pr.get("state") or "").upper()
+        if state == "OPEN":
+            open_note = open_note or f"PR {repo}#{pr.get('number')} is open"
+        elif state == "CLOSED":
+            settled_note = settled_note or (
+                f"PR {repo}#{pr.get('number')} {'merged' if pr.get('mergedAt') else 'closed'}")
+    if open_note:
+        return False, open_note
+    if settled_note:
+        return True, settled_note
+    return False, f"issue {repo}#{number} is open"
+
+
+def dead_run_outcome(repo, title, thread):
+    """Return (settle, note) for a dead thread that has no ticket receipt.
+
+    The thread's work is named by its linked pull requests and its title: a
+    pull request number (`#12`) or a ticket key (`MO-1058`, which maps to a
+    repository through the ticket config). The thread settles only when all
+    of that work has finished."""
+    references = [(repo, pr.get("number")) for pr in thread.get("pullRequests") or []
+                  if pr.get("repository") == repo and pr.get("number")]
+    references += [(repo, int(number)) for number in re.findall(r"#(\d+)\b", title)]
+    keys = {str(cfg.get("key") or "").lower(): name for name, cfg in CFG.items()
+            if isinstance(cfg, dict) and cfg.get("key")}
+    for key, number in re.findall(r"\b([A-Za-z][A-Za-z0-9]{1,7})-(\d+)\b", title):
+        if key.lower() in keys:
+            references += [(keys[key.lower()], found)
+                           for found in dead_ticket_numbers(keys[key.lower()], f"{key.upper()}-{number}")]
+    settled_note, open_note = "", ""
+    for ref_repo, number in dict.fromkeys(references):
+        settle, note = dead_reference_outcome(ref_repo, number)
+        if settle:
+            settled_note = settled_note or note
+        else:
+            open_note = open_note or note
+    if open_note:
+        return False, open_note
+    if settled_note:
+        return True, settled_note
+    return False, "no pull request or ticket in the title"
+
+
 def recover_dead_runs(ledger):
     receipts = stall_receipts()
     for repo in LANE_REPOS:
@@ -981,17 +1106,26 @@ def recover_dead_runs(ledger):
                 continue
             receipt_key = next((key for key, value in receipts.items() if value == thread_id and key.startswith(f"ticket:{repo}#")), "")
             if not receipt_key:
-                closed_pr = False
-                for pr in thread.get("pullRequests") or []:
-                    if pr.get("repository") == repo and pr.get("number"):
-                        current = read_json(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "state"])
-                        closed_pr = closed_pr or current.get("state") in {"CLOSED", "MERGED"}
-                if closed_pr:
-                    print(f"DEAD {thread_id}: settle, linked PR closed (model {thread.get('model')})")
-                    if not DRY:
-                        settle_dead_run(thread_id)
-                else:
-                    print(f"DEAD {thread_id}: coordinator needed, no ticket receipt or verified worktree (model {thread.get('model')})")
+                # A thread with no receipt is settled once its work has
+                # finished, and otherwise flagged for the coordinator once.
+                # The ledger note is the driver's record of that one report.
+                if ledger.get(f"dead-run:{thread_id}"):
+                    continue
+                try:
+                    settle, note = dead_run_outcome(repo, title, thread)
+                except ApiBudgetExhausted:
+                    raise
+                except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+                    print(f"DEAD {thread_id}: coordinator needed, state unread ({exc}); left for the next pass")
+                    continue
+                day = time.strftime("%Y-%m-%d")
+                if not settle:
+                    print(f"DEAD {thread_id}: coordinator needed, {note}; flagged once (model {thread.get('model')})")
+                    ledger[f"dead-run:{thread_id}"] = f"flagged {day}: {note}"
+                    continue
+                print(f"DEAD {thread_id}: settle, {note} (model {thread.get('model')})")
+                if DRY or settle_dead_run(thread_id):
+                    ledger[f"dead-run:{thread_id}"] = f"settled {day}: {note}"
                 continue
             work_match = re.match(rf"ticket:{re.escape(repo)}#(\d+)(?::a\d+)?$", receipt_key)
             if not work_match:
