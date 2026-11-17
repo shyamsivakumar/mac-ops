@@ -713,8 +713,10 @@ def launchd_state(label):
     """Return the launchd state of one job, or None when launchd cannot say.
 
     A job that launchd no longer holds has no state: `launchctl print` fails
-    for it. That is the difference between a stopped job and a job that is
-    loaded and idle, which is the difference the watchdog has to see.
+    for it with "Could not find service". That is the difference between a
+    stopped job and a job that is loaded and idle, which is the difference
+    the watchdog has to see. Any other failure of launchctl is a failure to
+    read, not evidence that the job stopped, so it returns None.
     """
     try:
         result = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"],
@@ -722,16 +724,21 @@ def launchd_state(label):
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode:
-        return {"loaded": False}
+        said = result.stdout + result.stderr
+        if "Could not find service" in said:
+            return {"loaded": False}
+        return None
     text = result.stdout
 
     def field(pattern):
         match = re.search(pattern, text, re.MULTILINE)
         return match.group(1) if match else None
 
+    exit_code = field(r"^\tlast exit code = (-?\d+)$")
     return {"loaded": True,
             "runs": int(field(r"^\truns = (\d+)$") or 0),
-            "exit_code": int(field(r"^\tlast exit code = (-?\d+)$") or 0),
+            "exit_code": int(exit_code) if exit_code is not None else None,
+            "signal": int(field(r"^\tlast terminating signal = (\d+)$") or 0),
             "running": field(r"^\tstate = (.+)$") == "running",
             "pid": int(field(r"^\tpid = (\d+)$") or 0)}
 
@@ -779,28 +786,42 @@ def log_age(path):
         return None
 
 
+def silence_alarm(name, minutes, age):
+    """Return the alarm for a job whose only evidence is the age of its log."""
+    if age is None or age > minutes:
+        silence = "no log" if age is None else f"{age:.0f} min"
+        return f"{name} silent {silence} (limit {minutes})"
+    return None
+
+
 def watchdog_signal(name, minutes, label, age, state):
     """Return the signal and the alarm for one watched job.
 
     The signal names the evidence used. The alarm is None when the job is
-    healthy. A job that launchd holds and that exits clean is alive even
-    when its log is quiet, because a job with nothing to write writes
-    nothing. A job that launchd no longer holds, or that fails, or that
-    runs past its limit, is not alive.
+    healthy. A job that launchd holds and that ends clean is alive even when
+    its log is quiet, because a job with nothing to write writes nothing. A
+    job that launchd no longer holds, or that fails, or that runs past its
+    limit, is not alive. When launchd cannot say how the job ended, the age
+    of the log is the only evidence left, so the old silence rule applies and
+    a real alarm is never silenced.
     """
     if state is None:
-        # launchd cannot say, so the log age is the only evidence left.
-        if age is None or age > minutes:
-            silence = "no log" if age is None else f"{age:.0f} min"
-            return "log-age", f"{name} silent {silence} (limit {minutes})"
-        return "log-age", None
+        return "log-age", silence_alarm(name, minutes, age)
     if not state["loaded"]:
         return "launchd", f"{name} stopped (launchd job {label} is not loaded)"
+    if state["signal"]:
+        return "launchd", f"{name} killed (last terminating signal {state['signal']})"
+    if state["exit_code"] is None:
+        return "log-age", silence_alarm(name, minutes, age)
     if state["exit_code"]:
         return "launchd", f"{name} failing (last exit code {state['exit_code']})"
     if state["running"] and state["pid"]:
         elapsed = process_seconds(state["pid"])
-        if elapsed is not None and elapsed > minutes * 60:
+        if elapsed is None:
+            # The job is running but nobody can say for how long, so the
+            # log age is the only evidence left.
+            return "log-age", silence_alarm(name, minutes, age)
+        if elapsed > minutes * 60:
             return "launchd", f"{name} stuck (running {elapsed // 60} min, limit {minutes})"
     return "launchd", None
 
@@ -819,6 +840,7 @@ def watchdog():
             detail += " launchd=not-loaded runs=0 exit=0"
         else:
             detail += (f" launchd=loaded runs={state['runs']} exit={state['exit_code']}"
+                       f" signal={state['signal']}"
                        f" running={'yes' if state['running'] else 'no'}")
         print(f"WATCH {name}: signal={signal} limit={minutes} min {detail}"
               + (f" alarm={alarm}" if alarm else ""))
