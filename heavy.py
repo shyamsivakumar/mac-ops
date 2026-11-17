@@ -441,6 +441,15 @@ def simulator_destination_device(argv: Sequence[str]) -> Optional[str]:
     return None
 
 
+def _device_key(value: str) -> str:
+    """Return a comparable device name or UDID.
+
+    Xcode's simulator listings quote a device name, so the same device reads
+    as "CI-iPhone" in the listing and CI-iPhone in a destination.
+    """
+    return str(value).strip().strip('"').strip().lower()
+
+
 def _booted_simulator_udid(
     device: str, *, command_runner: Callable[[Sequence[str], float], str] = _run_native
 ) -> Optional[str]:
@@ -459,6 +468,7 @@ def _booted_simulator_udid(
     devices = payload.get("devices") if isinstance(payload, dict) else None
     if not isinstance(devices, dict):
         return None
+    key = _device_key(device)
     for rows in devices.values():
         if not isinstance(rows, list):
             continue
@@ -469,7 +479,7 @@ def _booted_simulator_udid(
             udid = str(row.get("udid", ""))
             if not udid:
                 continue
-            if name.lower() == device.lower() or udid.lower() == device.lower():
+            if _device_key(name) == key or _device_key(udid) == key:
                 return udid
     return None
 
