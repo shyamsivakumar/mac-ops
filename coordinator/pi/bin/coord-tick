@@ -139,16 +139,7 @@ def model_available(env: dict) -> bool:
     try:
         stdout, stderr = process.communicate(timeout=MODEL_CHECK_TIMEOUT)
     except subprocess.TimeoutExpired:
-        kill_group(process, signal.SIGTERM)
-        try:
-            stdout, stderr = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            kill_group(process, signal.SIGKILL)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-            stdout, stderr = "", ""
+        end_group(process)
         log(
             f"skipped: the model check for {MODEL} timed out after "
             f"{MODEL_CHECK_TIMEOUT}s"
@@ -225,6 +216,32 @@ def kill_group(process, sig: int) -> None:
         pass
 
 
+def end_group(process, grace: int = 5) -> tuple[str, str]:
+    """End the whole group of the run and return what it wrote.
+
+    The group is what has to die, and the group is emptied after the leader
+    is gone and not only when the wait ends: a descendant that ignored the
+    first signal and closed or redirected its output lets the wait finish
+    while it keeps running, and it would then outlive the run."""
+    kill_group(process, signal.SIGTERM)
+    try:
+        stdout, stderr = process.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        kill_group(process, signal.SIGKILL)
+        try:
+            stdout, stderr = process.communicate(timeout=grace)
+        except subprocess.TimeoutExpired:
+            # The pipes are still held by a descendant that the signals did
+            # not reach, so they are closed here rather than left to the
+            # collector: the run is over either way.
+            stdout, stderr = "", ""
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+    kill_group(process, signal.SIGKILL)
+    return stdout or "", stderr or ""
+
+
 def stop_on_signal(signum, _frame):
     """A stopped launcher (launchctl bootout, Ctrl-C) must not leave the pi
     it started running: that would be a second tick."""
@@ -264,15 +281,7 @@ def run_tick(env: dict, lock_fd: int) -> int:
         try:
             stdout, stderr = process.communicate(timeout=TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            kill_group(process, signal.SIGTERM)
-            try:
-                stdout, stderr = process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                kill_group(process, signal.SIGKILL)
-                try:
-                    stdout, stderr = process.communicate(timeout=15)
-                except subprocess.TimeoutExpired:
-                    stdout, stderr = "", ""
+            stdout, stderr = end_group(process, 10)
             log(f"tick killed after {TIMEOUT_S}s")
             deliver(alert_lines(stdout or ""))
             return 124
