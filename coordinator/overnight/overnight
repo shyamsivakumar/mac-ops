@@ -645,6 +645,43 @@ def allowed_repos(cfg: dict) -> list[tuple[str, str]]:
     return sorted((repo, entry.get("key", "")) for repo, entry in repos.items())
 
 
+def kill_group(process, number: int) -> None:
+    """Signal the whole group of a call.
+
+    The call runs in a process group of its own, so the group is what has
+    to die: a descendant that ignored the first signal and closed its
+    output would otherwise outlive the call and keep the tick's work
+    alive behind it."""
+    try:
+        os.killpg(process.pid, number)
+    except OSError:
+        pass
+
+
+def end_group(process, grace: int = 5) -> None:
+    """End the whole group of a call and close what it wrote.
+
+    The group is what has to die, and the group is emptied after the leader
+    is gone and not only when the wait ends: a descendant that ignored the
+    first signal and closed or redirected its output lets the wait finish
+    while it keeps running, and it would then outlive the call."""
+    kill_group(process, signal.SIGTERM)
+    try:
+        process.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        kill_group(process, signal.SIGKILL)
+        try:
+            process.communicate(timeout=grace)
+        except subprocess.TimeoutExpired:
+            # The pipes are still held by a descendant that the signals did
+            # not reach, so they are closed here rather than left to the
+            # collector: the call is over either way.
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+    kill_group(process, signal.SIGKILL)
+
+
 def run(
     argv: list[str], timeout: int, deadline: float, optional: bool = False
 ) -> str | None:
@@ -674,24 +711,9 @@ def run(
     try:
         stdout, stderr = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
-        # The bound is real: the group is killed, so a call that hangs
-        # cannot hold the tick past the timeout it was given.
-        for number in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(process.pid, number)
-            except OSError:
-                pass
-            try:
-                stdout, stderr = process.communicate(timeout=5)
-                break
-            except subprocess.TimeoutExpired:
-                continue
-        else:
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-            stdout, stderr = "", ""
+        # The bound is real: the whole group is killed, so a call that
+        # hangs cannot hold the tick past the timeout it was given.
+        end_group(process)
         if optional:
             emit(
                 f"overnight: skipped {command} after {seconds}s "

@@ -84,6 +84,28 @@ class CallBoundTests(unittest.TestCase):
         self.assertIsNone(out)
         self.assertLess(elapsed, 15, "the call held the tick past its bound")
 
+    def test_a_descendant_that_ignores_the_signal_does_not_outlive_the_call(self):
+        """A descendant that ignores SIGTERM and closes its output dies too.
+
+        The leader is killed first, so the wait ends while the descendant
+        is still running. The group is emptied after the leader is gone,
+        or the descendant keeps running behind the tick."""
+        with tempfile.TemporaryDirectory() as scratch:
+            marker = Path(scratch) / "descendant.pid"
+            script = (
+                "(trap '' TERM; while true; do sleep 1; done) >/dev/null 2>&1 & "
+                f"echo $! > {marker}; wait"
+            )
+            with redirect_stderr(io.StringIO()):
+                out = self.overnight.run(
+                    ["/bin/sh", "-c", script], 1, time.monotonic() + 60, optional=True
+                )
+            self.assertIsNone(out)
+            pid = int(marker.read_text().strip())
+            time.sleep(1)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
     def test_a_call_that_fails_is_a_refusal_and_not_a_skip(self):
         with self.assertRaises(self.overnight.RepoError):
             self.overnight.run(
@@ -164,6 +186,43 @@ class ModelCheckBoundTests(unittest.TestCase):
         self.assertTrue(answer, "a check that cannot answer says yes")
         self.assertLess(elapsed, 15, "the model check was not bounded")
         self.assertIn("skipped", written)
+
+
+class TickRunStopTests(unittest.TestCase):
+    """A run the tick kills is a whole group, not one process."""
+
+    def setUp(self):
+        self.tick = load_coord_tick()
+
+    def test_a_killed_run_leaves_no_descendant_behind(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            marker = Path(scratch) / "descendant.pid"
+            script = (
+                "(trap '' TERM; while true; do sleep 1; done) >/dev/null 2>&1 & "
+                f"echo $! > {marker}; wait"
+            )
+            # The process is made before the patch, so the patch cannot reach
+            # the call that makes it.
+            process = subprocess.Popen(
+                ["/bin/sh", "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            log = Path(scratch) / "tick.log"
+            with patch.object(self.tick, "LOG_PATH", log):
+                with patch.object(self.tick, "TIMEOUT_S", 1):
+                    with patch.object(self.tick, "RUNNING", []):
+                        with patch.object(
+                            self.tick.subprocess, "Popen", return_value=process
+                        ):
+                            code = self.tick.run_tick({}, os.open(os.devnull, 0))
+            self.assertEqual(code, 124, "a killed run reports the kill")
+            pid = int(marker.read_text().strip())
+            time.sleep(1)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
 
 
 if __name__ == "__main__":
