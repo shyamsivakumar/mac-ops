@@ -26,7 +26,7 @@ A sample the governor cannot read holds the capacity it already published (`min(
 
 ## Headroom a job needs
 
-A job needs headroom to start: `max(6 GiB, 15% of RAM)` on a host with 24 GiB or more of memory, and 15% of the host's memory with a 2 GiB floor on a smaller host. A 16 GiB host therefore needs 2.4 GiB instead of 6 GiB, so one iOS build fits beside the simulator it drives. On a smaller host the simulator a job drives is that job's own memory: the resident bytes of that simulator's own processes count towards the headroom the job needs to start, capped at an eighth of the host's memory. A running job pauses below `max(6 GiB, 12.5% of RAM)` and resumes above `max(6 GiB, 15% of RAM)` on every host, so the 16 GiB host still pauses at 6 GiB. The 2.4 GiB figure is the admission threshold on a 16 GiB host only.
+A job needs headroom to start: `max(6 GiB, 15% of RAM)` on a host with 24 GiB or more of memory, and 15% of the host's memory with a 2 GiB floor on a smaller host. A 16 GiB host therefore needs 2.4 GiB instead of 6 GiB, so one iOS build fits beside the simulator it drives. On a smaller host the simulator a job drives is that job's own memory: the resident bytes of that simulator's own processes count towards the headroom the job needs to start, capped at an eighth of the host's memory. A running job pauses below `max(6 GiB, 12.5% of RAM)` and resumes above `max(6 GiB, 15% of RAM)` on every host, so the 16 GiB host pauses at 6 GiB as it did before. The 2.4 GiB figure is the admission threshold on a 16 GiB host only.
 
 ## Running and pause recovery
 
@@ -43,7 +43,7 @@ stateDiagram-v2
     Terminating --> Complete: verified group exits and registry cleanup finishes
 ```
 
-Memory headroom (free, inactive and speculative pages) has a dead band so a job does not flip near one line. A running job counts headroom as low only below `max(6 GiB, 12.5% RAM)`. A paused job resumes only at `max(6 GiB, 15% RAM)` or more. On this 48 GB Mac that is 6.0 GiB to pause and 7.2 GiB to resume; the previous single line was 9.6 GiB, and measured headroom at normal load was 7.8 to 9.8 GiB, so jobs flipped. Critical kernel pressure, swap growth and a level 2 reading at or below 30% free still count as pressure at either state, and critical pressure still pauses at once.
+Memory headroom (free, inactive and speculative pages) has a dead band so a job does not flip near one line. A running job counts headroom as low below `max(6 GiB, 12.5% RAM)` on every host, and a paused job resumes only at `max(6 GiB, 15% RAM)` or more, so the running thresholds are the same as before on every host. On this 48 GB Mac that is 6.0 GiB to pause and 7.2 GiB to resume; the previous single line was 9.6 GiB, and measured headroom at normal load was 7.8 to 9.8 GiB, so jobs flipped. Critical kernel pressure, swap growth and a level 2 reading at or below 30% free still count as pressure at either state, and critical pressure still pauses at once.
 
 Only the registered workload's own isolated process group receives pause, resume, or termination signals. The supervisor stays outside that group and keeps the watchdog heartbeat current while the workload is paused. Host pressure and missing telemetry never trigger termination. Capacity zero blocks admission and resume, and capacity zero alone does not trigger a pause. Paused jobs remain in admission accounting. A resume also waits until the verified count of active nonpaused jobs is below the fresh slot limit.
 
