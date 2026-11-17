@@ -108,27 +108,25 @@ class SmallHostAdmissionTests(unittest.TestCase):
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
         )
 
-    def test_a_running_job_keeps_the_original_pause_threshold(self):
-        reason = heavy._host_reason(sample(16, 3))
-        self.assertEqual(reason, "memory-headroom-or-swap-pressure")
-
-    def test_the_simulator_a_job_drives_is_credited_against_the_pause_threshold(self):
-        reason = heavy._host_reason(sample(16, 4), allowance_bytes=2 * heavy.GIB)
-        self.assertIsNone(reason)
+    def test_a_running_job_on_a_small_host_pauses_below_the_scaled_threshold(self):
+        self.assertIsNone(heavy._host_reason(sample(16, 3)))
+        self.assertEqual(
+            heavy._host_reason(sample(16, 1)), "memory-headroom-or-swap-pressure"
+        )
 
     def test_a_large_host_pause_threshold_is_unchanged(self):
         self.assertEqual(
-            heavy.pause_headroom_bytes(48 * heavy.GIB),
+            heavy.required_headroom_bytes(48 * heavy.GIB, heavy.PAUSE_HEADROOM_FRACTION),
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
         )
         self.assertEqual(
-            heavy.pause_headroom_bytes(16 * heavy.GIB),
-            max(6 * heavy.GIB, int(16 * heavy.GIB * 0.125)),
+            heavy.required_headroom_bytes(16 * heavy.GIB, heavy.PAUSE_HEADROOM_FRACTION),
+            max(2 * heavy.GIB, int(16 * heavy.GIB * 0.125)),
         )
 
     def test_the_resume_threshold_keeps_the_old_share_of_ram(self):
         self.assertEqual(
-            heavy.pause_headroom_bytes(48 * heavy.GIB, True),
+            heavy.required_headroom_bytes(48 * heavy.GIB, heavy.HEADROOM_FRACTION),
             max(6 * heavy.GIB, int(48 * heavy.GIB * 0.15)),
         )
         reason = heavy._host_reason(sample(48, 7), paused=True)

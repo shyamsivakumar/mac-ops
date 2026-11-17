@@ -403,18 +403,6 @@ def memory_load_block_reason(
     return None
 
 
-def pause_headroom_bytes(
-    physical_bytes: int, paused: bool = False
-) -> int:
-    """Return the headroom a running job needs, with the original rule.
-
-    A running job keeps the host's original pause threshold on every host;
-    only the headroom a job needs to start scales with the host's memory.
-    """
-    fraction = HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
-    return max(MIN_HEADROOM_BYTES, int(physical_bytes * fraction))
-
-
 def required_headroom_bytes(
     physical_bytes: int, headroom_fraction: float = HEADROOM_FRACTION
 ) -> int:
@@ -1923,7 +1911,6 @@ def _host_reason(
     sample: Sample,
     load_high_count: int = 0,
     paused: bool = False,
-    allowance_bytes: int = 0,
 ) -> Optional[str]:
     if sample.pressure_level == CRITICAL_PRESSURE_LEVEL:
         return "critical-pressure"
@@ -1941,8 +1928,6 @@ def _host_reason(
         headroom_fraction=(
             HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
         ),
-        required_bytes=pause_headroom_bytes(sample.physical_bytes, paused),
-        allowance_bytes=allowance_bytes,
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
     return None
@@ -2738,7 +2723,6 @@ def _supervise_running(
     workload = _workload_identity(record)
     if workload is None:
         raise HeavyError("workload identity missing")
-    memory_credit = int(record.get("memory_credit_bytes") or 0)
     pressure_since: Optional[float] = None
     healthy_since: Optional[float] = None
     last_pause_retry: Optional[float] = None
@@ -2801,15 +2785,10 @@ def _supervise_running(
                     now=deps.wall_clock(),
                     boot_id=deps.boot_reader(),
                 )
-                pressure_reason = _host_reason(
-                    sample, allowance_bytes=memory_credit
-                )
+                pressure_reason = _host_reason(sample)
                 resume_blocked = (
                     pressure_reason is None
-                    and _host_reason(
-                        sample, paused=True, allowance_bytes=memory_credit
-                    )
-                    is not None
+                    and _host_reason(sample, paused=True) is not None
                 )
             except Exception:
                 invalid_reason = "capacity-unavailable"
