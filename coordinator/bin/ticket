@@ -991,6 +991,11 @@ def resolve_models(cfg, ticket):
     for role, alias in (("builder", builder), ("reviewer", reviewer)):
         if alias not in cfg["models"]:
             raise Refuse(f"unknown {role} alias {alias}")
+    if cfg["models"][builder]["vendor"] == "openai":
+        # A builder: label cannot pin an OpenAI model: builds run on GLM 5.3
+        # or the MiniMax route and reviews own the OpenAI models (Shyam
+        # 2026-11-17).
+        raise Refuse(f"builder {builder} is an OpenAI model; builds run on GLM 5.3 or the MiniMax route")
     if cfg["models"][reviewer].get("noGate"):
         raise Refuse(f"reviewer {reviewer} cannot gate (noGate)")
     if cfg["models"][builder]["vendor"] == cfg["models"][reviewer]["vendor"]:

@@ -168,11 +168,29 @@ def with_model(args):
         return None, (f"refused: taskType 'review' runs on the gate model "
                       f"{ASTRA_MODEL} (GPT-6.2 Astra only), "
                       f"but the payload names {resolved['modelSelection']!r}")
+    elif task_type != "review" and is_forbidden_builder(resolved["modelSelection"], task_type is None):
+        return None, (f"refused: builds run on GLM 5.3 or the MiniMax route, never on an "
+                      f"OpenAI model ({resolved['modelSelection']!r}); Shyam 2026-11-17")
     return resolved, None
 
 
 def is_gate_model(selection):
     return isinstance(selection, dict) and selection in REVIEWER_CHAIN
+
+
+def is_forbidden_builder(selection, gate_ok=False):
+    """True for a model no build may ever run on: the OpenAI API instance
+    and the OpenAI models on the Codex instance (Sol, Terra, Luna, GPT).
+    A hand launch with no taskType may still name a gate model, because
+    gate payloads carry no taskType either."""
+    if not isinstance(selection, dict):
+        return False
+    if gate_ok and is_gate_model(selection):
+        return False
+    if selection.get("instanceId") == "openai-api":
+        return True
+    return (selection.get("instanceId") == "codex"
+            and str(selection.get("model") or "").startswith("gpt-6"))
 
 
 def tool_refusal(tool):

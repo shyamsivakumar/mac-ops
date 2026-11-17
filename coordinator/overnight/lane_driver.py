@@ -404,6 +404,11 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
+    if sendable and not allowed_builder(thread):
+        # A fix round never continues inside a thread that builds on a
+        # forbidden model: it relaunches on GLM in the PR worktree instead
+        # (Shyam 2026-11-17; the old thread is left alone, not interrupted).
+        sendable = False
     if sendable:
         workspace = None
         args = {"threadId": thread_id, "message": message}
@@ -433,6 +438,22 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
 
 
 GLM = {"instanceId": "glm", "model": "zai/glm-5.3"}
+# The models a build may run on: GLM, MiniMax, DeepSeek or a router task
+# route (the route handles its own fallbacks). No OpenAI model and no
+# Sol/Terra/Luna ever builds (Shyam 2026-11-17).
+ALLOWED_BUILDER_MODELS = {"zai/glm-5.3", "minimax/MiniMax-M3.1-Flash", "deepseek/deepseek-flash"}
+# Models that may have run a review gate under the old or new chain: a dead
+# run on one of these is a review when its title says so, and a build
+# otherwise.
+REVIEWER_CLASS_MODELS = {"gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra", "gpt-6.2-astra",
+                         "openai/gpt-6-astra", "openai/gpt-6.2-astra", "claude-opus-5-5"}
+
+
+def allowed_builder(thread):
+    """True when a thread's model is one a build may continue on."""
+    if thread.get("providerInstanceId") == "router":
+        return True
+    return (thread.get("model") or "") in ALLOWED_BUILDER_MODELS
 LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
               "shyamsivakumar/catalouge"]
 NEVER_START = {("shyamsivakumar/strategy-replay-workbench", 468)}
@@ -529,6 +550,12 @@ def act_on_pr(repo, number, ledger):
         return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
     tag = "regate" if verdict == "none" else "gate"
     model = ASTRA
+    if verdict == "none":
+        # The first gate ran on the chain head (API credits). Its retry takes
+        # the next reviewer in the chain, Codex Astra, instead of retrying a
+        # provider whose credits may be gone; a gate that dies twice waits
+        # for Shyam (Shyam 2026-11-17: GPT-6.2 Astra only, no other model).
+        model = REVIEWER_CHAIN[1] if len(REVIEWER_CHAIN) > 1 else ASTRA
     if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
         # No Opus escalation any more: a gate that ended without a verdict
         # twice waits for Shyam instead of running on another model
@@ -953,16 +980,19 @@ def dead_run_model(thread, limit_failure):
     provider = thread.get("providerInstanceId")
     model = thread.get("model") or ""
     title = (thread.get("title") or "").lower()
-    if not limit_failure or provider == "router":
+    if provider == "router":
+        return {"instanceId": provider, "model": model}
+    # Why the run died does not change what may relaunch: a review-class
+    # run whose title names a review goes to the gate chain, every other
+    # run builds only on an allowed builder, and anything else (Sol, Terra,
+    # Luna, Opus, unknown) falls to GLM (Shyam 2026-11-17). Gate titles are
+    # built as "<key>-<issue> review #<pr> <head>", so the word "review"
+    # identifies them; a fix round titled "gate findings" does not match.
+    if model in REVIEWER_CLASS_MODELS and "review" in title:
+        return ASTRA
+    if model in ALLOWED_BUILDER_MODELS:
         return {"instanceId": provider or "codex", "model": model}
-    # A dead run on an OpenAI model or on Opus never relaunches on one:
-    # reviews go to the gate chain, builds go to GLM (Shyam 2026-11-17:
-    # no Sol, Terra, Luna or OpenAI builder, no Opus reviewer).
-    retired = {"gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra", "gpt-6.2-astra",
-               "openai/gpt-6-astra", "openai/gpt-6.2-astra", "claude-opus-5-5"}
-    if model in retired:
-        return ASTRA if any(word in title for word in ("review", "test", "gate")) else GLM
-    return {"instanceId": provider or "codex", "model": model}
+    return GLM
 
 
 def dead_reference(repo, number):
