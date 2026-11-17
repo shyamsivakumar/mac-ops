@@ -1271,3 +1271,60 @@ Dispatch retains origin/main behavior. The latest ticket instruction limits
 this delivery to classification. Additional dispatch, reminder and dedupe work,
 state matrix proof, and live board counts remain unverified.
 See `evidence/MO-254/status.md` for verification and limitations.
+
+### The watchdog reads the job's real state (Refs #479)
+
+The watchdog used to treat a log's mtime as proof of life. A job with nothing
+to write writes nothing, so a quiet log raised a false alarm about a live job
+and put a fake question on the board. The `WATCH` table now holds the launchd
+label of each job beside its log and its silence limit, and the watchdog asks
+launchd what the state of the job is.
+
+The signal is `launchctl print gui/<uid>/<label>`. A job that launchd holds
+and that ends clean is alive, whatever its log says, and the watchdog says so
+in a `WATCH <job>: signal=launchd ...` line. A job that launchd no longer
+holds is stopped and alarms. A job that is idle now and whose last exit code
+is not zero, or that launchd killed with a signal, is failing and alarms. A
+job that is running now is judged by the run in flight alone: what an
+earlier run left behind says nothing about the run that is going on, so a
+job that started a moment ago after a failure does not raise an alarm, and
+only a run that overruns its limit is a problem and it is stuck. When
+launchd cannot say how the job ended, the log age is the only evidence left
+and the old silence rule applies, so a watchdog that cannot read launchd
+does not silence a real alarm. That fallback covers a launchctl that cannot
+run, a launchctl failure that is not a missing service, a job that never ran
+and so reports no exit code, and a running job that nobody can time.
+
+launchd prints its status in more than one shape, and the watchdog reads all
+of them: `last exit code = 0`, a code with its name (`78: EX_CONFIG`), a
+signal with its name (`Killed: 9`), and `(never exited)` for a job that never
+ran. A status it cannot read stays unknown, and an unknown status falls back
+to the log age rather than counting as health.
+
+The plists under `coordinator/launchd/` stay the source of truth for which
+jobs exist, and the tick, dispatch and refill thresholds and the
+`dev.coordinator.*` schedules are unchanged.
+
+The board still holds one `factory-watchdog` item: the pass removes the item
+and writes it back when a job is not healthy. The title names the reason and
+the job.
+
+Run `python3 evidence/MO-1056/proof.py` for the proof. The first pass reads
+the live launchd state of `dev.coordinator.gatekeep` with a stale gatekeep log
+and writes no alarm. The second pass stubs the stopped job and alarms with
+the job's name. The proof uses a copy of the decisions file, a copy of the
+log and a stub for the stopped job: it never stops the live job, never writes
+the live board file and never installs anything.
+
+`overnight selftest` covers the same ground with a fake launchd and a fake
+clock: a stale log with a live job raises nothing, a stopped job, a failing
+job, a job killed by a signal in both launchd shapes and a job stuck past
+its limit each raise one alarm that names the job, a launchd that cannot say
+or cannot be read falls back to the log age, a job that is running now is
+judged by its own run and ignores what an earlier run left behind, a job
+that never ran is judged by how long it has been running, the silence limit
+is a limit, and the item stays a single item over repeated passes.
+
+`evidence/MO-1056/proof.py` runs three passes: the live launchd state with a
+stale log, a stopped job, and real launchctl output that reports a job
+killed by a signal, so the parser is exercised on the text launchd prints.
