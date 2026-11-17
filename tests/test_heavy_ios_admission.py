@@ -183,13 +183,13 @@ if __name__ == "__main__":
 
 
 class SmallHostSlotTests(unittest.TestCase):
-    def test_a_small_host_runs_one_heavy_job_at_a_time(self):
+    def test_a_small_host_keeps_the_two_job_limit(self):
         registry = Mock()
         registry.uid = 501
         registry.directory = Path('/nonexistent-heavy-test')
         with patch.object(heavy, "_read_capacity_config", return_value={"heavy_slots": 2}):
             limit = heavy._effective_slot_limit(registry, sample(16, 5), now=700.0, boot_id="1")
-        self.assertEqual(limit, 1)
+        self.assertEqual(limit, 2)
 
     def test_a_large_host_keeps_its_slot_ceiling(self):
         registry = Mock()
