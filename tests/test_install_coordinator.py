@@ -643,6 +643,56 @@ class TestInstallPath(unittest.TestCase):
             self.assertTrue((home / "Library/Logs/coordinator").is_dir())
 
 
+class TestLocalBoardConfig(unittest.TestCase):
+    """The installed board config belongs to the machine.
+
+    The policy the coordinator runs with is decided on the Mac, so the
+    installed copy is the live file, a local policy edit is not installed
+    drift and an install never writes over it (mac-ops #473)."""
+
+    def test_the_board_config_is_seeded_when_the_machine_has_none(self):
+        with temp_home() as td:
+            home = Path(td)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            installed = home / ".coordinator/tickets.json"
+            self.assertEqual(
+                installed.read_bytes(),
+                (CHECKOUT / "coordinator/config/tickets.json").read_bytes(),
+            )
+
+    def test_an_installed_board_config_is_never_written_over(self):
+        with temp_home() as td:
+            home = Path(td)
+            installed = home / ".coordinator/tickets.json"
+            installed.parent.mkdir(parents=True, exist_ok=True)
+            edited = '{"repos": {"digitized/Concerning": {"key": "NING"}}}\n'
+            installed.write_text(edited)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            self.assertEqual(installed.read_text(), edited)
+
+    def test_a_local_policy_edit_is_not_installed_drift(self):
+        with temp_home() as td:
+            home = Path(td)
+            installed = home / ".coordinator/tickets.json"
+            installed.parent.mkdir(parents=True, exist_ok=True)
+            installed.write_text('{"repos": {}}\n')
+            differs = [str(t) for t, _, _ in install_coordinator.changes(CHECKOUT, home)]
+            self.assertNotIn(str(installed), differs)
+
+    def test_a_machine_without_the_board_config_is_still_a_difference(self):
+        with temp_home() as td:
+            home = Path(td)
+            differs = [str(t) for t, _, _ in install_coordinator.changes(CHECKOUT, home)]
+            self.assertIn(str(home / ".coordinator/tickets.json"), differs)
+
+    def test_the_repository_board_config_carries_no_merge_policy(self):
+        config = json.loads((CHECKOUT / "coordinator/config/tickets.json").read_text())
+        for repo, settings in config["repos"].items():
+            self.assertNotIn("merge", settings, repo)
+
+
 class TestMainSourcePin(unittest.TestCase):
     """The installer only accepts clean canonical main that matches origin/main."""
 
