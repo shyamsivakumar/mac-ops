@@ -198,3 +198,33 @@ class SmallHostSlotTests(unittest.TestCase):
         with patch.object(heavy, "_read_capacity_config", return_value={"heavy_slots": 2}):
             limit = heavy._effective_slot_limit(registry, sample(48, 30), now=700.0, boot_id="1")
         self.assertEqual(limit, 2)
+
+
+class TelemetryGapTests(unittest.TestCase):
+    def test_a_busy_cpu_sample_still_gives_a_reading(self):
+        reading = heavy.parse_cpu_busy(
+            "      cpu    load average\n"
+            " us sy id   1m   5m   15m\n"
+            " 23 13 64  20.81 23.02 26.55\n"
+            " 49 30 21  20.90 23.00 26.52\n"
+        )
+        self.assertAlmostEqual(reading, 79.0)
+
+    def test_an_inconsistent_cpu_sample_falls_back_to_the_idle_share(self):
+        reading = heavy.parse_cpu_busy(
+            "      cpu    load average\n"
+            " us sy id   1m   5m   15m\n"
+            " 23 13 64  20.81 23.02 26.55\n"
+            " 60 30  2  20.90 23.00 26.52\n"
+        )
+        self.assertAlmostEqual(reading, 98.0)
+
+    def test_a_missing_cpu_reading_does_not_kill_running_work(self):
+        gap = heavy.Sample(
+            pressure_level=1, cpu_busy_pct=None, memory_used_pct=50.0,
+            headroom_bytes=5 * heavy.GIB, physical_bytes=16 * heavy.GIB,
+            load_per_core=3.0, captured_monotonic=700.0, free_percent=60.0,
+            swap_growth_bytes_per_second=0, swapout_bytes_per_second=0,
+            physical_cores=10)
+        self.assertFalse(heavy.critical_pressure(gap, load_proxy=False))
+        self.assertTrue(heavy.critical_pressure(gap))

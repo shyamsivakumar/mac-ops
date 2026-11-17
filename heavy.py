@@ -184,7 +184,9 @@ def parse_cpu_busy(output: str) -> float:
     ):
         raise TelemetryError("invalid iostat CPU sample")
     if abs((user + system + idle) - 100.0) > 5.0:
-        raise TelemetryError("inconsistent iostat CPU sample")
+        # iostat's columns can omit a category or round badly under load; the
+        # idle share still gives a usable busy reading.
+        return max(0.0, min(100.0, 100.0 - idle))
     return user + system
 
 
@@ -2783,7 +2785,7 @@ def _supervise_running(
                 )
             except Exception:
                 invalid_reason = "capacity-unavailable"
-        critical = sample is not None and critical_pressure(sample)
+        critical = sample is not None and critical_pressure(sample, load_proxy=False)
         unhealthy_reason = (
             "critical-pressure" if critical else (invalid_reason or pressure_reason)
         )
