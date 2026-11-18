@@ -419,6 +419,27 @@ class DiffValuesTest(unittest.TestCase):
         item = check.item_checks("found", text)
         self.assertEqual(item["status"], check.FAIL)
 
+    def test_a_proof_file_the_pull_request_does_not_change_is_not_accepted(self):
+        """A proof file on the base branch is an earlier run's proof.
+
+        The checklist reads the proof of the change in front of it, so the
+        proof path has to be among the files the pull request changes.
+        """
+        check = close_check()
+        path = "evidence/MO-524/check-proof.md"
+        self.assertFalse(check.changed_proof(["coordinator/bin/close_check.py"], path))
+        self.assertTrue(check.changed_proof(["coordinator/bin/close_check.py", path], path))
+        item = check.item_proof(check.proof_file.MISSING, path,
+                                f"the proof file at {path} is not part of this change")
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("not part of this change", item["detail"])
+
+    def test_an_empty_cost_note_waives_nothing(self):
+        """A cost note carries a value; the label alone is not a note."""
+        check = close_check()
+        self.assertEqual(check.item_cost("Cost:", "exists")["status"], check.FAIL)
+        self.assertEqual(check.item_cost("Cost: 12 minutes", "exists")["status"], check.PASS)
+
     def test_a_failure_written_outside_the_table_still_fails(self):
         """A result outside the table is a check too."""
         check = close_check()

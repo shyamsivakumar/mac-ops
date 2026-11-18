@@ -75,6 +75,11 @@ The work goes back to its builder and the ticket stays open.
   not escaped. A Markdown row does not have to carry its outer pipes, and a line
   inside the table that is not a row is a malformed row, so nothing the table
   holds is dropped.
+- The proof file has to be part of the change. A proof file that is already on the
+  base branch is an earlier run's proof, so the path has to be among the files the
+  pull request changes.
+- A cost note carries a value. "Cost:" on its own is a label without a note, so it
+  waives nothing.
 
 The cost note item is skipped in both: MO-1068 (#504) is report only and its report
 (evidence/MO-1068/cost-report.md) does not exist yet.

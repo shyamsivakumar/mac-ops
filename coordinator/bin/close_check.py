@@ -31,7 +31,9 @@ import proof_file
 GH_TIMEOUT = 60
 PROOF_NAME = proof_file.PROOF_NAME
 COST_REPORT = "evidence/MO-1068/cost-report.md"
-COST_NOTE = re.compile(r"(?im)^[ \t>*-]*(cost|cost note|kosten)[ \t]*[:\-]")
+# A cost note carries a value: "Cost:" on its own is a label without a
+# note, so it waives nothing.
+COST_NOTE = re.compile(r"(?im)^[ \t>*-]*(cost|cost note|kosten)[ \t]*[:\-][ \t]*\S")
 TICKET_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 ISSUE_REF = re.compile(r"(?:refs|fixes|closes|resolves)[ \t]+#(\d+)", re.IGNORECASE)
 # A token is a whole path, never the tail of a longer one: the part of
@@ -297,13 +299,23 @@ def item_scope(body, files, evidence=""):
             "detail": "every changed file is inside the ticket's stated scope"}
 
 
-def item_proof(state, path):
+def changed_proof(files, proof_path):
+    """Is the proof file part of this change?
+
+    A proof file that is already on the base branch is an earlier run's
+    proof. The checklist reads the proof of the change in front of it, so
+    the path has to be among the files the pull request changes.
+    """
+    return proof_path in files
+
+
+def item_proof(state, path, detail=""):
     """Item 2: the pull request carries a proof file."""
     if state == proof_file.FOUND:
         return {"item": "proof file", "status": PASS, "required": True, "detail": f"{path} is present"}
     if state == proof_file.MISSING:
         return {"item": "proof file", "status": FAIL, "required": True,
-                "detail": f"the pull request carries no proof file at {path}"}
+                "detail": detail or f"the pull request carries no proof file at {path}"}
     return {"item": "proof file", "status": FAIL, "required": True,
             "detail": f"the proof file at {path} could not be read, so the checks are unproven"}
 
@@ -426,11 +438,11 @@ def item_cost(body, report_state, detail=""):
             "detail": "the cost report exists, but the pull request body carries no cost note"}
 
 
-def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail=""):
+def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", proof_detail=""):
     """The four items, in the order the checklist reads them."""
     return [
         item_scope(body, files, evidence_dir(proof_path)),
-        item_proof(proof_state, proof_path),
+        item_proof(proof_state, proof_path, proof_detail),
         item_checks(proof_state, proof_text),
         item_cost(pr_body, report_state, report_detail),
     ]
@@ -529,16 +541,24 @@ def run_check(repo, pr, issue=None, reader=None):
         body = ticket.get("body") or ""
         title = ticket.get("title") or title
     proof_path = proof_file.path_for(ticket_key(title), number)
-    if reader is None:
+    if not changed_proof(files, proof_path):
+        state, text = proof_file.MISSING, None
+        proof_detail = (f"the proof file at {proof_path} is not part of this change: the pull "
+                        "request does not change it, so it is an earlier run's proof")
+    elif reader is None:
         state, text = proof_file.fetch(repo, proof_path, merge)
-        report, report_detail = report_state(repo, merge)
+        proof_detail = ""
     else:
         state, text = reader(proof_path, merge)
+        proof_detail = ""
+    if reader is None:
+        report, report_detail = report_state(repo, merge)
+    else:
         found, _ = reader(COST_REPORT, merge)
         report = {"found": "exists", "missing": "absent"}.get(found, "unknown")
         report_detail = ""
     items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
-                      report_detail)
+                      report_detail, proof_detail)
     return {"repo": repo, "pr": pr, "issue": number, "merge": merge, "files": files, "items": items}
 
 
