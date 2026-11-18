@@ -14,14 +14,20 @@ Working tree clean when the checks ran: yes
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
 so every check after it is `not run`.
 
-Scope repair: merged current origin/main without force push. The PR merge-base diff now contains only five cockpit JavaScript files and this receipt. MO-539 prompt, test and receipt files have no PR diff.
+Scope repair: merged current origin/main without force push. The PR merge-base diff now contains only four cockpit JavaScript files and this receipt. MO-539 prompt, test and receipt files have no PR diff.
 
 | Additional check | Command | Result |
 | --- | --- | --- |
 | Full local suite | `python3 -m unittest discover -s tests` | failed: 7 failures, 390 tests |
-| JavaScript syntax | `node --check` on each of the five changed cockpit files | passed |
+| JavaScript syntax | `node --check` on each of the four changed cockpit files | passed |
 | Whitespace | `git diff --check` | passed |
 | Scope review | `git diff origin/main...HEAD` | passed: one in-session review, no critical or major findings |
 | Device, handset, live-service, live-board | No command run | not run: waived by Shyam 2026-11-14 |
 
 No checks or tests were weakened. Selected check success does not mean full-suite success. Cleanup review found no in-scope cleanup; this repair adds no code comments. Coordinator Astra gate remains required on the new head.
+
+Gate repair: restored evidence/MO-540/check-proof.md and evidence/check-proof.md byte for byte from origin/main so neither is deleted by this PR. The root proof belongs to main and is not the MO-541 receipt.
+
+Fresh selected check: `python3 scripts/mac_ops_fast_check.py --proof /tmp/mo541-check-current.md` passed. Full suite rerun: `python3 -m unittest discover -s tests` (result recorded below). One in-session scope review confirmed no changes to coordinator/bin/ticket or coordinator/bin/gate_policy.py. No critical or major scope findings remain. Deslop and comment diff review: this repair changes receipts only, with no code comments added.
+
+Full suite rerun result: failed; see /tmp/mo541-full-current.log. Existing tests and checks were not weakened.
