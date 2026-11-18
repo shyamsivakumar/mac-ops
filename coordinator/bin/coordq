@@ -1159,15 +1159,24 @@ def fallback_reviewer(queue, key, current, models=()):
     return None
 
 
+def block_failed_reviewer(current, failure, dry_run=False):
+    """Record the block one gate's failure earns, and log its one line.
+
+    A blocking provider error blocks this reviewer for every head; a
+    diagnostic blocks nothing, and a dry run writes nothing."""
+    until = block_reviewer(current, failure) if not dry_run else None
+    if until is not None:
+        log(f"reviewer {identity(current)} blocked until "
+            + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(until)))
+    return until
+
+
 def failed_gate_reviewer(queue, key, current, failure, dry_run=False):
     """The next reviewer of a gate that ended without a verdict.
 
     A blocking provider error blocks this reviewer for every head first; a
     diagnostic blocks nothing."""
-    until = block_reviewer(current, failure) if not dry_run else None
-    if until is not None:
-        log(f"reviewer {identity(current)} blocked until "
-            + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(until)))
+    block_failed_reviewer(current, failure, dry_run)
     selection = fallback_reviewer(queue, key, current)
     if selection is not None:
         return selection
@@ -1351,7 +1360,12 @@ def cmd_gatekeep(a):
                     if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
                         continue
                     retries = state["retries"] + 1
+                    current = ran_reviewer(thread, state["reviewer"])
                     if retries > GATE_RETRY_LIMIT:
+                        # The block is recorded before the head gives up, so a
+                        # reviewer that is out of credits is not handed the
+                        # next head once this one's retries are spent.
+                        block_failed_reviewer(current, data, a.dry_run)
                         print(f"gave up {key} after {state['retries']} retries without a verdict",
                               flush=True)
                         if not a.dry_run:
@@ -1360,7 +1374,6 @@ def cmd_gatekeep(a):
                         continue
                     if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
                         continue
-                    current = ran_reviewer(thread, state["reviewer"])
                     model = failed_gate_reviewer(queue, key, current, data, a.dry_run)
                     if model is None:
                         if not a.dry_run:

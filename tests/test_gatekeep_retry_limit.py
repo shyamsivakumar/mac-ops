@@ -178,9 +178,11 @@ class NonAstraGateTest(RetryLimitBase):
         self.assertNotIn("regating", out)
         self.assertEqual(self.gate_items(), [])
         # The head record is a dict now: the dead Opus gate is not requeued
-        # and the head is recorded as given up.
+        # and the head is recorded as given up. The launch reviewer is kept
+        # beside it, so a later read of this head knows which reviewer ran.
         self.assertEqual(self.read_queue()["gatedHeads"][self.key],
-                         {"id": 4, "retries": 0, "at": None, "givenUp": True})
+                         {"id": 4, "retries": 0, "at": None, "givenUp": True,
+                          "reviewer": None})
 
 
 class BackoffTest(RetryLimitBase):
@@ -311,6 +313,57 @@ class ExplicitGateTest(RetryLimitBase):
         with self.assertRaises(SystemExit):
             with redirect_stderr(io.StringIO()):
                 self.gate_once()
+        self.assertEqual(self.gate_items(), [])
+
+
+def reviewer_of(thread):
+    """The chain-shaped selection of a reviewer a gate thread ran on."""
+    return {"instanceId": thread["providerInstanceId"], "model": thread["model"]}
+
+
+# A dead Opus gate whose failure is the provider refusing to run: the run the
+# thread names is the failed one, and it names the refusal.
+QUOTA_FAILURE = {"thread": {"status": "failed", "latestRunId": "run-1", **OPUS_GATE},
+                 "items": [{"type": "user_message", "text": "review"}],
+                 "recentRuns": [{"runId": "run-1", "status": "failed", "executedModel": None,
+                                 "error": {"code": "insufficient_quota",
+                                           "message": "no credits remaining"}}]}
+
+
+class RetryLimitBlocksReviewerTest(RetryLimitBase):
+    """A reviewer that ran out of credits is blocked before the head is
+    given up, so the next head cannot start on it."""
+
+    def setUp(self):
+        super().setUp()
+        saved_limit = coordq.GATE_RETRY_LIMIT
+        self.addCleanup(setattr, coordq, "GATE_RETRY_LIMIT", saved_limit)
+        coordq.GATE_RETRY_LIMIT = 1
+        self.clear_blocks()
+        self.addCleanup(self.clear_blocks)
+
+    def clear_blocks(self):
+        blocks = os.path.join(QUEUE_DIR, "reviewers-blocked.json")
+        if os.path.exists(blocks):
+            os.unlink(blocks)
+
+    def test_the_reviewer_out_of_credits_is_blocked_when_the_head_gives_up(self):
+        refusal = {"error": {"code": "insufficient_quota",
+                            "message": "no credits remaining"}}
+        coordq.block_reviewer(reviewer_of(ASTRA_GATE), refusal)
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(QUOTA_FAILURE))
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1, "at": time.time(),
+                                           "givenUp": False, "reviewer": OPUS_GATE}})
+        out, _ = self.run_gatekeep()
+        self.assertIn("gave up " + self.key, out)
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
+        self.assertTrue(coordq.is_blocked(reviewer_of(OPUS_GATE)))
+        # Both reviewers are out of credits, so the next head waits instead
+        # of starting on the Opus block the give-up just recorded.
+        self.pr["head"]["sha"] = OTHER_HEAD
+        self.pr["body"] = f"Refs #9\nBuilder check: PASS {OTHER_HEAD}\n"
+        out, _ = self.run_gatekeep()
+        self.assertIn("defer " + f"{REPO}#7: every gate reviewer is blocked", out)
         self.assertEqual(self.gate_items(), [])
 
 
