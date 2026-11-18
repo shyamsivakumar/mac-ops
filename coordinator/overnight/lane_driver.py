@@ -19,8 +19,8 @@ for _candidate in (_GATE_DIR, os.path.join(os.path.dirname(_GATE_DIR), "bin")):
             sys.path.insert(0, _candidate)
         break
 from gate_reviewers import (REVIEWER_CHAIN, block_reviewer, blocked_identities,
-                            chain_index, first_reviewer,
-                            provider_block_reason, reviewer_after,
+                            chain_index, failure_text, first_reviewer,
+                            provider_block_reason, reset_time, reviewer_after,
                             selection_for_model)
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
@@ -367,9 +367,10 @@ def gate_reviewer(thread):
     run used. A gate title carries the model in brackets and is the
     fallback when the read names none. A gate that failed without reaching
     a model never got an answer from the provider, which blocks that
-    reviewer for every head (Shyam 2026-11-17 18:15 PT)."""
+    reviewer for every head (Shyam 2026-11-17 18:15 PT). The error text
+    comes back too, because it may name the time the provider resets."""
     if not thread:
-        return None, None
+        return None, None, None
     data = t3("t3_thread_read", {"threadId": thread["threadId"], "maxCharsPerItem": 4000})
     read = data.get("thread") or {}
     instance = read.get("providerInstanceId") or thread.get("providerInstanceId")
@@ -378,7 +379,7 @@ def gate_reviewer(thread):
     if selection is None:
         match = re.search(r"\(([^()]+)\)\s*$", thread.get("title") or "")
         selection = selection_for_model(match.group(1)) if match else None
-    return selection, provider_block_reason(data)
+    return selection, provider_block_reason(data), failure_text(data)
 
 
 def gate_verdict(repo, number, head):
@@ -606,10 +607,12 @@ def act_on_pr(repo, number, ledger):
         # The gate ended without a verdict, for any reason. The head moves
         # down the chain to the next reviewer, once per reviewer, and waits
         # when the chain is exhausted (Shyam 2026-11-17 18:10 PT).
-        ran, reason = gate_reviewer(gate)
+        ran, reason, error = gate_reviewer(gate)
         blocked = blocked_reviewers()
         if reason and chain_index(ran) >= 0:
-            line = block_reviewer(ran, reason)
+            # The provider may say when its credits come back; the probe
+            # waits for that time.
+            line = block_reviewer(ran, reason, reset_at=reset_time(error))
             if line:
                 print(line, flush=True)
             blocked = blocked_reviewers()

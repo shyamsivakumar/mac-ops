@@ -292,6 +292,27 @@ def note_probe(selection, request_id, now=None):
     return record
 
 
+def note_probe_failure(selection, text, now=None):
+    """Record a probe that ended without an answer.
+
+    The provider may name a new reset in the failure, and the next probe
+    waits for that reset. The deadline never moves earlier, so a failed
+    probe cannot bring the next one forward."""
+    ident = identity(selection)
+    with BlockedLock():
+        state = load_blocked()
+        record = state.get(ident)
+        if not record:
+            return None
+        now = time.time() if now is None else now
+        reset_at = reset_time(text)
+        deadline = next_probe_at(now, reset_at)
+        record["probeAt"] = max(float(record.get("probeAt") or 0), deadline)
+        record["resetAt"] = reset_at
+        save_blocked(state)
+    return record
+
+
 def failure_text(payload):
     """The error text of a failed run, from whatever the payload holds."""
     if payload is None:

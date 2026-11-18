@@ -303,9 +303,17 @@ class NewGateStartTests(unittest.TestCase):
         gate_reviewers.block_reviewer(API_REVIEWER, "no credits")
         gate_reviewers.block_reviewer(CODEX_REVIEWER, "no credits")
         args, refusal = coordq.with_model({"taskType": "review", "message": "probe",
+                                           "clientRequestId": "probe:openai-api:1",
                                            "modelSelection": API_REVIEWER})
         self.assertIsNone(refusal)
         self.assertEqual(args["modelSelection"], API_REVIEWER)
+
+    def test_an_ordinary_gate_may_not_name_a_blocked_reviewer(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits")
+        args, refusal = coordq.with_model({"taskType": "review", "message": "review",
+                                            "modelSelection": API_REVIEWER})
+        self.assertIsNone(args)
+        self.assertIn("blocked", refusal)
 
     def test_the_ticket_gate_starts_on_the_next_reviewer(self):
         ticket = load_ticket()
