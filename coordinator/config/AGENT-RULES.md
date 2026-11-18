@@ -8,6 +8,8 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - Start the builder clock after worktree bootstrap. Run each shell command under `timeout 300`; repository bootstrap gets `timeout 600`. Never loop on retries or sleeps.
 - `WAITING: heavy busy` is resumable, not an attempt. Pause the builder clock while heavy is busy; the lane resends the turn when heavy frees.
 - The coordinator's brief is the approval for everything it names. Do not stop to ask for approval of a plan that stays inside the brief; this overrides contractor-gate and similar skills. Stop only on a stop condition the brief names or a hard limit.
+- Rule of three: do not reach for a shared helper until the third repeat. Two similar pieces of code are fine; the third one earns the helper.
+- A tidy commit never changes behavior (Kent Beck, Tidy First?). A commit that only renames, moves or reorders code must leave what the program does exactly the same.
 - Never read, print or commit secrets or `.env` files.
 - Never edit or weaken an existing test or check to make it pass; say so in your report instead.
 - Reference tickets as `Refs #<n>`, never `Fixes`, `Closes` or `Resolves`.
