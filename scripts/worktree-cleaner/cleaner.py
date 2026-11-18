@@ -120,19 +120,20 @@ def discover_repositories(code_root: Path) -> list[Path]:
 
 
 def worktrees(repo: Path) -> list[dict[str, Any]]:
-    output = git(repo, "worktree", "list", "--porcelain", "-z")
+    output = git_bytes(repo, "worktree", "list", "--porcelain", "-z")
     entries: list[dict[str, Any]] = []
     current: dict[str, Any] = {}
-    for field in output.split("\0"):
-        if not field:
+    for raw in output.split(b"\0"):
+        if not raw:
             if current:
                 entries.append(current)
                 current = {}
             continue
+        field = raw.decode("utf-8", "surrogateescape")
         if field.startswith("worktree "):
             if current:
                 entries.append(current)
-            current = {"path": field[len("worktree "):], "locked": False, "detached": False, "bare": False}
+            current = {"path": os.fsdecode(raw[len("worktree "):]), "locked": False, "detached": False, "bare": False}
         elif field == "detached":
             current["detached"] = True
         elif field == "bare":
@@ -155,10 +156,12 @@ def status_for(path: Path) -> list[tuple[str, str, str | None]]:
 
     The records keep their status columns and are NUL separated, so a path
     that starts with a space, or that looks like a bootstrap path, cannot
-    shift the columns of the record.
+    shift the columns of the record. The status is read as bytes and every
+    path is decoded with `os.fsdecode`, so a file name that is not valid
+    UTF-8 cannot abort the scan.
     """
-    output = git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-    fields = output.split("\0")
+    output = git_bytes(path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    fields = output.split(b"\0")
     records: list[tuple[str, str, str | None]] = []
     index = 0
     while index < len(fields):
@@ -166,11 +169,11 @@ def status_for(path: Path) -> list[tuple[str, str, str | None]]:
         index += 1
         if not field:
             continue
-        code = field[:2]
-        name = field[3:]
+        code = field[:2].decode("ascii", "replace")
+        name = os.fsdecode(field[3:])
         original: str | None = None
         if code[0] in "RC" or code[1] in "RC":
-            original = fields[index] if index < len(fields) else None
+            original = os.fsdecode(fields[index]) if index < len(fields) else None
             index += 1
         records.append((code, name, original))
     return records
@@ -419,6 +422,20 @@ def _trash_path(trash: Path, prefix: str) -> Path:
     return Path(name)
 
 
+def _keep_moved(trash: Path, moved: Path, name: str) -> None:
+    """Keep a moved file in recovery storage instead of deleting it.
+
+    An editor can hold the file open and save through that descriptor after
+    the cleaner read it, so the moved copy is the only place that save can
+    live. It is kept beside the other recovery copies.
+    """
+    try:
+        kept = _trash_path(trash, f"{name.replace('/', '_')}.cleared")
+        os.replace(moved, kept)
+    except OSError:
+        pass
+
+
 def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None) -> bool:
     """Clear one verified bootstrap file without losing an intervening edit.
 
@@ -460,28 +477,16 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
         except OSError:
             mode = 0o644
         if after is not None and _exclusive_write(file_path, after, mode):
-            try:
-                moved.unlink()
-            except OSError:
-                pass
+            _keep_moved(trash, moved, name)
         return False
     if entry is None:
-        try:
-            moved.unlink()
-        except OSError:
-            return False
+        _keep_moved(trash, moved, name)
         return True
     if not _restore_entry(repo, name, entry):
         # The file came back: someone saved it, so the worktree is kept.
-        try:
-            moved.unlink()
-        except OSError:
-            pass
+        _keep_moved(trash, moved, name)
         return False
-    try:
-        moved.unlink()
-    except OSError:
-        pass
+    _keep_moved(trash, moved, name)
     return True
 
 
