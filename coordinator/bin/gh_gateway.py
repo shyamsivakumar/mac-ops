@@ -247,7 +247,9 @@ def resource(argv):
         return SEARCH
     if words[0] == "api":
         path = endpoint(argv).lstrip("/")
-        if path.startswith("search/") or "/search/" in path:
+        # Only the top-level endpoint decides: `repos/acme/search/issues` is
+        # a core REST read of a repository named `search`.
+        if path.split("/", 1)[0] == "search":
             return SEARCH
         if path == "graphql" or "graphql" in words:
             return GRAPHQL
@@ -390,6 +392,10 @@ def _conditional_run(argv, timeout):
     headers, body = _split_headers(result.stdout or "")
     status = _status(headers)
     if status == 304 and state:
+        # The ETag says the body is still good, so the body cache is
+        # renewed too. Without this the entry expires and every identical
+        # read of an unchanged list pays a core call to learn it is 304.
+        store(argv, state["stdout"])
         return subprocess.CompletedProcess(argv, 0, state["stdout"], "")
     record(argv, 1)
     # A 2xx is not a success by itself: `gh` can fail locally after a good
