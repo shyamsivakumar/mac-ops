@@ -134,7 +134,10 @@ def scope_texts(body):
             if EXCLUSION_HEADING.match(named):
                 kind = "exclusion"
             elif SCOPE_HEADING.match(named):
-                kind = "declared"
+                # A heading that declares the scope cannot lift the
+                # exclusion of the section it sits in: the exclusion holds
+                # until a sibling or a higher heading ends it.
+                kind = "exclusion" if enclosing == "exclusion" else "declared"
             else:
                 kind = enclosing
             sections.append((depth, kind))
@@ -250,12 +253,27 @@ def in_scope(path, tokens, changed=(), evidence=""):
         if token_matches(path, token):
             return True, f"{path} is named by {token}"
     if path.startswith("tests/"):
+        # The inferred allowance reaches the test of a changed file, and
+        # only a test file: a fixture or a helper that happens to carry
+        # the name of the source is not part of the change.
+        if not is_test_file(base):
+            return False, ""
         stem = os.path.splitext(base)[0].removeprefix("test_")
         for other in named_sources(changed, tokens):
             other_stem = os.path.splitext(os.path.basename(other))[0]
             if stem == other_stem:
                 return True, f"{path} tests {other}"
     return False, ""
+
+
+def is_test_file(name):
+    """Is this file a test of a module?
+
+    A test file carries the test prefix and the test extension. A fixture
+    or a helper that shares the name of a source file is not a test of
+    it, so the inferred allowance does not reach it.
+    """
+    return name.startswith("test_") and name.endswith(".py")
 
 
 def named_sources(changed, tokens=None):
