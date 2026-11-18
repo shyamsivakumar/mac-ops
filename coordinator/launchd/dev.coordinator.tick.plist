@@ -22,6 +22,8 @@
     <integer>1800</integer>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>COORDINATOR_GH_CACHE</key>
+        <string>on</string>
         <key>COORD_TICK_MODEL</key>
         <string>deepseek/deepseek-flash</string>
         <key>PATH</key>
