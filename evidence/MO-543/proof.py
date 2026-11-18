@@ -480,6 +480,21 @@ def landed_elsewhere_reaches_shyam():
           and [item["id"] for item in published] == ["base-moved-MO-544"], command)
 
 
+def non_default_base_waits_for_shyam():
+    """A pull request based off the default branch is not merged by the lane."""
+    import lane_driver as lane
+    command = "python3 evidence/MO-543/proof.py"
+    saved = lane.CFG
+    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+    try:
+        item = lane.base_review_item("shyamsivakumar/mac-ops", 544, HEAD, "feature/x")
+    finally:
+        lane.CFG = saved
+    grant("lane: a pull request on a feature base becomes a decision item, not an auto-merge",
+          item["id"] == "base-review-MO-544" and item["kind"] == "action"
+          and "feature/x" in item["title"], command)
+
+
 def tree_fallback():
     """A 3,001-file PR never fits the file list, so the trees classify it."""
     coordq = load(BIN / "coordq", "proof_coordq_trees")
@@ -601,6 +616,7 @@ def main():
     retarget_after_the_merge_is_reported()
     classification_reads_the_own_base()
     landed_elsewhere_reaches_shyam()
+    non_default_base_waits_for_shyam()
     tree_fallback()
     lane_truncation()
     board_reconcile()

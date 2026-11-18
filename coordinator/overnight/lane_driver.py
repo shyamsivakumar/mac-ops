@@ -763,6 +763,25 @@ def base_moved_item(repo, number, head, landed, base):
                     "fast-forwarded. Inspect the merged diff for prompt files before keeping it.")}
 
 
+def base_review_item(repo, number, head, base):
+    """The item Shyam answers when a passing PR is not on the default branch.
+
+    The merge call carries the pull request's base, so a retarget can move the
+    destination after the last read. That is only harmless where the base is
+    the branch the classification ran against and every retarget target
+    inherits it - which is the default branch, not an arbitrary feature
+    branch. A pull request based anywhere else waits for Shyam's click.
+    """
+    key = CFG[repo]["key"]
+    return {"id": f"base-review-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} passed its gate on base `{base}`, not `{prompt_paths.DEFAULT_BASE}`: "
+                      f"merge head {head[:8]} yourself."),
+            "why": (f"The merge call carries the pull request's base, so a retarget after the last read "
+                    f"could land this head somewhere the reviewed base `{base}` never classified. Only a "
+                    f"pull request on `{prompt_paths.DEFAULT_BASE}` is merged by the lane; this one is "
+                    f"merged by Shyam.")}
+
+
 def merge_on_reviewed_base(repo, number, head, base):
     """Merge one pull request only when its base is still the reviewed one.
 
@@ -887,6 +906,14 @@ def act_on_pr(repo, number, ledger):
         # not introduce against the base this pass classified. The base and
         # head are read again inside the merge step, as close to the merge as
         # the merge can be guarded: a pull request that moved merges nothing.
+        if base != prompt_paths.DEFAULT_BASE:
+            # The merge call cannot pin its base, so only a pull request whose
+            # base is the default branch is merged automatically: a retarget
+            # away from it is then the only way to move the destination, and
+            # the read below catches that before the merge.
+            published = publish_decision(base_review_item(repo, number, head, base))
+            return (f"skip #{number}: gate PASS, base {base} is not "
+                    f"{prompt_paths.DEFAULT_BASE}; Shyam has the item ({published})")
         merged, note = merge_on_reviewed_base(repo, number, head, base)
         if not merged:
             return note
