@@ -713,17 +713,20 @@ def below_floor(limit=None):
     return bool(remaining) and min(remaining.values()) < (floor() if limit is None else limit)
 
 
-def run(argv, timeout=60, stdin=None, limit=None):
+def run(argv, timeout=60, stdin=None, limit=None, fresh=False):
     """Run one GitHub command, from the cache when it is a repeated read.
 
     The result is a `CompletedProcess`, so a caller keeps its own error
     handling: this function does not decide whether a failed read is a
-    refusal or a skip."""
+    refusal or a skip. A `fresh` read is never answered from the short-TTL
+    cache, so a caller that must see what GitHub has now is never given an
+    old list; its own answer refreshes the entry for everyone else."""
     if limit is not None:
         guard_floor(limit)
-    hit = cached(argv)
-    if hit is not None:
-        return subprocess.CompletedProcess(argv, 0, hit, "")
+    if not fresh:
+        hit = cached(argv)
+        if hit is not None:
+            return subprocess.CompletedProcess(argv, 0, hit, "")
     if stdin is None and conditional(argv):
         return _conditional_run(argv, timeout)
     command, headers_counted = prepare(argv) if stdin is None else (list(argv), False)

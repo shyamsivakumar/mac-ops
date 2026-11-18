@@ -107,13 +107,13 @@ def check(name, condition, detail=""):
     print(f"{'PASS' if condition else 'FAIL'} {name}" + (f" ({detail})" if detail else ""))
 
 
-def run(argv, floor=None, cwd=None, extra_env=None):
+def run(argv, floor=None, cwd=None, extra_env=None, fresh=False):
     """Run one read in its own process, so the in-process quota cache is fresh."""
     code = f"""
 import sys
 sys.path.insert(0, {str(BIN)!r})
 import gh_gateway
-result = gh_gateway.run({argv!r}, timeout=20, limit={floor!r})
+result = gh_gateway.run({argv!r}, timeout=20, limit={floor!r}, fresh={fresh!r})
 sys.stdout.write(result.stdout)
 """
     return subprocess.run([sys.executable, "-c", code], capture_output=True,
@@ -432,6 +432,17 @@ check("body text is not counted as a page", len(rows()) - rows_before == 3,
 check("body text is not stripped from the output", bodyish.stdout.count("HTTP/1.1 200 OK") == 3,
       repr(bodyish.stdout[:60]))
 set_mode("200")
+
+# A fresh read never comes from the cache and never fills it.
+fresh_read = ["gh", "api", "repos/a/b/issues?state=all&per_page=100&page=1"]
+before = calls_made()
+run(fresh_read, extra_env={"COORDINATOR_GH_CACHE": "on"}, fresh=True)
+run(fresh_read, extra_env={"COORDINATOR_GH_CACHE": "on"}, fresh=True)
+check("a fresh read always calls", calls_made() - before == 2, f"calls={calls_made() - before}")
+before = calls_made()
+run(fresh_read)
+check("a fresh read refreshes the cache for the next reader", calls_made() - before == 0,
+      f"calls={calls_made() - before}")
 
 # A pull's files collection is a list named by the ticket, so it is cached.
 rows_before = len(rows())
