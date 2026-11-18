@@ -1347,6 +1347,7 @@ def cmd_gatekeep(a):
                 continue
             counts.pop(event["pr"], None)
             key, args = event["key"], event["args"]
+            retried = False
             with Lock(True):
                 queue = load()
                 heads = queue.setdefault("gatedHeads", {})
@@ -1415,6 +1416,7 @@ def cmd_gatekeep(a):
                             heads[key] = {**state, "givenUp": True}
                             save(queue)
                         continue
+                    retried = True
                     args["modelSelection"] = model
                     args["clientRequestId"] = key + ":" + model["model"] + ":retry"
                     print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
@@ -1427,11 +1429,20 @@ def cmd_gatekeep(a):
                             json.dump(receipts, f)
                         os.replace(receipt_path + ".tmp", receipt_path)
                 attempted.add(key)
-                if starting_reviewer() is None:
+                # A new head's reviewer is chosen again here, under the same
+                # lock that queues it: the candidate chose its reviewer before
+                # this lock, so one that became blocked in between is not the
+                # one queued. A retried head keeps the fallback its own branch
+                # picked under this lock.
+                selection = args["modelSelection"]
+                if not retried and is_blocked(selection):
+                    selection = starting_reviewer()
+                if selection is None:
                     # Every reviewer is blocked, so the gate waits instead of
                     # running on one the queue just recorded as unable.
                     print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
                     continue
+                args["modelSelection"] = selection
                 print(("would queue " if a.dry_run else "queued ") + key
                       + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
                       flush=True)
