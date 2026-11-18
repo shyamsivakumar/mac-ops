@@ -531,6 +531,19 @@ print(gh_gateway._hosts_account("github.com"))
 check("the host-level account wins over a nested users entry",
       account == "active-name", account)
 
+# `gh issue` and `gh pr` are mixed groups: reads are GraphQL, writes may be
+# REST, so a write is reported as `other` rather than guessed.
+mixed = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+for argv in (["gh", "issue", "list"], ["gh", "issue", "comment", "9"],
+             ["gh", "pr", "merge", "3"], ["gh", "pr", "view"]):
+    print(gh_gateway.resource(argv))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("a mixed group is classified by its verb",
+      mixed == ["graphql", "other", "other", "graphql"], str(mixed))
+
 # `gh repo` is a mixed command: list and view are GraphQL, writes are REST,
 # and a subcommand this code does not know is `other`, not core.
 import subprocess as _sp
@@ -745,9 +758,12 @@ web = subprocess.run([sys.executable, "-c", f"""
 import sys
 sys.path.insert(0, {str(BIN)!r})
 import gh_gateway
-print("WEB", gh_gateway.cacheable(["gh", "pr", "list", "--web"]))
+for argv in (["gh", "pr", "list", "--web"], ["gh", "pr", "list", "--web=true"],
+             ["gh", "pr", "list", "-w"]):
+    print("WEB", gh_gateway.cacheable(argv))
 """], capture_output=True, text=True, env=env).stdout.split()
-check("--web is never cached", web == ["WEB", "False"], str(web))
+check("--web is never cached in any spelling",
+      web == ["WEB", "False", "WEB", "False", "WEB", "False"], str(web))
 
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
