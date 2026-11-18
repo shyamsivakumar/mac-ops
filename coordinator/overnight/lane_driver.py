@@ -366,12 +366,28 @@ def gate_verdict(repo, number, head):
     return "absent", None, ""
 
 
+def duplicate_refusal(exc):
+    """True when coordq refused a start because the queue already holds it.
+
+    The queue is the record of what it holds: an item waiting there, or a
+    message a thread is still working, is the same message. A refusal is a
+    skip, not a failure: the pass tried to say something twice.
+    """
+    parts = [getattr(exc, "output", "") or "", getattr(exc, "stderr", "") or ""]
+    return any("refused: duplicate message" in part for part in parts if isinstance(part, str))
+
+
 def start(args, prio, ledger, lkey):
     if lkey in ledger:
         return f"already done {lkey}"
     if DRY:
         return f"DRY {lkey}"
-    out = run([COORDQ, "start", json.dumps(args), "--priority", str(prio)]).splitlines()[-1]
+    try:
+        out = run([COORDQ, "start", json.dumps(args), "--priority", str(prio)]).splitlines()[-1]
+    except subprocess.CalledProcessError as exc:
+        if duplicate_refusal(exc):
+            return f"skip {lkey}: the queue already holds this message"
+        raise
     ledger[lkey] = out
     return out
 
@@ -526,7 +542,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         args = {"projectId": CFG[repo]["projectId"], "title": title,
                 "modelSelection": model, "runtimeMode": "full-access",
-                "workspaceStrategy": workspace, "message": message}
+                "workspaceStrategy": workspace, "message": message, "clientRequestId": lkey}
         options = ["--priority", str(priority)]
     if DRY:
         return f"DRY {lkey}: {json.dumps(workspace) if workspace else 'send existing thread'}"
@@ -535,14 +551,24 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         old_continuation = os.environ.get("COORDQ_BUILDER_CONTINUATION")
         os.environ["COORDQ_BUILDER_CONTINUATION"] = json.dumps(continuation)
         try:
-            receipt = run(command).strip()
+            try:
+                receipt = run(command).strip()
+            except subprocess.CalledProcessError as exc:
+                if duplicate_refusal(exc):
+                    return f"skip {lkey}: the queue already holds this message"
+                raise
         finally:
             if old_continuation is None:
                 os.environ.pop("COORDQ_BUILDER_CONTINUATION", None)
             else:
                 os.environ["COORDQ_BUILDER_CONTINUATION"] = old_continuation
     else:
-        receipt = run(command).strip()
+        try:
+            receipt = run(command).strip()
+        except subprocess.CalledProcessError as exc:
+            if duplicate_refusal(exc):
+                return f"skip {lkey}: the queue already holds this message"
+            raise
     if not receipt:
         raise RuntimeError(f"Empty dispatch receipt for {lkey}")
     out = receipt.splitlines()[-1]
@@ -599,6 +625,34 @@ def check_step(repo, proof_path):
     return "run the repo's full local check"
 
 
+def message_title(repo, number, action, head):
+    """The title of one message about one head of one pull request.
+
+    The queue names a message by its title and its target, so the head is in
+    the title: two heads of one pull request are two messages to the same
+    builder thread, and the second must not be read as a copy of the first.
+    The whole head is in the title, because two heads can share a short
+    prefix and their messages are still two messages. Two passes over one
+    head keep one title, so they still queue once.
+    """
+    return f"{CFG[repo]['key']}#{number} {action} {head}"
+
+
+def superseded_by(repo, number, issue):
+    """True when a newer open pull request names the same ticket.
+
+    A pull request the board replaced with a newer one for the same ticket
+    is superseded: its findings belong to the newer work, and a message to
+    it is a message nobody reads.
+    """
+    for other in SNAPSHOT["repos"][repo]["prs"]:
+        if other["number"] <= number or other.get("isDraft"):
+            continue
+        if re.search(rf"\bRefs #{issue}\b", other.get("body") or ""):
+            return True
+    return False
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -613,12 +667,10 @@ def act_on_pr(repo, number, ledger):
                             "--json", "state,mergedAt"]))
     if state.get("state") != "OPEN" or state.get("mergedAt"):
         return f"skip #{number}: PR is merged or closed"
-    waiting = run([COORDQ, "list"])
-    key = re.escape(CFG[repo]["key"])
-    if re.search(rf"^#\d+ p-?\d+ \S+ {key}#{number}(?:\s|$)", waiting, re.MULTILINE):
-        return f"skip #{number}: coordq action already waiting"
     head, body = pr["headRefOid"], pr.get("body") or ""
     issue, builder = builder_thread(repo, body)
+    if issue and superseded_by(repo, number, int(issue)):
+        return f"skip #{number}: superseded by a newer pull request for #{issue}"
     proof_path = f"evidence/{CFG[repo]['key']}-{issue}/check-proof.md" if issue else "evidence/check-proof.md"
     if issue:
         issue_record = next((i for i in SNAPSHOT["repos"][repo]["issues"] if i["number"] == int(issue)), None)
@@ -636,7 +688,7 @@ def act_on_pr(repo, number, ledger):
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
-        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
+        return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
@@ -659,7 +711,10 @@ def act_on_pr(repo, number, ledger):
         if status in ("completed", "interrupted", "failed"):
             return f"#{number} continue: " + send(
                 builder, "Continue fixing the gate findings for this head. Push the fixes and report the new head.",
-                f"{CFG[repo]['key']}#{number} continue", ledger, f"continue:{repo}#{number}:{head}", pr_number=number)
+                message_title(repo, number, "continue", head), ledger, f"continue:{repo}#{number}:{head}", pr_number=number)
+        # The findings for this head are already with the builder, which is
+        # still working them. A second copy is the padding the queue had.
+        return f"skip #{number}: gate findings for this head are already with the builder ({status})"
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
@@ -667,7 +722,7 @@ def act_on_pr(repo, number, ledger):
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
-        return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
+        return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
     tag = "regate" if verdict == "none" else "gate"
     model = ASTRA
     if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:

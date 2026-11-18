@@ -24,6 +24,13 @@ TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_
 # A launch learns its thread only after the call, so its reservedThreads record
 # carries this prefix and reconcile knows the thread may not be listed live yet.
 LAUNCH_RECORD = "launch:"
+# One message is one item. A started item is recorded for this long, so the
+# same message is refused while the thread that took it still works it, while
+# a message the board asks for again after its thread stopped still goes out.
+MESSAGE_TTL = float(os.environ.get("COORDQ_MESSAGE_TTL", "1800"))
+# A reservation covers one step in flight. Past this age the step is over,
+# whatever its reply said, so the slot it holds goes back to the queue.
+RESERVATION_TIMEOUT = float(os.environ.get("COORDQ_RESERVATION_TIMEOUT", "180"))
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
@@ -275,34 +282,256 @@ def thread_status(thread_id):
     return json.loads(out).get("thread", {}).get("status")
 
 
-def reconcile_reservations(queue, active, statuses=None):
+def message_identity(item):
+    """The title and the target of one message.
+
+    The title is the one the caller supplied, under `messageTitle`. A send the
+    caller left untitled carries its thread id as its display title, and that
+    is not a message identity: two callers can send two different
+    instructions to one thread without a title, and neither is the other's
+    duplicate. An item written before the identity was kept falls back to its
+    title, which its caller supplied.
+
+    The target is the thread the message goes to. A launch has no thread yet,
+    so its client request names the work it starts: a second launch for the
+    same work is the same message.
+    """
+    args = item.get("args") or {}
+    target = str(args.get("threadId") or args.get("clientRequestId") or "")
+    if "messageTitle" in item:
+        title = item.get("messageTitle") or ""
+    else:
+        # An item written before the identity was kept. Its title is the
+        # caller's when the payload names it and when it is not the thread id
+        # the old code fell back to: an untitled send stored its thread id
+        # there, and that says nothing about what the caller meant.
+        title = item.get("title") or ""
+        if title and title == target and args.get("title") != title:
+            title = ""
+    return (str(title), target)
+
+
+def prune_messages(queue, live_ids=None):
+    """Drop the started-message records that are no longer running.
+
+    A record whose thread is still live is kept however old it is: that
+    thread is working the message now, so the queue must keep refusing a
+    second copy of it (ticket #544 counts a running item). The age only
+    retires a record once its thread is gone. An unreadable thread list
+    (live_ids None) keeps every record, the same way duplicate_message
+    counts an unreadable list as a duplicate: a refused start costs one
+    attempt, and dropping the record costs a second thread on the work.
+
+    Returns whether anything was dropped, so a caller saves only a change.
+    """
+    started = queue.get("started") or []
+    now = time.time()
+    kept = [record for record in started
+            if isinstance(record, dict)
+            and (live_ids is None
+                 or record.get("thread") in live_ids
+                 or now - float(record.get("at") or 0) < MESSAGE_TTL)]
+    changed = len(kept) != len(started)
+    queue["started"] = kept
+    return changed
+
+
+def dispatch_is_active(queue, record):
+    """Whether a started record is the dispatch running on its thread now.
+
+    A thread runs one message at a time, so a later message started on the
+    same thread makes the earlier one spent: the thread moved on, and a caller
+    asking for the earlier message again is asking for real work. A record
+    whose thread is not known yet (a launch whose reply carried none) cannot
+    be ordered against another, so it stays active.
+    """
+    thread = record.get("thread") or ""
+    if not thread:
+        return True
+    at = record.get("at") or 0
+    for other in queue.get("started") or []:
+        if other is record or not isinstance(other, dict):
+            continue
+        if other.get("thread") != thread:
+            continue
+        later = other.get("at") or 0
+        if later > at or (later == at and (other.get("id") or 0) > (record.get("id") or 0)):
+            return False
+    return True
+
+
+def duplicate_message(queue, title, target, live_ids=None, started_before=None):
+    """The queued or running item that already carries this message, or None.
+
+    A started message counts while the thread that took it is live, and only
+    while it is the latest message started on that thread: once a later
+    message starts there, the earlier one is spent and asking for it again is
+    real work. An unreadable thread list counts a record too, because a refused
+    start costs one attempt while a second copy of the message costs a second
+    thread on the same work.
+
+    An action key names one board action, but it does not make a second copy
+    of the same message a different message: the queue names a message by its
+    title and its target, and the lane puts the whole head in its title, so
+    messages for different heads stay distinct without the key. A message with
+    no title or no target is never a duplicate: without a title the caller
+    supplied, or without a thread or a client request, there is nothing to
+    tell two of them apart, and refusing one would drop work the queue was
+    asked to start.
+    """
+    if not title or not target:
+        return None
+    for item in queue.get("items") or []:
+        if message_identity(item) != (title, target):
+            continue
+        return "queued", item.get("id")
+    for record in queue.get("started") or []:
+        if (record.get("title"), record.get("target")) != (title, target):
+            continue
+        if not dispatch_is_active(queue, record):
+            # A later message started on this thread, so this one is spent and
+            # asking for it again is real work.
+            continue
+        if live_ids is None:
+            # An unreadable thread list cannot say a thread stopped.
+            return "started", record.get("id")
+        if started_before is not None and (record.get("id"), record.get("at")) not in started_before:
+            # Recorded after the list was read, so the list cannot say whether
+            # its thread is live, and it is the message just taken.
+            return "started", record.get("id")
+        if str(record.get("id")) in (queue.get("reserved") or {}):
+            # The queue still holds this launch's slot: a launch learns its
+            # thread only after the call, so a record whose thread the list
+            # does not show yet is an unfinished launch, not a spent message.
+            return "started", record.get("id")
+        if record.get("thread") in live_ids:
+            return "started", record.get("id")
+    return None
+
+
+def started_snapshot(queue):
+    """The started-message records as they stood before the thread list read.
+
+    A record added since then names a message another start has just taken,
+    and the list cannot say whether its thread is live, so it counts as
+    running.
+    """
+    return {(record.get("id"), record.get("at"))
+            for record in queue.get("started") or [] if isinstance(record, dict)}
+
+
+def record_started(queue, item, thread):
+    """Remember a message the queue started, so it is not queued again."""
+    title, target = message_identity(item)
+    queue.setdefault("started", []).append({"id": item.get("id"), "title": title,
+                                            "target": target, "thread": thread or "",
+                                            "actionKey": item.get("actionKey") or "",
+                                            "at": time.time()})
+
+
+def started_thread(queue, item, key):
+    """The thread a dispatched item works, as far as the queue knows it."""
+    if item.get("tool") == "t3_thread_send":
+        return str((item.get("args") or {}).get("threadId") or "")
+    record = (queue.get("reservedThreads") or {}).get(key) or ""
+    if isinstance(record, str) and record.startswith(LAUNCH_RECORD):
+        return record[len(LAUNCH_RECORD):]
+    return ""
+
+
+def live_thread_ids():
+    """The live thread ids, or None when they cannot be read."""
+    try:
+        return active_thread_ids()
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError):
+        return None
+
+
+def reservation_snapshot(queue):
+    """The reservations as they stood when the thread list was read.
+
+    A reservation taken after that read is not judged by it: the thread it
+    names may have been free when the list was made, and busy a moment later.
+    """
+    threads = queue.get("reservedThreads") or {}
+    return {key: {"at": at, "thread": threads.get(key)}
+            for key, at in (queue.get("reserved") or {}).items()}
+
+
+def thread_status_or_none(thread):
+    """The status of `thread`, or None when it cannot be read."""
+    try:
+        return thread_status(thread)
+    except (RuntimeError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def launch_statuses(queue, live_ids):
+    """The status of every launch the snapshot holds that is not live.
+
+    The lookups happen before the writer lock is taken, so a slow t3 call
+    never blocks a start. A launch thread can finish before any pass lists it
+    live, so its status is what says whether its slot is still in use.
+    """
+    statuses = {}
+    reserved = queue.get("reserved") or {}
+    threads = queue.get("reservedThreads") or {}
+    now = time.time()
+    for key, at in reserved.items():
+        record = threads.get(key)
+        if not (isinstance(record, str) and record.startswith(LAUNCH_RECORD)):
+            continue
+        if now - float(at) >= RESERVATION_TIMEOUT:
+            continue
+        thread = record[len(LAUNCH_RECORD):]
+        if not thread or thread in live_ids:
+            continue
+        statuses[thread] = thread_status_or_none(thread)
+    return statuses
+
+
+def reconcile_reservations(queue, active, statuses=None, snapshot=None):
+    """Release the reservations no thread uses any more.
+
+    With `snapshot` only the reservations that stood when the thread list was
+    read are judged: a reservation taken since then names a thread the list
+    cannot speak for, and releasing it would free a slot a live launch holds.
+    """
     reserved = queue.setdefault("reserved", {})
     threads = queue.setdefault("reservedThreads", {})
     known = {} if statuses is None else statuses
+    released = 0
     for key, at in list(reserved.items()):
         record = threads.get(key)
+        if snapshot is not None:
+            before = snapshot.get(key)
+            if before is None or before.get("at") != at or before.get("thread") != record:
+                continue
         launched = isinstance(record, str) and record.startswith(LAUNCH_RECORD)
         thread = record[len(LAUNCH_RECORD):] if launched else record
-        expired = time.time() - at >= 600
+        expired = time.time() - at >= RESERVATION_TIMEOUT
         seen = bool(thread) and thread in active
         finished = False
         if launched and not (expired or seen):
             # A launch thread can finish before any pass lists it live.
-            if thread not in known:
-                try:
-                    known[thread] = thread_status(thread)
-                except (RuntimeError, ValueError, TypeError, AttributeError):
-                    known[thread] = None
-            finished = known[thread] in TERMINAL_STATUSES
+            if thread and thread not in known:
+                # With a snapshot the statuses were read before the writer
+                # lock was taken. A launch they do not cover keeps its slot:
+                # looking it up here would hold every start for the length of
+                # a t3 call.
+                known[thread] = None if snapshot is not None else thread_status_or_none(thread)
+            finished = known.get(thread) in TERMINAL_STATUSES
         if not (expired or seen or finished):
             continue
         if expired:
-            log(f"EXPIRED reservation #{key} after ten minutes")
+            log(f"EXPIRED reservation #{key} after {int(RESERVATION_TIMEOUT)}s")
         elif finished:
             log(f"released reservation #{key}: thread {thread} is {known[thread]}")
         reserved.pop(key)
         threads.pop(key, None)
-    save(queue)
+        released += 1
+    if released:
+        save(queue)
 
 
 def undispatchable_tool(item):
@@ -401,6 +630,8 @@ def drain():
             log(f"{e}, nothing started")
             return
         reconcile_reservations(queue, active, statuses)
+        if prune_messages(queue, active):
+            save(queue)
         if not ready:
             return
         n = max(n, len(active))
@@ -489,6 +720,7 @@ def drain():
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
+            record_started(queue, item, started_thread(queue, item, reservation))
             if item.get("actionKey"):
                 set_action_key_state(queue, item["actionKey"], "dispatched")
             save(queue)
@@ -627,6 +859,12 @@ def cmd_start(a):
                 read_rules()
             except RuntimeError as e:
                 die(f"refused: {e}")
+    # The thread list is read before the writer lock is taken: a slow t3 call
+    # under it would hold every other start for its length. The started-message
+    # records it speaks for are snapshotted first, because a record added since
+    # then cannot be judged by it.
+    started_before = started_snapshot(load())
+    live = live_thread_ids() if started_before else None
     with Lock(True):
         queue = load()
         key = (getattr(a, "action_key", None) or "").strip()
@@ -638,7 +876,18 @@ def cmd_start(a):
                 die(f"refused: the action key {key} is already "
                     f"{action_key_state(queue, record.get('id'), record.get('state'))} "
                     f"{where}")
-        item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
+        explicit = a.title or args.get("title") or ""
+        item = {"id": queue["next"], "tool": tool, "args": args,
+                "title": explicit or args.get("threadId", ""), "messageTitle": explicit,
+                "priority": a.priority}
+        title, target = message_identity(item)
+        if prune_messages(queue, live):
+            save(queue)
+        duplicate = duplicate_message(queue, title, target, live,
+                                      started_before if started_before else None)
+        if duplicate:
+            die(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "
+                f"already {duplicate[0]} as coordq #{duplicate[1]}")
         if key:
             item["actionKey"] = key
         queue["next"] += 1
@@ -1064,10 +1313,35 @@ def cmd_drop(a):
 
 
 def cmd_status(a):
+    # A reservation outlives its launch when nothing reconciles it, so the read
+    # reconciles before it reports: a slot a finished launch no longer needs
+    # never shows as held. The thread list and the launch statuses are read
+    # before the writer lock is taken, because a t3 call under the lock would
+    # hold every start for its length, and the reservations they speak for are
+    # snapshotted first, so a launch reserved after the read is left alone.
+    before = load()
+    snapshot = reservation_snapshot(before)
+    live_ids = active_thread_ids() if snapshot else None
+    statuses = launch_statuses(before, live_ids) if live_ids is not None else {}
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
-    print(json.dumps({"cap": cap(), "live": live(), "reserved": load().get("reserved", {}), "queued": len(load()["items"]), "failed": load().get("failed", []), "stuck": stuck, "tickAlarm": tick_alarm()}))
+    threads = live()
+    # A start can enqueue between a read and a write, and saving an older
+    # snapshot would drop the item it just queued. So the queue is read,
+    # reconciled and written under the same lock the start takes.
+    with Lock(True):
+        queue = load()
+        if live_ids is not None:
+            try:
+                reconcile_reservations(queue, live_ids, statuses, snapshot)
+            except (RuntimeError, ValueError, KeyError, TypeError, OSError) as e:
+                log(f"status left the reservations alone: {e}")
+            queue = load()
+        report = {"cap": cap(), "live": threads, "reserved": queue.get("reserved", {}),
+                  "queued": len(queue["items"]), "failed": queue.get("failed", []),
+                  "stuck": stuck, "tickAlarm": tick_alarm()}
+    print(json.dumps(report))
 
 
 
