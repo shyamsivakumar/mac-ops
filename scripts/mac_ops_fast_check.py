@@ -226,6 +226,9 @@ def main():
         fixture = ["python3", "verification/worktree-cleaner/check_bootstrap.py"]
         proof.check("worktree cleaner bootstrap fixture", shlex.join(fixture),
                     lambda: run(fixture, timeout=300))
+        cleaner_tests = ["python3", "-m", "unittest", "tests.test_worktree_cleaner_bootstrap"]
+        proof.check("tests: tests.test_worktree_cleaner_bootstrap", shlex.join(cleaner_tests),
+                    lambda: run(cleaner_tests, timeout=300))
 
     scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
     model_dir = ROOT / "formal" / "heavy-queue"
