@@ -1,7 +1,0 @@
-{
-  "hosts": {
-    "shyams-macbook-pro": {
-      "min_headroom_bytes": 2147483648
-    }
-  }
-}
