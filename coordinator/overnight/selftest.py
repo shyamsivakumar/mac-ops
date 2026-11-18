@@ -12,6 +12,28 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent
 
 
+def panel_source():
+    """Return the coordinator panel's source.
+
+    The check runs in the checkout and in the installed layout, where the
+    panel lives beside the other Herdr files and not in the checkout."""
+    for candidate in (ROOT.parent / "mods" / "coordinator" / "main.js",
+                      Path.home() / ".config" / "herdr-app" / "mods" / "coordinator" / "main.js"):
+        if candidate.is_file():
+            return candidate.read_text()
+    raise AssertionError("the coordinator panel is not found")
+
+
+def load_runner():
+    """Return the overnight runner as a module, so an eval runs the real path."""
+    path = ROOT / "overnight" if (ROOT / "overnight").is_file() else ROOT.parent / "overnight" / "overnight"
+    loader = importlib.machinery.SourceFileLoader("overnight_runner", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 def load_ticket():
     path = ROOT / "ticket" if (ROOT / "ticket").is_file() else ROOT.parent / "bin" / "ticket"
     loader = importlib.machinery.SourceFileLoader("fixture_ticket", str(path))
@@ -735,6 +757,7 @@ def hourly_selftest_fixture():
 
 def watchdog():
     hourly_selftest_fixture()
+    import alarms
     import lane_driver as lane
     import os
     import time
@@ -758,6 +781,10 @@ def watchdog():
     state = {"items": [other]}
     mtimes = {path: now for path, _, _ in lane.WATCH.values()}
     decisions = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
+    # The mute state lives in its own file, so the pass writes it there
+    # and not to the live shift's folder.
+    scratch = tempfile.mkdtemp(prefix="overnight-mute-")
+    mute = str(Path(scratch) / "mute-state.json")
     # The launchd state of every job, by label. None means launchd cannot
     # run. "not-loaded" means the job is no longer held by launchd.
     # "unreadable" means launchctl failed for another reason.
@@ -806,7 +833,12 @@ def watchdog():
         raise AssertionError(f"unexpected subprocess: {cmd}")
 
     def opened(path, mode="r"):
-        exact(str(path), decisions + (".tmp" if mode == "w" else ""))
+        if mode == "w":
+            # The board is replaced from a temporary file of this
+            # writer's own, so two writers never share one.
+            exact(str(path) in (decisions + ".tmp", f"{decisions}.{os.getpid()}.tmp"), True)
+        else:
+            exact(str(path), decisions)
         if mode == "r":
             return io.StringIO(json.dumps(state))
         return mock_open()()
@@ -816,8 +848,10 @@ def watchdog():
         state.update(json.loads(json.dumps(value)))
 
     def alarm(title):
+        cause = title.split("Factory job stopped or failing: ", 1)[1]
         return [other, {"id": "factory-watchdog", "group": "Coordinator",
                         "kind": "action", "title": title,
+                        "cause": alarms.cause_of(cause),
                         "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."}]
 
     def pass_once():
@@ -826,7 +860,7 @@ def watchdog():
             lane.watchdog()
         return buffer.getvalue()
 
-    with patch("builtins.open", side_effect=opened),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace,          patch.object(lane.subprocess, "run", side_effect=fake_run):
+    with patch("builtins.open", side_effect=opened),          patch.object(time, "time", return_value=now),          patch.object(os.path, "getmtime", side_effect=lambda path: mtimes[path]),          patch.object(lane.json, "dump", side_effect=saved),          patch.object(os, "replace") as replace,          patch.object(lane.subprocess, "run", side_effect=fake_run),          patch.object(alarms, "MUTE_PATH", mute):
         # A quiet log is not a dead job. Every job is loaded and exits
         # clean, so the stale gatekeep log must not raise an alarm.
         stale = {path: now - 200 * 60 for path in mtimes}
@@ -1026,8 +1060,13 @@ def watchdog():
             mtimes[path] = now
         pass_once()
         exact(state["items"], [other])
-        for call in replace.call_args_list:
-            exact(call.args, (decisions + ".tmp", decisions))
+        # The pass replaces the board file and the mute state file, each
+        # from its own temporary file, and nothing else.
+        replaced = {(str(call.args[0]), str(call.args[1])) for call in replace.call_args_list}
+        exact(replaced - {(decisions + ".tmp", decisions),
+                          (f"{decisions}.{os.getpid()}.tmp", decisions),
+                          (mute + ".tmp", mute),
+                          (f"{mute}.{os.getpid()}.tmp", mute)}, set())
 
 
 def zero_merge():
@@ -1988,7 +2027,652 @@ def stall():
         exact(lane.unstick(repo, {}), "DRY unstick [9]")
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall}
+def alarm_mute():
+    import datetime as dt
+    import alarms
+    import lane_driver as lane
+    import stall as rule
+
+    now = dt.datetime(2026, 11, 17, 12, 0, tzinfo=dt.timezone.utc)
+    cause = "gatekeep failing (last exit code 1)"
+    key = alarms.key_of("factory-watchdog", cause)
+
+    # The rule: a key with an acknowledgement stays quiet for four hours,
+    # and every other key is raised at once.
+    state = {}
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
+    alarms.raised(state, "factory-watchdog", cause, now)
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
+
+    # A board item that went missing is not an acknowledgement. The board
+    # has more than one writer and one of them can lose the item, so an
+    # alarm nobody answered is raised again and never silenced.
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
+
+    # The acknowledgement is what quiets the key.
+    alarms.acknowledge(state, key, now)
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "quiet")
+    exact(alarms.muted(state, key, now), True)
+    # A different cause is a different key and alarms at once.
+    exact(alarms.decide(state, "factory-watchdog", "gatekeep failing (last exit code 2)",
+                         now), "raise")
+    # The quiet key stays quiet for four hours and then alarms again.
+    exact(alarms.decide(state, "factory-watchdog", cause,
+                         now + dt.timedelta(hours=3)), "quiet")
+    exact(alarms.decide(state, "factory-watchdog", cause,
+                         now + dt.timedelta(hours=4, minutes=1)), "raise")
+
+    # The minutes of a quiet log are not part of the cause, so the same
+    # quiet log is the same cause. The exit code is part of it.
+    exact(alarms.key_of("factory-watchdog", "gatekeep silent 200 min (limit 120)"),
+          alarms.key_of("factory-watchdog", "gatekeep silent 261 min (limit 120)"))
+    exact(alarms.key_of("factory-watchdog", "gatekeep failing (last exit code 1)") ==
+          alarms.key_of("factory-watchdog", "gatekeep failing (last exit code 2)"), False)
+
+    # The idle tick count is not part of a cause: the same stall reported
+    # on the fourth tick is the same stall as the one reported on the
+    # third, so it does not raise again inside the mute window.
+    exact(alarms.key_of("factory-overnight-stall", "no board progress for 3 ticks"),
+          alarms.key_of("factory-overnight-stall", "no board progress for 4 ticks"))
+
+    # A tick where the alarm is not true any more does not take the mute
+    # with it: the key keeps its acknowledgement, so the same cause stays
+    # quiet for the rest of the four hours.
+    state = {}
+    alarms.raised(state, "factory-watchdog", cause, now)
+    alarms.acknowledge(state, key, now)
+    alarms.gone(state, "factory-watchdog")
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "quiet")
+    # And a cause that was never acknowledged alarms again when it is
+    # true again.
+    state = {}
+    alarms.raised(state, "factory-watchdog", cause, now)
+    alarms.gone(state, "factory-watchdog")
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
+
+    # The mute state lives in its own file, so a board file that the
+    # coordinator rewrites cannot take the mute with it, and the command
+    # that records an acknowledgement writes that file.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            state = alarms.load_state()
+            alarms.raised(state, "factory-watchdog", cause, now)
+            exact(alarms.save_state(state), True)
+            exact(alarms.load_state()[key]["raised"], alarms.stamp(now))
+
+            class StateClock(dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now
+
+            with patch.object(dt, "datetime", StateClock):
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 0)
+            exact(alarms.muted(alarms.load_state(), key, now), True)
+            # The command that cannot write the state says so, so the
+            # panel can warn that the alarm will raise again.
+            with patch.object(alarms, "write_state", return_value=False), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 3)
+            with contextlib.redirect_stderr(io.StringIO()):
+                exact(alarms.main(["ack", "factory-nothing", cause]), 1)
+
+    # The command acknowledges one cause. Another cause of the same alarm
+    # was not answered and is not silenced.
+    state = {}
+    alarms.raised(state, "factory-watchdog", cause, now)
+    other = "gatekeep failing (last exit code 2)"
+    alarms.raised(state, "factory-watchdog", other, now)
+    alarms.acknowledge(state, alarms.key_of("factory-watchdog", other), now)
+    exact(alarms.decide(state, "factory-watchdog", other, now), "quiet")
+    exact(alarms.decide(state, "factory-watchdog", cause, now), "raise")
+
+    # A tick that read the state before the acknowledgement was recorded
+    # does not take that acknowledgement with it when it writes.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            stale = alarms.load_state()
+            alarms.raised(stale, "factory-watchdog", cause, now)
+            alarms.save_state(stale)
+            fresh = alarms.load_state()
+            alarms.acknowledge(fresh, alarms.key_of("factory-watchdog", cause), now)
+            alarms.save_state(fresh)
+            # The tick writes its older snapshot.
+            alarms.save_state(stale)
+            exact(alarms.muted(alarms.load_state(),
+                                alarms.key_of("factory-watchdog", cause), now), True)
+
+    # Two writers of the same file at once: the tick writes its older
+    # snapshot while the panel records the acknowledgement, and the
+    # acknowledgement survives.
+    import threading
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            stale = alarms.load_state()
+            alarms.raised(stale, "factory-watchdog", cause, now)
+            alarms.save_state(stale)
+            written = []
+
+            def panel():
+                fresh = alarms.load_state()
+                alarms.acknowledge(fresh, alarms.key_of("factory-watchdog", cause), now)
+                written.append(alarms.save_state(fresh))
+
+            def tick():
+                written.append(alarms.save_state(stale))
+
+            threads = [threading.Thread(target=panel), threading.Thread(target=tick)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            exact(all(written), True)
+            exact(alarms.muted(alarms.load_state(),
+                                alarms.key_of("factory-watchdog", cause), now), True)
+
+    # The panel is JavaScript, so the contract it holds for the answer is
+    # read from its source: the answer carries the cause it was given
+    # for, an answer whose alarm changed is dropped before the send, the
+    # acknowledgement names that cause, and the panel warns when the
+    # command did not record it.
+    panel = panel_source()
+    exact('shown: a.cause ?? ""' in panel, True)
+    # The panel uses the rules in the module the probe runs, so the
+    # rules themselves are checked there, not here.
+    exact('from "./answers.js"' in panel, True)
+    exact("await acknowledgeAlarm(a.id, a.cause)" in panel, True)
+    exact("if (r.code !== 0) {" in panel, True)
+    exact("`${home()}/.local/bin/alarms.py`" in panel, True)
+    exact("const bound = this.replyCauses.get(q)" in panel, True)
+    # A restored reply keeps the cause it belongs to, and a restored
+    # reply whose cause is unknown is dropped.
+    exact('shared("co.replyCauses")' in panel, True)
+    exact("bound === undefined" in panel, True)
+    send = panel.index("send(cx) {")
+    body = panel[send:send + 400]
+    exact(body.index("this.dropStaleDrafts()") < body.index("this.message()"), True)
+
+    # A lock that cannot be taken is not a lock: the write fails and the
+    # file is left alone, rather than written unlocked.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            state = alarms.load_state()
+            alarms.raised(state, "factory-watchdog", cause, now)
+            with patch.object(alarms.os, "open", side_effect=OSError("read-only")):
+                exact(alarms.save_state(state), False)
+            exact(alarms.load_state(), {})
+
+    # A lock that cannot be taken fails the command too: the
+    # acknowledgement did not land, the command says so, and the alarm is
+    # not muted.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            state = alarms.load_state()
+            alarms.raised(state, "factory-watchdog", cause, now)
+            alarms.save_state(state)
+            with patch.object(alarms.os, "open", side_effect=OSError("read-only")), \
+                 contextlib.redirect_stderr(io.StringIO()):
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 3)
+            exact(alarms.muted(alarms.load_state(),
+                                alarms.key_of("factory-watchdog", cause), now), False)
+
+    # The decision and the publication happen under the lock, so an
+    # answer cannot slip between them: while the alarm is published, the
+    # lock is held and no other writer can record an acknowledgement.
+    import fcntl
+    import os
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            state = alarms.load_state()
+            alarms.raised(state, "factory-watchdog", cause, now)
+            alarms.save_state(state)
+            published = []
+            held = []
+
+            def publish(action):
+                # Another writer tries the lock while the alarm is
+                # published. It cannot have it: the tick holds it.
+                other = os.open(str(Path(str(mute) + ".lock")), os.O_RDWR | os.O_CREAT, 0o600)
+                try:
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held.append(False)
+                    fcntl.flock(other, fcntl.LOCK_UN)
+                except OSError:
+                    held.append(True)
+                finally:
+                    os.close(other)
+                published.append(action)
+                return None
+
+            action = alarms.decide_and_publish("factory-watchdog", cause, publish)
+            exact(action, "raise")
+            exact(published, ["raise"])
+            # The lock was held for the whole publication.
+            exact(held, [True])
+            # The key is on the board and in the state, so the answer has
+            # something to acknowledge.
+            exact(alarms.muted(alarms.load_state(), key, now), False)
+            exact("acked" in alarms.load_state()[key], False)
+
+    # A lock that cannot be taken does not hide the alarm: the alarm is
+    # published as unchecked and the fault is said out loud, because a
+    # storage failure must not hide a real failure from Shyam.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            published = []
+            with patch.object(alarms, "take_lock", return_value=None):
+                action = alarms.decide_and_publish("factory-watchdog", cause,
+                                                   lambda a: published.append(a))
+            exact(action, "unchecked")
+            exact(published, ["unchecked"])
+
+    # A board lock that cannot be taken does not hide the alarm: the
+    # board is written without it and the fault is said out loud.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            published = []
+            with patch.object(alarms, "take_lock", return_value=None):
+                action = alarms.decide_and_publish("factory-watchdog", cause,
+                                                   lambda a: published.append(a))
+            exact(action, "unchecked")
+            exact(published, ["unchecked"])
+            # The board lock is its own file, so a mute lock that cannot
+            # be taken does not leave the board open. A board lock that
+            # cannot be taken stops the publication: two publishers
+            # writing the same board would erase one another's alarm.
+            board_file = Path(scratch) / "decisions.json"
+            with patch.object(alarms, "take_lock", side_effect=lambda path=None: None):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    target, action = rule.alert("no board progress for 3 ticks", None, board_file)
+                exact("the board lock could not be taken" in buffer.getvalue(), True)
+                exact(action, "failed")
+            exact(board_file.exists(), False)
+
+    # A damaged state file is not an empty state either: the alarm is
+    # published as unchecked and the file is kept as it is, so the
+    # acknowledgements it still holds are not lost.
+    with tempfile.TemporaryDirectory() as scratch:
+        damaged = Path(scratch) / "mute-state.json"
+        damaged.write_text("{ not json")
+        with patch.object(alarms, "MUTE_PATH", str(damaged)):
+            published = []
+            action = alarms.decide_and_publish("factory-watchdog", cause,
+                                               lambda a: published.append(a))
+            exact(action, "unchecked")
+            exact(published, ["unchecked"])
+            exact(damaged.read_text(), "{ not json")
+            # The command says the state cannot be read, and it does not
+            # write over the damaged file either.
+            exact(alarms.main(["status"]), 3)
+            exact(alarms.main(["ack", "factory-watchdog", cause]), 3)
+            exact(damaged.read_text(), "{ not json")
+
+    # A state file that cannot be read is not an empty state: the alarm
+    # is published as unchecked, and the state that could not be read is
+    # not written over, so the acknowledgements it holds stay.
+    with tempfile.TemporaryDirectory() as scratch:
+        unreadable = Path(scratch) / "mute-state.json"
+        unreadable.mkdir()
+        with patch.object(alarms, "MUTE_PATH", str(unreadable)):
+            published = []
+            action = alarms.decide_and_publish("factory-watchdog", cause,
+                                               lambda a: published.append(a))
+            exact(action, "unchecked")
+            exact(published, ["unchecked"])
+            exact(unreadable.is_dir(), True)
+
+    # The stall's cause names the stalled repos, so two stalls on
+    # different repos are different causes.
+    stalled = {"items": {"a/one#1": {"stalled": True}, "b/two#2": {"stalled": False}}}
+    exact(rule.alarm_cause("no board progress for 3 ticks", stalled),
+          "no board progress for 3 ticks | stalled: a/one#1")
+    exact(rule.alarm_cause("no board progress for 3 ticks", {"items": {}}),
+          "no board progress for 3 ticks | stalled: none")
+
+    # The stall writes the alarm, and the same cause stays quiet once it
+    # is acknowledged.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            board = Path(scratch) / "decisions.json"
+            board.write_text(json.dumps({"items": []}))
+            target, action = rule.alert("no board progress for 3 ticks", None, board)
+            exact(action, "wrote")
+            exact(target, str(board))
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact(items[0]["id"], "factory-overnight-stall")
+            exact(items[0]["cause"], "no board progress for <ticks>")
+            # An alarm nobody answered is raised again: the board item
+            # going missing says nothing.
+            data = json.loads(board.read_text())
+            data["items"] = []
+            board.write_text(json.dumps(data))
+            target, action = rule.alert("no board progress for 3 ticks", None, board)
+            exact(action, "wrote")
+            exact(len(json.loads(board.read_text())["items"]), 1)
+            # The acknowledgement quiets it. The panel passes the cause
+            # the item shows, and only that cause is quiet.
+            shown = json.loads(board.read_text())["items"][0]["cause"]
+            exact(alarms.main(["ack", "factory-overnight-stall", shown]), 0)
+            target, action = rule.alert("no board progress for 3 ticks", None, board)
+            exact(action, "quiet")
+            exact(json.loads(board.read_text())["items"], [])
+            # A different cause is a different alarm and is written at once.
+            target, action = rule.alert("the board stopped for another reason", None, board)
+            exact(action, "wrote")
+            exact(len(json.loads(board.read_text())["items"]), 1)
+
+    # An alarm on the board always has a key: the stall writes no board
+    # item is published anyway when its key cannot be written, and the
+    # fault is said out loud: a storage failure must not hide a real
+    # failure.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            board = Path(scratch) / "decisions.json"
+            board.write_text(json.dumps({"items": []}))
+            buffer = io.StringIO()
+            with patch.object(alarms, "write_state", return_value=False), \
+                 contextlib.redirect_stdout(buffer):
+                target, action = rule.alert("no board progress for 3 ticks", None, board)
+            exact(action, "wrote")
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact("the alarm key could not be written" in buffer.getvalue(), True)
+
+    # The real path: the shift asks again on every tick of a stall that
+    # continues, so the alarm can come back when the four hours are over
+    # and the log says one line per tick.
+    runner = load_runner()
+
+    # The fixture writes its records under the root it chose, the mute
+    # state included: a fixture run never writes a synthetic alarm key
+    # into the live state, and never reads a live acknowledgement.
+    from argparse import Namespace
+    with tempfile.TemporaryDirectory() as scratch:
+        fixture = Path(scratch) / "fixture.json"
+        fixture.write_text(json.dumps({
+            "items": [{"repo": "a/one", "number": 1}],
+            "ticks": [{"a/one#1": "same|1"}] * 4,
+        }))
+        root = Path(scratch) / "root"
+        live = str(Path(scratch) / "live-mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", live):
+            runner.run_stall_fixture(Namespace(root=str(root), fixture=str(fixture)))
+            exact(alarms.MUTE_PATH, str(root / "run" / "mute-state.json"))
+            exact((root / "run" / "mute-state.json").exists(), True)
+            exact(Path(live).exists(), False)
+
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        board = Path(scratch) / "decisions.json"
+        with patch.object(alarms, "MUTE_PATH", mute), \
+             patch.object(rule, "BOARD_FILE", str(board)):
+            board.write_text(json.dumps({"items": []}))
+            state = rule.new_state()
+            state["board_idle"] = 3
+            event = {"kind": "board", "idle": 3, "cap": 3}
+            written = runner.stall_records(Path(scratch), [event], str(board), state)
+            exact(len(written), 1)
+            items = [i for i in json.loads(board.read_text())["items"]
+                     if i["id"] == "factory-overnight-stall"]
+            exact(len(items), 1)
+            # The rule stops asking once the alert was delivered, and the
+            # shift asks anyway.
+            exact(rule.continues(state), True)
+            # Shyam answers the alarm: the acknowledgement is recorded,
+            # for the cause the panel showed.
+            shown = json.loads(board.read_text())["items"][0]["cause"]
+            exact(alarms.main(["ack", "factory-overnight-stall", shown]), 0)
+            # The next tick has no event, and the alarm stays quiet.
+            runner.stall_records(Path(scratch), [], str(board), state)
+            exact(json.loads(board.read_text())["items"], [])
+            runner.stall_records(Path(scratch), [], str(board), state)
+            exact(json.loads(board.read_text())["items"], [])
+            # The shift's log says one line per tick.
+            log = (Path(scratch) / "run" / "shift-log.md").read_text()
+            exact(log.count("stall: no board progress"), 3)
+
+    # The watchdog raises the alarm, and the same cause stays quiet once
+    # it is acknowledged. A changed cause alarms at once, and the alarm
+    # comes back after four hours.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            board = Path(scratch) / "decisions.json"
+            board.write_text(json.dumps({"items": []}))
+            codes = {"code": 1}
+
+            def state_of(label):
+                if label == "dev.coordinator.gatekeep":
+                    return {"loaded": True, "runs": 3, "exit_code": codes["code"],
+                            "signal": None, "running": False, "pid": 0}
+                return {"loaded": True, "runs": 3, "exit_code": 0, "signal": None,
+                        "running": False, "pid": 0}
+
+            def pass_once(clock):
+                class Clock(dt.datetime):
+                    @classmethod
+                    def now(cls, tz=None):
+                        return clock
+
+                buffer = io.StringIO()
+                with patch.object(lane, "DECISIONS_PATH", str(board)), \
+                     patch.object(lane, "log_age", return_value=1.0), \
+                     patch.object(lane, "launchd_state", side_effect=state_of), \
+                     patch.object(dt, "datetime", Clock):
+                    with contextlib.redirect_stdout(buffer):
+                        lane.watchdog()
+                return buffer.getvalue()
+
+            output = pass_once(now)
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact(items[0]["id"], "factory-watchdog")
+            exact(items[0]["cause"], "gatekeep failing (last exit code 1)")
+            exact("WATCHDOG" in output, True)
+
+            # An alarm nobody answered is raised again, even when its
+            # board item went missing.
+            data = json.loads(board.read_text())
+            data["items"] = []
+            board.write_text(json.dumps(data))
+            output = pass_once(now + dt.timedelta(minutes=3))
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact("WATCHDOG quiet" in output, False)
+
+            # The acknowledgement quiets it: the board holds no item and
+            # the tick says so. The command runs on the clock the tick
+            # runs on.
+            class AckClock(dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now + dt.timedelta(minutes=6)
+
+            with patch.object(dt, "datetime", AckClock):
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 0)
+            output = pass_once(now + dt.timedelta(minutes=6))
+            items = json.loads(board.read_text())["items"]
+            exact(items, [])
+            exact("WATCHDOG quiet" in output, True)
+
+            # A changed cause is a different key and alarms at once.
+            codes["code"] = 78
+            output = pass_once(now + dt.timedelta(minutes=9))
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact(items[0]["cause"], "gatekeep failing (last exit code 78)")
+
+            # The same cause comes back after four hours.
+            data = json.loads(board.read_text())
+            data["items"] = []
+            board.write_text(json.dumps(data))
+            codes["code"] = 1
+            output = pass_once(now + dt.timedelta(hours=4, minutes=10))
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact(items[0]["cause"], "gatekeep failing (last exit code 1)")
+
+            # A tick where the job is healthy does not take the mute with
+            # it: the same cause stays quiet for the rest of the four
+            # hours.
+            class LaterClock(dt.datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now + dt.timedelta(hours=4, minutes=11)
+
+            with patch.object(dt, "datetime", LaterClock):
+                exact(alarms.main(["ack", "factory-watchdog", cause]), 0)
+            data = json.loads(board.read_text())
+            data["items"] = []
+            board.write_text(json.dumps(data))
+            codes["code"] = 0
+            output = pass_once(now + dt.timedelta(hours=4, minutes=12))
+            exact(json.loads(board.read_text())["items"], [])
+            codes["code"] = 1
+            output = pass_once(now + dt.timedelta(hours=4, minutes=13))
+            exact(json.loads(board.read_text())["items"], [])
+            exact("WATCHDOG quiet" in output, True)
+
+            # An alarm on the board always has a key: the key is written
+            # before the alarm is published. A key that cannot be written
+            # is said out loud, and the alarm is published anyway: a
+            # storage failure must not hide a real failure.
+            codes["code"] = 78
+            with patch.object(alarms, "write_state", return_value=False):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=14))
+            items = json.loads(board.read_text())["items"]
+            exact(len(items), 1)
+            exact(items[0]["id"], "factory-watchdog")
+            exact("the alarm key could not be written" in output, True)
+
+            # A quiet tick writes nothing, so a write that fails cannot
+            # turn a muted alarm into a published one.
+            codes["code"] = 1
+            with patch.object(alarms, "write_state", return_value=False):
+                output = pass_once(now + dt.timedelta(minutes=30))
+            items = [i for i in json.loads(board.read_text())["items"]
+                     if i["id"] == "factory-watchdog"]
+            exact(items, [])
+            exact("WATCHDOG quiet" in output, True)
+
+            # A new cause raises its own alarm, so the board holds the
+            # watchdog's item.
+            codes["code"] = 78
+            output = pass_once(now + dt.timedelta(minutes=33))
+            ids = [i["id"] for i in json.loads(board.read_text())["items"]]
+            exact("factory-watchdog" in ids, True)
+            # The board is read under the lock, so the two writers do not
+            # lose each other's item: the stall writer adds its item and
+            # the watchdog's item stays.
+            target, action = rule.alert("no board progress for 3 ticks", None, board)
+            ids = [i["id"] for i in json.loads(board.read_text())["items"]]
+            exact("factory-watchdog" in ids, True)
+            exact("factory-overnight-stall" in ids, True)
+
+            # The board lock is held while the board is read, changed
+            # and replaced, and it is its own file, so a mute storage
+            # that cannot be locked does not leave the board open.
+            import fcntl
+            import os as _os
+            held = []
+
+            def watched_open(path, *args, **kwargs):
+                if str(path) == str(board):
+                    other = _os.open(str(str(board) + ".lock"),
+                                     _os.O_RDWR | _os.O_CREAT, 0o600)
+                    try:
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held.append(False)
+                        fcntl.flock(other, fcntl.LOCK_UN)
+                    except OSError:
+                        held.append(True)
+                    finally:
+                        _os.close(other)
+                return open(path, *args, **kwargs)
+
+            codes["code"] = 1
+            with patch.object(lane, "open", create=True, side_effect=watched_open):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=43))
+            exact(held, [True])
+
+            # A board that cannot be written is said out loud: the alarm
+            # is nowhere, and the tick says so.
+            with patch.object(lane.json, "dump", side_effect=OSError("read-only")):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=40))
+            exact("could not be published" in output, True)
+
+            # A board that cannot be read is said out loud too: the alarm
+            # is nowhere, and the tick says so.
+            board.unlink()
+            output = pass_once(now + dt.timedelta(hours=4, minutes=41))
+            exact("could not be published" in output, True)
+            board.write_text(json.dumps({"items": []}))
+
+            # The healthy branch cleans the board even when the mute
+            # state cannot be locked or read: a stale alarm must not
+            # stay on the board.
+            codes["code"] = 78
+            pass_once(now + dt.timedelta(hours=4, minutes=44))
+            ids = [i["id"] for i in json.loads(board.read_text())["items"]
+                   if i["id"] == "factory-watchdog"]
+            exact(ids, ["factory-watchdog"])
+            codes["code"] = 0
+            real_take_lock = alarms.take_lock
+
+            def mute_lock_only(path=None):
+                """Fail the mute lock, and leave the board lock alone."""
+                if path is None or str(path) == str(Path(str(mute) + ".lock")):
+                    return None
+                return real_take_lock(path)
+
+            with patch.object(alarms, "take_lock", side_effect=mute_lock_only):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=45))
+            ids = [i["id"] for i in json.loads(board.read_text())["items"]
+                   if i["id"] == "factory-watchdog"]
+            exact(ids, [])
+
+            # The board is read while the state lock is held, so the two
+            # writers cannot read it stale and lose each other's item.
+            import fcntl
+            import os as _os
+            held = []
+
+            def watched_open(path, *args, **kwargs):
+                if str(path) == str(board):
+                    other = _os.open(str(Path(str(mute) + ".lock")),
+                                     _os.O_RDWR | _os.O_CREAT, 0o600)
+                    try:
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held.append(False)
+                        fcntl.flock(other, fcntl.LOCK_UN)
+                    except OSError:
+                        held.append(True)
+                    finally:
+                        _os.close(other)
+                return open(path, *args, **kwargs)
+
+            codes["code"] = 1
+            with patch.object(lane, "open", create=True, side_effect=watched_open):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=42))
+            exact(held, [True])
+
+
+
+EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+
+
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():

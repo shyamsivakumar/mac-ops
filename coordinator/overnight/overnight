@@ -156,6 +156,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tick_health import tick_alarm
 
+import alarms
 import stall
 
 from typing import NoReturn
@@ -1455,6 +1456,10 @@ def cmd_shift(args: argparse.Namespace) -> int:
     now_pt = datetime.now(PT)
     stamp = now_pt.strftime("%Y-%m-%d %H:%M %Z")
     root = report_root(args.root)
+    # The mute for the alarms lives in the shift's own records, beside
+    # the stall state, so a board file the coordinator rewrites cannot
+    # take the mute with it.
+    alarms.MUTE_PATH = str(root / "run" / "mute-state.json")
     if now_local.utcoffset() != now_pt.utcoffset():
         emit(
             "overnight: the Mac's clock is not on Pacific time, so the job "
@@ -1677,6 +1682,7 @@ def stall_records(
     The shift does not end here: the sweep ran again and the shift keeps
     running until every item is done or parked."""
     written: list[str] = []
+    board_event = False
     for event in events:
         kind = event.get("kind")
         if kind == "item":
@@ -1705,29 +1711,56 @@ def stall_records(
             )
             written.append(f"{receipt_path(root, item)} ({outcome})")
         elif kind == "board":
-            reason = (
-                f"The overnight shift saw no board progress for "
-                f"{event.get('idle')} ticks. The board was swept again and the "
-                "shift keeps running until every item is done or parked."
-            )
-            target = stall.alert(reason, board)
-            if target:
-                if isinstance(state, dict):
-                    stall.delivered(state)
-                write_shift_line(
-                    root,
-                    f"stall: no board progress for {event.get('idle')} ticks; the "
-                    "board was swept again and Shyam was alerted",
-                )
-                written.append(target)
-            else:
-                write_shift_line(
-                    root,
-                    f"stall: no board progress for {event.get('idle')} ticks; the "
-                    "board was swept again and the alert could not be written",
-                )
-                written.append("the alert could not be written")
+            board_event = True
+            written.append(stall_alert(root, event.get("idle"), state, board))
+    # A stall that continues: the board has not moved since the alert was
+    # delivered, so the rule stops asking. The shift asks anyway, on every
+    # tick, because the writer knows whether the alarm is due: it is quiet
+    # while the mute runs, and it comes back when the four hours are over.
+    if not board_event and stall.continues(state):
+        written.append(stall_alert(root, int(state.get("board_idle") or 0), state, board))
     return written
+
+
+def stall_alert(root, idle, state, board=None):
+    """Write the board stall alarm and write the line that says what it did.
+
+    The writer decides: the alarm is written, or it stays quiet for the
+    same cause, or its item went off the board and the shift asks again
+    on the next tick. The shift logs one line per tick either way."""
+    reason = (
+        f"The overnight shift saw no board progress for "
+        f"{idle} ticks. The board was swept again and the "
+        "shift keeps running until every item is done or parked."
+    )
+    cause = stall.alarm_cause(reason, state)
+    target, action = stall.alert(reason, cause, board)
+    if action == "wrote":
+        if isinstance(state, dict):
+            stall.delivered(state)
+        write_shift_line(
+            root,
+            f"stall: no board progress for {idle} ticks; the "
+            "board was swept again and Shyam was alerted",
+        )
+        return target
+    if action == "quiet":
+        # The alarm was answered or routed, so the same cause stays quiet
+        # for four hours. The shift logs one line per tick and the board
+        # holds no item for it.
+        write_shift_line(
+            root,
+            f"stall: no board progress for {idle} ticks; the "
+            "board was swept again and the alarm stays quiet for the same "
+            "cause",
+        )
+        return "the alarm stays quiet for the same cause"
+    write_shift_line(
+        root,
+        f"stall: no board progress for {idle} ticks; the "
+        "board was swept again and the alert could not be written",
+    )
+    return "the alert could not be written"
 
 
 def show_stall_state(explicit: str | None = None) -> int:
@@ -1838,6 +1871,10 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
         board = root / "decisions.json"
         if not board.exists():
             write_record(board, json.dumps({"items": []}, indent=1) + "\n")
+        # The mute state belongs to the root the fixture chose, so a
+        # fixture run never writes a synthetic alarm key into the live
+        # state and never reads a live acknowledgement.
+        alarms.MUTE_PATH = str(root / "run" / "mute-state.json")
         for line in stall_records(root, events, str(board), state):
             emit(f"wrote {line}")
         save_stall_state(root, state)

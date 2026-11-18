@@ -677,7 +677,10 @@ def ensure_overnight_dirs(coordinator: Path, home: Path) -> list[Path]:
 
 def smoke_checks(home: Path) -> list[dict]:
     results = []
-    for name, argument in (("coordq", "status"), ("ticket", "--help"), ("overnight", "--help")):
+    # `alarms.py` is the command the coordinator panel runs when Shyam
+    # answers an alarm, so the install checks that it runs.
+    for name, argument in (("coordq", "status"), ("ticket", "--help"),
+                           ("overnight", "--help"), ("alarms.py", "--help")):
         command = ["/opt/homebrew/bin/python3", str(home / ".local/bin" / name), argument]
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=30,
