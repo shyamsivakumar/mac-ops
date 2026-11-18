@@ -12,6 +12,10 @@ let flushing = false;
 let lastPass = 0;
 
 export const logLaneChange = (event) => queue.push(event);
+export const logAct = (event) => queue.push(event);
+
+const actId = (e) => `${e.key}|${e.act}|${e.t}`;
+const isLane = (e) => !e.gap && !e.act;
 
 export function markPass(now) {
   if (now - lastPass > GAP_AFTER) queue.push({ t: now, gap: true });
@@ -19,7 +23,7 @@ export function markPass(now) {
 }
 
 const isNew = (last, e) => {
-  if (e.gap) return true;
+  if (e.gap || e.act) return true;
   return e.to === null ? last.has(e.key) && last.get(e.key) !== null : last.get(e.key) !== e.to;
 };
 
@@ -34,7 +38,7 @@ const parse = (text) => (text ?? "").split("\n").flatMap((line) => {
 const utf8Length = (text) => [...text].reduce((n, c) => n + (c.codePointAt(0) < 128 ? 1 : c.codePointAt(0) < 2048 ? 2 : c.codePointAt(0) < 65536 ? 3 : 4), 0);
 
 function trim(events, now) {
-  const latest = new Map(events.filter((e) => !e.gap).map((e) => [e.key, e]));
+  const latest = new Map(events.filter(isLane).map((e) => [e.key, e]));
   const pinned = new Set([...latest.values()].filter((e) => e.to !== null));
   let rest = events.filter((e) => !pinned.has(e) && e.t >= now - MAX_AGE).slice(-Math.max(0, MAX_LINES - pinned.size));
   const sizes = new Map([...pinned, ...rest].map((e) => [e, utf8Length(JSON.stringify(e)) + 1]));
@@ -53,11 +57,14 @@ export async function flushFlowLog(now) {
     await exec("mkdir", ["-p", DIR]);
     const text = await readTextFile(FILE);
     const events = parse(text);
-    const last = new Map(events.filter((e) => !e.gap).map((e) => [e.key, e.to]));
+    const last = new Map(events.filter(isLane).map((e) => [e.key, e.to]));
+    const acts = new Set(events.filter((e) => e.act).map(actId));
     const fresh = [];
     for (const e of batch) {
       if (!isNew(last, e)) continue;
-      if (!e.gap) last.set(e.key, e.to);
+      if (e.act && acts.has(actId(e))) continue;
+      if (e.act) acts.add(actId(e));
+      if (isLane(e)) last.set(e.key, e.to);
       fresh.push(e);
     }
     if (!fresh.length) return;

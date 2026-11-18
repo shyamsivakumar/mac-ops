@@ -633,6 +633,14 @@ function decisionBase(col, g, info, verdict, now, tab) {
       checks: null,
     };
   }
+  const askingThread = g.lead ?? c;
+  const asked = col === "needs" && (askingThread.kind === "done" || askingThread.kind === "idle") ? askingThread.choices : null;
+  if (asked) {
+    const best = asked.options.indexOf(asked.recommended);
+    const pick = (i) => ({ id: `choice:${i}`, key: String(i + 1), label: clip(asked.options[i], 60) });
+    const rest = asked.options.map((_, i) => i).filter((i) => i !== best).map(pick);
+    return { headline: `Answer ${name}'s question`, primary: pick(best), why: [asked.question, `${g.project} · asked ${age} ago`], hint: "Press the number or click to send that answer to the thread now. Enter sends the recommended one.", other: [...rest, ...other], checks: null };
+  }
   const checks = pr ? checksOf(info.gh, verdict) : null;
   if (reasons?.[0] === "stalled") {
     return { headline: `${name} has stalled`, primary: { id: "open", key: "o", label: "Open thread" }, why: [`No agent activity for ${elapsed(now - stallOf(g, now))}.`, `${g.title} · ${g.project}`], other: other.filter((x) => x.id !== "open"), checks: null };
@@ -852,7 +860,7 @@ function ticketPanel(t, v, cb) {
 export function decisionView(t, v, input, cb) {
   const { col, d, armed, armedKind, outdated, replying, outcome } = v;
   const [, label, tone] = LANES.find((l) => l[0] === col);
-  const hint = d.hint ?? (outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "open" ? "Opens the thread in T3 Code." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`);
+  const hint = outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.hint ?? (d.primary.id === "open" ? "Opens the thread in T3 Code." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`);
   return v_flex().size_full().min_h(0)
     .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
       .child(div().size(7).flex_none().rounded(4).bg(t[tone]))
