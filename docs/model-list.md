@@ -33,11 +33,12 @@ is blocked, the caller waits and says so.
   chooses the gate reviewer in the gatekeep and the backstop.
 - The lane driver picks a builder for every launch and every send: the
   first entry of the build list that is not blocked, with the ticket's
-  `builder:<id>` label first. A thread that runs no model of the list, a
-  thread whose provider is blocked, and a thread that works in the shared
-  root of a repository take no send; the work starts a fresh thread on
-  the chosen builder instead, in the same worktree when the thread has
-  one.
+  `builder:<id>` label first. A thread takes the send only when it runs
+  that builder, its provider is not blocked, and it works in a worktree of
+  its own. A thread that fails any of those - a legacy Sol thread, another
+  builder of the list, a blocked provider, the shared root of a repository -
+  takes no send: the work starts a fresh thread on the chosen builder
+  instead, in the same worktree when the thread has one.
 - `install_coordinator.py` regenerates the `ROUTES` table of
   `~/.pi/agent/extensions/task-router.ts` from the pi-prefixed entries of the
   build list, so pi cannot drift from the file.

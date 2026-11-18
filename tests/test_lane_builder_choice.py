@@ -110,6 +110,21 @@ class BuilderChoice(unittest.TestCase):
         out, payload = self.launch(self.thread(SOL), issue=10, builder_label="glm")
         self.assertEqual(payload["modelSelection"], GLM)
 
+    def test_a_thread_on_another_builder_takes_no_send(self):
+        # The ticket names glm, so a minimax thread does not take the work.
+        out, payload = self.launch(self.thread(MINIMAX), issue=10, builder_label="glm")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["modelSelection"], GLM)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "existing_worktree", "worktreePath": "/fixture/worktree"})
+
+    def test_a_thread_on_the_second_builder_takes_no_send(self):
+        # With no preference the first entry of the list is the builder,
+        # so a glm thread does not take the work either.
+        out, payload = self.launch(self.thread(GLM))
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["modelSelection"], MINIMAX)
+
     def test_a_blocked_provider_is_never_launched_on(self):
         self.block("minimax:MiniMax-M3.1-Flash")
         out, payload = self.launch(self.thread(SOL))
@@ -208,6 +223,93 @@ class DeadRunChoice(unittest.TestCase):
     def test_a_provider_failure_names_the_builder_as_out(self):
         messages = [{"type": "provider_error", "text": "429 rate limit reached"}]
         self.assertEqual(self.relaunch(MINIMAX, messages), GLM)
+
+
+class CompletedGate(unittest.TestCase):
+    """A gate that ended without a verdict is not a builder failure.
+
+    The gate is retried once on the same head and then parks as
+    needs-you. The builder takes no message and no thread: a gate that
+    ended without a verdict says nothing about the builder.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.previous = os.environ.get("COORDQ_DIR")
+        os.environ["COORDQ_DIR"] = self.scratch.name
+
+        def restore():
+            if self.previous is None:
+                os.environ.pop("COORDQ_DIR", None)
+            else:
+                os.environ["COORDQ_DIR"] = self.previous
+        self.addCleanup(restore)
+        self.lane = load_lane()
+        self.lane.DRY = False
+
+    def replay(self, ledger):
+        """Two lane passes over a pull request whose gate ended without a verdict."""
+        lane = self.lane
+        head = "a" * 40
+        pr = {"number": 20, "state": "OPEN", "headRefOid": head, "mergeable": "MERGEABLE",
+              "isDraft": False, "statusCheckRollup": [],
+              "body": f"Refs #10\nBuilder check: PASS {head}"}
+        snapshot = {"tickets": [], "repos": {REPO: {"prs": [pr], "issues": [{"number": 10, "labels": []}]}}}
+        builder = {"threadId": "builder", "status": "completed",
+                   "providerInstanceId": MINIMAX["instanceId"], "model": MINIMAX["model"],
+                   "worktreePath": "/fixture/worktree", "pullRequests": []}
+        gate = {"threadId": "gate", "status": "completed", "updatedAt": "fixture"}
+        launches = []
+
+        def t3(tool, args):
+            if tool == "t3_thread_list":
+                return {"threads": [gate]}
+            if tool == "t3_thread_read" and args.get("view") == "messages":
+                return {"items": [{"type": "assistant_message",
+                                   "text": "the gate ended without a verdict"}]}
+            if tool == "t3_thread_read":
+                return {"thread": builder}
+            raise AssertionError(f"unexpected T3 call {tool}")
+
+        def run(cmd, timeout=150):
+            if cmd[:2] == ["ticket", "gate"]:
+                if "--print-model" in cmd:
+                    return json.dumps([{"id": "astra-sub", "vendor": "openai",
+                                       "selection": {"instanceId": "codex", "model": "gpt-6.2-astra"}}])
+                return f"Gate exact head {head}"
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return json.dumps({"state": "OPEN", "mergedAt": None})
+            if cmd[:2] == [lane.COORDQ, "start"]:
+                launches.append(json.loads(cmd[2]))
+                return "fixture-receipt"
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
+             patch.object(lane, "CFG", {REPO: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+             patch.object(lane, "builder_thread", return_value=("10", "builder")), \
+             patch.object(lane, "root_workspace", return_value=False), \
+             patch.object(lane, "read_json", return_value={"number": 20, "state": "OPEN",
+                                                           "headRefName": "builder/fixture",
+                                                           "baseRefName": "main"}), \
+             patch.object(lane, "run", run), patch.object(lane, "t3", t3), \
+             redirect_stdout(io.StringIO()):
+            first = lane.act_on_pr(REPO, 20, ledger)
+            second = lane.act_on_pr(REPO, 20, ledger)
+        return first, second, launches
+
+    def test_a_completed_gate_without_a_verdict_is_not_a_builder_failure(self):
+        first, second, launches = self.replay({})
+        # One gate for the head: the retry. No second one.
+        self.assertEqual(len(launches), 1)
+        self.assertEqual(launches[0]["taskType"], "review")
+        self.assertIn("regate", launches[0]["clientRequestId"])
+        # The builder takes no message and no thread: the gate that ended
+        # without a verdict is not a failure of the builder.
+        self.assertNotIn("threadId", launches[0])
+        self.assertTrue(second.startswith("#20: needs-you"), second)
+        self.assertIn("regate", first)
 
 
 if __name__ == "__main__":
