@@ -188,10 +188,20 @@ def probe_pi_guards() -> None:
             "cwd": str(SCRATCH),
             "event": {"toolName": "bash", "input": {"command": "git push --set-upstream origin t3/deny-probe"}},
         },
+        {
+            "label": "push a task branch named main.fix",
+            "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": "git push origin main.fix"}},
+        },
+        {
+            "label": "push to main on a second remote",
+            "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": "git push upstream main"}},
+        },
     ]
     expect_block = [
         True, True, True, True, True, True, True, True, True, True,
-        False, True, True, True, False, False,
+        False, True, True, True, False, False, False, True,
     ]
     for instance in PI_INSTANCES:
         guard = HOME / ".pi" / instance / "extensions/deny-guard.ts"
@@ -267,6 +277,8 @@ def probe_claude_settings() -> None:
         ("push to master on a second remote", "git push other master", None, "deny"),
         ("force-push on a second remote", "git push -f other t3/x", None, "deny"),
         ("push a task branch", "git push --set-upstream origin t3/deny-probe", None, "allow"),
+        ("push a branch named main.fix (a task branch, not main)", "git push origin main.fix", None, "allow"),
+        ("push to main on a second remote", "git push upstream main", None, "deny"),
     )
     for label, command, role, want in cases:
         decision = hook_decision(command, role)

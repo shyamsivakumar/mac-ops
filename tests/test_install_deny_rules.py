@@ -219,6 +219,11 @@ class ListTest(unittest.TestCase):
             "git push origin t3/deny-rules",
             "git push origin t3/main-fix",
             "git push origin feature/main-work",
+            "git push origin main.fix",
+            "git push origin master.fix",
+            "git push origin main2",
+            "git push origin HEAD:main.fix",
+            "git push origin refs/heads/main.fix",
             "git push --set-upstream origin t3/x",
             "git -C /tmp/repo push origin t3/deny-rules",
         ):
@@ -322,6 +327,19 @@ class HookTest(unittest.TestCase):
             decision = self.decided(command)
             self.assertIsNotNone(decision, command)
             self.assertEqual(decision["permissionDecision"], "deny", command)
+
+    def test_allows_task_branches_that_start_with_a_protected_name(self):
+        # `main.fix` is a task branch, not the protected ref `main`: the rule
+        # compares the complete destination ref, not a prefix of it.
+        for command in (
+            "git push origin main.fix",
+            "git push origin master.fix",
+            "git push origin main2",
+            "git push origin HEAD:main.fix",
+            "git push origin refs/heads/main.fix",
+            "git push origin feature/main.fix",
+        ):
+            self.assertIsNone(self.decided(command), command)
 
     def test_denies_force_push_on_every_remote(self):
         for command in (

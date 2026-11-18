@@ -21,7 +21,9 @@ PASS claude hook: pin that is not a merge argument: deny (mac-ops deny rules (#5
 PASS claude hook: push to master on a second remote: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
 PASS claude hook: force-push on a second remote: deny (mac-ops deny rules (#530): force-push in any form is denied)
 PASS claude hook: push a task branch: allow (no decision)
-PASS pushing a task branch is still allowed (scratch remote): pushed to /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-0rs01qsq/remote.git: ['refs/heads/t3/deny-probe']
+PASS claude hook: push a branch named main.fix (a task branch, not main): allow (no decision)
+PASS claude hook: push to main on a second remote: deny (mac-ops deny rules (#530): pushing to main or master is denied for any)
+PASS pushing a task branch is still allowed (scratch remote): pushed to /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-jg9j5unt/remote.git: ['refs/heads/t3/deny-probe']
 PASS scratch remote has no main branch (nothing was pushed to main): refs on scratch remote: ['refs/heads/t3/deny-probe']
 
-19 passed, 0 failed, 6 not run
+21 passed, 0 failed, 6 not run
