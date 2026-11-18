@@ -40,6 +40,15 @@ DEAD_GATE = {"thread": {"status": "failed", **ASTRA_GATE},
 DEAD_OPUS_GATE = {"thread": {"status": "failed", **OPUS_GATE},
                  "items": [{"type": "user_message", "text": "review"}],
                  "recentRuns": [{"executedModel": None}]}
+# A dead Opus gate whose provider refusal says when it comes back, in a window
+# shorter than the head's own five-minute retry backoff.
+SHORT_RESET_GATE = {"thread": {"status": "failed", "latestRunId": "run-1", **OPUS_GATE},
+                    "items": [{"type": "user_message", "text": "review"}],
+                    "recentRuns": [{"runId": "run-1", "status": "failed",
+                                     "executedModel": None,
+                                     "error": {"code": "rate_limit_exceeded",
+                                               "message": "too many requests, your plan "
+                                                          "resets in 30 seconds"}}]}
 
 coordq = None
 QUEUE_DIR = None
@@ -239,6 +248,59 @@ class BackoffTest(RetryLimitBase):
         time.sleep(0.01)
         self.run_gatekeep()
         self.assertEqual(self.blocked_until(), first)
+
+    def test_a_short_reset_is_not_blocked_again_after_it_ends(self):
+        # The provider says it comes back in 30 seconds, so its block ends
+        # inside this head's five-minute backoff. The next pass reads the same
+        # dead run and must leave the freed reviewer to other heads instead of
+        # blocking it a second time for one failure.
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(SHORT_RESET_GATE))
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
+                                          "at": time.time(), "givenUp": False,
+                                          "reviewer": OPUS_GATE}})
+        before = len(self.block_lines())
+        self.run_gatekeep()
+        self.assertAlmostEqual(self.blocked_until() - time.time(), 30, delta=5)
+        self.assertEqual(len(self.block_lines()), before + 1)
+        self.end_blocks()
+        self.run_gatekeep()
+        self.assertFalse(coordq.is_blocked(reviewer_of(OPUS_GATE)))
+        self.assertEqual(len(self.block_lines()), before + 1)
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_new_failure_after_a_short_reset_still_blocks(self):
+        # The failure is blocked once, not never: a run the block was not
+        # recorded for still blocks the reviewer.
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(SHORT_RESET_GATE))
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
+                                          "at": time.time(), "givenUp": False,
+                                          "reviewer": OPUS_GATE}})
+        before = len(self.block_lines())
+        self.run_gatekeep()
+        self.end_blocks()
+        newer = json.loads(json.dumps(SHORT_RESET_GATE))
+        newer["thread"]["latestRunId"] = "run-2"
+        newer["recentRuns"][0]["runId"] = "run-2"
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(newer))
+        self.run_gatekeep()
+        self.assertTrue(coordq.is_blocked(reviewer_of(OPUS_GATE)))
+        self.assertEqual(len(self.block_lines()), before + 2)
+
+    def end_blocks(self):
+        """Put every recorded block in the past, as its provider window ending does."""
+        with open(os.path.join(QUEUE_DIR, "reviewers-blocked.json")) as f:
+            records = json.load(f)
+        for record in records.values():
+            record["until"] = time.time() - 1
+        with open(os.path.join(QUEUE_DIR, "reviewers-blocked.json"), "w") as f:
+            json.dump(records, f)
+
+    def block_lines(self):
+        try:
+            with open(os.path.join(QUEUE_DIR, "dispatch.log")) as f:
+                return [line for line in f if "blocked until" in line]
+        except OSError:
+            return []
 
     def blocked_until(self):
         try:
