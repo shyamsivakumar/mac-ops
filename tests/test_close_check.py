@@ -345,6 +345,29 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("tests/test_alarm_panel.py", item["detail"])
         self.assertNotIn("pass", item["status"])
 
+    def test_a_nested_scope_heading_does_not_lift_the_exclusion(self):
+        """A heading under an exclusion cannot permit what it holds.
+
+        "### Scope" inside "## Out of scope" does not make the files
+        beneath it permitted: the exclusion holds until a sibling or a
+        higher heading ends it.
+        """
+        check = close_check()
+        ticket = ("In: src/\n## Out of scope\n### Scope\nsrc/legacy.py\n")
+        item = check.item_scope(ticket, ["src/parser.py", "src/legacy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("src/legacy.py", item["detail"])
+
+    def test_the_inferred_test_allowance_reaches_test_files_only(self):
+        """A fixture that carries the name of a source is not its test."""
+        check = close_check()
+        ok, _ = check.in_scope("tests/fixtures/close_check.json", {"close_check.py"},
+                               ["src/close_check.py"])
+        self.assertFalse(ok)
+        ok, _ = check.in_scope("tests/test_close_check.py", {"close_check.py"},
+                               ["src/close_check.py"])
+        self.assertTrue(ok)
+
     def test_a_sibling_heading_restores_the_enclosing_exclusion(self):
         """A subsection does not take the enclosing section's intent away.
 

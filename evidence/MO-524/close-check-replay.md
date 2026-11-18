@@ -62,7 +62,9 @@ The work goes back to its builder and the ticket stays open.
   background, and a file named in the context section is a reference, not a
   permission. A ticket that declares no scope names no file, so its scope cannot be
   judged and the close is refused.
-- A heading under a section belongs to that section, so it keeps the section's intent: a
+- A heading under a section cannot lift the exclusion of the section it sits in: a
+  "### Scope" inside "## Out of scope" leaves the files beneath it excluded. A heading
+  under a section belongs to that section, so it keeps the section's intent: a
   file under "### Protected files" inside "## Out of scope" stays excluded, and a
   sibling heading restores the intent of the section around it rather than dropping
   it. Only a heading of the same level or higher ends a section.
@@ -79,8 +81,9 @@ The work goes back to its builder and the ticket stays open.
 - An exclusion is not a permission. The words after an "out" marker, the list
   entries under it and the rest of its section are exclusions, so a change to one of
   them fails the scope item, and an excluded name never widens the scope.
-- A test changes when the ticket names that test, or when it is the test of a file the
-  change touches by name. No string ties a test to a change: a pull request can
+- A test changes when the ticket names that test, or when it is a test file of a file
+  the change touches by name. The inferred allowance reaches test files only, so a
+  fixture that carries the name of a source is not part of the change. No string ties a test to a change: a pull request can
   write the same string into an unrelated test and into a file it changed, whether
   the change introduced that string or not, so a shared string proves nothing.
   Evidence is not a source, so a pull request cannot supply the file that
