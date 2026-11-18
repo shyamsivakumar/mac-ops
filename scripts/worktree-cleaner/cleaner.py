@@ -1918,19 +1918,41 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     survived = bool(remaining)
                     tree_gone = False
                     if not survived:
-                        # The directory that is removed has to be the one
-                        # that was verified, so a replacement that took the
-                        # path is not removed.
+                        # The directory that is removed has to be the one that
+                        # was verified. It is renamed aside first, so the
+                        # directory that is removed belongs to this call and a
+                        # replacement that took the path is put back.
                         try:
-                            current = os.stat(candidate["path"], follow_symlinks=False)
+                            parent = os.open(Path(candidate["path"]).parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                         except OSError:
-                            current = None
-                        if current is not None and (not expected_identity or f"{current.st_dev}:{current.st_ino}" == expected_identity):
+                            parent = None
+                        if parent is None:
+                            tree_gone = False
+                        else:
+                            aside = f".cleaner-removed-{os.getpid()}-{abs(hash(candidate['path'])) & 0xFFFF:x}"
                             try:
-                                os.rmdir(candidate["path"])
-                                tree_gone = True
+                                os.rename(candidate["path"], aside, src_dir_fd=parent, dst_dir_fd=parent)
                             except OSError:
                                 tree_gone = False
+                            else:
+                                try:
+                                    info = os.stat(aside, dir_fd=parent, follow_symlinks=False)
+                                except OSError:
+                                    info = None
+                                matched = info is not None and (not expected_identity or f"{info.st_dev}:{info.st_ino}" == expected_identity)
+                                if matched:
+                                    try:
+                                        os.rmdir(aside, dir_fd=parent)
+                                        tree_gone = True
+                                    except OSError:
+                                        tree_gone = False
+                                if not tree_gone:
+                                    try:
+                                        os.rename(aside, candidate["path"], src_dir_fd=parent, dst_dir_fd=parent)
+                                    except OSError:
+                                        candidate["checkout_conflict"] = True
+                            finally:
+                                os.close(parent)
                     # The registration is removed through its own descriptor, so a
                     # registration that replaced it in the meantime is not
                     # touched.

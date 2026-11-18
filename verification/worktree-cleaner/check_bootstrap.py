@@ -268,7 +268,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         listed = git(repo, "worktree", "list", "--porcelain")
         assert str(paths["bootstrap"]) not in listed, listed
         assert str(paths["onmain"]) not in listed, listed
-        aside = [item for item in trees.iterdir() if item.name.startswith(".worktree-cleaner-aside-")]
+        aside = [item for item in trees.iterdir() if item.name.startswith((".worktree-cleaner-aside-", ".cleaner-removed-", ".cleaner-unlink-"))]
         assert not aside, aside
         assert git(repo, "show-ref", "--verify", "refs/heads/real")
         print(json.dumps({"ok": True, "removed": applied["removed"], "bootstrap_only_removed": True, "real_work_kept": True, "ascend_untouched": True}))
