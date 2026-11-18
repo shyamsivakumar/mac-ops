@@ -461,33 +461,44 @@ def _exclusive_write(repo: Path, relative: Path, data: bytes, mode: int) -> bool
     published with a link, which is atomic and refuses a path that already
     exists. A save that lands at the path keeps its own file, and a save
     that lands after the publication sees a complete file.
+
+    Everything happens relative to the descriptor of the parent directory, so
+    a parent that was replaced by a link in between cannot move the write
+    out of the worktree.
     """
     parent = _open_parent_fd(repo, relative.parent)
     if parent is None:
         return False
-    temporary: Path | None = None
+    temporary: str | None = None
     try:
-        try:
-            descriptor, name = tempfile.mkstemp(dir=repo / relative.parent, prefix=".cleaner-", suffix=".tmp")
-        except OSError:
+        for attempt in range(64):
+            name = f".cleaner-{os.getpid()}-{attempt}-{id(data) & 0xFFFF:x}"
+            try:
+                descriptor = os.open(name, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600, dir_fd=parent)
+            except FileExistsError:
+                continue
+            except OSError:
+                return False
+            temporary = name
+            break
+        if temporary is None:
             return False
-        temporary = Path(name)
         with os.fdopen(descriptor, "wb") as handle:
             os.fchmod(handle.fileno(), mode)
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.link(temporary, relative.name, dst_dir_fd=parent)
+        os.link(temporary, relative.name, src_dir_fd=parent, dst_dir_fd=parent)
         return True
     except OSError:
         return False
     finally:
-        os.close(parent)
         if temporary is not None:
             try:
-                temporary.unlink()
+                os.unlink(temporary, dir_fd=parent)
             except OSError:
                 pass
+        os.close(parent)
 
 
 def _read_at(parent: int, name: str) -> bytes | None:
@@ -589,15 +600,11 @@ def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool
                 return False
             return True
         mode = int(entry[0], 8) & 0o777
-        try:
-            descriptor = os.open(relative.name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode, dir_fd=parent)
-        except OSError:
-            return False
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(entry[2])
-        return True
     finally:
         os.close(parent)
+    # The committed bytes are published the same way as any other file: a
+    # private file first, then an atomic link that refuses an occupied path.
+    return _exclusive_write(repo, relative, entry[2], mode)
 
 
 def _trash_path(trash: Path, prefix: str) -> Path:
