@@ -903,7 +903,9 @@ def watchdog():
                 # mute storage that cannot be locked must not leave the
                 # board unprotected, or two publishers read the same
                 # board and one alarm disappears.
-                with alarms.board_locked(p):
+                with alarms.board_locked(p) as unlocked:
+                    if unlocked:
+                        print("WATCHDOG the board lock could not be taken; the board was written without it")
                     with open(p) as handle:
                         d = json.load(handle)
                     if not isinstance(d, dict) or not isinstance(d.get("items"), list):

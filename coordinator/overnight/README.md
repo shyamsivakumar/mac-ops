@@ -1408,7 +1408,8 @@ across the read, the change and the replace. It is not the mute lock: a
 mute storage that cannot be locked must not leave the board unprotected,
 or the watchdog and the stall writer read the same board and one alarm
 disappears. Each publisher also replaces the board from a temporary file
-of its own.
+of its own. A board lock that cannot be taken does not hide the alarm
+either: the board is written without it and the fault is said out loud.
 
 An alarm on the board always has a key. The key is written before the alarm
 is published, so the answer Shyam gives it has something to acknowledge. A

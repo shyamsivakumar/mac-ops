@@ -2082,6 +2082,26 @@ def alarm_mute():
             exact(action, "unchecked")
             exact(published, ["unchecked"])
 
+    # A board lock that cannot be taken does not hide the alarm: the
+    # board is written without it and the fault is said out loud.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            published = []
+            with patch.object(alarms, "take_lock", return_value=None):
+                action = alarms.decide_and_publish("factory-watchdog", cause,
+                                                   lambda a: published.append(a))
+            exact(action, "unchecked")
+            exact(published, ["unchecked"])
+            # The board lock is its own file, so a mute lock that cannot
+            # be taken does not leave the board open.
+            with patch.object(alarms, "take_lock", side_effect=lambda path=None: None):
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    target, action = rule.alert("no board progress for 3 ticks", None,
+                                                Path(scratch) / "decisions.json")
+                exact("the board lock could not be taken" in buffer.getvalue(), True)
+
     # The stall's cause names the stalled repos, so two stalls on
     # different repos are different causes.
     stalled = {"items": {"a/one#1": {"stalled": True}, "b/two#2": {"stalled": False}}}
