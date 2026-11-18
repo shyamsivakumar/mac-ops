@@ -422,7 +422,7 @@ the label of the tick, which the command prints with the stall it reports.
 }
 ```
 
-`evidence/MO-520/tonight.json` is a fixture of a real night: the tick
+`evidence/MO-1075-520/tonight.json` is a fixture of a real night: the tick
 times are the shift log's own lane pass lines and the events are the pull
 requests that merged and the tickets that closed. `proof.py` next to it
 replays that night through the real command and shows that a tick with a
