@@ -360,14 +360,6 @@ def gate_pipeline():
                 # The post-merge guard: a merged pull request cannot be
                 # retargeted, so this base is the one the merge landed on.
                 return json.dumps({"baseRefName": "main"})
-            if cmd[:4] == ["gh", "api", "--method", "POST"]:
-                # The merges endpoint names the reviewed base, so a retarget
-                # cannot move the destination.
-                exact(cmd[4], "repos/%s/merges" % target)
-                exact("base=main" in cmd, True)
-                exact("head=" + head in cmd, True)
-                actions.append("merge")
-                return json.dumps({"sha": "m" * 40})
             if cmd[:2] == ["gh", "api"]:
                 # The changed paths of the pull request: the case decides
                 # whether they carry one prompt path or only code. The lane
@@ -393,14 +385,10 @@ def gate_pipeline():
             if cmd[:2] == ["ticket", "close"]:
                 actions.append("provides")
                 return "closed"
-            if cmd[:4] == ["gh", "api", "--method", "POST"]:
-                # The merges endpoint names the reviewed base, so a retarget
-                # cannot move the destination.
-                exact(cmd[4], "repos/%s/merges" % target)
-                exact("base=main" in cmd, True)
-                exact("head=" + head in cmd, True)
+            if cmd[:3] == ["gh", "pr", "merge"]:
+                exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
-                return json.dumps({"sha": "m" * 40})
+                return "merged"
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
             if cmd[0] == "git" and "symbolic-ref" in cmd:
@@ -1481,13 +1469,10 @@ def consolidation_guard():
         for emitted in briefs:
             exact("Builder check: PASS " + "a" * 40 in emitted, True)
             if ascend:
-                exact("repos/shyamsivakumar/fixture/merges" in emitted, False)
+                exact("gh pr merge" in emitted, False)
                 exact("gh issue close" in emitted, False)
             else:
-                # The merge names the reviewed base and the head, so a
-                # retarget cannot move where it lands.
-                exact("repos/shyamsivakumar/fixture/merges -f base=main" in emitted, True)
-                exact("head=" + "a" * 40 in emitted, True)
+                exact("--match-head-commit " + "a" * 40 in emitted, True)
                 exact("verify every Provides claim" in emitted, True)
                 exact("false, missing or unverified, close nothing" in emitted, True)
                 exact(emitted.index("verify every Provides claim") < emitted.index("gh issue close"), True)
