@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -43,6 +44,29 @@ def load_ticket():
     return module
 
 
+@contextlib.contextmanager
+def fixture_models():
+    """The one model list from the checkout, with no blocked provider.
+
+    The evals forbid live files, so the list and the blocked state are read
+    once here and the module answers from them."""
+    seed = ROOT.parent / "models.json"
+    env = {"COORDINATOR_MODELS": str(seed)} if seed.is_file() else {}
+    with patch.dict(os.environ, env):
+        import lane_driver as lane
+        lists = lane.model_list.load()
+        with patch.object(lane.model_list, "entries", side_effect=lambda name: lists[name]), \
+             patch.object(lane.model_list, "blocked_identities", return_value=set()):
+            yield
+
+
+def fixer_identity():
+    """The provider and model of a thread already on the first available fix model."""
+    import lane_driver as lane
+    selection = lane.model_list.first_available("fix")["selection"]
+    return {"providerInstanceId": selection["instanceId"], "model": selection["model"]}
+
+
 def exact(actual, expected):
     if actual != expected:
         raise AssertionError(f"expected {expected!r}, got {actual!r}")
@@ -56,7 +80,8 @@ def start_routing():
              "digitized/Concerning", "fixture/sixth"]
     board = json.loads(json.dumps([
         dict(repo=repo, number=n, key=f"F-{n}", stage=stage, problems=problems,
-             priority=2, title="bot", builderAlias="implementation", body="fixture", url="fixture")
+             priority=2, title="bot", type="standard", builderAlias="implementation",
+             builderSelection={"model": "fixture-implementation"}, body="fixture", url="fixture")
         for repo in repos for n, stage, problems in
         [(1, "backlog", []), (2, "todo", ["blocked"]), (3, "todo", []), (4, "todo", [])]
     ]))
@@ -75,8 +100,7 @@ def start_routing():
     exact(actions, [cmd for repo in repos for cmd in
                     (["ticket", "start", f"{repo}#3", "--dry-run"],
                      ["ticket", "start", f"{repo}#3"])])
-    cfg = {"repos": {repo: {"projectId": repo} for repo in repos},
-           "models": {"implementation": {"selection": {"model": "fixture-implementation"}}}}
+    cfg = {"repos": {repo: {"projectId": repo} for repo in repos}}
     with patch.object(ticket, "default_branch", return_value="main"), \
          patch.object(ticket, "brief_reviewer", return_value="astra"):
         for item in board:
@@ -85,17 +109,15 @@ def start_routing():
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
-    cfg["types"] = {"feature": "implementation", "chore": "maintenance", "review": "gate"}
-    cfg["models"].update({"maintenance": {"selection": {"model": "fixture-maintenance"}, "vendor": "builder"},
-                          "gate": {"selection": {"model": "fixture-review"}, "vendor": "reviewer"}})
-    cfg["models"]["implementation"]["vendor"] = "builder"
-    for kind, expected in [("feature", "fixture-implementation"), ("chore", "fixture-maintenance")]:
-        item = dict(board[3], type=kind, builder=None, reviewer=None)
-        item["builderAlias"], item["reviewerAlias"] = ticket.resolve_models(cfg, item)
+    for kind, label, expected in [("standard", None, "minimax/MiniMax-M3.1-Flash"), ("risky", None, "minimax/MiniMax-M3.1-Flash"),
+                                  ("chore", "glm", "zai/glm-5.3")]:
+        item = dict(board[3], type=kind, builder=label, reviewer=None)
+        builder, reviewer = ticket.resolve_models(cfg, item)
+        item.update(builderAlias=builder["id"], reviewerAlias=reviewer["id"], builderSelection=builder["selection"])
         commands = []
         def launch(command, timeout):
             payload = json.loads(command[2])
-            exact(payload["modelSelection"], {"model": expected})
+            exact(payload["modelSelection"]["model"], expected)
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, "fixture receipt", "")
@@ -240,7 +262,7 @@ def dead_run_recovery():
         lane.recover_dead_runs(ledger)
         lane.recover_dead_runs(ledger)
     exact(len(launches), 1)
-    exact(launches[0]["modelSelection"], lane.ASTRA)
+    exact(launches[0]["modelSelection"], lane.model_list.first_available("build")["selection"])
     exact(launches[0]["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/fixture-worktree"})
     exact(ledger[f"dead-relaunch-thread:fixture-dead"], "fixture-relaunch")
     exact(settled, ["fixture-dead", "fixture-dead"])
@@ -339,14 +361,14 @@ def gate_pipeline():
     failures = []
     delivered = [{"name": "stage:started"}]
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["astra"], delivered),
+        ("checked-head", repo, "absent", "", {}, ["openai-api"], delivered),
         ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], delivered),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], delivered),
-        ("no-verdict", repo, "none", "interrupted", {}, ["astra"], delivered),
+        ("no-verdict", repo, "none", "interrupted", {}, ["openai-api"], delivered),
         ("second-no-verdict", repo, "none", "interrupted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, [], delivered),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"], delivered),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["codex"], delivered),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], delivered),
         ("ascend", "ascend/fixture", "absent", "", {}, [], delivered),
         # A ticket that lost its stage label is delivered here, on the pass
@@ -379,6 +401,8 @@ def gate_pipeline():
                 actions.append("deliver")
                 return f"moved {target}#10 at stage:started"
             if cmd[:2] == ["ticket", "gate"]:
+                if "--print-model" in cmd:
+                    return json.dumps(lane.model_list.reviewers(["minimax"]))
                 return f"Gate exact head {head}"
             if cmd[:2] == ["ticket", "close"]:
                 actions.append("provides")
@@ -404,8 +428,7 @@ def gate_pipeline():
                     actions.append("builder")
                 else:
                     exact(head in payload["message"], True)
-                    model = payload["modelSelection"]["model"]
-                    actions.append("astra" if model == "gpt-6-astra" else "opus" if "opus" in model else model)
+                    actions.append(payload["modelSelection"]["instanceId"])
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
@@ -416,7 +439,7 @@ def gate_pipeline():
                     dict(threadId="gate", status="completed", updatedAt="fixture")]}
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
-                    return {"thread": {"status": "running", "sendable": True}}
+                    return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
@@ -499,8 +522,21 @@ def completion_boundary():
             exact(cmd[:3], ["issue", "close", "10"])
             actions.append("close")
             return "closed"
+
+        class Checklist:
+            """The close checklist the close step now runs, stubbed to pass."""
+            def run_check(self, *args, **kwargs):
+                return {"items": [{"item": "proof file", "status": "pass", "detail": "fixture"}]}
+            def failures(self, items):
+                return []
+            def blocking(self, items):
+                return []
+            def report(self, items, target=""):
+                return "fixture"
+
         with patch.object(ticket, "gh_json", return_value=pull), \
              patch.object(ticket, "t3_call", return_value={"items": [dict(type="assistant_message", text=reply)]}), \
+             patch.object(ticket, "close_check_module", return_value=Checklist()), \
              patch.object(ticket, "gh", side_effect=close):
             try:
                 ticket.cmd_close(args)
@@ -539,7 +575,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
          patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
          patch.object(lane, "run", command), \
-         patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
+         patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": status}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
@@ -1104,7 +1140,18 @@ def watchdog():
 
 
 def zero_merge():
+    """Run the merge-alert fixture in a folder that is always cleaned up.
+
+    The folder holds the mute state the fixture writes, so it is a
+    temporary directory rather than a directory the run leaves behind:
+    the cleanup runs after a failed assertion too."""
+    with tempfile.TemporaryDirectory(prefix="zero-merge-mute-") as scratch:
+        zero_merge_fixture(Path(scratch))
+
+
+def zero_merge_fixture(scratch):
     import datetime as dt
+    import os
     import lane_driver as lane
     other = {"id": "unrelated"}
     state = {"items": [other]}
@@ -1128,11 +1175,31 @@ def zero_merge():
     def saved(value, handle, **kwargs):
         state.clear()
         state.update(json.loads(json.dumps(value)))
+    # The alarm's key names the repos that are waiting, so a stall on one
+    # repo does not silence a stall on another. The title stays one title.
     alert = {"id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
         "title": "No merge in 60 minutes with open PRs",
-        "why": "The coordinator must inspect blocked PRs and restore merge progress."}
+        "cause": "No merge in 60 minutes with open PRs: fixture/one",
+        "why": "The coordinator must inspect blocked PRs and restore merge progress: fixture/one"}
+    # The alarm's mute state goes to a file of its own, so the eval never
+    # reads or writes the live shift's folder.
+    mute = str(scratch / "mute-state.json")
+
+    def read_board(path):
+        return b"", json.loads(json.dumps(state))
+
+    def write_board(path, board):
+        state.clear()
+        state.update(json.loads(json.dumps(board)))
+        return True
+
+    import alarms
     with patch.object(dt, "datetime", Clock), patch.object(lane, "read_json", side_effect=read), \
          patch("builtins.open", side_effect=opened), patch.object(lane.json, "dump", side_effect=saved), \
+         patch.object(alarms, "MUTE_PATH", mute), \
+         patch.object(lane, "DECISIONS_PATH", str(Path(mute).parent / "decisions.json")), \
+         patch.object(alarms, "read_board", side_effect=read_board), \
+         patch.object(alarms, "write_board", side_effect=write_board), \
          patch.object(lane.os, "replace") as replace:
         for stamps, expected in [([], [other, alert]),
                 (["2026-11-15T10:59:59Z"], [other, alert]),
@@ -1151,15 +1218,63 @@ def zero_merge():
             else:
                 raise AssertionError("read failure was swallowed")
         exact(state["items"], [other, alert])
-        exact(replace.call_count, 5)
+
         snapshot["repos"]["fixture/one"]["prs"] = []
-        lane.zero_merge(snapshot)
+        # A healthy tick raises nothing, so it says nothing about an alarm:
+        # "with open PRs: none" is not a stall.
+        healthy = io.StringIO()
+        with contextlib.redirect_stdout(healthy):
+            lane.zero_merge(snapshot)
         exact(state["items"], [other])
         exact(len(calls), 10)
-        exact(replace.call_count, 6)
-        for call in replace.call_args_list:
-            exact(call.args, ("/Users/shyamsivakumar/Code/coordinator/decisions.json.tmp",
-                              "/Users/shyamsivakumar/Code/coordinator/decisions.json"))
+        # A board that cannot be written is reported, not swallowed: the
+        # alarm is nowhere, and the tick has to say so.
+        with patch.object(alarms, "board_update", return_value="failed"):
+            try:
+                lane.zero_merge(snapshot)
+            except RuntimeError as exc:
+                exact("could not be published" in str(exc), True)
+            else:
+                raise AssertionError("a failed publication was swallowed")
+        exact("ZERO-MERGE No merge" in healthy.getvalue(), False)
+        # The board is written through the alarm module's own writer, and
+        # the mute state beside it, each from a temporary file of its own.
+        replaced = {(str(call.args[0]), str(call.args[1])) for call in replace.call_args_list}
+        # The mute state was written: the exact pair was seen, and nothing
+        # else was replaced for it.
+        exact((f"{mute}.{os.getpid()}.tmp", mute) in replaced, True)
+
+        # The changed cause reaches the board. The alarm for one waiting
+        # repo is answered, a second repo starts waiting, and the next
+        # pass must raise an alarm whose cause names both repos. A
+        # producer that kept using the first repo as its cause would fail
+        # here, and would have silenced the newly stalled repo.
+        import alarms as mute_rules
+        snapshot["repos"]["fixture/one"]["prs"] = [{"number": 1}]
+        snapshot["repos"]["fixture/two"]["prs"] = []
+        rows = []
+        lane.zero_merge(snapshot)
+        first = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        exact(len(first), 1)
+        exact(first[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one")
+        # The answer goes to the mute state the shift keeps. The replace
+        # above is observed by a mock, so the eval writes the record the
+        # panel writes, rather than replacing the file and losing it.
+        answers = mute_rules.load_state()
+        answered = mute_rules.key_of("factory-zero-merge", first[0]["cause"])
+        mute_rules.acknowledge(answers, answered, now)
+        Path(mute).write_text(json.dumps({mute_rules.STATE_KEY: answers}))
+        exact(mute_rules.muted(mute_rules.load_state(), answered, now), True)
+        # The answered cause is quiet: the same wait raises no board item.
+        lane.zero_merge(snapshot)
+        exact([i for i in state["items"] if i["id"] == "factory-zero-merge"], [])
+        # A repository that starts waiting is a different cause, so it
+        # alarms at once under its own key.
+        snapshot["repos"]["fixture/two"]["prs"] = [{"number": 2}]
+        lane.zero_merge(snapshot)
+        raised = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        exact(len(raised), 1)
+        exact(raised[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one, fixture/two")
 
 
 def board_integrity():
@@ -1229,7 +1344,7 @@ def api_budget():
         return subprocess.CompletedProcess(command, 2, "refused: fixture", "")
     ledger = {}
     with patch.object(dt, "datetime", Clock), patch.object(lane, "unstick", return_value="nothing ready"), \
-         patch.object(lane, "api_remaining", return_value={"core": 1000, "graphql": 1000}), \
+         patch.object(lane, "api_remaining", return_value={"core": lane.API_FLOOR + 500, "graphql": lane.API_FLOOR + 500}), \
          patch.object(subprocess, "run", side_effect=refused):
         lane.start_next(repo, tickets, ledger)
         exact(commands, [["ticket", "start", f"{repo}#{n}", "--dry-run"] for n in (1, 2, 3)])
@@ -1356,9 +1471,9 @@ def script_results():
 def consolidation_guard():
     import lane_driver as lane
     ticket = load_ticket()
-    cfg = {"types": {"review": "gate"}}
+    cfg = {}
     item = {"body": "Implement the scoped fixture. Report leftover work in the PR.",
-            "url": "https://fixture/issue/1"}
+            "url": "https://fixture/issue/1", "reviewerAlias": "astra-api"}
     builder = ticket.assemble_brief(cfg, item, "fixture-run", {"comments": []})
     gate = ticket.gate_brief("fixture/repo", {"key": "FIX"}, 1, 2,
                              "a" * 40, "main", False, False)
@@ -1415,7 +1530,7 @@ def send_integrity():
             def read(tool, args):
                 exact((tool, args), ("t3_thread_read", {"threadId": "old", "limit": 1}))
                 reads.append("read")
-                return {"thread": thread}
+                return {"thread": {**fixer_identity(), **thread}}
             def command(cmd, timeout=150):
                 exact(reads, ["read"])
                 exact(cmd[:2], [lane.COORDQ, "start"])
@@ -1424,8 +1539,8 @@ def send_integrity():
                     exact(payload, {"threadId": "old", "message": "brief"})
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
-                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
-                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief"})
+                    exact(payload, {"projectId": "fixture", "title": "fix", "taskType": "fix", "modelSelection": lane.model_list.first_available("fix")["selection"],
+                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief", "clientRequestId": key})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
                 if failure == "error":
@@ -1448,7 +1563,7 @@ def send_integrity():
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
-         patch.object(lane, "t3", return_value={"thread": {"status": "running"}}), \
+         patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": "running"}}), \
          patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
         ledger = {}
         exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}: send existing thread")
@@ -1509,7 +1624,7 @@ def root_workspace():
                 worktree_only=True):
         actions = []
         def read(tool, args):
-            return {"thread": thread}
+            return {"thread": {**fixer_identity(), **thread}}
         def command(cmd, timeout=150):
             if cmd[0] == "git":
                 if "rev-parse" in cmd:
@@ -2635,7 +2750,8 @@ def main():
         print("FAIL negative-control: equality accepted wrong actions")
         return 1
     with patch.object(subprocess, "run", side_effect=AssertionError("live subprocess forbidden")), \
-         patch.object(subprocess, "Popen", side_effect=AssertionError("live process forbidden")):
+         patch.object(subprocess, "Popen", side_effect=AssertionError("live process forbidden")), \
+         fixture_models():
         for name, evaluate in EVALS.items():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):

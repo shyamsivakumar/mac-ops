@@ -8,11 +8,31 @@ export const NEEDS = "needs";
 export const STUCK = "stuck";
 export const DEAD = "dead";
 
+const MAX_CHOICES = 4;
+const RECOMMENDED = /^\(Recommended:\s*(.+)\)$/;
+const OPTION = /^(\d)[.)]\s+(.+)$/;
+
+const plainLines = (text) => (text ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+
+export function parseChoices(text) {
+  const lines = plainLines(text);
+  const normalize = (value) => value.replace(/\*\*/g, "");
+  const recommended = RECOMMENDED.exec((lines.pop() ?? "").replace(/^\*\*|\*\*$/g, "").replace(/[\s*_`"'”’]+$/, ""))?.[1].trim();
+  const options = [];
+  while (lines.length && OPTION.test(lines.at(-1))) options.unshift(OPTION.exec(lines.pop()));
+  const question = lines.at(-1);
+  if (!recommended || !question?.replace(TRAILING, "").endsWith("?") || options.length < 2 || options.length > MAX_CHOICES) return null;
+  if (options.some((option, i) => Number(option[1]) !== i + 1)) return null;
+  const texts = options.map((option) => option[2].trim());
+  const matches = texts.filter((value) => normalize(value) === normalize(recommended));
+  const match = texts.includes(recommended) ? recommended : matches.length === 1 ? matches[0] : undefined;
+  return match !== undefined ? { question, options: texts, recommended: match } : null;
+}
+
 // The last thing a turn said is a question, or a WAITING: line, when it ends that way.
 export function endsWithAsk(text) {
-  const lines = (text ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
-  const last = (lines.at(-1) ?? "").replace(TRAILING, "");
-  return last.endsWith("?") || WAITING.test(last);
+  const last = (plainLines(text).at(-1) ?? "").replace(TRAILING, "");
+  return last.endsWith("?") || WAITING.test(last) || parseChoices(text) !== null;
 }
 
 // The column a group of threads belongs to. Decisions and asked turns need Shyam; dead runs and asks on a merged PR or an interrupted turn do not.

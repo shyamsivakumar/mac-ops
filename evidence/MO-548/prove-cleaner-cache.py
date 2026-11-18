@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Prove the worktree cleaner's commit cache: save, reload, evict, persist.
+
+The cache keeps a verified `<repo>@<sha>` for a week so a scan does not ask
+GitHub again. A refresh that fails must evict the positive entry, and the
+eviction must be saved before the cleaner lock is released, or the next scan
+reloads the stale positive.
+
+This runs the real `GitHub` class from `scripts/worktree-cleaner/cleaner.py`
+against a fake git runner, so it spends no GitHub quota.
+"""
+import importlib.util
+import json
+import subprocess
+import time
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+CLEANER = ROOT / "scripts" / "worktree-cleaner" / "cleaner.py"
+
+spec = importlib.util.spec_from_file_location("cleaner_probe", CLEANER)
+cleaner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cleaner)
+
+from types import SimpleNamespace
+
+REAL_GATEWAY = cleaner.gh_gateway
+
+
+def stub(run_fn):
+    """A gateway stub that keeps the real exception type and floor."""
+    return SimpleNamespace(run=run_fn,
+                           ApiBudgetExhausted=REAL_GATEWAY.ApiBudgetExhausted,
+                           floor=REAL_GATEWAY.floor)
+
+
+REPO = "shyamsivakumar/mac-ops"
+SHA = "a" * 40
+KEY = f"{REPO}@{SHA}"
+scratch = Path(tempfile.mkdtemp(prefix="cleaner-cache-proof-"))
+cache_path = scratch / "github-commits.json"
+ok = True
+calls = []
+
+
+def check(name, condition, detail=""):
+    global ok
+    ok = ok and bool(condition)
+    print(f"{'PASS' if condition else 'FAIL'} {name}" + (f" ({detail})" if detail else ""))
+
+
+def fake_run(argv, timeout=None):
+    calls.append(argv)
+    if "commits" in " ".join(argv):
+        return subprocess.CompletedProcess(argv, 0, SHA + "\n", "")
+    return subprocess.CompletedProcess(argv, 0, "", "")
+
+
+def fake_missing(argv, timeout=None):
+    calls.append(argv)
+    return subprocess.CompletedProcess(argv, 1, "", "HTTP 404: Not Found")
+
+
+cleaner.run = fake_run
+
+# The commit lookup goes through the shared gateway, so it is metered and a
+# forced refresh skips the gateway cache.
+metered = []
+
+
+class Result:
+    def __init__(self, argv, code, out):
+        self.args = argv
+        self.returncode = code
+        self.stdout = out
+
+
+def fake_gateway(argv, **kwargs):
+    metered.append({"argv": list(argv), **kwargs})
+    # The lookup still runs through this file's git runner, so the failure
+    # cases below keep their behaviour.
+    return cleaner.run(argv, timeout=kwargs.get("timeout", 30))
+
+
+cleaner.gh_gateway = stub(fake_gateway)
+
+# 1. A verified commit is a positive, and it is persisted by save_cache.
+first = cleaner.GitHub(cache_path)
+check("a verified commit is present", first.commit_present(REPO, SHA) is True)
+first.save_cache()
+saved = json.loads(cache_path.read_text())
+check("save_cache persists the positive", saved.get(KEY, 0) > 0, f"entries={sorted(saved)}")
+
+# 1a. An inventory lookup takes the floor and a skipped lookup stays
+#     unverified; the pre-removal verification takes none.
+floors = []
+
+
+def floored_gateway(argv, **kwargs):
+    floors.append(kwargs.get("limit"))
+    if kwargs.get("limit") is not None:
+        raise cleaner.gh_gateway.ApiBudgetExhausted("fixture floor")
+    return cleaner.run(argv, timeout=kwargs.get("timeout", 30))
+
+
+cleaner.gh_gateway = stub(floored_gateway)
+below_floor = cleaner.GitHub(cache_path)
+check("a below-floor inventory lookup is unverified, not an error",
+      below_floor.commit_present(REPO, "b" * 40) is False)
+check("the inventory lookup passes the floor", floors[-1] is not None, str(floors[-1]))
+below_floor.commit_present(REPO, "b" * 40, refresh=True)
+check("the pre-removal verification passes no floor", floors[-1] is None, str(floors[-1]))
+cleaner.gh_gateway = stub(fake_gateway)
+
+# 1b. The lookup is metered through the shared gateway, and its caller is
+#     named, so the cleaner is visible in the per-caller report.
+recent = metered[-1:]
+check("the commit lookup is metered", recent and
+      recent[0].get("caller_name") == "worktree-cleaner", str(recent))
+check("an ordinary lookup may use the gateway cache",
+      metered[-1].get("fresh") is False)
+reloaded_refresh = cleaner.GitHub(cache_path)
+reloaded_refresh.commit_present(REPO, SHA, refresh=True)
+check("a forced refresh skips the gateway cache",
+      any(entry.get("fresh") is True for entry in metered), str(metered[-1]))
+
+# 1c. A refresh that cannot run evicts the positive and saves before the
+#     error goes up.
+def failing_gateway(argv, **kwargs):
+    metered.append({"argv": list(argv), **kwargs})
+    raise OSError("gh: launch failed")
+
+
+# Put a positive back first, so the failure has something to evict.
+restored = cleaner.GitHub(cache_path)
+restored.commit_present(REPO, SHA)
+restored.save_cache()
+
+cleaner.gh_gateway = stub(failing_gateway)
+reloaded_fail = cleaner.GitHub(cache_path)
+try:
+    reloaded_fail.commit_present(REPO, SHA, refresh=True)
+except cleaner.SafetyError:
+    pass
+else:
+    raise AssertionError("a failed refresh did not raise")
+on_disk = json.loads(cache_path.read_text())
+check("a refresh that cannot run evicts the positive", KEY not in on_disk, f"entries={sorted(on_disk)}")
+
+cleaner.gh_gateway = stub(fake_gateway)
+
+# 2. A reload trusts it: no GitHub call is made for the same commit.
+seed = cleaner.GitHub(cache_path)
+seed.commit_present(REPO, SHA)
+seed.save_cache()
+calls.clear()
+reloaded = cleaner.GitHub(cache_path)
+check("a reload serves the positive without a call",
+      reloaded.commit_present(REPO, SHA) is True and not calls)
+
+# 3. A failed refresh evicts the positive, and save_cache (the scan's second
+#    save, inside the lock) persists the eviction.
+cleaner.run = fake_missing
+check("a failed refresh evicts the positive", reloaded.commit_present(REPO, SHA, refresh=True) is False)
+reloaded.save_cache()
+check("the eviction is persisted",
+      KEY not in json.loads(cache_path.read_text()), f"entries={sorted(json.loads(cache_path.read_text()))}")
+
+# 4. A later scan does not reload the stale positive: it asks GitHub again.
+calls.clear()
+later = cleaner.GitHub(cache_path)
+check("a later scan asks GitHub again",
+      later.commit_present(REPO, SHA) is False and len(calls) == 1, f"calls={len(calls)}")
+
+# Concurrent refreshes that all fail leave no positive behind: the
+# eviction, the snapshot and the write take one lock.
+import threading
+
+seed2 = cleaner.GitHub(cache_path)
+for index in range(8):
+    seed2.verified[f"{REPO}@{str(index) * 40}"] = time.time()
+seed2.save_cache()
+
+# One shared object, as scan() uses: every worker updates the same map.
+shared = cleaner.GitHub(cache_path)
+
+def fail_one(index):
+    try:
+        shared.commit_present(REPO, str(index) * 40, refresh=True)
+    except cleaner.SafetyError:
+        pass
+
+cleaner.gh_gateway = stub(failing_gateway)
+threads = [threading.Thread(target=fail_one, args=(index,)) for index in range(8)]
+[thread.start() for thread in threads]
+[thread.join() for thread in threads]
+left = json.loads(cache_path.read_text())
+check("concurrent failed refreshes leave no positive",
+      not any(key.startswith(REPO + "@") for key in left), f"entries={sorted(left)[:3]}")
+
+print("PROOF", "PASS" if ok else "FAIL")
+sys.exit(0 if ok else 1)
