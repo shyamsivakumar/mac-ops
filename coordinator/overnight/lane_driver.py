@@ -486,14 +486,14 @@ def barred_worktree(path):
     is a destination. A detached head names no branch, so it is barred
     as well. A workspace folder that herdr made is barred whatever branch
     it sits on, since the branch can be renamed and the folder stays
-    Shyam's.
+    Shyam's. Both the supplied path and the folder it resolves to are
+    checked, so a symlink cannot route work into a herdr folder.
     """
-    if os.path.basename(os.path.normpath(path)).startswith("herdr-"):
-        return True
-    if any(part == ".herdr" for part in Path(path).parts):
-        # A folder under the herdr workspace root is one herdr made, and
-        # the branch inside it can be renamed while the folder stays.
-        return True
+    for spelling in (path, os.path.realpath(path)):
+        if os.path.basename(os.path.normpath(spelling)).startswith("herdr-"):
+            return True
+        if any(part == ".herdr" for part in Path(spelling).parts):
+            return True
     branch = worktree_branch(path)
     return not branch or branch == "HEAD" or branch.startswith("herdr/")
 
