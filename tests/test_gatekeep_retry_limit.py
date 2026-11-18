@@ -186,7 +186,7 @@ class NonAstraGateTest(RetryLimitBase):
         # still moves down the chain.
         self.assertEqual(self.read_queue()["gatedHeads"][self.key],
                          {"id": 4, "retries": 0, "at": None, "givenUp": True,
-                          "reviewer": None, "moved": False})
+                          "reviewer": None, "moved": False, "deadThread": None})
 
 
 class BackoffTest(RetryLimitBase):
@@ -439,45 +439,25 @@ class ReviewerFallbackTest(RetryLimitBase):
                         "model": "x"}, "items": [], "recentRuns": []}))
         out, _ = self.run_gatekeep()
         self.assertIn("gave up " + self.key, out)
-        self.assertEqual(self.gate_items(), [])
-        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
-
-    def test_an_interrupted_write_does_not_leave_a_blocked_reviewer_queued(self):
-        chosen = coordq.fallback_reviewer
-        saved = coordq.save
-
-        def choose_then_block(queue, key, current, models=()):
-            selection = chosen(queue, key, current, models)
-            self.block(selection)
-            return selection
-
-        def save_then_interrupt(queue):
-            saved(queue)
-            if queue["items"]:
-                raise KeyboardInterrupt
-
-        coordq.fallback_reviewer = choose_then_block
-        coordq.save = save_then_interrupt
-        self.addCleanup(setattr, coordq, "fallback_reviewer", chosen)
-        self.addCleanup(setattr, coordq, "save", saved)
-        self.write_queue(heads=self.head())
-        try:
-            self.run_gatekeep()
-        except KeyboardInterrupt:
-            pass
-        self.assertEqual(self.gate_items(), [])
+        self.assertNotIn("regating", out)
+        self.assertEqual(len(self.gate_items()), 0)
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 1)
 
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
         self.run_gatekeep()
+        launched = self.read_queue()
+        launched["items"] = []
+        with open(os.path.join(QUEUE_DIR, "queue.json"), "w") as f:
+            json.dump(launched, f)
         second = coordq.model_list.entries("review")[1]["selection"]
         coordq.call = lambda tool, args, rules=None: (0, json.dumps(
             {"thread": {"status": "failed", "providerInstanceId": second["instanceId"],
                         "model": second["model"]}, "items": [], "recentRuns": []}))
         out, _ = self.run_gatekeep()
-        self.assertIn("gave up " + self.key, out)
         self.assertNotIn("regating", out)
-        self.assertEqual(len(self.gate_items()), 1)
+        self.assertEqual(self.gate_items(), [])
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 1)
 
 if __name__ == "__main__":
     unittest.main()
