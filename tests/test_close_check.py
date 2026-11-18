@@ -328,6 +328,35 @@ class DiffValuesTest(unittest.TestCase):
         self.assertEqual(check.proof_rows(text),
                          [("lane selection", "passed"), ("heavy help", "failed")])
 
+    def test_a_headerless_proof_keeps_its_failed_row(self):
+        """The header is the whole header row, so a first row that is not
+        one is a check.
+
+        A proof file with no header, whose first row reads
+        `| check | command | failed | compiler error |`, records a
+        failure. It must not be read as a header and dropped.
+        """
+        check = close_check()
+        text = ("| check | command | failed | compiler error |\n"
+                "| lint  | make lint | passed | |\n")
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("failed", item["detail"])
+
+    def test_an_escaped_pipe_stays_in_the_command(self):
+        """A command can hold a pipe, and the result column is the third.
+
+        `make build \| tee build.log` is one command cell, so the row
+        reads as a passing check rather than as a check whose result is
+        "tee build.log".
+        """
+        check = close_check()
+        text = ("| Check | Command | Result | Detail |\n"
+                "| --- | --- | --- | --- |\n"
+                "| build | make build \\| tee build.log | passed | |\n")
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.PASS)
+
     def test_a_failure_written_outside_the_table_still_fails(self):
         """A result outside the table is a check too."""
         check = close_check()

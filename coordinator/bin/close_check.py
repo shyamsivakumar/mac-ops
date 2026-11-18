@@ -298,8 +298,26 @@ def item_proof(state, path):
             "detail": f"the proof file at {path} could not be read, so the checks are unproven"}
 
 
+# A Markdown cell holds a pipe that is written as \|, so a row is split on
+# the pipes that are not escaped, and the escape is read back as a pipe.
+PIPE_SPLIT = re.compile(r"(?<!\\)\|")
 # A check recorded outside the table: a name, a colon, and a result.
 RESULT_LINE = re.compile(r"(?i)^(?:[-*+]\s+)?(?P<name>[^:]+?)\s*:\s*(?P<result>passed|failed|not run)\s*$")
+
+
+def split_cells(line):
+    r"""The cells of one table row.
+
+    A command can hold a pipe, and a Markdown table writes that pipe as
+    \|, so a row is split on the pipes that are not escaped and the
+    escape is read back as the pipe it stands for.
+    """
+    inner = line.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
+    return [cell.strip().replace("\\|", "|") for cell in PIPE_SPLIT.split(inner)]
 
 
 def proof_rows(text):
@@ -328,12 +346,12 @@ def proof_rows(text):
             if plain:
                 rows.append((plain.group("name").strip(), plain.group("result").lower()))
             continue
-        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        cells = split_cells(line)
         if cells and all(cell and set(cell) <= set("-: ") for cell in cells):
             continue
         name = cells[0] if cells else ""
-        if (not header_seen and len(cells) > 1 and name.lower() == "check"
-                and cells[1].lower() == "command"):
+        if (not header_seen and len(cells) > 2 and name.lower() == "check"
+                and cells[1].lower() == "command" and cells[2].lower() == "result"):
             header_seen = True
             continue
         result = cells[2].lower() if len(cells) > 2 else ""
