@@ -49,3 +49,11 @@ Run `python3 verification/worktree-cleaner/check_bootstrap.py` for the bootstrap
 ## Limits
 
 GitHub CLI authentication and `t3mcp` (with a signed-in T3 session) must be available to the LaunchAgent. Network or state failures block candidates. The 24-hour detached age uses the worktree's latest `HEAD` reflog entry; missing reflog data blocks removal. The cleaner scans repository markers beneath `~/Code` and does not inspect worktrees owned by repositories outside that root.
+
+A stale registration, one whose directory is gone, is **left in place**. It
+cannot be bound to the registration that was verified: git names the
+administration directory after the basename of the path, so two worktrees
+can share a basename, and a registration can be taken over at that path in
+the meantime. Removing it could drop the registration of a live worktree and
+the only reference to its unpublished commit, so the cleaner reports the
+stale registration and leaves it for an operator to prune.
