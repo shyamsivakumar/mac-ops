@@ -206,14 +206,18 @@ def method(argv):
     `gh api` reads unless a method is named or a field is given; a field
     without a method is a POST, and `-X GET` overrides a field."""
     words = [str(word) for word in argv[1:]]
+    # `gh` uses the last method flag, so a repeated flag is read the same
+    # way here. Reading only the first would call `-X GET -X POST` a read.
+    named = None
     for index, word in enumerate(words):
-        # `--method=POST` and `-XPOST` are the same method as `-X POST`.
         if word.startswith("--method="):
-            return word.split("=", 1)[1].strip().upper()
-        if word.startswith("-X") and len(word) > 2:
-            return word[2:].lstrip("=").strip().upper()
-        if word in ("-X", "--method"):
-            return words[index + 1].strip().upper() if index + 1 < len(words) else ""
+            named = word.split("=", 1)[1]
+        elif word.startswith("-X") and len(word) > 2:
+            named = word[2:].lstrip("=")
+        elif word in ("-X", "--method"):
+            named = words[index + 1] if index + 1 < len(words) else ""
+    if named is not None:
+        return named.strip().upper()
     if has_body(argv):
         return "POST"
     return "GET"
@@ -500,6 +504,27 @@ def requests(argv, stdout):
     return max(1, count)
 
 
+def prepare(argv):
+    """Return (command to run, headers_counted) for one read.
+
+    A paginated read whose output is formatted prints plain text, so its
+    pages cannot be counted from the body. Such a read asks for the
+    response headers as well, and the status lines give the page count
+    before formatting. A caller that runs its own subprocess uses this and
+    `settle`, so every caller counts pages the same way."""
+    needs = (_gh(argv) and "--paginate" in argv and "--include" not in argv
+             and resource(argv) == CORE and filtered(argv))
+    return (list(argv) + ["--include"] if needs else list(argv)), needs
+
+
+def settle(argv, stdout, headers_counted):
+    """Return (body, count) for one read that has already run."""
+    stdout = stdout or ""
+    if headers_counted:
+        return strip_headers(stdout), max(1, status_lines(stdout))
+    return stdout, requests(argv, stdout)
+
+
 def record(argv, count=1):
     """Write one usage-log line per GitHub core request the command made.
 
@@ -602,24 +627,13 @@ def run(argv, timeout=60, stdin=None, limit=None):
         return subprocess.CompletedProcess(argv, 0, hit, "")
     if stdin is None and conditional(argv):
         return _conditional_run(argv, timeout)
-    # A paginated read whose output is formatted cannot be counted from the
-    # body: `--jq '.[].name'` prints plain names. Ask for the headers too,
-    # count the status lines, and hand the caller the body it expects.
-    count_headers = (stdin is None and "--paginate" in argv
-                     and "--include" not in argv and resource(argv) == CORE
-                     and filtered(argv))
-    run_argv = argv + ["--include"] if count_headers else argv
-    result = _launch()(run_argv, input=stdin, capture_output=True, text=True,
+    command, headers_counted = prepare(argv) if stdin is None else (list(argv), False)
+    result = _launch()(command, input=stdin, capture_output=True, text=True,
                        timeout=timeout)
     # A caller's launcher need not be a real CompletedProcess, so every part
     # is read with a default.
-    result.stdout = getattr(result, "stdout", "") or ""
-    body = result.stdout
-    if count_headers:
-        body = strip_headers(result.stdout)
-        count = max(1, status_lines(result.stdout))
-    else:
-        count = requests(argv, result.stdout)
+    stdout = getattr(result, "stdout", "") or ""
+    body, count = settle(argv, stdout, headers_counted)
     record(argv, count)
     if result.returncode == 0:
         store(argv, body)
