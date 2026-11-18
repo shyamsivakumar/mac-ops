@@ -238,6 +238,26 @@ class ScopeTest(unittest.TestCase):
                                    ["coordinator/bin/close_check.py"], None, touched)
         self.assertEqual(tied, ["coordinator/bin/close_check.py"])
 
+    def test_a_prohibition_phrase_excludes_only_what_it_forbids(self):
+        """A phrase that forbids no file excludes no file.
+
+        "builders and gates never file follow-up issues" forbids a
+        practice, not a file, so the file the same line names is still
+        in scope.
+        """
+        check = close_check()
+        ticket = ("Only coordinator/config/AGENT-RULES.md. Add the missing decision: builders "
+                  "and gates never file follow-up issues.")
+        self.assertEqual(check.scope_tokens(ticket), {"coordinator/config/AGENT-RULES.md"})
+
+    def test_a_prohibition_of_a_change_excludes_that_change(self):
+        check = close_check()
+        ticket = "Change close_check.py. Must not change coordinator/bin/gate_policy.py."
+        item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
+                                         "coordinator/bin/gate_policy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("coordinator/bin/gate_policy.py", item["detail"])
+
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
         item = check.item_scope("The change is in lane_driver.py.",

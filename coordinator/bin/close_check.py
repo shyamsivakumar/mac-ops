@@ -62,7 +62,11 @@ DISTINCTIVE = re.compile(r"[\"']([^\"'\\\n]{10,})[\"']")
 # ticket excludes. Those names are never permission.
 SEGMENT = re.compile(r"(?i)\b(in|inside|out|out of scope|not in scope|excludes|except)\b\s*:")
 OUT_MARKERS = ("out", "out of scope", "not in scope", "excludes", "except")
-PROHIBITION = re.compile(r"(?i)\b(must not|do not|never|without (?:changing|touching|editing))\b")
+# A prohibition names a change it forbids: "must not change x", "do not
+# touch x", "without changing x". A phrase that merely forbids something
+# else, "never file follow-up issues", forbids no file and excludes nothing.
+PROHIBITION = re.compile(r"(?i)\b(?:must not|do not|never|without)\s+"
+                          r"(?:change|changes|changing|touch|touches|touching|edit|edits|editing|include|includes)\b")
 SENTENCE = re.compile(r";|\.\s")
 # A Markdown heading opens a section, and a section states its own intent.
 HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]*(.*)$")
@@ -502,7 +506,14 @@ def issue_of(body):
     return int(match.group(1)) if match else None
 
 
-def run_check(repo, pr, issue=None):
+def run_check(repo, pr, issue=None, reader=None):
+    """Run the checklist on a merged pull request.
+
+    A reader reads one file at a ref and returns the state and the text
+    of it, the way `proof_file.fetch` does. The close step reads through
+    GitHub; the replay reads through the local checkout, so it runs
+    without the API.
+    """
     """Run the checklist on a merged pull request."""
     pull = gh_json(["pr", "view", str(pr), "-R", repo, "--json",
                     "state,headRefOid,body,mergeCommit,files,title"])
@@ -516,8 +527,14 @@ def run_check(repo, pr, issue=None):
         body = ticket.get("body") or ""
         title = ticket.get("title") or title
     proof_path = proof_file.path_for(ticket_key(title), number)
-    state, text = proof_file.fetch(repo, proof_path, merge)
-    report, report_detail = report_state(repo, merge)
+    if reader is None:
+        state, text = proof_file.fetch(repo, proof_path, merge)
+        report, report_detail = report_state(repo, merge)
+    else:
+        state, text = reader(proof_path, merge)
+        found, _ = reader(COST_REPORT, merge)
+        report = {"found": "exists", "missing": "absent"}.get(found, "unknown")
+        report_detail = ""
     ties = {}
     if TEST_CLAUSE.search(body or ""):
         tokens = scope_tokens(body)
