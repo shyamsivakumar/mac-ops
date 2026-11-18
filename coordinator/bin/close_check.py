@@ -48,6 +48,9 @@ SKIPPED = "skipped"
 # A test file is in scope when it tests a file the change touches: the
 # two names share a prefix of this many characters.
 TEST_PREFIX = 6
+# The ticket template says whether its own tests may change. The clause is
+# the ticket's statement, so it is the ticket that allows the change.
+TEST_CLAUSE = re.compile(r"(?i)\bexisting tests?\b.{0,160}?\bmay change\b")
 
 
 def scope_tokens(body):
@@ -75,14 +78,15 @@ def common_prefix(one, other):
     return count
 
 
-def in_scope(path, tokens, changed=()):
+def in_scope(path, tokens, changed=(), tests_allowed=False):
     """Is one changed file inside the ticket's stated scope?
 
     A file is in scope when the ticket names it, names a directory that
     holds it, or names a glob that matches it. Evidence travels with the
     change, so a file under `evidence/` is in scope. A test is in scope
-    only when it tests a file the change touches: a test of something
-    else is not part of this change.
+    only when it tests a file the change touches, or when the ticket says
+    its existing tests may change: a test of something else is not part of
+    this change.
     """
     base = os.path.basename(path)
     if path.startswith("evidence/"):
@@ -105,6 +109,8 @@ def in_scope(path, tokens, changed=()):
             other_stem = os.path.splitext(os.path.basename(other))[0]
             if common_prefix(stem, other_stem) >= TEST_PREFIX:
                 return True, f"{path} tests {other}"
+        if tests_allowed:
+            return True, f"{path} is a test the ticket says may change"
     return False, ""
 
 
@@ -139,7 +145,9 @@ def item_scope(body, files):
         return {"item": "scope", "status": FAIL, "required": True,
                 "detail": ("the ticket names no file in this repository, so the scope cannot be "
                            "judged: the ticket has to name the files it changes")}
-    outside = [path for path in files if not in_scope(path, tokens, files)[0]]
+    tests_allowed = bool(TEST_CLAUSE.search(body or ""))
+    outside = [path for path in files
+               if not in_scope(path, tokens, files, tests_allowed)[0]]
     if outside:
         return {"item": "scope", "status": FAIL, "required": True,
                 "detail": "outside the ticket's stated scope: " + ", ".join(sorted(outside))}
