@@ -186,6 +186,41 @@ class ProviderBlockTests(unittest.TestCase):
             SELECTION, "will reset at 2026-11-18 11:58:52 (UTC+08:00)", failed, now=failed)
         self.assertEqual(record["until"], "2026-11-18T03:58:52+00:00")
 
+    def test_a_newer_zero_reset_frees_a_provider_held_until_later(self):
+        """A 10:00 refusal blocks until 14:00; at 11:00 the provider says
+        `retry after 0s` and is free from then on."""
+        older = moment("2026-11-18T10:00:00")
+        provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", older, now=older)
+        self.assertTrue(provider_block.is_blocked(SELECTION, moment("2026-11-18T11:00:00")))
+        newer = moment("2026-11-18T11:00:00")
+        record = provider_block.record_block(SELECTION, "rate limited, retry after 0s",
+                                             newer, now=newer)
+        self.assertIsNone(record)
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T11:00:01")))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
+
+    def test_a_late_replay_of_an_older_refusal_does_not_restore_the_block(self):
+        """The store keeps the newer refusal, so the old one cannot come
+        back and hold the provider again."""
+        older = moment("2026-11-18T10:00:00")
+        provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", older, now=older)
+        newer = moment("2026-11-18T11:00:00")
+        provider_block.record_block(SELECTION, "rate limited, retry after 0s", newer, now=newer)
+        provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", older,
+                                    now=moment("2026-11-18T11:30:00"))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
+
+    def test_a_newer_refusal_read_after_its_reset_clears_the_older_block(self):
+        """A newer refusal whose reset has passed still replaces the older
+        block, so the provider is not held until the older reset."""
+        older = moment("2026-11-18T10:00:00")
+        provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", older, now=older)
+        newer = moment("2026-11-18T11:00:00")
+        provider_block.record_block(SELECTION, "429; resets at 11:05 UTC", newer,
+                                    now=moment("2026-11-18T12:00:00"))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T12:00:01")))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
+
     def test_a_newer_refusal_replaces_an_older_reset(self):
         """The provider's latest word on when it comes back is the one that
         holds: an 11:00 refusal that names noon replaces a 10:00 record
