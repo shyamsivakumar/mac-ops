@@ -28,6 +28,12 @@ ARCHIVE_ROOT = Path.home() / ".local/state/archive/worktrees"
 
 SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycache__", "DerivedData"}
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
+# The GitHub call path is the coordinator's, so a commit lookup is counted
+# in the same usage log as every other caller's.
+_GATEWAY = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+if str(_GATEWAY) not in sys.path:
+    sys.path.insert(0, str(_GATEWAY))
+import gh_gateway  # noqa: E402
 GITHUB_ORIGIN_RE = re.compile(r"^(?:https://(?:[^@/\s]+@)?|ssh://git@|git@)github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
 WORKERS = 8
 COMMIT_CACHE_TTL = 7 * 24 * 3600
@@ -378,8 +384,14 @@ class GitHub:
             self.commits[key] = True
             return True
         try:
-            result = run(["gh", "api", f"repos/{repo}/commits/{sha}", "--jq", ".sha"])
+            # Through the metered helper, so a cold scan is visible in the
+            # usage log. A forced refresh skips its cache.
+            result = gh_gateway.run(
+                ["gh", "api", f"repos/{repo}/commits/{sha}", "--jq", ".sha"],
+                timeout=30, fresh=refresh, caller_name="worktree-cleaner")
             self.commits[key] = result.returncode == 0 and result.stdout.strip().lower() == sha.lower()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SafetyError("command_unavailable:gh") from exc
         except SafetyError:
             self.commits[key] = False
         if self.commits[key]:

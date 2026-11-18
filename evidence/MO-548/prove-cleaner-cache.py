@@ -52,12 +52,44 @@ def fake_missing(argv, timeout=None):
 
 cleaner.run = fake_run
 
+# The commit lookup goes through the shared gateway, so it is metered and a
+# forced refresh skips the gateway cache.
+metered = []
+
+
+class Result:
+    def __init__(self, argv, code, out):
+        self.args = argv
+        self.returncode = code
+        self.stdout = out
+
+
+def fake_gateway(argv, **kwargs):
+    metered.append({"argv": list(argv), **kwargs})
+    # The lookup still runs through this file's git runner, so the failure
+    # cases below keep their behaviour.
+    return cleaner.run(argv, timeout=kwargs.get("timeout", 30))
+
+
+cleaner.gh_gateway = type("GatewayStub", (), {"run": staticmethod(fake_gateway)})
+
 # 1. A verified commit is a positive, and it is persisted by save_cache.
 first = cleaner.GitHub(cache_path)
 check("a verified commit is present", first.commit_present(REPO, SHA) is True)
 first.save_cache()
 saved = json.loads(cache_path.read_text())
 check("save_cache persists the positive", saved.get(KEY, 0) > 0, f"entries={sorted(saved)}")
+
+# 1b. The lookup is metered through the shared gateway, and its caller is
+#     named, so the cleaner is visible in the per-caller report.
+check("the commit lookup is metered", len(metered) == 1 and
+      metered[0].get("caller_name") == "worktree-cleaner", str(metered[:1]))
+check("an ordinary lookup may use the gateway cache",
+      metered[0].get("fresh") is False)
+reloaded_refresh = cleaner.GitHub(cache_path)
+reloaded_refresh.commit_present(REPO, SHA, refresh=True)
+check("a forced refresh skips the gateway cache",
+      metered[-1].get("fresh") is True, str(metered[-1]))
 
 # 2. A reload trusts it: no GitHub call is made for the same commit.
 calls.clear()
