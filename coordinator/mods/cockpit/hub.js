@@ -1,7 +1,7 @@
 // The hub as the cockpit sees it: threads that need Shyam, grouped by project, and the calls that act on them.
 
 import { exec, home, readTextFile } from "herdr";
-import { endsWithAsk } from "./asks.js";
+import { endsWithAsk, parseChoices } from "./asks.js";
 
 const LIVE = ["preparing", "queued", "starting", "running", "waiting", "failed", "interrupted"];
 const RUNNING = new Set(["preparing", "queued", "starting", "running"]);
@@ -148,6 +148,7 @@ function card(thread, names) {
     runStarted: thread.activeRunStartedAt ? Date.parse(thread.activeRunStartedAt) : null,
     status: thread.status,
     ask: Boolean(thread.ask),
+    choices: thread.choices ?? null,
     context: thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : kind === "done" && thread.askText ? thread.askText : CONTEXT[kind] ?? "",
     error: kind === "fail" ? thread.lastError ?? CONTEXT.fail : undefined,
     prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state ?? "unknown" })),
@@ -284,11 +285,12 @@ async function tailOf(thread, items) {
     const message = reversed.find((item) => item.type === "assistant_message");
     const error = reversed.find((item) => item.type === "error");
     const text = message ? await endOf(thread, message) : "";
-    const value = { stamp: thread.updatedAt, ask: Boolean(message) && endsWithAsk(text), text: lastLine(text), error: error?.text ?? error?.title ?? null };
+    const choices = parseChoices(text);
+    const value = { stamp: thread.updatedAt, ask: Boolean(message) && endsWithAsk(text), choices, text: choices?.question ?? lastLine(text), error: error?.text ?? error?.title ?? null };
     failures.set(thread.threadId, value);
     return value;
   } catch {
-    return { unread: true, ask: false, text: null, error: null };
+    return { unread: true, ask: false, choices: null, text: null, error: null };
   }
 }
 
@@ -314,10 +316,12 @@ export async function load() {
         thread.lastError = tail.unread ? CONTEXT.fail : tail.error ?? "No failure text recorded";
         thread.ask = tail.ask;
         thread.askText = tail.text;
+        thread.choices = tail.choices;
       } else if (thread.status === "interrupted") {
         const tail = await tailOf(thread, ASK_TAIL);
         thread.ask = tail.ask;
         thread.askText = tail.text;
+        thread.choices = tail.choices;
       }
     }));
   }
@@ -326,6 +330,7 @@ export async function load() {
       const tail = await tailOf(thread, ASK_TAIL);
       thread.ask = tail.ask;
       thread.askText = tail.text;
+      thread.choices = tail.choices;
     }));
   }
   const cards = [...live, ...finished].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
