@@ -60,6 +60,7 @@ def main() -> int:
         git(repo, "add", "x.specstory/notes")
         command(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "notes"])
         git(repo, "push", "-u", "origin", "main")
+        git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
         shas: dict[str, str] = {}
         for name in ("bootstrap", "real", "onmain", "offmain", "partial", "renamed", "shifted", "marker"):
             sha = commit(repo, f"{name}.txt", name + "\n")
@@ -67,6 +68,12 @@ def main() -> int:
             git(repo, "branch", name, sha)
             if name != "offmain":
                 git(repo, "push", "origin", "main")
+        # A commit that is only on master, never on the default branch main.
+        git(repo, "checkout", "-b", "masteronly")
+        shas["masteronly"] = commit(repo, "master-only.txt", "master\n")
+        git(repo, "push", "origin", "masteronly:master")
+        git(repo, "fetch", "origin")
+        git(repo, "checkout", "main")
         paths = {name: trees / name for name in shas}
         for name, path in paths.items():
             git(repo, "worktree", "add", str(path), name)
@@ -106,7 +113,7 @@ def main() -> int:
 
         fixture = base / "fixture.json"
         fixture.write_text(json.dumps({
-            "present": [shas[name] for name in ("bootstrap", "real", "onmain", "partial", "renamed", "shifted", "marker")] + [ascend_sha],
+            "present": [shas[name] for name in ("bootstrap", "real", "onmain", "partial", "renamed", "shifted", "marker", "masteronly")] + [ascend_sha],
             "prs": {name: [{"number": 7, "state": "MERGED", "headRefName": name, "headRefOid": shas[name]}] for name in ("bootstrap", "partial", "renamed", "shifted", "marker")},
         }))
         bin_dir = base / "bin"
@@ -118,7 +125,10 @@ from pathlib import Path
 args = sys.argv[1:]
 d = json.loads(Path(os.environ['MO1073_FIXTURE']).read_text())
 if args[:2] == ['repo', 'view']:
-    print('fixture/fixture-repo')
+    if 'defaultBranchRef' in args:
+        print('main')
+    else:
+        print('fixture/fixture-repo')
 elif args[0] == 'api':
     sha = args[1].rsplit('/', 1)[-1]
     if sha not in d['present']:
@@ -155,6 +165,8 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert by_name["shifted"]["bootstrap_changes"] == [], by_name["shifted"]
         assert by_name["marker"]["eligible"] is False and "worktree_dirty" in by_name["marker"]["reasons"], by_name["marker"]
         assert by_name["marker"]["bootstrap_changes"] == [], by_name["marker"]
+        assert by_name["masteronly"]["eligible"] is False, by_name["masteronly"]
+        assert by_name["masteronly"].get("published_on_default_branch") is not True, by_name["masteronly"]
         assert by_name["onmain"]["eligible"] is True, by_name["onmain"]["reasons"]
         assert by_name["onmain"]["published_on_default_branch"] is True, by_name["onmain"]
         assert by_name["offmain"]["eligible"] is False, by_name["offmain"]["reasons"]
@@ -167,6 +179,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert paths["real"].exists() and paths["offmain"].exists(), applied
         assert paths["partial"].exists() and paths["renamed"].exists(), applied
         assert paths["shifted"].exists() and paths["marker"].exists(), applied
+        assert paths["masteronly"].exists(), applied
         assert ascend_tree.exists(), "ascend worktree must stay"
         log = (base / "worktree-cleaner.log").read_text(encoding="utf-8")
         entries = [json.loads(line) for line in log.splitlines()]
