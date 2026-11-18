@@ -10,10 +10,15 @@ HOLD_LABEL = "stage:hold"
 
 
 def stage_labels(issue):
-    """The stage values of an open issue, without the hold family."""
-    names = [label["name"] for label in issue["labels"]]
+    """The stage values of an open issue, in lower case, without the hold family.
+
+    The labels are read in lower case because GitHub keeps the spelling a
+    label was created with, so `Stage:Backlog` carries the same stage as
+    `stage:backlog` and must read the same here.
+    """
+    names = [label["name"].lower() for label in issue["labels"]]
     return [name[len(STAGE_PREFIX):] for name in names
-            if name.lower().startswith(STAGE_PREFIX) and name.lower() != HOLD_LABEL]
+            if name.startswith(STAGE_PREFIX) and name != HOLD_LABEL]
 
 
 def defects(snapshot):
@@ -43,7 +48,12 @@ def defects(snapshot):
         for ticket in snapshot["tickets"]:
             if ticket["repo"] == repo and ticket["stage"] == "started":
                 issue = issues.get(ticket["number"])
-                if issue and issue["state"].upper() == "OPEN" and "stage:started" not in [l["name"] for l in issue["labels"]]:
+                if not issue or issue["state"].upper() != "OPEN":
+                    continue
+                # Label names are compared in lower case, the way the delivery
+                # path compares them, so `Stage:Started` is the started stage
+                # and not a lost one.
+                if "stage:started" not in [label["name"].lower() for label in issue["labels"]]:
                     found.append(f"{repo}#{ticket['number']}: started lost stage:started")
         for pr in data["prs"]:
             refs = {int(n) for n in re.findall(r"\bRefs #(\d+)\b", pr.get("body") or "")}
