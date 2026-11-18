@@ -210,17 +210,6 @@ def bootstrap_path(name: str) -> bool:
     return any(name.startswith(prefix) for prefix in BOOTSTRAP_PREFIXES)
 
 
-def git_bytes(root: Path, *args: str, timeout: int = 30) -> bytes:
-    """Run git and return the raw bytes, with no newline translation."""
-    try:
-        result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SafetyError(f"command_unavailable:{Path(args[0]).name}") from exc
-    if result.returncode != 0:
-        raise SafetyError(f"git_{args[0].replace('-', '_')}_failed")
-    return result.stdout
-
-
 def valid_branch_name(name: str) -> bool:
     """True for a name git accepts as a branch name."""
     if not name or name.startswith("/") or name.endswith("/") or name.endswith(".lock"):
@@ -1147,6 +1136,7 @@ DELETE_REFUSED = {"worktree_status_unknown", "worktree_root_mismatch", "head_unk
 
 
 def git_bytes(path: Path, *args: str) -> bytes:
+    """Run git and return the raw bytes, with no newline translation."""
     try:
         result = subprocess.run(["git", "-C", str(path), *args], capture_output=True, timeout=120, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
