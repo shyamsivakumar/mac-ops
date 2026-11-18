@@ -484,22 +484,23 @@ def branch_on_origin(repo, branch):
 def builder_label(repo, issue):
     """The builder a ticket names, or None when it names none.
 
-    A `builder:<id>` label puts that entry first in the build list, so
-    a ticket keeps the builder it asked for while that builder is
-    unblocked.
+    A `builder:<id>` label on the issue puts that entry first in the
+    build list, so a ticket keeps the builder it asked for while that
+    builder is unblocked. The board record's builder is the fallback
+    when the issue carries no label.
     """
     if issue is None:
         return None
-    for ticket in SNAPSHOT.get("tickets") or []:
-        if ticket.get("repo") == repo and str(ticket.get("number")) == str(issue) and ticket.get("builder"):
-            return ticket["builder"]
     for record in (SNAPSHOT.get("repos", {}).get(repo) or {}).get("issues") or []:
         if str(record.get("number")) != str(issue):
             continue
         for label in record.get("labels") or []:
             name = label.get("name") if isinstance(label, dict) else label
-            if isinstance(name, str) and name.startswith("builder:"):
-                return name.split(":", 1)[1] or None
+            if isinstance(name, str) and name.startswith("builder:") and name.split(":", 1)[1]:
+                return name.split(":", 1)[1]
+    for ticket in SNAPSHOT.get("tickets") or []:
+        if ticket.get("repo") == repo and str(ticket.get("number")) == str(issue) and ticket.get("builder"):
+            return ticket["builder"]
     return None
 
 
