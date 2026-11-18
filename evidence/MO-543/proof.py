@@ -287,6 +287,25 @@ def board_reconcile():
           settled == [("MERGED", "prompt-merge-MO-544")], command)
 
 
+def timeout_and_unnamed():
+    """A slow read and a nameless entry both defer; neither stops the scan."""
+    import subprocess as real_subprocess
+    coordq = load(BIN / "coordq", "proof_coordq_timeout")
+    lane = load(OVERNIGHT / "lane_driver.py", "proof_lane_timeout")
+    command = "python3 evidence/MO-543/proof.py"
+    with patch.object(coordq, "gh_json", side_effect=real_subprocess.TimeoutExpired("gh api", 40)):
+        slow = coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1)
+    with patch.object(coordq, "gh_json", return_value=[{}]):
+        unnamed = coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1)
+    grant("queue gatekeep: a gh timeout and a nameless entry both read unknown",
+          slow == prompt_paths.UNKNOWN and unnamed == prompt_paths.UNKNOWN, command)
+    with patch.object(lane, "run", side_effect=real_subprocess.TimeoutExpired("gh api", 40)):
+        state = lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1)
+        held = lane.prompt_pass("shyamsivakumar/mac-ops", 544, HEAD, state)
+    grant("lane: a gh timeout defers the pass instead of stopping it",
+          state == prompt_paths.UNKNOWN and "next run retries" in (held or ""), command)
+
+
 def tree_fallback():
     """A 3,001-file PR never fits the file list, so the trees classify it."""
     coordq = load(BIN / "coordq", "proof_coordq_trees")
@@ -384,6 +403,7 @@ def main():
     gate_briefs()
     queue_briefs()
     ticket_file_read()
+    timeout_and_unnamed()
     tree_fallback()
     lane_truncation()
     board_reconcile()

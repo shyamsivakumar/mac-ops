@@ -602,12 +602,12 @@ def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts
     """
     try:
         count = changed_files if isinstance(changed_files, int) else pr_changed_count(repo, number)
-    except (RuntimeError, ValueError):
+    except (RuntimeError, ValueError, subprocess.SubprocessError):
         return prompt_paths.UNKNOWN
     for _ in range(max(1, attempts)):
         try:
             paths = pr_paths(repo, number, count)
-        except (RuntimeError, ValueError):
+        except (RuntimeError, ValueError, subprocess.SubprocessError):
             # A `gh` read that failed is retried, never guessed at.
             continue
         state = prompt_paths.prompt_scan(paths)

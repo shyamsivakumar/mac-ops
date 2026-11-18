@@ -1157,7 +1157,7 @@ def gate_changed_count(repo, number):
     """
     try:
         rows = gh_json(f"repos/{repo}/pulls/{number}")
-    except (RuntimeError, ValueError):
+    except (RuntimeError, ValueError, subprocess.SubprocessError):
         return None
     pull = rows[0] if isinstance(rows, list) and rows else rows
     count = pull.get("changed_files") if isinstance(pull, dict) else None
@@ -1181,7 +1181,7 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
     for _ in range(max(1, attempts)):
         try:
             pages = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
-        except (RuntimeError, ValueError):
+        except (RuntimeError, ValueError, subprocess.SubprocessError):
             continue
         files = pages
         if not isinstance(files, list):
@@ -1192,7 +1192,7 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
     if base and head:
         try:
             paths = prompt_paths.tree_diff(gh_json, repo, base, head)
-        except (RuntimeError, ValueError):
+        except (RuntimeError, ValueError, subprocess.SubprocessError):
             paths = None
         if paths is not None:
             return prompt_paths.prompt_scan(paths)

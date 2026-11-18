@@ -92,11 +92,16 @@ def list_is_complete(entries, changed_files):
     list shorter than the pull request's own changed-file count may have
     dropped the one prompt file. A count that is not known is not a complete
     list either: without it the caller cannot tell, and the safe answer for a
-    list that authorizes a merge is defer.
+    list that authorizes a merge is defer. An entry GitHub gave no name for
+    makes the list unusable too: the missing name could be the prompt file.
     """
     if not isinstance(changed_files, int):
         return False
-    return len(entries or ()) >= changed_files
+    entries = list(entries or ())
+    if len(entries) < changed_files:
+        return False
+    return all(isinstance(entry, dict) and isinstance(entry.get("filename"), str)
+               and bool(entry["filename"]) for entry in entries)
 
 
 def prompt_scan(paths):
@@ -142,8 +147,11 @@ def tree_paths(tree):
         if not isinstance(entry, dict) or entry.get("type") != "blob":
             continue
         path = entry.get("path")
-        if isinstance(path, str) and path:
-            paths[path] = entry.get("sha")
+        if not isinstance(path, str) or not path:
+            # A blob GitHub gave no path for is a tree that cannot be read
+            # completely, so it decides nothing.
+            return None
+        paths[path] = entry.get("sha")
     return paths
 
 

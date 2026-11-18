@@ -5,6 +5,7 @@ One path list decides it, and two places read it: the gate brief built by
 tests here pin the list and both call sites.
 """
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -94,6 +95,12 @@ class PromptPathTest(unittest.TestCase):
         self.assertIsNone(prompt_paths.page_entries([{"filename": "a.py"}]))
         self.assertIsNone(prompt_paths.page_entries(None))
         self.assertIsNone(prompt_paths.page_entries("not a page list"))
+
+    def test_an_entry_with_no_name_is_not_a_complete_list(self):
+        """A nameless entry could be the prompt file, so the list is unusable."""
+        self.assertFalse(prompt_paths.list_is_complete([{}], 1))
+        self.assertFalse(prompt_paths.list_is_complete([{"filename": ""}], 1))
+        self.assertTrue(prompt_paths.list_is_complete([{"filename": "a.py"}], 1))
 
     def test_a_huge_code_pull_request_clears_from_its_trees(self):
         """The files endpoint stops at 3,000, so the trees give the whole diff."""
@@ -320,6 +327,20 @@ class CoordqGateTest(unittest.TestCase):
             self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
                              prompt_paths.UNKNOWN)
 
+    def test_a_nameless_entry_is_unknown_never_clear(self):
+        with patch.object(self.coordq, "gh_json", return_value=[{}]):
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
+                             prompt_paths.UNKNOWN)
+
+    def test_a_timeout_defers_instead_of_stopping_the_scan(self):
+        """One slow read must not end the pass before later PRs are read."""
+        import subprocess as real_subprocess
+
+        with patch.object(self.coordq, "gh_json",
+                          side_effect=real_subprocess.TimeoutExpired("gh api", 40)):
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
+                             prompt_paths.UNKNOWN)
+
     def test_a_failed_read_is_unknown_never_clear(self):
         """A transient GitHub error must not authorize the merge it once did."""
         with patch.object(self.coordq, "gh_json", side_effect=RuntimeError("boom")) as read:
@@ -376,7 +397,9 @@ class CoordqGateTest(unittest.TestCase):
             raise AssertionError(f"unexpected endpoint {endpoint}")
 
         quiet = types.SimpleNamespace(returncode=0, stdout="me\n", stderr="")
-        with patch.object(coordq, "subprocess", types.SimpleNamespace(run=lambda *a, **k: quiet)), \
+        fake_subprocess = types.SimpleNamespace(run=lambda *a, **k: quiet,
+                                               SubprocessError=subprocess.SubprocessError)
+        with patch.object(coordq, "subprocess", fake_subprocess), \
                 patch.object(coordq, "gh_json", fake_gh), \
                 patch.object(coordq, "load_receipts", return_value={"req-1": "thread-1"}), \
                 patch.object(coordq, "read_builder_thread",
@@ -425,7 +448,9 @@ class CoordqGateTest(unittest.TestCase):
             raise AssertionError(f"unexpected endpoint {endpoint}")
 
         quiet = types.SimpleNamespace(returncode=0, stdout="me\n", stderr="")
-        with patch.object(coordq, "subprocess", types.SimpleNamespace(run=lambda *a, **k: quiet)), \
+        fake_subprocess = types.SimpleNamespace(run=lambda *a, **k: quiet,
+                                               SubprocessError=subprocess.SubprocessError)
+        with patch.object(coordq, "subprocess", fake_subprocess), \
                 patch.object(coordq, "gh_json", fake_gh), \
                 patch.object(coordq, "load_receipts", return_value={"req-1": "thread-1"}), \
                 patch.object(coordq, "read_builder_thread",
@@ -551,6 +576,18 @@ class LanePassTest(unittest.TestCase):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544,
                                                    base="main", head="head"),
                              prompt_paths.CLEAR)
+
+    def test_a_timeout_defers_the_pass(self):
+        import subprocess as real_subprocess
+        written = []
+        with patch.object(self.lane, "run",
+                          side_effect=real_subprocess.TimeoutExpired("gh api", 40)), \
+                patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
+            state = self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1)
+            held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40, state)
+        self.assertEqual(state, prompt_paths.UNKNOWN)
+        self.assertIn("next run retries", held)
+        self.assertEqual(written, [])
 
     def test_a_dry_run_writes_no_board_item(self):
         """The board write is live state, so a dry run must not reach it."""
