@@ -564,9 +564,11 @@ def message_title(repo, number, action, head):
     The queue names a message by its title and its target, so the head is in
     the title: two heads of one pull request are two messages to the same
     builder thread, and the second must not be read as a copy of the first.
-    Two passes over one head keep one title, so they still queue once.
+    The whole head is in the title, because two heads can share a short
+    prefix and their messages are still two messages. Two passes over one
+    head keep one title, so they still queue once.
     """
-    return f"{CFG[repo]['key']}#{number} {action} {head[:8]}"
+    return f"{CFG[repo]['key']}#{number} {action} {head}"
 
 
 def superseded_by(repo, number, issue):
