@@ -7,6 +7,7 @@ import re
 import subprocess
 import time
 
+import alarms
 import stall
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
@@ -1060,16 +1061,107 @@ def watchdog():
         if alarm:
             stale.append(alarm)
     p = DECISIONS_PATH
-    d = json.load(open(p))
-    d["items"] = [i for i in d["items"] if i.get("id") != "factory-watchdog"]
     if stale:
-        print("WATCHDOG " + "; ".join(stale))
-        d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                           "title": "Factory job stopped or failing: " + "; ".join(stale),
-                           "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
-    d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    json.dump(d, open(p + ".tmp", "w"), indent=1)
-    os.replace(p + ".tmp", p)
+        cause = "; ".join(stale)
+
+        def publish(action):
+            """Read the board, change it, and write it, under the lock.
+
+            This runs while the mute state is locked, so an answer that
+            lands now cannot slip between the decision and the alarm on
+            the board, and the board is read now, not before the lock.
+            A board that cannot be read or written returns "failed", so
+            the tick says the alarm is nowhere instead of losing it."""
+            try:
+                # The board lock is its own file, beside the board: a
+                # mute storage that cannot be locked must not leave the
+                # board unprotected, or two publishers read the same
+                # board and one alarm disappears.
+                with alarms.board_locked(p) as unlocked:
+                    if unlocked:
+                        # The board cannot be written safely without its
+                        # lock: two publishers would read the same board
+                        # and one alarm would be erased. The alarm is not
+                        # published and the fault is said out loud.
+                        print("WATCHDOG the board lock could not be taken; the alarm is not published")
+                        return "failed"
+                    with open(p) as handle:
+                        d = json.load(handle)
+                    if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+                        return "failed"
+                    d["items"] = [i for i in d["items"]
+                                  if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
+                    if action in ("raise", "unchecked"):
+                        d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
+                                           "title": "Factory job stopped or failing: " + cause,
+                                           "cause": alarms.cause_of(cause),
+                                           "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
+                    d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    temporary = f"{p}.{os.getpid()}.tmp"
+                    with open(temporary, "w") as handle:
+                        json.dump(d, handle, indent=1)
+                    os.replace(temporary, p)
+            except (OSError, ValueError):
+                return "failed"
+            if action == "quiet":
+                # The alarm was acknowledged, so the same cause stays
+                # quiet for four hours. The tick still says what it did
+                # not raise, and the board holds no item for it.
+                print("WATCHDOG quiet: " + cause)
+            else:
+                print("WATCHDOG " + cause)
+                if action == "unchecked":
+                    # The key could not be written, so the answer to this
+                    # alarm cannot be recorded. The alarm is published
+                    # anyway: a storage failure must not hide a real
+                    # failure from Shyam.
+                    print("WATCHDOG the alarm key could not be written; the answer to this alarm cannot be recorded")
+
+        # The decision and the publication happen under the state lock, so
+        # an answer that lands between them cannot be missed.
+        action = alarms.decide_and_publish("factory-watchdog", cause, publish)
+        if action == "failed":
+            # The board could not be written, so the alarm is nowhere.
+            print("WATCHDOG the alarm could not be published; the board file could not be written")
+        return
+
+    def publish_healthy():
+        """Take the watchdog's item off the board, under the board lock.
+
+        The board is read and written while the board lock is held, so
+        another writer cannot replace it between the read and the write.
+        The board lock is its own file: it does not depend on the mute
+        storage, so the board is cleaned even when the mute state cannot
+        be locked or read. A board that cannot be written is said out
+        loud: the item stays on the board and the next tick tries
+        again."""
+        try:
+            with alarms.board_locked(p) as unlocked:
+                if unlocked:
+                    print("WATCHDOG the board lock could not be taken; the alarm stays on the board")
+                    return
+                with open(p) as handle:
+                    d = json.load(handle)
+                if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+                    print("WATCHDOG could not take the alarm off the board; the board file could not be read")
+                    return
+                d["items"] = [i for i in d["items"]
+                              if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
+                d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                temporary = f"{p}.{os.getpid()}.tmp"
+                with open(temporary, "w") as handle:
+                    json.dump(d, handle, indent=1)
+                os.replace(temporary, p)
+        except (OSError, ValueError):
+            print("WATCHDOG could not take the alarm off the board; the board file could not be written")
+
+    # The alarm is not true any more, so the same cause can alarm again
+    # the next time it is true. An acknowledgement that is still running
+    # keeps the key quiet. The board is cleaned under the board lock,
+    # even when the mute state cannot be locked or read, so a broken
+    # mute storage does not leave a stale alarm on the board.
+    if not alarms.forget_and_save("factory-watchdog", publish_healthy):
+        print("WATCHDOG could not write the mute state; the alarm is not muted")
 
 
 def zero_merge(snapshot):
