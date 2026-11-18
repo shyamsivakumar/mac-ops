@@ -1058,6 +1058,9 @@ def unstick(repo, ledger, excl=frozenset()):
     batch = tickets[:7]
     if DRY:
         return f"DRY unstick {batch}"
+    root = repo_root(repo)
+    if not root or barred_worktree(root):
+        return "unstick waits, the project root is on a herdr branch or its branch cannot be read"
     lst = ", ".join(f"#{n}" for n in batch)
     msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "taskType": "chore", "modelSelection": unsticker["selection"],
