@@ -152,7 +152,11 @@ def scope_texts(body):
                     kind = "declared"
                 # An inline marker cannot lift the exclusion of the
                 # section it sits in: the exclusion holds until a sibling
-                # or a higher heading ends it.
+                # or a higher heading ends it. The marker becomes the
+                # intent of the section it is in, so a heading under that
+                # section keeps it too.
+                if sections:
+                    sections[-1] = (sections[-1][0], kind)
                 position = match.end()
             kind = record(sentence[position:], kind)
     # A ticket is judged by its declaration: the words after an "in"

@@ -345,6 +345,19 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("tests/test_alarm_panel.py", item["detail"])
         self.assertNotIn("pass", item["status"])
 
+    def test_an_inline_exclusion_survives_a_child_heading(self):
+        """An exclusion written inline holds under a heading beneath it.
+
+        "Out of scope:" inside "## Scope" excludes what follows, and the
+        "### Protected files" heading under it does not end that.
+        """
+        check = close_check()
+        ticket = ("## Scope\nIn: src/\nOut of scope:\n### Protected files\n"
+                  "src/private.py\n")
+        item = check.item_scope(ticket, ["src/parser.py", "src/private.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("src/private.py", item["detail"])
+
     def test_an_inline_marker_does_not_lift_the_enclosing_exclusion(self):
         """An "In:" bullet under an exclusion does not permit the file.
 
