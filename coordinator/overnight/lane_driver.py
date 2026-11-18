@@ -1049,18 +1049,41 @@ def zero_merge(snapshot):
                 if cutoff <= stamp <= now:
                     recent = True
     path = DECISIONS_PATH
-    with open(path) as handle:
-        decisions = json.load(handle)
-    decisions["items"] = [item for item in decisions["items"]
-                          if item.get("id") != "factory-zero-merge"]
+    # The key names the repos that have open pull requests and no merge:
+    # that is the cause. A stall on one repo and a stall on another are
+    # different causes, so answering the first does not silence the
+    # second. The title stays one title, for the board.
+    waiting = sorted(repo for repo, data in snapshot["repos"].items() if data["prs"])
+    title = "No merge in 60 minutes with open PRs"
+    cause = title + ": " + (", ".join(waiting) if waiting else "none")
+    item = None
     if open_prs and not recent:
-        decisions["items"].append({"id": "factory-zero-merge", "group": "Coordinator",
-            "kind": "action", "title": "No merge in 60 minutes with open PRs",
-            "why": "The coordinator must inspect blocked PRs and restore merge progress."})
-    decisions["updated"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    with open(path + ".tmp", "w") as handle:
-        json.dump(decisions, handle, indent=1)
-    os.replace(path + ".tmp", path)
+        item = {"id": "factory-zero-merge", "group": "Coordinator",
+                "kind": "action", "title": title,
+                "cause": alarms.cause_of(cause),
+                "why": "The coordinator must inspect blocked PRs and restore merge progress: "
+                       + ", ".join(waiting)}
+    # The alarm is muted for four hours once it is acknowledged, like the
+    # watchdog's and the stall's (Refs #496): one place decides, and the
+    # board is written under its lock.
+    action = alarms.decide_and_publish(
+        "factory-zero-merge", cause or "",
+        lambda decided: None if alarms.board_update(
+            path, "factory-zero-merge",
+            "raise" if decided in ("raise", "unchecked") and item else "remove",
+            item) == "wrote" else "failed")
+    if action == "failed":
+        # The board could not be written, so the alarm is nowhere. The
+        # tick has to say so, or a real failure reaches nobody.
+        raise RuntimeError("the merge alert could not be published: the board file could not be written")
+    # A healthy tick has no alarm, so it says nothing about one: the log
+    # names an alarm only when there is an alarm to name.
+    if item is None:
+        return
+    if action == "quiet":
+        print("ZERO-MERGE quiet: " + cause)
+    elif action in ("raise", "unchecked"):
+        print("ZERO-MERGE " + cause)
 
 
 def item_failure_summary(ledger):
