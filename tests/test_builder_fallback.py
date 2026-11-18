@@ -264,6 +264,73 @@ class LaneDriverTests(StoreCase):
         self.assertIn('"clientRequestId": "builder-probe:', calls[0][2])
         self.assertNotEqual(provider_health.record(GLM).get("probeRequestId"), "builder-probe:glm:1")
 
+    def dead_run_with(self, items):
+        """Recover one dead thread whose messages are the ones given."""
+        module = self.module()
+        dead = {"threadId": "t-dead", "title": "ship #531", "settled": False}
+        thread = {**dead, "providerInstanceId": DEEPSEEK["instanceId"], "model": DEEPSEEK["model"],
+                  "worktreePath": "/tmp/fixture-worktree", "pullRequests": []}
+        launched = []
+
+        def t3(tool, args):
+            if tool == "t3_thread_list":
+                return {"threads": [dead]} if args.get("statuses") == ["failed", "interrupted"] else {"threads": []}
+            if tool == "t3_thread_read" and args.get("view") == "messages":
+                return {"items": items}
+            if tool == "t3_thread_read":
+                return {"thread": thread}
+            if tool == "t3_thread_organize":
+                return {}
+            raise AssertionError(f"unexpected T3 call {tool}")
+
+        def run(command, timeout=150):
+            if command[0] == "git":
+                return "worktree /tmp/fixture-worktree\n"
+            launched.append(json.loads(command[2]))
+            return "fixture-relaunch"
+
+        with patch.object(module, "LANE_REPOS", ["shyamsivakumar/mac-ops"]), \
+                patch.object(module, "CFG", {"shyamsivakumar/mac-ops": {"projectId": "p"}}), \
+                patch.object(module, "DRY", False), patch.object(module, "t3", t3), \
+                patch.object(module, "run", run), \
+                patch.object(module, "stall_receipts",
+                             return_value={"ticket:shyamsivakumar/mac-ops#531:a1": "t-dead"}), \
+                patch.object(module, "read_json", return_value={"state": "OPEN"}):
+            module.recover_dead_runs({})
+        return launched
+
+    def test_a_previous_runs_limit_does_not_block_the_builder(self):
+        # The gate finding of round 5: recovery read the newest diagnostic in
+        # the thread, so a run that stopped without one reused the 429 of the
+        # run before it and blocked a healthy builder for every new build.
+        launched = self.dead_run_with([
+            {"runId": "run-a", "type": "error", "text": "429 code 1308 usage limit, resets in 2 hours"},
+            {"runId": "run-b", "type": "user_message", "text": "Continue MO#531"},
+            {"runId": "run-b", "type": "assistant_message", "text": "Reading the ticket"}])
+        self.assertEqual(provider_health.load(), {})
+        self.assertEqual(len(launched), 1)
+        self.assertEqual(launched[0]["modelSelection"], DEEPSEEK)
+
+    def test_a_block_reason_and_its_reset_come_from_the_failed_run(self):
+        launched = self.dead_run_with([
+            {"runId": "run-a", "type": "error", "text": "429 code 1308 usage limit, resets in 5 hours"},
+            {"runId": "run-b", "type": "error",
+             "text": "429 code 2056 MiniMax Token Plan usage limit, resets in 1 hours"},
+            {"runId": "run-b", "type": "assistant_message", "text": "The plan resets in 5 hours"}])
+        record = provider_health.record(DEEPSEEK)
+        self.assertEqual(record.get("reason"), "2056")
+        self.assertAlmostEqual(record["resetAt"] - time.time(), 3600, delta=120)
+        self.assertEqual(len(launched), 1)
+        self.assertEqual(launched[0]["modelSelection"], GLM)
+
+    def test_a_thread_that_names_no_run_supplies_no_diagnostic(self):
+        # Messages without a run id cannot be scoped, so they name no reason:
+        # blocking a builder on one of them is the stale reading again.
+        module = self.module()
+        items = [{"type": "error", "text": "429 code 1308 usage limit"}]
+        with patch.object(module, "t3", lambda tool, args: {"items": items}):
+            self.assertEqual(module.last_reply("t1", diagnostics_only=True), "")
+
 
 class CallerTests(StoreCase):
     """Every caller falls back: the queue's dispatch and the ticket start."""

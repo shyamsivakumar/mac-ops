@@ -161,7 +161,18 @@ def settle_dead_run(thread_id):
 
 
 def last_reply(thread_id, diagnostics_only=False):
+    """The newest message of a thread, or the diagnostic of the run that stopped.
+
+    A diagnostic names the run that produced it. An earlier run's 429 says
+    nothing about the run that stopped now, so that run cannot take the
+    blame: only the newest run's messages name a block reason and its
+    reset. A thread whose messages name no run supplies no diagnostic,
+    because no reason is better than another run's.
+    """
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
+    if diagnostics_only:
+        newest = next((i.get("runId") for i in reversed(items) if i.get("runId")), None)
+        items = [i for i in items if newest and i.get("runId") == newest]
     msgs = [i.get("text") or i.get("message") or "" for i in items
             if i.get("type") in ({"error", "run_error", "provider_error"} if diagnostics_only
                                  else {"assistant_message", "error", "run_error", "provider_error"})]
@@ -1493,7 +1504,7 @@ def recover_dead_runs(ledger):
                 current = builder_of(full_thread)
                 if current and block_reason and not DRY:
                     line = builders.blocked_builder(
-                        current, block_reason, reset_at=provider_health.reset_time(reply))
+                        current, block_reason, reset_at=provider_health.reset_time(diagnostics))
                     if line:
                         print(line)
                 model = builders.choose_builder(current)
