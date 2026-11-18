@@ -483,10 +483,11 @@ def barred_worktree(path):
     there and never hands a worktree on that branch to a builder. A
     worktree whose branch cannot be read is not confirmed to be anywhere
     else, so it is barred too: only a readable branch outside `herdr/`
-    is a destination.
+    is a destination. A detached head names no branch, so it is barred
+    as well.
     """
     branch = worktree_branch(path)
-    return not branch or branch.startswith("herdr/")
+    return not branch or branch == "HEAD" or branch.startswith("herdr/")
 
 
 def branch_on_origin(repo, branch):
