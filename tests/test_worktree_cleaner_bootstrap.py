@@ -517,6 +517,53 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertEqual(os.readlink(link), "../../elsewhere.md")
         self.assertEqual(cleaner.status_for(repo), [])
 
+    def test_a_link_that_replaces_the_directory_stops_the_restore(self):
+        # A link that replaces the directory after the scan must not let the
+        # restore write outside the worktree.
+        repo = Path(self.tmp.name) / "swapped-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        (repo / ".specstory" / "notes").write_text("history\n", encoding="utf-8")
+        git(repo, "add", ".specstory/notes")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "notes"], check=True, capture_output=True)
+        (repo / ".specstory" / "notes").write_text("edited\n", encoding="utf-8")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        (repo / ".specstory" / "notes").unlink()
+        (repo / ".specstory").rmdir()
+        os.symlink(str(outside), repo / ".specstory")
+        cleared = clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
+        self.assertIsNone(cleared)
+        self.assertFalse((outside / "notes").exists(), "nothing may be written outside the worktree")
+
+    def test_a_moved_link_is_compared_by_its_target(self):
+        # The link is moved aside, where its relative target no longer
+        # resolves, so the target itself has to be compared.
+        repo = Path(self.tmp.name) / "moved-link-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        (repo / "notes.md").write_text("notes\n", encoding="utf-8")
+        os.symlink("../notes.md", repo / ".specstory" / "link.md")
+        git(repo, "add", ".specstory/link.md", "notes.md")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "link"], check=True, capture_output=True)
+        (repo / ".specstory" / "link.md").unlink()
+        os.symlink("../other.md", repo / ".specstory" / "link.md")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        cleared = clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
+        self.assertEqual(sorted(cleared or []), [".specstory/link.md"])
+        link = repo / ".specstory" / "link.md"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), "../notes.md")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

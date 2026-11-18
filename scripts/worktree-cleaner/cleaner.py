@@ -343,10 +343,27 @@ def classify_changes(path: Path, records: list[tuple[str, str, str | None]]) -> 
     return bootstrap, real
 
 
-def file_digest(path: Path) -> str | None:
-    """The digest of the bytes of a file, or None when it cannot be read."""
+def _file_bytes(path: Path) -> bytes | None:
+    """The bytes of a file, or the target of a link, or None.
+
+    A link is never read through: a relative target that resolved inside the
+    worktree can dangle once the link is moved aside.
+    """
     try:
-        data = (path).read_bytes()
+        if path.is_symlink():
+            return os.readlink(path).encode("utf-8", "surrogateescape")
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def file_digest(path: Path) -> str | None:
+    """The digest of a file, or of the target of a link, or None."""
+    try:
+        if path.is_symlink():
+            data = os.readlink(path).encode("utf-8", "surrogateescape")
+        else:
+            data = path.read_bytes()
     except OSError:
         return None
     return hashlib.sha256(data).hexdigest()
@@ -406,6 +423,34 @@ def _exclusive_write(path: Path, data: bytes, mode: int) -> bool:
     return True
 
 
+def _prepare_parent(repo: Path, relative: Path) -> Path | None:
+    """The parent directory of a path, when it is a real directory in the worktree.
+
+    Every component is checked: a component that is a link, or that is not a
+    directory, stops the restore, so a link that replaced a directory after
+    the scan cannot move the restored file outside the worktree.
+    """
+    current = repo
+    for part in relative.parent.parts:
+        current = current / part
+        if current.is_symlink():
+            return None
+        if current.exists():
+            if not current.is_dir():
+                return None
+            continue
+        try:
+            current.mkdir()
+        except OSError:
+            return None
+    parent = repo / relative.parent
+    root = os.path.realpath(repo)
+    resolved = os.path.realpath(parent)
+    if resolved != root and not resolved.startswith(root + os.sep):
+        return None
+    return parent
+
+
 def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool:
     """Recreate a path from its committed bytes without replacing anything.
 
@@ -417,14 +462,7 @@ def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool
     relative = Path(name)
     if relative.is_absolute() or ".." in relative.parts:
         return False
-    parent = (repo / relative).parent
-    try:
-        parent.relative_to(repo)
-    except ValueError:
-        return False
-    try:
-        parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
+    if _prepare_parent(repo, relative) is None:
         return False
     if entry[0] == "120000":
         target = entry[2].decode("utf-8", "surrogateescape")
@@ -466,9 +504,8 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
     kept.
     """
     file_path = repo / name
-    try:
-        expected = file_path.read_bytes()
-    except OSError:
+    expected = _file_bytes(file_path)
+    if expected is None:
         # A delete or a rename has already taken the file away, so there is no
         # edit to preserve and the committed bytes are restored, or nothing
         # stays when HEAD has none. A path that came back is kept.
@@ -484,10 +521,7 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
         os.replace(file_path, moved)
     except OSError:
         return False
-    try:
-        after = moved.read_bytes()
-    except OSError:
-        after = None
+    after = _file_bytes(moved)
     if after != expected:
         # Someone wrote the file while it was being cleared. Only a free path
         # is restored, so a save that landed in the meantime keeps its own
