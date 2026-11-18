@@ -477,7 +477,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
     thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    if (sendable and pr_number is not None and thread.get("status") in {"completed", "interrupted", "failed"}
+    if (sendable and thread.get("status") in {"completed", "interrupted", "failed"}
             and model_list.identity(thread_model)
             and model_list.identity(thread_model) != model_list.identity(fixer["selection"])):
         sendable = False
@@ -496,13 +496,13 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if pr is None:
-            return f"skip {lkey}: no verified PR branch for relaunch"
-        if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
-            return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
         if reroute == "model is not first available" and not root_workspace(thread):
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
+            if pr is None:
+                return f"skip {lkey}: no verified PR branch for relaunch"
+            if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
+                return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
             workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
