@@ -79,5 +79,13 @@ turned out to be blocked (`waiting <repo>#<pr>`). The first reviewer of a head
 is chosen before the locks are taken, so it is checked again under them and
 chosen again on a free reviewer (`rechoosing <repo>#<pr>`).
 
+A queued gate whose reviewer was blocked after it was queued is not launched.
+The dispatcher checks the reviewer again under the block store lock just
+before it reserves the launch, refuses the item (`REFUSED #<id>`), and
+releases the head with its tried reviewers, so the head is gated again. The
+dispatcher already holds the queue lock, so it takes the block store lock
+without waiting and leaves the item queued for the next run when a writer
+holds it. Queued builders are never refused for a blocked model.
+
 A loaded LaunchAgent runs after login. Reboot survival requires a real reboot
 and has not been demonstrated by plist validation or local checks.

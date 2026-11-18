@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, fcntl, json, os, re, signal, subprocess, sys, time
+import argparse, contextlib, fcntl, json, os, re, signal, subprocess, sys, time
 from pathlib import Path
 
 # The modules below live next to this script. A caller that loads this file
@@ -213,13 +213,26 @@ def blocked_launch(item):
     """Why an item cannot be launched, or None.
 
     A gate item whose reviewer was blocked after it was queued is not
-    launched: the provider cannot run it. The item is refused and the head
-    it belongs to is released, so the head is gated again later.
+    launched: the provider cannot run it. Only a gate item is refused; a
+    builder is never held back here.
     """
     selection = (item.get("args") or {}).get("modelSelection")
-    if selection and model_list.is_blocked(selection):
+    if selection and is_gate_model(selection) and model_list.is_blocked(selection):
         return f"{model_list.identity(selection)} is blocked"
     return None
+
+
+def refuse_blocked_gate(queue, item, reason):
+    """Take a gate item whose reviewer is blocked out of the queue.
+
+    The head it belongs to is released with its tried reviewers, so the head
+    is gated again later and its spent move is not counted.
+    """
+    release_action_key(queue, item)
+    head = item.get("head") or str((item.get("args") or {}).get("clientRequestId") or "")
+    queue.get("gatedHeads", {}).pop(head, None)
+    queue.get("gateReviewers", {}).pop(head, None)
+    log(f"REFUSED #{item['id']}: {reason}")
 
 
 def tool_refusal(tool):
@@ -601,11 +614,7 @@ def drain():
                     dispatchable.append(item)
                     continue
                 dropped.add(item["id"])
-                release_action_key(queue, item)
-                head = item.get("head")
-                if head and head in queue.get("gatedHeads", {}):
-                    del queue["gatedHeads"][head]
-                log(f"REFUSED #{item['id']}: {reason}")
+                refuse_blocked_gate(queue, item, reason)
                 continue
             dropped.add(item["id"])
             release_action_key(queue, item)
@@ -652,13 +661,25 @@ def drain():
         if n + len(queue["reserved"]) + len(steps) > cap():
             log(f"waiting for {len(steps)} slots for #{item['id']}")
             return
-        for key, step in zip(keys, steps):
-            queue["reserved"][key] = time.time()
-            if step["tool"] == "t3_thread_send":
-                queue["reservedThreads"][key] = step["args"]["threadId"]
-        if item.get("actionKey"):
-            set_action_key_state(queue, item["actionKey"], "reserved")
-        save(queue)
+        guard = model_list.blocked_lock(blocking=False) if is_gate_model(item["args"].get("modelSelection")) \
+            else contextlib.nullcontext(True)
+        with guard as held:
+            if not held:
+                log(f"#{item['id']} waits, the provider block store is being written")
+                return
+            reason = blocked_launch(item)
+            if reason is not None:
+                queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
+                refuse_blocked_gate(queue, item, reason)
+                save(queue)
+                continue
+            for key, step in zip(keys, steps):
+                queue["reserved"][key] = time.time()
+                if step["tool"] == "t3_thread_send":
+                    queue["reservedThreads"][key] = step["args"]["threadId"]
+            if item.get("actionKey"):
+                set_action_key_state(queue, item["actionKey"], "reserved")
+            save(queue)
         code, out = 0, ""
         for index, (key, step) in enumerate(zip(keys, steps)):
             try:
