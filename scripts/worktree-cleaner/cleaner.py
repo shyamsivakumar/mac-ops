@@ -533,6 +533,24 @@ def _read_at(parent: int, name: str) -> bytes | None:
         os.close(descriptor)
 
 
+def _worktree_registration(path: Path) -> Path | None:
+    """The administration directory of the registration a worktree owns.
+
+    It is read from the worktree itself, so it is the registration of that
+    worktree and not one that shares its basename.
+    """
+    try:
+        text = (path / ".git").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if not text.startswith("gitdir: "):
+        return None
+    admin = Path(text[len("gitdir: "):])
+    if not admin.is_absolute():
+        admin = (path / admin).resolve()
+    return admin
+
+
 def root_identity(path: Path) -> str | None:
     """The identity of a worktree directory: its device and its inode."""
     try:
@@ -1672,6 +1690,37 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 # The head is checked again after the cleanup, so a commit
                 # made in between stops the removal: git would see a clean
                 # worktree and remove it, and the new commit would be lost.
+                # The removal is bound to the worktree that was verified: the
+                # directory at that path has to be the one the scan saw, and
+                # the registration the worktree owns has to carry the head
+                # that was checked. A worktree that took the place in the
+                # meantime is left alone.
+                expected_identity = candidate.get("root_identity")
+                if expected_identity and root_identity(Path(candidate["path"])) != expected_identity:
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_replaced_before_remove"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
+                registration = _worktree_registration(Path(candidate["path"]))
+                if registration is None:
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_registration_unknown"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
+                try:
+                    registered = (registration / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+                except OSError:
+                    registered = ""
+                if registered.startswith("ref: "):
+                    try:
+                        registered = git(repo_root, "rev-parse", registered[len("ref: "):]).strip()
+                    except SafetyError:
+                        registered = ""
+                if registered != str(candidate.get("head") or ""):
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_head_moved_before_remove"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
                 lock = _claim_head_lock(Path(candidate["path"]))
                 if lock is None:
                     candidate["eligible"] = False
