@@ -48,3 +48,19 @@ Ordinary direct `xcodebuild` commands keep the shared DerivedData rewrite and ru
 Critical kernel pressure, memory use at least 95%, or load per core at least 2 with a missing CPU reading requests pauses for all registered running workloads immediately. The controller writes those requests before board queries, and each supervisor retries its own verified group signal. Raw CPU busy at or above 95% is a noncritical warning for a supervisor: it must persist for the 15-second sustained window before a pause request. The controller's smoothed CPU busy at or above 95% is critical.
 
 A partial sample from a failed collection (`sample_with_emergency`) counts as critical only for pressure level 4 or memory use of at least 95%. The load-average stand-in for a missing CPU reading does not apply to that partial path (`critical_pressure(..., load_proxy=False)`), so a slow or stale collection holds capacity instead of writing 0 slots. The tick exception path republishes 2 when a fresh valid noncritical sample is available, so a prior 0 cannot stick through repeated census races.
+
+## Dead jobs and simulator cleanup
+
+```mermaid
+stateDiagram-v2
+    [*] --> Starting
+    Starting --> Running: workload launched and identity verified
+    Starting --> Dead: supervisor process gone
+    Running --> Dead: supervisor process gone
+    Dead --> [*]: record removed, slot free, one log line
+```
+
+A supervisor is gone when its recorded pid, uid, and start token no longer match the process table for the current boot. The governor checks this on every tick, removes the record so the slot is free on the next admission decision, and logs one `job-dead` line. A live supervisor is never removed, and the check uses the recorded boot id so a pid from another boot cannot match.
+
+A simulator job records the booted simulator devices before it starts. When the job ends on any outcome, heavy shuts down the devices that the job booted, which are the devices that were not booted when the job started and whose launchd process started while the job ran. A device that another running job may use is left alone, so a job never shuts down a simulator another job holds. On every governor tick heavy also stops the simulator processes that belong to no booted device, which are the processes whose owning device is not booted. A process of a booted device is never stopped.
+

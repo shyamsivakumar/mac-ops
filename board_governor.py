@@ -1233,6 +1233,7 @@ def _critical_pressure(helper, sample):
 
 
 _last_restart_tick = 0.0
+_last_simulator_sweep = 0.0
 
 
 def _board_restart_tick():
@@ -1242,6 +1243,21 @@ def _board_restart_tick():
         return {"action": "not_due"}
     _last_restart_tick = now
     return board_restart.tick()
+
+
+def _simulator_sweep_tick(helper):
+    """Stop simulator processes that belong to no booted device, at most every 10 seconds."""
+    global _last_simulator_sweep
+    now = time.monotonic()
+    if now - _last_simulator_sweep < helper.SIMULATOR_SWEEP_INTERVAL_SECONDS:
+        return {"action": "not-due"}
+    _last_simulator_sweep = now
+    result = helper.stop_orphan_simulator_processes()
+    if result.get("stopped"):
+        result["action"] = "stopped"
+    else:
+        result["action"] = "clean"
+    return result
 
 
 def controller_tick(*, board_control=True, cfg=None):
@@ -1310,6 +1326,16 @@ def controller_tick(*, board_control=True, cfg=None):
                 entry["critical_curtailment"] = {"requested": helper.request_critical_pauses()}
             except Exception as exc:
                 entry["critical_curtailment_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
+
+    try:
+        reaped = helper.reap_dead_jobs(helper.Registry(helper.state_directory()))
+        entry["heavy_reap"] = {"reaped": len(reaped)}
+    except Exception as exc:
+        entry["heavy_reap_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
+    try:
+        entry["simulator_cleanup"] = _simulator_sweep_tick(helper)
+    except Exception as exc:
+        entry["simulator_cleanup_error"] = type(exc).__name__ + ": " + str(exc).splitlines()[0][:180]
 
     agent_census = None
     admission_active = []

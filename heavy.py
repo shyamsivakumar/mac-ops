@@ -64,6 +64,14 @@ LEGACY_SLOTS = Path("/tmp/heavy-slots")
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
+SIMCTL_TIMEOUT = 15.0
+SIMULATOR_SWEEP_INTERVAL_SECONDS = 10.0
+SIMULATOR_DEVICE_PATTERN = re.compile(
+    r"/CoreSimulator/Devices/([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})/"
+)
+SIMULATOR_RUNTIME_PATTERN = re.compile(r"/([^/]+\.simruntime)/")
+SIMULATOR_JOB_COMMANDS = ("xcodebuild", "simctl")
 
 
 def monotonic_ns() -> int:
@@ -2152,6 +2160,347 @@ def _stop_watchdog(watchdog: Any) -> None:
             pass
 
 
+def _is_simulator_job(command_basename: str, argv: Sequence[str]) -> bool:
+    """Return True when the job may boot simulators."""
+    if command_basename in SIMULATOR_JOB_COMMANDS:
+        return True
+    return any(os.path.basename(str(arg)) == "simctl" for arg in argv)
+
+
+def simulator_booted_devices(
+    *, command_runner: Callable[[Sequence[str], float], str] = _run_native
+) -> Dict[str, str]:
+    """Return every booted or booting simulator device and its runtime identifier."""
+    output = command_runner(
+        ["/usr/bin/xcrun", "simctl", "list", "devices", "--json"], SIMCTL_TIMEOUT
+    )
+    try:
+        value = json.loads(output)
+    except (TypeError, ValueError) as exc:
+        raise HeavyError("simulator device list is malformed") from exc
+    devices = value.get("devices") if isinstance(value, dict) else None
+    if not isinstance(devices, dict):
+        raise HeavyError("simulator device list is malformed")
+    booted: Dict[str, str] = {}
+    for runtime, rows in devices.items():
+        if not isinstance(runtime, str) or not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            udid = row.get("udid")
+            if not isinstance(udid, str) or not udid:
+                continue
+            if row.get("state") not in ("Booted", "Booting"):
+                continue
+            booted[udid] = runtime
+    return booted
+
+
+def simulator_process_rows(
+    *, command_runner: Callable[[Sequence[str], float], str] = _run_native
+) -> List[Tuple[int, int, str]]:
+    """Return the process table rows for simulator processes and their parents."""
+    output = command_runner(
+        ["/bin/ps", "-axo", "pid=,ppid=,command="], NATIVE_TIMEOUT
+    )
+    rows: List[Tuple[int, int, str]] = []
+    for line in output.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        rows.append((int(parts[0]), int(parts[1]), parts[2]))
+    return rows
+
+
+def simulator_device_owners(
+    rows: Sequence[Tuple[int, int, str]]
+) -> Dict[int, str]:
+    """Map each simulator process pid to the simulator device that owns it."""
+    parents = {pid: ppid for pid, ppid, _ in rows}
+    launchd: Dict[int, str] = {}
+    for pid, _, command in rows:
+        if "launchd_sim" not in command:
+            continue
+        match = SIMULATOR_DEVICE_PATTERN.search(command)
+        if match:
+            launchd[pid] = match.group(1)
+    owners: Dict[int, str] = {}
+    for pid, ppid, command in rows:
+        match = SIMULATOR_DEVICE_PATTERN.search(command)
+        if match:
+            owners[pid] = match.group(1)
+            continue
+        if not SIMULATOR_RUNTIME_PATTERN.search(command):
+            continue
+        current = ppid
+        for _ in range(16):
+            if current in launchd:
+                owners[pid] = launchd[current]
+                break
+            following = parents.get(current)
+            if following is None or following == current:
+                break
+            current = following
+    return owners
+
+
+def simulator_device_boot_epochs(
+    rows: Sequence[Tuple[int, int, str]]
+) -> Dict[str, float]:
+    """Return the wall clock start time of each simulator device's launchd process."""
+    epochs: Dict[str, float] = {}
+    for pid, _, command in rows:
+        if "launchd_sim" not in command:
+            continue
+        match = SIMULATOR_DEVICE_PATTERN.search(command)
+        if not match:
+            continue
+        try:
+            info = _native_process_info(pid)
+        except HeavyError:
+            continue
+        if info is None:
+            continue
+        udid = match.group(1)
+        epoch = float(info.start_epoch)
+        if epoch > epochs.get(udid, 0.0):
+            epochs[udid] = epoch
+    return epochs
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def stop_orphan_simulator_processes(
+    *,
+    booted_reader: Callable[[], Dict[str, str]] = simulator_booted_devices,
+    rows_reader: Callable[[], List[Tuple[int, int, str]]] = simulator_process_rows,
+    kill: Callable[[int, int], None] = os.kill,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = monotonic,
+) -> Dict[str, Any]:
+    """Stop simulator processes that belong to no booted device.
+
+    A simulator process is an orphan when the device that owns it is not booted.
+    Processes of a booted device are never touched.
+    """
+    booted = booted_reader()
+    rows = rows_reader()
+    owners = simulator_device_owners(rows)
+    orphans = sorted(pid for pid, udid in owners.items() if udid not in booted)
+    if not orphans:
+        return {"stopped": 0, "devices": []}
+    for pid in orphans:
+        try:
+            kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = clock() + 2.0
+    remaining = list(orphans)
+    while remaining and clock() < deadline:
+        remaining = [pid for pid in remaining if _pid_alive(pid)]
+        if remaining:
+            sleep(0.2)
+    for pid in remaining:
+        try:
+            kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    return {
+        "stopped": len(orphans),
+        "devices": sorted({owners[pid] for pid in orphans}),
+    }
+
+
+def _simulator_shutdown(udid: str) -> bool:
+    try:
+        _run_native(["/usr/bin/xcrun", "simctl", "shutdown", udid], SIMCTL_TIMEOUT)
+    except (HeavyError, OSError):
+        return False
+    return True
+
+
+def _device_used_by_other_job(
+    udid: str, boot_epoch: float, other_records: Sequence[Dict[str, Any]]
+) -> bool:
+    """Return True when another running job may be using one simulator device."""
+    for other in other_records:
+        if other.get("state") in ("complete", "removed", "dead"):
+            continue
+        command = str(other.get("command_basename") or "")
+        simulators = other.get("simulators")
+        if command not in SIMULATOR_JOB_COMMANDS and not isinstance(simulators, dict):
+            continue
+        if not isinstance(simulators, dict):
+            continue
+        booted_before = simulators.get("booted")
+        if isinstance(booted_before, list) and udid in booted_before:
+            return True
+        started_at = simulators.get("started_at")
+        if (
+            isinstance(started_at, (int, float))
+            and not isinstance(started_at, bool)
+            and started_at <= boot_epoch
+        ):
+            return True
+    return False
+
+
+def shutdown_simulators_booted_by_job(
+    record: Dict[str, Any],
+    *,
+    other_records: Sequence[Dict[str, Any]] = (),
+    booted_reader: Callable[[], Dict[str, str]] = simulator_booted_devices,
+    rows_reader: Callable[[], List[Tuple[int, int, str]]] = simulator_process_rows,
+    epochs_reader: Callable[
+        [Sequence[Tuple[int, int, str]]], Dict[str, float]
+    ] = simulator_device_boot_epochs,
+    shutdown: Callable[[str], bool] = _simulator_shutdown,
+) -> List[str]:
+    """Shut down the simulator devices that one job booted.
+
+    A device belongs to the job when it was not booted when the job started and
+    its launchd process started while the job ran. A device another running job
+    may use is left alone.
+    """
+    simulators = record.get("simulators")
+    if not isinstance(simulators, dict):
+        return []
+    booted_before = simulators.get("booted")
+    started_at = simulators.get("started_at")
+    if not isinstance(booted_before, list) or not isinstance(started_at, (int, float)):
+        return []
+    if isinstance(started_at, bool):
+        return []
+    booted = booted_reader()
+    rows = rows_reader()
+    owners = simulator_device_owners(rows)
+    boot_epochs = epochs_reader(rows)
+    stopped: List[str] = []
+    for udid in sorted(booted):
+        if udid in set(booted_before):
+            continue
+        epoch = boot_epochs.get(udid)
+        if epoch is None or epoch < float(started_at):
+            continue
+        if _device_used_by_other_job(udid, epoch, other_records):
+            continue
+        if shutdown(udid):
+            stopped.append(udid)
+    return stopped
+
+
+def _capture_simulator_state(
+    command_basename: str, argv: Sequence[str]
+) -> Optional[Dict[str, Any]]:
+    """Record the booted simulator devices before a job starts."""
+    if not _is_simulator_job(command_basename, argv):
+        return None
+    try:
+        booted = simulator_booted_devices()
+    except (HeavyError, OSError):
+        booted = {}
+    return {"booted": sorted(booted), "started_at": time.time()}
+
+
+def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[str]:
+    """Shut down the simulators that one job booted and log the result once."""
+    if not isinstance(record.get("simulators"), dict):
+        return []
+    try:
+        other = [
+            row
+            for row in registry.records()
+            if row.get("job_id") != record.get("job_id")
+            and row.get("state") not in ("complete", "removed", "dead")
+        ]
+    except Exception:
+        other = []
+    try:
+        stopped = shutdown_simulators_booted_by_job(record, other_records=other)
+    except Exception:
+        return []
+    if stopped:
+        try:
+            _log_event(
+                registry.directory,
+                "simulators-shutdown",
+                record,
+                detail=",".join(stopped),
+            )
+        except Exception:
+            pass
+        print(
+            "heavy: simulators shut down task={} devices={}".format(
+                record.get("task_id"), ",".join(stopped)
+            ),
+            file=sys.stderr,
+        )
+    return stopped
+
+
+def reap_dead_jobs(
+    registry: Registry,
+    *,
+    table_reader: Callable[[], Dict[int, ProcessInfo]] = process_table,
+    boot_reader: Callable[[], str] = kernel_boot_identity,
+) -> List[Dict[str, Any]]:
+    """Free the slot of every job whose supervisor process is gone.
+
+    A supervisor is gone when its recorded pid, uid, and start token no longer
+    match the process table for the current boot. The record is removed so the
+    slot is free on the next admission decision, and one event is logged.
+    """
+    boot_id = boot_reader()
+    table = table_reader()
+    reaped: List[Dict[str, Any]] = []
+    with registry.lock():
+        for record in registry.records():
+            if record.get("state") in ("complete", "removed", "dead"):
+                continue
+            supervisor = record.get("supervisor")
+            if not isinstance(supervisor, dict):
+                continue
+            if supervisor.get("boot_id") != boot_id:
+                registry.remove(record["job_id"])
+                reaped.append({"record": record, "reason": "other-boot"})
+                continue
+            if _identity_matches(table.get(supervisor.get("pid")), supervisor):
+                continue
+            registry.remove(record["job_id"])
+            reaped.append({"record": record, "reason": "supervisor-gone"})
+    for entry in reaped:
+        record = entry["record"]
+        try:
+            _log_event(
+                registry.directory,
+                "job-dead",
+                record,
+                detail=entry["reason"] + "; slot freed",
+            )
+        except Exception:
+            pass
+        print(
+            "heavy: job dead task={} reason={} slot freed".format(
+                record.get("task_id"), entry["reason"]
+            ),
+            file=sys.stderr,
+        )
+        try:
+            _cleanup_job_simulators(registry, record)
+        except Exception:
+            pass
+    return reaped
+
+
 def _normal_completion(workload: Dict[str, Any], deps: SupervisorDeps) -> bool:
     members = _safe_group_members(
         workload,
@@ -2888,6 +3237,18 @@ def _launch_job(
     project_fd = None
     try:
         record = _record(registry, job_id)
+        simulator_state = _capture_simulator_state(command_basename, argv)
+        if simulator_state is not None:
+            with registry.lock():
+
+                def attach_simulators(
+                    current: Dict[str, Any]
+                ) -> Optional[Dict[str, Any]]:
+                    current["simulators"] = simulator_state
+                    return current
+
+                registry.update(job_id, attach_simulators)
+            record = _record(registry, job_id)
         project_fd = _acquire_project_lock(
             registry,
             project_key,
@@ -2982,6 +3343,10 @@ def _launch_job(
                 try:
                     with registry.lock():
                         registry.remove(job_id)
+                except Exception:
+                    pass
+                try:
+                    _cleanup_job_simulators(registry, record)
                 except Exception:
                     pass
             elif record.get("workload") and (
