@@ -2076,7 +2076,7 @@ def alarm_mute():
             board = Path(scratch) / "decisions.json"
             board.write_text(json.dumps({"items": []}))
             buffer = io.StringIO()
-            with patch.object(alarms, "save_state", return_value=False), \
+            with patch.object(alarms, "write_state", return_value=False), \
                  contextlib.redirect_stdout(buffer):
                 target, action = rule.alert("no board progress for 3 ticks", None, board)
             exact(action, "wrote")
@@ -2244,7 +2244,7 @@ def alarm_mute():
             # is said out loud, and the alarm is published anyway: a
             # storage failure must not hide a real failure.
             codes["code"] = 78
-            with patch.object(alarms, "save_state", return_value=False):
+            with patch.object(alarms, "write_state", return_value=False):
                 output = pass_once(now + dt.timedelta(hours=4, minutes=14))
             items = json.loads(board.read_text())["items"]
             exact(len(items), 1)

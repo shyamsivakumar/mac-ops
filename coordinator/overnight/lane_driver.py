@@ -889,44 +889,48 @@ def watchdog():
     p = DECISIONS_PATH
     d = json.load(open(p))
     d["items"] = [i for i in d["items"] if i.get("id") != "factory-watchdog"]
-    state = alarms.load_state()
     if stale:
         cause = "; ".join(stale)
-        action = alarms.decide(state, "factory-watchdog", cause)
-        if action == "quiet":
-            # The alarm was acknowledged, so the same cause stays quiet
-            # for four hours. The tick still says what it did not raise,
-            # and the board holds no item for it.
-            print("WATCHDOG quiet: " + cause)
-        else:
-            print("WATCHDOG " + cause)
-            alarms.raised(state, "factory-watchdog", cause)
-            # The key is written before the alarm is published: an alarm
-            # on the board must have a key, so the answer Shyam gives it
-            # has something to acknowledge. A key that cannot be written
-            # is a fault the tick says out loud, and the alarm is
-            # published anyway: a storage failure must not hide a real
-            # failure from Shyam.
-            if not alarms.save_state(state):
-                print("WATCHDOG the alarm key could not be written; the answer to this alarm cannot be recorded")
-            d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                               "title": "Factory job stopped or failing: " + cause,
-                               "cause": alarms.cause_of(cause),
-                               "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
-    else:
-        # The alarm is not true any more, so the same cause can alarm
-        # again the next time it is true. An acknowledgement that is
-        # still running keeps the key quiet.
-        alarms.gone(state, "factory-watchdog")
+
+        def publish(action):
+            """Write the board with the alarm, or without it.
+
+            This runs while the mute state is locked, so an answer that
+            lands now cannot slip between the decision and the alarm on
+            the board."""
+            if action in ("raise", "unchecked"):
+                d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
+                                   "title": "Factory job stopped or failing: " + cause,
+                                   "cause": alarms.cause_of(cause),
+                                   "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
+            d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            json.dump(d, open(p + ".tmp", "w"), indent=1)
+            os.replace(p + ".tmp", p)
+            if action == "quiet":
+                # The alarm was acknowledged, so the same cause stays
+                # quiet for four hours. The tick still says what it did
+                # not raise, and the board holds no item for it.
+                print("WATCHDOG quiet: " + cause)
+            else:
+                print("WATCHDOG " + cause)
+                if action == "unchecked":
+                    # The key could not be written, so the answer to this
+                    # alarm cannot be recorded. The alarm is published
+                    # anyway: a storage failure must not hide a real
+                    # failure from Shyam.
+                    print("WATCHDOG the alarm key could not be written; the answer to this alarm cannot be recorded")
+
+        # The decision and the publication happen under the state lock, so
+        # an answer that lands between them cannot be missed.
+        alarms.decide_and_publish("factory-watchdog", cause, publish)
+        return
+    # The alarm is not true any more, so the same cause can alarm again
+    # the next time it is true. An acknowledgement that is still running
+    # keeps the key quiet.
+    alarms.forget_and_save("factory-watchdog")
     d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     json.dump(d, open(p + ".tmp", "w"), indent=1)
     os.replace(p + ".tmp", p)
-    # The mute state is written again after the board, so the state never
-    # says the alarm is on the board when the board does not hold it. A
-    # write that fails is said out loud: the tick did not record what it
-    # did, and the next tick measures the alarms again.
-    if not alarms.save_state(state):
-        print("WATCHDOG could not write the mute state; the alarm is not muted")
 
 
 def zero_merge(snapshot):

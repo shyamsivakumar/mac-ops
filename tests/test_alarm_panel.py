@@ -56,6 +56,9 @@ const out = {
   typedLost: decide(null, causeB, "half a th", undefined),
   // A fresh reply: no draft, no typing.
   fresh: decide(null, causeB, undefined, undefined),
+  // An ordinary decision has no cause: a reply to it keeps its text.
+  ordinary: decide({ kind: "reply", text: "the fix is in" }, ""),
+  ordinaryTyped: decide(null, "", "half a th", undefined),
 };
 console.log(JSON.stringify(out));
 """
@@ -117,6 +120,21 @@ class PanelAlarmTest(unittest.TestCase):
         self.assertEqual(lost["text"], "")
         self.assertFalse(lost["sent"])
         self.assertEqual(lost["acknowledged"], "")
+
+    def test_a_reply_to_an_ordinary_decision_keeps_its_text(self):
+        out = self.run_probe()
+        # An ordinary decision shows no cause, so a draft with text and
+        # no cause is a valid draft and its text is restored.
+        ordinary = out["ordinary"]
+        self.assertEqual(ordinary["text"], "the fix is in")
+        self.assertFalse(ordinary["stale"])
+        self.assertTrue(ordinary["sent"])
+        # It acknowledges nothing, because an ordinary decision is not
+        # an alarm.
+        self.assertEqual(ordinary["acknowledged"], "")
+        typed = out["ordinaryTyped"]
+        self.assertEqual(typed["text"], "half a th")
+        self.assertFalse(typed["sent"] is None)
 
     def test_a_fresh_reply_binds_to_the_alarm_on_the_board(self):
         out = self.run_probe()
