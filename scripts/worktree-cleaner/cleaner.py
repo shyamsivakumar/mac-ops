@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from urllib.parse import quote
 import time
 from typing import Any
 
@@ -1073,7 +1074,10 @@ class GitHub:
         if key in self.contained and not refresh:
             return self.contained[key]
         try:
-            result = run(["gh", "api", f"repos/{repo}/compare/{base}...{head}", "--jq", ".status"])
+            # The branch name is part of a path, so the characters that would
+            # change the meaning of the url are encoded.
+            encoded = quote(base, safe="/")
+            result = run(["gh", "api", f"repos/{repo}/compare/{encoded}...{head}", "--jq", ".status"])
         except SafetyError:
             result = None
         status = result.stdout.strip() if result and result.returncode == 0 else ""

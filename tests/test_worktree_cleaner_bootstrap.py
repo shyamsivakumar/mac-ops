@@ -932,6 +932,27 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), "saved by an editor\n")
         self.assertEqual([item.name for item in repo.iterdir() if item.name.startswith(".cleaner-")], [])
 
+    def test_a_branch_name_is_encoded_in_the_comparison_url(self):
+        # A branch name can hold characters that would change the meaning of
+        # the url, so it is encoded before it goes into the request.
+        github = cleaner.GitHub()
+        requests = []
+        original_run = cleaner.run
+
+        def record(argv, **kwargs):
+            requests.append(argv)
+            class Result:
+                returncode = 0
+                stdout = "behind"
+                stderr = ""
+            return Result()
+
+        with mock.patch.object(cleaner, "run", record):
+            self.assertTrue(github.contains("owner/repo", "release#1", "a" * 40))
+        url = next(argv[2] for argv in requests if "compare" in argv[2])
+        self.assertIn("release%231", url)
+        self.assertNotIn("release#1", url)
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
