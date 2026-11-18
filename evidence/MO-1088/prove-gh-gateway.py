@@ -678,6 +678,22 @@ report_env = subprocess.run(
     [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"), "--hours", "1"],
     capture_output=True, text=True,
     env={**env, "COORDINATOR_GH_USAGE_LOG": str(env_log)})
+# An unreadable log makes the hour incomplete, not quiet.
+unreadable = scratch / "unreadable.jsonl"
+unreadable.mkdir()
+incomplete = subprocess.run(
+    [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"),
+     "--log", str(unreadable), "--hours", "1"],
+    capture_output=True, text=True, env=env)
+check("an unreadable log is reported and fails",
+      incomplete.returncode != 0 and "INCOMPLETE" in (incomplete.stdout + incomplete.stderr),
+      f"exit={incomplete.returncode}")
+absent = subprocess.run(
+    [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"),
+     "--log", str(scratch / "never-written.jsonl"), "--hours", "1"],
+    capture_output=True, text=True, env=env)
+check("an absent log is allowed", absent.returncode == 0, f"exit={absent.returncode}")
+
 check("the report defaults to the writer's log path",
       "envrun" in report_env.stdout, report_env.stdout.strip()[:60] or report_env.stderr.strip()[-80:])
 
