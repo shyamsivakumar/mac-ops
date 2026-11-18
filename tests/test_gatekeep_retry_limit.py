@@ -221,6 +221,33 @@ class BackoffTest(RetryLimitBase):
         self.assertTrue(coordq.is_blocked(reviewer_of(OPUS_GATE)))
         self.assertEqual(coordq.reviewer_model([]), reviewer_of(ASTRA_GATE))
 
+    def test_a_repeated_read_does_not_extend_the_block(self):
+        # Every gatekeep pass reads the same dead gate. The first pass records
+        # the block; a later pass must leave its window where it is.
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(
+            {"thread": {"status": "failed", **OPUS_GATE, "latestRunId": "run-1"},
+             "items": [{"type": "user_message", "text": "review"}],
+             "recentRuns": [{"runId": "run-1", "status": "failed", "executedModel": None,
+                              "error": {"code": "insufficient_quota",
+                                        "message": "your plan resets in 20 minutes"}}]}))
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
+                                          "at": time.time(), "givenUp": False,
+                                          "reviewer": OPUS_GATE}})
+        self.run_gatekeep()
+        first = self.blocked_until()
+        self.assertIsNotNone(first)
+        time.sleep(0.01)
+        self.run_gatekeep()
+        self.assertEqual(self.blocked_until(), first)
+
+    def blocked_until(self):
+        try:
+            with open(os.path.join(QUEUE_DIR, "reviewers-blocked.json")) as f:
+                records = json.load(f)
+        except OSError:
+            return None
+        return records.get(f"{OPUS_GATE['providerInstanceId']}:{OPUS_GATE['model']}", {}).get("until")
+
     def test_a_second_retry_happens_after_the_backoff(self):
         self.write_queue(heads={self.key: {"id": 4, "retries": 1,
                                           "at": time.time() - coordq.GATE_RETRY_BACKOFF - 1,
@@ -351,6 +378,42 @@ class ExplicitGateTest(RetryLimitBase):
             with redirect_stderr(err):
                 coordq.cmd_gate(args)
         self.assertIn("every gate reviewer is blocked", err.getvalue())
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_reviewer_blocked_after_it_was_chosen_is_refused(self):
+        # The model is chosen before the queue lock, so another gatekeep run
+        # can block it in between. The chosen reviewer is refused instead of
+        # queued.
+        chosen = coordq.gate_request
+
+        def blocked_meanwhile(*a, **k):
+            now = time.time()
+            with open(os.path.join(QUEUE_DIR, "reviewers-blocked.json"), "w") as f:
+                json.dump({f"{entry['instanceId']}:{entry['model']}":
+                           {"until": now + 600, "at": now}
+                           for entry in coordq.REVIEWER_CHAIN}, f)
+            return chosen(*a, **k)
+
+        coordq.gate_request = blocked_meanwhile
+        args = argparse.Namespace(ref=f"{REPO}#7", config=self.config)
+        err = io.StringIO()
+        with self.assertRaises(SystemExit):
+            with redirect_stderr(err):
+                coordq.cmd_gate(args)
+        self.assertIn("every gate reviewer is blocked", err.getvalue())
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_chosen_reviewer_blocked_alone_names_that_reviewer(self):
+        coordq.block_reviewer(coordq.REVIEWER_CHAIN[-1],
+                              {"error": {"code": "insufficient_quota",
+                                         "message": "no credits remaining"}})
+        args = argparse.Namespace(ref=f"{REPO}#7", config=self.config)
+        err = io.StringIO()
+        with self.assertRaises(SystemExit):
+            with redirect_stderr(err):
+                coordq.cmd_gate(args)
+        self.assertIn("gate reviewer claudeAgent:claude-opus-5-5 is blocked",
+                      err.getvalue())
         self.assertEqual(self.gate_items(), [])
 
 
