@@ -153,14 +153,19 @@ class PromptPathTest(unittest.TestCase):
     def test_a_tree_entry_without_a_path_is_no_diff(self):
         self.assertIsNone(prompt_paths.tree_entries({"tree": [{"type": "blob", "sha": "1"}]}))
 
-    def test_a_truncated_tree_is_walked_by_subtree(self):
-        """A listing GitHub cuts short names its subtrees; they are read."""
+    def test_a_truncated_tree_is_walked_from_a_fresh_root(self):
+        """A cut-short listing is no list: walk the root, files included."""
         def fetch(endpoint):
             if "/compare/" in endpoint:
                 return [{"merge_base_commit": {"sha": "base"}}]
             if endpoint.endswith("/git/trees/head?recursive=1"):
                 return {"truncated": True,
                         "tree": [{"type": "tree", "path": "skills", "sha": "sub"}]}
+            if endpoint.endswith("/git/trees/head"):
+                # The fresh root listing: a root file and a directory.
+                return {"tree": [{"type": "blob", "path": "AGENT-RULES.md",
+                                  "mode": "100644", "sha": "root"},
+                                 {"type": "tree", "path": "skills", "sha": "sub"}]}
             if endpoint.endswith("/git/trees/sub"):
                 return {"tree": [{"type": "blob", "path": "x/SKILL.md",
                                   "mode": "100644", "sha": "9"}]}
@@ -169,7 +174,7 @@ class PromptPathTest(unittest.TestCase):
             raise AssertionError(endpoint)
 
         paths = prompt_paths.tree_diff(fetch, "o/r", "main", "head")
-        self.assertEqual(paths, ["a.py", "skills/x/SKILL.md"])
+        self.assertEqual(paths, ["AGENT-RULES.md", "a.py", "skills/x/SKILL.md"])
         self.assertEqual(prompt_paths.prompt_scan(paths), prompt_paths.HOLD)
 
     def test_a_walk_that_runs_out_of_requests_is_no_diff(self):
@@ -177,8 +182,7 @@ class PromptPathTest(unittest.TestCase):
             if "/compare/" in endpoint:
                 return {"merge_base_commit": {"sha": "base"}}
             if endpoint.endswith("?recursive=1"):
-                return {"truncated": True,
-                        "tree": [{"type": "tree", "path": "skills", "sha": "sub"}]}
+                return {"truncated": True, "tree": []}
             raise AssertionError(endpoint)
 
         self.assertIsNone(prompt_paths.tree_paths(fetch, "o/r", "head", requests=[0]))

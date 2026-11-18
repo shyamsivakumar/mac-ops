@@ -161,18 +161,22 @@ def tree_entries(tree, prefix=""):
 
 
 # A recursive tree listing stops at 100,000 entries or 7 MB, so a big
-# repository arrives truncated. Its subtrees are then read one by one, and
-# this bounds that walk: a bound reached is unknown, never clear.
-TREE_REQUESTS = 400
+# repository arrives truncated. Its directories are then read one by one
+# from a fresh root listing, and this bounds that walk: one request per
+# directory, so the bound is never the binding limit for a real repository,
+# and a walk that cannot finish is unknown, never clear.
+TREE_REQUESTS = 5000
 
 
 def tree_paths(fetch, repo, ref, requests=None):
     """Every non-directory path of one commit's tree, or None.
 
     `fetch(endpoint)` is a reader's own `gh api` read. The recursive listing
-    is the cheap read; a truncated one names the subtrees it did not walk, so
-    each is read in turn, which is how a repository too big for one listing
-    still yields its paths instead of blocking the pull request for ever.
+    is the cheap read. A truncated one is no list of paths at all: the walk
+    starts again from a fresh, non-recursive root listing, so the files at
+    the root count as well, and reads each directory in turn. That is how a
+    repository too big for one listing still yields every path instead of
+    blocking the pull request for ever.
     """
     budget = [TREE_REQUESTS] if requests is None else requests
     budget[0] -= 1
@@ -186,13 +190,7 @@ def tree_paths(fetch, repo, ref, requests=None):
     if not isinstance(tree, dict) or not tree.get("truncated"):
         return None
     paths = {}
-    listed = tree.get("tree")
-    if not isinstance(listed, list):
-        return None
-    stack = [(entry.get("sha"), f"{entry.get('path')}/")
-             for entry in listed if isinstance(entry, dict) and entry.get("type") == "tree"]
-    if not stack:
-        return None
+    stack = [(ref, "")]
     while stack:
         sha, prefix = stack.pop()
         if not isinstance(sha, str) or not sha:
@@ -213,7 +211,9 @@ def tree_paths(fetch, repo, ref, requests=None):
             if not isinstance(path, str) or not path:
                 return None
             if entry.get("type") == "tree":
-                stack.append((entry.get("sha"), prefix + path + "/"))
+                if not isinstance(entry.get("sha"), str) or not entry["sha"]:
+                    return None
+                stack.append((entry["sha"], f"{prefix}{path}/"))
                 continue
             paths[prefix + path] = (entry.get("type"), entry.get("mode"), entry.get("sha"))
     return paths
