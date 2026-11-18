@@ -521,7 +521,9 @@ class ReviewerFallbackTest(RetryLimitBase):
         queue = self.read_queue()
         self.assertEqual(launches, [])
         self.assertEqual(queue["items"], [])
-        self.assertNotIn(self.key, queue["gatedHeads"])
+        # The head keeps its record, so it is not a new head and a reviewer
+        # that already ran is not run again.
+        self.assertIn(self.key, queue["gatedHeads"])
 
     def test_an_interrupted_write_with_a_late_block_is_refused_at_launch(self):
         chosen = coordq.save
@@ -546,8 +548,24 @@ class ReviewerFallbackTest(RetryLimitBase):
         queue = self.read_queue()
         self.assertEqual(launches, [])
         self.assertEqual(queue["items"], [])
-        self.assertNotIn(self.key, queue["gatedHeads"])
+        # The head keeps its record, so it is not a new head and a reviewer
+        # that already ran is not run again; only the refused reviewer, which
+        # never ran, is undone.
+        self.assertIn(self.key, queue["gatedHeads"])
         self.assertNotIn(self.key, queue.get("gateReviewers", {}))
+
+    def test_a_refused_fallback_undoes_only_its_own_attempt(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        identity = coordq.model_list.identity(second)
+        first = coordq.model_list.identity(coordq.model_list.entries("review")[0]["selection"])
+        item = {"id": 9, "args": {"modelSelection": second}, "head": self.key}
+        queue = {"items": [item], "gatedHeads": {self.key: {"id": 4, "moved": True}},
+                 "gateReviewers": {self.key: [first, identity]}}
+        coordq.refuse_blocked_gate(queue, item, "blocked")
+        # The head keeps its record and the reviewer that ran before it.
+        self.assertIn(self.key, queue["gatedHeads"])
+        self.assertEqual(queue["gateReviewers"][self.key], [first])
+        self.assertFalse(queue["gatedHeads"][self.key]["moved"])
 
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
