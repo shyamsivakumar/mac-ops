@@ -60,6 +60,13 @@ def fixture_models():
             yield
 
 
+def fixer_identity():
+    """The provider and model of a thread already on the first available fix model."""
+    import lane_driver as lane
+    selection = lane.model_list.first_available("fix")["selection"]
+    return {"providerInstanceId": selection["instanceId"], "model": selection["model"]}
+
+
 def exact(actual, expected):
     if actual != expected:
         raise AssertionError(f"expected {expected!r}, got {actual!r}")
@@ -406,7 +413,7 @@ def gate_pipeline():
                     dict(threadId="gate", status="completed", updatedAt="fixture")]}
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
-                    return {"thread": {"status": "running", "sendable": True}}
+                    return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
@@ -542,7 +549,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
          patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
          patch.object(lane, "run", command), \
-         patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
+         patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": status}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
@@ -1487,7 +1494,7 @@ def send_integrity():
             def read(tool, args):
                 exact((tool, args), ("t3_thread_read", {"threadId": "old", "limit": 1}))
                 reads.append("read")
-                return {"thread": thread}
+                return {"thread": {**fixer_identity(), **thread}}
             def command(cmd, timeout=150):
                 exact(reads, ["read"])
                 exact(cmd[:2], [lane.COORDQ, "start"])
@@ -1520,7 +1527,7 @@ def send_integrity():
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
-         patch.object(lane, "t3", return_value={"thread": {"status": "running"}}), \
+         patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": "running"}}), \
          patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
         ledger = {}
         exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}: send existing thread")
@@ -1581,7 +1588,7 @@ def root_workspace():
                 worktree_only=True):
         actions = []
         def read(tool, args):
-            return {"thread": thread}
+            return {"thread": {**fixer_identity(), **thread}}
         def command(cmd, timeout=150):
             if cmd[0] == "git":
                 if "rev-parse" in cmd:
