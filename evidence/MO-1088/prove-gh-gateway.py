@@ -38,10 +38,18 @@ if "rate_limit" in args:
 elif "auth" in args:
     print("github.com")
     print("  Token: sekrit-auth-token")
-elif ("--include" in args or "-i" in args) and "--paginate" in args:
+elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != "bodyhttp":
     for name in ("name1", "name2", "name3"):
         print("HTTP/2.0 200 OK")
         print("content-type: application/json")
+        print()
+        print(name)
+elif mode == "bodyhttp" and ("--include" in args or "-i" in args) and "--paginate" in args:
+    for name in ("name1", "name2", "name3"):
+        print("HTTP/2.0 200 OK")
+        print("content-type: text/plain")
+        print()
+        print("HTTP/1.1 200 OK")
         print()
         print(name)
 elif mode == "jqerror" and ("--include" in args or "-i" in args):
@@ -397,6 +405,26 @@ check("the cached no-ETag read returns the same body",
       first_noetag.stdout.strip() == second_noetag.stdout.strip() == '[{"number": 5}]',
       repr((first_noetag.stdout, second_noetag.stdout)))
 set_mode("200")
+
+# A body that starts like a response is user data: it is not a page and it
+# is not stripped from the caller's output.
+set_mode("bodyhttp")
+rows_before = len(rows())
+bodyish = run(["gh", "api", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
+check("body text is not counted as a page", len(rows()) - rows_before == 3,
+      f"rows={len(rows()) - rows_before}")
+check("body text is not stripped from the output", bodyish.stdout.count("HTTP/1.1 200 OK") == 3,
+      repr(bodyish.stdout[:60]))
+set_mode("200")
+
+# A pull's files collection is a list named by the ticket, so it is cached.
+rows_before = len(rows())
+files_read = ["gh", "api", "repos/a/b/pulls/7/files?per_page=100"]
+before = calls_made()
+run(files_read)
+run(files_read)
+check("a pull's files list is cached once", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
 
 # A query string alone is not a list: a single ref read is never cached,
 # so a moved branch is never answered from an old body.

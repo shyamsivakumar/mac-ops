@@ -51,13 +51,20 @@ LIST_TTL = 120
 # enough: `gh auth status --show-token` is a `status` read that prints a
 # token, so it must never reach the disk cache. A command that is not in
 # this set is not cached, whatever its verb.
-# The endpoint names the cache may serve. A list read ends in one of these;
-# a single object does not, whatever query string it carries.
-LIST_ENDPOINT_SEGMENTS = (
-    "issues", "pulls", "comments", "statuses", "commits", "files", "timeline",
-    "labels", "branches", "tags", "releases", "check-runs", "runs",
-    "workflows", "deployments", "environments", "artifacts", "contributors",
-    "members", "milestones", "events", "topics",
+# The complete collection routes the cache may serve. A route is matched in
+# full, so a single object is never cached whatever its last segment is:
+# `repos/o/r/pulls/7` is a pull and `repos/o/r/git/ref/heads/releases` is a
+# ref to a branch named releases, and neither is a list.
+COLLECTION_ROUTES = (
+    r"repos/[^/]+/[^/]+/(?:issues|pulls|commits|branches|tags|releases|labels"
+    r"|milestones|events|contributors|collaborators|forks|stargazers"
+    r"|subscribers|topics|environments|deployments|comments|statuses"
+    r"|check-runs|actions/runs|actions/workflows)",
+    r"repos/[^/]+/[^/]+/(?:issues|pulls)/\d+/(?:comments|events|labels|timeline"
+    r"|files|reviews|commits|statuses|check-runs|requested_reviewers)",
+    r"repos/[^/]+/[^/]+/commits/[^/]+/(?:statuses|check-runs|comments)",
+    r"search/(?:issues|repositories|users|commits|code|topics)",
+    r"(?:orgs|users)/[^/]+/(?:repos|members|teams|events|followers)",
 )
 READ_COMMANDS = (
     ("pr", "list"),
@@ -289,15 +296,12 @@ def cacheable(argv):
     path = endpoint(argv)
     if method(argv) != "GET" or "?" not in path:
         return False
-    clean = path.split("?", 1)[0].rstrip("/")
-    # A single pull or issue path may carry a head SHA into a merge
-    # decision, so it is never cached or answered from an ETag.
-    if re.match(r"^repos/[^/]+/[^/]+/(?:pulls|issues)/\d+", clean.lstrip("/")):
-        return False
-    # A query string alone does not make a read a list. A single object
-    # asked with one, such as `repos/o/r/git/ref/heads/main?per_page=1`,
-    # must never be answered from the cache after the branch moves.
-    return clean.split("/")[-1] in LIST_ENDPOINT_SEGMENTS
+    clean = path.split("?", 1)[0].rstrip("/").lstrip("/")
+    # The whole route has to be a collection. A query string alone does not
+    # make a read a list, so a single pull or a ref such as
+    # `repos/o/r/git/ref/heads/main?per_page=1` is never answered from the
+    # cache after the branch or the pull moves.
+    return any(re.fullmatch(route, clean) for route in COLLECTION_ROUTES)
 
 
 def conditional(argv):
@@ -504,17 +508,29 @@ def filtered(argv):
     return False
 
 
-def status_lines(text):
-    """Return how many response status lines an `--include` output holds.
+# A real response block is a status line followed by at least one header
+# line and a blank line. The header line is what tells a block apart from a
+# body that happens to start with text such as `HTTP/1.1 200 OK`, which is
+# user data and must be neither counted nor removed.
+HEADER_BLOCK = re.compile(
+    r"(?m)^HTTP/[\d.]+\s+\d{3}[^\n]*\n(?:[^:\n]+:[^\n]*\n)+\n")
 
-    One status line is one request, whatever the output formatting did to
-    the body, so this is the page count before formatting."""
-    return len(re.findall(r"(?m)^HTTP/[\d.]+\s+\d{3}", text or ""))
+
+def status_lines(text):
+    """Return how many response blocks an `--include` output holds.
+
+    One block is one request, whatever the output formatting did to the
+    body, so this is the page count before formatting. A header block only
+    counts when it carries a header line, so body text is not a page."""
+    return len(HEADER_BLOCK.findall(text or ""))
 
 
 def strip_headers(text):
-    """Remove every `--include` header block, keeping the formatted bodies."""
-    return re.sub(r"(?m)^HTTP/[\d.]+[^\n]*\n(?:[^\n:]+:[^\n]*\n)*\n", "", text or "")
+    """Remove every real `--include` header block, keeping the bodies.
+
+    Only a block with a header line is removed, so a body that begins with
+    `HTTP/1.1 200 OK` and a blank line survives in the caller's output."""
+    return HEADER_BLOCK.sub("", text or "")
 
 
 def requests(argv, stdout):
