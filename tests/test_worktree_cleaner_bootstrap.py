@@ -78,6 +78,10 @@ def scan_digests(repo: Path, records: list[tuple[str, str, str | None]]) -> dict
 
 def clear_bootstrap(repo: Path, records, trash: Path, digests=None, index_before=None):
     """Call the cleaner across its signature changes."""
+    if digests is None:
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+    if index_before is None:
+        index_before = cleaner.index_digest(repo)
     for arguments in ((repo, records, trash, digests, index_before), (repo, records, trash, digests), (repo, records, trash), (repo, records)):
         try:
             return cleaner.clear_bootstrap_changes(*arguments)
@@ -235,7 +239,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         (self.repo / ".specstory").mkdir()
         (self.repo / ".specstory" / "session.md").write_text("history\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
-        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, scan_digests(self.repo, records))
+        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, scan_digests(self.repo, records), cleaner.index_digest(self.repo))
         self.assertEqual(sorted(cleared or []), [".specstory/session.md", "AGENTS.md"])
         self.assertFalse((self.repo / ".specstory" / "session.md").exists())
         self.assertEqual(cleaner.status_for(self.repo), [])
@@ -247,7 +251,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         git(repo, "mv", ".specstory/a.md", ".specstory/b.md")
         records = cleaner.status_for(repo)
         self.assertEqual(cleaner.classify_changes(repo, records), ([".specstory/b.md"], []))
-        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records))
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records), cleaner.index_digest(repo))
         self.assertEqual(cleared, [".specstory/b.md"])
         self.assertEqual((repo / ".specstory" / "a.md").read_text(encoding="utf-8"), "history\n")
         self.assertFalse((repo / ".specstory" / "b.md").exists())
@@ -257,7 +261,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         repo = self.tracked_specstory()
         (repo / ".specstory" / "a.md").unlink()
         records = cleaner.status_for(repo)
-        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records))
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records), cleaner.index_digest(repo))
         self.assertEqual(cleared, [".specstory/a.md"])
         self.assertEqual(cleaner.status_for(repo), [])
 
@@ -279,7 +283,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
             handle.write("saved by an editor\n")
         records = cleaner.status_for(self.repo)
-        self.assertIsNone(cleaner.clear_bootstrap_changes(self.repo, records, self.trash, digests))
+        self.assertIsNone(cleaner.clear_bootstrap_changes(self.repo, records, self.trash, digests, cleaner.index_digest(self.repo)))
         self.assertIn("saved by an editor", (self.repo / "AGENTS.md").read_text(encoding="utf-8"))
 
     def test_a_newly_staged_bootstrap_file_is_cleared(self):
@@ -376,6 +380,51 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), "saved by an editor\n")
         kept = [item.read_text(encoding="utf-8") for item in self.trash.iterdir() if item.is_file()]
         self.assertTrue(any("write-through bytes" in text for text in kept), "the recovered copy must be kept")
+
+    def test_a_missing_index_digest_refuses_the_cleanup(self):
+        # The scan could not read the index, so what is staged is unknown and
+        # the index must be left alone.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        staged = self.repo / "staged.txt"
+        staged.write_text("genuine staged edit\n", encoding="utf-8")
+        git(self.repo, "add", "staged.txt")
+        records = cleaner.status_for(self.repo)
+        digests = {"AGENTS.md": cleaner.file_digest(self.repo / "AGENTS.md")}
+        self.assertIsNone(cleaner.clear_bootstrap_changes(self.repo, records, self.trash, digests, None))
+        self.assertIn("staged.txt", git(self.repo, "ls-files", "-s", "--", "staged.txt"))
+
+    def test_recovery_copies_of_two_worktrees_do_not_collide(self):
+        # Two worktrees with the same relative path must not share the name
+        # of the copy that is kept when a save is raced.
+        names = []
+        for index in range(2):
+            repo = Path(self.tmp.name) / f"repo-{index}"
+            repo.mkdir()
+            git(repo, "init", "-b", "main")
+            git(repo, "config", "user.name", "Fixture")
+            git(repo, "config", "user.email", "fixture@example.test")
+            commit(repo, "AGENTS.md", "# Repository rules\n\n")
+            with (repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+                handle.write(self.block)
+            digests = {"AGENTS.md": cleaner.file_digest(repo / "AGENTS.md")}
+            original_replace = os.replace
+
+            def replace_and_save(source, destination, index=index):
+                result = original_replace(source, destination)
+                if str(source).endswith("AGENTS.md") and str(destination).startswith(str(self.trash)):
+                    with open(destination, "a", encoding="utf-8") as handle:
+                        handle.write(f"saved by an editor {index}\n")
+                    with (repo / "AGENTS.md").open("w", encoding="utf-8") as handle:
+                        handle.write(f"saved by an editor {index}\n")
+                return result
+
+            with mock.patch.object(cleaner.os, "replace", replace_and_save):
+                clear_bootstrap(repo, cleaner.status_for(repo), self.trash, digests)
+            names.append((repo / "AGENTS.md").read_text(encoding="utf-8"))
+        kept = sorted(item.name for item in self.trash.iterdir() if item.is_file())
+        self.assertEqual(len(kept), 2, kept)
+        self.assertEqual(len(set(kept)), 2, kept)
 
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
