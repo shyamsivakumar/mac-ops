@@ -131,23 +131,28 @@ def gate_state(value):
     """The gate state of one recorded head.
 
     gatedHeads maps a head to its queue item, and to the record
-    `{id, retries, at, givenUp, reviewer, moved}` once a gate for the head
-    has died without a verdict. `reviewer` is the reviewer the gate was
-    launched on, and `moved` says the head already moved down the chain
+    `{id, retries, at, givenUp, reviewer, moved, deadThread}` once a gate for
+    the head has died without a verdict. `reviewer` is the reviewer the gate
+    was launched on, `moved` says the head already moved down the chain
     (`None` for a record written before it, which the caller reads from the
-    head's `gateReviewers` history).
+    head's `gateReviewers` history), and `deadThread` is the thread of the
+    dead gate that the queued retry replaces, written in the same save as the
+    retry item.
     """
     if isinstance(value, dict):
         retries = value.get("retries")
         at = value.get("at")
         reviewer = value.get("reviewer")
+        dead = value.get("deadThread")
         return {"id": value.get("id"),
                 "retries": retries if isinstance(retries, int) and not isinstance(retries, bool) else 0,
                 "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
                 "givenUp": bool(value.get("givenUp")),
                 "reviewer": reviewer if isinstance(reviewer, str) and reviewer else None,
-                "moved": bool(value["moved"]) if "moved" in value else None}
-    return {"id": value, "retries": 0, "at": None, "givenUp": False, "reviewer": None, "moved": None}
+                "moved": bool(value["moved"]) if "moved" in value else None,
+                "deadThread": dead if isinstance(dead, str) and dead else None}
+    return {"id": value, "retries": 0, "at": None, "givenUp": False, "reviewer": None, "moved": None,
+            "deadThread": None}
 
 
 def gate_label(state):
@@ -1668,7 +1673,7 @@ def cmd_gatekeep(a):
                         continue
                     receipts = load_receipts()
                     thread_id = receipts.get(key)
-                    if not thread_id:
+                    if not thread_id or thread_id == state["deadThread"]:
                         continue
                     code, out = call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 20000})
                     if code:
@@ -1736,7 +1741,8 @@ def cmd_gatekeep(a):
                 heads[key] = {"id": item["id"], "retries": retries,
                               "at": time.time() if retries else None, "givenUp": False,
                               "reviewer": model_list.identity(args["modelSelection"]),
-                              "moved": retried or state["moved"]}
+                              "moved": retried or state["moved"],
+                              "deadThread": thread_id if retried else None}
                 save(queue)
                 if model_list.is_blocked(args["modelSelection"]):
                     # A block landed while the item was written, so the item
