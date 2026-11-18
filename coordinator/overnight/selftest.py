@@ -158,14 +158,20 @@ def start_routing():
 
     orphan_snapshot = {"tickets": [], "repos": {repos[1]: {"prs": [], "issues": [
         {"number": 9, "title": "bot repair", "labels": []}]}}}
+    from unittest.mock import mock_open
+    def orphan_files(path, *args, **kwargs):
+        # The lane pass also reads the provider health store, so the stub
+        # answers that path with an empty store rather than the receipts.
+        data = (json.dumps({"blocked": {}}) if str(path) == lane.provider_health.blocked_path()
+                else json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))
+        return mock_open(read_data=data)()
     with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
          patch.object(lane, "board_snapshot", return_value=orphan_snapshot), \
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
          patch.object(lane, "recover_dead_runs"), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
-         patch("builtins.open", __import__("unittest.mock", fromlist=["mock_open"]).mock_open(
-             read_data=json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))):
+         patch("builtins.open", orphan_files):
         def threads(tool, args):
             return {"threads": [{"title": "bot"}]} if tool == "t3_thread_list" else {}
         with patch.object(lane, "t3", side_effect=threads):
@@ -1525,7 +1531,12 @@ def send_integrity():
     for failure in (False, True):
         ledger, actions = {}, []
         def files(path, *args, **kwargs):
-            data = json.dumps({f"ticket:{repo}#385:a1": "old"}) if path == lane.RECEIPTS else "brief"
+            # A send reads the provider health store, so the stub answers
+            # that path with an empty store rather than a brief.
+            if str(path) == lane.provider_health.blocked_path():
+                data = json.dumps({"blocked": {}})
+            else:
+                data = json.dumps({f"ticket:{repo}#385:a1": "old"}) if path == lane.RECEIPTS else "brief"
             return mock_open(read_data=data)()
         def command(cmd, timeout=150):
             exact(json.loads(cmd[2])["projectId"], "fixture")
