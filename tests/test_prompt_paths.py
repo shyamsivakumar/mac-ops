@@ -837,12 +837,58 @@ class BoardReconcileTest(unittest.TestCase):
             self.assertEqual(self.lane.reconcile_prompt_items(self.snapshot), 0)
 
 
+class LandedBaseTest(unittest.TestCase):
+    """A merge that landed on another base reaches Shyam as a board item."""
+
+    def setUp(self):
+        import lane_driver
+        self.lane = lane_driver
+        self.saved = lane_driver.CFG
+        lane_driver.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+        self.addCleanup(lambda: setattr(lane_driver, "CFG", self.saved))
+
+    def merge(self, landed):
+        published = []
+
+        def command(cmd, timeout=150):
+            if cmd[:2] == ["gh", "pr"] and "view" in cmd:
+                if any("headRefOid" in str(part) for part in cmd):
+                    return '{"baseRefName": "main", "headRefOid": "%s"}' % ("a" * 40)
+                return '{"baseRefName": "%s"}' % landed
+            return ""
+
+        with patch.object(self.lane, "run", command), \
+                patch.object(self.lane, "publish_decision",
+                             lambda item: (published.append(item), "wrote")[1]):
+            merged, note = self.lane.merge_on_reviewed_base(
+                "shyamsivakumar/mac-ops", 544, "a" * 40, "main")
+        return merged, note, published
+
+    def test_a_merge_that_landed_on_the_reviewed_base_stands(self):
+        merged, note, published = self.merge("main")
+        self.assertTrue(merged)
+        self.assertEqual(published, [])
+        self.assertEqual(note, "#544: merged " + "a" * 40)
+
+    def test_a_merge_that_landed_elsewhere_reaches_shyam(self):
+        merged, note, published = self.merge("release/next")
+        self.assertFalse(merged)
+        self.assertIn("critical", note)
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0]["id"], "base-moved-MO-544")
+        self.assertEqual(published[0]["kind"], "action")
+        self.assertIn("release/next", published[0]["title"])
+
+
 class MergeBaseGuardTest(unittest.TestCase):
     """A pull request is merged only when its base is still the reviewed one."""
 
     def setUp(self):
         import lane_driver
         self.lane = lane_driver
+        self.saved = lane_driver.CFG
+        lane_driver.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+        self.addCleanup(lambda: setattr(lane_driver, "CFG", self.saved))
 
     def merge(self, base_after):
         calls = []
@@ -898,11 +944,15 @@ class MergeBaseGuardTest(unittest.TestCase):
                 return '{"baseRefName": "%s", "headRefOid": "%s"}' % (base["now"], "a" * 40)
             return ""
 
-        with patch.object(self.lane, "run", command):
+        published = []
+        with patch.object(self.lane, "run", command), \
+                patch.object(self.lane, "publish_decision",
+                             lambda item: (published.append(item), "wrote")[1]):
             merged, note = self.lane.merge_on_reviewed_base(
                 "shyamsivakumar/mac-ops", 544, "a" * 40, "main")
         self.assertFalse(merged)
         self.assertIn("not the reviewed main", note)
+        self.assertEqual([item["id"] for item in published], ["base-moved-MO-544"])
         self.assertEqual(len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]), 1)
 
     def test_the_base_is_read_before_and_after_the_merge(self):

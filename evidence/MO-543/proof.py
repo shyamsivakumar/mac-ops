@@ -416,7 +416,10 @@ def retarget_after_the_merge_is_reported():
             return json.dumps({"baseRefName": state["base"], "headRefOid": HEAD})
         return ""
 
-    with patch.object(lane, "run", run_cmd):
+    saved_cfg = lane.CFG
+    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+    with patch.object(lane, "run", run_cmd), \
+            patch.object(lane, "publish_decision", lambda item: "wrote"):
         merged, note = lane.merge_on_reviewed_base(
             "shyamsivakumar/mac-ops", 544, HEAD, "release/next")
         reported = "not the reviewed release/next" in note and merged is False
@@ -424,6 +427,7 @@ def retarget_after_the_merge_is_reported():
         state["base"], state["slip"] = "release/next", False
         again, ok_note = lane.merge_on_reviewed_base(
             "shyamsivakumar/mac-ops", 544, HEAD, "release/next")
+    lane.CFG = saved_cfg
     grant("lane: a retarget after the merge read is reported, never counted as merged",
           reported and again is True and ok_note == f"#544: merged {HEAD}", command)
 
@@ -453,6 +457,34 @@ def classification_covers_the_default_branch():
     grant("lane: a head that adds prompt text against main holds, whatever its base",
           state == prompt_paths.HOLD
           and prompt_paths.bases("feature") == ["feature", "main"], command)
+
+
+def landed_elsewhere_reaches_shyam():
+    """A merge that landed on another base becomes a board item, not a log line."""
+    import lane_driver as lane
+    command = "python3 evidence/MO-543/proof.py"
+    published = []
+    saved = lane.CFG
+    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+
+    def run_cmd(cmd, timeout=150):
+        if cmd[:2] == ["gh", "pr"] and "view" in cmd:
+            if any("headRefOid" in str(part) for part in cmd):
+                return '{"baseRefName": "main", "headRefOid": "%s"}' % HEAD
+            return '{"baseRefName": "release/next"}'
+        return ""
+
+    try:
+        with patch.object(lane, "run", run_cmd), \
+                patch.object(lane, "publish_decision",
+                             lambda item: (published.append(item), "wrote")[1]):
+            merged, note = lane.merge_on_reviewed_base(
+                "shyamsivakumar/mac-ops", 544, HEAD, "main")
+    finally:
+        lane.CFG = saved
+    grant("lane: a merge that landed on another base reaches Shyam as a board item",
+          merged is False and "critical" in note
+          and [item["id"] for item in published] == ["base-moved-MO-544"], command)
 
 
 def tree_fallback():
@@ -575,6 +607,7 @@ def main():
     moved_base_refuses_merge()
     retarget_after_the_merge_is_reported()
     classification_covers_the_default_branch()
+    landed_elsewhere_reaches_shyam()
     tree_fallback()
     lane_truncation()
     board_reconcile()
