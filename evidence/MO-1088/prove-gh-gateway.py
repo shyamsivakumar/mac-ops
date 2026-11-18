@@ -329,6 +329,15 @@ check("a caller-included paginated read keeps its headers",
       included_pages.stdout.count("HTTP/") == 3 and "name1" in included_pages.stdout,
       repr(included_pages.stdout[:40]))
 
+# The same holds with no output filter: the bodies are JSON, but the
+# response starts with a status line, so the headers carry the count.
+rows_before = len(rows())
+unfiltered = run(["gh", "api", "-i", "--paginate", "repos/a/b/tags"])
+check("an unfiltered caller-included read logs one row per page",
+      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("an unfiltered caller-included read keeps its headers",
+      unfiltered.stdout.count("HTTP/") == 3, repr(unfiltered.stdout[:40]))
+
 # Two writers refreshing one entry use their own temporary file, so the
 # entry is always whole.
 code = f"""

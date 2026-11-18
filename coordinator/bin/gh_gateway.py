@@ -545,10 +545,10 @@ def settle(argv, stdout, headers_counted):
     if headers_counted:
         return strip_headers(stdout), max(1, status_lines(stdout))
     has_include = "--include" in argv or "-i" in argv
-    if (has_include and "--paginate" in argv
-            and resource(argv) == CORE and filtered(argv)):
+    if has_include and "--paginate" in argv and resource(argv) == CORE:
         # The caller asked for the headers itself: count the pages from
-        # them and leave its output exactly as gh wrote it.
+        # them and leave its output exactly as gh wrote it. This holds
+        # whether or not an output filter formatted the bodies.
         return stdout, max(1, status_lines(stdout))
     return stdout, requests(argv, stdout)
 
