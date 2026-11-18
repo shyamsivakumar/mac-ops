@@ -44,10 +44,15 @@ The work goes back to its builder and the ticket stays open.
 The scope comes from the ticket alone: the pull request body is not read for it, so
 a pull request cannot widen the scope of the ticket that asked for the change.
 
+A name the ticket excludes is not a permission. The words after an "out" marker, and
+the words of a sentence that forbids a change, name what the ticket excludes, so a
+change to one of them fails the scope item.
+
 A ticket clause about its existing tests keeps its restriction. The clause lets a
 test change when the test pins what the change pins, that is when the two files
-share a distinctive value; a test of something else shares none, so the clause never
-reaches it.
+share a distinctive value, or when the test is the test of a changed file by name.
+A shared prefix is not a relationship: `tests/test_close_window.py` is not the test of
+`close_check.py`.
 
 The cost note item is skipped in all three: MO-1068 (#504) is report only and its
 report (evidence/MO-1068/cost-report.md) does not exist yet.

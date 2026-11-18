@@ -129,6 +129,33 @@ class ScopeTest(unittest.TestCase):
                                    ["coordinator/bin/gate.py", "coordinator/bin/other.py"])
         self.assertEqual(tied, ["coordinator/bin/gate.py"])
 
+    def test_a_file_the_ticket_excludes_is_out_of_scope(self):
+        """An exclusion is not permission."""
+        check = close_check()
+        ticket = "Change `close_check.py`. Out of scope: `gate_policy.py`."
+        item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
+                                         "coordinator/bin/gate_policy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("coordinator/bin/gate_policy.py", item["detail"])
+
+    def test_an_excluded_file_is_not_a_permission(self):
+        check = close_check()
+        ticket = "Change `close_check.py`. Out of scope: `gate_policy.py`."
+        self.assertEqual(check.scope_tokens(ticket), {"close_check.py"})
+
+    def test_a_test_with_a_similar_name_is_out_of_scope(self):
+        """A shared prefix is not a relationship."""
+        check = close_check()
+        ok, _ = check.in_scope("tests/test_close_window.py", {"close_check.py"},
+                               ["coordinator/bin/close_check.py"])
+        self.assertFalse(ok)
+
+    def test_a_test_with_the_same_name_is_in_scope(self):
+        check = close_check()
+        ok, _ = check.in_scope("tests/test_close_check.py", {"close_check.py"},
+                               ["coordinator/bin/close_check.py"])
+        self.assertTrue(ok)
+
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
         item = check.item_scope("The change is in lane_driver.py.",
