@@ -82,7 +82,7 @@ class StatusColumnsTest(unittest.TestCase):
             bootstrap, real = cleaner.classify_changes(repo, records)
             self.assertEqual(bootstrap, [])
             self.assertEqual(real, ["x.specstory/notes"])
-            self.assertEqual(cleaner.removal_force_flags(repo, records), [])
+            self.assertIsNone(cleaner.clear_bootstrap_changes(repo, records))
 
 
 class AgentsBootstrapTest(unittest.TestCase):
@@ -176,6 +176,38 @@ class AgentsBootstrapTest(unittest.TestCase):
         link.write_bytes(self.block.encode("utf-8"))
         os.chmod(link, 0o755)
         self.assertFalse(agents_bootstrap(self.repo))
+
+
+class ClearBootstrapChangesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mo514-clear-")
+        self.repo = Path(self.tmp.name) / "repo"
+        self.repo.mkdir()
+        git(self.repo, "init", "-b", "main")
+        git(self.repo, "config", "user.name", "Fixture")
+        git(self.repo, "config", "user.email", "fixture@example.test")
+        commit(self.repo, "AGENTS.md", "# Repository rules\n\n")
+        self.block = RULES.read_text(encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_only_bootstrap_changes_are_cleared(self):
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        (self.repo / ".specstory").mkdir()
+        (self.repo / ".specstory" / "session.md").write_text("history\n", encoding="utf-8")
+        records = cleaner.status_for(self.repo)
+        cleared = cleaner.clear_bootstrap_changes(self.repo, records)
+        self.assertEqual(sorted(cleared or []), [".specstory/session.md", "AGENTS.md"])
+        self.assertFalse((self.repo / ".specstory" / "session.md").exists())
+        self.assertEqual(cleaner.status_for(self.repo), [])
+
+    def test_a_real_change_is_never_cleared(self):
+        (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
+        records = cleaner.status_for(self.repo)
+        self.assertIsNone(cleaner.clear_bootstrap_changes(self.repo, records))
+        self.assertTrue((self.repo / "notes.txt").exists())
 
 
 class DefaultBranchTest(unittest.TestCase):
