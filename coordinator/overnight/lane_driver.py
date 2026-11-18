@@ -529,6 +529,10 @@ def allowed_builder(selection, chosen):
     return model_list.identity(selection) == model_list.identity(chosen)
 
 
+HELD_SKIP = "held until it is idle"
+BLOCKED_SKIP = "every builder is blocked"
+
+
 def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, issue=None):
     """Send work to a thread, or start a fresh one when it cannot take it.
 
@@ -552,7 +556,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
     chosen = builder_for(repo, issue)
     if chosen is None:
-        return f"skip {lkey}: every builder is blocked"
+        return f"skip {lkey}: {BLOCKED_SKIP}"
     for attached in thread.get("pullRequests") or []:
         if attached.get("repository") == repo and attached.get("number"):
             _, skip = pr_action_skip(repo, attached["number"])
@@ -569,7 +573,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         # exhausted provider and the work moves to the chosen builder.
         if live:
             return (f"skip {lkey}: thread is {thread.get('status')} on the blocked "
-                    f"{model_list.identity(thread_model)}; held until it is idle")
+                    f"{model_list.identity(thread_model)}; {HELD_SKIP}")
         sendable = False
         reroute = "builder blocked"
     elif not allowed_builder(thread_model, chosen["selection"]):
@@ -579,7 +583,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         if live:
             return (f"skip {lkey}: thread is {thread.get('status')} on "
                     f"{model_list.identity(thread_model) or 'an unknown model'}, "
-                    f"not the chosen builder; held until it is idle")
+                    f"not the chosen builder; {HELD_SKIP}")
         sendable = False
         reroute = "not the chosen builder"
     if sendable and root_workspace(thread):
@@ -941,13 +945,16 @@ def unstick(repo, ledger, excl=frozenset()):
             queued = {}
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
                        queued, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, issue=n)
-            ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out, not queued]
-            if not queued:
-                # The work was held: the thread is live on another model, so
-                # the ticket is being worked. It is not unstuck, and the
-                # scan goes on to the next ticket: one held ticket must not
-                # starve the others. The cooldown entry keeps the hold, so
-                # the next pass leaves the ticket out of the batch too.
+            if out.endswith(BLOCKED_SKIP):
+                continue
+            hold = out.endswith(HELD_SKIP)
+            ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out, hold]
+            if hold:
+                # The thread is live, so the ticket is being worked. It is
+                # not unstuck, and the scan goes on to the next ticket: one
+                # held ticket must not starve the others. The cooldown entry
+                # keeps the hold, so the next pass leaves the ticket out of
+                # the batch too.
                 held.add(n)
                 continue
             return f"continue #{n}: {out}"
