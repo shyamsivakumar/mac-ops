@@ -48,11 +48,17 @@ TASK_MODELS = {
     "review": ASTRA_MODEL,
 }
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
-# The OpenAI model names, on any instance: the gpt family and the o-series.
-# A build never runs on one of these; a review runs on the gate chain only
-# (Shyam 2026-11-17).
-OPENAI_MODEL_PREFIXES = ("gpt-", "openai/")
-OPENAI_MODEL_NAME = re.compile(r"^(o1|o3|o4)([-./]|$)")
+# The selections a build may run on, and nothing else: GLM 5.3, MiniMax,
+# DeepSeek, or a task/* route on the router (the MiniMax-first pi route).
+# Every other selection — Sol, Terra, Luna, any OpenAI model in any
+# spelling (gpt-*, openai/*, subscriptions/*), the o-series, Opus, Sonnet,
+# cursor — is refused as a builder; reviews run on the gate chain only
+# (Shyam 2026-11-17: "build with glm 5.3 or minimax first").
+ALLOWED_BUILDER_SELECTIONS = (
+    {"instanceId": "glm", "model": "zai/glm-5.3"},
+    {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
+    {"instanceId": "pi", "model": "deepseek/deepseek-flash"},
+)
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
 # The board refill. When the machine has free slots,
@@ -173,9 +179,9 @@ def with_model(args):
         return None, (f"refused: taskType 'review' runs on the gate model "
                       f"{ASTRA_MODEL} (GPT-6.2 Astra only), "
                       f"but the payload names {resolved['modelSelection']!r}")
-    elif task_type != "review" and is_forbidden_builder(resolved["modelSelection"]):
-        return None, (f"refused: builds run on GLM 5.3 or the MiniMax route, never on an "
-                      f"OpenAI model ({resolved['modelSelection']!r}); Shyam 2026-11-17")
+    elif task_type != "review" and not is_allowed_builder(resolved["modelSelection"]):
+        return None, (f"refused: builds run only on GLM 5.3, MiniMax or a task/* route, "
+                      f"but the payload names {resolved['modelSelection']!r}; Shyam 2026-11-17")
     return resolved, None
 
 
@@ -183,19 +189,18 @@ def is_gate_model(selection):
     return isinstance(selection, dict) and selection in REVIEWER_CHAIN
 
 
-def is_forbidden_builder(selection):
-    """True for a model no build may ever run on: the OpenAI API instance
-    and every OpenAI model, on any instance (Sol, Terra, Luna, GPT, the
-    o-series). A launch that names a gate model must say taskType review;
-    an omitted taskType is not evidence of a gate."""
+def is_allowed_builder(selection):
+    """True for the one of the permitted builder selections a launch names.
+    A permit list, not a deny list: anything unlisted — every OpenAI model
+    in any spelling, Opus, Sonnet, cursor — is refused as a builder. A
+    launch that names a gate model must say taskType review; an omitted
+    taskType is not evidence of a gate."""
     if not isinstance(selection, dict):
         return False
-    if selection.get("instanceId") == "openai-api":
+    if selection in ALLOWED_BUILDER_SELECTIONS:
         return True
-    model = str(selection.get("model") or "").lower()
-    if model.startswith(OPENAI_MODEL_PREFIXES):
-        return True
-    return bool(OPENAI_MODEL_NAME.match(model))
+    return (selection.get("instanceId") == "router"
+            and str(selection.get("model") or "").startswith("task/"))
 
 
 def tool_refusal(tool):

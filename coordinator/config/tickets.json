@@ -60,6 +60,15 @@
     "chore": "pi-chore",
     "review": "astra"
   },
+  "builderAliases": [
+    "glm-5.3",
+    "minimax",
+    "pi-standard",
+    "pi-ui",
+    "pi-research",
+    "pi-rca",
+    "pi-chore"
+  ],
   "models": {
     "glm-5.3": {
       "selection": {
