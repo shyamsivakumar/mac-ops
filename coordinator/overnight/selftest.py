@@ -339,6 +339,9 @@ def gate_pipeline():
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
                 return "merged"
+            if cmd[0] == "git" and "rev-parse" in cmd:
+                return ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
+                        "/Users/shyamsivakumar/Code/mac-ops/.git\n")
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
             if cmd[0] == "git" and "symbolic-ref" in cmd:
@@ -479,6 +482,9 @@ def no_parking(status="interrupted"):
             return json.dumps({"state": "OPEN", "mergedAt": None})
         if cmd == [lane.COORDQ, "list"]:
             return ""
+        if cmd[0] == "git" and "rev-parse" in cmd:
+            return ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
+                    "/Users/shyamsivakumar/Code/mac-ops/.git\n")
         exact(cmd[0:2], [lane.COORDQ, "start"])
         exact(cmd[3:5], ["--tool", "t3_thread_send"])
         payload = json.loads(cmd[2])
@@ -1337,6 +1343,10 @@ def send_integrity():
             def command(cmd, timeout=150):
                 exact(reads, ["read"])
                 if cmd[0] == "git":
+                    if "rev-parse" in cmd:
+                        # The thread keeps a linked worktree of its own.
+                        return ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
+                                "/Users/shyamsivakumar/Code/mac-ops/.git\n")
                     # The branch is on origin, so a worktree can start there.
                     return "abc123\trefs/heads/builder/fixture"
                 exact(cmd[:2], [lane.COORDQ, "start"])
@@ -1418,13 +1428,22 @@ def root_workspace():
     root = "/Users/shyamsivakumar/Code/mac-ops"
     worktree = "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-fixture"
     key = f"check:{repo}#512:head"
+    # The root checkout of a repository keeps the common git directory of
+    # the repository; a linked worktree keeps its own.
+    root_git = ".git\n.git\n"
+    worktree_git = ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
+                    "/Users/shyamsivakumar/Code/mac-ops/.git\n")
+    other_root_git = ("/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n"
+                      "/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n")
 
-    def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture"):
+    def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git):
         actions = []
         def read(tool, args):
             return {"thread": thread}
         def command(cmd, timeout=150):
             if cmd[0] == "git":
+                if "rev-parse" in cmd:
+                    return git
                 exact(cmd[1:4], ["-C", root, "ls-remote"])
                 exact(cmd[4:], ["--heads", "origin", "builder/fixture"])
                 return listing
@@ -1448,8 +1467,18 @@ def root_workspace():
     result, actions = send_to({"status": "running"})
     exact(result, "fresh (old root workspace): receipt")
     exact(actions, ["fresh"])
-    # So does a thread whose worktree is the repository root.
-    result, actions = send_to({"status": "running", "worktreePath": root})
+    # So does a thread whose worktree is the root checkout of a repository.
+    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git)
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # And so does a thread whose worktree is the root checkout of another
+    # repository.
+    result, actions = send_to({"status": "running", "worktreePath": worktree}, git=other_root_git)
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # A worktree path that cannot be read cannot be shown to be a worktree
+    # of its own, so the work does not go there either.
+    result, actions = send_to({"status": "running", "worktreePath": worktree}, git="")
     exact(result, "fresh (old root workspace): receipt")
     exact(actions, ["fresh"])
     # A thread with its own worktree takes the work.

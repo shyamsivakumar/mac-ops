@@ -383,19 +383,29 @@ def repo_root(repo):
     return "/Users/shyamsivakumar/Code/" + folder if folder else None
 
 
-def root_workspace(thread, repo):
-    """Say whether a thread works in the shared root of its repository.
+def root_workspace(thread):
+    """Say whether a thread works in the root checkout of a repository.
 
-    A thread without a worktree works in the project root, and a worktree
-    that is the repository root is the shared checkout itself. Pull
-    request work in either place moves the branch everyone installs from,
-    so it never belongs there.
+    A thread without a worktree works in the project root. A worktree
+    that is the root checkout of a repository is that repository's shared
+    checkout: the root checkout keeps the common git directory of the
+    repository, while a linked worktree keeps its own. Pull request work
+    in a shared checkout moves the branch everyone installs from, so it
+    never belongs there.
     """
     path = thread.get("worktreePath")
     if not path:
         return True
-    root = repo_root(repo)
-    return bool(root) and os.path.realpath(path) == os.path.realpath(root)
+    try:
+        listing = run(["git", "-C", path, "rev-parse", "--git-dir", "--git-common-dir"], timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        # A path that cannot be read cannot be shown to be a worktree of
+        # its own, so pull request work does not go there.
+        return True
+    lines = listing.splitlines()
+    if len(lines) != 2:
+        return True
+    return os.path.realpath(os.path.join(path, lines[0])) == os.path.realpath(os.path.join(path, lines[1]))
 
 
 def branch_on_origin(repo, branch):
@@ -434,7 +444,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
-    if sendable and pr_number is not None and root_workspace(thread, repo):
+    if sendable and pr_number is not None and root_workspace(thread):
         # Pull request work in the shared root of the repository moves the
         # branch everyone installs from, so it starts a fresh worktree
         # instead of the thread that works there.
