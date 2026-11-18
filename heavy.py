@@ -338,11 +338,22 @@ def read_installed_config(path: Path) -> Optional[Dict[str, Any]]:
     return value if isinstance(value, dict) else None
 
 
+def _usable_headroom(value: Any) -> bool:
+    """Return True when a configured headroom is a usable byte count."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    return 0 < value <= MAX_HOST_HEADROOM_BYTES
+
+
 def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
     """Return the headroom floor this host needs, or the default 6 GiB floor.
 
     The installed configuration names hosts and the headroom each one needs.
-    A missing, unreadable, malformed, or unlisted host keeps the default floor.
+    Host names are matched without regard to case, so a configured
+    ``Shyams-MacBook-Pro.local`` still names the ``shyams-macbook-pro.local``
+    host. Two configured names that differ only by case are ambiguous, so
+    neither of them is used and that host keeps the default floor. A missing,
+    unreadable, malformed, or unlisted host keeps the default floor.
     """
     path = host_config_path() if config_path is None else Path(config_path)
     value = read_installed_config(path)
@@ -351,16 +362,31 @@ def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
     hosts = value.get(HOST_HEADROOM_KEY)
     if not isinstance(hosts, dict):
         return MIN_HEADROOM_BYTES
+    exact: Dict[str, Any] = {}
+    short: Dict[str, Any] = {}
+
+    def record(mapping: Dict[str, Any], key: str, headroom: Any) -> None:
+        if key in mapping:
+            mapping[key] = None
+        else:
+            mapping[key] = headroom
+
+    for name, headroom in hosts.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        key = name.strip().lower()
+        record(exact, key, headroom)
+        record(short, key.split(".")[0], headroom)
     try:
         hostname = socket.gethostname().strip().lower()
     except OSError:
         return MIN_HEADROOM_BYTES
-    for name in (hostname, hostname.split(".")[0]):
-        headroom = hosts.get(name)
-        if isinstance(headroom, bool) or not isinstance(headroom, int):
-            continue
-        if 0 < headroom <= MAX_HOST_HEADROOM_BYTES:
-            return headroom
+    candidates = (hostname, hostname.split(".")[0])
+    for mapping in (exact, short):
+        for candidate in candidates:
+            headroom = mapping.get(candidate)
+            if _usable_headroom(headroom):
+                return headroom
     return MIN_HEADROOM_BYTES
 
 
