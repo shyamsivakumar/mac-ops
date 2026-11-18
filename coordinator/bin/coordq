@@ -1258,13 +1258,14 @@ def cmd_status(a):
 
 
 
-def gh_json(endpoint, optional=True):
+def gh_json(endpoint, optional=True, fresh=False):
     """Read one endpoint as JSON.
 
     `optional` is what the floor applies to: the polling reads that run on
     a timer, and not an explicit `gate` an operator asked for."""
     run = gh_gateway.run(["gh", "api", "--paginate", "--slurp", endpoint],
-                         timeout=40, limit=FLOOR if optional else None)
+                         timeout=40, limit=FLOOR if optional else None,
+                         fresh=fresh)
     if run.returncode:
         raise RuntimeError(f"GitHub request failed: {endpoint}")
     pages = json.loads(run.stdout)
@@ -1797,7 +1798,8 @@ def check_names_head(body, head, publisher, checks):
     return False
 
 
-def gate_request(repo, pr, settings, config, receipts, login, optional=True):
+def gate_request(repo, pr, settings, config, receipts, login, optional=True,
+                 fresh=False):
     """Return the gate request of one open pull request, or None.
 
     The backstop gates a head the queue's own gatekeeper left alone. The
@@ -1813,7 +1815,7 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True):
         thread, runs = read_builder_thread(thread_id)
         model = backstop_model(thread, runs)
         statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
-                           optional=optional)
+                           optional=optional, fresh=fresh)
         checks = [x for x in statuses if x["context"] == "srw/agent-check"]
         publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
         if not check_names_head(body, head, publisher, checks):
@@ -1823,7 +1825,7 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True):
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
                                proof=proof, proof_path=proof_path, proof_state=proof_state), builder_models(thread, runs)
     statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
-                       optional=optional)
+                       optional=optional, fresh=fresh)
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
     if not check_names_head(body, head, publisher, checks):
@@ -1882,7 +1884,7 @@ def cmd_gate(a):
     login = login_run.stdout.strip()
     # An explicit gate is a required read: the floor applies to polling.
     found = gate_request(repo, pr, settings, config, load_receipts(), login,
-                         optional=False)
+                         optional=False, fresh=True)
     if not found:
         die(
             f"refused: no passing builder check of {repo}#{number} names the "

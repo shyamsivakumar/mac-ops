@@ -176,7 +176,7 @@ _CALLER = None
 # getter for the launcher, so every gh call still goes through the one it
 # can see. Resolved at call time, never captured at import time.
 _RUNNER = None
-_REMAINING = {"at": 0.0, "value": None}
+_REMAINING = {}
 _REMAINING_TTL = 30.0
 
 
@@ -848,11 +848,22 @@ def record(argv, count=1, caller_name=None):
         return
 
 
+def quota_key():
+    """Return the identity a quota sample belongs to.
+
+    `GH_TOKEN` or `GH_HOST` can change inside a long-lived process, and a
+    balance read for one identity must not set the floor for another."""
+    host = os.environ.get("GH_HOST") or "github.com"
+    return host + "|" + _token_id()
+
+
 def api_remaining(timeout=60):
     """Return the remaining core and graphql calls, or raise."""
     now = time.time()
-    if _REMAINING["value"] is not None and now - _REMAINING["at"] < _REMAINING_TTL:
-        return dict(_REMAINING["value"])
+    key = quota_key()
+    entry = _REMAINING.get(key)
+    if entry and entry["at"] and now - entry["at"] < _REMAINING_TTL:
+        return dict(entry["value"])
     try:
         result = _launch()(["gh", "api", "rate_limit"], capture_output=True,
                            text=True, timeout=timeout)
@@ -865,7 +876,7 @@ def api_remaining(timeout=60):
         value = {name: int(resources[name]["remaining"]) for name in ("core", "graphql")}
     except (ValueError, KeyError, TypeError) as exc:
         raise ApiBudgetExhausted("quota response is invalid") from exc
-    _REMAINING.update(at=now, value=value)
+    _REMAINING[key] = {"at": now, "value": value}
     return dict(value)
 
 
