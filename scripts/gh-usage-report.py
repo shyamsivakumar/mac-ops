@@ -9,8 +9,11 @@ prints the count per caller per hour, so the measurement in
     python3 scripts/gh-usage-report.py --hours 1
     python3 scripts/gh-usage-report.py --hours 24 --log /path/to/gh-usage.jsonl
 
-A cached answer and a 304 are not GitHub calls that cost core quota, so
-they are not in the log and not in the count.
+A cached answer and a 304 are not GitHub calls, so they are not in the log
+and not in the count. Each row names the quota it spends: `core` for
+`gh api`, `search` for `gh search`, `graphql` for the commands GitHub
+answers over GraphQL. Only the `core` rows count against the 5000 an hour
+the ticket is about.
 """
 import argparse
 import collections
@@ -52,16 +55,21 @@ def main():
     if not rows:
         print(f"no GitHub calls recorded in the last {args.hours:g}h at {args.log}")
         return 0
-    per_hour = collections.Counter((hour(row["ts"]), row.get("caller") or "unknown") for row in rows)
-    per_caller = collections.Counter(row.get("caller") or "unknown" for row in rows)
-    print(f"{'hour':20} {'caller':16} calls")
-    for (stamp, caller), count in sorted(per_hour.items()):
-        print(f"{stamp:20} {caller:16} {count}")
+    per_hour = collections.Counter(
+        (hour(row["ts"]), row.get("caller") or "unknown", row.get("resource") or "core")
+        for row in rows)
+    per_caller = collections.Counter(
+        (row.get("caller") or "unknown", row.get("resource") or "core") for row in rows)
+    print(f"{'hour':20} {'caller':16} {'quota':8} calls")
+    for (stamp, caller, quota), count in sorted(per_hour.items()):
+        print(f"{stamp:20} {caller:16} {quota:8} {count}")
     print()
-    print(f"{'caller':16} {'calls':>6} {'per hour':>9}")
-    for caller, count in per_caller.most_common():
-        print(f"{caller:16} {count:6} {count / args.hours:9.0f}")
-    print(f"{'total':16} {len(rows):6} {len(rows) / args.hours:9.0f}")
+    print(f"{'caller':16} {'quota':8} {'calls':>6} {'per hour':>9}")
+    for (caller, quota), count in sorted(per_caller.items()):
+        print(f"{caller:16} {quota:8} {count:6} {count / args.hours:9.0f}")
+    core = sum(count for (_caller, quota), count in per_caller.items() if quota == "core")
+    print(f"{'core total':16} {'core':8} {core:6} {core / args.hours:9.0f}")
+    print(f"{'all requests':16} {'':8} {len(rows):6} {len(rows) / args.hours:9.0f}")
     return 0
 
 

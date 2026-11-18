@@ -46,6 +46,16 @@ LIST_TTL = 120
 # one object may not. `view` and a `repos/.../pulls/<n>` path are the head
 # reads a merge decision uses.
 CACHEABLE_COMMANDS = ("list", "search", "status")
+# The commands that take a subcommand, such as `gh pr list`. The verb is the
+# word after the group, not the first word, so `gh pr list` and `gh issue
+# list` are list reads and are cacheable like `gh label list`.
+GROUPS = ("pr", "issue", "repo", "label", "release", "run", "workflow", "gist",
+          "cache", "auth", "secret", "variable", "ruleset", "project", "org",
+          "codespace", "extension", "api", "search")
+# GitHub counts a search against its own bucket (30 requests a minute), not
+# against the 5000 core calls an hour. A report that calls it a core call
+# overstates the core usage.
+SEARCH = "search"
 CACHE_ON = "COORDINATOR_GH_CACHE"
 CACHE_DIR = Path(os.environ.get("COORDINATOR_GH_CACHE_DIR",
                                 os.path.expanduser("~/.cache/coordinator/gh")))
@@ -107,6 +117,33 @@ def _gh(argv):
     return bool(argv) and os.path.basename(str(argv[0])) == "gh"
 
 
+def verb(argv):
+    """Return the command's verb, such as `list` in `gh issue list`."""
+    words = [str(word) for word in argv[1:]]
+    if not words:
+        return ""
+    if words[0] in (SEARCH, "api"):
+        return words[0]
+    if words[0] in GROUPS and len(words) > 1:
+        return words[1]
+    return words[0]
+
+
+def resource(argv):
+    """Return the GitHub quota a command spends.
+
+    `gh api` spends core calls; `gh search` spends the search bucket; the
+    other commands are backed by GraphQL and spend that bucket."""
+    words = [str(word) for word in argv[1:]]
+    if not words:
+        return "core"
+    if words[0] == SEARCH:
+        return SEARCH
+    if words[0] == "api":
+        return "graphql" if "graphql" in words else "core"
+    return "graphql"
+
+
 def cacheable(argv):
     """True when a repeated read of this command may be served from cache."""
     if not _gh(argv) or not cache_enabled():
@@ -114,7 +151,7 @@ def cacheable(argv):
     words = [str(word) for word in argv[1:]]
     if not words:
         return False
-    if words[0] in CACHEABLE_COMMANDS:
+    if verb(argv) in CACHEABLE_COMMANDS:
         return True
     # A paginated read of a list endpoint is a list read. A single pull or
     # issue path is not: it may carry a head SHA into a merge decision.
@@ -237,7 +274,7 @@ def requests(argv, stdout):
     """
     if not _gh(argv):
         return 0
-    if "--paginate" not in argv:
+    if "--paginate" not in argv or resource(argv) != "core":
         return 1
     if "--slurp" in argv:
         # gh writes the pages as one JSON array here, so the pages are its
@@ -266,10 +303,13 @@ def record(argv, count=1):
     """Write one usage-log line per GitHub core request the command made.
 
     A 304 is not a core call and is never passed here, so the log holds
-    what was spent and not what was wanted."""
+    what was spent and not what was wanted. The quota the request spends is
+    on the row, so the report never counts a search or a GraphQL read as a
+    core call."""
     if not _gh(argv) or count <= 0:
         return
     line = json.dumps({"ts": round(time.time(), 3), "caller": caller(),
+                       "resource": resource(argv),
                        "command": [str(word) for word in argv[1:4]]})
     try:
         if USAGE_LOG.exists() and USAGE_LOG.stat().st_size > USAGE_LOG_MAX:
