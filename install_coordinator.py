@@ -49,23 +49,38 @@ ROUTE_LEVELS = {
     "hard": "xhigh",
 }
 ROUTES_COMMENT = (
-    "// Generated from ~/.coordinator/models.json by mac-ops install_coordinator.py."
+    "// Generated from coordinator/models.json in mac-ops by install_coordinator.py."
     " Do not edit by hand.\n"
 )
+ROUTES_END = "// End generated\n"
 ROUTES_BLOCK = re.compile(
-    r"(?:// Generated from[^\n]*\n)?const ROUTES: Record<string, string\[\]> = \{.*?\n\};\n",
+    r"(?:// Generated from[^\n]*\n)?const ROUTES: Record<string, string\[\]> = \{.*?\n\};\n"
+    r"(?:const SHARED_IDENTITIES.*?// End generated\n)?",
     re.DOTALL,
 )
+SHARED_BLOCKS = """const SHARED_BLOCKS_PATH = join(process.env.COORDQ_DIR ?? join(homedir(), "Code", "coordinator", "queue"), "providers-blocked.json");
+
+function sharedBlocked(): Set<string> {
+	if (!existsSync(SHARED_BLOCKS_PATH)) return new Set();
+	return new Set(Object.keys(JSON.parse(readFileSync(SHARED_BLOCKS_PATH, "utf8")).blocked ?? {}));
+}
+"""
+SHARED_CHECK = (
+    '\tif (sharedBlocked().has(SHARED_IDENTITIES[entry.key] ?? "")) return "blocked in the shared provider store";\n'
+)
+BLOCK_ANCHOR = "\tconst block = blocks[entry.key];\n"
 OWNERSHIP_PARAGRAPH = re.compile(r" \* Ownership:.*?\n \*\n", re.DOTALL)
 OWNERSHIP_TEXT = (
     " * Ownership: mac-ops install_coordinator.py regenerates the ROUTES table on every\n"
-    " * install from ~/.coordinator/models.json. Change the model list there.\n"
+    " * install from coordinator/models.json in the mac-ops checkout. Change the model\n"
+    " * list there and reinstall; this file is overwritten.\n"
     " *\n"
 )
 POLICY_PARAGRAPH = re.compile(r" \* Routing policy.*?\n(?= \* Reviews are not routed)", re.DOTALL)
 POLICY_TEXT = (
     " * Routing policy: every route tries the pi models of the build list in\n"
-    " * ~/.coordinator/models.json, in that order.\n"
+    " * coordinator/models.json, in that order, and skips any the shared provider\n"
+    " * store (providers-blocked.json in the queue folder) has blocked.\n"
 )
 ARCHIVE_DIR = ".coordinator/archive/2026-11-18-model-lists"
 ARCHIVED_LISTS_FILE = "tickets.json.models-and-types.json"
@@ -176,17 +191,20 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
     return items
 
 
-def task_router_text(text: str, routes: list[str]) -> str:
+def task_router_text(text: str, routes: list[str], identities: dict[str, str]) -> str:
     """Return the task-router.ts text with its ROUTES table rebuilt from routes.
 
     Every route tries each model of routes in order, at the route's thinking
-    level. The header paragraphs that told a reader to edit the table by hand
-    are replaced."""
+    level. identities names each route's entry in the shared provider store, and
+    the router skips an entry that store has blocked each time it picks one. The
+    header paragraphs that told a reader to edit the table by hand are replaced."""
     lines = "".join(
         f"\t{route}: [{', '.join(json.dumps(f'{model}:{level}') for model in routes)}],\n"
         for route, level in ROUTE_LEVELS.items()
     )
-    block = f"{ROUTES_COMMENT}const ROUTES: Record<string, string[]> = {{\n{lines}}};\n"
+    shared = "".join(f"\t{json.dumps(spec)}: {json.dumps(identity)},\n" for spec, identity in identities.items())
+    block = (f"{ROUTES_COMMENT}const ROUTES: Record<string, string[]> = {{\n{lines}}};\n"
+             f"const SHARED_IDENTITIES: Record<string, string> = {{\n{shared}}};\n{SHARED_BLOCKS}{ROUTES_END}")
     for pattern, replacement in (
         (ROUTES_BLOCK, block),
         (OWNERSHIP_PARAGRAPH, OWNERSHIP_TEXT),
@@ -195,6 +213,10 @@ def task_router_text(text: str, routes: list[str]) -> str:
         text, count = pattern.subn(lambda _match, new=replacement: new, text, count=1)
         if not count:
             raise RuntimeError(f"task-router.ts has no section matching {pattern.pattern[:40]}")
+    if SHARED_CHECK not in text:
+        if text.count(BLOCK_ANCHOR) != 1:
+            raise RuntimeError("task-router.ts has no single place to check the shared provider store")
+        text = text.replace(BLOCK_ANCHOR, SHARED_CHECK + BLOCK_ANCHOR)
     return text
 
 
@@ -246,9 +268,9 @@ def archive_model_lists(home: Path) -> list[Path]:
     return moved
 
 
-def checkout_pi_routes(checkout: Path) -> list[str]:
+def checkout_pi_models(checkout: Path) -> tuple[list[str], dict[str, str]]:
     with mock.patch.dict(os.environ, {"COORDINATOR_MODELS": str(checkout / "coordinator/models.json")}):
-        return models.pi_routes()
+        return models.pi_routes(), models.pi_identities()
 
 
 def coordinator_dir(home: Path, override: str | None = None) -> Path:
@@ -744,7 +766,7 @@ def changes(
     router = home / TASK_ROUTER
     live_router = read_regular(router)
     if live_router is not None:
-        text = task_router_text(live_router[0].decode(), checkout_pi_routes(checkout))
+        text = task_router_text(live_router[0].decode(), *checkout_pi_models(checkout))
         wanted.append((router, text.encode(), stat.S_IMODE(live_router[1].st_mode)))
     tickets = home / ".coordinator/tickets.json"
     live_tickets = read_regular(tickets)
