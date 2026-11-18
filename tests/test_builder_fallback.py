@@ -209,7 +209,7 @@ class LaneDriverTests(StoreCase):
         self.assertEqual(calls, [])
         self.assertIn("every builder is blocked", out)
 
-    def probe_with(self, module, status, reply):
+    def probe_with(self, module, status, reply, items=None):
         from unittest.mock import patch
         calls = []
 
@@ -219,6 +219,8 @@ class LaneDriverTests(StoreCase):
 
         def t3(tool, args):
             if args.get("view") == "messages":
+                if items is not None:
+                    return {"items": items}
                 return {"items": [{"type": "assistant_message", "text": reply}] if reply else []}
             return {"thread": {"status": status}}
 
@@ -248,13 +250,53 @@ class LaneDriverTests(StoreCase):
     def test_a_failed_probe_keeps_the_reset_its_error_names(self):
         module = self.module()
         self.blocked_glm_probe()
-        self.probe_with(module, "failed",
-                        "429 code 1308: the 5-hour limit is reached, resets in 2 hours")
+        # The reset has to come from the provider's diagnostic: a reply the
+        # assistant wrote is the probe's answer, not the provider's error.
+        self.probe_with(module, "failed", "", items=[
+            {"runId": "run-probe", "type": "provider_error",
+             "text": "429 code 1308: the 5-hour limit is reached, resets in 2 hours"}])
         record = provider_health.record(GLM)
         self.assertNotIn("probeRequestId", record)
         self.assertAlmostEqual(record["resetAt"] - time.time(), 7200, delta=60)
         self.assertFalse(provider_health.probe_due(GLM))
         self.assertTrue(provider_health.probe_due(GLM, now=time.time() + 7200))
+
+    def test_a_probe_answer_that_names_a_reset_keeps_the_hourly_probe(self):
+        # The gate finding of this round: the probe's last reply carried the
+        # scheduling, so an interrupted probe whose assistant text said
+        # "resets in 5 hours" postponed the next probe for five hours even
+        # though the provider named no reset. #531 wants hourly recovery.
+        module = self.module()
+        self.blocked_glm_probe()
+        self.probe_with(module, "interrupted", "the provider resets in 5 hours")
+        record = provider_health.record(GLM)
+        self.assertNotIn("probeRequestId", record)
+        self.assertIsNone(record.get("resetAt"))
+        self.assertAlmostEqual(record["probeAt"] - time.time(),
+                               provider_health.PROBE_INTERVAL, delta=60)
+        self.assertFalse(provider_health.probe_due(GLM))
+        self.assertTrue(provider_health.probe_due(
+            GLM, now=time.time() + provider_health.PROBE_INTERVAL))
+
+    def test_the_probe_reply_and_the_diagnostic_schedule_apart(self):
+        # Both texts are in the probe's run: the answer text is read for the
+        # OK check and the provider diagnostic alone schedules the retry.
+        module = self.module()
+        self.blocked_glm_probe()
+        self.probe_with(module, "failed", "", items=[
+            {"runId": "run-probe", "type": "provider_error",
+             "text": "429 code 1308: the 5-hour limit is reached, resets in 2 hours"},
+            {"runId": "run-probe", "type": "assistant_message",
+             "text": "the 5-hour limit resets in 5 hours"}])
+        record = provider_health.record(GLM)
+        self.assertAlmostEqual(record["resetAt"] - time.time(), 7200, delta=60)
+        self.assertFalse(provider_health.probe_due(GLM))
+
+    def test_an_ok_answer_still_unblocks_the_builder(self):
+        module = self.module()
+        self.blocked_glm_probe()
+        self.probe_with(module, "completed", "OK")
+        self.assertFalse(provider_health.blocked(GLM))
 
     def test_a_probe_that_never_reported_is_retried_at_its_deadline(self):
         module = self.module()
@@ -299,6 +341,63 @@ class LaneDriverTests(StoreCase):
             module.recover_dead_runs({})
         return launched
 
+    def test_a_previous_runs_head_does_not_settle_the_work(self):
+        # Audit finding of the same class: the head comparison read the same
+        # unscoped reply. Run B stopped after its prompt with no reply of its
+        # own, so the reader handed over run A's commit, marked the work moved
+        # and settled the thread without a relaunch. The stopped run names no
+        # head, so the driver cannot compare one and flags the thread instead.
+        module = self.module()
+        repo = "shyamsivakumar/mac-ops"
+        dead = {"threadId": "t-dead", "title": "ship #531", "settled": False,
+                "pullRequests": [{"repository": repo, "number": 537}]}
+        thread = {**dead, "providerInstanceId": DEEPSEEK["instanceId"],
+                  "model": DEEPSEEK["model"], "worktreePath": "/tmp/fixture-worktree"}
+        items = [{"runId": "run-a", "type": "assistant_message",
+                  "text": "pushed head sha deadbee1"},
+                 {"runId": "run-b", "type": "user_message",
+                  "text": "Continue MO#531 in this worktree"}]
+        settled, launched, lines = [], [], []
+
+        def t3(tool, args):
+            if tool == "t3_thread_list":
+                return {"threads": [dead]} if args.get("statuses") == ["failed", "interrupted"] else {"threads": []}
+            if tool == "t3_thread_read" and args.get("view") == "messages":
+                return {"items": items}
+            if tool == "t3_thread_read":
+                return {"thread": thread}
+            if tool == "t3_thread_organize":
+                settled.append(args["threadId"])
+                return {}
+            raise AssertionError(f"unexpected T3 call {tool}")
+
+        def read_json(command):
+            fields = command[command.index("--json") + 1] if "--json" in command else ""
+            if "headRefName" in fields:
+                return {"number": 537, "state": "OPEN",
+                        "headRefName": "fix-537", "baseRefName": "main"}
+            if "headRefOid" in fields:
+                return {"state": "OPEN", "headRefOid": "cafe1234"}
+            return {"state": "OPEN"}
+
+        def run(command, timeout=150):
+            if command[0] == "git":
+                return "worktree /tmp/fixture-worktree\n"
+            launched.append(json.loads(command[2]))
+            return "fixture-relaunch"
+
+        with patch.object(module, "LANE_REPOS", [repo]), \
+                patch.object(module, "CFG", {repo: {"projectId": "p"}}), \
+                patch.object(module, "DRY", False), patch.object(module, "t3", t3), \
+                patch.object(module, "run", run), patch.object(module, "read_json", read_json), \
+                patch.object(module, "print", lambda *a, **k: lines.append(" ".join(map(str, a)))), \
+                patch.object(module, "stall_receipts",
+                             return_value={f"ticket:{repo}#531:a1": "t-dead"}):
+            module.recover_dead_runs({})
+        self.assertEqual(settled, [])
+        self.assertEqual(launched, [])
+        self.assertTrue(any("open PR head cannot be compared" in line for line in lines), lines)
+
     def test_a_previous_runs_limit_does_not_block_the_builder(self):
         # The gate finding of round 5: recovery read the newest diagnostic in
         # the thread, so a run that stopped without one reused the 429 of the
@@ -330,6 +429,31 @@ class LaneDriverTests(StoreCase):
         items = [{"type": "error", "text": "429 code 1308 usage limit"}]
         with patch.object(module, "t3", lambda tool, args: {"items": items}):
             self.assertEqual(module.last_reply("t1", diagnostics_only=True), "")
+
+    def test_an_untagged_interrupted_run_inherits_no_earlier_limit(self):
+        # The gate finding of this round: run A carried a tagged 429 and the
+        # interrupted run B wrote only an untagged message, so the backward
+        # search skipped B and blocked the builder on A's limit. No run is
+        # identified here, so no run takes the blame.
+        launched = self.dead_run_with([
+            {"runId": "run-a", "type": "error", "text": "429 code 1308 usage limit, resets in 5 hours"},
+            {"type": "user_message", "text": "Continue MO#531"},
+            {"type": "assistant_message", "text": "Reading the ticket"}])
+        self.assertEqual(provider_health.load(), {})
+        self.assertEqual(len(launched), 1)
+        self.assertEqual(launched[0]["modelSelection"], DEEPSEEK)
+
+    def test_the_stopped_run_speaks_for_itself(self):
+        module = self.module()
+        items = [
+            {"runId": "run-a", "type": "error", "text": "429 code 1308 usage limit"},
+            {"runId": "run-b", "type": "provider_error", "text": "401 invalid api key"},
+            {"runId": "run-b", "type": "assistant_message", "text": "stopping"}]
+        with patch.object(module, "t3", lambda tool, args: {"items": items}):
+            self.assertEqual(module.current_run_id(items), "run-b")
+            self.assertEqual(module.last_reply("t1", diagnostics_only=True), "401 invalid api key")
+            # The same run's non-diagnostic text is what a reply reader sees.
+            self.assertEqual(module.last_reply("t1", current_run=True), "stopping")
 
     def test_an_interrupted_reply_naming_authentication_blocks_nothing(self):
         # The gate finding of round 6: the builder's own last reply was read as
