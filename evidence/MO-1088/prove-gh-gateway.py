@@ -694,6 +694,29 @@ print("COUNT", count)
 check("an include first-request failure is one attempt",
       first_fail == ["COUNT", "1"], str(first_fail))
 
+# The quota sample belongs to the identity that read it: a balance read
+# for one token must not set the floor for another.
+quota = subprocess.run([sys.executable, "-c", f"""
+import json, os, sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+
+class R:
+    returncode = 0
+    stderr = ""
+    def __init__(self, remaining):
+        self.stdout = json.dumps({{"resources": {{"core": {{"remaining": remaining}},
+                                                 "graphql": {{"remaining": remaining}}}}}})
+
+gh_gateway.set_runner(lambda: (lambda argv, **kwargs: R(int(os.environ["GH_TOKEN"]))))
+os.environ["GH_TOKEN"] = "3000"
+print("ONE", gh_gateway.api_remaining()["core"])
+os.environ["GH_TOKEN"] = "100"
+print("TWO", gh_gateway.api_remaining()["core"])
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("the quota cache follows the credential",
+      quota == ["ONE", "3000", "TWO", "100"], str(quota))
+
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
 host_read = ["gh", "api", "--hostname", "enterprise.example",
