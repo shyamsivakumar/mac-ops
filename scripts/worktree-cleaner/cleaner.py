@@ -401,22 +401,19 @@ class GitHub:
             # up, or the next scan reloads it and calls the commit verified.
             self.commits[key] = False
             with VERIFIED_LOCK:
-                # Read-modify-write under the lock: a stale snapshot would
-                # otherwise restore an entry another worker just evicted.
-                fresh = self._load_verified()
-                fresh.pop(cache_key, None)
-                self.verified = fresh
+                # One authoritative map: every update happens here under the
+                # lock and is written from it, so a later lookup can neither
+                # restore an eviction nor drop a fresh verification.
+                self.verified.pop(cache_key, None)
                 self.save_cache()
             raise SafetyError("command_unavailable:gh") from exc
         except SafetyError:
             self.commits[key] = False
         with VERIFIED_LOCK:
-            fresh = self._load_verified()
             if self.commits[key]:
-                fresh[cache_key] = time.time()
+                self.verified[cache_key] = time.time()
             else:
-                fresh.pop(cache_key, None)
-            self.verified = fresh
+                self.verified.pop(cache_key, None)
         return self.commits[key]
 
     def _load_verified(self) -> dict[str, float]:
