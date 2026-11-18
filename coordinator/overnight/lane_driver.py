@@ -1210,7 +1210,7 @@ def dead_ticket_prs(repo, number):
     result = gh_gateway.run(["gh", "pr", "list", "-R", repo, "--state", "all",
                              "--limit", str(DEAD_PR_PAGE), "--search", f"#{number} in:body",
                              "--json", "number,state,mergedAt,body"], timeout=120,
-                            caller_name=LANE_CALLER)
+                            fresh=True, caller_name=LANE_CALLER)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(
