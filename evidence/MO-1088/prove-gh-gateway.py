@@ -928,6 +928,15 @@ print("VERBAFTER", gh_gateway.argv_host(
     ["gh", "run", "-R", "actual.example/o/r", "list", "-w", "-Rother.example/o/r"]))
 print("CLUSTER", gh_gateway.argv_host(
     ["gh", "pr", "list", "-dRent.example/team/repo"]))
+print("MERGESQUASH", gh_gateway.argv_host(
+    ["gh", "pr", "merge", "42", "-s", "-R", "ent.example/team/repo"]))
+print("MERGEMETHOD", gh_gateway.argv_host(
+    ["gh", "pr", "merge", "42", "-m", "-d", "-R", "ent.example/team/repo"]))
+print("MERGEREBASE", gh_gateway.argv_host(
+    ["gh", "pr", "merge", "42", "-r", "-R", "ent.example/team/repo"]))
+print("MERGEBODY", gh_gateway.argv_host(
+    ["gh", "pr", "merge", "42", "-b", "-Rother.example/o/r", "-s",
+     "-R", "ent.example/team/repo"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
@@ -942,7 +951,9 @@ check("a host in -R is the effective host",
                   "WORKFLOWALL", "ent.example", "SELBEFORE", "actual.example",
                   "SELBEFORE2", "actual.example", "COMMITVAL", "actual.example",
                   "REPOEQSHORT", "ent.example", "CLUSTERNEXT", "ent.example",
-                  "VERBAFTER", "actual.example", "CLUSTER", "ent.example"],
+                  "VERBAFTER", "actual.example", "CLUSTER", "ent.example",
+                  "MERGESQUASH", "ent.example", "MERGEMETHOD", "ent.example",
+                  "MERGEREBASE", "ent.example", "MERGEBODY", "ent.example"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.
