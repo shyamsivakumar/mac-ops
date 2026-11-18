@@ -1483,25 +1483,78 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
     return False, "github_pr_not_closed_for_head", None
 
 
-def _sweep_recovery(storage: Path, older_than: float) -> None:
-    """Remove the recovery copies that are older than the given time."""
-    try:
-        entries = list(storage.iterdir())
-    except OSError:
-        return
-    for entry in entries:
-        try:
-            if entry.stat().st_mtime > older_than:
+def _newest_change(path: Path) -> float | None:
+    """The newest change inside a directory, at any depth."""
+    newest: float | None = None
+    for root, dirs, files in os.walk(path):
+        for name in list(dirs) + list(files):
+            try:
+                stamp = os.stat(os.path.join(root, name)).st_mtime
+            except OSError:
                 continue
-        except OSError:
+            newest = stamp if newest is None else max(newest, stamp)
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        return newest
+    return stamp if newest is None else max(newest, stamp)
+
+
+def _recovery_manifest(state_root: Path) -> Path:
+    return state_root / "recovery.json"
+
+
+def _record_recovery(state_root: Path, path: Path) -> None:
+    """Remember a recovery directory, so it is swept later.
+
+    The directory holds a marker with the time of the recovery, so the
+    retention of a copy starts when it was taken and not when its root
+    directory was last touched.
+    """
+    manifest = _recovery_manifest(state_root)
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        entries = []
+    if not isinstance(entries, list):
+        entries = []
+    if str(path) not in entries:
+        entries.append(str(path))
+    try:
+        atomic_write(manifest, json.dumps(sorted(entries), indent=1) + "\n")
+    except OSError:
+        pass
+
+
+def _sweep_recovery(state_root: Path, older_than: float) -> None:
+    """Remove the recovery copies that have not changed since the cutoff.
+
+    Every recovery directory is swept, wherever it lives, and a change
+    anywhere inside one keeps the whole directory, so an editor's save is
+    never removed by a sweep.
+    """
+    manifest = _recovery_manifest(state_root)
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        entries = []
+    if not isinstance(entries, list):
+        entries = []
+    keep: list[str] = []
+    for entry in entries:
+        path = Path(entry)
+        newest = _newest_change(path)
+        if newest is None or newest > older_than:
+            keep.append(entry)
             continue
         try:
-            if entry.is_dir():
-                shutil.rmtree(entry)
-            else:
-                entry.unlink()
+            shutil.rmtree(path)
         except OSError:
-            continue
+            keep.append(entry)
+    try:
+        atomic_write(manifest, json.dumps(sorted(keep), indent=1) + "\n")
+    except OSError:
+        pass
 
 
 def _trash_for(state_trash: Path, worktree: Path) -> Path:
@@ -1802,7 +1855,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
         if apply:
             # The recovery storage is swept first: the copies of the earlier
             # removals have had their day, so the space comes back.
-            _sweep_recovery(state_root / "cleanup-trash", time.time() - 24 * 60 * 60)
+            _sweep_recovery(state_root, time.time() - 24 * 60 * 60)
 
             def refreshed(candidate: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | SafetyError | None]:
                 repo_root = Path(candidate["repo"])
@@ -1993,16 +2046,6 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["reasons"] = ["worktree_has_ignored_files" if ignored else "worktree_changed_before_remove"]
                         continue
                     storage_path = _trash_for(state_root / "cleanup-trash", Path(candidate["path"]))
-                    try:
-                        storage = os.open(storage_path, os.O_RDONLY | os.O_DIRECTORY)
-                    except OSError:
-                        storage = None
-                    if storage is None:
-                        os.close(directory)
-                        append_removal(state_root, candidate, "removal_failed")
-                        candidate["eligible"] = False
-                        candidate["reasons"] = ["recovery_storage_unavailable"]
-                        continue
                     kept = 0
                     # What is left in the directory decides whether the checkout
                     # survives, not the count of entries the loop handled: a file
@@ -2041,6 +2084,9 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                     try:
                                         storage.mkdir(mode=0o700, parents=True, exist_ok=True)
                                         os.rename(Path(candidate["path"]).parent / aside, storage / aside)
+                                        marker = storage / aside / ".recovered-at"
+                                        marker.write_text(str(time.time()), encoding="utf-8")
+                                        _record_recovery(state_root, storage / aside)
                                         tree_gone = True
                                     except OSError:
                                         tree_gone = False
