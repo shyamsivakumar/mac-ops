@@ -74,11 +74,17 @@ def main():
         if handle is not None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         unreadable = []
-        for source in sources:
+        truncated = False
+        for index, source in enumerate(sources):
             found, state = read(source)
             if state == "error":
                 unreadable.append(source)
             rows.extend(row for row in found if row["ts"] >= since)
+            if index == 1 and found and min(row["ts"] for row in found) > since:
+                # The rotation holds only calls newer than the window start,
+                # so a second rotation inside the window discarded earlier
+                # ones: the total is a lower bound, not the whole hour.
+                truncated = True
     finally:
         if handle is not None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -102,7 +108,8 @@ def main():
     per_caller = collections.Counter(
         (row.get("caller") or "unknown", row.get("resource") or "core") for row in rows)
     unknown = sum(1 for row in rows if row.get("pages") == "unknown")
-    calls_header = "calls (>=)" if unknown else "calls"
+    lower_bound = bool(unknown or truncated)
+    calls_header = "calls (>=)" if lower_bound else "calls"
     print(f"{'hour':20} {'caller':16} {'quota':8} {calls_header}")
     for (stamp, caller, quota), count in sorted(per_hour.items()):
         print(f"{stamp:20} {caller:16} {quota:8} {count}")
@@ -111,11 +118,13 @@ def main():
     for (caller, quota), count in sorted(per_caller.items()):
         print(f"{caller:16} {quota:8} {count:6} {count / args.hours:9.0f}")
     core = sum(count for (_caller, quota), count in per_caller.items() if quota == "core")
-    unknown = sum(1 for row in rows if row.get("pages") == "unknown")
-    label = "core total (lower bound)" if unknown else "core total"
+    label = "core total (lower bound)" if lower_bound else "core total"
     print(f"{label:16} {'core':8} {core:6} {core / args.hours:9.0f}")
-    all_label = "all requests (lower bound)" if unknown else "all requests"
+    all_label = "all requests (lower bound)" if lower_bound else "all requests"
     print(f"{all_label:16} {'':8} {len(rows):6} {len(rows) / args.hours:9.0f}")
+    if truncated and not incomplete:
+        print("note: a rotation inside the window discarded earlier calls, "
+              "so the totals are a lower bound")
     if incomplete:
         print("result: incomplete (an input log could not be read)")
         return 2
