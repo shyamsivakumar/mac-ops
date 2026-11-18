@@ -161,10 +161,11 @@ class MessageDedupeTests(unittest.TestCase):
 
     def test_the_dispatch_records_the_started_message(self):
         self.q.live = lambda: 0
-        self.assertEqual(self.start()[0], 0)
+        # The whole test runs against the stub dispatcher: the first start
+        # drains too, and a real drain would send the message.
         with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
                 self.q, "call", return_value=(0, "{}")):
-            self.q.drain()
+            self.assertEqual(self.start()[0], 0)
         queue = self.q.load()
         self.assertEqual(queue["items"], [])
         self.assertEqual(queue["started"][0]["title"], TITLE)
