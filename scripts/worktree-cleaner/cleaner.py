@@ -549,6 +549,34 @@ def _snapshot_directory(fd: int) -> dict[str, tuple[int, int, int, int]]:
     return snapshot
 
 
+def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> int:
+    """Unlink a file only when it is the one that was stamped.
+
+    The file is renamed aside first, so the name that is unlinked belongs to
+    this call. A file that was replaced after the stamp is put back.
+    """
+    moved = f".cleaner-unlink-{os.getpid()}-{abs(hash(name)) & 0xFFFF:x}"
+    try:
+        os.rename(name, moved, src_dir_fd=fd, dst_dir_fd=fd)
+    except OSError:
+        return 1
+    try:
+        info = os.stat(moved, dir_fd=fd, follow_symlinks=False)
+    except OSError:
+        info = None
+    if info is not None and (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) == stamp:
+        try:
+            os.unlink(moved, dir_fd=fd)
+            return 0
+        except OSError:
+            return 1
+    try:
+        os.rename(moved, name, src_dir_fd=fd, dst_dir_fd=fd)
+    except OSError:
+        pass
+    return 1
+
+
 def _snapshot_all(fd: int, prefix: str = "") -> dict[str, dict[str, tuple[int, int, int, int]]]:
     """The stamp of every entry of every directory below an open directory.
 
@@ -609,10 +637,7 @@ def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapsh
             except OSError:
                 kept += 1
             continue
-        try:
-            os.unlink(entry, dir_fd=fd)
-        except OSError:
-            kept += 1
+        kept += _unlink_verified(fd, entry, stamp)
     return kept
 
 
@@ -1879,18 +1904,24 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_changed_before_remove"]
                     continue
                 kept = _remove_tree(directory, {}, snapshot)
+                # What is left in the directory decides whether the checkout
+                # survives, not the count of entries the loop handled: a file
+                # that was created after the snapshot is not in the loop at all.
+                remaining = _snapshot_directory(directory)
+                survived = bool(remaining)
                 os.close(directory)
                 tree_gone = False
-                try:
-                    os.rmdir(candidate["path"])
-                    tree_gone = True
-                except OSError:
-                    tree_gone = False
+                if not survived:
+                    try:
+                        os.rmdir(candidate["path"])
+                        tree_gone = True
+                    except OSError:
+                        tree_gone = False
                 # The registration is removed through its own descriptor, so a
                 # registration that replaced it in the meantime is not
                 # touched.
                 registration_gone = False
-                if kept:
+                if survived:
                     # Files survived the deletion, so the checkout is still
                     # there and keeps its pointer, and the registration is
                     # kept with it.
@@ -1911,22 +1942,38 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                     except OSError:
                         admin = None
-                if kept == 0 and admin is not None:
+                if not survived and admin is not None:
+                    try:
+                        admin_parent = os.open(registration.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    except OSError:
+                        admin_parent = None
                     try:
                         info = os.fstat(admin)
-                        if (info.st_dev, info.st_ino) == registration_identity:
+                        if admin_parent is not None and (info.st_dev, info.st_ino) == registration_identity:
                             _remove_tree(admin, {}, _snapshot_all(admin))
+                            # The registration is renamed aside before it is
+                            # removed, so the directory that is removed is one
+                            # this call owns.
+                            aside = f".cleaner-registration-{os.getpid()}-{abs(hash(registration)) & 0xFFFF:x}"
                             try:
-                                current = os.stat(registration)
-                                if (current.st_dev, current.st_ino) == registration_identity:
-                                    os.rmdir(registration)
-                                    registration_gone = True
-                                else:
-                                    registration_gone = False
+                                os.rename(registration, aside, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
                             except OSError:
                                 registration_gone = False
+                            else:
+                                try:
+                                    info = os.stat(aside, dir_fd=admin_parent, follow_symlinks=False)
+                                    if (info.st_dev, info.st_ino) == registration_identity:
+                                        os.rmdir(aside, dir_fd=admin_parent)
+                                        registration_gone = True
+                                    else:
+                                        os.rename(aside, registration, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
+                                        registration_gone = False
+                                except OSError:
+                                    registration_gone = False
                     finally:
                         os.close(admin)
+                        if admin_parent is not None:
+                            os.close(admin_parent)
                 candidate["kept_entries"] = kept
                 prune_results.append({
                     "repo": str(repo_root), "worktree": candidate["path"],
