@@ -949,6 +949,8 @@ print("CREATEDRAFT", gh_gateway.argv_host(
     ["gh", "pr", "create", "-d", "-R", "ent.example/team/repo"]))
 print("CREATEWEB", gh_gateway.argv_host(
     ["gh", "pr", "create", "-w", "-R", "ent.example/team/repo"]))
+print("CREATEEDITOR", gh_gateway.argv_host(
+    ["gh", "pr", "create", "-e", "-R", "ent.example/team/repo"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
@@ -969,7 +971,7 @@ check("a host in -R is the effective host",
                   "REVIEWAPPROVE", "ent.example", "REVIEWCOMMENT", "ent.example",
                   "REVIEWCHANGES", "ent.example",
                   "CREATEFILL", "ent.example", "CREATEDRAFT", "ent.example",
-                  "CREATEWEB", "ent.example"],
+                  "CREATEWEB", "ent.example", "CREATEEDITOR", "ent.example"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.
