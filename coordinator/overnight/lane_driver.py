@@ -686,6 +686,11 @@ def park(repo, number, issue, head, reply, ledger):
     recutter = builder_for(repo, issue)
     if recutter is None:
         return f"#{number}: park waits, every builder is blocked"
+    root = repo_root(repo)
+    if not root or barred_worktree(root):
+        # The re-cut thread works in the project root, so a root on a
+        # herdr branch is Shyam's to merge and takes no launch.
+        return f"#{number}: park waits, the project root is on a herdr branch or its branch cannot be read"
     if issue:
         run(["gh", "issue", "edit", str(issue), "-R", repo, "--remove-label", "stage:todo", "--add-label", "stage:backlog"])
         run(["gh", "issue", "comment", str(issue), "-R", repo, "--body",
