@@ -69,6 +69,30 @@ class HostHeadroomTests(unittest.TestCase):
         path = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
         self.assertEqual(self.floor_for(path, "Shyams-M4.local"), DEFAULT)
 
+    def test_a_qualified_name_does_not_lower_another_qualified_host(self):
+        path = self.config({heavy.HOST_HEADROOM_KEY: {"builder.lab": M1_HEADROOM}})
+        self.assertEqual(self.floor_for(path, "builder.office"), DEFAULT)
+        self.assertEqual(self.floor_for(path, "builder.lab.office"), DEFAULT)
+        self.assertEqual(self.floor_for(path, "builder.lab"), M1_HEADROOM)
+
+    def test_an_unqualified_configured_name_matches_a_qualified_host(self):
+        path = self.config({heavy.HOST_HEADROOM_KEY: {"builder": M1_HEADROOM}})
+        self.assertEqual(self.floor_for(path, "builder.office"), M1_HEADROOM)
+
+    def test_a_qualified_name_matches_an_unqualified_host(self):
+        path = self.config({heavy.HOST_HEADROOM_KEY: {"builder.lab": M1_HEADROOM}})
+        self.assertEqual(self.floor_for(path, "builder"), M1_HEADROOM)
+
+    def test_two_qualified_names_sharing_a_short_name_are_ambiguous(self):
+        path = self.config(
+            {heavy.HOST_HEADROOM_KEY: {
+                "builder.lab": M1_HEADROOM,
+                "builder.office": 4 * heavy.GIB,
+            }}
+        )
+        self.assertEqual(self.floor_for(path, "builder"), DEFAULT)
+        self.assertEqual(self.floor_for(path, "builder.lab"), M1_HEADROOM)
+
     def test_a_missing_malformed_or_out_of_range_file_keeps_the_default_floor(self):
         absent = Path(self.directory.name) / "absent.json"
         self.assertEqual(heavy.host_headroom_bytes(absent), DEFAULT)
