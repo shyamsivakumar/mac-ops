@@ -60,10 +60,10 @@ def fixture_models():
             yield
 
 
-def fixer_identity():
-    """The provider and model of a thread already on the first available fix model."""
+def builder_identity():
+    """The provider and model of a thread already on the first available builder."""
     import lane_driver as lane
-    selection = lane.model_list.first_available("fix")["selection"]
+    selection = lane.model_list.first_available("build")["selection"]
     return {"providerInstanceId": selection["instanceId"], "model": selection["model"]}
 
 
@@ -228,7 +228,7 @@ def dead_run_recovery():
         if tool == "t3_thread_list":
             return {"threads": [dead]} if args.get("statuses") == ["failed", "interrupted"] else {"threads": []}
         if tool == "t3_thread_read" and args.get("view") == "messages":
-            return {"items": [{"type": "assistant_message", "text": "provider individual spend limit"}]}
+            return {"items": [{"type": "provider_error", "text": "provider individual spend limit"}]}
         if tool == "t3_thread_read":
             return {"thread": thread}
         if tool == "t3_thread_organize":
@@ -413,7 +413,7 @@ def gate_pipeline():
                     dict(threadId="gate", status="completed", updatedAt="fixture")]}
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
-                    return {"thread": {**fixer_identity(), "status": "running", "sendable": True}}
+                    return {"thread": {**builder_identity(), "status": "running", "sendable": True}}
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
@@ -421,6 +421,7 @@ def gate_pipeline():
             with patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                 patch.object(lane, "root_workspace", return_value=False), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
@@ -549,7 +550,8 @@ def no_parking(status="interrupted"):
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
          patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
          patch.object(lane, "run", command), \
-         patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": status}}), \
+         patch.object(lane, "t3", return_value={"thread": {**builder_identity(), "status": status}}), \
+         patch.object(lane, "root_workspace", return_value=False), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
@@ -1494,7 +1496,7 @@ def send_integrity():
             def read(tool, args):
                 exact((tool, args), ("t3_thread_read", {"threadId": "old", "limit": 1}))
                 reads.append("read")
-                return {"thread": {**fixer_identity(), **thread}}
+                return {"thread": {**builder_identity(), **thread}}
             def command(cmd, timeout=150):
                 exact(reads, ["read"])
                 exact(cmd[:2], [lane.COORDQ, "start"])
@@ -1503,7 +1505,7 @@ def send_integrity():
                     exact(payload, {"threadId": "old", "message": "brief"})
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
-                    exact(payload, {"projectId": "fixture", "title": "fix", "taskType": "fix", "modelSelection": lane.model_list.first_available("fix")["selection"],
+                    exact(payload, {"projectId": "fixture", "title": "fix", "taskType": "worker", "modelSelection": lane.model_list.first_available("build")["selection"],
                           "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief", "clientRequestId": key})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
@@ -1513,6 +1515,8 @@ def send_integrity():
             output = io.StringIO()
             with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
                  patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
+                 patch.object(lane, "root_workspace", return_value=False), \
+                 patch.object(lane, "branch_on_origin", return_value=True), \
                  patch.object(lane, "read_json", return_value=dict(number=385, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), contextlib.redirect_stdout(output):
                 try:
@@ -1527,7 +1531,8 @@ def send_integrity():
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
-         patch.object(lane, "t3", return_value={"thread": {**fixer_identity(), "status": "running"}}), \
+         patch.object(lane, "t3", return_value={"thread": {**builder_identity(), "status": "running"}}), \
+         patch.object(lane, "root_workspace", return_value=False), \
          patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
         ledger = {}
         exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}: send existing thread")
@@ -1562,7 +1567,7 @@ def send_integrity():
 
 
 def root_workspace():
-    """Pull request work never works in the shared root of a repository.
+    """No lane path works in the shared root of a repository.
 
     The lane sends pull request work to the builder thread of the ticket
     that opened the pull request. A thread that works in the shared root
@@ -1584,11 +1589,10 @@ def root_workspace():
     other_root_git = ("/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n"
                       "/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n")
 
-    def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git,
-                worktree_only=True):
+    def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git):
         actions = []
         def read(tool, args):
-            return {"thread": {**fixer_identity(), **thread}}
+            return {"thread": {**builder_identity(), **thread}}
         def command(cmd, timeout=150):
             if cmd[0] == "git":
                 if "rev-parse" in cmd:
@@ -1609,8 +1613,7 @@ def root_workspace():
              patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
              patch.object(lane, "read_json", return_value=pull), \
              patch.object(lane, "run", command), contextlib.redirect_stdout(io.StringIO()):
-            result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512,
-                               worktree_only=worktree_only)
+            result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512)
         return result, actions
 
     # A thread without a worktree works in the shared root.
@@ -1635,12 +1638,11 @@ def root_workspace():
     result, actions = send_to({"status": "running", "worktreePath": worktree})
     exact(result, "receipt")
     exact(actions, ["send"])
-    # The other lane paths keep their own routing: a thread in a shared
-    # checkout still takes their work.
-    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
-                               worktree_only=False)
-    exact(result, "receipt")
-    exact(actions, ["send"])
+    # The other lane paths keep their own routing, but no path works in
+    # the shared checkout of the repository.
+    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git)
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
     # A branch that is not on origin has no safe worktree, so no work is
     # dispatched at all.
     result, actions = send_to({"status": "running"}, listing="")

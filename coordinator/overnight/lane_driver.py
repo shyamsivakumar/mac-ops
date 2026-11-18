@@ -174,6 +174,20 @@ def last_reply(thread_id):
     return (msgs[-1] if msgs else "").rstrip()
 
 
+def provider_diagnostic(thread_id):
+    """The provider's own failure message, or nothing.
+
+    Only a provider failure names a provider failure. An assistant
+    reply - a progress note, a gate report that ended without a
+    verdict - is the thread talking, so it never marks the builder as
+    failed.
+    """
+    items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
+    msgs = [i.get("text") or i.get("message") or "" for i in items
+            if i.get("type") in {"error", "run_error", "provider_error"}]
+    return (msgs[-1] if msgs else "").rstrip()
+
+
 def busy(repo):
     pid = CFG[repo]["projectId"]
     live = t3("t3_thread_list", {"projectId": pid, "statuses": ["preparing", "queued", "starting", "running", "waiting"], "limit": 20}).get("threads") or []
@@ -460,13 +474,59 @@ def branch_on_origin(repo, branch):
     return bool(listing.strip())
 
 
-def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False):
+def builder_label(repo, issue):
+    """The builder a ticket names, or None when it names none.
+
+    A `builder:<id>` label puts that entry first in the build list, so
+    a ticket keeps the builder it asked for while that builder is
+    unblocked.
+    """
+    if issue is None:
+        return None
+    for ticket in SNAPSHOT.get("tickets") or []:
+        if ticket.get("repo") == repo and str(ticket.get("number")) == str(issue):
+            return ticket.get("builder") or None
+    for record in (SNAPSHOT.get("repos", {}).get(repo) or {}).get("issues") or []:
+        if str(record.get("number")) != str(issue):
+            continue
+        for label in record.get("labels") or []:
+            name = label.get("name") if isinstance(label, dict) else label
+            if isinstance(name, str) and name.startswith("builder:"):
+                return name.split(":", 1)[1] or None
+    return None
+
+
+def builder_for(repo=None, issue=None, preferred=None, blocked=None):
+    """The builder a launch or a send runs on.
+
+    The first entry of the build list that is not blocked. The ticket's
+    builder label comes first when the ticket names one. None when
+    every entry is blocked: the caller waits for a probe instead of
+    starting work on a provider that cannot run it.
+    """
+    if preferred is None:
+        preferred = builder_label(repo, issue)
+    return model_list.first_available("build", preferred, blocked)
+
+
+def allowed_builder(selection):
+    """Whether a thread's model is one the model list allows.
+
+    A thread that runs no model of the list - a legacy Sol thread - is
+    not allowed, so its work moves to a builder.
+    """
+    return model_list.find(selection, ("build", "fix")) is not None
+
+
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, issue=None):
     """Send work to a thread, or start a fresh one when it cannot take it.
 
-    With `worktree_only` the work belongs in a worktree of its own: a
-    thread that works in a shared checkout of a repository never takes
-    it, and the work starts a fresh worktree instead. That is the
-    fix-check path's rule; the other paths keep their own routing.
+    A thread takes the send only when its model is one the model list
+    allows, its provider is not blocked, and it works in a worktree of
+    its own. A thread that fails any of those - a legacy Sol thread, a
+    blocked provider, the shared checkout of the repository - never
+    takes the work: a fresh thread on the first unblocked builder takes
+    it instead, in the same worktree when the thread has one.
     """
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
@@ -477,9 +537,9 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     if lkey in ledger:
         return f"already done {lkey}"
     thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
-    fixer = model_list.first_available("fix")
-    if fixer is None:
-        return f"skip {lkey}: every fix model is blocked"
+    chosen = builder_for(repo, issue)
+    if chosen is None:
+        return f"skip {lkey}: every builder is blocked"
     for attached in thread.get("pullRequests") or []:
         if attached.get("repository") == repo and attached.get("number"):
             _, skip = pr_action_skip(repo, attached["number"])
@@ -489,19 +549,29 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
+    live = thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}
     thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    if not model_list.same_selection(thread_model, fixer["selection"]):
-        if thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}:
+    if not allowed_builder(thread_model):
+        # A thread that runs no model of the list - a legacy Sol thread -
+        # never takes the work, so it moves to a builder.
+        if live:
             return (f"skip {lkey}: thread is {thread.get('status')} on "
                     f"{model_list.identity(thread_model) or 'an unknown model'}, "
-                    f"not the first available fix model; held until it is idle")
-        if thread.get("status") in {"completed", "interrupted", "failed"}:
-            sendable = False
-            reroute = "model is not first available"
-    if sendable and worktree_only and root_workspace(thread):
-        # Pull request work in a shared checkout of the repository moves
-        # the branch everyone installs from, so it starts a fresh
-        # worktree instead of the thread that works there.
+                    f"not a builder; held until it is idle")
+        sendable = False
+        reroute = "not a builder"
+    elif model_list.is_blocked(thread_model):
+        # The thread's provider ran out, so its send would start on an
+        # exhausted provider and the work moves to the next builder.
+        if live:
+            return (f"skip {lkey}: thread is {thread.get('status')} on the blocked "
+                    f"{model_list.identity(thread_model)}; held until it is idle")
+        sendable = False
+        reroute = "builder blocked"
+    if sendable and root_workspace(thread):
+        # Work in the shared checkout of the repository moves the branch
+        # everyone installs from, so it never goes to the thread that
+        # works there.
         sendable = False
         reroute = "root workspace"
     if sendable:
@@ -512,18 +582,19 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute == "model is not first available" and not root_workspace(thread):
+        if reroute in {"not a builder", "builder blocked"} and thread.get("worktreePath") and not root_workspace(thread):
+            # The work stays in its own worktree; only the builder moves.
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
                 return f"skip {lkey}: no verified PR branch for relaunch"
-            if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
+            if not branch_on_origin(repo, pr["headRefName"]):
                 return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
             workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
         args = {"projectId": CFG[repo]["projectId"], "title": title,
-                "taskType": "fix", "modelSelection": fixer["selection"], "runtimeMode": "full-access",
+                "taskType": "worker", "modelSelection": chosen["selection"], "runtimeMode": "full-access",
                 "workspaceStrategy": workspace, "message": message,
                 "clientRequestId": lkey}
         options = ["--priority", str(priority)]
@@ -556,7 +627,7 @@ def park(repo, number, issue, head, reply, ledger):
         return f"#{number}: parked, re-cut on the way"
     if DRY:
         return f"DRY park #{number}"
-    recutter = model_list.first_available("build")
+    recutter = builder_for(repo, issue)
     if recutter is None:
         return f"#{number}: park waits, every builder is blocked"
     if issue:
@@ -656,7 +727,7 @@ def act_on_pr(repo, number, ledger):
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
-        return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
+        return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, issue=issue)
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
@@ -679,7 +750,7 @@ def act_on_pr(repo, number, ledger):
         if status in ("completed", "interrupted", "failed"):
             return f"#{number} continue: " + send(
                 builder, "Continue fixing the gate findings for this head. Push the fixes and report the new head.",
-                message_title(repo, number, "continue", head), ledger, f"continue:{repo}#{number}:{head}", pr_number=number)
+                message_title(repo, number, "continue", head), ledger, f"continue:{repo}#{number}:{head}", pr_number=number, issue=issue)
         # The findings for this head are already with the builder, which is
         # still working them. A second copy is the padding the queue had.
         return f"skip #{number}: gate findings for this head are already with the builder ({status})"
@@ -690,7 +761,7 @@ def act_on_pr(repo, number, ledger):
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
-        return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
+        return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number, issue=issue)
     tag = "regate" if verdict == "none" else "gate"
     reviewers = json.loads(run(["ticket", "gate", f"{repo}#{number}", "--print-model"]))
     if not reviewers:
@@ -850,7 +921,7 @@ def unstick(repo, ledger, excl=frozenset()):
                 return f"DRY continue #{n}"
             msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
-                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900)
+                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, issue=n)
             ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
             return f"continue #{n}: {out}"
     if ledger.get("_item_failures", 0) > failures_before:
@@ -868,7 +939,7 @@ def unstick(repo, ledger, excl=frozenset()):
     if DRY:
         return f"DRY unstick {batch}"
     lst = ", ".join(f"#{n}" for n in batch)
-    unsticker = model_list.first_available("build")
+    unsticker = builder_for(repo, next((n for n in batch if builder_label(repo, n)), None))
     if unsticker is None:
         return "unstick waits, every builder is blocked"
     msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
@@ -1186,17 +1257,17 @@ def item_failure_summary(ledger):
     return failures
 
 
-def dead_run_model(thread, limit_failure):
+def dead_run_model(thread, limit_failure, repo=None, ticket=None):
     """The build entry a dead run relaunches on, or None when every builder is blocked.
 
-    The configured build order decides, whatever the thread ran on. A run
-    that died on a usage limit names its own builder as out, so the
-    relaunch skips it."""
+    The configured build order decides, whatever the thread ran on. The
+    ticket's builder label comes first, and a run that died on a usage
+    limit names its own builder as out, so the relaunch skips it."""
     blocked = model_list.blocked_identities()
     if limit_failure:
         own = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
         blocked = blocked | {model_list.identity(own)}
-    chosen = model_list.first_available("build", None, blocked)
+    chosen = builder_for(repo, ticket, blocked=blocked)
     return chosen["selection"] if chosen else None
 
 
@@ -1449,7 +1520,7 @@ def recover_dead_runs(ledger):
                 if not DRY:
                     settle_dead_run(thread_id)
                 continue
-            failure = reply.lower()
+            failure = provider_diagnostic(thread_id).lower()
             limit_failure = any(term in failure for term in ("rate limit", "spend limit", "quota", "individual spend"))
             day = time.strftime("%Y-%m-%d")
             count_key = f"dead-relaunch:{day}:{work_key}"
@@ -1459,7 +1530,7 @@ def recover_dead_runs(ledger):
                 if not DRY:
                     settle_dead_run(thread_id)
                 continue
-            model = dead_run_model(full_thread, limit_failure)
+            model = dead_run_model(full_thread, limit_failure, repo, ticket)
             if model is None:
                 print(f"DEAD {thread_id}: coordinator needed, every builder is blocked")
                 continue
