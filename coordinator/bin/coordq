@@ -283,14 +283,22 @@ def thread_status(thread_id):
 def message_identity(item):
     """The title and the target of one message.
 
-    The target is the thread the message goes to. A launch has no thread
-    yet, so its client request names the work it starts: a second launch for
-    the same work is the same message. A message that names neither a thread
-    nor a client request has no target, and no target cannot be compared: two
-    launches with the same title and different projects are two launches.
+    The title is the one the caller supplied, under `messageTitle`. A send the
+    caller left untitled carries its thread id as its display title, and that
+    is not a message identity: two callers can send two different
+    instructions to one thread without a title, and neither is the other's
+    duplicate. An item written before the identity was kept falls back to its
+    title, which its caller supplied.
+
+    The target is the thread the message goes to. A launch has no thread yet,
+    so its client request names the work it starts: a second launch for the
+    same work is the same message.
     """
     args = item.get("args") or {}
-    return (str(item.get("title") or ""),
+    title = item.get("messageTitle")
+    if title is None:
+        title = item.get("title") or ""
+    return (str(title),
             str(args.get("threadId") or args.get("clientRequestId") or ""))
 
 
@@ -329,11 +337,12 @@ def duplicate_message(queue, title, target, key="", live_ids=None):
 
     An action key names one board action, and a new head is a new action on
     the same thread, so two different keys are two messages. A message with
-    no target is never a duplicate: without a thread or a client request
-    there is nothing to tell two of them apart, and refusing one would drop
-    work the queue was asked to start.
+    no title or no target is never a duplicate: without a title the caller
+    supplied, or without a thread or a client request, there is nothing to
+    tell two of them apart, and refusing one would drop work the queue was
+    asked to start.
     """
-    if not target:
+    if not title or not target:
         return None
     for item in queue.get("items") or []:
         if message_identity(item) != (title, target):
@@ -654,7 +663,10 @@ def cmd_start(a):
                 die(f"refused: the action key {key} is already "
                     f"{action_key_state(queue, record.get('id'), record.get('state'))} "
                     f"{where}")
-        item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
+        explicit = a.title or args.get("title") or ""
+        item = {"id": queue["next"], "tool": tool, "args": args,
+                "title": explicit or args.get("threadId", ""), "messageTitle": explicit,
+                "priority": a.priority}
         title, target = message_identity(item)
         live = live_thread_ids() if queue.get("started") else None
         if prune_messages(queue, live):

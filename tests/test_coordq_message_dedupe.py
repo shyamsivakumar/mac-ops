@@ -57,6 +57,33 @@ class MessageDedupeTests(unittest.TestCase):
         self.assertIn("#1", err)
         self.assertEqual(len(self.q.load()["items"]), 1)
 
+    def test_two_untitled_messages_to_one_thread_are_two_messages(self):
+        # The finding: an untitled send carries its thread id as its display
+        # title, which is not a message identity. Two callers can send two
+        # different instructions to one thread, and neither is the other's
+        # duplicate.
+        first = self.start(payload=json.dumps({"threadId": THREAD, "message": "one"}),
+                           title=None)
+        second = self.start(payload=json.dumps({"threadId": THREAD, "message": "two"}),
+                            title=None)
+        self.assertEqual(first[0], 0, first[1])
+        self.assertEqual(second[0], 0, second[1])
+        items = self.q.load()["items"]
+        self.assertEqual([i["args"]["message"] for i in items], ["one", "two"])
+        self.assertEqual([i["title"] for i in items], [THREAD, THREAD])
+        self.assertEqual([i["messageTitle"] for i in items], ["", ""])
+
+    def test_a_queued_item_written_before_the_identity_was_kept_still_counts(self):
+        # An item in the queue from the older code has no messageTitle; its
+        # title was supplied by its caller, so it still suppresses a repeat.
+        self.q.save({"next": 2, "items": [{"id": 1, "tool": "t3_thread_send",
+                                           "args": {"threadId": THREAD, "message": "old"},
+                                           "priority": 800, "title": TITLE}]})
+        with patch.object(self.q, "read_rules", return_value="rules"):
+            code, err = self.start()
+        self.assertEqual(code, 1)
+        self.assertIn("refused: duplicate message", err)
+
     def test_another_thread_is_another_message(self):
         self.assertEqual(self.start()[0], 0)
         other = json.dumps({"threadId": "mcp:launch:other", "message": "fix the findings"})
