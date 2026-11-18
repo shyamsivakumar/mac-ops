@@ -678,6 +678,22 @@ report_env = subprocess.run(
     [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"), "--hours", "1"],
     capture_output=True, text=True,
     env={**env, "COORDINATOR_GH_USAGE_LOG": str(env_log)})
+# A rotation inside the window discards earlier calls, so the totals are a
+# lower bound rather than an exact number.
+truncated_log = scratch / "truncated.jsonl"
+now = time.time()
+(scratch / "truncated.jsonl.1").write_text(
+    json.dumps({"ts": now - 600, "caller": "kept", "resource": "core", "verb": "list"}) + "\n")
+truncated_log.write_text(
+    json.dumps({"ts": now - 30, "caller": "active", "resource": "core", "verb": "list"}) + "\n")
+truncated = subprocess.run(
+    [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"),
+     "--log", str(truncated_log), "--hours", "1"],
+    capture_output=True, text=True, env=env)
+check("a rotation inside the window makes the total a lower bound",
+      "lower bound" in truncated.stdout and "rotation inside the window" in truncated.stdout,
+      truncated.stdout.strip().splitlines()[-2:] if truncated.stdout else truncated.stderr[-80:])
+
 # An unreadable log makes the hour incomplete, not quiet.
 unreadable = scratch / "unreadable.jsonl"
 unreadable.mkdir()
