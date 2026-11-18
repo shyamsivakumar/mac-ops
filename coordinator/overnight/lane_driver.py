@@ -924,6 +924,8 @@ def unstick(repo, ledger, excl=frozenset()):
                 continue
             v = ledger.get(f"cont:{best[1]}")
             if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
+                if len(v) > 2 and v[2]:
+                    held.add(n)
                 continue
             thread = t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread")
             if not thread or root_workspace(thread):
@@ -939,12 +941,13 @@ def unstick(repo, ledger, excl=frozenset()):
             queued = {}
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
                        queued, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, issue=n)
-            ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
+            ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out, not queued]
             if not queued:
                 # The work was held: the thread is live on another model, so
                 # the ticket is being worked. It is not unstuck, and the
                 # scan goes on to the next ticket: one held ticket must not
-                # starve the others.
+                # starve the others. The cooldown entry keeps the hold, so
+                # the next pass leaves the ticket out of the batch too.
                 held.add(n)
                 continue
             return f"continue #{n}: {out}"
