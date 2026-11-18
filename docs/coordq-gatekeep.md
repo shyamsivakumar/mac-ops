@@ -11,10 +11,12 @@ coordinator-ticket receipt on that issue from the authenticated GitHub user.
 The dispatch receipt must identify a latest builder run with executedModel evidence.
 A build that no receipt covers is found through the ticket key of the issue
 (`MO-233`), as the newest thread that is not a review thread.
-Claude builders use Sol for review; other builders use Opus 5.5.
-The executed model of the builder run decides the reviewer: a run that
-executed a Claude or Anthropic model gets Sol, every other builder gets Opus
-5.5, so the reviewer never shares the vendor of the builder. A router run
+The reviewer comes from the `review` list in `models.json` (see
+[the model list](model-list.md)). The executed model of the builder run decides
+which entries are allowed: an entry of the builder's vendor is skipped, and so
+is an entry whose provider is blocked, so the reviewer never shares the vendor
+of the builder. The first allowed entry gates the PR.
+A router run
 reports no executed model, and its route is no evidence either: the chain says
 what the router would run, not what it ran, and a block that expired since
 the build hides the model it fell back to. A route that can run an Anthropic

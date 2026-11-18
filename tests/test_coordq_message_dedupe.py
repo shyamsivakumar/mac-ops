@@ -177,7 +177,7 @@ class MessageDedupeTests(unittest.TestCase):
                      "reservedThreads": {"1": "launch:mcp:launch:new"}})
         args = argparse.Namespace(
             args=json.dumps({"projectId": "fixture", "title": TITLE, "message": "fix",
-                             "modelSelection": {"instanceId": "codex", "model": "gpt-6.1-sol"},
+                             "taskType": "standard",
                              "clientRequestId": request}),
             title=None, priority=800, tool="t3_thread_launch", action_key=None)
         with patch.object(self.q, "active_thread_ids", return_value=set()), \
@@ -276,7 +276,7 @@ class MessageDedupeTests(unittest.TestCase):
     def launch(self, request_id, title=TITLE):
         args = argparse.Namespace(
             args=json.dumps({"projectId": "fixture", "title": title, "message": "fix",
-                             "modelSelection": {"instanceId": "codex", "model": "gpt-6.1-sol"},
+                             "taskType": "standard",
                              "clientRequestId": request_id}),
             title=None, priority=800, tool="t3_thread_launch", action_key=None)
         err = io.StringIO()
@@ -322,7 +322,7 @@ class MessageDedupeTests(unittest.TestCase):
 
     def launch_payload(self, project_id, title=TITLE):
         return json.dumps({"projectId": project_id, "title": title, "message": "work",
-                           "modelSelection": {"instanceId": "codex", "model": "gpt-6.1-sol"}})
+                           "taskType": "standard"})
 
     def launch_no_request(self, payload, key=None):
         args = argparse.Namespace(args=payload, title=None, priority=800,

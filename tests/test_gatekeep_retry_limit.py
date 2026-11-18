@@ -32,7 +32,7 @@ BUILDER_RUNS = [{"executedModel": "minimax/MiniMax-M3.1-Flash"}]
 # The gate died for a reviewer-side reason: no message, so no verdict. The
 # thread records the gate model coordq launches, which gatekeep requires before
 # it treats a dead gate as retryable; setUpModule checks it against coordq.
-ASTRA_GATE = {"providerInstanceId": "codex", "model": "gpt-6.2-astra"}
+ASTRA_GATE = {"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra"}
 OPUS_GATE = {"providerInstanceId": "claudeAgent", "model": "claude-opus-5-5"}
 DEAD_GATE = {"thread": {"status": "failed", **ASTRA_GATE},
              "items": [{"type": "user_message", "text": "review"}],
@@ -62,8 +62,9 @@ def setUpModule():
     os.environ["COORDQ_DIR"] = QUEUE_DIR
     coordq = load_coordq()
     launched = {"instanceId": ASTRA_GATE["providerInstanceId"], "model": ASTRA_GATE["model"]}
-    if coordq.ASTRA_MODEL != launched:
-        raise AssertionError(f"ASTRA_GATE drifted from coordq.ASTRA_MODEL: {coordq.ASTRA_MODEL}")
+    first_review = coordq.model_list.entries("review")[0]["selection"]
+    if first_review != launched:
+        raise AssertionError(f"ASTRA_GATE drifted from the first review entry: {first_review}")
 
 
 def tearDownModule():
