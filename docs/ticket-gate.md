@@ -58,13 +58,18 @@ them with the list in `coordinator/bin/prompt_paths.py`: `AGENT-RULES.md`,
 When one path matches, the brief's heading says `review only`, the merge
 order becomes `do not merge ... Shyam merges a passing one himself`, the
 fast-forward is left out, and the brief closes no issue. A pull request that
-only changes code keeps the merge order. A file list GitHub cannot give is
-not a prompt change, so a failed read never blocks the merge of ordinary
-code.
+only changes code keeps the merge order. A renamed file counts under both
+names, so moving prompt text out of `prompts/` still holds it.
+
+A file list GitHub cannot give is not code: the read is retried, and a list
+still unknown defers the gate instead of building a brief. A brief written
+without the list could order a merge of prompt text, so an unreadable list
+never reads as clear.
 
 The lane driver reads the same list before it merges a passing pull request:
 on a prompt change it merges nothing and writes one item to the decisions
-board asking Shyam to merge it.
+board asking Shyam to merge it. A dry run writes no item, and an unreadable
+list defers the pull request to the next run.
 
 ## What it refuses
 

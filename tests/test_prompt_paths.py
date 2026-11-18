@@ -58,10 +58,24 @@ class PromptPathTest(unittest.TestCase):
             ["coordinator/bin/ticket", "coordinator/config/AGENT-RULES.md"]))
         self.assertFalse(prompt_paths.prompt_change(["coordinator/bin/ticket"]))
 
-    def test_an_unreadable_list_adds_no_hold(self):
-        """An unknown list is never a prompt change: it must not block a merge."""
-        self.assertFalse(prompt_paths.prompt_change(None))
-        self.assertFalse(prompt_paths.prompt_change([]))
+    def test_an_unreadable_list_is_unknown_never_clear(self):
+        """An unknown list must not read as clear: clear authorizes a merge."""
+        self.assertEqual(prompt_paths.prompt_scan(None), prompt_paths.UNKNOWN)
+        self.assertEqual(prompt_paths.prompt_scan([]), prompt_paths.CLEAR)
+        with self.assertRaises(ValueError):
+            prompt_paths.prompt_change(None)
+
+    def test_a_renamed_prompt_file_still_counts(self):
+        """Moving prompt text out of a prompt directory still changed it."""
+        entry = {"filename": "archive/reviewer.md",
+                 "previous_filename": "prompts/reviewer.md"}
+        self.assertEqual(prompt_paths.entry_paths(entry),
+                         ["archive/reviewer.md", "prompts/reviewer.md"])
+        self.assertEqual(prompt_paths.entries_paths([entry]), prompt_paths.entry_paths(entry))
+        self.assertEqual(prompt_paths.prompt_scan(prompt_paths.entries_paths([entry])),
+                         prompt_paths.HOLD)
+        self.assertEqual(prompt_paths.entry_paths(None), [])
+        self.assertEqual(prompt_paths.entry_paths("not an entry"), [])
 
     def test_a_skills_directory_at_the_top_counts(self):
         self.assertTrue(prompt_paths.is_prompt_path("skills/SKILL.md"))
@@ -114,13 +128,29 @@ class TicketGateTest(unittest.TestCase):
             return self.ticket.prompt_pull("shyamsivakumar/mac-ops", 544, None)
 
     def test_a_prompt_pull_request_is_held(self):
-        self.assertTrue(self.prompt_pull(["coordinator/config/AGENT-RULES.md"]))
+        self.assertEqual(self.prompt_pull(["coordinator/config/AGENT-RULES.md"]),
+                         prompt_paths.HOLD)
 
     def test_a_code_pull_request_is_not_held(self):
-        self.assertFalse(self.prompt_pull(["coordinator/bin/ticket", "docs/ticket-gate.md"]))
+        self.assertEqual(self.prompt_pull(["coordinator/bin/ticket", "docs/ticket-gate.md"]),
+                         prompt_paths.CLEAR)
 
-    def test_an_unreadable_list_is_not_held(self):
-        self.assertFalse(self.prompt_pull(None))
+    def test_an_unreadable_list_is_unknown_and_holds_the_merge(self):
+        self.assertEqual(self.prompt_pull(None), prompt_paths.UNKNOWN)
+
+    def test_the_brief_refuses_an_unreadable_list(self):
+        with patch.object(self.ticket, "pull_files", return_value=None):
+            with self.assertRaises(self.ticket.Refuse):
+                self.ticket.prompt_hold("shyamsivakumar/mac-ops", 544)
+
+    def test_the_brief_holds_a_renamed_prompt_file(self):
+        with patch.object(self.ticket, "pull_files",
+                          return_value=["archive/reviewer.md", "prompts/reviewer.md"]):
+            self.assertTrue(self.ticket.prompt_hold("shyamsivakumar/mac-ops", 544))
+
+    def test_the_brief_does_not_hold_code(self):
+        with patch.object(self.ticket, "pull_files", return_value=["coordinator/bin/ticket"]):
+            self.assertFalse(self.ticket.prompt_hold("shyamsivakumar/mac-ops", 544))
 
 
 class CoordqGateTest(unittest.TestCase):
@@ -136,14 +166,27 @@ class CoordqGateTest(unittest.TestCase):
     def test_the_queue_reads_the_same_list(self):
         with patch.object(self.coordq, "gh_json",
                           return_value=[{"filename": "coordinator/config/AGENT-RULES.md"}]):
-            self.assertTrue(self.coordq.gate_prompt_change("shyamsivakumar/mac-ops", 544))
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.HOLD)
         with patch.object(self.coordq, "gh_json",
                           return_value=[{"filename": "coordinator/bin/ticket"}]):
-            self.assertFalse(self.coordq.gate_prompt_change("shyamsivakumar/mac-ops", 544))
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.CLEAR)
 
-    def test_a_failed_read_is_not_a_hold(self):
-        with patch.object(self.coordq, "gh_json", side_effect=RuntimeError("boom")):
-            self.assertFalse(self.coordq.gate_prompt_change("shyamsivakumar/mac-ops", 544))
+    def test_a_renamed_prompt_file_is_held(self):
+        with patch.object(self.coordq, "gh_json",
+                          return_value=[{"filename": "archive/reviewer.md",
+                                         "previous_filename": "prompts/reviewer.md"}]):
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.HOLD)
+
+    def test_a_failed_read_is_unknown_never_clear(self):
+        """A transient GitHub error must not authorize the merge it once did."""
+        with patch.object(self.coordq, "gh_json", side_effect=RuntimeError("boom")) as read:
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.UNKNOWN)
+        self.assertEqual(read.call_count, 2)
+
     def test_the_queued_brief_says_do_not_merge(self):
         settings = {"key": "MO", "projectId": "fixture"}
         model = {"instanceId": "codex", "model": "gpt-6.2-astra"}
@@ -205,6 +248,44 @@ class CoordqGateTest(unittest.TestCase):
         self.assertIn("gh pr merge 7 -R shyamsivakumar/fixture --squash", message)
         self.assertNotIn("never auto-merges", message)
 
+    def test_an_unreadable_file_list_defers_the_gate(self):
+        """No queue entry means no brief, so no merge order can be written."""
+        import types
+        from contextlib import redirect_stderr
+        import io
+        import json
+        coordq = self.coordq
+        head, repo = self.HEAD, self.REPO
+        pull = {"draft": False, "number": 7, "head": {"sha": head},
+                "body": f"Refs #9\nBuilder check: PASS {head}\n"}
+        receipt = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
+        comment = {"user": {"login": "me"},
+                   "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
+
+        def fake_gh(endpoint):
+            if "/files" in endpoint:
+                raise RuntimeError("transient GitHub error")
+            if endpoint.startswith(f"repos/{repo}/pulls"):
+                return [dict(pull)]
+            if endpoint.endswith("/comments?per_page=100"):
+                return [comment]
+            if endpoint.startswith(f"repos/{repo}/commits/"):
+                return []
+            raise AssertionError(f"unexpected endpoint {endpoint}")
+
+        quiet = types.SimpleNamespace(returncode=0, stdout="me\n", stderr="")
+        with patch.object(coordq, "subprocess", types.SimpleNamespace(run=lambda *a, **k: quiet)), \
+                patch.object(coordq, "gh_json", fake_gh), \
+                patch.object(coordq, "load_receipts", return_value={"req-1": "thread-1"}), \
+                patch.object(coordq, "read_builder_thread",
+                             return_value=({"providerInstanceId": "codex", "model": "gpt-6.2-astra"}, [])), \
+                patch.object(coordq, "builder_thread_for_issue", return_value="thread-1"), \
+                patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")), \
+                redirect_stderr(io.StringIO()):
+            events = list(coordq.gate_candidates({"repos": {repo: {"key": "T", "projectId": "P"}}}))
+        self.assertEqual([event["kind"] for event in events], ["skip"])
+        self.assertIn("unreadable", events[0]["reason"])
+
 
 class LanePassTest(unittest.TestCase):
     """A passing prompt pull request writes one item and merges nothing."""
@@ -226,9 +307,53 @@ class LanePassTest(unittest.TestCase):
 
     def test_the_lane_reads_the_same_list(self):
         with patch.object(self.lane, "run", return_value='[{"filename": "skills/x/SKILL.md"}]'):
-            self.assertTrue(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544))
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.HOLD)
         with patch.object(self.lane, "run", return_value='[{"filename": "coordinator/bin/ticket"}]'):
-            self.assertFalse(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544))
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.CLEAR)
+
+    def test_a_renamed_prompt_file_is_held(self):
+        files = '[{"filename": "archive/reviewer.md", "previous_filename": "prompts/reviewer.md"}]'
+        with patch.object(self.lane, "run", return_value=files):
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.HOLD)
+
+    def test_an_unreadable_list_defers_the_pass(self):
+        """A list the lane cannot read is retried, then merged nothing on."""
+        written = []
+        with patch.object(self.lane, "run", side_effect=RuntimeError("boom")), \
+                patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
+            state = self.lane.prompt_pull("shyamsivakumar/mac-ops", 544)
+            held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40, state)
+        self.assertEqual(state, prompt_paths.UNKNOWN)
+        self.assertIn("could not be read", held)
+        self.assertIn("next run retries", held)
+        self.assertEqual(written, [])
+
+    def test_a_dry_run_writes_no_board_item(self):
+        """The board write is live state, so a dry run must not reach it."""
+        written = []
+        with patch.object(self.lane, "DRY", True), \
+                patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
+            held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40,
+                                         prompt_paths.HOLD)
+        self.assertEqual(held, "DRY hold #544 " + "a" * 40)
+        self.assertEqual(written, [])
+
+    def test_a_code_pull_request_merges(self):
+        with patch.object(self.lane, "publish_decision",
+                          side_effect=AssertionError("a code pass writes no board item")):
+            self.assertIsNone(self.lane.prompt_pass("shyamsivakumar/mac-ops", 544,
+                                                    "a" * 40, prompt_paths.CLEAR))
+
+    def test_a_failed_board_write_is_not_a_merge_ask(self):
+        with patch.object(self.lane, "DRY", False), \
+                patch.object(self.lane, "publish_decision", return_value="failed"):
+            held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40,
+                                         prompt_paths.HOLD)
+        self.assertIn("could not be written", held)
+        self.assertNotIn("Shyam merges", held)
 
     def test_it_publishes_under_the_board_lock(self):
         calls = []

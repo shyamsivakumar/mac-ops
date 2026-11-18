@@ -545,7 +545,12 @@ def check_step(repo, proof_path):
 
 
 def pr_paths(repo, number):
-    """The paths a pull request changed, or None when GitHub cannot say."""
+    """The paths a pull request changed, or None when GitHub cannot say.
+
+    Both names of a renamed file count. Moving `prompts/reviewer.md` to
+    `archive/reviewer.md` removed prompt text, so a read that looked at the
+    new name alone would let that pull request merge.
+    """
     output = run(["gh", "api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
     try:
         entries = json.loads(output or "[]")
@@ -553,12 +558,25 @@ def pr_paths(repo, number):
         return None
     if not isinstance(entries, list):
         return None
-    return [entry.get("filename") or "" for entry in entries if isinstance(entry, dict)]
+    return prompt_paths.entries_paths(entries)
 
 
-def prompt_pull(repo, number):
-    """True when the pull request changed prompt, skill or playbook text."""
-    return prompt_paths.prompt_change(pr_paths(repo, number))
+def prompt_pull(repo, number, attempts=2):
+    """HOLD, CLEAR or UNKNOWN for the paths a pull request changed.
+
+    An unreadable list is retried, then UNKNOWN: the lane defers a passing
+    pull request it cannot read instead of merging it blind.
+    """
+    for _ in range(max(1, attempts)):
+        try:
+            paths = pr_paths(repo, number)
+        except (RuntimeError, ValueError):
+            # A `gh` read that failed is retried, never guessed at.
+            continue
+        state = prompt_paths.prompt_scan(paths)
+        if state != prompt_paths.UNKNOWN:
+            return state
+    return prompt_paths.UNKNOWN
 
 
 def publish_decision(item):
@@ -580,6 +598,26 @@ def prompt_merge_item(repo, number, head):
 def withdraw_decision(item_id):
     """Take one item off Shyam's board, once the pull request is settled."""
     return alarms.board_update(DECISIONS_PATH, item_id, "remove", None)
+
+
+def prompt_pass(repo, number, head, prompt):
+    """What the lane does with a passing pull request's path state.
+
+    A prompt, skill or playbook change never auto-merges (Shyam): the lane
+    stops at the verdict and asks him once. A dry run writes nothing at all,
+    and an unknown list defers to the next run rather than merging blind.
+    None means the merge may go ahead.
+    """
+    if prompt == prompt_paths.UNKNOWN:
+        return (f"skip #{number}: gate PASS, the changed-file list could not be read on "
+                f"head {head[:8]}, next run retries")
+    if prompt != prompt_paths.HOLD:
+        return None
+    if DRY:
+        return f"DRY hold #{number} {head}"
+    if publish_decision(prompt_merge_item(repo, number, head)) != "wrote":
+        return f"skip #{number}: prompt change, the decisions item could not be written"
+    return f"skip #{number}: gate PASS, prompt change, Shyam merges"
 
 
 def act_on_pr(repo, number, ledger):
@@ -629,15 +667,9 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
-        prompt = prompt_pull(repo, number)
-        if prompt:
-            # A prompt, skill or playbook change never auto-merges (Shyam):
-            # the lane stops at the verdict and asks him once.
-            if DRY:
-                return f"DRY hold #{number} {head}"
-            if publish_decision(prompt_merge_item(repo, number, head)) != "wrote":
-                return f"skip #{number}: prompt change, the decisions item could not be written"
-            return f"skip #{number}: gate PASS, prompt change, Shyam merges"
+        held = prompt_pass(repo, number, head, prompt_pull(repo, number))
+        if held:
+            return held
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
         if DRY:

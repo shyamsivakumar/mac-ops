@@ -37,11 +37,47 @@ def is_prompt_path(path):
     return any(part in PROMPT_DIRS for part in parts[:-1])
 
 
-def prompt_change(paths):
-    """True when any changed path is prompt text.
+# The three answers a changed-path read gives. UNKNOWN is a list GitHub could
+# not give, and it never reads as CLEAR: a clear answer authorizes the merge
+# the gate brief orders for an ordinary pull request.
+HOLD, CLEAR, UNKNOWN = "hold", "clear", "unknown"
 
-    A list GitHub could not give (None) is not a prompt change: the rule only
-    ever adds a hold to a pull request whose paths it can read, so an
-    unreadable list never blocks a merge.
+
+def entry_paths(entry):
+    """Both names of one changed file of a pull request.
+
+    A rename carries the name it left as `previous_filename`. Moving
+    `prompts/reviewer.md` to `archive/reviewer.md` removed prompt text, so
+    the name it left is prompt text too, and a read that checks only the new
+    name would let that pull request merge.
     """
-    return any(is_prompt_path(path) for path in paths or ())
+    if not isinstance(entry, dict):
+        return []
+    return [path for path in (entry.get("filename"), entry.get("previous_filename")) if path]
+
+
+def entries_paths(entries):
+    """Every path a list of changed-file entries names, old names included."""
+    return [path for entry in entries or () for path in entry_paths(entry)]
+
+
+def prompt_change(paths):
+    """True when one known path list carries prompt, skill or playbook text.
+
+    A list GitHub could not give is not a path list, so it raises here rather
+    than reading as clear. Callers that may not have a list use `prompt_scan`.
+    """
+    if paths is None:
+        raise ValueError("a path list GitHub could not give is unknown, not clear; use prompt_scan")
+    return any(is_prompt_path(path) for path in paths)
+
+
+def prompt_scan(paths):
+    """HOLD, CLEAR or UNKNOWN for one changed-path list.
+
+    An unreadable list (None) is UNKNOWN, never CLEAR: its caller retries or
+    defers the gate, because CLEAR lets the pull request merge.
+    """
+    if paths is None:
+        return UNKNOWN
+    return HOLD if prompt_change(paths) else CLEAR
