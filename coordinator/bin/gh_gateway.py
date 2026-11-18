@@ -630,8 +630,11 @@ def command_of(argv):
     if group_at is None:
         return "", ""
     group = words[group_at]
-    tail = [word for word in words[group_at + 1:]]
-    verb = next((word for word in tail if not word.startswith("-")), "")
+    tail = words[group_at + 1:]
+    # Skip option values on the way to the verb: `gh run -R o/r list` names
+    # `run list`, so a selector between the group and the verb is not it.
+    verb = next((word for word in tail
+                 if not word.startswith("-") and not looks_like_repo(word)), "")
     return group, verb
 
 
@@ -697,6 +700,11 @@ def parse_options(argv):
                 # The value form: `-RHOST/OWNER/REPO`, `-R=HOST/OWNER/REPO`,
                 # `-Sfoo`. A leading `=` is part of the syntax.
                 attached = rest[1:].lstrip("=")
+                if not attached and following:
+                    # A value option that ends the cluster takes the next
+                    # argument: `-dR ent.example/team/repo`.
+                    attached = following
+                    index += 1
                 options[short] = attached
                 ordered.append((short, attached))
                 rest = ""
