@@ -1116,6 +1116,16 @@ def ran_reviewer(thread, launched=None):
     return launched if launched in REVIEWER_CHAIN else ASTRA_MODEL
 
 
+def failed_run_id(value):
+    """The id of the failed run a gate report names, or None.
+
+    The block a failure earns is remembered by this id, so the same dead run
+    read again does not earn a second one."""
+    thread = value.get("thread") if isinstance(value, dict) else None
+    run_id = (thread or {}).get("latestRunId")
+    return run_id if isinstance(run_id, str) and run_id else None
+
+
 def quota_failure(value):
     if isinstance(value, str):
         try:
@@ -1370,9 +1380,20 @@ def cmd_gatekeep(a):
                     # before it gives up, so a reviewer that is out of credits
                     # is not handed another head during the wait. A block that
                     # is already recorded stays as it was, so reading the same
-                    # dead gate again does not extend it.
-                    if not is_blocked(current):
-                        block_failed_reviewer(current, data, a.dry_run)
+                    # dead gate again does not extend it. The failed run is
+                    # kept beside the block, because a provider that comes back
+                    # inside this head's backoff ends its block first: without
+                    # that record the next pass would read the same failure and
+                    # block the freed reviewer again.
+                    recorded = heads.get(key)
+                    blocked_run = recorded.get("blockedRun") if isinstance(recorded, dict) else None
+                    run_id = failed_run_id(data)
+                    if not is_blocked(current) and not (run_id and run_id == blocked_run):
+                        until = block_failed_reviewer(current, data, a.dry_run)
+                        if until is not None and run_id and not a.dry_run:
+                            state = {**state, "blockedRun": run_id}
+                            heads[key] = state
+                            save(queue)
                     if retries > GATE_RETRY_LIMIT:
                         print(f"gave up {key} after {state['retries']} retries without a verdict",
                               flush=True)
