@@ -77,10 +77,17 @@ The choice of the reviewer and the queue item that carries it happen under
 `models.blocked_lock()`, the lock the provider block store holds while it
 writes `providers-blocked.json`. A block recorded while that lock is held
 cannot land between the choice and the append, so a blocked reviewer is never
-queued. The block lock is taken before the queue lock, everywhere. A reviewer
-that is blocked when the item is about to be written is not queued at all: the
-head waits (`waiting <repo>#<pr>: <reviewer> is blocked`) and tries again on
-the next run.
+queued. The block lock is taken before the queue lock, everywhere.
+
+The first reviewer of a head is chosen before the locks are taken, so it is
+checked again under them: a reviewer that was blocked in between is not
+queued, and the choice is made again on the free reviewer
+(`rechoosing <repo>#<pr>: <reviewer> is blocked`). A head with no free
+reviewer waits (`defer <repo>#<pr>: every gate reviewer is blocked`).
+
+A head moves to one other reviewer, once. A head that already moved is not
+moved again, backoff or not: the next verdictless run gives it up in one line
+(`gave up <head> after one move down the reviewer chain without a verdict`).
 
 A loaded LaunchAgent runs after login. Reboot survival requires a real reboot
 and has not been demonstrated by plist validation or local checks.
