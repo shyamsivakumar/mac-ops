@@ -369,8 +369,8 @@ def truncated_tree_walk():
           and prompt_paths.prompt_scan(paths) == prompt_paths.HOLD, command)
 
 
-def moved_base_after_merge():
-    """A merge that lands on a moved base is reverted in the same step."""
+def moved_base_refuses_merge():
+    """A base the merge cannot enforce merges nothing, so nothing is reverted."""
     import lane_driver as lane
     command = "python3 evidence/MO-543/proof.py"
     calls = []
@@ -379,17 +379,16 @@ def moved_base_after_merge():
         calls.append(cmd)
         if cmd[:2] == ["gh", "pr"] and "view" in cmd and "baseRefName" in cmd:
             return '{"baseRefName": "release/next"}'
-        if cmd[:2] == ["gh", "api"]:
-            return '{"merged": false}'
         return ""
 
     with patch.object(lane, "run", run_cmd):
         merged, note = lane.merge_on_reviewed_base(
             "shyamsivakumar/mac-ops", 544, HEAD, "main")
-    revert = [call for call in calls if "revert" in " ".join(call)]
-    grant("lane: a merge on a moved base is reverted instead of kept",
-          merged is False and "reverted" in note and len(revert) == 1
-          and "pulls/544/revert" in " ".join(revert[0]), command)
+    issued = [call for call in calls if call[:3] == ["gh", "pr", "merge"]]
+    reverted = [call for call in calls if "revert" in " ".join(call)]
+    grant("lane: a moved base is never merged, so nothing has to be reverted",
+          merged is False and "nothing merged" in note
+          and issued == [] and reverted == [], command)
 
 
 def tree_fallback():
@@ -509,7 +508,7 @@ def main():
     timeout_and_unnamed()
     tree_entries()
     truncated_tree_walk()
-    moved_base_after_merge()
+    moved_base_refuses_merge()
     tree_fallback()
     lane_truncation()
     board_reconcile()

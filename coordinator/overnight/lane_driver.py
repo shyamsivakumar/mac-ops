@@ -730,29 +730,23 @@ def prompt_pass(repo, number, head, prompt):
 
 
 def merge_on_reviewed_base(repo, number, head, base):
-    """Merge one pull request, and undo the merge if its base was not the reviewed one.
+    """Merge one pull request only when its base is still the reviewed one.
 
-    `--match-head-commit` pins the head only. A retarget leaves the head where
-    it is, so a merge can land against a base this review never classified,
-    even between the base read and the merge call. The base is read again
-    after the merge; a base that is not the reviewed one is put back by
-    reverting the merge in the same step, so a retarget ends unmerged.
-
-    Return (merged, note): merged means the pull request is merged against the
-    reviewed base; note is the line the pass prints.
+    `--match-head-commit` pins the head, and nothing in the merge call pins
+    the base: a retarget leaves the head where it is. The merge therefore
+    cannot enforce the reviewed base, so a merge is only issued when the base
+    reads as the reviewed one immediately before it, and a base that has
+    moved merges nothing and waits for the next pass to review the new base.
+    Return (merged, note): merged means the merge was issued; note is the
+    line the pass prints.
     """
-    run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
     current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
                               "--json", "baseRefName"])) or {}
-    if current.get("baseRefName") == base:
-        return True, f"#{number}: merged {head}"
-    reverted = run(["gh", "api", "--method", "PUT",
-                    f"repos/{repo}/pulls/{number}/revert",
-                    "-f", f"body=The base moved from {base} to {current.get('baseRefName')} "
-                          "after this review, so the merge was reverted."])
-    return False, (f"skip #{number}: merged on head {head} but the base had moved from {base} "
-                  f"to {current.get('baseRefName')}; the merge was reverted ({reverted.strip()[:120]}), "
-                  "the next pass reviews the new base")
+    if current.get("baseRefName") != base:
+        return False, (f"skip #{number}: gate PASS, but the base moved from {base} to "
+                       f"{current.get('baseRefName')}; nothing merged, the next pass reviews the new base")
+    run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+    return True, f"#{number}: merged {head}"
 
 
 def act_on_pr(repo, number, ledger):

@@ -268,11 +268,12 @@ class GateBriefTest(unittest.TestCase):
         self.assertLess(text.index("merge nothing unless it is still `main`"),
                         text.index("gh pr merge"))
 
-    def test_the_merge_order_undoes_a_merge_on_a_moved_base(self):
-        """The pin is a read, so the merge that follows it is verified."""
+    def test_the_merge_order_refuses_a_base_it_cannot_enforce(self):
+        """The merge cannot pin the base, so a moved base is not merged."""
         text = self.brief(prompt=False)
-        self.assertIn("revert that merge with", text)
-        self.assertIn("read the base again after the merge", text)
+        self.assertIn("the merge cannot enforce the base", text)
+        self.assertIn("left for the next review instead of merged", text)
+        self.assertNotIn("revert that merge", text)
 
     def test_the_verdict_lines_are_the_same_either_way(self):
         for prompt in (True, False):
@@ -837,7 +838,7 @@ class BoardReconcileTest(unittest.TestCase):
 
 
 class MergeBaseGuardTest(unittest.TestCase):
-    """A merge that lands on a moved base is undone in the same step."""
+    """A pull request is merged only when its base is still the reviewed one."""
 
     def setUp(self):
         import lane_driver
@@ -850,8 +851,6 @@ class MergeBaseGuardTest(unittest.TestCase):
             calls.append(cmd)
             if cmd[:2] == ["gh", "pr"] and "view" in cmd and "baseRefName" in cmd:
                 return '{"baseRefName": "%s"}' % base_after
-            if cmd[:2] == ["gh", "api"]:
-                return '{"merged": false}'
             return ""
 
         with patch.object(self.lane, "run", command):
@@ -859,21 +858,24 @@ class MergeBaseGuardTest(unittest.TestCase):
                 "shyamsivakumar/mac-ops", 544, "a" * 40, "main")
         return merged, note, calls
 
-    def test_a_merge_on_the_reviewed_base_stands(self):
+    def test_a_merge_on_the_reviewed_base_is_issued(self):
         merged, note, calls = self.merge("main")
         self.assertTrue(merged)
-        self.assertNotIn("revert", " ".join(" ".join(call) for call in calls))
         self.assertEqual(note, "#544: merged " + "a" * 40)
+        self.assertEqual(len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]), 1)
 
-    def test_a_merge_on_a_moved_base_is_reverted(self):
-        """The base can move between the pinned read and the merge call."""
+    def test_a_moved_base_merges_nothing(self):
+        """The merge cannot enforce the base, so a moved base is refused."""
         merged, note, calls = self.merge("release/next")
         self.assertFalse(merged)
-        self.assertIn("reverted", note)
-        self.assertIn("release/next", note)
-        revert = [call for call in calls if "revert" in " ".join(call)]
-        self.assertEqual(len(revert), 1)
-        self.assertIn("repos/shyamsivakumar/mac-ops/pulls/544/revert", " ".join(revert[0]))
+        self.assertIn("nothing merged", note)
+        self.assertEqual([c for c in calls if c[:3] == ["gh", "pr", "merge"]], [])
+
+    def test_a_moved_base_reverts_nothing(self):
+        """No merge is issued, so there is nothing to take back."""
+        merged, _note, calls = self.merge("release/next")
+        self.assertFalse(merged)
+        self.assertEqual([c for c in calls if "revert" in " ".join(c)], [])
 
 
 if __name__ == "__main__":
