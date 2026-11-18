@@ -938,6 +938,20 @@ check("a malformed record makes the result incomplete",
       and "INCOMPLETE" in (partial.stdout + partial.stderr),
       f"exit={partial.returncode}")
 
+# An explicit selector overrides GH_REPO, including when it names no host.
+override = subprocess.run([sys.executable, "-c", f"""
+import os, sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+os.environ["GH_REPO"] = "enterprise.example/team/old"
+print("TWOPART", repr(gh_gateway.argv_host(["gh", "pr", "list", "-R", "owner/repo"])))
+print("NOSEL", gh_gateway.argv_host(["gh", "pr", "list"]))
+print("HOSTED", gh_gateway.argv_host(["gh", "pr", "list", "-R", "ent.example/o/r"]))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("an explicit selector overrides GH_REPO, host or not",
+      override == ["TWOPART", "''", "NOSEL", "enterprise.example", "HOSTED", "ent.example"],
+      str(override))
+
 # `-i=true` is the same as `--include`: the caller's headers must survive.
 short_bool = subprocess.run([sys.executable, "-c", f"""
 import sys

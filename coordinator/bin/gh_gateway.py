@@ -705,16 +705,18 @@ def argv_host(argv):
     # `gh` uses the last selector given, whichever alias it is, so the host
     # is taken from the last one in argument order.
     host = ""
+    explicit = False
     for name, value in ordered:
         if name == "--hostname" and isinstance(value, str) and value:
             host = value
+            explicit = True
         elif name in ("-R", "--repo") and isinstance(value, str) and looks_like_repo(value):
+            explicit = True
             parts = value.split("/")
-            if len(parts) == 3 and parts[0]:
-                host = parts[0]
-            elif len(parts) == 2:
-                host = ""
-    if host:
+            # A two-part selector names no host, and it still overrides
+            # `GH_REPO`, so the answer is "" rather than the environment's.
+            host = parts[0] if len(parts) == 3 and parts[0] else ""
+    if explicit:
         return host
     selector = os.environ.get("GH_REPO") or ""
     parts = selector.split("/")
