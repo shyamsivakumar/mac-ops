@@ -44,6 +44,8 @@ function columnOf(group) {
   return "done";
 }
 
+const asksShyam = (group) => group.kind === "ask" || group.kind === "wait" || group.threads.some((thread) => thread.ask && thread.toShyam && (thread.kind === "done" || thread.kind === "idle"));
+
 const acting = (group) => group.threads.some((thread) => thread.kind === "run");
 
 // A fix round finished after the CI failure was reported, so the failing result may be stale.
@@ -86,11 +88,11 @@ export function trailOf(group, now, reviewFailed) {
   return { at: failure.at, live, review: !failure.checks.length, checks: failure.checks, routedIn, fixes, unrouted: Boolean(group.trusted) && live && routedIn === null && !acting(group) && now - failure.at > UNROUTED_AFTER };
 }
 
-// Why a group needs Shyam, in display order: a question, a stall, then the facts of its open PR when no thread is acting on it.
+// Why a group needs attention, in display order: a question for Shyam or one for the coordinator, a stall, then the facts of its open PR when no thread is acting on it.
 // `reviewFailed` is called only for an open PR that nobody is acting on.
 export function needReasons(group, reviewFailed, now) {
   const column = columnOf(group);
-  const reasons = column === NEEDS ? ["question"] : [];
+  const reasons = column === NEEDS ? [asksShyam(group) ? "question" : "asked"] : [];
   if (stallOf(group, now) !== null) reasons.push("stalled");
   const { status, gh } = group.info;
   if ((column !== NEEDS && column !== "done") || status !== "open" || acting(group)) return reasons;
@@ -101,7 +103,7 @@ export function needReasons(group, reviewFailed, now) {
   return reasons;
 }
 
-// The lane of a group, from live facts only: a question for Shyam, other reasons the coordinator can fix, thread state, then the open PR's CI and review.
+// The lane of a group, from live facts only: a question for Shyam, other reasons (including a question for the coordinator) the coordinator can fix, thread state, then the open PR's CI and review.
 // `reviewCleared` is called only for an open PR whose CI is not failing or pending.
 export function laneOf(group, reasons, reviewCleared) {
   if (reasons.includes("question")) return NEEDS;

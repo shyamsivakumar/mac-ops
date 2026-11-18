@@ -856,7 +856,7 @@ export default class Board extends View {
     const since = Math.max(g.at, seen?.col === key ? seen.at : 0);
     if (key !== "needs" && key !== "stuck") return since;
     const [first] = g.needs;
-    if (first === "question") return g.primary.at;
+    if (first === "question" || first === "asked") return g.primary.at;
     if (first === "stalled") return g.stalledAt + STALL_AFTER;
     if (first === "unrouted") return g.trail.at;
     if (first === "ci") return g.info.gh.ciAt || since;
@@ -1615,10 +1615,23 @@ export default class Board extends View {
     if (this.dec) setShared("cockpit.acted", Date.now());
     for (const c of threads) this.settled.set(c.key, c.at);
     const label = summary ?? (threads.length === 1 ? `Settled ${threads[0].task || threads[0].title}` : `Settled ${threads.length} threads`);
-    const undo = () => threads.forEach((c) => this.settled.delete(c.key));
+    const undo = (failed = threads) => failed.forEach((c) => this.settled.delete(c.key));
     this.attempt(label, async () => {
-      for (const c of threads) await settle(c.key);
-      return { note: "", level: "success" };
+      const failures = [];
+      for (const c of threads) {
+        try {
+          await settle(c.key);
+        } catch (error) {
+          failures.push({ thread: c, message: error.message });
+        }
+      }
+      if (!failures.length) return { note: "", level: "success" };
+      if (failures.length === threads.length) throw new Error(failures[0].message);
+      undo(failures.map((f) => f.thread));
+      const running = failures.filter((f) => /still running/.test(f.message)).length;
+      const other = failures.find((f) => !/still running/.test(f.message));
+      const note = [running && `${running} still running`, other && `${failures.length - running} failed: ${other.message}`].filter(Boolean).join(". ");
+      return { label: `Settled ${threads.length - failures.length} of ${threads.length}`, note, level: "error" };
     }, cx, undo);
     cx.notify();
   }
