@@ -558,6 +558,17 @@ def check_step(repo, proof_path):
     return "run the repo's full local check"
 
 
+def message_title(repo, number, action, head):
+    """The title of one message about one head of one pull request.
+
+    The queue names a message by its title and its target, so the head is in
+    the title: two heads of one pull request are two messages to the same
+    builder thread, and the second must not be read as a copy of the first.
+    Two passes over one head keep one title, so they still queue once.
+    """
+    return f"{CFG[repo]['key']}#{number} {action} {head[:8]}"
+
+
 def superseded_by(repo, number, issue):
     """True when a newer open pull request names the same ticket.
 
@@ -608,7 +619,7 @@ def act_on_pr(repo, number, ledger):
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
-        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
+        return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
@@ -631,7 +642,7 @@ def act_on_pr(repo, number, ledger):
         if status in ("completed", "interrupted", "failed"):
             return f"#{number} continue: " + send(
                 builder, "Continue fixing the gate findings for this head. Push the fixes and report the new head.",
-                f"{CFG[repo]['key']}#{number} continue", ledger, f"continue:{repo}#{number}:{head}", pr_number=number)
+                message_title(repo, number, "continue", head), ledger, f"continue:{repo}#{number}:{head}", pr_number=number)
         # The findings for this head are already with the builder, which is
         # still working them. A second copy is the padding the queue had.
         return f"skip #{number}: gate findings for this head are already with the builder ({status})"
@@ -642,7 +653,7 @@ def act_on_pr(repo, number, ledger):
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
-        return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
+        return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
     tag = "regate" if verdict == "none" else "gate"
     model = ASTRA
     if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
