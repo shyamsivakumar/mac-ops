@@ -73,7 +73,7 @@ class ScopeTest(unittest.TestCase):
 
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
-        item = check.item_scope("The change is in lane_driver.py.", "",
+        item = check.item_scope("The change is in lane_driver.py.",
                                 ["coordinator/overnight/lane_driver.py",
                                  "coordinator/mods/cockpit/ui.js"])
         self.assertEqual(item["status"], check.FAIL)
@@ -81,33 +81,40 @@ class ScopeTest(unittest.TestCase):
 
     def test_a_ticket_that_names_no_path_cannot_be_judged_and_fails(self):
         check = close_check()
-        item = check.item_scope("Nothing here names a file.", "", ["a.py"])
+        item = check.item_scope("Nothing here names a file.", ["a.py"])
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("cannot be judged", item["detail"])
 
-    def test_the_pull_request_scope_line_states_the_scope(self):
+    def test_the_pull_request_cannot_widen_the_scope(self):
+        """The ticket is the only authority for the scope.
+
+        A ticket limited to one file plus a pull request that declares a
+        different file must not let that file through: the pull request
+        cannot authorize work the ticket never asked for.
+        """
         check = close_check()
-        body = "**Scope.** `coordinator/bin/close_check.py`, `tests/test_close_check.py`."
-        item = check.item_scope("Nothing here names a file.", body,
-                                ["coordinator/bin/close_check.py", "tests/test_close_check.py"])
-        self.assertEqual(item["status"], check.PASS)
+        ticket = "The change is in lane_driver.py."
+        pull_request = "**Scope.** `unrelated.py`."
+        item = check.item_scope(ticket, ["coordinator/unrelated.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("coordinator/unrelated.py", item["detail"])
 
     def test_a_home_path_is_not_a_path_in_this_repository(self):
         check = close_check()
         body = "Source: ~/Code/inbox/2026-11-17-ideas.md, requested by Shyam."
         self.assertEqual(check.scope_tokens(body), set())
-        item = check.item_scope(body, "", ["coordinator/bin/close_check.py"])
+        item = check.item_scope(body, ["coordinator/bin/close_check.py"])
         self.assertEqual(item["status"], check.FAIL)
 
     def test_a_ticket_that_names_only_a_directory_cannot_be_judged(self):
         check = close_check()
-        item = check.item_scope("The change lands in coordinator/overnight and anthropics/claude-cookbooks.", "",
+        item = check.item_scope("The change lands in coordinator/overnight and anthropics/claude-cookbooks.",
                                 ["coordinator/bin/close_check.py"])
         self.assertEqual(item["status"], check.FAIL)
 
     def test_a_ticket_that_names_a_file_in_another_directory_still_judges(self):
         check = close_check()
-        item = check.item_scope("The board's state is decisions.json.", "",
+        item = check.item_scope("The board's state is decisions.json.",
                                 ["coordinator/overnight/lane_driver.py"])
         self.assertEqual(item["status"], check.FAIL)
 
