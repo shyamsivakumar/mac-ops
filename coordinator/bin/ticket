@@ -1538,9 +1538,8 @@ def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts
     must be complete before it decides anything.
     """
     if base and head:
-        return prompt_paths.scan_bases(
-            lambda endpoint: gh_json(["api", endpoint]), repo,
-            prompt_paths.bases(base), head, attempts)
+        return prompt_paths.scan_diff(
+            lambda endpoint: gh_json(["api", endpoint]), repo, base, head, attempts)
     count = changed_files if isinstance(changed_files, int) else pull_changed_count(repo, number)
     for _ in range(max(1, attempts)):
         state = prompt_paths.prompt_scan(pull_files(repo, number, count))

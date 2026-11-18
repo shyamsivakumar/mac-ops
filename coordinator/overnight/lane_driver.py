@@ -628,7 +628,7 @@ def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts
     unreadable or short is UNKNOWN.
     """
     if base and head:
-        return prompt_paths.scan_bases(api_json, repo, prompt_paths.bases(base), head, attempts)
+        return prompt_paths.scan_diff(api_json, repo, base, head, attempts)
     try:
         count = changed_files if isinstance(changed_files, int) else pr_changed_count(repo, number)
     except (RuntimeError, ValueError, subprocess.SubprocessError):

@@ -965,51 +965,38 @@ class MergeBaseGuardTest(unittest.TestCase):
         self.assertGreater(calls.index(views[1]), merge_at)
 
 
-class DefaultBaseTest(unittest.TestCase):
-    """The classification covers the default branch, so a retarget cannot hide text."""
+class BaseScopeTest(unittest.TestCase):
+    """The classification reads the pull request's own base and nothing else."""
 
-    def test_the_own_base_and_the_default_branch_are_both_classified(self):
-        self.assertEqual(prompt_paths.bases("feature"), ["feature", prompt_paths.DEFAULT_BASE])
-        self.assertEqual(prompt_paths.bases("main"), ["main"])
-        self.assertEqual(prompt_paths.bases(None), [prompt_paths.DEFAULT_BASE])
-
-    def test_a_prompt_change_against_main_holds_a_feature_base_pull_request(self):
+    def test_a_prompt_change_against_the_own_base_holds(self):
         import lane_driver
 
         def fetch(endpoint):
-            if endpoint.endswith("/compare/feature...head"):
-                return {"merge_base_commit": {"sha": "feature-base"}}
-            if endpoint.endswith("/compare/main...head"):
-                return {"merge_base_commit": {"sha": "main-base"}}
-            if endpoint.endswith("/git/trees/feature-base?recursive=1"):
-                return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}
-            if endpoint.endswith("/git/trees/main-base?recursive=1"):
-                return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"},
-                                 {"type": "blob", "path": "skills/x/SKILL.md", "sha": "2"}]}
-            if endpoint.endswith("/git/trees/head?recursive=1"):
-                return {"tree": [{"type": "blob", "path": "a.py", "sha": "3"}]}
-            raise AssertionError(endpoint)
+            if "/compare/" in endpoint:
+                return {"merge_base_commit": {"sha": "base"}}
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "mode": "100644", "sha": "1"}]}
+            return {"tree": [{"type": "blob", "path": "skills/x/SKILL.md",
+                              "mode": "100644", "sha": "2"}]}
 
         with patch.object(lane_driver, "api_json", fetch):
-            state = lane_driver.prompt_pull("o/r", 544, base="feature", head="head")
-        self.assertEqual(state, prompt_paths.HOLD)
+            self.assertEqual(lane_driver.prompt_pull("o/r", 544, base="feature", head="head"),
+                             prompt_paths.HOLD)
 
-    def test_an_unreadable_default_branch_is_unknown_never_clear(self):
+    def test_an_inherited_prompt_change_does_not_hold_code_work(self):
+        """A feature branch's own prompt edit is not the child's change."""
         import lane_driver
 
         def fetch(endpoint):
-            if endpoint.endswith("/compare/feature...head"):
-                return {"merge_base_commit": {"sha": "feature-base"}}
-            if endpoint.endswith("/git/trees/feature-base?recursive=1"):
-                return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}
-            if endpoint.endswith("/git/trees/head?recursive=1"):
-                return {"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]}
-            raise RuntimeError("gh failed")
+            if "/compare/" in endpoint:
+                return {"merge_base_commit": {"sha": "base"}}
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "skills/x/SKILL.md",
+                                  "mode": "100644", "sha": "2"}]}
+            return {"tree": [{"type": "blob", "path": "skills/x/SKILL.md",
+                              "mode": "100644", "sha": "2"},
+                             {"type": "blob", "path": "a.py", "mode": "100644", "sha": "3"}]}
 
         with patch.object(lane_driver, "api_json", fetch):
-            state = lane_driver.prompt_pull("o/r", 544, base="feature", head="head", attempts=1)
-        self.assertEqual(state, prompt_paths.UNKNOWN)
-
-
-if __name__ == "__main__":
-    unittest.main()
+            self.assertEqual(lane_driver.prompt_pull("o/r", 544, base="feature", head="head"),
+                             prompt_paths.CLEAR)
