@@ -2,6 +2,7 @@
 import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 
+from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
@@ -1211,7 +1212,7 @@ def assemble_brief(cfg, t, request_id, issue):
     head = [f"Ticket: {t['url']}", f"Reviewer for the gate: {brief_reviewer(cfg, t)}"]
     if not filled:
         head.append(f"Run id: `{request_id}`")
-    parts = ["\n".join(head), body]
+    parts = ["\n".join(head), ANSWER_FORMAT, body]
     decisions = coordinator_decisions(issue)
     if decisions:
         parts.append(DECISIONS_HEADING + "\n\n" + "\n\n".join(decisions))
