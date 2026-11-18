@@ -138,7 +138,7 @@ export default class Board extends View {
     this.born = 0;
     this.staleTimer = null;
     this.actedSeen = shared("cockpit.acted") ?? 0;
-    this.answerSeen = 0;
+    this.answerSeen = new Map();
     this.handle = cx.focus_handle();
     this.input = InputState.new({ placeholder: "Write a reply" });
     this.input.on("submit", (_e, cx) => this.submitReply(cx));
@@ -843,9 +843,9 @@ export default class Board extends View {
   }
 
   logAnswers() {
-    const fresh = Object.entries(shared("co.decided") ?? {}).filter(([, d]) => d.at > this.answerSeen);
+    const fresh = Object.entries(shared("co.decided") ?? {}).filter(([key, d]) => d.at > (this.answerSeen.get(key) ?? 0));
     for (const [key, d] of fresh) logAct({ t: d.at, key, act: "answer", src: "coordinator", project: null });
-    if (fresh.length) this.answerSeen = Math.max(...fresh.map(([, d]) => d.at));
+    for (const [key, d] of fresh) this.answerSeen.set(key, d.at);
   }
 
   enteredAt(key, g) {
