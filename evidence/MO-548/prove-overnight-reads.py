@@ -136,6 +136,25 @@ check("a formatted paginated read logs one row per page", len(rows()) - before =
 check("a formatted paginated read returns only its bodies",
       out.split() == ["name1", "name2", "name3"] and "HTTP/" not in out, repr(out[:40]))
 
+# 2d. The other two wrappers count pages the same way. The finding named
+#     all three functions, and each one owns its own subprocess, so each is
+#     exercised here on its own endpoint: a cache hit would make the row
+#     count zero and hide an undercount.
+for label, endpoint_path, call in (
+    ("run", "repos/a/b/tags-run",
+     lambda a: overnight.run(a, 10, time.monotonic() + 30)),
+    ("health_run", "repos/a/b/tags-health",
+     lambda a: overnight.health_run(a, time.monotonic() + 30)[1]),
+):
+    wrapper_argv = [str(fake), "api", "--paginate", "--jq", ".[].name",
+                    endpoint_path]
+    before = len(rows())
+    out = call(wrapper_argv)
+    check(f"{label} logs one row per formatted page", len(rows()) - before == 3,
+          f"rows={len(rows()) - before}")
+    check(f"{label} returns only the formatted bodies",
+          (out or "").split() == ["name1", "name2", "name3"], repr((out or "")[:40]))
+
 # 3. A succeeded read is cached: the next identical read makes no call.
 before = calls_made()
 overnight.run_read(argv, 10, deadline)
