@@ -352,12 +352,11 @@ def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
     Host names are matched without regard to case, so a configured
     ``Shyams-MacBook-Pro.local`` still names the ``shyams-macbook-pro.local``
     host. Two configured names that differ only by case are ambiguous, so
-    neither of them is used and that host keeps the default floor. A short
-    name is only matched against a short name: the first label of a qualified
-    name is used when the configured name has no dot or the observed hostname
-    has no dot, so a qualified name never lowers the floor of a different
-    qualified host. A missing, unreadable, malformed, or unlisted host keeps
-    the default floor.
+    neither of them is used and that host keeps the default floor. Short-name
+    fallback is allowed only when either the configured name or the observed
+    hostname is unqualified, so a qualified name never lowers the floor of a
+    different qualified host. A missing, unreadable, malformed, or unlisted
+    host keeps the default floor.
     """
     path = host_config_path() if config_path is None else Path(config_path)
     value = read_installed_config(path)
