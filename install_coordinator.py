@@ -221,9 +221,7 @@ def archive_model_lists(home: Path) -> list[Path]:
     before the files are written."""
     archive = home / ARCHIVE_DIR
     live = read_regular(home / ".coordinator/tickets.json")
-    if live is None:
-        return []
-    config = json.loads(live[0])
+    config = json.loads(live[0]) if live is not None else {}
     sections = {k: config[k] for k in OLD_LIST_SECTIONS if k in config}
     moved = []
     if sections:
