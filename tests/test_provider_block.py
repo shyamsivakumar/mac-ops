@@ -237,6 +237,30 @@ class ProviderBlockTests(unittest.TestCase):
         self.assertIsNone(record)
         self.assertEqual(provider_block.blocked_identities(), set())
 
+    def test_a_local_disk_error_blocks_nobody(self):
+        """`disk quota exceeded` holds the words of a quota refusal and is
+        a full disk, not the provider."""
+        value = "disk quota exceeded"
+        self.assertFalse(provider_block.provider_refusal("", value))
+        self.assertIsNone(provider_block.block_run(SELECTION, value))
+        self.assertEqual(provider_block.blocked_identities(), set())
+
+    def test_a_leading_status_code_is_a_refusal(self):
+        """A launch error arrives as plain text: '429; resets at 14:00 UTC'
+        names the status it was refused with."""
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.block_run(SELECTION, "429; resets at 14:00 UTC",
+                                          now=failed)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["until"], "2026-11-18T14:00:00+00:00")
+        self.assertTrue(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T14:00:01")))
+
+    def test_a_number_inside_a_message_is_no_refusal(self):
+        """`worker 14031 exited` holds the digits of 403 and is no refusal."""
+        self.assertFalse(provider_block.provider_refusal("", "worker 14031 exited"))
+        self.assertFalse(provider_block.provider_refusal("", "429 items queued"))
+
     def test_the_queue_writes_the_block_when_a_launch_fails(self):
         """The production path: a launch that fails with a provider error
         blocks that provider, so the next launch does not use it."""
@@ -256,6 +280,25 @@ class ProviderBlockTests(unittest.TestCase):
         record = provider_block.read()[IDENTITY]
         self.assertEqual(record["reason"], "429 rate limit; resets in 30 minutes")
         self.assertTrue(record["until"].endswith("+00:00"))
+
+    def test_the_queue_blocks_on_the_ticket_literal_refusal(self):
+        """The ticket's own message, arriving as plain text from a launch."""
+        coordq = load_coordq()
+        coordq.DIR = self.scratch.name
+        coordq.live = lambda: 0
+        coordq.cap = lambda: 6
+        coordq.save({"next": 2, "items": [
+            {"id": 1, "tool": "t3_thread_launch", "priority": 0, "title": "queued",
+             "args": {"clientRequestId": "c1", "title": "queued", "projectId": "p",
+                      "modelSelection": dict(SELECTION)}}]})
+        with patch.object(coordq, "active_thread_ids", return_value=set()), \
+                patch.object(coordq, "call",
+                             return_value=(1, "429; resets at 14:00 UTC")):
+            coordq.drain()
+        record = provider_block.read().get(IDENTITY)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["reason"], "429; resets at 14:00 UTC")
+        self.assertTrue(provider_block.is_blocked(SELECTION))
 
 
 if __name__ == "__main__":
