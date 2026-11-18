@@ -252,6 +252,23 @@ class ProviderBlockTests(unittest.TestCase):
         self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T12:00:01")))
         self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
 
+    def test_a_newer_refusal_inside_one_millisecond_replaces_the_older_one(self):
+        """The failure time is what orders one refusal against another, so
+        it keeps its whole precision: a refusal a tenth of a millisecond
+        later is the newer word and replaces the older one."""
+        base = moment("2026-11-18T10:00:00")
+        provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", base + 0.0001,
+                                    now=base + 0.0001)
+        provider_block.record_block(SELECTION, "rate limited, retry after 0s", base + 0.0005,
+                                    now=base + 0.0005)
+        stored = provider_block.read()[IDENTITY]
+        self.assertEqual(stored["since"], "2026-11-18T10:00:00.000500+00:00")
+        # The expiry is rounded up to the next millisecond, so the provider
+        # is still held for that fraction of a millisecond, and free after.
+        self.assertTrue(provider_block.is_blocked(SELECTION, base + 0.0006))
+        self.assertFalse(provider_block.is_blocked(SELECTION, base + 0.0011))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
+
     def test_the_store_writes_the_reset_in_whole_milliseconds(self):
         """The pi reader parses the expiry with Date.parse, which reads
         milliseconds only, so the record carries whole milliseconds and the
