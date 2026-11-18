@@ -347,14 +347,30 @@ def _file_bytes(path: Path) -> bytes | None:
     """The bytes of a file, or the target of a link, or None.
 
     A link is never read through: a relative target that resolved inside the
-    worktree can dangle once the link is moved aside.
+    worktree can dangle once the link is moved aside. A file that is not
+    regular is never read, so a FIFO with no writer cannot block.
     """
     try:
         if path.is_symlink():
             return os.readlink(path).encode("utf-8", "surrogateescape")
-        return path.read_bytes()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     except OSError:
         return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
 
 
 def file_digest(path: Path) -> str | None:
@@ -438,10 +454,16 @@ def _read_at(parent: int, name: str) -> bytes | None:
     except OSError:
         pass
     try:
-        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        # The file is opened without blocking, so a FIFO with no writer
+        # cannot hang the cleanup, and it is checked before it is read.
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
     except OSError:
         return None
     try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            # A FIFO, a device or a socket is never read.
+            return None
         chunks: list[bytes] = []
         while True:
             chunk = os.read(descriptor, 65536)
@@ -1473,12 +1495,14 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 candidate["eligible"] = False
                 candidate["removed"] = True
                 removed += 1
+        prune_results: list[dict[str, Any]] = []
         if apply and removed:
             for repo_root in sorted({str(row["repo"]) for row in rows if row.get("removed")}):
                 try:
-                    run(["git", "-C", repo_root, "worktree", "prune"], timeout=300)
-                except SafetyError:
-                    continue
+                    result = run(["git", "-C", repo_root, "worktree", "prune"], timeout=300)
+                    prune_results.append({"repo": repo_root, "ok": result.returncode == 0, "error": None if result.returncode == 0 else result.stderr.strip()[:400]})
+                except SafetyError as exc:
+                    prune_results.append({"repo": repo_root, "ok": False, "error": str(exc)})
         for row in rows:
             row["category"] = categorize(row)
         pruned = 0
@@ -1516,6 +1540,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
             "eligible": sum(1 for row in rows if row["eligible"]),
             "removed": removed,
             "pruned": pruned,
+            "prune_results": prune_results,
             "categories": {name: sum(1 for row in rows if row["category"] == name and not row["main_checkout"]) for name in ("safe", "look", "protected", "prune", "removed")},
             "excluded_worktrees": len(excluded_rows),
             "excluded_rows": excluded_rows,
