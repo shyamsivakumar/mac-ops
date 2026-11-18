@@ -1587,10 +1587,10 @@ def probe_blocked_builders(ledger):
                 "modelSelection": member, "runtimeMode": "full-access",
                 "workspaceStrategy": {"type": "root"}, "clientRequestId": key,
                 "message": PROBE_MESSAGE}
+        provider_health.note_probe(member, key)
         out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).strip()
         if not out:
             raise RuntimeError(f"Empty builder probe receipt for {ident}")
-        provider_health.note_probe(member, key)
         print(f"builder probe {ident}: started")
 
 
