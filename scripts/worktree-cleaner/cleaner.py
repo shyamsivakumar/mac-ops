@@ -212,13 +212,13 @@ def bootstrap_path(name: str) -> bool:
 
 def valid_branch_name(name: str) -> bool:
     """True for a name git accepts as a branch name."""
-    if not name or name.startswith("/") or name.endswith("/") or name.endswith(".lock"):
+    if not name or name.startswith("-"):
         return False
-    if ".." in name or "//" in name or name.startswith("-") or name.endswith("."):
+    try:
+        result = run(["git", "check-ref-format", "--branch", name])
+    except SafetyError:
         return False
-    if any(character in name for character in " ~^:?*[\\"):
-        return False
-    return all(32 < ord(character) < 127 for character in name)
+    return result.returncode == 0
 
 
 def _permitted_agents_bytes(content: bytes, committed: bytes, block: bytes) -> bool:
@@ -277,14 +277,16 @@ def agents_only_rules(path: Path) -> bool:
     blocks = rules_blocks()
     if not blocks:
         return False
-    try:
-        current = (path / AGENTS_FILE).read_bytes()
-    except OSError:
-        return False
     working = _working_signature(path / AGENTS_FILE)
     committed = _committed_signature(path)
     staged = _staged_signature(path)
-    if working is None:
+    if working is None or working[0] != "blob" or working[1]:
+        # A symlink or an executable is never the bootstrap file, and reading
+        # it would follow the link to whatever it points at.
+        return False
+    try:
+        current = (path / AGENTS_FILE).read_bytes()
+    except OSError:
         return False
     if committed is not None and (staged is None or staged != committed or working != committed):
         return False
@@ -345,29 +347,6 @@ def removal_force_flags(path: Path, records: list[tuple[str, str, str | None]]) 
         return []
     untracked = any(code.strip() == "??" for code, _name, _original in records)
     return ["--force", "--force"] if untracked else ["--force"]
-
-
-def on_default_branch(repo_root: Path, head: str, refs: list[str]) -> bool:
-    """True when the head commit is already on the remote default branch."""
-    for ref in refs:
-        result = run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor", head, ref])
-        if result.returncode == 0:
-            return True
-    return False
-
-
-def default_branch_refs(repo_root: Path, github: GitHub, repo_slug: str | None) -> list[str]:
-    """The remote tracking ref of the verified default branch of the repository.
-
-    The default branch must be verified by GitHub. A stale `origin/HEAD` is
-    not trusted: after a default branch change it still points at the old
-    branch, and a commit unique to that branch must not qualify a worktree
-    for removal.
-    """
-    name = github.default_branch(repo_slug) if repo_slug else None
-    if not name:
-        return []
-    return [f"refs/remotes/origin/{name}"]
 
 
 def detached_idle_seconds(path: Path) -> int | None:
@@ -566,6 +545,20 @@ class GitHub:
         self.commits: dict[tuple[str, str], bool] = {}
         self.pull_requests: dict[tuple[str, str, str], list[dict[str, Any]] | None] = {}
         self.default_branches: dict[str, str | None] = {}
+        self.contained: dict[tuple[str, str, str], bool] = {}
+
+    def contains(self, repo: str, base: str, head: str) -> bool:
+        """True when GitHub says the head commit is contained in the base."""
+        key = (repo, base, head)
+        if key in self.contained:
+            return self.contained[key]
+        try:
+            result = run(["gh", "api", f"repos/{repo}/compare/{base}...{head}", "--jq", ".status"])
+        except SafetyError:
+            result = None
+        status = result.stdout.strip() if result and result.returncode == 0 else ""
+        self.contained[key] = status in {"behind", "identical"}
+        return self.contained[key]
 
     def default_branch(self, repo: str | None) -> str | None:
         """The one default branch of the repository, or None when unknown."""
@@ -664,8 +657,13 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
-def published_on_default_branch(result: dict[str, Any], repo_root: Path, refs: list[str]) -> bool:
-    """True when every commit of the worktree is already on the remote default branch."""
+def published_on_default_branch(result: dict[str, Any], github: GitHub, repo_slug: str | None) -> bool:
+    """True when every commit of the worktree is already on the default branch.
+
+    The ancestry is decided by GitHub, against the current tip of the default
+    branch it reports. A local tracking ref can still hold the candidate
+    after a force push, while the default branch does not contain it.
+    """
     head = str(result.get("head") or "")
     if not SHA_RE.fullmatch(head):
         return False
@@ -673,9 +671,12 @@ def published_on_default_branch(result: dict[str, Any], repo_root: Path, refs: l
         return False
     if result.get("remote_commit_present") is not True:
         return False
-    if not refs:
+    if not repo_slug:
         return False
-    return on_default_branch(repo_root, head, refs)
+    default = github.default_branch(repo_slug)
+    if not default:
+        return False
+    return github.contains(repo_slug, default, head)
 
 
 def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False, refresh_cwds: bool = True) -> dict[str, Any]:
@@ -730,21 +731,20 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         result["remote_commit_present"] = present
         if not present:
             reasons.append("remote_commit_unverified")
-    default_refs = default_branch_refs(repo_root, github, repo_slug)
     if record.get("detached"):
         try:
             idle = detached_idle_seconds(path) if path.is_dir() else None
         except SafetyError:
             idle = None
         result["detached_idle_seconds"] = idle
-        if not published_on_default_branch(result, repo_root, default_refs):
+        if not published_on_default_branch(result, github, repo_slug):
             if idle is None or idle < 24 * 60 * 60:
                 reasons.append("detached_not_proven_24h_old")
     elif not result["main_checkout"]:
         ok, why, pr_url = verify_pr(github, repo_slug, record.get("branch"), str(record.get("head") or ""), refresh=refresh)
         result["pull_request"] = pr_url
         if not ok and why:
-            if why == "github_pr_not_closed_for_head" and published_on_default_branch(result, repo_root, default_refs):
+            if why == "github_pr_not_closed_for_head" and published_on_default_branch(result, github, repo_slug):
                 result["published_on_default_branch"] = True
             else:
                 reasons.append(why)
