@@ -467,6 +467,7 @@ def act_on_pr(repo, number, ledger):
         return f"skip #{number}: coordq action already waiting"
     head, body = pr["headRefOid"], pr.get("body") or ""
     issue, builder = builder_thread(repo, body)
+    proof_path = f"evidence/{CFG[repo]['key']}-{issue}/check-proof.md" if issue else "evidence/check-proof.md"
     if issue:
         issue_record = next((i for i in SNAPSHOT["repos"][repo]["issues"] if i["number"] == int(issue)), None)
         if issue_record is None:
@@ -481,7 +482,8 @@ def act_on_pr(repo, number, ledger):
         if not builder:
             return f"skip #{number}: {why}, no builder thread"
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, run the repo check "
-               "(mac-ops: `python3 scripts/mac_ops_fast_check.py`; SRW: rely on srw/agent-check, do not run scripts/check.sh), push, set "
+               f"(mac-ops: `python3 scripts/mac_ops_fast_check.py --proof {proof_path}`; SRW: rely on srw/agent-check, do not run scripts/check.sh), "
+               f"commit the proof file `{proof_path}` it writes, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
         return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number)
     verdict, gate, reply = gate_verdict(repo, number, head)
@@ -510,7 +512,8 @@ def act_on_pr(repo, number, ledger):
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
-        msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, push, set "
+        msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, run the repo check "
+               f"(mac-ops: `python3 scripts/mac_ops_fast_check.py --proof {proof_path}`), commit the proof file `{proof_path}` it writes, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
