@@ -1368,7 +1368,9 @@ def send_integrity():
     cases = [(dict(status=status, providerInstanceId="glm", model="zai/glm-5.3"), True) for status in
              ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
     cases += [(thread, True) for thread in
-              (dict(status="running", providerInstanceId="router", model="task/standard"),)]
+              (dict(status="running", providerInstanceId="router", model="task/standard"),
+               # The in-route DeepSeek fallback continues on its own pair.
+               dict(status="running", providerInstanceId="pi", model="deepseek/deepseek-flash"))]
     # The archived/sendable/canSend fixtures carry the same permitted GLM
     # selection as the positive cases, so each one still tests its own
     # lifecycle guard: the builder guard alone would send them.
@@ -1379,6 +1381,10 @@ def send_integrity():
               # A Sol builder thread is never continued, whatever its state:
               # the fix round relaunches on GLM instead (Shyam 2026-11-17).
               dict(status="running", providerInstanceId="codex", model="gpt-6.1-sol"),
+              # A permitted model name on a disallowed provider is not a
+              # permitted pair: the fix relaunches on GLM, exactly as
+              # coordq refuses the pair for a new build.
+              dict(status="running", providerInstanceId="codex", model="zai/glm-5.3"),
               # A router provider is not enough: a model spelled through it
               # that is not a task/* route gets the same refusal.
               dict(status="running", providerInstanceId="router", model="subscriptions/gpt-6.2-astra"))]
