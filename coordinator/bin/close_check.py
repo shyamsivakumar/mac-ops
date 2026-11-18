@@ -40,7 +40,10 @@ ISSUE_REF = re.compile(r"(?:refs|fixes|closes|resolves)[ \t]+#(\d+)", re.IGNOREC
 # `~/Code/inbox/note.md` after the `~` or the `/` is not a path in this
 # repository, so the character before a token may not continue a path.
 _NOT_IN_PATH = r"(?<![A-Za-z0-9_.*~/\\-])"
-PATH_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)+")
+# A path token keeps the slash a directory declaration ends with, so
+# "In: src/" stays "src/" and bounds every path under it.
+PATH_TOKEN = re.compile(_NOT_IN_PATH +
+                        r"(?=[A-Za-z0-9_.*-]*/)[A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)*/?")
 FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css)\b")
 
 PASS = "pass"
@@ -472,10 +475,11 @@ def item_cost(body, report_state, detail=""):
             "detail": "the cost report exists, but the pull request body carries no cost note"}
 
 
-def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", proof_detail=""):
+def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", proof_detail="", scope_files=None):
     """The four items, in the order the checklist reads them."""
     return [
-        item_scope(body, files, evidence_dir(proof_path)),
+        item_scope(body, files if scope_files is None else scope_files,
+                   evidence_dir(proof_path)),
         item_proof(proof_state, proof_path, proof_detail),
         item_checks(proof_state, proof_text),
         item_cost(pr_body, report_state, report_detail),
@@ -542,6 +546,30 @@ def report_state(repo, ref):
     return "unknown", first
 
 
+def fetch_files(repo, pr):
+    """The files a pull request changes, and the path a rename came from.
+
+    A rename has two paths: the file it came from and the file it is now.
+    The scope is judged against both, so a rename cannot carry an
+    out-of-scope file into an in-scope name.
+    """
+    try:
+        entries = gh_json(["api", f"repos/{repo}/pulls/{pr}/files?per_page=100"])
+    except RuntimeError:
+        return [], []
+    changed = []
+    scope = []
+    for entry in entries if isinstance(entries, list) else []:
+        path = entry.get("filename")
+        if path:
+            changed.append(path)
+            scope.append(path)
+        previous = entry.get("previous_filename")
+        if previous:
+            scope.append(previous)
+    return changed, scope
+
+
 def ticket_key(title):
     """The ticket key from its title, `MO-1077 · name` gives `MO`."""
     match = TICKET_KEY.match(title or "")
@@ -564,9 +592,9 @@ def run_check(repo, pr, issue=None, reader=None):
     """
     """Run the checklist on a merged pull request."""
     pull = gh_json(["pr", "view", str(pr), "-R", repo, "--json",
-                    "state,headRefOid,body,mergeCommit,files,title"])
+                    "state,headRefOid,body,mergeCommit,title"])
     merge = (pull.get("mergeCommit") or {}).get("oid") or pull["headRefOid"]
-    files = [entry.get("path") for entry in pull.get("files") or [] if entry.get("path")]
+    files, scope_files = fetch_files(repo, pr)
     number = issue if issue is not None else issue_of(pull.get("body"))
     body = ""
     title = pull.get("title") or ""
@@ -593,7 +621,7 @@ def run_check(repo, pr, issue=None, reader=None):
         report = {"found": "exists", "missing": "absent"}.get(found, "unknown")
         report_detail = ""
     items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
-                      report_detail, proof_detail)
+                      report_detail, proof_detail, scope_files)
     return {"repo": repo, "pr": pr, "issue": number, "merge": merge, "files": files, "items": items}
 
 

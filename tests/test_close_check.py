@@ -200,11 +200,47 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("src/legacy.py", item["detail"])
 
+    def test_a_top_level_directory_declaration_bounds_the_scope(self):
+        """A top-level directory is a declaration too.
+
+        "In: src/" has no component after the slash, and it still bounds
+        every path under it.
+        """
+        check = close_check()
+        ticket = "In: src/\n"
+        self.assertEqual(check.scope_tokens(ticket), {"src/"})
+        item = check.item_scope(ticket, ["src/parser.py"])
+        self.assertEqual(item["status"], check.PASS)
+        outside = check.item_scope(ticket, ["src/parser.py", "srcfoo/other.py"])
+        self.assertEqual(outside["status"], check.FAIL)
+        self.assertIn("srcfoo/other.py", outside["detail"])
+
+    def test_the_files_of_a_rename_carry_both_paths(self):
+        check = close_check()
+        entries = [{"filename": "src/new.py", "previous_filename": "legacy/old.py"},
+                   {"filename": "src/other.py"}]
+        with patch.object(check, "gh_json", return_value=entries):
+            changed, scope = check.fetch_files("a/b", 12)
+        self.assertEqual(changed, ["src/new.py", "src/other.py"])
+        self.assertEqual(scope, ["src/new.py", "legacy/old.py", "src/other.py"])
+
+    def test_a_rename_is_judged_on_both_paths(self):
+        """A rename cannot carry an out-of-scope file into scope.
+
+        The file a rename came from is judged as well as the file it is
+        now.
+        """
+        check = close_check()
+        ticket = "In: src/new.py\n\n## Out of scope\nlegacy/old.py\n"
+        item = check.item_scope(ticket, ["src/new.py", "legacy/old.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("legacy/old.py", item["detail"])
+
     def test_a_declared_directory_bounds_the_scope(self):
         """A declared directory of the repository says where the change is."""
         check = close_check()
         ticket = "In: coordinator/bin/\n"
-        self.assertEqual(check.scope_tokens(ticket), {"coordinator/bin"})
+        self.assertEqual(check.scope_tokens(ticket), {"coordinator/bin/"})
         item = check.item_scope(ticket, ["coordinator/bin/ticket"])
         self.assertEqual(item["status"], check.PASS)
         outside = check.item_scope(ticket, ["coordinator/bin/ticket",
