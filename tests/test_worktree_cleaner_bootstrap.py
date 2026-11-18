@@ -426,6 +426,32 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertEqual(len(kept), 2, kept)
         self.assertEqual(len(set(kept)), 2, kept)
 
+    def test_a_file_name_that_is_not_utf8_does_not_abort_the_scan(self):
+        # A path that is not valid UTF-8 must not raise out of the status
+        # reader, and it must come back unchanged. macOS refuses to create
+        # such a name, so the status output is fed to the reader directly.
+        raw = b"\xff\xfe-notes.txt"
+
+        def fake_status(path, *args):
+            return b"?? " + raw + b"\0"
+
+        with mock.patch.object(cleaner, "git_bytes", fake_status):
+            records = cleaner.status_for(self.repo)
+        self.assertEqual([name for _code, name, _original in records], [os.fsdecode(raw)])
+
+    def test_a_cleared_file_is_kept_in_recovery_storage(self):
+        # The moved file is the only place a save through an open descriptor
+        # can live, so it is kept instead of deleted.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        records = cleaner.status_for(self.repo)
+        digests = {name: cleaner.file_digest(self.repo / name) for code, name, original in records if original is None}
+        cleared = clear_bootstrap(self.repo, records, self.trash, digests, cleaner.index_digest(self.repo))
+        self.assertEqual(sorted(cleared or []), ["AGENTS.md"])
+        kept = [item for item in self.trash.iterdir() if item.is_file()]
+        self.assertTrue(kept, "the moved file must be kept")
+        self.assertTrue(any(item.read_bytes().endswith(self.block.encode("utf-8")) for item in kept), kept)
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
