@@ -160,10 +160,11 @@ def settle_dead_run(thread_id):
     return True
 
 
-def last_reply(thread_id):
+def last_reply(thread_id, diagnostics_only=False):
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
     msgs = [i.get("text") or i.get("message") or "" for i in items
-            if i.get("type") in {"assistant_message", "error", "run_error", "provider_error"}]
+            if i.get("type") in ({"error", "run_error", "provider_error"} if diagnostics_only
+                                 else {"assistant_message", "error", "run_error", "provider_error"})]
     return (msgs[-1] if msgs else "").rstrip()
 
 
@@ -1475,8 +1476,9 @@ def recover_dead_runs(ledger):
                 if not DRY:
                     settle_dead_run(thread_id)
                 continue
-            failure = reply.lower()
-            block_reason = provider_health.block_reason(reply)
+            diagnostics = last_reply(thread_id, diagnostics_only=True)
+            failure = diagnostics.lower()
+            block_reason = provider_health.block_reason(diagnostics)
             limit_failure = bool(block_reason) or any(term in failure for term in ("rate limit", "spend limit", "quota", "individual spend"))
             day = time.strftime("%Y-%m-%d")
             count_key = f"dead-relaunch:{day}:{work_key}"
