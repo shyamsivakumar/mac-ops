@@ -1382,6 +1382,14 @@ The command is the installed one (`~/.local/bin/alarms.py`, installed with
 the rest of the shift's commands), and it is a file with a shebang, so the
 panel runs it as a command.
 
+A state file that is not there is an empty state: the shift measures the
+alarms again from that tick on. A state file that cannot be read is not an
+empty state. Reading it as empty would let the next alarm overwrite every
+acknowledgement it holds, and the alarms that were answered would come back
+before their four hours are over. So the read failure is raised, and the
+alarm is published as unchecked without writing over the state that could
+not be read.
+
 The state is written with a merge: a tick reads the state, the panel records
 an acknowledgement and writes the file, and the tick writes its older
 snapshot. The newer acknowledgement of a key wins, so the tick cannot take
@@ -1408,8 +1416,9 @@ across the read, the change and the replace. It is not the mute lock: a
 mute storage that cannot be locked must not leave the board unprotected,
 or the watchdog and the stall writer read the same board and one alarm
 disappears. Each publisher also replaces the board from a temporary file
-of its own. A board lock that cannot be taken does not hide the alarm
-either: the board is written without it and the fault is said out loud.
+of its own. A board lock that cannot be taken stops the publication: two
+publishers writing the same board would erase one another's alarm, so the
+alarm is not published and the fault is said out loud.
 
 An alarm on the board always has a key. The key is written before the alarm
 is published, so the answer Shyam gives it has something to acknowledge. A

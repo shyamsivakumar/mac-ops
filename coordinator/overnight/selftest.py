@@ -2094,13 +2094,31 @@ def alarm_mute():
             exact(action, "unchecked")
             exact(published, ["unchecked"])
             # The board lock is its own file, so a mute lock that cannot
-            # be taken does not leave the board open.
+            # be taken does not leave the board open. A board lock that
+            # cannot be taken stops the publication: two publishers
+            # writing the same board would erase one another's alarm.
+            board_file = Path(scratch) / "decisions.json"
             with patch.object(alarms, "take_lock", side_effect=lambda path=None: None):
                 buffer = io.StringIO()
                 with contextlib.redirect_stdout(buffer):
-                    target, action = rule.alert("no board progress for 3 ticks", None,
-                                                Path(scratch) / "decisions.json")
+                    target, action = rule.alert("no board progress for 3 ticks", None, board_file)
                 exact("the board lock could not be taken" in buffer.getvalue(), True)
+                exact(action, "failed")
+            exact(board_file.exists(), False)
+
+    # A state file that cannot be read is not an empty state: the alarm
+    # is published as unchecked, and the state that could not be read is
+    # not written over, so the acknowledgements it holds stay.
+    with tempfile.TemporaryDirectory() as scratch:
+        unreadable = Path(scratch) / "mute-state.json"
+        unreadable.mkdir()
+        with patch.object(alarms, "MUTE_PATH", str(unreadable)):
+            published = []
+            action = alarms.decide_and_publish("factory-watchdog", cause,
+                                               lambda a: published.append(a))
+            exact(action, "unchecked")
+            exact(published, ["unchecked"])
+            exact(unreadable.is_dir(), True)
 
     # The stall's cause names the stalled repos, so two stalls on
     # different repos are different causes.
