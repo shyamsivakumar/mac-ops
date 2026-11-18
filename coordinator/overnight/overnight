@@ -743,7 +743,9 @@ def run(
                 pass
             return None
         die(f"{command} timed out")
-    gh_gateway.record(argv)
+    # The page count is what a paginated read spent, and only a succeeded
+    # read is stored: a cached failure would read as an empty board.
+    gh_gateway.record(argv, gh_gateway.requests(argv, stdout))
     if process.returncode != 0:
         tail = (stderr or stdout or "").strip().splitlines()[-3:]
         raise RepoError(
@@ -4360,8 +4362,12 @@ def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
         die(f"{argv[0]} is not on PATH")
     except subprocess.TimeoutExpired:
         return 124, f"{' '.join(argv)} timed out"
-    gh_gateway.record(argv)
-    gh_gateway.store(argv, result.stdout)
+    # A failed read is never stored: a cached error would answer the next
+    # identical read with a success, and a failed list would read as an
+    # empty board. The page count is what the request actually spent.
+    gh_gateway.record(argv, gh_gateway.requests(argv, result.stdout))
+    if result.returncode == 0:
+        gh_gateway.store(argv, result.stdout)
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
 
@@ -5141,7 +5147,7 @@ def run_write(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]
         die(f"{argv[0]} is not on PATH")
     except subprocess.TimeoutExpired:
         return 124, f"{' '.join(argv)} timed out"
-    gh_gateway.record(argv)
+    gh_gateway.record(argv, 1)
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
 
@@ -6022,8 +6028,9 @@ def health_run(argv: list[str], deadline: float) -> tuple[int, str, str]:
         return 127, "", f"{argv[0]} is not on PATH"
     except subprocess.TimeoutExpired:
         return 124, "", f"{' '.join(argv)} timed out"
-    gh_gateway.record(argv)
-    gh_gateway.store(argv, result.stdout)
+    gh_gateway.record(argv, gh_gateway.requests(argv, result.stdout))
+    if result.returncode == 0:
+        gh_gateway.store(argv, result.stdout)
     return result.returncode, result.stdout or "", result.stderr or ""
 
 

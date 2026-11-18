@@ -169,8 +169,13 @@ def method(argv):
     without a method is a POST, and `-X GET` overrides a field."""
     words = [str(word) for word in argv[1:]]
     for index, word in enumerate(words):
-        if word in ("-X", "--method") and index + 1 < len(words):
-            return words[index + 1].upper()
+        # `--method=POST` and `-XPOST` are the same method as `-X POST`.
+        if word.startswith("--method="):
+            return word.split("=", 1)[1].strip().upper()
+        if word.startswith("-X") and len(word) > 2:
+            return word[2:].lstrip("=").strip().upper()
+        if word in ("-X", "--method"):
+            return words[index + 1].strip().upper() if index + 1 < len(words) else ""
     if any(word in BODY_FLAGS for word in words):
         return "POST"
     return "GET"
@@ -205,6 +210,10 @@ def resource(argv):
 def cacheable(argv):
     """True when a repeated read of this command may be served from cache."""
     if not _gh(argv) or not cache_enabled():
+        return False
+    if not context()[1]:
+        # The account is unknown, so one cache entry could answer another
+        # account's read. Skip the cache rather than guess.
         return False
     words = [str(word) for word in argv[1:]]
     if not words:
@@ -299,9 +308,46 @@ def _conditional_run(argv, timeout):
     return subprocess.CompletedProcess(argv, result.returncode, body, result.stderr)
 
 
+def _hosts_account(host):
+    """Return the account `gh` is signed in as for one host, or "".
+
+    The answer is read from gh's own hosts file, so no GitHub call is made.
+    A name that cannot be read is an unknown context, and an unknown
+    context is never cached: two accounts must not share an entry."""
+    config = os.environ.get("GH_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".config", "gh")
+    try:
+        lines = open(os.path.join(config, "hosts.yml")).read().splitlines()
+    except OSError:
+        return ""
+    current = ""
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            current = line.split(":", 1)[0].strip()
+        elif current == host:
+            key, _, value = line.strip().partition(":")
+            if key.strip() == "user" and value.strip():
+                return value.strip()
+    return ""
+
+
+def context():
+    """Return (host, account, repository) for this call.
+
+    `gh pr list` resolves its repository from the working directory, so two
+    identical commands in two checkouts are two different reads. The host
+    and the account are part of the answer too."""
+    host = os.environ.get("GH_HOST") or "github.com"
+    account = os.environ.get("COORDINATOR_GH_ACCOUNT") or _hosts_account(host)
+    return host, account, os.getcwd()
+
+
 def _key(argv):
     import hashlib
-    return hashlib.sha256("\0".join(str(word) for word in argv).encode()).hexdigest()
+    host, account, repository = context()
+    parts = [host, account, repository] + [str(word) for word in argv]
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
 def cached(argv):
@@ -375,9 +421,11 @@ def record(argv, count=1):
     core call."""
     if not _gh(argv) or count <= 0:
         return
+    # No argument is written: `gh api -H "Authorization: ..."` carries a
+    # credential in one. The caller, the quota and the verb are enough for
+    # the report and safe to keep.
     line = json.dumps({"ts": round(time.time(), 3), "caller": caller(),
-                       "resource": resource(argv),
-                       "command": [str(word) for word in argv[1:4]]})
+                       "resource": resource(argv), "verb": verb(argv)})
     try:
         if USAGE_LOG.exists() and USAGE_LOG.stat().st_size > USAGE_LOG_MAX:
             os.replace(USAGE_LOG, USAGE_LOG.with_suffix(".jsonl.1"))
