@@ -13,6 +13,7 @@ to its builder; the ticket stays open.
 import argparse
 import importlib.util
 import os
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,6 +30,34 @@ def load(path, name):
     return module
 
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def has_ref(ref):
+    """Is the ref in the local checkout?"""
+    result = subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{ref}^{{commit}}"],
+                            capture_output=True, text=True, timeout=30)
+    return result.returncode == 0
+
+
+def local_reader(path, ref):
+    """Read one file of the merged tree from the local checkout.
+
+    The replay runs over pull requests that are already merged, so their
+    merge commit is in this checkout. Reading the tree here keeps the
+    replay off the API, which has a rate limit.
+    """
+    if not has_ref(ref):
+        return ("unreadable", "the merge commit is not in the local checkout")
+    result = subprocess.run(["git", "-C", ROOT, "show", f"{ref}:{path}"],
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        return ("missing", None)
+    if not result.stdout.strip():
+        return ("unreadable", "the file is empty")
+    return ("found", result.stdout)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Replay the close checklist on merged pull requests.")
     parser.add_argument("--repo", default="shyamsivakumar/mac-ops")
@@ -39,7 +68,7 @@ def main(argv=None):
     failed = 0
     for pr in args.pr:
         try:
-            result = close_check.run_check(args.repo, pr)
+            result = close_check.run_check(args.repo, pr, reader=local_reader)
         except RuntimeError as exc:
             print(f"close check: {args.repo}#{pr} could not be read: {exc}")
             failed += 1
