@@ -18,14 +18,17 @@ export const canMerge = (verdict) => verdict?.state === "pass" || verdict?.state
 const MERGE = { MERGEABLE: ["merge ✓", "done", "Mergeable"], CONFLICTING: ["merge ✗", "blocked", "Merge conflict"], UNKNOWN: ["merge ?", "dim", "Merge status unknown"] };
 const DRAFT = ["Draft", "dim", "Draft PR, not ready to merge"];
 const mergeOf = (gh) => (gh?.draft ? DRAFT : MERGE[gh?.mergeable] ?? MERGE.UNKNOWN);
-export const COLUMNS = [["needs", "Needs you", "blocked", "Needs you"], ["run", "Working", "working", "Working"], ["checks", "Checks running", "idle", "Checks"], ["cifail", "CI failed", "blocked", "CI failed"], ["review", "Review pending", "working", "Review"], ["ready", "Approved/Ready", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"], ["backlog", "Backlog", "idle", "Backlog"], ["dead", "Dead runs", "idle", "Dead"]];
-export const PR_LANES = new Set(["checks", "cifail", "review", "ready"]);
+export const LANES = [["needs", "Needs you", "blocked", "needs"], ["stuck", "Stuck · coordinator fixing", "working", "stuck"], ["dead", "Dead runs", "idle", "stuck"], ["run", "Working", "working", "run"], ["backlog", "Backlog", "idle", "run"], ["ready", "Approved/Ready", "accent", "review"], ["review", "Review pending", "working", "review"], ["checks", "Checks running", "idle", "review"], ["done", "Done · not settled", "done", "done"]];
+export const COLUMNS = [["needs", "Needs you", "blocked", "Needs you"], ["stuck", "Stuck", "working", "Stuck"], ["run", "Working", "working", "Working"], ["review", "In review", "accent", "Review"], ["done", "Done", "done", "Done"]];
+export const COLUMN_OF = Object.fromEntries(LANES.map((l) => [l[0], l[3]]));
+export const LANE_RANK = Object.fromEntries(LANES.map((l, i) => [l[0], i]));
+export const PR_LANES = new Set(["checks", "review", "ready"]);
 const PR_REASONS = new Set(["unrouted", "ci", "changes", "conflict"]);
-export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "needs" && PR_REASONS.has(reasons?.[0]));
+export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "stuck" && !reasons?.length) || ((col === "needs" || col === "stuck") && PR_REASONS.has(reasons?.[0]));
 export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
-const COLUMN_NAME = Object.fromEntries(COLUMNS.map((c) => [c[0], c[3]]));
-export const COLUMN_LIMIT = { needs: 10, ready: 10 };
-const AGED_COLUMNS = new Set(["needs", "cifail", "ready"]);
+const LANE_NAME = Object.fromEntries(LANES.map((l) => [l[0], l[1]]));
+export const COLUMN_LIMIT = { needs: 10 };
+const AGED_LANES = new Set(["needs", "stuck", "ready"]);
 const DAY = 86400000;
 const AMBER_AFTER = DAY;
 const RED_AFTER = 3 * DAY;
@@ -82,7 +85,6 @@ function headButton(t, id, glyph, tip, run) {
 const limitOf = (key) => COLUMN_LIMIT[key];
 const overLimit = (key, col) => limitOf(key) !== undefined && col.total > limitOf(key);
 const countText = (key, col, state) => {
-  if (key === "run") return `${state.running}/${state.cap}`;
   if (limitOf(key) === undefined) return String(col.count);
   const load = `${col.total}/${limitOf(key)}`;
   return col.count === col.total ? load : `${col.count} · ${load}`;
@@ -100,17 +102,17 @@ export function columnHead(t, key, col, state, cb) {
   const settleReviewed = key === "done" && state.reviewed > 0 && !tight ? { label: state.armed?.kind === "settle" ? `Confirm ${state.reviewed}` : `Settle ${state.reviewed}` } : null;
   const bulk = key === "done" && state.done > 0
     ? { id: "settle-all", hint: "A", label: state.armed?.kind === "settle-all" ? `Confirm ${state.done}` : tight ? `Settle ${state.done}` : `Settle all ${state.done}`, run: (cx) => cb.settleAll(cx), tip: `Settle all ${state.done} (A)` }
-    : key === "ready" && col.count > 0
+    : key === "review" && col.lanes.ready > 0
     ? { id: "approve-all", hint: "M", label: state.armed?.kind === "approve-all" ? `Confirm ${state.approvable}` : tight ? `Approve ${state.approvable}` : `Approve all ${state.approvable}`, run: (cx) => cb.approveAll(cx), tip: state.approvable ? `Approve all ${state.approvable} (M)` : `${state.nothing} (M)`, dim: state.approvable === 0 }
     : null;
-  const review = key === "ready" && col.count > 0 && !state.popup
-    ? { id: "review-ready", hint: "m", label: `Review ${col.count}`, run: (cx) => cb.review(cx), tip: `Go through the ${col.count} ready cards one at a time: verdict, CI and changed files, then approve or send back (m)` }
+  const review = key === "review" && col.lanes.ready > 0 && !state.popup
+    ? { id: "review-ready", hint: "m", label: `Review ${col.lanes.ready}`, run: (cx) => cb.review(cx), tip: `Go through the ${col.lanes.ready} ready cards one at a time: verdict, CI and changed files, then approve or send back (m)` }
     : null;
   const retry = key === "needs" && state.failed > 0
     ? { id: "retry-failed", hint: "F", label: `Retry ${state.failed}`, run: (cx) => cb.retry(cx), tip: `Retry the ${state.failed} failed cards, grouped by error (F)` }
     : null;
   const rebase = state.conflicts[key] > 0
-    ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" && state.armed.key === key ? `Confirm ${state.conflicts[key]}` : `Rebase ${state.conflicts[key]}`, run: (cx) => cb.rebaseAll(cx, key), tip: `Send the ${state.conflicts[key]} conflicting PRs here back for a rebase (U does every lane)` }
+    ? { id: "rebase-all", hint: "U", label: state.armed?.kind === "rebase-all" && state.armed.key === key ? `Confirm ${state.conflicts[key]}` : `Rebase ${state.conflicts[key]}`, run: (cx) => cb.rebaseAll(cx, key), tip: `Send the ${state.conflicts[key]} conflicting PRs here back for a rebase (U does every column)` }
     : null;
   const summary = fitSummary(col.summary, state.colW - 28 - [settleReviewed, review, retry, rebase, bulk].filter(Boolean).reduce((sum, b) => sum + buttonWidth(b.label, tight) + 4, 0));
   const buttons = [settleReviewed, retry, rebase, bulk].filter(Boolean).map((b) => ({ ...b, bare: tight }));
@@ -149,7 +151,7 @@ function alertsItem() {
   if (a && !a.on) return { id: "alerts", prio: 3, label: "Alerts · off", tip: "Phone alerts are off. Click to turn them on." };
   const last = a?.sent ? `Last sent ${ago(a.sent.at, Date.now())} ago: ${a.sent.text.replace(/^Mirror: /, "")}.` : "Nothing sent yet.";
   if (a?.failed) return { id: "alerts", prio: -1, label: "Alerts · relay down", tone: "blocked", tip: `The last phone alert failed, so Herdr showed a desktop notification instead: ${a.failed}. ${last} Click to turn alerts off.` };
-  return { id: "alerts", prio: 3, label: a?.sent ? `Alerts · on · ${ago(a.sent.at, Date.now())}` : "Alerts · on", tip: `A card entering Needs you or becoming Ready is sent to your phone relay, at most one message every 5 minutes. ${last} Click to turn off.` };
+  return { id: "alerts", prio: 3, label: a?.sent ? `Alerts · on · ${ago(a.sent.at, Date.now())}` : "Alerts · on", tip: `A card entering Needs you or becoming ready to merge is sent to your phone relay, at most one message every 5 minutes. ${last} Click to turn off.` };
 }
 
 function barItems(v) {
@@ -384,23 +386,27 @@ function statusLine(v) {
   return c.context;
 }
 
-function ageTone(col, ms) {
-  if (!AGED_COLUMNS.has(col)) return "muted";
+function ageTone(lane, ms) {
+  if (!AGED_LANES.has(lane)) return "muted";
   return ms >= RED_AFTER ? "blocked" : ms >= AMBER_AFTER ? "working" : "muted";
 }
 
 const NEED_WORD = { question: "question", stalled: "stalled", unrouted: "not sent back", ci: "CI failed", changes: "changes", conflict: "conflict" };
-const stateWord = (v) => (v.col === "needs" && v.needs?.length ? NEED_WORD[v.needs[0]] : COLUMN_NAME[v.col]);
+const LANE_WORD = { needs: "Needs you", stuck: "CI failed", run: "running", backlog: "queued", checks: "checks", review: "review", ready: "ready to merge", done: "done" };
+const stateWord = (v) => ((v.col === "needs" || v.col === "stuck") && v.needs?.length ? NEED_WORD[v.needs[0]] : v.col === "dead" ? (v.c.kind === "fail" ? "failed" : "stopped") : LANE_WORD[v.col]);
+const LANE_TONE = Object.fromEntries(LANES.map((l) => [l[0], l[2]]));
 
 function columnAge(t, e, v) {
   const ms = v.now - v.entered;
   const age = ago(v.entered, v.now);
   const issue = v.col === "backlog" && v.c.issue;
-  const word = issue ? "Updated" : stateWord(v);
+  const word = issue ? "ticket" : stateWord(v);
   const room = v.colW - 40 - (v.c.task ? v.c.task.length * 7 : 0) - 8;
-  const fit = (word.length + age.length + 1) * 5.3 <= room ? word : null;
-  const named = issue ? `Updated ${elapsed(ms)} ago` : `In ${COLUMN_NAME[v.col]} for ${elapsed(ms)}`;
-  return div().id(`age-${e.key}`).flex_none().text_size(10).text_color(t[ageTone(v.col, ms)]).tooltip(named).child(fit ? `${fit} ${age}` : age);
+  const fit = chipWidth(word) + age.length * 5.3 + 4 <= room;
+  const named = issue ? `Updated ${elapsed(ms)} ago` : `In ${LANE_NAME[v.col]} for ${elapsed(ms)}`;
+  return h_flex().id(`age-${e.key}`).flex_none().gap(4).items_center().tooltip(named)
+    .when(fit, (el) => el.child(chip(t, word, LANE_TONE[v.col] === "idle" ? "dim" : LANE_TONE[v.col])))
+    .child(div().text_size(10).text_color(t[ageTone(v.col, ms)]).child(age));
 }
 
 export function card(t, e, v, input, cb) {
@@ -493,7 +499,6 @@ export function childRow(t, e, v, cb) {
     .child(opening === e.key ? div().flex_none().text_size(9.5).font_medium().text_color(t.accent).child("Opening…") : div().flex_none().text_size(9.5).text_color(t.muted).child(ago(c.at, now)));
 }
 
-const LANE_TONE = Object.fromEntries(COLUMNS.map((c) => [c[0], c[2]]));
 const PROGRESS_TONE = { merged: "done", review: "accent", working: "working", needs: "blocked", queued: "dim", other: "dim" };
 const PROGRESS_WORD = { review: "in review", working: "working", needs: "needs you", queued: "queued", other: "idle" };
 
@@ -519,7 +524,7 @@ export function parentCard(t, p, v, cb) {
 
 export function workerRow(t, e, v, cb) {
   const { c, selected, mark, now, pr, gh } = v;
-  const word = v.col === "needs" && v.needs?.length ? NEED_WORD[v.needs[0]] : COLUMN_NAME[v.col];
+  const word = stateWord(v);
   const branch = v.session?.branch;
   const tree = v.session?.worktree?.split("/").at(-1);
   const where = v.issue ? `${issueRef(v.issue)} · ${v.issue.stage ?? "no stage"}` : [branch, tree && `worktree ${tree}`].filter(Boolean).join(" · ");
@@ -599,7 +604,7 @@ function decisionBase(col, g, info, verdict, now, tab) {
   const c = g.primary;
   const pr = info.status === "open" ? info.pr : null;
   const settle = (col === "done" || col === "dead") && g.threads.some((x) => SETTLEABLE.includes(x.kind));
-  const reasons = col === "needs" ? needReasons({ ...g, info }, () => verdict?.state === "fail", now) : null;
+  const reasons = col === "needs" || col === "stuck" ? needReasons({ ...g, info }, () => verdict?.state === "fail", now) : null;
   const sendBack = (col === "ready" || col === "review") && pr && verdict?.state === "fail";
   const other = [
     { id: "open", key: "o", label: "Open thread" },
@@ -632,7 +637,7 @@ function decisionBase(col, g, info, verdict, now, tab) {
   if (reasons?.[0] === "stalled") {
     return { headline: `${name} has stalled`, primary: { id: "open", key: "o", label: "Open thread" }, why: [`No agent activity for ${elapsed(now - stallOf(g, now))}.`, `${g.title} · ${g.project}`], other: other.filter((x) => x.id !== "open"), checks: null };
   }
-  if ((col === "cifail" || (col === "needs" && prCard(col, reasons))) && pr) {
+  if ((col === "needs" || col === "stuck") && prCard(col, reasons) && pr) {
     return { headline: `Fix PR #${pr.number}`, primary: { id: "answer", key: "r", label: "Send back" }, why: [g.task ? `${g.task} · ${g.title}` : g.title, checkWords(info.gh, verdict)], other, checks };
   }
   if ((col === "ready" || col === "review") && pr) {
@@ -846,7 +851,7 @@ function ticketPanel(t, v, cb) {
 
 export function decisionView(t, v, input, cb) {
   const { col, d, armed, armedKind, outdated, replying, outcome } = v;
-  const [, label, tone] = COLUMNS.find((c) => c[0] === col);
+  const [, label, tone] = LANES.find((l) => l[0] === col);
   const hint = d.hint ?? (outdated ? "This view is over a minute old. Nothing happens until it is re-checked." : d.primary.id === "open" ? "Opens the thread in T3 Code." : d.primary.id === "answer" ? "Opens a reply box. Nothing is sent until you press Enter in it." : d.primary.id === "wait" ? "Nothing can be merged until the review check loads." : `Press ${d.primary.key} or Enter to arm, then ${d.primary.key} or click to confirm.`);
   return v_flex().size_full().min_h(0)
     .child(h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
@@ -874,7 +879,7 @@ export function decisionView(t, v, input, cb) {
 
 const REVIEW_HEAD = (t, right, close) => h_flex().h(34).px(12).gap(6).items_center().flex_none().border_b(1).border_color(t.border)
   .child(div().size(7).flex_none().rounded(4).bg(t.accent))
-  .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Review Approved/Ready"))
+  .child(div().flex_1().text_size(11).font_semibold().text_color(t.foreground).child("Review ready to merge"))
   .when(Boolean(right), (el) => el.child(div().flex_none().text_size(11).font_medium().text_color(t.muted).child(right)))
   .child(headButton(t, "rv-close", "✕", "Close (Esc)", close));
 
@@ -938,7 +943,7 @@ export function reviewView(t, v, input, cb) {
           .when(Boolean(v.branch), (el) => el.child(chip(t, v.branch, "dim", `Branch ${v.branch}`)))
           .when(Boolean(v.builder), (el) => el.child(chip(t, `built ${shortModel(v.builder)}`, "dim", `Built on ${v.builder}`)))
           .when(Boolean(v.reviewer), (el) => el.child(chip(t, `review ${shortModel(v.reviewer)}`, "dim", `Reviewed on ${v.reviewer}`)))
-          .child(chip(t, `ready ${ago(v.entered, v.now)}`, "dim", "How long the card has been in Approved/Ready"))
+          .child(chip(t, `ready ${ago(v.entered, v.now)}`, "dim", "How long the card has been ready to merge"))
           .when(Boolean(verdict), (el) => el.child(chip(t, `${VERDICT_MARK[verdict.state]} ${VERDICT_TEXT(verdict)}`, VERDICT_TONE[verdict.state], "The agent review verdict"))))
         .when(Boolean(v.done), (el) => el.child(banner(t, "done", v.done)))
         .when(Boolean(v.block), (el) => el.child(banner(t, "blocked", `Can't approve: ${v.block}`)))
@@ -965,10 +970,10 @@ export function reviewView(t, v, input, cb) {
           .when(Boolean(v.trail), (el) => el.child(trailRows(t, v.trail, cb))))));
 }
 
-export const DECIDES = new Set(["needs", "cifail", "review", "ready"]);
+export const DECIDES = new Set(["needs", "stuck", "review", "ready"]);
 export const KEY_TABLE = [
   { keys: "⏎", group: "Card", all: "Open the card's ticket and decision pop-up" },
-  { keys: "a", group: "Card", all: "Approve the merge, press twice (Approved/Ready cards)" },
+  { keys: "a", group: "Card", all: "Approve the merge, press twice (ready to merge cards in In review)" },
   { keys: "o", group: "Card", all: "Open the thread (the issue on GitHub for ticket cards)" },
   { keys: "r", group: "Card", all: "Reply to the thread" },
   { keys: "d", group: "Card", all: "Send back with a note: reply to the thread (PR cards; on Needs you cards it is a plain reply)" },
@@ -977,17 +982,17 @@ export const KEY_TABLE = [
   { keys: "w", group: "Card", all: "Open the Herdr tab whose terminal runs in the task's worktree (only when one exists)" },
   { keys: "c", group: "Card", all: "Open the pull request's changed files on GitHub (the pop-up lists them and clicking a file opens them too)" },
   { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (PR cards)" },
-  { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, CI failed, Review pending and Approved/Ready cards)" },
+  { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, Stuck and In review cards)" },
   { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards without a GitHub issue)" },
-  { keys: "x", group: "Marked", all: "Mark or unmark the selected card, in any lane and in the fan-out view. The toolbar shows how many are marked" },
+  { keys: "x", group: "Marked", all: "Mark or unmark the selected card, in any column and in the fan-out view. The toolbar shows how many are marked" },
   { keys: "X Esc", group: "Marked", all: "Clear every mark (Esc only when no search is open)" },
   { keys: "s", group: "Marked", all: "With marks: settle the marked Done and Dead cards, press twice" },
-  { keys: "a", group: "Marked", all: "With marks: approve the marked Approved/Ready cards that can merge, press twice" },
+  { keys: "a", group: "Marked", all: "With marks: approve the marked ready to merge cards that can merge, press twice" },
   { keys: "t", group: "Marked", all: "With marks: retry the marked failed cards, press twice" },
   { keys: "u", group: "Marked", all: "With marks: send the marked conflicting PRs back for a rebase, press twice" },
   { keys: "z", group: "Marked", all: "With marks: snooze every marked card, choosing how long once" },
   { keys: "r d", group: "Marked", all: "With marks: write one note and send it to each marked card's thread, press Enter twice" },
-  { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then CI failed, then Approved/Ready, and cycle" },
+  { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then Stuck, then ready to merge cards, and cycle" },
   { keys: "⌥⌘N", group: "Move", all: "Jump to the next blocked agent in any space, else the next Needs you card (bind cockpit.needs)" },
   { keys: "j k", group: "Move", all: "Next or previous card (the arrow keys work too)" },
   { keys: "h l", group: "Move", all: "Previous or next column (section on a narrow board)" },
@@ -995,15 +1000,14 @@ export const KEY_TABLE = [
   { keys: "→ ←", group: "Move", all: "Show or hide a task's other threads" },
   { keys: "S", group: "Board", all: "Settle every reviewed card, press twice (Done)" },
   { keys: "A", group: "Board", all: "Settle every finished card, press twice (Done)" },
-  { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (Approved/Ready)" },
-  { keys: "m", group: "Board", all: "Review the Approved/Ready cards one at a time, oldest first: verdict, CI and changed files. In it: a approves (press twice), d sends back with a note, j k or → ← move, s skips, Esc closes" },
+  { keys: "M", group: "Board", all: "Approve every PR with a passing review, press twice (ready to merge cards in In review)" },
+  { keys: "m", group: "Board", all: "Review the ready to merge cards one at a time, oldest first: verdict, CI and changed files. In it: a approves (press twice), d sends back with a note, j k or → ← move, s skips, Esc closes" },
   { keys: "F", group: "Board", all: "Retry failed cards in groups by error kind (Needs you)" },
-  { keys: "U", group: "Board", all: "Send every conflicting PR back for a rebase, press twice (every PR lane; the lane head button does one lane)" },
+  { keys: "U", group: "Board", all: "Send every conflicting PR back for a rebase, press twice (every column with PRs; a column head button does one column)" },
   { keys: "Z", group: "Board", all: "List snoozed cards, wake one or all" },
   { keys: "f", group: "Board", all: "Fold or show this column" },
   { keys: "e", group: "Board", all: "Open this column in a pop-up" },
-  { keys: "b", group: "Board", all: "Fold or show Backlog" },
-  { keys: "v", group: "Board", all: "Switch to the fan-out view: one card per feature with its worker cards under it (lane-wide bulk keys are off there, marked cards still work; ← → or f fold a feature)" },
+  { keys: "v", group: "Board", all: "Switch to the fan-out view: one card per feature with its worker cards under it (column-wide bulk keys are off there, marked cards still work; ← → or f fold a feature)" },
   { keys: "P", group: "Board", all: "Choose one project to show, or all projects" },
   { keys: "/", group: "Board", all: "Search cards by ticket ID or title, with quick filters. Enter returns to the board, Esc clears" },
   { keys: "R", group: "Board", all: "Reload the board now" },

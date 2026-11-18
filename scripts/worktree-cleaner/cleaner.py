@@ -7,6 +7,8 @@ import concurrent.futures
 import contextlib
 import datetime as dt
 import fcntl
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -14,6 +16,7 @@ import re
 
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from typing import Any
@@ -232,20 +235,24 @@ class T3State:
     MAX_PAGES = 1000
     worktree_cache: dict[str, tuple[str, str | None]] = {}
 
-    SNAPSHOT_ATTEMPTS = 3
-    SNAPSHOT_PAUSE_SECONDS = 0.5
+    SNAPSHOT_ATTEMPTS = 5
+    SNAPSHOT_PAUSE_SECONDS = 1
 
     def __init__(self):
         for attempt in range(self.SNAPSHOT_ATTEMPTS):
-            self._read_threads()
-            first_safety = self._safety_view()
-            first_pages = self.page_count
-            self._read_threads()
-            if self._safety_view() == first_safety:
-                self.page_count += first_pages
-                return
+            try:
+                self._read_threads()
+                first_safety = self._safety_view()
+                first_pages = self.page_count
+                self._read_threads()
+                if self._safety_view() == first_safety:
+                    self.page_count += first_pages
+                    return
+            except SafetyError as exc:
+                if str(exc) != "t3_list_changed":
+                    raise
             if attempt + 1 < self.SNAPSHOT_ATTEMPTS:
-                time.sleep(self.SNAPSHOT_PAUSE_SECONDS)
+                time.sleep(self.SNAPSHOT_PAUSE_SECONDS * 2**attempt)
         raise SafetyError("t3_list_changed")
 
     def _safety_view(self) -> frozenset[tuple[str, str | None]]:
@@ -404,7 +411,7 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
-def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False) -> dict[str, Any]:
+def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False, refresh_cwds: bool = True) -> dict[str, Any]:
     path = Path(record["path"])
     result: dict[str, Any] = {
         "repo": str(repo_root), "path": str(path), "branch": record.get("branch"),
@@ -425,7 +432,7 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
     if any(reason != "t3_thread_unfinished" for reason in reasons):
         result["reasons"] = reasons
         return result
-    if any(inside(holder, path) for holder in process_cwds(refresh=refresh)):
+    if any(inside(holder, path) for holder in process_cwds(refresh=refresh and refresh_cwds)):
         reasons.append("process_cwd_inside")
     if record.get("locked"):
         reasons.append("worktree_locked")
@@ -781,12 +788,12 @@ def pin_head(repo_root: Path, name: str, checkout: Path) -> tuple[str, str]:
     return head, ref
 
 
-def archive_one(code_root: Path, state_root: Path, github: GitHub, repo_root: Path, raw: str, day_dir: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def look_target(code_root: Path, github: GitHub, repo_root: Path, raw: str, refresh_cwds: bool = True) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     current = next((r for r in worktrees(repo_root) if canonical(r["path"]) == canonical(raw)), None)
     if current is None:
         return None, {"path": raw, "repo": str(repo_root), "reasons": ["worktree_not_registered"]}
     path = Path(current["path"])
-    row = evaluate(repo_root, current, code_root, github, T3State(), refresh=True)
+    row = evaluate(repo_root, current, code_root, github, T3State(), refresh=True, refresh_cwds=refresh_cwds)
     row["category"] = categorize(row)
     refusal = {"path": raw, "repo": str(repo_root), "branch": row["branch"]}
     if row["category"] != "look":
@@ -795,6 +802,14 @@ def archive_one(code_root: Path, state_root: Path, github: GitHub, repo_root: Pa
         return None, {**refusal, "reasons": ["worktree_missing_or_prunable"]}
     if path.is_symlink():
         return None, {**refusal, "reasons": ["worktree_is_symlink"]}
+    return row, refusal
+
+
+def archive_one(code_root: Path, state_root: Path, github: GitHub, repo_root: Path, raw: str, day_dir: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    row, refusal = look_target(code_root, github, repo_root, raw)
+    if row is None:
+        return None, refusal
+    path = Path(row["path"])
     destination = day_dir / repo_root.name / path.name
     if destination.exists() or destination.is_symlink():
         return None, {**refusal, "reasons": ["archive_target_exists"]}
@@ -827,12 +842,168 @@ def archive_one(code_root: Path, state_root: Path, github: GitHub, repo_root: Pa
     return row, None
 
 
-def archive(code_root: Path, state_root: Path, paths: list[Path]) -> dict[str, Any]:
+SAVE_LIMIT = 200 * 1024 * 1024
+BULK_DIRS = {"node_modules", ".venv", "venv", "build", "dist", ".next", "target", "DerivedData", "__pycache__", "Pods", "vendor", ".git", ".turbo", ".cache", "coverage", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".gradle", ".expo"}
+DELETE_REFUSED = {"worktree_status_unknown", "worktree_root_mismatch", "head_unknown"}
+
+
+def git_bytes(path: Path, *args: str) -> bytes:
+    try:
+        result = subprocess.run(["git", "-C", str(path), *args], capture_output=True, timeout=120, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SafetyError("git_save_failed") from exc
+    if result.returncode != 0:
+        raise SafetyError("git_save_failed")
+    return result.stdout
+
+
+def names(listing: bytes) -> list[str]:
+    return [os.fsdecode(name) for name in listing.split(b"\0") if name]
+
+
+def tracked_diff(path: Path, head: str) -> bytes:
+    return git_bytes(path, "diff", "--binary", "--no-ext-diff", "--no-textconv", head)
+
+
+def snapshot(path: Path) -> dict[str, Any]:
+    head = git_bytes(path, "rev-parse", "HEAD").decode().strip()
+    status = git_bytes(path, "status", "--porcelain=v1", "--untracked-files=all", "-z")
+    untracked = names(git_bytes(path, "ls-files", "--others", "--exclude-standard", "-z"))
+    ignored = names(git_bytes(path, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"))
+    kept = [entry for entry in ignored if not BULK_DIRS & set(entry.rstrip("/").split("/"))]
+    if any(entry.endswith("/") for entry in untracked) or any(entry.startswith(b"?? ") and entry.endswith(b"/") for entry in status.split(b"\0")):
+        raise SafetyError("nested_repository_inside")
+    files = saved_files(path, untracked, "untracked") + saved_files(path, kept, "ignored")
+    try:
+        stats = [(arc, os.lstat(source).st_size, os.lstat(source).st_mtime_ns) for arc, source in files]
+    except OSError as exc:
+        raise SafetyError("delete_save_unverified") from exc
+    return {
+        "head": head, "status": status, "untracked": untracked, "ignored": ignored, "kept": kept,
+        "files": files, "stats": stats, "diff": hashlib.sha256(tracked_diff(path, head)).digest(),
+    }
+
+
+def saved_files(path: Path, entries: list[str], prefix: str) -> list[tuple[str, Path]]:
+    files: list[tuple[str, Path]] = []
+    for entry in entries:
+        found = path / entry
+        if not entry.endswith("/"):
+            files.append((f"{prefix}/{entry}", found))
+            continue
+        if (found / ".git").exists():
+            raise SafetyError("nested_repository_inside")
+        for root, dirs, leaves in os.walk(found, followlinks=False):
+            if ".git" in dirs or ".git" in leaves:
+                raise SafetyError("nested_repository_inside")
+            files.extend((f"{prefix}/{Path(root, leaf).relative_to(path)}", Path(root, leaf)) for leaf in leaves + [d for d in dirs if Path(root, d).is_symlink()])
+    return files
+
+
+def save_work(repo_root: Path, path: Path, row: dict[str, Any], tar_path: Path, before: dict[str, Any]) -> None:
+    if (path / ".gitmodules").exists():
+        raise SafetyError("submodules_inside")
+    if any(line[:1] in (b"S", b"h") for line in git_bytes(path, "ls-files", "-v", "-z").split(b"\0")):
+        raise SafetyError("hidden_tracked_changes")
+    untracked, kept, files = before["untracked"], before["kept"], before["files"]
+    skipped = [entry for entry in before["ignored"] if entry not in kept]
+    sizes = {arc: size for arc, size, _ in before["stats"]}
+    if sum(sizes.values()) > SAVE_LIMIT:
+        raise SafetyError("save_too_large")
+    patch = tracked_diff(path, row["head"])
+    manifest = json.dumps({
+        "repo": str(repo_root), "path": str(path), "branch": row["branch"], "head": row["head"],
+        "archive_ref": row["archive_ref"], "uncommitted": row["uncommitted"], "unpushed": row["unpushed"],
+        "untracked_files": untracked, "ignored_saved": kept, "ignored_skipped": skipped,
+        "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }, sort_keys=True, indent=2).encode()
+    partial = tar_path.with_name(tar_path.name + ".tmp")
+    partial.unlink(missing_ok=True)
+    try:
+        with os.fdopen(os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+            with tarfile.open(fileobj=output, mode="w:gz") as tar:
+                for name, data in (("changes.patch", patch), ("manifest.json", manifest)):
+                    info = tarfile.TarInfo(name)
+                    info.size, info.mtime = len(data), int(time.time())
+                    tar.addfile(info, io.BytesIO(data))
+                for arc, source in files:
+                    tar.add(source, arcname=arc, recursive=False)
+            output.flush()
+            os.fsync(output.fileno())
+        with tarfile.open(partial, "r:gz") as tar:
+            members = {member.name: member for member in tar.getmembers()}
+        if {"changes.patch", "manifest.json", *sizes} - members.keys():
+            raise SafetyError("delete_save_unverified")
+        if any(members[arc].isreg() and members[arc].size != os.lstat(source).st_size for arc, source in files):
+            raise SafetyError("delete_save_unverified")
+        os.replace(partial, tar_path)
+    except (tarfile.TarError, OSError) as exc:
+        raise SafetyError("delete_save_unverified") from exc
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def delete_one(code_root: Path, state_root: Path, github: GitHub, repo_root: Path, raw: str, day_dir: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    row, refusal = look_target(code_root, github, repo_root, raw, refresh_cwds=False)
+    if row is None:
+        return None, refusal
+    path = Path(row["path"])
+    if DELETE_REFUSED & set(row["reasons"]) or row["uncommitted"] is None:
+        return None, {**refusal, "reasons": ["worktree_status_unknown"]}
+    row["head"], ref = pin_head(repo_root, path.name, path)
+    tar_path = day_dir / repo_root.name / f"{path.name}-{row['head'][:12]}-{dt.datetime.now().strftime('%H%M%S')}.tar.gz"
+    if tar_path.exists() or tar_path.is_symlink():
+        return None, {**refusal, "reasons": ["delete_target_exists"]}
+    tar_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    row["archive_ref"] = ref
+    row["save_path"] = str(tar_path)
+    details = {
+        "reason": "deleted from Needs a look, commit pinned and uncommitted work saved to a file",
+        "save_path": row["save_path"], "archive_ref": ref,
+        "uncommitted": row["uncommitted"], "unpushed": row["unpushed"],
+    }
+    before = snapshot(path)
+    if before["head"] != row["head"]:
+        return None, {**refusal, "reasons": ["worktree_changed_before_remove"]}
+    try:
+        save_work(repo_root, path, row, tar_path, before)
+        if snapshot(path) != before:
+            raise SafetyError("worktree_changed_before_remove")
+    except SafetyError as exc:
+        tar_path.unlink(missing_ok=True)
+        if str(exc) == "worktree_changed_before_remove":
+            append_removal(state_root, row, "delete_blocked", details)
+        raise
+    try:
+        append_removal(state_root, row, "delete_attempted", details)
+        blockers = T3State().blockers(path)
+        if blockers or cwd_held(path) or snapshot(path) != before:
+            raise SafetyError(blockers[0] if blockers else "worktree_changed_before_remove")
+    except (SafetyError, OSError) as exc:
+        tar_path.unlink(missing_ok=True)
+        append_removal(state_root, row, "delete_blocked", details)
+        return None, {**refusal, "reasons": [str(exc)]}
+    try:
+        result = run(["git", "-C", str(repo_root), "worktree", "remove", "--force", str(path)], timeout=300)
+    except SafetyError:
+        append_removal(state_root, row, "delete_outcome_unknown", details)
+        return None, {**refusal, "reasons": ["worktree_remove_outcome_unknown"]}
+    if result.returncode != 0 or path.exists() or any(canonical(item["path"]) == canonical(path) for item in worktrees(repo_root)):
+        append_removal(state_root, row, "delete_failed", details)
+        if path.is_dir() and snapshot(path) == before:
+            tar_path.unlink(missing_ok=True)
+        return None, {**refusal, "reasons": ["delete_remove_failed"]}
+    append_removal(state_root, row, "deleted", details)
+    return row, None
+
+
+def archive(code_root: Path, state_root: Path, paths: list[Path], delete: bool = False) -> dict[str, Any]:
     state_root = secure_state_dir(state_root)
     day_dir = ARCHIVE_ROOT / report_day()
     with cleaner_lock(state_root):
         github = GitHub()
         found = registrations(code_root, github)
+        one = delete_one if delete else archive_one
         archived: list[dict[str, Any]] = []
         refused: list[dict[str, Any]] = []
         for raw in paths:
@@ -841,14 +1012,14 @@ def archive(code_root: Path, state_root: Path, paths: list[Path]) -> dict[str, A
                 refused.append({"path": os.fspath(raw), "reasons": ["worktree_not_registered"]})
                 continue
             try:
-                row, refusal = archive_one(code_root, state_root, github, entry[0], os.fspath(raw), day_dir)
+                row, refusal = one(code_root, state_root, github, entry[0], os.fspath(raw), day_dir)
             except (SafetyError, OSError) as exc:
                 row, refusal = None, {"path": os.fspath(raw), "repo": str(entry[0]), "reasons": [str(exc)]}
             if row:
                 archived.append(row)
             if refusal:
                 refused.append(refusal)
-        return {"mode": "archive", "archive_dir": str(day_dir), "archived": archived, "refused": refused}
+        return {"mode": "delete" if delete else "archive", "archive_dir": str(day_dir), "deleted" if delete else "archived": archived, "refused": refused}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -859,6 +1030,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--apply", action="store_true", help="remove only worktrees that pass every safety check")
     mode.add_argument("--dry-run", action="store_false", dest="apply", help="report counts without removing worktrees")
     mode.add_argument("--archive", nargs="+", type=Path, metavar="PATH", help="move Needs-a-look worktrees to the archive, pin their commit, keep their branch")
+    mode.add_argument("--delete", nargs="+", type=Path, metavar="PATH", help="remove Needs-a-look worktrees, pin their commit, and save uncommitted work to a small file in the archive")
     parser.add_argument("--prune", action="store_true", help="with --apply, also drop registrations whose folder is gone and that pass every prune check")
     parser.add_argument("--no-report", action="store_true", help="skip writing the daily kept-worktrees report")
     parser.set_defaults(apply=False)
@@ -866,6 +1038,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.archive:
             print(json.dumps(archive(args.code_root.expanduser(), args.state_root.expanduser(), args.archive), sort_keys=True))
+            return 0
+        if args.delete:
+            print(json.dumps(archive(args.code_root.expanduser(), args.state_root.expanduser(), args.delete, delete=True), sort_keys=True))
             return 0
         result = scan(args.code_root.expanduser(), args.state_root.expanduser(), args.apply, not args.no_report, args.prune)
     except SafetyError as exc:

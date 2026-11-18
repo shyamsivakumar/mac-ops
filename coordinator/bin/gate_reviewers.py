@@ -14,14 +14,14 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
-# The chain, in order: the OpenAI API on API credits first, the Codex
-# subscription second. The planned tail is the Anthropic API on Opus 5.5
-# once that instance exists, then the Claude Agent on Opus 5.5. It is not
-# in the chain yet: a gate runs on GPT-6.2 Astra only (Shyam 2026-11-17)
-# and the merge acceptance accepts no other reviewer.
+# The chain, in order: the Codex subscription on gpt-6.2-astra first —
+# the openai-api reviewer left the chain when its org ran out of credits
+# (Refs #521, 2026-11-17 19:20 PT) — then the Claude Agent on Opus 5.5
+# as the fallback. Reviews run on GPT-6.2 Astra first; Opus takes over
+# only when Astra cannot run (Shyam 2026-11-17).
 REVIEWER_CHAIN = (
-    {"instanceId": "openai-api", "model": "openai/gpt-6.2-astra"},
     {"instanceId": "codex", "model": "gpt-6.2-astra"},
+    {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
 )
 
 # One tiny probe per blocked reviewer, at most once an hour.
