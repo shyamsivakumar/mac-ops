@@ -1,0 +1,166 @@
+"""The one model list.
+
+`models.json` is the only place a model is listed. The ticket tool, coordq,
+the lane driver and the pi route generator read it through this module.
+Lists: `build` (every build type), `fix` (fix and finish rounds), `review`
+(the gate) and `panel` (only when Shyam asks for one).
+
+A provider that fails for a blocking reason is recorded by the provider
+health store, `providers-blocked.json` in the queue folder. This module
+only reads that file, so every caller skips the same blocked providers.
+"""
+
+import json
+import os
+from pathlib import Path
+
+LISTS = ("build", "fix", "review", "panel")
+INSTALLED_PATH = "~/.coordinator/models.json"
+SEED_PATH = Path(__file__).resolve().parent.parent / "models.json"
+BLOCKED_FILE = "providers-blocked.json"
+VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
+
+
+class ModelsError(Exception):
+    pass
+
+
+def path():
+    override = os.environ.get("COORDINATOR_MODELS")
+    if override:
+        return Path(override)
+    installed = Path(os.path.expanduser(INSTALLED_PATH))
+    return installed if installed.exists() else SEED_PATH
+
+
+def validate(data):
+    if not isinstance(data, dict):
+        raise ModelsError("models.json must be an object")
+    for name in LISTS:
+        entries = data.get(name)
+        if not isinstance(entries, list) or not entries:
+            raise ModelsError(f"models.json needs a non-empty {name} list")
+        seen = set()
+        for entry in entries:
+            selection = entry.get("selection") if isinstance(entry, dict) else None
+            if not (
+                isinstance(selection, dict)
+                and selection.get("instanceId")
+                and selection.get("model")
+                and entry.get("id")
+                and entry.get("vendor")
+            ):
+                raise ModelsError(
+                    f"models.json {name} entry needs id, vendor and a selection with instanceId and model: {entry!r}"
+                )
+            if entry["id"] in seen:
+                raise ModelsError(f"models.json {name} lists {entry['id']} twice")
+            seen.add(entry["id"])
+    return data
+
+
+def load():
+    with open(path()) as f:
+        return validate(json.load(f))
+
+
+def entries(list_name):
+    return load()[list_name]
+
+
+def identity(selection):
+    """`instanceId:model`, the model on its last segment, so a provider
+    prefixed spelling names the same provider as the plain one."""
+    if not isinstance(selection, dict):
+        return ""
+    instance = selection.get("instanceId")
+    model = str(selection.get("model") or "").split("/")[-1]
+    return f"{instance}:{model}" if instance and model else ""
+
+
+def blocked_identities():
+    queue = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+    try:
+        with open(os.path.join(queue, BLOCKED_FILE)) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return set()
+    blocked = data.get("blocked") if isinstance(data, dict) else None
+    if not isinstance(blocked, dict):
+        raise ModelsError(f"{BLOCKED_FILE} must hold a blocked object")
+    return set(blocked)
+
+
+def is_blocked(selection, blocked=None):
+    blocked = blocked_identities() if blocked is None else blocked
+    return identity(selection) in blocked
+
+
+def in_order(list_name, preferred=None):
+    """The entries of a list, the preferred id first, then the list in order."""
+    listed = entries(list_name)
+    first = [e for e in listed if e["id"] == preferred]
+    return first + [e for e in listed if e["id"] != preferred]
+
+
+def first_available(list_name, preferred=None, blocked=None):
+    """The first entry that is not blocked, or None when every entry is."""
+    blocked = blocked_identities() if blocked is None else blocked
+    for entry in in_order(list_name, preferred):
+        if identity(entry["selection"]) not in blocked:
+            return entry
+    return None
+
+
+def find(selection, list_names=LISTS):
+    wanted = identity(selection)
+    for name in list_names:
+        for entry in entries(name):
+            if identity(entry["selection"]) == wanted:
+                return entry
+    return None
+
+
+def vendor_of(model):
+    """The vendor of an executed model, given as a selection or a model name.
+
+    A router entry carries a thinking level after a colon, which is not part
+    of the model name."""
+    if isinstance(model, dict):
+        entry = find(model)
+        return entry["vendor"] if entry else None
+    name = str(model or "").split("/")[-1].split(":")[0]
+    for list_name in LISTS:
+        for entry in entries(list_name):
+            if entry["selection"]["model"].split("/")[-1] == name:
+                return entry["vendor"]
+    lowered = name.lower()
+    for prefix, vendor in VENDOR_PREFIXES:
+        if lowered.startswith(prefix):
+            return vendor
+    return None
+
+
+def reviewers(builder_models=(), preferred=None, blocked=None):
+    """The gate reviewers a build may use, in order.
+
+    A reviewer of the builder's vendor is skipped, and so is a blocked
+    one. A builder model of unknown vendor excludes nothing."""
+    blocked = blocked_identities() if blocked is None else blocked
+    vendors = {vendor_of(m) for m in builder_models} - {None}
+    return [
+        e
+        for e in in_order("review", preferred)
+        if e["vendor"] not in vendors and identity(e["selection"]) not in blocked
+    ]
+
+
+def pi_routes():
+    """The build list as pi route specs, `provider/model`, in order.
+
+    Only an entry whose model carries a pi provider prefix can run in pi."""
+    return [
+        e["selection"]["model"]
+        for e in entries("build")
+        if "/" in e["selection"]["model"]
+    ]

@@ -1,4 +1,3 @@
-REVIEWER_CHAIN = (
-    {"instanceId": "codex", "model": "gpt-6.2-astra"},
-    {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
-)
+import models
+
+REVIEWER_CHAIN = tuple(entry["selection"] for entry in models.entries("review"))
