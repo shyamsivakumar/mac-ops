@@ -564,6 +564,39 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue(link.is_symlink())
         self.assertEqual(os.readlink(link), "../notes.md")
 
+    def test_a_link_that_appears_after_the_check_cannot_redirect_the_restore(self):
+        # The directory is replaced by a link after the parent was opened.
+        # The create is relative to the descriptor, so it cannot land outside.
+        repo = Path(self.tmp.name) / "late-link-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        (repo / ".specstory" / "notes").write_text("history\n", encoding="utf-8")
+        git(repo, "add", ".specstory/notes")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "notes"], check=True, capture_output=True)
+        (repo / ".specstory" / "notes").write_text("edited\n", encoding="utf-8")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        (repo / ".specstory" / "notes").unlink()
+        outside = Path(self.tmp.name) / "outside-late"
+        outside.mkdir()
+        original_open = cleaner._open_parent_fd
+        swapped = []
+
+        def open_then_swap(repo_arg, relative):
+            descriptor = original_open(repo_arg, relative)
+            if descriptor is not None and not swapped:
+                swapped.append(True)
+                (repo / ".specstory").rmdir()
+                os.symlink(str(outside), repo / ".specstory")
+            return descriptor
+
+        with mock.patch.object(cleaner, "_open_parent_fd", open_then_swap):
+            clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
+        self.assertFalse((outside / "notes").exists(), "nothing may be written outside the worktree")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
