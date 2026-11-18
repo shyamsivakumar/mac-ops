@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `1245f1304e5e2d48cfeb915a232a8dce42456223`
+Checked commit: `c0f81750322417c0648931fbfe28e5df4f2fd8de`
 Working tree clean when the checks ran: yes
 
 | Check | Command | Result | Detail |
