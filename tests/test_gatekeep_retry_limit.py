@@ -372,6 +372,20 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertIn("waiting o/r#7", out)
         self.assertEqual(self.gate_items(), [])
 
+    def test_a_block_recorded_when_the_item_is_written_is_not_queued(self):
+        chosen = coordq.save
+
+        def save_then_block(queue):
+            chosen(queue)
+            self.block(coordq.model_list.entries("review")[1]["selection"])
+
+        coordq.save = save_then_block
+        self.addCleanup(setattr, coordq, "save", chosen)
+        self.write_queue(heads=self.head())
+        out, _ = self.run_gatekeep()
+        self.assertIn("waiting o/r#7", out)
+        self.assertEqual(self.gate_items(), [])
+
     def test_a_first_gate_whose_reviewer_is_blocked_is_rechosen(self):
         chosen = coordq.reviewer_model
 
