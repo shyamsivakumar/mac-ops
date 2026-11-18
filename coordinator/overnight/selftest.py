@@ -1436,6 +1436,104 @@ def send_integrity():
             exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
 
 
+def root_workspace():
+    """Pull request work never works in the shared root of a repository.
+
+    The lane sends pull request work to the builder thread of the ticket
+    that opened the pull request. A thread that works in the shared root
+    of the repository is refused: the work starts a fresh worktree
+    instead, so the branch everyone installs from never moves. The lane
+    also skips a herdr pull request and a pull request that is merged or
+    closed, so neither ever reaches a thread.
+    """
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    root = "/Users/shyamsivakumar/Code/mac-ops"
+    worktree = "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-fixture"
+    key = f"check:{repo}#512:head"
+    # The root checkout of a repository keeps the common git directory of
+    # the repository; a linked worktree keeps its own.
+    root_git = ".git\n.git\n"
+    worktree_git = ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
+                    "/Users/shyamsivakumar/Code/mac-ops/.git\n")
+    other_root_git = ("/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n"
+                      "/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n")
+
+    def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git,
+                worktree_only=True):
+        actions = []
+        def read(tool, args):
+            return {"thread": thread}
+        def command(cmd, timeout=150):
+            if cmd[0] == "git":
+                if "rev-parse" in cmd:
+                    return git
+                exact(cmd[1:4], ["-C", root, "ls-remote"])
+                exact(cmd[4:], ["--heads", "origin", "builder/fixture"])
+                return listing
+            payload = json.loads(cmd[2])
+            if payload.get("threadId"):
+                actions.append("send")
+            else:
+                actions.append("fresh")
+                exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/builder/fixture",
+                                                     "startFromOrigin": True})
+            return "receipt"
+        pull = pr or dict(number=512, state="OPEN", headRefName="builder/fixture", baseRefName="main")
+        with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
+             patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
+             patch.object(lane, "read_json", return_value=pull), \
+             patch.object(lane, "run", command), contextlib.redirect_stdout(io.StringIO()):
+            result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512,
+                               worktree_only=worktree_only)
+        return result, actions
+
+    # A thread without a worktree works in the shared root.
+    result, actions = send_to({"status": "running"})
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # So does a thread whose worktree is the root checkout of a repository.
+    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git)
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # And so does a thread whose worktree is the root checkout of another
+    # repository.
+    result, actions = send_to({"status": "running", "worktreePath": worktree}, git=other_root_git)
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # A worktree path that cannot be read cannot be shown to be a worktree
+    # of its own, so the work does not go there either.
+    result, actions = send_to({"status": "running", "worktreePath": worktree}, git="")
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # A thread with its own worktree takes the work.
+    result, actions = send_to({"status": "running", "worktreePath": worktree})
+    exact(result, "receipt")
+    exact(actions, ["send"])
+    # The other lane paths keep their own routing: a thread in a shared
+    # checkout still takes their work.
+    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
+                               worktree_only=False)
+    exact(result, "receipt")
+    exact(actions, ["send"])
+    # A branch that is not on origin has no safe worktree, so no work is
+    # dispatched at all.
+    result, actions = send_to({"status": "running"}, listing="")
+    exact(result, f"skip {key}: branch builder/fixture is not on origin, no safe worktree")
+    exact(actions, [])
+    # A herdr pull request is skipped, and a merged one is skipped too.
+    result, actions = send_to({"status": "running", "worktreePath": worktree},
+                               pr=dict(number=512, state="OPEN", headRefName="herdr/board-stuck-lane",
+                                       baseRefName="main"))
+    exact(result, "skip #512: herdr branch, Shyam merges")
+    exact(actions, [])
+    result, actions = send_to({"status": "running", "worktreePath": worktree},
+                               pr=dict(number=512, state="MERGED", headRefName="builder/fixture",
+                                       baseRefName="main"))
+    exact(result, "skip #512: PR is merged or closed")
+    exact(actions, [])
+
+
 def cycle_health():
     """The cycle's health checks over injected inputs.
 
@@ -2482,6 +2580,9 @@ def alarm_mute():
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+
+
 def main():
     failed = False
     try:
@@ -2506,6 +2607,15 @@ def main():
                                 pass
                             else:
                                 raise AssertionError("negative control accepted unchecked send")
+                    if name == "root-workspace":
+                        import lane_driver
+                        with patch.object(lane_driver, "root_workspace", return_value=False):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted pull request work in the shared root")
                     if name == "consolidation-guard":
                         import lane_driver
                         with patch.object(lane_driver, "park", return_value="unguarded"):
