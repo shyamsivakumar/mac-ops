@@ -1774,24 +1774,28 @@ def _read_recovery_manifest(state_root: Path) -> list[dict[str, Any]] | None:
     return [entry for entry in entries if isinstance(entry, dict)]
 
 
-def _record_recovery(state_root: Path, path: Path) -> bool:
+def _record_recovery(state_root: Path, path: Path, identity: tuple[int, int] | None = None) -> bool:
     """Remember a recovery directory and the time it was taken.
 
     The time lives in the manifest, which the cleaner owns, so nothing is
-    written inside the recovered worktree.
+    written inside the recovered worktree. The identity is the one verified
+    when the copy arrived; it is read from the path only when the caller has
+    none.
     """
     manifest = _recovery_manifest(state_root)
     entries = _read_recovery_manifest(state_root)
     if entries is None:
         return False
     kept = [entry for entry in entries if entry.get("path") != str(path)]
-    try:
-        info = os.stat(path)
-    except OSError:
-        # Without the identity of the copy it cannot be told apart from a
-        # replacement later, so it is not recorded.
-        return False
-    kept.append({"path": str(path), "recovered_at": time.time(), "device": info.st_dev, "inode": info.st_ino})
+    if identity is None:
+        try:
+            info = os.stat(path)
+        except OSError:
+            # Without the identity of the copy it cannot be told apart from a
+            # replacement later, so it is not recorded.
+            return False
+        identity = (info.st_dev, info.st_ino)
+    kept.append({"path": str(path), "recovered_at": time.time(), "device": identity[0], "inode": identity[1]})
     try:
         atomic_write(manifest, json.dumps(kept, indent=1, sort_keys=True) + "\n")
     except OSError:
@@ -2395,7 +2399,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                             moved_to = None
                                         else:
                                             try:
-                                                recorded_recovery = _record_recovery(state_root, storage / aside)
+                                                recorded_recovery = _record_recovery(state_root, storage / aside, aside_identity)
                                             except Exception:
                                                 recorded_recovery = False
                                     if tree_gone and not recorded_recovery:
