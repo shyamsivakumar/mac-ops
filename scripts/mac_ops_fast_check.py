@@ -212,7 +212,7 @@ def main():
     lane = ["python3", "scripts/mac_ops_fast_check.py", "--lane-selection"]
     proof.check("lane selection", shlex.join(lane), lambda: run(lane, timeout=120))
     selftest = ["python3", "coordinator/overnight/overnight", "selftest"]
-    proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=120))
+    proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=60))
     for name in changed_python:
         command = ["python3", "-c",
                    "import ast,sys;[ast.parse(open(f,'rb').read(),f) for f in sys.argv[1:]]", name]
@@ -235,7 +235,7 @@ def main():
     def tlc():
         for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
             shutil.copyfile(model_dir / name, scratch / name)
-        run(tlc_command, cwd=scratch, timeout=120)
+        run(tlc_command, cwd=scratch, timeout=55)
 
     proof.check("TLC heavy queue model", shlex.join(tlc_command), tlc)
     heavy = ["python3", "heavy.py", "--help"]

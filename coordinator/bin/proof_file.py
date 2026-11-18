@@ -36,7 +36,9 @@ def fetch(repo, path, head):
 
     The state says what the read found: the file (`found`), no such file
     (`missing`), or a read that failed (`unreadable`). A read that failed
-    is not a confirmed absence, so the two are never the same answer.
+    is not a confirmed absence, so the two are never the same answer. A
+    file that exists but carries nothing is a failed read too: only a
+    confirmed 404 is a missing file.
     """
     if not path:
         return MISSING, None
@@ -55,13 +57,17 @@ def fetch(repo, path, head):
         blob = json.loads(run.stdout)
     except ValueError:
         return UNREADABLE, "GitHub returned no JSON"
-    content = blob.get("content")
-    if not content:
-        return MISSING, None
+    if "content" not in blob:
+        return UNREADABLE, "GitHub returned no content for the file"
+    if blob.get("encoding") not in (None, "base64"):
+        return UNREADABLE, "GitHub returned a file this reader cannot decode"
     try:
-        return FOUND, base64.b64decode(content).decode("utf-8", "replace")
+        text = base64.b64decode(blob["content"]).decode("utf-8", "replace")
     except (ValueError, UnicodeDecodeError):
         return UNREADABLE, "GitHub returned a file this reader cannot decode"
+    if not text.strip():
+        return UNREADABLE, "the file is empty"
+    return FOUND, text
 
 
 def section(state, text, path):
