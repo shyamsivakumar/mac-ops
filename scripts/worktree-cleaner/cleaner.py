@@ -1573,21 +1573,6 @@ def cleaner_lock(state_root: Path):
         yield
 
 
-def _registration_dir(repo_root: Path, path: str) -> Path | None:
-    """The administration directory of the registration of a worktree."""
-    name = Path(path).name
-    if not name:
-        return None
-    try:
-        listed = git(repo_root, "rev-parse", "--git-path", f"worktrees/{name}").strip()
-    except SafetyError:
-        return None
-    admin = Path(listed)
-    if not admin.is_absolute():
-        admin = repo_root / admin
-    return admin
-
-
 def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, prune: bool = False) -> dict[str, Any]:
     state_root = secure_state_dir(state_root)
     with cleaner_lock(state_root):
@@ -1752,31 +1737,18 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 if not final["prunable"] or current.get("head") != row.get("head"):
                     continue
-                # The registration is bound before it is removed: the
-                # registration that is there now has to be the one that was
-                # verified, and the registration itself is removed, never the
-                # path. A worktree that replaced the stale one in the meantime
-                # is not touched.
-                admin = _registration_dir(repo_root, row["path"])
-                if admin is None or not admin.is_dir():
-                    continue
-                try:
-                    registered = (admin / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
-                except OSError:
-                    continue
-                if registered != str(row.get("head") or ""):
-                    continue
-                append_removal(state_root, row, "prune_attempted")
-                try:
-                    shutil.rmtree(admin)
-                except OSError as exc:
-                    prune_results.append({"repo": str(repo_root), "worktree": row["path"], "ok": False, "error": str(exc)})
-                    append_removal(state_root, row, "prune_failed")
-                    continue
-                prune_results.append({"repo": str(repo_root), "worktree": row["path"], "ok": True, "error": None})
-                append_removal(state_root, row, "pruned")
-                row["category"] = "removed"
-                pruned += 1
+                # The registration is left in place. It cannot be bound to
+                # the registration that was verified: git names the
+                # administration directory after the basename of the path, so
+                # two worktrees can share a basename, and a registration can
+                # be taken over at that path in the meantime. Removing it
+                # could therefore drop the registration of a live worktree
+                # and the only reference to its unpublished commit.
+                append_removal(state_root, row, "prune_skipped")
+                prune_results.append({
+                    "repo": str(repo_root), "worktree": row["path"], "ok": False,
+                    "error": "the registration was left in place: it cannot be bound to the registration that was verified",
+                })
         summary = {
             "mode": "apply" if apply else "dry-run",
             "repositories_scanned": len({row["repo"] for row in rows}),
