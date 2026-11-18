@@ -45,7 +45,17 @@ TIME_ONLY = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)")
 RESET_WORD = re.compile(r"reset|retry|available|till|until|back\s+off", re.IGNORECASE)
 # The zone a message states for its reset: "UTC", "+08:00", "Asia/Shanghai".
 OFFSET = re.compile(r"([+-])(\d{2}):?(\d{2})\b")
-NAMED_ZONE = re.compile(r"\b([A-Za-z]+(?:/[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*)+)\b")
+NAMED_ZONE = re.compile(r"\b([A-Za-z]+(?:/[A-Za-z0-9_+-]+)+)\b")
+
+
+def _named_zone(window):
+    match = NAMED_ZONE.search(window) if ZoneInfo is not None else None
+    if match is None:
+        return None
+    try:
+        return ZoneInfo(match.group(1))
+    except Exception:
+        return None
 
 
 def zone_of(text, start=0):
@@ -53,8 +63,12 @@ def zone_of(text, start=0):
 
     An offset wins over a bare "UTC": "UTC+08:00" is eight hours ahead of
     UTC, not UTC, and reading it as UTC would hold the provider eight hours
-    past the reset it named."""
+    past the reset it named. A complete zone name wins over both: "Etc/GMT+5"
+    is five hours behind UTC, not GMT."""
     window = text[start:start + 48]
+    named = _named_zone(window)
+    if named is not None:
+        return named
     match = OFFSET.search(window)
     if match and int(match.group(2)) < 24 and int(match.group(3)) < 60:
         hours, minutes = int(match.group(2)), int(match.group(3))
@@ -64,13 +78,6 @@ def zone_of(text, start=0):
         return timezone.utc
     if re.match(r"\s*Z\b", window):
         return timezone.utc
-    if ZoneInfo is not None:
-        match = NAMED_ZONE.search(window)
-        if match:
-            try:
-                return ZoneInfo(match.group(1))
-            except Exception:
-                return None
     return None
 
 
