@@ -505,6 +505,20 @@ check("a failed pagination counts its failed request",
       len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
 set_mode("200")
 
+# `gh repo` is a mixed command: list and view are GraphQL, writes are REST,
+# and a subcommand this code does not know is `other`, not core.
+import subprocess as _sp
+_repo_routes = _sp.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+for argv in (["gh", "repo", "list"], ["gh", "repo", "view"],
+             ["gh", "repo", "create"], ["gh", "repo", "unknowncmd"]):
+    print(gh_gateway.resource(argv))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("gh repo is classified by subcommand",
+      _repo_routes == ["graphql", "graphql", "core", "other"], str(_repo_routes))
+
 # A filter value named `graphql` does not make a REST read GraphQL.
 rows_before = len(rows())
 run(["gh", "api", "repos/a/b/issues?state=open", "--jq", "graphql"])

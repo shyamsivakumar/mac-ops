@@ -98,8 +98,14 @@ GRAPHQL = "graphql"
 # A command that is not one of these is `other`: it is named as such and is
 # never counted as a core call.
 REST_GROUPS = ("run", "workflow", "cache", "release", "secret", "variable",
-               "ruleset", "gist", "codespace", "repo", "attestation",
+               "ruleset", "gist", "codespace", "attestation",
                "ssh-key", "gpg-key", "auth")
+# `gh repo` is a mixed command: its list and view are answered over GraphQL,
+# its write commands over REST. A command this code does not know is `other`,
+# never a guessed core call.
+REPO_GRAPHQL_VERBS = ("list", "view")
+REPO_REST_VERBS = ("clone", "create", "fork", "delete", "edit", "archive",
+                   "rename", "sync", "set-default")
 GRAPHQL_GROUPS = ("pr", "issue", "project", "label", "org")
 # The `gh api` flags that take a value, so the endpoint can be found and the
 # method can be read without mistaking a value for the endpoint.
@@ -286,6 +292,11 @@ def resource(argv):
         if path == GRAPHQL:
             return GRAPHQL
         return CORE
+    if words[0] == "repo":
+        subcommand = verb(argv)
+        if subcommand in REPO_GRAPHQL_VERBS:
+            return GRAPHQL
+        return CORE if subcommand in REPO_REST_VERBS else "other"
     if words[0] in REST_GROUPS:
         return CORE
     if words[0] in GRAPHQL_GROUPS:
