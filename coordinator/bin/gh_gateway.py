@@ -684,17 +684,23 @@ def parse_options(argv):
             index += 2
             continue
         if word.startswith("-") and len(word) > 2:
-            short = word[:2]
-            if short in booleans:
-                options[short] = True
-                ordered.append((short, True))
-                index += 1
-                continue
-            # The attached form: `-RHOST/OWNER/REPO`, `-R=HOST/OWNER/REPO`,
-            # `-Sfoo`. The optional `=` is part of the syntax, not the value.
-            attached = word[2:].lstrip("=")
-            options[short] = attached
-            ordered.append((short, attached))
+            # A cluster of short options: `-dRhost/o/r` is `-d` (a flag)
+            # followed by `-R` with the attached value `host/o/r`.
+            rest = word[1:]
+            while rest and not rest.startswith("-"):
+                short = "-" + rest[0]
+                if short in booleans:
+                    options[short] = True
+                    ordered.append((short, True))
+                    rest = rest[1:]
+                    continue
+                # The value form: `-RHOST/OWNER/REPO`, `-R=HOST/OWNER/REPO`,
+                # `-Sfoo`. A leading `=` is part of the syntax.
+                attached = rest[1:].lstrip("=")
+                options[short] = attached
+                ordered.append((short, attached))
+                rest = ""
+                break
             index += 1
             continue
         if word.startswith("-"):
