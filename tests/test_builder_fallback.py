@@ -165,7 +165,9 @@ class LaneDriverTests(StoreCase):
     def test_a_blocked_builders_thread_takes_no_send(self):
         module = self.module()
         builders.blocked_builder(GLM, "usage limit")
-        out, calls = self.send_with(module, self.thread(GLM))
+        # The thread's worktree is its own, so the work stays in it.
+        with patch.object(module, "root_workspace", lambda thread: False):
+            out, calls = self.send_with(module, self.thread(GLM))
         self.assertEqual(len(calls), 1)
         payload = __import__("json").loads(calls[0][2])
         self.assertEqual(payload["modelSelection"], MINIMAX)
