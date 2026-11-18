@@ -1038,6 +1038,22 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue((destination / "other.md").exists())
         self.assertTrue((source / "kept.md").exists())
 
+    def test_an_ignored_file_keeps_the_worktree(self):
+        # An ignored file is local work: the status without the ignored
+        # entries would not show it, and it must not be deleted.
+        repo = Path(self.tmp.name) / "ignored-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".gitignore").write_text("notes.local\n", encoding="utf-8")
+        commit(repo, ".gitignore", "notes.local\n")
+        (repo / "notes.local").write_text("local work\n", encoding="utf-8")
+        records = cleaner.status_for(repo, include_ignored=True)
+        self.assertTrue(any(code.strip() == "!!" for code, _name, _original in records), records)
+        plain = cleaner.status_for(repo)
+        self.assertFalse(any(code.strip() == "!!" for code, _name, _original in plain), plain)
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
