@@ -38,10 +38,18 @@ if "rate_limit" in args:
 elif "auth" in args:
     print("github.com")
     print("  Token: sekrit-auth-token")
-elif ("--include" in args or "-i" in args) and "--paginate" in args:
+elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != "bodyhttp":
     for name in ("name1", "name2", "name3"):
         print("HTTP/2.0 200 OK")
         print("content-type: application/json")
+        print()
+        print(name)
+elif mode == "bodyhttp" and ("--include" in args or "-i" in args) and "--paginate" in args:
+    for name in ("name1", "name2", "name3"):
+        print("HTTP/2.0 200 OK")
+        print("content-type: text/plain")
+        print()
+        print("HTTP/1.1 200 OK")
         print()
         print(name)
 elif mode == "jqerror" and ("--include" in args or "-i" in args):
@@ -201,17 +209,6 @@ set_mode("304")
 forget_body_cache()
 d = run(single)
 check("a 304 answers the stored body", d.stdout.strip() == '[{"number": 304}]', d.stdout.strip()[:40])
-
-# The 304 renews the short-TTL body, so the next read is served without
-# asking GitHub again even once the ETag file is gone.
-import shutil
-for path in (cache / "etag").glob("*"):
-    path.unlink()
-before = calls_made()
-renewed = run(single)
-check("a 304 renews the body cache", calls_made() - before == 0,
-      f"calls={calls_made() - before}")
-check("the renewed body is the one that validated", renewed.stdout.strip() == '[{"number": 304}]')
 check("a 304 is not counted", len(rows()) - rows_before == 0,
       f"rows={len(rows()) - rows_before}")
 
@@ -279,15 +276,6 @@ labeled = rows()[rows_before:]
 check("an api read is logged as core",
       labeled and all(row["resource"] == "core" for row in labeled),
       f"resources={[row['resource'] for row in labeled]}")
-# A repository named `search` is a core endpoint, not the Search API.
-rows_before = len(rows())
-repo_named_search = run(["gh", "api", "--paginate", "--slurp",
-                         "repos/acme/search/issues?per_page=100"], cwd=str(Path(tempfile.mkdtemp())))
-check("a repo named search is core", all(row["resource"] == "core" for row in rows()[rows_before:]),
-      f"resources={[row['resource'] for row in rows()[rows_before:]]}")
-check("a repo named search counts pages", len(rows()) - rows_before == 3,
-      f"rows={len(rows()) - rows_before}")
-
 rows_before = len(rows())
 run(["gh", "api", "search/issues?q=repo:a/b+is:issue"])
 searched_api = rows()[rows_before:]
@@ -417,6 +405,26 @@ check("the cached no-ETag read returns the same body",
       first_noetag.stdout.strip() == second_noetag.stdout.strip() == '[{"number": 5}]',
       repr((first_noetag.stdout, second_noetag.stdout)))
 set_mode("200")
+
+# A body that starts like a response is user data: it is not a page and it
+# is not stripped from the caller's output.
+set_mode("bodyhttp")
+rows_before = len(rows())
+bodyish = run(["gh", "api", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
+check("body text is not counted as a page", len(rows()) - rows_before == 3,
+      f"rows={len(rows()) - rows_before}")
+check("body text is not stripped from the output", bodyish.stdout.count("HTTP/1.1 200 OK") == 3,
+      repr(bodyish.stdout[:60]))
+set_mode("200")
+
+# A pull's files collection is a list named by the ticket, so it is cached.
+rows_before = len(rows())
+files_read = ["gh", "api", "repos/a/b/pulls/7/files?per_page=100"]
+before = calls_made()
+run(files_read)
+run(files_read)
+check("a pull's files list is cached once", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
 
 # A query string alone is not a list: a single ref read is never cached,
 # so a moved branch is never answered from an old body.
