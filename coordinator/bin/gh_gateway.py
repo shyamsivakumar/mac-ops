@@ -615,6 +615,8 @@ SHORT_BOOLEAN = {
     ("pr", "merge"): {"-s", "-m", "-r", "-d"},
     # `-a` approves, `-c` comments and `-r` requests changes.
     ("pr", "review"): {"-a", "-c", "-r"},
+    # `-d` is `--draft`, `-f` is `--fill` and `-w` is `--web`.
+    ("pr", "create"): {"-d", "-f", "-w"},
 }
 SHORT_VALUE = {
     # `-b` is `--branch string` for `run list`, not a boolean.
