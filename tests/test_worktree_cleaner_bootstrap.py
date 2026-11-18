@@ -1194,6 +1194,33 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertEqual(len(moved), 1, moved)
         self.assertTrue((moved[0] / "saved.txt").exists(), "every file keeps its name")
 
+    def test_the_sweep_catches_a_link_that_appears_after_the_check(self):
+        # The link appears after the copy was checked, so the move takes the
+        # link and the post-move check has to catch it.
+        base = Path(self.tmp.name)
+        state = base / "state"
+        state.mkdir()
+        trash = base / "trash"
+        trash.mkdir(exist_ok=True)
+        recovery = base / "elsewhere" / "recovered"
+        recovery.mkdir(parents=True)
+        (recovery / "saved.txt").write_text("saved\n", encoding="utf-8")
+        cleaner._TRASH = trash
+        original_rename = os.rename
+
+        swapped = []
+
+        def rename_with_a_link(source, destination, *args, **kwargs):
+            if str(source).endswith("recovered") and not swapped:
+                swapped.append(True)
+                os.rename(str(source), str(source) + "-moved")
+                os.symlink(str(source) + "-moved", str(source))
+            return original_rename(source, destination, *args, **kwargs)
+
+        with mock.patch.object(cleaner.os, "rename", rename_with_a_link):
+            moved = cleaner._remove_recovery_copy(recovery, time.time() + 3600)
+        self.assertFalse(moved, "the move of a link is not a successful move")
+
     def test_the_sweep_never_moves_a_link(self):
         # A link in place of the copy is not the directory that was checked,
         # so it is not moved and the copy stays.

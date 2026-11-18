@@ -1622,7 +1622,9 @@ def _volume_trash(path: Path) -> Path | None:
         return _TRASH if _TRASH.is_dir() else None
     home = Path.home()
     try:
-        if path == home or home in path.parents:
+        if os.stat(path).st_dev == os.stat(home).st_dev:
+            # The same volume as the home directory: its trash is there, even
+            # when a volume is mounted under the home directory.
             trash = home / ".Trash"
         else:
             # The volume root is where the device of a directory differs
