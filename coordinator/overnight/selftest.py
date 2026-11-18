@@ -72,6 +72,21 @@ def exact(actual, expected):
         raise AssertionError(f"expected {expected!r}, got {actual!r}")
 
 
+@contextlib.contextmanager
+def scratch_board(scratch):
+    """Point the lane's decisions board at a scratch file.
+
+    The lane raises one item on the decisions board when a pull request
+    uses its review rounds. A test must never write the board Shyam
+    reads, so the board path is a scratch file for the whole eval.
+    """
+    import lane_driver as lane
+    board = Path(scratch) / "decisions.json"
+    board.write_text(json.dumps({"items": []}))
+    with patch.object(lane, "DECISIONS_PATH", str(board)):
+        yield board
+
+
 def start_routing():
     import lane_driver as lane
     ticket = load_ticket()
@@ -418,7 +433,9 @@ def gate_pipeline():
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         try:
-            with patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
+            with tempfile.TemporaryDirectory() as scratch, \
+                 scratch_board(scratch), \
+                 patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
@@ -543,7 +560,9 @@ def no_parking(status="interrupted"):
         actions.append("continue" if payload["message"].startswith("Continue") else "fix")
         return "sent"
 
-    with patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+    with tempfile.TemporaryDirectory() as scratch, \
+         scratch_board(scratch), \
+         patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
          patch.object(lane, "CFG", {repo: {"key": "MO"}}), \
          patch.object(lane, "builder_thread", return_value=("10", "builder")), \
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
@@ -1494,9 +1513,7 @@ def gate_round_cap():
     repo = "shyamsivakumar/mac-ops"
     heads = ["a" * 40, "b" * 40, "c" * 40, "d" * 40]
     sent = []
-    with tempfile.TemporaryDirectory() as scratch:
-        board = Path(scratch) / "decisions.json"
-        board.write_text(json.dumps({"items": []}))
+    with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board:
 
         def command(cmd, timeout=150):
             if cmd == ["gh", "pr", "view", "20", "-R", repo, "--json", "state,mergedAt"]:
@@ -1521,7 +1538,6 @@ def gate_round_cap():
             snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
             with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
-                 patch.object(lane, "DECISIONS_PATH", str(board)), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "gate_verdict", return_value=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL")), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
@@ -1540,6 +1556,33 @@ def gate_round_cap():
         # The fix rounds of the pull request are its failed reviews before
         # the one in hand.
         exact(lane.failed_reviews(repo, 20, ledger), (4, heads[3]))
+
+
+def decisions_board_guard():
+    """A test run never writes the board Shyam reads.
+
+    The lane raises one item on the decisions board when a pull request
+    uses its review rounds. The board path comes from the environment, so
+    a test points it at a scratch file. This eval runs the path that
+    raises the item and checks that the board Shyam reads is byte for
+    byte what it was before.
+    """
+    import lane_driver as lane
+    real = Path("/Users/shyamsivakumar/Code/coordinator/decisions.json")
+    before = real.read_bytes() if real.exists() else None
+    with tempfile.TemporaryDirectory() as scratch:
+        board = Path(scratch) / "decisions.json"
+        board.write_text(json.dumps({"items": []}))
+        with patch.object(lane, "DECISIONS_PATH", str(board)):
+            lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
+            # A second pass over the same pull request finds the item
+            # already on the board, so the board holds one item.
+            lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
+        items = json.loads(board.read_text())["items"]
+        exact(len(items), 1)
+        exact(items[0]["id"], "lane-gate-rounds-fixture-repo-20")
+    after = real.read_bytes() if real.exists() else None
+    exact(after, before)
 
 
 def send_integrity():
@@ -2764,7 +2807,7 @@ def alarm_mute():
 
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():
