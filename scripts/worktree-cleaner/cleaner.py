@@ -2324,6 +2324,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                 except OSError:
                                     info = None
                                 matched = info is not None and (not expected_identity or f"{info.st_dev}:{info.st_ino}" == expected_identity)
+                                moved_to: Path | None = None
                                 if matched:
                                     # The moved worktree keeps every file and
                                     # every name, so a save through an open
@@ -2334,6 +2335,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                     try:
                                         storage.mkdir(mode=0o700, parents=True, exist_ok=True)
                                         os.rename(Path(candidate["path"]).parent / aside, storage / aside)
+                                        moved_to = storage / aside
                                         tree_gone = True
                                     except OSError:
                                         tree_gone = False
@@ -2344,11 +2346,13 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                         # is reported as incomplete.
                                         tree_gone = False
                                 if not tree_gone:
-                                    # The copy is moved back with a rename that
-                                    # refuses an occupied path, so a save at
-                                    # that path is never replaced and the
-                                    # aside copy is kept whole.
-                                    if not _rename_exclusive(Path(candidate["path"]).parent / aside, Path(candidate["path"])):
+                                    # The copy is moved back from where it is
+                                    # now, with a rename that refuses an
+                                    # occupied path, so a save at that path is
+                                    # never replaced and the copy is kept
+                                    # whole.
+                                    source = moved_to or (Path(candidate["path"]).parent / aside)
+                                    if not _rename_exclusive(source, Path(candidate["path"])):
                                         candidate["checkout_conflict"] = True
                             os.close(parent)
                     # The registration is removed through its own descriptor, so a
