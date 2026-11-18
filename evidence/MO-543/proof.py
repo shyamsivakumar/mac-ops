@@ -337,8 +337,13 @@ def truncated_tree_walk():
         if "/compare/" in endpoint:
             return {"merge_base_commit": {"sha": "base"}}
         if endpoint.endswith("/git/trees/head?recursive=1"):
-            return {"truncated": True,
-                    "tree": [{"type": "tree", "path": "skills", "sha": "sub"}]}
+            return {"truncated": True, "tree": []}
+        if endpoint.endswith("/git/trees/head"):
+            # The fresh root listing carries the root files a truncated
+            # recursive listing never showed.
+            return {"tree": [{"type": "blob", "path": "AGENT-RULES.md",
+                              "mode": "100644", "sha": "root"},
+                             {"type": "tree", "path": "skills", "sha": "sub"}]}
         if endpoint.endswith("/git/trees/sub"):
             return {"tree": [{"type": "blob", "path": "x/SKILL.md",
                               "mode": "100644", "sha": "9"}]}
@@ -347,8 +352,8 @@ def truncated_tree_walk():
         raise AssertionError(endpoint)
 
     paths = prompt_paths.tree_diff(fetch, "o/r", "main", "head")
-    grant("trees: a truncated repository tree is walked by subtree",
-          paths == ["a.py", "skills/x/SKILL.md"]
+    grant("trees: a truncated tree is walked from a fresh root, root files included",
+          paths == ["AGENT-RULES.md", "a.py", "skills/x/SKILL.md"]
           and prompt_paths.prompt_scan(paths) == prompt_paths.HOLD, command)
 
 
