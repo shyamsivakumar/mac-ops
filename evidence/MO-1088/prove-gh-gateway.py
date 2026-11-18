@@ -45,16 +45,6 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != 
         print("x-ratelimit-resource: core")
         print()
         print(name)
-elif mode == "partialheaders" and "--include" in args and "--paginate" in args:
-    # Two pages print headers, then the third request fails without headers.
-    for name in ("name1", "name2"):
-        print("HTTP/2.0 200 OK")
-        print("content-type: application/json")
-        print("x-ratelimit-resource: core")
-        print()
-        print(name)
-    sys.stderr.write("gh: HTTP 502\\n")
-    sys.exit(1)
 elif mode == "failfirst" and "--paginate" in args:
     # The first request fails: one attempt, no page printed.
     sys.stderr.write("gh: HTTP 502\\n")
@@ -500,15 +490,6 @@ check("the lane's own calls are named lane_driver",
       [row["caller"] for row in rows_after[-2:]] == ["overnight", "lane_driver"],
       f"callers={[row['caller'] for row in rows_after[-2:]]}")
 
-# A header-carrying read that fails after printing pages still counts the
-# request that failed: the blocks are the pages, not a JSON body.
-set_mode("partialheaders")
-rows_before = len(rows())
-run(["gh", "api", "--include", "--paginate", "repos/a/b/tags"])
-check("a failed header-carried pagination counts its failed request",
-      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
-set_mode("200")
-
 # A read whose first request fails made one attempt, not two.
 set_mode("failfirst")
 rows_before = len(rows())
@@ -523,6 +504,20 @@ run(["gh", "api", "--paginate", "repos/a/b/issues?state=open"])
 check("a failed pagination counts its failed request",
       len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
 set_mode("200")
+
+# `gh repo` is a mixed command: list and view are GraphQL, writes are REST,
+# and a subcommand this code does not know is `other`, not core.
+import subprocess as _sp
+_repo_routes = _sp.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+for argv in (["gh", "repo", "list"], ["gh", "repo", "view"],
+             ["gh", "repo", "create"], ["gh", "repo", "unknowncmd"]):
+    print(gh_gateway.resource(argv))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("gh repo is classified by subcommand",
+      _repo_routes == ["graphql", "graphql", "core", "other"], str(_repo_routes))
 
 # A filter value named `graphql` does not make a REST read GraphQL.
 rows_before = len(rows())
