@@ -345,6 +345,18 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("tests/test_alarm_panel.py", item["detail"])
         self.assertNotIn("pass", item["status"])
 
+    def test_an_inline_marker_does_not_lift_the_enclosing_exclusion(self):
+        """An "In:" bullet under an exclusion does not permit the file.
+
+        The exclusion holds throughout its section: a marker written
+        inside it cannot turn the file it names into a permission.
+        """
+        check = close_check()
+        ticket = "In: src/\n## Out of scope\n- In: legacy/config.py\n"
+        item = check.item_scope(ticket, ["src/parser.py", "legacy/config.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("legacy/config.py", item["detail"])
+
     def test_a_nested_scope_heading_does_not_lift_the_exclusion(self):
         """A heading under an exclusion cannot permit what it holds.
 

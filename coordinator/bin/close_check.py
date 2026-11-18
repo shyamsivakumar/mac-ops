@@ -145,8 +145,14 @@ def scope_texts(body):
             position = 0
             for match in SEGMENT.finditer(sentence):
                 kind = record(sentence[position:match.start()], kind)
-                kind = ("exclusion" if match.group(1).lower() in OUT_MARKERS
-                        else "declared")
+                marker = match.group(1).lower()
+                if marker in OUT_MARKERS:
+                    kind = "exclusion"
+                elif kind != "exclusion":
+                    kind = "declared"
+                # An inline marker cannot lift the exclusion of the
+                # section it sits in: the exclusion holds until a sibling
+                # or a higher heading ends it.
                 position = match.end()
             kind = record(sentence[position:], kind)
     # A ticket is judged by its declaration: the words after an "in"
