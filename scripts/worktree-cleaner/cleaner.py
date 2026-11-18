@@ -570,8 +570,14 @@ def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> in
             return 0
         except OSError:
             return 1
+    # The file is restored exclusively: a path that was taken by a newer save
+    # keeps that save, and the copy that was moved aside is kept beside it.
     try:
-        os.rename(moved, name, src_dir_fd=fd, dst_dir_fd=fd)
+        os.link(moved, name, src_dir_fd=fd, dst_dir_fd=fd)
+    except OSError:
+        return 1
+    try:
+        os.unlink(moved, dir_fd=fd)
     except OSError:
         pass
     return 1
@@ -1849,144 +1855,151 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_head_locked"]
                     append_removal(state_root, candidate, "removal_blocked")
                     continue
-                if not _head_matches(Path(candidate["path"]), str(candidate["head"])):
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_head_changed_before_remove"]
-                    append_removal(state_root, candidate, "removal_blocked")
-                    continue
-                # The directory that is opened has to be the one the scan saw.
                 try:
-                    directory = os.open(Path(candidate["path"]), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                except OSError:
-                    directory = None
-                if directory is None:
-                    append_removal(state_root, candidate, "removal_failed")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_directory_unavailable"]
-                    continue
-                try:
-                    info = os.fstat(directory)
-                    identity = f"{info.st_dev}:{info.st_ino}"
-                except OSError:
-                    identity = ""
-                if expected_identity and identity != expected_identity:
-                    os.close(directory)
-                    append_removal(state_root, candidate, "removal_blocked")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_replaced_before_remove"]
-                    continue
-                # The snapshot comes before the status check, so a file that is
-                # saved after the check is not in it and is never removed.
-                snapshot = _snapshot_all(directory)
-                pointer = ""
-                try:
-                    pointer = (Path(candidate["path"]) / ".git").read_text(encoding="utf-8", errors="replace")
-                except OSError:
+                    if not _head_matches(Path(candidate["path"]), str(candidate["head"])):
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_head_changed_before_remove"]
+                        append_removal(state_root, candidate, "removal_blocked")
+                        continue
+                    # The directory that is opened has to be the one the scan saw.
+                    try:
+                        directory = os.open(Path(candidate["path"]), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    except OSError:
+                        directory = None
+                    if directory is None:
+                        append_removal(state_root, candidate, "removal_failed")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_directory_unavailable"]
+                        continue
+                    try:
+                        info = os.fstat(directory)
+                        identity = f"{info.st_dev}:{info.st_ino}"
+                    except OSError:
+                        identity = ""
+                    if expected_identity and identity != expected_identity:
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_replaced_before_remove"]
+                        continue
+                    # The snapshot comes before the status check, so a file that is
+                    # saved after the check is not in it and is never removed.
+                    snapshot = _snapshot_all(directory)
                     pointer = ""
-                try:
-                    pending = status_for(Path(candidate["path"]))
-                except SafetyError:
-                    pending = None
-                if pending is None:
-                    # A failed inspection blocks the removal.
-                    os.close(directory)
-                    append_removal(state_root, candidate, "removal_blocked")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_status_unknown"]
-                    continue
-                if pending:
-                    # The same refusal git makes for a dirty worktree: a file
-                    # that was saved after the last status check is real work
-                    # and is never removed.
-                    os.close(directory)
-                    append_removal(state_root, candidate, "removal_blocked")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_changed_before_remove"]
-                    continue
-                kept = _remove_tree(directory, {}, snapshot)
-                # What is left in the directory decides whether the checkout
-                # survives, not the count of entries the loop handled: a file
-                # that was created after the snapshot is not in the loop at all.
-                remaining = _snapshot_directory(directory)
-                survived = bool(remaining)
-                os.close(directory)
-                tree_gone = False
-                if not survived:
                     try:
-                        os.rmdir(candidate["path"])
-                        tree_gone = True
+                        pointer = (Path(candidate["path"]) / ".git").read_text(encoding="utf-8", errors="replace")
                     except OSError:
-                        tree_gone = False
-                # The registration is removed through its own descriptor, so a
-                # registration that replaced it in the meantime is not
-                # touched.
-                registration_gone = False
-                if survived:
-                    # Files survived the deletion, so the checkout is still
-                    # there and keeps its pointer, and the registration is
-                    # kept with it.
-                    if pointer:
+                        pointer = ""
+                    try:
+                        pending = status_for(Path(candidate["path"]))
+                    except SafetyError:
+                        pending = None
+                    if pending is None:
+                        # A failed inspection blocks the removal.
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_status_unknown"]
+                        continue
+                    if pending:
+                        # The same refusal git makes for a dirty worktree: a file
+                        # that was saved after the last status check is real work
+                        # and is never removed.
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_changed_before_remove"]
+                        continue
+                    kept = _remove_tree(directory, {}, snapshot)
+                    # What is left in the directory decides whether the checkout
+                    # survives, not the count of entries the loop handled: a file
+                    # that was created after the snapshot is not in the loop at all.
+                    remaining = _snapshot_directory(directory)
+                    survived = bool(remaining)
+                    os.close(directory)
+                    tree_gone = False
+                    if not survived:
                         try:
-                            (Path(candidate["path"]) / ".git").write_text(pointer, encoding="utf-8")
+                            os.rmdir(candidate["path"])
+                            tree_gone = True
                         except OSError:
-                            pass
-                    try:
-                        admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                    except OSError:
-                        admin = None
-                    if admin is not None:
-                        os.close(admin)
+                            tree_gone = False
+                    # The registration is removed through its own descriptor, so a
+                    # registration that replaced it in the meantime is not
+                    # touched.
                     registration_gone = False
-                else:
-                    try:
-                        admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                    except OSError:
-                        admin = None
-                if not survived and admin is not None:
-                    try:
-                        admin_parent = os.open(registration.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                    except OSError:
-                        admin_parent = None
-                    try:
-                        info = os.fstat(admin)
-                        if admin_parent is not None and (info.st_dev, info.st_ino) == registration_identity:
-                            _remove_tree(admin, {}, _snapshot_all(admin))
-                            # The registration is renamed aside before it is
-                            # removed, so the directory that is removed is one
-                            # this call owns.
-                            aside = f".cleaner-registration-{os.getpid()}-{abs(hash(registration)) & 0xFFFF:x}"
+                    if not tree_gone:
+                        # Files survived the deletion, so the checkout is still
+                        # there and keeps its pointer, and the registration is
+                        # kept with it.
+                        if pointer:
                             try:
-                                os.rename(registration, aside, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
+                                (Path(candidate["path"]) / ".git").write_text(pointer, encoding="utf-8")
                             except OSError:
-                                registration_gone = False
-                            else:
+                                pass
+                        try:
+                            admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                        except OSError:
+                            admin = None
+                        if admin is not None:
+                            os.close(admin)
+                        registration_gone = False
+                    else:
+                        try:
+                            admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                        except OSError:
+                            admin = None
+                    if tree_gone and admin is not None:
+                        try:
+                            admin_parent = os.open(registration.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                        except OSError:
+                            admin_parent = None
+                        try:
+                            info = os.fstat(admin)
+                            if admin_parent is not None and (info.st_dev, info.st_ino) == registration_identity:
+                                _remove_tree(admin, {}, _snapshot_all(admin))
+                                # The registration is renamed aside before it is
+                                # removed, so the directory that is removed is one
+                                # this call owns.
+                                aside = f".cleaner-registration-{os.getpid()}-{abs(hash(registration)) & 0xFFFF:x}"
                                 try:
-                                    info = os.stat(aside, dir_fd=admin_parent, follow_symlinks=False)
-                                    if (info.st_dev, info.st_ino) == registration_identity:
-                                        os.rmdir(aside, dir_fd=admin_parent)
-                                        registration_gone = True
-                                    else:
-                                        os.rename(aside, registration, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
-                                        registration_gone = False
+                                    os.rename(registration, aside, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
                                 except OSError:
                                     registration_gone = False
-                    finally:
-                        os.close(admin)
-                        if admin_parent is not None:
-                            os.close(admin_parent)
-                candidate["kept_entries"] = kept
-                prune_results.append({
-                    "repo": str(repo_root), "worktree": candidate["path"],
-                    "ok": tree_gone and registration_gone,
-                    "error": None if tree_gone and registration_gone else "the checkout or the registration is still there",
-                    "kept_entries": kept,
-                })
-                if not (tree_gone and registration_gone):
-                    # The removal is reported as what it was.
-                    append_removal(state_root, candidate, "removal_incomplete")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_not_fully_removed"]
-                    continue
+                                else:
+                                    try:
+                                        info = os.stat(aside, dir_fd=admin_parent, follow_symlinks=False)
+                                        if (info.st_dev, info.st_ino) == registration_identity:
+                                            os.rmdir(aside, dir_fd=admin_parent)
+                                            registration_gone = True
+                                        else:
+                                            os.rename(aside, registration, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
+                                            registration_gone = False
+                                    except OSError:
+                                        registration_gone = False
+                        finally:
+                            os.close(admin)
+                            if admin_parent is not None:
+                                os.close(admin_parent)
+                    candidate["kept_entries"] = kept
+                    prune_results.append({
+                        "repo": str(repo_root), "worktree": candidate["path"],
+                        "ok": tree_gone and registration_gone,
+                        "error": None if tree_gone and registration_gone else "the checkout or the registration is still there",
+                        "kept_entries": kept,
+                    })
+                    if not (tree_gone and registration_gone):
+                        # The removal is reported as what it was.
+                        append_removal(state_root, candidate, "removal_incomplete")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_not_fully_removed"]
+                        continue
+                finally:
+                    if lock.exists():
+                        try:
+                            lock.unlink()
+                        except OSError:
+                            pass
                 append_removal(state_root, candidate, "removed")
                 candidate["eligible"] = False
                 candidate["removed"] = True

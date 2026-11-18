@@ -81,6 +81,9 @@ the test that fails without the fix.
 | 79 | a file's identity was checked and its name was unlinked, so a file that was replaced in between lost the new version | the file is renamed aside first, so the name that is unlinked belongs to this call, and a file that was replaced after the stamp is put back | `verification/worktree-cleaner/check_bootstrap.py` |
 | 80 | a file created after the snapshot was not in the deletion loop, so the count of kept entries was zero and the registration was deleted although the checkout survived | what is left in the directory decides whether the checkout survives, so the registration and the `.git` pointer are kept whenever a file survives | `verification/worktree-cleaner/check_bootstrap.py` |
 | 81 | the registration was removed by pathname after its identity was checked, so an empty replacement could be removed | the registration is renamed aside before it is removed, so the directory that is removed is one this call owns | `verification/worktree-cleaner/check_bootstrap.py` |
+| 82 | a changed file was restored with an overwriting rename, so a newer save at the original path was destroyed | the file is restored **exclusively** with a link, so a path that was taken by a newer save keeps that save and the copy that was moved aside is kept beside it | `verification/worktree-cleaner/check_bootstrap.py` |
+| 83 | the registration was removed on the earlier survival value even when the removal of the directory failed, so a surviving file was left without its pointer or registration | the registration is removed only when the **removal of the checkout was confirmed** | `verification/worktree-cleaner/check_bootstrap.py` |
+| 84 | the head lock was kept when the removal was refused, so the retained checkout was locked against commits | the lock is released on **every** path out of the removal | `verification/worktree-cleaner/check_bootstrap.py` |
 
 ## How the fixes are proved
 
