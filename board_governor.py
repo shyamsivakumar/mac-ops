@@ -1233,7 +1233,6 @@ def _critical_pressure(helper, sample):
 
 
 _last_restart_tick = 0.0
-_last_simulator_sweep = 0.0
 
 
 def _board_restart_tick():
@@ -1246,12 +1245,7 @@ def _board_restart_tick():
 
 
 def _simulator_sweep_tick(helper):
-    """Stop simulator processes that belong to no booted device, at most every 10 seconds."""
-    global _last_simulator_sweep
-    now = time.monotonic()
-    if now - _last_simulator_sweep < helper.SIMULATOR_SWEEP_INTERVAL_SECONDS:
-        return {"action": "not-due"}
-    _last_simulator_sweep = now
+    """Stop simulator processes that belong to no booted device."""
     result = helper.stop_orphan_simulator_processes()
     if result.get("stopped"):
         result["action"] = "stopped"

@@ -65,7 +65,8 @@ JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
 SIMCTL_TIMEOUT = 15.0
-SIMULATOR_SWEEP_INTERVAL_SECONDS = 10.0
+SIMULATOR_LOCK_NAME = ".simulators.lock"
+SIMULATOR_LOCK_TIMEOUT = 30.0
 SIMULATOR_DEVICE_PATTERN = re.compile(
     r"/CoreSimulator/Devices/([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
     r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})/"
@@ -832,10 +833,12 @@ class Registry:
         self.uid = os.getuid() if uid is None else uid
 
     @contextmanager
-    def lock(self, *, exclusive: bool = True, timeout: float = 5.0) -> Iterable[None]:
-        """Hold a flock on the registry lock file for the duration of the block."""
+    def lock(
+        self, *, exclusive: bool = True, timeout: float = 5.0, name: str = ".lock"
+    ) -> Iterable[None]:
+        """Hold a flock on a lock file of the registry directory for the block."""
         _secure_directory(self.directory, self.uid, create=False, mode=0o700)
-        lock_path = self.directory / ".lock"
+        lock_path = self.directory / name
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -2213,30 +2216,78 @@ def simulator_process_rows(
     return rows
 
 
+def _process_executable(pid: int) -> Optional[str]:
+    """Return the executable path of a process, or None when it cannot be read."""
+    if _LIBPROC is None:
+        return None
+    function = _LIBPROC.proc_pidpath
+    function.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    function.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(4096)
+    length = function(pid, buffer, len(buffer))
+    if length <= 0:
+        return None
+    return buffer.raw[:length].decode("utf-8", "replace")
+
+
+def _simulator_candidate(command: str) -> bool:
+    return (
+        "launchd_sim" in command
+        or "/CoreSimulator/" in command
+        or ".simruntime/" in command
+    )
+
+
 def simulator_device_owners(
-    rows: Sequence[Tuple[int, int, str]]
-) -> Dict[int, str]:
-    """Map each simulator process pid to the simulator device that owns it."""
+    rows: Sequence[Tuple[int, int, str]],
+    executable_reader: Callable[[int], Optional[str]] = _process_executable,
+) -> Dict[int, Optional[str]]:
+    """Map each simulator process pid to the device that owns it.
+
+    A process is a simulator process only when its own executable is the
+    simulator launchd, lives in a device data directory, or lives in a simulator
+    runtime. A process that only mentions a simulator path in its arguments is
+    not one. A runtime process with no simulator launchd above it and a parent
+    chain that ends at pid 1 has no device, and maps to None. A runtime process
+    whose parent chain cannot be followed is left out.
+    """
     parents = {pid: ppid for pid, ppid, _ in rows}
+    executables: Dict[int, str] = {}
+    for pid, _, command in rows:
+        if not _simulator_candidate(command):
+            continue
+        executable = executable_reader(pid)
+        if executable:
+            executables[pid] = executable
     launchd: Dict[int, str] = {}
     for pid, _, command in rows:
-        if "launchd_sim" not in command:
+        executable = executables.get(pid)
+        if executable is None or os.path.basename(executable) != "launchd_sim":
             continue
         match = SIMULATOR_DEVICE_PATTERN.search(command)
         if match:
             launchd[pid] = match.group(1)
-    owners: Dict[int, str] = {}
-    for pid, ppid, command in rows:
-        match = SIMULATOR_DEVICE_PATTERN.search(command)
+    owners: Dict[int, Optional[str]] = {}
+    for pid, ppid, _ in rows:
+        executable = executables.get(pid)
+        if executable is None:
+            continue
+        if pid in launchd:
+            owners[pid] = launchd[pid]
+            continue
+        match = SIMULATOR_DEVICE_PATTERN.search(executable)
         if match:
             owners[pid] = match.group(1)
             continue
-        if not SIMULATOR_RUNTIME_PATTERN.search(command):
+        if not SIMULATOR_RUNTIME_PATTERN.search(executable):
             continue
         current = ppid
         for _ in range(16):
             if current in launchd:
                 owners[pid] = launchd[current]
+                break
+            if current <= 1:
+                owners[pid] = None
                 break
             following = parents.get(current)
             if following is None or following == current:
@@ -2246,12 +2297,16 @@ def simulator_device_owners(
 
 
 def simulator_device_boot_epochs(
-    rows: Sequence[Tuple[int, int, str]]
+    rows: Sequence[Tuple[int, int, str]],
+    executable_reader: Callable[[int], Optional[str]] = _process_executable,
 ) -> Dict[str, float]:
     """Return the wall clock start time of each simulator device's launchd process."""
     epochs: Dict[str, float] = {}
     for pid, _, command in rows:
         if "launchd_sim" not in command:
+            continue
+        executable = executable_reader(pid)
+        if executable is None or os.path.basename(executable) != "launchd_sim":
             continue
         match = SIMULATOR_DEVICE_PATTERN.search(command)
         if not match:
@@ -2290,6 +2345,39 @@ def _process_identity(pid: int) -> Optional[Tuple[int, str]]:
     return (info.uid, info.start_token)
 
 
+def _orphan_snapshot(
+    *,
+    booted_reader: Callable[[], Dict[str, str]],
+    rows_reader: Callable[[], List[Tuple[int, int, str]]],
+    executable_reader: Callable[[int], Optional[str]],
+    identity_reader: Callable[[int], Optional[Tuple[int, str]]],
+    epoch_clock: Callable[[], float],
+) -> Dict[int, Tuple[Optional[str], Tuple[int, str]]]:
+    """Return the simulator processes that belong to no booted device.
+
+    Each process comes with the uid and start token read right after the process
+    listing. A process that started after the listing began is a reused pid, not
+    the process that was classified, and is left out.
+    """
+    taken = epoch_clock()
+    booted = set(booted_reader())
+    owners = simulator_device_owners(rows_reader(), executable_reader)
+    snapshot: Dict[int, Tuple[Optional[str], Tuple[int, str]]] = {}
+    for pid, udid in sorted(owners.items()):
+        if udid is not None and udid in booted:
+            continue
+        identity = identity_reader(pid)
+        if identity is None or identity[0] != os.getuid():
+            continue
+        try:
+            if float(identity[1]) > taken:
+                continue
+        except ValueError:
+            continue
+        snapshot[pid] = (udid, identity)
+    return snapshot
+
+
 def stop_orphan_simulator_processes(
     *,
     booted_reader: Callable[[], Dict[str, str]] = simulator_booted_devices,
@@ -2298,58 +2386,61 @@ def stop_orphan_simulator_processes(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = monotonic,
     identity_reader: Callable[[int], Optional[Tuple[int, str]]] = _process_identity,
+    executable_reader: Callable[[int], Optional[str]] = _process_executable,
+    epoch_clock: Callable[[], float] = time.time,
 ) -> Dict[str, Any]:
     """Stop simulator processes that belong to no booted device.
 
-    A simulator process is an orphan when the device that owns it is not booted.
-    Processes of a booted device are never touched. The booted devices are read
-    again before any signal, so a device that starts booting in between is left
-    alone, and every signal is sent only to a process whose uid and start token
-    still match the ones read before the first signal.
+    A simulator process is an orphan when the device that owns it is not booted,
+    or when it has no device at all. Processes of a booted device are never
+    touched. The booted devices and the process table are read again right before
+    the first signal and again right before escalating to SIGKILL, so a device
+    that starts booting in between is left alone. A signal goes only to a process
+    whose uid and start token match the ones read with its classification.
     """
-    booted = set(booted_reader())
-    rows = rows_reader()
-    owners = simulator_device_owners(rows)
-    orphans = sorted(pid for pid, udid in owners.items() if udid not in booted)
-    if not orphans:
+
+    def snapshot():
+        return _orphan_snapshot(
+            booted_reader=booted_reader,
+            rows_reader=rows_reader,
+            executable_reader=executable_reader,
+            identity_reader=identity_reader,
+            epoch_clock=epoch_clock,
+        )
+
+    if not snapshot():
         return {"stopped": 0, "devices": []}
-    booted_now = set(booted_reader())
-    orphans = [pid for pid in orphans if owners[pid] not in booted_now]
-    if not orphans:
+    targets = snapshot()
+    if not targets:
         return {"stopped": 0, "devices": []}
-    identities: Dict[int, Tuple[int, str]] = {}
-    for pid in orphans:
-        identity = identity_reader(pid)
-        if identity is None or identity[0] != os.getuid():
-            continue
-        identities[pid] = identity
-    if not identities:
-        return {"stopped": 0, "devices": []}
-    for pid in identities:
+    for pid in targets:
         try:
             kill(pid, signal.SIGTERM)
         except OSError:
             pass
     deadline = clock() + 2.0
-    remaining = list(identities)
+    remaining = list(targets)
     while remaining and clock() < deadline:
         remaining = [
             pid
             for pid in remaining
-            if _pid_alive(pid) and identity_reader(pid) == identities[pid]
+            if _pid_alive(pid) and identity_reader(pid) == targets[pid][1]
         ]
         if remaining:
             sleep(0.2)
-    for pid in remaining:
-        if identity_reader(pid) != identities[pid]:
-            continue
-        try:
-            kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+    if remaining:
+        still_orphans = snapshot()
+        for pid in remaining:
+            current = still_orphans.get(pid)
+            if current is None or current[1] != targets[pid][1]:
+                continue
+            try:
+                kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
     return {
-        "stopped": len(identities),
-        "devices": sorted({owners[pid] for pid in identities}),
+        "stopped": len(targets),
+        "devices": sorted({udid for udid, _ in targets.values() if udid}),
     }
 
 
@@ -2370,9 +2461,9 @@ def _device_used_by_other_job(
             continue
         command = str(other.get("command_basename") or "")
         simulators = other.get("simulators")
-        if command not in SIMULATOR_JOB_COMMANDS and not isinstance(simulators, dict):
-            continue
         if not isinstance(simulators, dict):
+            if command in SIMULATOR_JOB_COMMANDS:
+                return True
             continue
         booted_before = simulators.get("booted")
         if isinstance(booted_before, list) and udid in booted_before:
@@ -2415,9 +2506,7 @@ def shutdown_simulators_booted_by_job(
     if isinstance(started_at, bool):
         return []
     booted = booted_reader()
-    rows = rows_reader()
-    owners = simulator_device_owners(rows)
-    boot_epochs = epochs_reader(rows)
+    boot_epochs = epochs_reader(rows_reader())
     stopped: List[str] = []
     for udid in sorted(booted):
         if udid in set(booted_before):
@@ -2440,17 +2529,36 @@ def shutdown_simulators_booted_by_job(
     return stopped
 
 
-def _capture_simulator_state(
-    command_basename: str, argv: Sequence[str]
-) -> Optional[Dict[str, Any]]:
-    """Record the booted simulator devices before a job starts."""
+def _attach_simulator_state(
+    registry: Registry, job_id: str, command_basename: str, argv: Sequence[str]
+) -> None:
+    """Record the booted simulator devices on the job record before it starts.
+
+    The read and the write happen under the simulator lock, the same lock that
+    job-end cleanup holds while it decides and shuts a device down. A job either
+    records a device before cleanup looks for competing jobs, or reads the device
+    state after cleanup shut the device down. A lock that cannot be taken leaves
+    the job without a snapshot, and a competing job without a snapshot keeps
+    every device on.
+    """
     if not _is_simulator_job(command_basename, argv):
-        return None
+        return
     try:
-        booted = simulator_booted_devices()
-    except (HeavyError, OSError):
-        booted = {}
-    return {"booted": sorted(booted), "started_at": time.time()}
+        with registry.lock(name=SIMULATOR_LOCK_NAME, timeout=SIMULATOR_LOCK_TIMEOUT):
+            try:
+                booted = simulator_booted_devices()
+            except (HeavyError, OSError):
+                booted = {}
+            state = {"booted": sorted(booted), "started_at": time.time()}
+
+            def attach(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                current["simulators"] = state
+                return current
+
+            with registry.lock():
+                registry.update(job_id, attach)
+    except HeavyError:
+        return
 
 
 def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[str]:
@@ -2458,7 +2566,9 @@ def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[
 
     The competing jobs are read again for every device. A registry read that
     fails stops the cleanup, so a device another running job may use is never
-    shut down because the registry could not be read.
+    shut down because the registry could not be read. The whole decision and the
+    shutdown run under the simulator lock, so a job cannot take a device between
+    the check and the shutdown.
     """
     if not isinstance(record.get("simulators"), dict):
         return []
@@ -2473,9 +2583,10 @@ def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[
             ]
 
     try:
-        stopped = shutdown_simulators_booted_by_job(
-            record, other_records_reader=competing_records
-        )
+        with registry.lock(name=SIMULATOR_LOCK_NAME, timeout=SIMULATOR_LOCK_TIMEOUT):
+            stopped = shutdown_simulators_booted_by_job(
+                record, other_records_reader=competing_records
+            )
     except Exception:
         return []
     if stopped:
@@ -3287,18 +3398,8 @@ def _launch_job(
     project_fd = None
     try:
         record = _record(registry, job_id)
-        simulator_state = _capture_simulator_state(command_basename, argv)
-        if simulator_state is not None:
-            with registry.lock():
-
-                def attach_simulators(
-                    current: Dict[str, Any]
-                ) -> Optional[Dict[str, Any]]:
-                    current["simulators"] = simulator_state
-                    return current
-
-                registry.update(job_id, attach_simulators)
-            record = _record(registry, job_id)
+        _attach_simulator_state(registry, job_id, command_basename, argv)
+        record = _record(registry, job_id)
         project_fd = _acquire_project_lock(
             registry,
             project_key,
