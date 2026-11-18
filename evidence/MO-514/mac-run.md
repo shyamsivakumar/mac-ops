@@ -2,17 +2,17 @@
 
 The worktree cleaner on this Mac, at the head of PR #545.
 
-- executed commit: `9b4cfcdef58d800984fb9fb2f7b566e5d189ea2b`
+- executed commit: `141d95db9a8bee845bf983414da2519d6df3291d`
 - command: `python3 scripts/worktree-cleaner/cleaner.py --dry-run --no-report`
 
 ## Dry run
 
 - repositories scanned: 71
-- worktrees scanned: 239
-- categories: safe 0, needs a look 113, in use or protected 55
+- worktrees scanned: 238
+- categories: safe 0, needs a look 113, in use or protected 54
 - eligible (would be removed): 0
 - excluded repositories: 32
-- held: 239
+- held: 238
 
 Reasons per worktree, in aggregate:
 
@@ -22,10 +22,10 @@ Reasons per worktree, in aggregate:
 | github_pr_not_closed_for_head | 52 |
 | github_pr_open | 14 |
 | main_checkout | 71 |
-| process_cwd_inside | 9 |
-| remote_commit_unverified | 20 |
-| t3_thread_unfinished | 40 |
-| worktree_dirty | 80 |
+| process_cwd_inside | 7 |
+| remote_commit_unverified | 21 |
+| t3_thread_unfinished | 39 |
+| worktree_dirty | 79 |
 | worktree_missing_or_prunable | 10 |
 | worktree_outside_scope | 84 |
 | worktree_status_unknown | 1 |
@@ -62,13 +62,12 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-183d70ea-e8dc1b09f1a23b41` | detached | ee144cdce816 | detached_not_proven_24h_old |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-1bd9b9e6-95c92394691f3ea2` | t3/invite-redemption-audit-slice | 10bad28f38ba | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-6cc00be6-418aeee9357c5436` | detached | 0743cd55c35f | detached_not_proven_24h_old |
-| `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-a248118e-806b5489338cca83` | t3/fix-pr-builder-check-line | 74c4d8977b33 | process_cwd_inside, t3_thread_unfinished |
+| `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-a248118e-806b5489338cca83` | t3/fix-pr-builder-check-line | 74c4d8977b33 | t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-con-102-dry-run-25642a6bcda8ce92` | t3/con-102-dry-run | 0743cd55c35f | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-con-102-grants-331bb1e4deb7fd9e` | t3/con-102-grants | 9f58ce770167 | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-con-105-rebase` | con-15-area-concern-workspace-invariant | 99035592231a | github_pr_open |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-con-106-rebase` | con-16-invite-atomic-expiry | 7f3aec405992 | github_pr_open |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-con-14-fix-81bd08089d88164d` | t3/con-14-fix | 5f259a1e24a1 | github_pr_not_closed_for_head |
-| `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-con-rebase-105-106-39ee104f145f1125` | t3/con-rebase-105-106 | 74c4d8977b33 | t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-e0f553f3-52fdfde222f25372` | t3/expose-build-commit-health | b15aa216a258 | t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-ning-13-redesign-bui-5e3330407d52e635` | t3/ning-13-redesign-build | 2ac9adf0066c | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-terrane-landing-memo-20e2c5ce95593d80` | t3/terrane-landing-memo-redesign-6b | 68811951a13c | worktree_dirty |
@@ -118,10 +117,10 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-0b52757a-92a5e3a85418e130` | t3/traces-trial-findings | 99b14ecd94f8 | github_pr_not_closed_for_head, remote_commit_unverified |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-190b68f0-118b49042f0f6e1c` | t3/overnight-pr-state-actions | 88217fd4b647 | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-22350cfe-02533d768be081e9` | t3/mo245-shift-health | ac247e18ec78 | t3_thread_unfinished |
-| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-2767e585-3aaf4aae17942d16` | t3/worktree-cleaner-auto-archive | 9b4cfcdef58d | github_pr_open, process_cwd_inside, t3_thread_unfinished, worktree_dirty |
+| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-2767e585-3aaf4aae17942d16` | t3/worktree-cleaner-auto-archive | 141d95db9a8b | github_pr_open, process_cwd_inside, remote_commit_unverified, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-3893369a-fd3a15a73c0995bb` | t3/astra-reviewer-chain-openai-api | 68479d7b94c4 | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-3893415e-a05be649c7b45064` | t3/overnight-stall-sweep-alert | a224366c8255 | github_pr_not_closed_for_head, remote_commit_unverified |
-| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-3b3f29fb-d559100edfc2f01a` | t3/lane-queue-dedupe-reservations | e5bf969d0332 | process_cwd_inside, t3_thread_unfinished |
+| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-3b3f29fb-d559100edfc2f01a` | t3/lane-queue-dedupe-reservations | e5bf969d0332 | t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-4c50e113-b71e72ea5e0cba10` | t3/normalize-ticket-section-headings | a19b8a09708a | t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-58283951-ecb9ff8b5480bca3` | t3/overnight-selftest-routing | ddb69591422d | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-5c6cfdb3-0b4876575ac51cff` | t3/coord-watch-full-check | 529c09b17d54 | t3_thread_unfinished |
@@ -140,13 +139,13 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-af05d4d4-92a8fafc3dde265b` | t3/prompt-question-quick-answers | 9dabf45d5749 | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-b0403464-2d79187186b26f5f` | t3/coordinator-tick-call-timeouts | 5547e96601ad | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-d0fd643e-c890630b5592eb54` | t3/gate-main-fast-forward | b5db52b67228 | github_pr_not_closed_for_head, remote_commit_unverified |
-| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-d3c05f6b-0816e79cd3256c91` | t3/prompt-pr-no-auto-merge | f1c17e037269 | github_pr_open, process_cwd_inside, t3_thread_unfinished, worktree_dirty |
+| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-d3c05f6b-0816e79cd3256c91` | t3/prompt-pr-no-auto-merge | 002d76011b84 | github_pr_open, process_cwd_inside, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-d55e849b-7ac34c278c502d06` | mo-1060-finish | ce79295f57ec | t3_thread_unfinished, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-e05fc9b2-bbe83cb200cb4954` | t3/atomic-ticket-stage-labels | 61a6355e4f5b | github_pr_not_closed_for_head, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-ed0cc1ab-dd469dc6a2dc50a9` | t3/heavy-admit-ios-builds-16gb | bbfca75ef74c | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1072-heavy-headro-7047753fa31e514d` | t3/mo-1072-heavy-headroom | 8cc4e7b565ec | t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1081-ds-c2a8b679bfa1cfe2` | t3/mo-1081-ds | ab1678b3e6de | github_pr_not_closed_for_head, t3_thread_unfinished |
-| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1082-builder-fall-f25933ab4a05df56` | t3/mo-1082-builder-fallback | 60e05177c667 | github_pr_open, process_cwd_inside, t3_thread_unfinished |
+| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1082-builder-fall-f25933ab4a05df56` | t3/mo-1082-builder-fallback | 01625c3c9b5d | github_pr_open, process_cwd_inside, t3_thread_unfinished, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1083-ds-f14d3e93d7c4c72c` | t3/mo-1083-ds | a07ebdb9792d | github_pr_open, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1084-ds-e622750ab7149819` | t3/mo-1084-ds | 607c9120c611 | github_pr_open, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-185-cockpit-t3-efa57bdfd7448ec4` | t3/mo-185-cockpit-t3 | 9423ca179385 | worktree_dirty |
@@ -214,7 +213,7 @@ Every worktree that was scanned, with the reason it is held:
 
 The append-only log `worktree-cleaner.log` recorded one `removal_attempted`
 and one `removed` entry per worktree, each with the repo, the path, the
-branch and the head:
+branch, the head and the rule that authorised the removal:
 
 | path | branch | head | eligibility rule |
 | --- | --- | --- | --- |
@@ -222,10 +221,6 @@ branch and the head:
 | `/private/tmp/macops-main` | detached | `13c79aedc6fa611f3eb171fb3904f72ffd3828f4` | `detached_worktree_idle_24_hours` |
 | `~/.t3/worktrees/mac-ops/t3-e7e8696e-f284ea12ebd41fa7` | `t3/heavy-m1-memory-headroom-per-host` | `13c79aedc6fa611f3eb171fb3904f72ffd3828f4` | `commits_on_the_default_branch` |
 | `~/Code/mac-ops/.claude/worktrees/agent-a95ad4d3bad0d5625` | `remove-empryo` | `758710924a397ab59a1418a6a816ad1e76f82090` | `commits_on_the_default_branch` |
-
-The log entry of each removal carries the rule that authorised it in its
-`eligible_reason` field, so a detached worktree removed by the 24 hour
-rule is no longer logged as if a pull request had authorised it.
 
 ## GitHub confirmation for every removed head
 
@@ -247,7 +242,7 @@ The installed cleaner writes the same record to
 `~/.local/state/mac-ops/worktree-cleaner.log`. A recent entry from it:
 
 ```json
-{"branch": "t3/reconcile-release-docs-m1", "event": "removed", "head": "0133d324c60a1b9e71cc05d72155f0062d9da3cb", "path": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-ded6acbb-0f4627a17f56af87", "pull_request": "https://github.com/shyamsivakumar/tunerise/pull/26", "reason": "clean, remote commit verified, no live T3 thread, and closed PR or detached idle for 24 hours", "removed_at": "2026-11-18T06:44:21.921435+00:00", "repo": "/Users/shyamsivakumar/Code/tunerise"}
+{"branch": "t3/reconcile-release-docs-m1", "event": "removed", "head": "0133d324c60a1b9e71cc05d72155f0062d9da3cb", "path": "/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-ded6acbb-0f4627a17f56af87", "pull_request": "https://github.com/shyamsivakumar/tunerise/pull/26", "reason": "clean, remote commit verified, no live T3 thread, and the eligibility rule that authorised the removal", "removed_at": "2026-11-18T06:44:21.921435+00:00", "repo": "/Users/shyamsivakumar/Code/tunerise"}
 ```
 
 Device, handset and live-service testing was waived by Shyam on 2026-11-14
