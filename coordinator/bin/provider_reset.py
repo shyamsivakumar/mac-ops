@@ -69,7 +69,7 @@ def zone_of(text, start=0):
     return None
 
 
-def _epoch(date_text, time_text, zone):
+def _epoch(date_text, time_text, zone, fold=0):
     clock, _, fraction = time_text.partition(".")
     hour, _, rest = clock.partition(":")
     clock = f"{hour.zfill(2)}:{rest}"
@@ -79,7 +79,7 @@ def _epoch(date_text, time_text, zone):
         moment = datetime.fromisoformat(f"{date_text}T{clock}")
     except ValueError:
         return None
-    return moment.replace(tzinfo=zone or timezone.utc).timestamp()
+    return moment.replace(tzinfo=zone or timezone.utc, fold=fold).timestamp()
 
 
 def _absolute(message, base):
@@ -97,11 +97,14 @@ def _absolute(message, base):
             continue
         zone = zone_of(message, match.end()) or timezone.utc
         when = datetime.fromtimestamp(base, timezone.utc).astimezone(zone)
-        seconds = _epoch(when.date().isoformat(), match.group(1), zone)
-        if seconds is not None and seconds < base:
-            tomorrow = when.date() + timedelta(days=1)
-            seconds = _epoch(tomorrow.isoformat(), match.group(1), zone)
-        return seconds
+        today = [_epoch(when.date().isoformat(), match.group(1), zone, fold) for fold in (0, 1)]
+        if today[0] is None:
+            return None
+        coming = [seconds for seconds in today if seconds >= base]
+        if coming:
+            return min(coming)
+        tomorrow = when.date() + timedelta(days=1)
+        return _epoch(tomorrow.isoformat(), match.group(1), zone)
     return None
 
 
