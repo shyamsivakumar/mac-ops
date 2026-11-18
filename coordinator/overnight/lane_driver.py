@@ -464,6 +464,29 @@ def root_workspace(thread):
     return os.path.realpath(os.path.join(path, lines[0])) == os.path.realpath(os.path.join(path, lines[1]))
 
 
+def worktree_branch(path):
+    """The branch a worktree is on, or an empty string.
+
+    A worktree that cannot be read names no branch, so it is not read as
+    a branch of its own."""
+    try:
+        listing = run(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"], timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return ""
+    return listing.strip()
+
+
+def herdr_worktree(thread):
+    """Whether a thread works in a herdr worktree.
+
+    A herdr branch is Shyam's to merge, so the lane never sends work
+    there and never hands a worktree on that branch to a builder."""
+    path = thread.get("worktreePath")
+    if not path:
+        return False
+    return worktree_branch(path).startswith("herdr/")
+
+
 def branch_on_origin(repo, branch):
     """Say whether a branch is on origin, so a worktree can start there.
 
@@ -586,6 +609,11 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                     f"not the chosen builder; {HELD_SKIP}")
         sendable = False
         reroute = "not the chosen builder"
+    if sendable and herdr_worktree(thread):
+        # A herdr branch is Shyam's to merge, so the lane never sends work
+        # there, and never hands that worktree to a builder either.
+        sendable = False
+        reroute = "herdr worktree"
     if sendable and root_workspace(thread):
         # Work in the shared checkout of the repository moves the branch
         # everyone installs from, so it never goes to the thread that
@@ -601,6 +629,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         if not repo:
             raise ValueError(f"No repository for {lkey}")
         own_worktree = (thread.get("worktreePath") and not root_workspace(thread)
+                        and not herdr_worktree(thread)
                         and os.path.isdir(thread["worktreePath"]))
         if own_worktree and (reroute in {"not the chosen builder", "builder blocked"} or pr is None):
             # The work stays in its own worktree; only the builder moves.

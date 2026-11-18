@@ -71,11 +71,13 @@ class BuilderChoice(unittest.TestCase):
         path.write_text(json.dumps({"blocked": {identity: {"reason": "usage limit"} for identity in identities}}))
 
     def launch(self, thread, issue=None, builder_label=None, pr=True, root_workspace=False, tickets=None,
-               worktree_exists=True):
+               worktree_exists=True, branch="builder/fixture"):
         """Replay one send and return the dispatch payload, or None."""
         calls = []
 
         def run(cmd, timeout=150):
+            if cmd[:1] == ["git"] and "--abbrev-ref" in cmd:
+                return branch
             calls.append(cmd)
             return "#1 p0 started"
 
@@ -140,6 +142,23 @@ class BuilderChoice(unittest.TestCase):
         out, payload = self.launch(self.thread(SOL), pr=False, worktree_exists=False)
         self.assertIsNone(payload)
         self.assertIn("no verified PR branch", out)
+
+    def test_a_herdr_worktree_takes_no_send(self):
+        # The thread works in a herdr worktree. That branch is Shyam's to
+        # merge, so the lane sends the work nowhere: it starts again on
+        # the verified pull request branch.
+        out, payload = self.launch(self.thread(MINIMAX), branch="herdr/gh-trim")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_herdr_worktree_is_never_handed_off(self):
+        # The thread runs another model, so the work moves to the chosen
+        # builder, but never into a worktree on a herdr branch.
+        out, payload = self.launch(self.thread(SOL), branch="herdr/gh-trim")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
     def test_a_missing_worktree_on_a_blocked_builder_is_never_handed_off(self):
         # The thread's provider is blocked and its worktree is gone from
@@ -489,6 +508,8 @@ class HeldContinue(unittest.TestCase):
         def run(cmd, timeout=150):
             if cmd[:2] == ["ticket", "start"]:
                 return "started"
+            if cmd[:1] == ["git"]:
+                return "builder/fixture"
             queued.append(json.loads(cmd[2]))
             return "fixture-receipt"
 
