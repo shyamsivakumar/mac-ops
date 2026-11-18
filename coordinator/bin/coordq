@@ -213,19 +213,6 @@ def is_gate_model(selection):
     return model_list.find(selection, ("review",)) is not None
 
 
-def blocked_launch(item):
-    """Whether a queued gate's reviewer is blocked, so it must not be launched.
-
-    Only a gate item is held back: a builder is never held back here, even
-    on a model the review list also names.
-    """
-    args = item.get("args") or {}
-    selection = args.get("modelSelection")
-    if not selection or args.get("taskType") != "review":
-        return False
-    return model_list.is_blocked(selection)
-
-
 def tool_refusal(tool):
     return f"tool {tool!r} is not dispatchable. Accepted tools: {', '.join(DISPATCHABLE_TOOLS)}"
 
@@ -647,7 +634,7 @@ def drain():
         if n + len(queue["reserved"]) >= cap():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
-        item = next((i for i in ready if not blocked_launch(i)), None)
+        item = next((i for i in ready if not gate_reviewer_blocked(i)), None)
         if item is None:
             return
         try:
