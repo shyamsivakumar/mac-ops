@@ -546,6 +546,12 @@ def report_state(repo, ref):
     return "unknown", first
 
 
+# The pages of a pull request's files the checklist reads. A pull request
+# with more files than a page holds would hide its last files from the
+# scope, so the pages are read to the end.
+FILE_PAGES = 30
+
+
 def fetch_files(repo, pr):
     """The files a pull request changes, and the path a rename came from.
 
@@ -553,20 +559,25 @@ def fetch_files(repo, pr):
     The scope is judged against both, so a rename cannot carry an
     out-of-scope file into an in-scope name.
     """
-    try:
-        entries = gh_json(["api", f"repos/{repo}/pulls/{pr}/files?per_page=100"])
-    except RuntimeError:
-        return [], []
     changed = []
     scope = []
-    for entry in entries if isinstance(entries, list) else []:
-        path = entry.get("filename")
-        if path:
-            changed.append(path)
-            scope.append(path)
-        previous = entry.get("previous_filename")
-        if previous:
-            scope.append(previous)
+    for page in range(1, FILE_PAGES + 1):
+        try:
+            entries = gh_json(["api", f"repos/{repo}/pulls/{pr}/files?per_page=100&page={page}"])
+        except RuntimeError:
+            break
+        if not isinstance(entries, list) or not entries:
+            break
+        for entry in entries:
+            path = entry.get("filename")
+            if path:
+                changed.append(path)
+                scope.append(path)
+            previous = entry.get("previous_filename")
+            if previous:
+                scope.append(previous)
+        if len(entries) < 100:
+            break
     return changed, scope
 
 

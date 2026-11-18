@@ -224,6 +224,17 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(changed, ["src/new.py", "src/other.py"])
         self.assertEqual(scope, ["src/new.py", "legacy/old.py", "src/other.py"])
 
+    def test_the_files_are_read_past_the_first_page(self):
+        """A pull request with more files than a page holds is read whole."""
+        check = close_check()
+        first = [{"filename": f"src/file{index}.py"} for index in range(100)]
+        second = [{"filename": "src/last.py"}]
+        with patch.object(check, "gh_json", side_effect=[first, second]) as reader:
+            changed, scope = check.fetch_files("a/b", 12)
+        self.assertEqual(len(changed), 101)
+        self.assertIn("src/last.py", scope)
+        self.assertEqual(reader.call_count, 2)
+
     def test_a_rename_is_judged_on_both_paths(self):
         """A rename cannot carry an out-of-scope file into scope.
 
