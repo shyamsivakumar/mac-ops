@@ -27,8 +27,8 @@ LAUNCH_RECORD = "launch:"
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
-from gate_reviewers import (REVIEWER_CHAIN, block_reviewer, identity, is_blocked,
-                            release_expired, starting_reviewer)
+from gate_reviewers import (REVIEWER_CHAIN, block_reviewer, blocking_until, identity,
+                            is_blocked, release_expired, starting_reviewer)
 
 ASTRA_MODEL = REVIEWER_CHAIN[0]
 OPUS_MODEL = REVIEWER_CHAIN[-1]
@@ -1173,7 +1173,9 @@ def block_failed_reviewer(current, failure, dry_run=False):
     """Record the block one gate's failure earns, and log its one line.
 
     A blocking provider error blocks this reviewer for every head; a
-    diagnostic blocks nothing, and a dry run writes nothing."""
+    diagnostic blocks nothing, and a dry run writes nothing. A distinct
+    failure of a reviewer that is already blocked extends its block to the
+    window it names without a second line."""
     until = block_reviewer(current, failure) if not dry_run else None
     if until is not None:
         log(f"reviewer {identity(current)} blocked until "
@@ -1378,19 +1380,23 @@ def cmd_gatekeep(a):
                     current = ran_reviewer(thread, state["reviewer"])
                     # The block is recorded before this head's own backoff and
                     # before it gives up, so a reviewer that is out of credits
-                    # is not handed another head during the wait. A block that
-                    # is already recorded stays as it was, so reading the same
-                    # dead gate again does not extend it. The failed run is
-                    # kept beside the block, because a provider that comes back
-                    # inside this head's backoff ends its block first: without
-                    # that record the next pass would read the same failure and
-                    # block the freed reviewer again.
+                    # is not handed another head during the wait. Only the run
+                    # a block was recorded for is skipped: reading the same
+                    # dead gate again earns nothing, while a second, distinct
+                    # failure of the same reviewer still extends its block to
+                    # the later window it names, so a short reset read first
+                    # does not free the reviewer against a longer one read
+                    # second. The failed run is kept beside the block, because
+                    # a provider that comes back inside this head's backoff
+                    # ends its block first: without that record the next pass
+                    # would read the same failure and block the freed reviewer
+                    # again, extension included.
                     recorded = heads.get(key)
                     blocked_run = recorded.get("blockedRun") if isinstance(recorded, dict) else None
                     run_id = failed_run_id(data)
-                    if not is_blocked(current) and not (run_id and run_id == blocked_run):
-                        until = block_failed_reviewer(current, data, a.dry_run)
-                        if until is not None and run_id and not a.dry_run:
+                    if not (run_id and run_id == blocked_run):
+                        block_failed_reviewer(current, data, a.dry_run)
+                        if run_id and blocking_until(data) is not None and not a.dry_run:
                             state = {**state, "blockedRun": run_id}
                             heads[key] = state
                             save(queue)

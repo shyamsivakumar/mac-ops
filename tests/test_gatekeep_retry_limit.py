@@ -286,6 +286,69 @@ class BackoffTest(RetryLimitBase):
         self.assertTrue(coordq.is_blocked(reviewer_of(OPUS_GATE)))
         self.assertEqual(len(self.block_lines()), before + 2)
 
+    def test_a_second_distinct_failure_extends_the_block(self):
+        # Two in-flight heads die on the same reviewer. The first names a
+        # one-minute window and is blocked; the second, read while that
+        # block holds, names an hour. The longer window must win, without a
+        # second block line, or the queue frees the reviewer after one
+        # minute against the provider's own later word.
+        self.write_two_dead_opus_gates()
+        before = len(self.block_lines())
+        self.run_gatekeep()
+        self.assertAlmostEqual(self.blocked_until() - time.time(), 3600, delta=60)
+        self.assertEqual(len(self.block_lines()), before + 1)
+
+    def test_an_extended_block_is_not_extended_again_by_a_reread(self):
+        # Every pass reads both dead gates again while their heads back off.
+        # The run each block was recorded for, the first failure's and the
+        # extension's, is skipped, so the extended window stands still.
+        self.write_two_dead_opus_gates()
+        before = len(self.block_lines())
+        self.run_gatekeep()
+        until = self.blocked_until()
+        time.sleep(0.01)
+        self.run_gatekeep()
+        self.assertEqual(self.blocked_until(), until)
+        self.assertEqual(len(self.block_lines()), before + 1)
+
+    def write_two_dead_opus_gates(self):
+        """Two pull requests whose Opus gates died, each naming its own run.
+
+        The first gate's refusal says one minute; the second's, read while
+        the first block holds, says one hour."""
+        first = json.loads(json.dumps(SHORT_RESET_GATE))
+        first["recentRuns"][0]["error"]["message"] = ("too many requests, your plan "
+                                                      "resets in 1 minute")
+        second = json.loads(json.dumps(SHORT_RESET_GATE))
+        second["thread"]["latestRunId"] = "run-2"
+        second["recentRuns"][0]["runId"] = "run-2"
+        second["recentRuns"][0]["error"]["message"] = ("too many requests, your plan "
+                                                        "resets in 1 hour")
+        self.pr2 = {"draft": False, "number": 8, "head": {"sha": OTHER_HEAD},
+                    "body": f"Refs #9\nBuilder check: PASS {OTHER_HEAD}\n"}
+        key2 = f"gate:{REPO}#8:{OTHER_HEAD}"
+        base = self
+
+        def two_pr_gh(endpoint):
+            if endpoint.startswith(f"repos/{REPO}/pulls"):
+                return [base.pr, base.pr2]
+            if "/issues/" in endpoint and "/comments" in endpoint:
+                return [COMMENT]
+            if endpoint.startswith(f"repos/{REPO}/commits/"):
+                return []
+            raise AssertionError(f"unexpected endpoint {endpoint}")
+
+        coordq.gh_json = two_pr_gh
+        coordq.load_receipts = lambda: {RECEIPT["requestId"]: "builder-1",
+                                        self.key: "gate-1", key2: "gate-2"}
+        reads = {"gate-1": first, "gate-2": second}
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(reads[args["threadId"]]))
+        self.write_queue(heads={
+            self.key: {"id": 4, "retries": 1, "at": time.time(), "givenUp": False,
+                       "reviewer": OPUS_GATE},
+            key2: {"id": 5, "retries": 1, "at": time.time(), "givenUp": False,
+                   "reviewer": OPUS_GATE}})
+
     def end_blocks(self):
         """Put every recorded block in the past, as its provider window ending does."""
         with open(os.path.join(QUEUE_DIR, "reviewers-blocked.json")) as f:
