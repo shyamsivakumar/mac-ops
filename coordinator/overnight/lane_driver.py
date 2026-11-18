@@ -1072,6 +1072,10 @@ def zero_merge(snapshot):
             path, "factory-zero-merge",
             "raise" if decided in ("raise", "unchecked") and item else "remove",
             item) == "wrote" else "failed")
+    if action == "failed":
+        # The board could not be written, so the alarm is nowhere. The
+        # tick has to say so, or a real failure reaches nobody.
+        raise RuntimeError("the merge alert could not be published: the board file could not be written")
     # A healthy tick has no alarm, so it says nothing about one: the log
     # names an alarm only when there is an alarm to name.
     if item is None:
