@@ -20,10 +20,21 @@
       "force-push in any form is denied"
     ],
     [
-      "\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b[^;&|]*(?:^|[\\s\\\"'+])(?:[^\\s:;&|\\\"']*:)?(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w./-])(?=[\\s\\\"';&|]|$)",
+      "\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|\\'[^\\']*\\'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b(?:\\s+-{1,2}[\\w-]+(?:=\\S+)?)*\\s+(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w./-])[\\s\"\\']*(?:[;&|]|$)|\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|\\'[^\\']*\\'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b[^;&|]*\\s+[^\\s:;&|\"\\'-][^\\s:;&|\"\\']*\\s+(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w./-])(?=[\\s\"\\';&|]|$)|\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|\\'[^\\']*\\'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b[^;&|]*\\s+(?:[^\\s:;&|\"\\']*):(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w./-])",
       "pushing to main or master is denied; push a task branch instead"
     ]
   ],
+  "t3_gate_instance": {
+    "settings": "~/.t3/userdata/settings.json",
+    "instanceId": "claudeAgentGate",
+    "driver": "claudeAgent",
+    "displayName": "Claude gate",
+    "env": {
+      "name": "MAC_OPS_ROLE",
+      "value": "gate"
+    },
+    "note": "T3 applies a provider instance's environment to every thread launched on it, and the thread-launch input has no environment field. This instance is therefore the only channel that can hand a launched Claude gate its role. Only the trusted launcher selects it (coordinator/overnight/lane_driver.py), and the guard refuses a thread launch that names it from a caller without the role."
+  },
   "merge_deny": {
     "match_re": "\\bgh\\s+pr\\s+merge\\b",
     "required_flag": "--match-head-commit",

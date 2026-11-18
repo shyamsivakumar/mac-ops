@@ -258,6 +258,52 @@ class Installer:
             atomic_write(path, json.dumps(settings, indent=2) + "\n")
         return {"claude_settings": "cleaned" if changed else "already clean"}
 
+    # ---------- t3 provider instance ----------
+    def t3_settings(self) -> Path:
+        return self.root / ".t3/userdata/settings.json"
+
+    def merge_t3_gate(self, spec: dict) -> str:
+        conf = spec["t3_gate_instance"]
+        path = self.t3_settings()
+        current = load_json(path)
+        if current and not isinstance(current, dict):
+            raise RuntimeError(f"{path} is not a JSON object; refusing to edit it")
+        self.backup(path)
+        settings = dict(current or {})
+        instances = dict(settings.get("providerInstances") or {})
+        instances[conf["instanceId"]] = {
+            "driver": conf["driver"],
+            "displayName": conf["displayName"],
+            "enabled": True,
+            "environment": [
+                {
+                    "name": conf["env"]["name"],
+                    "value": conf["env"]["value"],
+                    "sensitive": False,
+                }
+            ],
+        }
+        settings["providerInstances"] = instances
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, json.dumps(settings, indent=2) + "\n")
+        return "installed"
+
+    def unmerge_t3_gate(self, spec: dict) -> str:
+        path = self.t3_settings()
+        settings = load_json(path)
+        if not isinstance(settings, dict):
+            return "absent"
+        instances = settings.get("providerInstances")
+        if not isinstance(instances, dict):
+            return "absent"
+        if instances.pop(spec["t3_gate_instance"]["instanceId"], None) is None:
+            return "absent"
+        self.backup(path)
+        if not instances:
+            settings.pop("providerInstances", None)
+        atomic_write(path, json.dumps(settings, indent=2) + "\n")
+        return "removed"
+
     # ---------- actions ----------
     def install(self, spec: dict) -> dict:
         repo_scope = ROOT_REPO / spec["scope_files"]["repo"]
@@ -284,6 +330,9 @@ class Installer:
         shutil.copyfile(MERGE_HOOK_SOURCE, hook_target)
         os.chmod(hook_target, os.stat(MERGE_HOOK_SOURCE).st_mode | stat.S_IXUSR)
         report["actions"].append("claude merge hook file installed")
+        report["actions"].append(
+            "t3 gate instance: " + self.merge_t3_gate(spec)
+        )
 
         guard = render_guard(spec, self.root)
         for entry in spec["pi_instances"]:
@@ -312,6 +361,7 @@ class Installer:
             "merge_hook": str(hook_target),
             "scope_copies": [expand(e, self.root) for e in spec["scope_files"]["copies"]],
             "scope_claude": str(claude_md),
+            "t3_gate_instance": spec["t3_gate_instance"]["instanceId"],
         }
         atomic_write(self.receipt, json.dumps(receipt, indent=2) + "\n")
         report["backups"] = str(self.backups)
@@ -329,6 +379,7 @@ class Installer:
         self.backups = self.state / "deny-rules-backups" / ("uninstall-" + str(time.time_ns()))
         report = {"actions": []}
         report.update(self.unmerge_claude(saved, spec))
+        report["actions"].append("t3 gate instance: " + self.unmerge_t3_gate(spec))
         for hook in [saved.get("merge_hook")] if saved.get("merge_hook") else []:
             path = Path(hook)
             if path.is_file():
@@ -363,12 +414,18 @@ class Installer:
                 else ("stale" if target.exists() else "missing")
             )
         hook = Path(expand(spec["claude_code"]["hook"]["target"], self.root))
+        t3 = load_json(self.t3_settings())
+        t3_instances = t3.get("providerInstances") if isinstance(t3, dict) else None
+        gate_instance = spec["t3_gate_instance"]["instanceId"]
         return {
             "installed": bool(saved),
             "spec_sha256": digest(SPEC_PATH),
             "receipt": saved or None,
             "claude_deny_missing": missing_deny,
             "merge_hook_file": hook.is_file(),
+            "t3_gate_instance": (
+                gate_instance in (t3_instances or {})
+            ),
             "pi_guards": guards,
             "backups": saved.get("backups") if saved else None,
         }

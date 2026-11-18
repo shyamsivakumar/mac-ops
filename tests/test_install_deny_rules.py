@@ -134,6 +134,26 @@ class InstallTest(FakeHome):
         self.assertFalse((self.home / ".claude/CLAUDE.md").exists())
         self.assertTrue(report["uninstalled"])
 
+    def test_t3_gate_instance_is_installed_and_removed(self):
+        conf = SPEC["t3_gate_instance"]
+        settings_path = self.home / conf["settings"][2:]
+        self.assertFalse(settings_path.exists())
+        self.installer.install(SPEC)
+        settings = load(settings_path)
+        instance = settings["providerInstances"][conf["instanceId"]]
+        self.assertEqual(instance["driver"], "claudeAgent")
+        self.assertTrue(instance["enabled"])
+        self.assertEqual(
+            instance["environment"],
+            [{"name": "MAC_OPS_ROLE", "value": "gate", "sensitive": False}],
+        )
+        self.assertTrue(self.installer.status(SPEC)["t3_gate_instance"])
+        self.installer.uninstall(SPEC)
+        self.assertNotIn(
+            conf["instanceId"], load(settings_path).get("providerInstances") or {}
+        )
+        self.assertFalse(self.installer.status(SPEC)["t3_gate_instance"])
+
     def test_install_refuses_when_repo_scope_file_lacks_the_section(self):
         real_repo = install_deny_rules.ROOT_REPO
         fake_repo = Path(tempfile.mkdtemp(prefix="deny-rules-repo-", dir=TMP))
@@ -387,6 +407,60 @@ class HookTest(unittest.TestCase):
             "git push origin feature/main-work",
         ):
             self.assertIsNone(self.decided(command), command)
+
+    def test_a_remote_named_main_does_not_block_a_task_branch_push(self):
+        # The first bare word after `push` is the repository argument, so a
+        # remote called `main` or `master` is not a destination branch.
+        for command in (
+            "git push main task-530",
+            "git push master task-530",
+            "git push main main.fix",
+            "git push master t3/deny-rules",
+            "git push -u main t3/deny-rules",
+            "git push main main:task-530",
+        ):
+            self.assertIsNone(self.decided(command), command)
+        for command in (
+            "git push main main",
+            "git push master master",
+            "git push master HEAD:master",
+        ):
+            decision = self.decided(command)
+            self.assertIsNotNone(decision, command)
+            self.assertEqual(decision["permissionDecision"], "deny", command)
+        # a lone protected word names the branch to push, not only a remote
+        self.assertIsNotNone(self.decided("git push main"))
+        self.assertIsNotNone(self.decided("git push master"))
+
+    def test_denies_launching_a_thread_on_the_gate_instance(self):
+        payload = {
+            "tool_name": "mcp__t3-code__t3_thread_launch",
+            "tool_input": {
+                "title": "gate",
+                "modelSelection": {
+                    "instanceId": "claudeAgentGate",
+                    "model": "claude-opus-5-5",
+                },
+            },
+        }
+        decision = json.loads(self.run_hook(payload))["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "deny")
+        self.assertEqual(self.run_hook(payload, role="gate"), "")
+        self.assertEqual(
+            self.run_hook(
+                {
+                    "tool_name": "mcp__t3-code__t3_thread_launch",
+                    "tool_input": {
+                        "title": "builder",
+                        "modelSelection": {
+                            "instanceId": "pi",
+                            "model": "deepseek/deepseek-flash",
+                        },
+                    },
+                }
+            ),
+            "",
+        )
 
     def test_ignores_other_tools_and_commands(self):
         self.assertEqual(

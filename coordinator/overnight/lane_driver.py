@@ -523,6 +523,35 @@ SRW_REPO = "shyamsivakumar/strategy-replay-workbench"
 # merge it owns: the role is never read from the command text.
 GATE_ROLE_ENV = "MAC_OPS_ROLE"
 GATE_ROLE_VALUE = "gate"
+# The provider instance the installer gives the gate role, one entry in the T3
+# provider list. A thread launched on it holds MAC_OPS_ROLE=gate, so the gate's
+# own pinned merge passes the deny hook. Only this launcher launches a gate on
+# it, and the deny hook refuses a thread launch that names it from a caller
+# without the role, so the role is never handed to a builder.
+GATE_INSTANCE = "claudeAgentGate"
+
+
+def gate_launch_model(chain_model):
+    """The gate's launch model, on the role-carrying instance when it can run.
+
+    The role rides the provider instance, so a gate thread holds it from the
+    moment it starts, and it merges the pinned head itself. T3 can report the
+    instance as unlaunchable (it did when the instance was first registered),
+    and a gate launch must never break, so the reviewer chain's own instance is
+    used then and the launcher merges the pinned head below instead.
+    """
+    if chain_model.get("instanceId") != "claudeAgent":
+        return chain_model
+    try:
+        providers = t3("orchestrator_capabilities", {}).get("providers") or []
+    except Exception:
+        return chain_model
+    gate = next(
+        (p for p in providers if p.get("providerInstanceId") == GATE_INSTANCE), None
+    )
+    if gate and gate.get("canRunChildTask") and not gate.get("constraints"):
+        return {**chain_model, "instanceId": GATE_INSTANCE}
+    return chain_model
 
 
 def check_step(repo, proof_path):
@@ -628,7 +657,7 @@ def act_on_pr(repo, number, ledger):
               f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
     key = CFG[repo]["key"]
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "modelSelection": model,
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "modelSelection": gate_launch_model(model),
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")

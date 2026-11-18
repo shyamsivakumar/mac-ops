@@ -32,6 +32,15 @@ MERGE_VALUE_FLAGS = {"--body", "-b", "--body-file", "-F", "--subject", "-t", "--
 SHELL_SEPARATORS = re.compile(r"[;&|\n]+")
 ROLE_ENV = "MAC_OPS_ROLE"
 ROLE_VALUE = "gate"
+# The provider instance that carries the gate role (installed with the rules).
+# Launching a thread on it hands the gate role to that thread, so only a gate
+# caller may name it.
+GATE_INSTANCE = "claudeAgentGate"
+THREAD_TOOLS = ("thread_launch", "thread_send", "create_threads")
+THREAD_REASON = (
+    "mac-ops deny rules (#530): launching a thread on the gate instance is "
+    "denied for builders; the gate role is handed out by the trusted launcher"
+)
 REASON = (
     "mac-ops deny rules (#530): gh pr merge is denied for builders; only a "
     "gate thread, with the pinned --match-head-commit head as a merge "
@@ -122,16 +131,40 @@ def destination_ref(token):
 
 
 def push_decision(command):
-    """Deny a force-push, and a push to main or master on any remote."""
+    """Deny a force-push, and a push to main or master on any remote.
+
+    The first bare word after `push` is the repository argument: it names a
+    remote or a URL, never a destination branch. Comparing it as a refspec
+    refused a valid task-branch push to a remote called `main` or `master`
+    (`git push main task-530`), so only the words after it are destinations.
+    A lone `main`/`master` names no destination of its own, so it stays
+    refused: the push would write whatever branch is checked out.
+    """
     match = PUSH_RE.search(command)
     if not match:
         return None
-    for token in match.group(1).split():
-        token = token.strip("\"'")
+    words = [token.strip("\"'") for token in match.group(1).split()]
+    words = [token for token in words if token]
+    for token in words:
         if token in FORCE_FLAGS or token.startswith("+") and len(token) > 1:
             return deny(FORCE_REASON)
+    bare = [token for token in words if not token.startswith("-")]
+    for position, token in enumerate(bare):
+        # The first bare word is the repository argument (a remote name or a
+        # URL) when another word follows it, and a bare word is not a refspec.
+        if position == 0 and ":" not in token and len(bare) > 1:
+            continue
         if destination_ref(token) in PROTECTED:
             return deny(PROTECTED_REASON)
+    return None
+
+
+def thread_decision(tool_input, environ=None):
+    """Deny a builder's launch of a thread that would carry the gate role."""
+    if is_gate(environ):
+        return None
+    if GATE_INSTANCE in json.dumps(tool_input, sort_keys=True):
+        return deny(THREAD_REASON)
     return None
 
 
@@ -144,12 +177,16 @@ def main():
         payload = json.load(sys.stdin)
     except (ValueError, OSError):
         return 0
-    if payload.get("tool_name") != "Bash":
-        return 0
+    tool_name = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return 0
-    result = decision(str(tool_input.get("command") or ""))
+    if tool_name == "Bash":
+        result = decision(str(tool_input.get("command") or ""))
+    elif any(name in tool_name for name in THREAD_TOOLS):
+        result = thread_decision(tool_input)
+    else:
+        result = None
     if result:
         print(json.dumps(result))
     return 0
