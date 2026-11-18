@@ -36,26 +36,10 @@ MESSAGE_TTL = float(os.environ.get("COORDQ_MESSAGE_TTL", "1800"))
 # A reservation covers one step in flight. Past this age the step is over,
 # whatever its reply said, so the slot it holds goes back to the queue.
 RESERVATION_TIMEOUT = float(os.environ.get("COORDQ_RESERVATION_TIMEOUT", "180"))
-WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
-SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
-DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
-from gate_reviewers import REVIEWER_CHAIN
+import models as model_list
 
-ASTRA_MODEL = REVIEWER_CHAIN[0]
-OPUS_MODEL = REVIEWER_CHAIN[-1]
-TASK_MODELS = {
-    "standard": {"instanceId": "router", "model": "task/standard"},
-    "large": {"instanceId": "router", "model": "task/standard"},
-    "ui": {"instanceId": "router", "model": "task/ui"},
-    "research": {"instanceId": "router", "model": "task/research"},
-    "rca": {"instanceId": "router", "model": "task/rca"},
-    "chore": {"instanceId": "router", "model": "task/chore"},
-    "worker": {"instanceId": "router", "model": "task/standard"},
-    "panel": WORKER_MODEL,
-    "risky": SOL_MODEL,
-    "design": SOL_MODEL,
-    "review": OPUS_MODEL,
-}
+BUILD_TASK_TYPES = ("standard", "large", "ui", "research", "rca", "chore", "worker", "risky", "design")
+TASK_TYPES = BUILD_TASK_TYPES + ("fix", "review", "panel")
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
@@ -166,27 +150,57 @@ def gate_label(state):
     return f"coordq #{state['id']}" if state["id"] is not None else "an earlier gate"
 
 
+def task_list(task_type):
+    return {"fix": "fix", "review": "review", "panel": "panel"}.get(task_type, "build")
+
+
 def with_model(args):
     task_type = args.get("taskType")
-    if task_type and task_type not in TASK_MODELS:
-        return None, f"refused: unknown taskType {task_type!r}. Accepted taskTypes: {', '.join(sorted(TASK_MODELS))}"
+    if task_type not in TASK_TYPES:
+        return None, f"refused: a launch needs a taskType, got {task_type!r}. Accepted taskTypes: {', '.join(sorted(TASK_TYPES))}"
     resolved = dict(args)
-    resolved.pop("taskType", None)
     if not resolved.get("modelSelection"):
-        if not task_type:
-            return None, "refused: a launch needs a taskType or a modelSelection"
-        resolved["modelSelection"] = TASK_MODELS[task_type]
-    elif task_type == "review" and not is_gate_model(resolved["modelSelection"]):
-        return None, (f"refused: taskType 'review' runs on the gate model "
-                      f"{{'instanceId': 'claudeAgent', 'model': 'claude-opus-5-5'}}, "
-                      f"but the payload names {resolved['modelSelection']!r}")
+        if task_type == "panel":
+            return None, "refused: a panel launch names its model from the panel list"
+        entry = model_list.first_available(task_list(task_type))
+        if entry is None:
+            return None, f"refused: every model for taskType {task_type!r} is blocked"
+        resolved["modelSelection"] = entry["selection"]
+    else:
+        list_name = task_list(task_type)
+        allowed = model_list.find(resolved["modelSelection"], (list_name,))
+        if allowed is None:
+            return None, (f"refused: taskType {task_type!r} runs on a model from the {list_name} list, "
+                          f"but the payload names {resolved['modelSelection']!r}")
+        if model_list.is_blocked(allowed["selection"]):
+            return None, (f"refused: {model_list.identity(allowed['selection'])} is blocked, "
+                          f"so taskType {task_type!r} cannot run on it")
+        resolved["modelSelection"] = allowed["selection"]
     return resolved, None
 
 
+LEGACY_ROUTE_TASK_TYPES = {f"task/{name}": name for name in ("standard", "ui", "research", "rca", "chore")}
+
+
+def queued_launch_args(tool, args):
+    """A launch queued before taskType was required carries none, so the list that names its model classifies it.
+
+    A router route the old task table stored becomes its task type and resolves through the current build
+    list. A model no list names stays unclassified and is refused at dispatch."""
+    if tool != "t3_thread_launch" or "taskType" in args or not args.get("modelSelection"):
+        return args
+    selection = args["modelSelection"]
+    if selection.get("instanceId") == "router" and selection.get("model") in LEGACY_ROUTE_TASK_TYPES:
+        return {**{k: v for k, v in args.items() if k != "modelSelection"},
+                "taskType": LEGACY_ROUTE_TASK_TYPES[selection["model"]]}
+    for list_name, task_type in (("review", "review"), ("build", "worker"), ("fix", "fix")):
+        if model_list.find(args["modelSelection"], (list_name,)):
+            return {**args, "taskType": task_type}
+    return args
+
+
 def is_gate_model(selection):
-    return (isinstance(selection, dict)
-            and selection.get("instanceId") == OPUS_MODEL["instanceId"]
-            and selection.get("model") == OPUS_MODEL["model"])
+    return model_list.find(selection, ("review",)) is not None
 
 
 def tool_refusal(tool):
@@ -221,6 +235,7 @@ def call(tool, args, rules=None):
             if rules is None:
                 return 1, "agent rules were not loaded"
             args = with_rules(args, rules)
+        args = {key: value for key, value in args.items() if key != "taskType"}
     # The call is bounded: a t3mcp that hangs must not hold the tick that
     # asked for it, and the answer says which call was skipped.
     try:
@@ -590,9 +605,15 @@ def drain():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
         item = ready[0]
-        steps = item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]
+        try:
+            steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
+                     for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
+            needs_rules = any(step["tool"] == "t3_thread_launch" and wants_rules(step["args"]) for step in steps)
+        except model_list.ModelsError as e:
+            log(f"#{item['id']} not started, the model files cannot be read: {e}")
+            return
         rules = None
-        if any(step["tool"] == "t3_thread_launch" and wants_rules(step["args"]) for step in steps):
+        if needs_rules:
             try:
                 rules = read_rules()
             except RuntimeError as e:
@@ -614,12 +635,23 @@ def drain():
         for index, (key, step) in enumerate(zip(keys, steps)):
             try:
                 code, out = call(step["tool"], step["args"], rules)
-            except (OSError, subprocess.SubprocessError) as e:
+            except model_list.ModelsError as e:
+                for unused in keys[index:]:
+                    queue["reserved"].pop(unused, None)
+                    queue["reservedThreads"].pop(unused, None)
+                item["pre"] = item.get("pre", [])[index:]
+                if item.get("actionKey"):
+                    set_action_key_state(queue, item["actionKey"], "queued")
+                save(queue)
+                log(f"#{item['id']} not started, the model files cannot be read: {e}")
+                return
+            except (OSError, subprocess.SubprocessError, ValueError) as e:
                 code, out = 1, str(e)
             if code != 0:
                 for unused in keys[index:]:
                     queue["reserved"].pop(unused, None)
                     queue["reservedThreads"].pop(unused, None)
+                item["pre"] = item.get("pre", [])[index:]
                 save(queue)
                 break
             if step["tool"] == "t3_thread_launch":
@@ -764,9 +796,12 @@ def cmd_start(a):
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
         task_type = args.get("taskType")
+        requested = args
         args, refusal = with_model(args)
         if refusal:
             die(refusal)
+        if not requested.get("modelSelection"):
+            args = requested
         if wants_rules(args, task_type):
             try:
                 read_rules()
@@ -1380,7 +1415,9 @@ def builder_models(thread, runs):
 
 
 def reviewer_model(models):
-    return ASTRA_MODEL
+    """The first unblocked review model of a vendor other than the builder's, or None."""
+    reviewers = model_list.reviewers(models)
+    return reviewers[0]["selection"] if reviewers else None
 
 
 def quota_failure(value):
@@ -1413,19 +1450,21 @@ def quota_failure(value):
 
 
 def fallback_reviewer(queue, key, current, models=()):
-    if current not in REVIEWER_CHAIN:
+    listed = [model_list.identity(e["selection"]) for e in model_list.entries("review")]
+    if model_list.identity(current) not in listed:
         return None
+    later = listed[listed.index(model_list.identity(current)) + 1:]
     tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
-    for selection in REVIEWER_CHAIN[REVIEWER_CHAIN.index(current) + 1:]:
-        identity = f"{selection['instanceId']}:{selection['model']}"
-        if identity not in tried:
+    for entry in model_list.reviewers(models):
+        identity = model_list.identity(entry["selection"])
+        if identity in later and identity not in tried:
             tried.append(identity)
-            return selection
+            return entry["selection"]
     return None
 
 
-def failed_gate_reviewer(queue, key, current, failure):
-    selection = fallback_reviewer(queue, key, current)
+def failed_gate_reviewer(queue, key, current, failure, models=()):
+    selection = fallback_reviewer(queue, key, current, models)
     if selection is not None:
         return selection
     state = queue.setdefault("gateInfrastructure", {}).setdefault(key, {"retries": 0})
@@ -1444,7 +1483,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     message = build_gate_brief(settings, repo, issue, number, head, publisher,
                                proof=proof, proof_path=proof_path, proof_state=proof_state)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
-            "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+            "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
 
 
@@ -1510,11 +1549,19 @@ def gate_candidates(config):
                 models = builder_models(thread, runs)
                 if models:
                     model = reviewer_model(models)
+                    if model is None:
+                        yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                               "reason": "every gate reviewer of a vendor other than the builder's is blocked"}
+                        continue
                 else:
                     # A build whose executed model is not known is still
                     # gated, on the backstop reviewer. The check below
                     # still decides whether the pull request is gated.
                     model = backstop_model(thread, runs)
+                    if model is None:
+                        yield {"kind": "skip", "pr": f"{repo}#{number}", "head": head,
+                               "reason": "every gate reviewer is blocked"}
+                        continue
                     if (repo, number) not in noted:
                         print(f"backstop {repo}#{number}: executed model unavailable, reviewer "
                               f"{model['instanceId']} {model['model']}", file=sys.stderr)
@@ -1620,7 +1667,7 @@ def cmd_gatekeep(a):
                         continue
                     current = {"instanceId": thread.get("providerInstanceId"),
                                "model": thread.get("model")}
-                    model = failed_gate_reviewer(queue, key, current, data)
+                    model = failed_gate_reviewer(queue, key, current, data, event.get("builderModels", []))
                     if model is None:
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
@@ -1780,7 +1827,7 @@ def cmd_fix(a):
 
 
 def backstop_model(thread, runs):
-    return ASTRA_MODEL
+    return reviewer_model([])
 
 
 def check_names_head(body, head, publisher, checks):
@@ -1813,7 +1860,9 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
         if not thread_id:
             continue
         thread, runs = read_builder_thread(thread_id)
-        model = backstop_model(thread, runs)
+        model = reviewer_model(builder_models(thread, runs))
+        if model is None:
+            return None
         statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
                            optional=optional, fresh=fresh)
         checks = [x for x in statuses if x["context"] == "srw/agent-check"]
@@ -1830,9 +1879,12 @@ def gate_request(repo, pr, settings, config, receipts, login, optional=True,
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
     if not check_names_head(body, head, publisher, checks):
         return None
+    model = backstop_model({}, [])
+    if model is None:
+        return None
     key = f"gate:{repo}#{number}:{head}"
     proof_state, proof, proof_path = gate_proof(settings, repo, None, head)
-    return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, []),
+    return key, gate_args(settings, repo, None, number, head, publisher, model,
                            proof=proof, proof_path=proof_path, proof_state=proof_state), []
 
 

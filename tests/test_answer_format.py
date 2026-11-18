@@ -39,8 +39,8 @@ class AnswerFormatTests(unittest.TestCase):
         self.assertIn("2 to 4 options", self.answer_format)
 
     def test_the_builder_brief_carries_the_rule(self):
-        brief = self.ticket.assemble_brief({"types": {"review": "gate"}},
-                                           {"body": "Do the work.", "url": "https://fixture/1"},
+        brief = self.ticket.assemble_brief({},
+                                           {"body": "Do the work.", "url": "https://fixture/1", "reviewerAlias": "astra-api"},
                                            "fixture-run", {"comments": []})
         self.assertIn(self.answer_format, brief)
 
