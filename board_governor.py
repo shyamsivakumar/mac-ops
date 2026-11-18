@@ -134,12 +134,17 @@ def config(path):
     hosts = values[HOST_HEADROOM_KEY]
     if not isinstance(hosts, dict):
         raise ValueError("min_headroom_bytes_by_host must map host names to headroom bytes")
+    normalized = {}
     for name, headroom in hosts.items():
-        if not isinstance(name, str) or not name:
+        if not isinstance(name, str) or not name.strip():
             raise ValueError("min_headroom_bytes_by_host names a host")
         if isinstance(headroom, bool) or not isinstance(headroom, int):
             raise ValueError("min_headroom_bytes must be an integer")
         number(headroom, "min_headroom_bytes", 1, MAX_HOST_HEADROOM_BYTES)
+        key = name.strip().lower()
+        if key in normalized:
+            raise ValueError("min_headroom_bytes_by_host names one host twice")
+        normalized[key] = headroom
     return values
 
 

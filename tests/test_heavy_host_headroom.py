@@ -44,6 +44,27 @@ class HostHeadroomTests(unittest.TestCase):
         path = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
         self.assertEqual(self.floor_for(path, "Shyams-MacBook-Pro.local"), M1_HEADROOM)
 
+    def test_a_mixed_case_configured_name_matches_the_hostname(self):
+        path = self.config({heavy.HOST_HEADROOM_KEY: {"Shyams-MacBook-Pro.local": M1_HEADROOM}})
+        self.assertEqual(self.floor_for(path, "Shyams-MacBook-Pro.local"), M1_HEADROOM)
+        self.assertEqual(self.floor_for(path, "shyams-macbook-pro.local"), M1_HEADROOM)
+        self.assertEqual(self.floor_for(path, "shyams-macbook-pro"), M1_HEADROOM)
+
+    def test_a_mixed_case_short_name_matches_the_hostname(self):
+        path = self.config({heavy.HOST_HEADROOM_KEY: {"Shyams-MacBook-Pro": M1_HEADROOM}})
+        self.assertEqual(self.floor_for(path, "shyams-macbook-pro"), M1_HEADROOM)
+        self.assertEqual(self.floor_for(path, "shyams-macbook-pro.local"), M1_HEADROOM)
+
+    def test_conflicting_case_variants_keep_the_default_floor(self):
+        path = self.config(
+            {heavy.HOST_HEADROOM_KEY: {
+                "Shyams-MacBook-Pro.local": M1_HEADROOM,
+                "shyams-macbook-pro.local": 4 * heavy.GIB,
+            }}
+        )
+        self.assertEqual(self.floor_for(path, "shyams-macbook-pro.local"), DEFAULT)
+        self.assertEqual(self.floor_for(path, "Shyams-MacBook-Pro.local"), DEFAULT)
+
     def test_an_unlisted_host_keeps_the_default_floor(self):
         path = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
         self.assertEqual(self.floor_for(path, "Shyams-M4.local"), DEFAULT)
@@ -106,6 +127,18 @@ class HostHeadroomTests(unittest.TestCase):
         path = Path(board_governor.__file__).parent / board_governor.DEFAULTS.name
         cfg = board_governor.config(path)
         self.assertEqual(cfg[board_governor.HOST_HEADROOM_KEY][M1], M1_HEADROOM)
+
+    def test_the_governor_config_rejects_conflicting_case_variants(self):
+        path = Path(board_governor.__file__).parent / board_governor.DEFAULTS.name
+        values = json.loads(path.read_text())
+        values[board_governor.HOST_HEADROOM_KEY] = {
+            "Shyams-MacBook-Pro.local": M1_HEADROOM,
+            "shyams-macbook-pro.local": M1_HEADROOM,
+        }
+        broken = Path(self.directory.name) / "governor.json"
+        broken.write_text(json.dumps(values))
+        with self.assertRaises(ValueError):
+            board_governor.config(broken)
 
     def test_the_governor_config_rejects_a_fractional_headroom(self):
         path = Path(board_governor.__file__).parent / board_governor.DEFAULTS.name
