@@ -746,6 +746,23 @@ def prompt_pass(repo, number, head, prompt):
     return f"skip #{number}: gate PASS, prompt change, Shyam merges"
 
 
+def base_moved_item(repo, number, head, landed, base):
+    """The item Shyam answers when a merge landed on a base nobody reviewed.
+
+    The merge API pins no base, so the guard reads the base again after the
+    merge; a merge that landed elsewhere is not silently reported as a merge
+    on the reviewed base. The item is what makes that reach Shyam instead of
+    a log line nobody reads.
+    """
+    key = CFG[repo]["key"]
+    return {"id": f"base-moved-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} merged into `{landed}`, not the reviewed `{base}`: "
+                      f"read head {head[:8]} and decide whether to keep it."),
+            "why": ("The merge call pins the head only, so a retarget inside the last moment before "
+                    "it cannot be refused by the merge. Nothing was closed and main was not "
+                    "fast-forwarded. Inspect the merged diff for prompt files before keeping it.")}
+
+
 def merge_on_reviewed_base(repo, number, head, base):
     """Merge one pull request only when its base is still the reviewed one.
 
@@ -773,10 +790,13 @@ def merge_on_reviewed_base(repo, number, head, base):
                              "--json", "baseRefName"])) or {}
     if landed.get("baseRefName") != base:
         # The pull request cannot be retargeted once it is merged, so the base
-        # it names now is the base the merge landed on.
+        # it names now is the base the merge landed on. The item puts that in
+        # front of Shyam; the pass itself claims no merge.
+        published = publish_decision(base_moved_item(repo, number, head,
+                                                     landed.get("baseRefName"), base))
         return False, (f"critical #{number}: the merge landed on base "
                        f"{landed.get('baseRefName')}, not the reviewed {base}; nothing closed, "
-                       f"nothing fast-forwarded, Shyam must read head {head}")
+                       f"nothing fast-forwarded, Shyam has the item ({published})")
     return True, f"#{number}: merged {head}"
 def message_title(repo, number, action, head):
     """The title of one message about one head of one pull request.
