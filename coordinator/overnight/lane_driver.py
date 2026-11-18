@@ -1065,43 +1065,21 @@ def watchdog():
         cause = "; ".join(stale)
 
         def publish(action):
-            """Read the board, change it, and write it, under the lock.
+            """Read the board, change it, and write it, under the board lock.
 
-            This runs while the mute state is locked, so an answer that
-            lands now cannot slip between the decision and the alarm on
-            the board, and the board is read now, not before the lock.
-            A board that cannot be read or written returns "failed", so
-            the tick says the alarm is nowhere instead of losing it."""
-            try:
-                # The board lock is its own file, beside the board: a
-                # mute storage that cannot be locked must not leave the
-                # board unprotected, or two publishers read the same
-                # board and one alarm disappears.
-                with alarms.board_locked(p) as unlocked:
-                    if unlocked:
-                        # The board cannot be written safely without its
-                        # lock: two publishers would read the same board
-                        # and one alarm would be erased. The alarm is not
-                        # published and the fault is said out loud.
-                        print("WATCHDOG the board lock could not be taken; the alarm is not published")
-                        return "failed"
-                    with open(p) as handle:
-                        d = json.load(handle)
-                    if not isinstance(d, dict) or not isinstance(d.get("items"), list):
-                        return "failed"
-                    d["items"] = [i for i in d["items"]
-                                  if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
-                    if action in ("raise", "unchecked"):
-                        d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                                           "title": "Factory job stopped or failing: " + cause,
-                                           "cause": alarms.cause_of(cause),
-                                           "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
-                    d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                    temporary = f"{p}.{os.getpid()}.tmp"
-                    with open(temporary, "w") as handle:
-                        json.dump(d, handle, indent=1)
-                    os.replace(temporary, p)
-            except (OSError, ValueError):
+            The board lock is taken first; when it cannot be taken the
+            write falls back to a compare-and-swap, so the alarm is still
+            published and two publishers still cannot erase one another's
+            alarm. A board that cannot be read or written returns
+            "failed", so the tick says the alarm is nowhere."""
+            item = None
+            if action in ("raise", "unchecked"):
+                item = {"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
+                        "title": "Factory job stopped or failing: " + cause,
+                        "cause": alarms.cause_of(cause),
+                        "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."}
+            if alarms.board_update(p, "factory-watchdog",
+                                   "raise" if item else "remove", item) != "wrote":
                 return "failed"
             if action == "quiet":
                 # The alarm was acknowledged, so the same cause stays
@@ -1126,33 +1104,12 @@ def watchdog():
         return
 
     def publish_healthy():
-        """Take the watchdog's item off the board, under the board lock.
+        """Take the watchdog's item off the board.
 
-        The board is read and written while the board lock is held, so
-        another writer cannot replace it between the read and the write.
-        The board lock is its own file: it does not depend on the mute
-        storage, so the board is cleaned even when the mute state cannot
-        be locked or read. A board that cannot be written is said out
-        loud: the item stays on the board and the next tick tries
-        again."""
-        try:
-            with alarms.board_locked(p) as unlocked:
-                if unlocked:
-                    print("WATCHDOG the board lock could not be taken; the alarm stays on the board")
-                    return
-                with open(p) as handle:
-                    d = json.load(handle)
-                if not isinstance(d, dict) or not isinstance(d.get("items"), list):
-                    print("WATCHDOG could not take the alarm off the board; the board file could not be read")
-                    return
-                d["items"] = [i for i in d["items"]
-                              if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
-                d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                temporary = f"{p}.{os.getpid()}.tmp"
-                with open(temporary, "w") as handle:
-                    json.dump(d, handle, indent=1)
-                os.replace(temporary, p)
-        except (OSError, ValueError):
+        The board lock is taken first, and a lock that cannot be taken
+        falls back to a compare-and-swap, so a stale alarm does not stay
+        on the board because a lock file cannot be opened."""
+        if alarms.board_update(p, "factory-watchdog", "remove") != "wrote":
             print("WATCHDOG could not take the alarm off the board; the board file could not be written")
 
     # The alarm is not true any more, so the same cause can alarm again
