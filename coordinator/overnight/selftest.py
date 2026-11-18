@@ -331,7 +331,7 @@ def gate_pipeline():
     failures = []
     cases = [
         ("checked-head", repo, "absent", "", {}, ["astra"], None),
-        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"], "coordinator/bin/ticket"),
+        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
         ("prompt-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"],
          "coordinator/config/AGENT-RULES.md"),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
@@ -424,9 +424,7 @@ def gate_pipeline():
 
         def decision(item):
             # The board write is the one live file this eval must not touch.
-            # A prompt pull request keeps its own item id; every other passing
-            # pull request now gets one merge ask.
-            exact(item["id"] in ("prompt-merge-FIX-20", "merge-FIX-20"), True)
+            exact(item["id"], "prompt-merge-FIX-20")
             exact(item["group"], "Coordinator")
             exact(item["kind"], "action")
             exact(item.get("options"), None)
@@ -1474,11 +1472,10 @@ def consolidation_guard():
                 exact("gh pr merge" in emitted, False)
                 exact("gh issue close" in emitted, False)
             else:
-                exact("--match-head-commit" in emitted, False)
-                exact("the lane writes one decisions item" in emitted, True)
-                # The close step went with the merge: the lane merges nothing,
-                # so no gate closes a ticket on this path.
-                exact("gh issue close" in emitted, False)
+                exact("--match-head-commit " + "a" * 40 in emitted, True)
+                exact("verify every Provides claim" in emitted, True)
+                exact("false, missing or unverified, close nothing" in emitted, True)
+                exact(emitted.index("verify every Provides claim") < emitted.index("gh issue close"), True)
     for brief in (builder, gate):
         exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
     calls = []
