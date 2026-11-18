@@ -210,6 +210,30 @@ class ProviderBlockTests(unittest.TestCase):
                                     now=moment("2026-11-18T11:30:00"))
         self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
 
+    def test_a_newer_refusal_with_no_record_yet_is_not_undone_by_an_older_one(self):
+        """With an empty store, an 11:00 `retry after 0s` is written, so a
+        delayed 10:00 refusal that names 14:00 cannot block the provider."""
+        newer = moment("2026-11-18T11:00:00")
+        provider_block.record_block(SELECTION, "rate limited, retry after 0s", newer, now=newer)
+        older = moment("2026-11-18T10:00:00")
+        provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", older,
+                                    now=moment("2026-11-18T11:30:00"))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T11:30:01")))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
+
+    def test_an_offset_a_clock_cannot_hold_is_not_a_zone(self):
+        """`UTC+24:00` is no offset; reading it raised in the failure handler."""
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(SELECTION, "429; resets at 14:00 UTC+24:00",
+                                             failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T14:00:00+00:00")
+
+    def test_a_reset_past_the_end_of_the_calendar_falls_back_to_the_default_hour(self):
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(SELECTION, "429 retry after 99999999999999999s",
+                                             failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T11:00:00+00:00")
+
     def test_a_newer_refusal_read_after_its_reset_clears_the_older_block(self):
         """A newer refusal whose reset has passed still replaces the older
         block, so the provider is not held until the older reset."""
