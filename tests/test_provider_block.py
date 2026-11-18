@@ -133,6 +133,12 @@ class ProviderBlockTests(unittest.TestCase):
             failed, now=failed)
         self.assertEqual(record["until"], "2026-11-18T16:58:52+00:00")
 
+    def test_an_inverted_etc_zone_name_is_read_whole(self):
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(
+            SELECTION, "usage limit; resets at 14:00 Etc/GMT+5", failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T19:00:00+00:00")
+
     def test_an_iso_reset_is_taken_as_it_is_written(self):
         failed = moment("2026-11-18T10:00:00")
         record = provider_block.record_block(
