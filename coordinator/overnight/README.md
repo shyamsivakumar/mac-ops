@@ -334,6 +334,7 @@ writes the records.
 | The marker of an item | The item's commit and the item's newest dispatch receipt, as one string. A new commit or a new receipt is progress, and nothing else is. |
 | The idle count | How many ticks in a row the item's marker did not change. The first tick of an item counts as idle: there is nothing yet to compare it with. |
 | The stall cap | Three idle ticks (`STALL_CAP`). The policy snapshot's `stall_cap` names the same number. |
+| The board's progress | A moved item, new work on the board, a merged pull request, a closed ticket or a ticket that changed stage. Every event counts once. |
 | The stall state | `run/stall-state.json`, in the shift's own folder. It holds the marker, the idle count and the parked flag of every item the shift measured. |
 
 An item is measured when the shift has something to measure: a commit or a
@@ -352,6 +353,20 @@ that appeared on the board is work, and a board that keeps receiving work
 is not stuck. The board's first tick is its baseline: there is nothing yet
 to compare it with, so it counts as an idle tick, the way the first tick
 of an item does.
+
+The board also moved when the work landed (Refs #520). A merged pull
+request, a closed ticket and a ticket that changed stage are progress: the
+board is not stuck when the work it was holding is landing. The shift reads
+the merged pull requests and the closed tickets of the monitored repos
+every tick, over the window since the last tick, and it compares the
+board's ticket stages with the stages it held. Every event counts once: an
+event the shift has already seen is not progress again, or a board that
+merged one pull request would never stall. A read that fails counts no
+progress at all, so the shift keeps the rule it had and a real stall is
+still reported.
+
+The shift's own record of the progress is bounded: it remembers the last
+two hundred events and the stage of every ticket on the board.
 
 A stalled item is reported, not parked: the lane keeps working it, the
 shift does not label it, does not re-cut it and does not stop its
@@ -384,7 +399,10 @@ which of them are `stalled` (never `parked`: the shift keeps working a
 stalled item). It writes nothing.
 
 The fixture is a JSON file that names its items and its ticks. A tick maps
-every item to its marker.
+every item to its marker. A tick may also name the board's progress:
+`progress` is a list of events (`merge:<repo>#<number>` or
+`close:<repo>#<number>`), `stages` maps a ticket to its stage and `at` is
+the label of the tick, which the command prints with the stall it reports.
 
 ```json
 {
@@ -403,6 +421,12 @@ every item to its marker.
   ]
 }
 ```
+
+`evidence/MO-1075-520/tonight.json` is a fixture of a real night: the tick
+times are the shift log's own lane pass lines and the events are the pull
+requests that merged and the tickets that closed. `proof.py` next to it
+replays that night through the real command and shows that a tick with a
+merge is progress and that a real three tick stall still alarms.
 
 ## The secret redaction
 
