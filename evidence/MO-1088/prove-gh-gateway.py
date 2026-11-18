@@ -904,6 +904,8 @@ print("SHORTSELECTOR", gh_gateway.argv_host(
 print("SEARCHHOST", gh_gateway.argv_host(
     ["gh", "pr", "list", "--search", "--hostname=other.example",
      "-R", "actual.example/o/r"]))
+print("RUNBRANCH", gh_gateway.argv_host(
+    ["gh", "run", "list", "-R", "actual.example/o/r", "-b", "-Rother.example/o/r"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
@@ -912,7 +914,8 @@ check("a host in -R is the effective host",
                   "RUNWORKFLOW", "ent.example", "NOOWNER", "''",
                   "SEARCHSELECTOR", "actual.example", "HOSTNAMEWINS", "h.example",
                   "REPOFLAG", "ent.example", "REPOEQ", "ent.example",
-                  "SHORTSELECTOR", "actual.example", "SEARCHHOST", "actual.example"],
+                  "SHORTSELECTOR", "actual.example", "SEARCHHOST", "actual.example",
+                  "RUNBRANCH", "actual.example"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.

@@ -602,12 +602,13 @@ LONG_VALUE_FLAGS = tuple(flag for flag in VALUE_FLAGS if flag.startswith("--"))
 # value for `pr list`, and `-w` is `--web` for `pr list` but a workflow name
 # for `run list`. The overrides below are the ones that differ.
 SHORT_BOOLEAN = {
-    ("run", "list"): {"-a", "-b"},
+    ("run", "list"): {"-a"},
     ("pr", "list"): {"-w", "-d"},
     ("issue", "list"): set(),
 }
 SHORT_VALUE = {
-    ("run", "list"): {"-w"},
+    # `-b` is `--branch string` for `run list`, not a boolean.
+    ("run", "list"): {"-w", "-b"},
     ("pr", "list"): {"-a", "-A", "-H"},
 }
 
