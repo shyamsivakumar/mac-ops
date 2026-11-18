@@ -44,6 +44,12 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args:
         print("content-type: application/json")
         print()
         print(name)
+elif mode == "jqerror" and ("--include" in args or "-i" in args):
+    print("HTTP/2.0 200 OK")
+    print()
+    print('[]')
+    sys.stderr.write("jq: error: syntax error\\n")
+    sys.exit(1)
 elif mode == "noetag" and ("--include" in args or "-i" in args):
     print("HTTP/2.0 200 OK")
     print("content-type: application/json")
@@ -370,6 +376,27 @@ check("a conditional read with no ETag is cached for the TTL", calls_made() - be
 check("the cached no-ETag read returns the same body",
       first_noetag.stdout.strip() == second_noetag.stdout.strip() == '[{"number": 5}]',
       repr((first_noetag.stdout, second_noetag.stdout)))
+set_mode("200")
+
+# A query string alone is not a list: a single ref read is never cached,
+# so a moved branch is never answered from an old body.
+set_mode("200")
+ref_read = ["gh", "api", "repos/a/b/git/ref/heads/main?per_page=1"]
+before = calls_made()
+run(ref_read)
+run(ref_read)
+check("a single-object read with a query is never cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+
+# A 2xx that fails locally is not cached either: the first caller sees the
+# error and the next identical read must see it too, not a cached success.
+set_mode("jqerror")
+broken = ["gh", "api", "repos/a/b/broken?page=1"]
+before = calls_made()
+run(broken)
+run(broken)
+check("a 2xx with a local error is not cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
 set_mode("200")
 
 # A required read is not optional polling: without a floor it still runs

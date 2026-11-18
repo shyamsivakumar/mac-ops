@@ -51,6 +51,14 @@ LIST_TTL = 120
 # enough: `gh auth status --show-token` is a `status` read that prints a
 # token, so it must never reach the disk cache. A command that is not in
 # this set is not cached, whatever its verb.
+# The endpoint names the cache may serve. A list read ends in one of these;
+# a single object does not, whatever query string it carries.
+LIST_ENDPOINT_SEGMENTS = (
+    "issues", "pulls", "comments", "statuses", "commits", "files", "timeline",
+    "labels", "branches", "tags", "releases", "check-runs", "runs",
+    "workflows", "deployments", "environments", "artifacts", "contributors",
+    "members", "milestones", "events", "topics",
+)
 READ_COMMANDS = (
     ("pr", "list"),
     ("issue", "list"),
@@ -281,9 +289,15 @@ def cacheable(argv):
     path = endpoint(argv)
     if method(argv) != "GET" or "?" not in path:
         return False
+    clean = path.split("?", 1)[0].rstrip("/")
     # A single pull or issue path may carry a head SHA into a merge
     # decision, so it is never cached or answered from an ETag.
-    return re.match(r"^repos/[^/]+/[^/]+/(?:pulls|issues)/\d+", path.lstrip("/")) is None
+    if re.match(r"^repos/[^/]+/[^/]+/(?:pulls|issues)/\d+", clean.lstrip("/")):
+        return False
+    # A query string alone does not make a read a list. A single object
+    # asked with one, such as `repos/o/r/git/ref/heads/main?per_page=1`,
+    # must never be answered from the cache after the branch moves.
+    return clean.split("/")[-1] in LIST_ENDPOINT_SEGMENTS
 
 
 def conditional(argv):
@@ -378,7 +392,11 @@ def _conditional_run(argv, timeout):
     if status == 304 and state:
         return subprocess.CompletedProcess(argv, 0, state["stdout"], "")
     record(argv, 1)
-    if status is not None and 200 <= status < 300:
+    # A 2xx is not a success by itself: `gh` can fail locally after a good
+    # response, as a `--jq` evaluation error does. Only a command that
+    # exited zero may write either cache, or the next identical read would
+    # be answered with a cached error and exit zero.
+    if result.returncode == 0 and status is not None and 200 <= status < 300:
         header = re.search(r"(?im)^etag:\s*(\S+)\s*$", headers)
         if header:
             _write_etag(argv, header.group(1), body)
