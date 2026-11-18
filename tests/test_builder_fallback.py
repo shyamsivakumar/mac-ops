@@ -341,6 +341,34 @@ class LaneDriverTests(StoreCase):
             module.recover_dead_runs({})
         return launched
 
+    def test_a_previous_runs_verdict_does_not_pass_the_gate(self):
+        # Audit finding of the same class: the gate read the thread's newest
+        # message, so a retried gate run that wrote nothing before it stopped
+        # answered with the earlier run's PASS. The stopped run's verdict is
+        # the only one the gate may read.
+        module = self.module()
+        thread = {"threadId": "t-gate", "title": "review #537 cafe1234", "status": "failed",
+                  "updatedAt": "2026-01-01T00:00:00Z"}
+
+        def verdict(items):
+            def t3(tool, args):
+                if tool == "t3_thread_list":
+                    return {"threads": [thread]}
+                if args.get("view") == "messages":
+                    return {"items": items}
+                raise AssertionError(f"unexpected T3 call {tool}")
+            with patch.object(module, "t3", t3):
+                return module.gate_verdict("shyamsivakumar/mac-ops", 537, "cafe1234deadbeef")
+
+        state, _, reply = verdict([
+            {"runId": "run-a", "type": "assistant_message", "text": "review\n\nVERDICT: PASS"},
+            {"runId": "run-b", "type": "user_message", "text": "review #537 again"}])
+        self.assertEqual((state, reply), ("none", ""))
+        state, _, reply = verdict([
+            {"runId": "run-a", "type": "assistant_message", "text": "review\n\nVERDICT: PASS"},
+            {"runId": "run-b", "type": "assistant_message", "text": "review\n\nVERDICT: FAIL"}])
+        self.assertEqual((state, reply), ("FAIL", "review\n\nVERDICT: FAIL"))
+
     def test_a_previous_runs_head_does_not_settle_the_work(self):
         # Audit finding of the same class: the head comparison read the same
         # unscoped reply. Run B stopped after its prompt with no reply of its
