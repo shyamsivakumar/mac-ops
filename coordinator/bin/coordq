@@ -133,9 +133,11 @@ def gate_state(value):
     """The gate state of one recorded head.
 
     gatedHeads maps a head to its queue item, and to the record
-    `{id, retries, at, givenUp}` once a gate for the head has died without
-    a verdict. A value written before that record is the bare queue item
-    id, which is a head with no retry behind it.
+    `{id, retries, at, givenUp, reviewer}` once a gate for the head has died
+    without a verdict. A value written before that record is the bare queue
+    item id, which is a head with no retry behind it. The reviewer is the one
+    the live gate was launched on, so a gate that dies before it records a
+    model is still attributed to the reviewer it was queued on.
     """
     if isinstance(value, dict):
         retries = value.get("retries")
@@ -143,8 +145,9 @@ def gate_state(value):
         return {"id": value.get("id"),
                 "retries": retries if isinstance(retries, int) and not isinstance(retries, bool) else 0,
                 "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
-                "givenUp": bool(value.get("givenUp"))}
-    return {"id": value, "retries": 0, "at": None, "givenUp": False}
+                "givenUp": bool(value.get("givenUp")),
+                "reviewer": value.get("reviewer") if value.get("reviewer") in REVIEWER_CHAIN else None}
+    return {"id": value, "retries": 0, "at": None, "givenUp": False, "reviewer": None}
 
 
 def gate_label(state):
@@ -559,7 +562,8 @@ def cmd_start(a):
             if request_id in heads:
                 die(f"refused: a gate for this head is already recorded as "
                     f"{gate_label(gate_state(heads[request_id]))}")
-            heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False}
+            heads[request_id] = {"id": item["id"], "retries": 0, "at": None, "givenUp": False,
+                                 "reviewer": args.get("modelSelection")}
         save(queue)
         drain()
         if any(i["id"] == item["id"] for i in load()["items"]):
@@ -1098,14 +1102,18 @@ def reviewer_model(models):
     return starting_reviewer() or ASTRA_MODEL
 
 
-def ran_reviewer(thread):
+def ran_reviewer(thread, launched=None):
     """The reviewer a gate thread ran on.
 
-    A gate that died before a model ran records none, and the chain head is
-    the reviewer it was queued on."""
+    A gate that died before a model ran records none, so the reviewer the
+    gate was launched on is the one it ran on. That is not the chain head
+    when the chain head was blocked at launch. A head recorded before the
+    launch reviewer was kept still reads as a run on the chain head."""
     current = {"instanceId": thread.get("providerInstanceId"),
                "model": thread.get("model")}
-    return current if current in REVIEWER_CHAIN else ASTRA_MODEL
+    if current in REVIEWER_CHAIN:
+        return current
+    return launched if launched in REVIEWER_CHAIN else ASTRA_MODEL
 
 
 def quota_failure(value):
@@ -1352,7 +1360,7 @@ def cmd_gatekeep(a):
                         continue
                     if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
                         continue
-                    current = ran_reviewer(thread)
+                    current = ran_reviewer(thread, state["reviewer"])
                     model = failed_gate_reviewer(queue, key, current, data, a.dry_run)
                     if model is None:
                         if not a.dry_run:
@@ -1386,7 +1394,8 @@ def cmd_gatekeep(a):
                 queue["next"] += 1
                 queue["items"].append(item)
                 heads[key] = {"id": item["id"], "retries": retries,
-                              "at": time.time() if retries else None, "givenUp": False}
+                              "at": time.time() if retries else None, "givenUp": False,
+                              "reviewer": args["modelSelection"]}
                 save(queue)
         write_counts(counts, seen, stuck, a.dry_run)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
@@ -1636,7 +1645,8 @@ def cmd_gate(a):
         # Its retry count stays at the limit, so if it dies without a verdict
         # the next gatekeep run gives up on the head again, in one line,
         # instead of reopening the automatic retries.
-        heads[key] = {**state, "id": item["id"], "givenUp": False}
+        heads[key] = {**state, "id": item["id"], "givenUp": False,
+                      "reviewer": args["modelSelection"]}
         save(queue)
     print("queued " + key
           + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"])

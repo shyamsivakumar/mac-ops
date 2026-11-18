@@ -49,8 +49,10 @@ seconds (300 by default) after the retry before them, and then the head is
 given up: one line `gave up gate:<repo>#<pr>:<head> after <n> retries without
 a verdict` in `queue/gatekeep.log`, and nothing is queued for that head again.
 The retry count lives with the head's queue item in `gatedHeads`, as
-`{id, retries, at, givenUp}`, and a bare queue item id is read as a head with
-no retry behind it. The record names the head, so a pull request that pushes a
+`{id, retries, at, givenUp, reviewer}`, and a bare queue item id is read as a
+head with no retry behind it. `reviewer` is the reviewer the live gate was
+launched on, written when the gate is queued. The record names the head, so a
+pull request that pushes a
 new head starts again at no retries. An explicit `coordq gate <repo>#<pr>`
 still queues a given-up head, because an operator asked for it: it keeps the
 retry count and is recorded as undecided again, so a second explicit gate for
@@ -61,7 +63,11 @@ automatic retries.
 A retry moves the head to the next reviewer in `REVIEWER_CHAIN` that it has
 not tried and that is not blocked, and never back to one it came from. A run
 that records no reviewer at all, because it died before a model ran, counts as
-a run on the first reviewer. A run that ended `VERDICT: PASS` or
+a run on the reviewer the gate was launched on: a head that started on Opus
+while Astra was blocked is never attributed to Astra, so a provider error
+blocks Opus and the head is not queued on Opus again. A head recorded before
+the launch reviewer was kept counts as a run on the first reviewer. A run that
+ended `VERDICT: PASS` or
 `VERDICT: FAIL` is a verdict and is never retried elsewhere. When nothing is
 left to move to, the head is given up as above and waits.
 
@@ -69,7 +75,10 @@ A gate run that fails with a blocking provider error -- no credits, a usage or
 spend limit, a rate limit (429), or an auth failure (401/403) -- blocks that
 reviewer for every head in `queue/reviewers-blocked.json`, for one hour or
 until the reset time the error names, and writes one line
-`reviewer <provider>:<model> blocked until <time>` to `queue/dispatch.log`. A
+`reviewer <provider>:<model> blocked until <time>` to `queue/dispatch.log`. The
+error has to be the provider's: its own error code, matched whole, or an HTTP
+status the message names as one. Bare digits are no evidence, so an error such
+as `worker 14031 exited` holds the digits of 403 and blocks nobody. A
 new gate then starts on the next unblocked reviewer, the reviewer a head moves
 to skips a blocked one, and a head with nothing left to move to waits. An
 expired block is released at the start of a `coordq gatekeep` run, which writes

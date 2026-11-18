@@ -24,9 +24,21 @@ DEFAULT_DIR = os.path.expanduser("~/Code/coordinator/queue")
 BLOCK_MARKERS = (
     "no credits", "credit balance", "out of credits", "insufficient_quota",
     "insufficient quota", "quota", "usage limit", "spend limit", "rate limit",
-    "too many requests", "429", "401", "403", "unauthorized", "forbidden",
-    "authentication", "invalid api key",
+    "too many requests", "unauthorized", "forbidden", "authentication",
+    "invalid api key",
 )
+# The provider's own error codes. The code field is compared whole, so a code
+# is evidence and a number inside a message is not.
+BLOCK_CODES = frozenset((
+    "401", "403", "429", "insufficient_quota", "rate_limit_exceeded",
+    "quota_exceeded", "usage_limit", "spend_limit", "invalid_api_key",
+    "authentication_error", "permission_error", "unauthorized", "forbidden",
+))
+# An HTTP status is evidence only when the message names it as one. Bare digits
+# are not: `worker 14031 exited` holds the digits of 403 and is no refusal.
+STATUS = re.compile(r"\b(?:http|status(?:\s+code)?)\s*[:=]?\s*(?:401|403|429)\b"
+                    r"|\b(?:401|403|429)\s+(?:unauthorized|forbidden|too many requests)\b",
+                    re.IGNORECASE)
 
 # A provider that says when it comes back: "your plan resets in 20 minutes".
 RESET = re.compile(r"(?:resets?|try again|retry|available|back)\s+(?:in|after)\s+"
@@ -122,25 +134,42 @@ def starting_reviewer(now=None, directory=None):
     return next((entry for entry in REVIEWER_CHAIN if identity(entry) not in held), None)
 
 
-def error_text(value):
-    """The text of a failed run's error, or "" when the value names no failure."""
+def failure_of(value):
+    """The failed run a value names, or None when it names no failure."""
     if isinstance(value, str):
-        return value
+        return {"error": value}
     if not isinstance(value, dict):
-        return ""
+        return None
     if "thread" in value:
         thread = value.get("thread") or {}
         runs = value.get("recentRuns") or []
         failure = next((run for run in runs
                         if run.get("runId") == thread.get("latestRunId")), thread)
-        if failure.get("status") != "failed":
-            return ""
-    else:
-        failure = value
-    error = failure.get("error")
+        return failure if failure.get("status") == "failed" else None
+    return value
+
+
+def error_fields(value):
+    """The provider's error code and message of a failed run, as text."""
+    failure = failure_of(value)
+    error = failure.get("error") if failure else None
     if isinstance(error, dict):
-        return " ".join(str(error.get(field) or "") for field in ("code", "message"))
-    return error if isinstance(error, str) else ""
+        return str(error.get("code") or ""), str(error.get("message") or "")
+    return "", error if isinstance(error, str) else ""
+
+
+def provider_refusal(code, message):
+    """Whether a failed run's error is the provider refusing to run.
+
+    A refusal names the provider's own error code, or an HTTP status in the
+    message. A substring is no evidence: `worker 14031 exited` holds the
+    digits of 403 and says nothing about the provider."""
+    if code.strip().lower() in BLOCK_CODES:
+        return True
+    if STATUS.search(message):
+        return True
+    lowered = message.lower()
+    return any(marker in lowered for marker in BLOCK_MARKERS)
 
 
 def blocking_until(value, now=None):
@@ -149,10 +178,10 @@ def blocking_until(value, now=None):
     A provider that says when it comes back sets the end; any other blocking
     error holds the reviewer for BLOCK_SECONDS."""
     now = time.time() if now is None else now
-    text = error_text(value).lower()
-    if not text or not any(marker in text for marker in BLOCK_MARKERS):
+    code, message = error_fields(value)
+    if not provider_refusal(code, message):
         return None
-    match = RESET.search(text)
+    match = RESET.search(message)
     if match:
         seconds = float(match.group(1)) * UNITS[match.group(2).lower()]
         if seconds > 0:

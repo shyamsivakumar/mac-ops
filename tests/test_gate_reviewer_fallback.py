@@ -41,6 +41,12 @@ DEAD_GATE = {"thread": {"status": "failed", "providerInstanceId": "codex",
 MODELLESS_GATE = {"thread": {"status": "failed"},
                   "items": [{"type": "user_message", "text": "review"}],
                   "recentRuns": []}
+# The same, launched on a reviewer that then refused for want of credits.
+MODELLESS_NO_CREDITS = {"thread": {"status": "failed",
+                                   "error": {"code": "usage_limit",
+                                             "message": "You have no credits left"}},
+                        "items": [{"type": "user_message", "text": "review"}],
+                        "recentRuns": []}
 DEAD_OPUS_GATE = {"thread": {"status": "failed", "providerInstanceId": "claudeAgent",
                              "model": "claude-opus-5-5"},
                   "items": [{"type": "user_message", "text": "review"}],
@@ -305,6 +311,39 @@ class BlockedReviewerTest(ReplayBase):
         answered = {"thread": {"status": "completed", "error": {"message": "no credits"}},
                     "items": [{"type": "assistant_message", "text": "VERDICT: FAIL"}]}
         self.assertIsNone(gate_reviewers.blocking_until(answered))
+
+    def test_a_mode_less_run_is_attributed_to_the_reviewer_it_launched_on(self):
+        # Astra was blocked, so this head started on Opus and died before
+        # recording a model. The launch record says which reviewer it ran on.
+        self.gate = MODELLESS_NO_CREDITS
+        self.write_queue(heads={self.key: {"id": 4, "retries": 0, "at": None,
+                                           "givenUp": False, "reviewer": NEXT_REVIEWER}})
+        out, _ = self.run_gatekeep()
+        self.assertEqual(list(self.blocked_records()), [identity(NEXT_REVIEWER)])
+        # Nothing is left below Opus, so the head waits instead of being
+        # queued on the reviewer that just refused.
+        self.assertEqual(self.gate_items(), [])
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
+        self.assertNotIn("regating", out)
+
+    def test_the_queue_records_the_reviewer_a_gate_launches_on(self):
+        self.write_blocked({identity(CHAIN_HEAD): {"until": time.time() + 600,
+                                                   "at": time.time()}})
+        self.next_head()
+        self.run_gatekeep()
+        items = self.gate_items()
+        self.assertEqual(len(items), 1)
+        self.assertEqual(self.read_queue()["gatedHeads"][f"gate:{REPO}#7:{NEXT_HEAD}"]["reviewer"],
+                         NEXT_REVIEWER)
+
+    def test_a_number_inside_a_message_is_no_provider_refusal(self):
+        for text in ("worker 14031 exited", "thread 4031 failed", "1403 items"):
+            with self.subTest(text=text):
+                self.assertIsNone(gate_reviewers.blocking_until({"error": {"message": text}}))
+        self.assertIsNotNone(gate_reviewers.blocking_until({"error": {"code": "403"}}))
+        self.assertIsNotNone(gate_reviewers.blocking_until({"error": {"message": "status code 429"}}))
+        self.assertIsNotNone(gate_reviewers.blocking_until(
+            {"error": {"code": "rate_limit_exceeded", "message": "slow down"}}))
 
     def test_the_provider_reasons_that_block(self):
         for text in ("You have no credits left", "usage limit reached",
