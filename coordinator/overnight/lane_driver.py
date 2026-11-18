@@ -477,13 +477,14 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
     thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    if sendable and not model_list.same_selection(thread_model, fixer["selection"]):
-        if thread.get("status") not in {"completed", "interrupted", "failed"}:
+    if not model_list.same_selection(thread_model, fixer["selection"]):
+        if thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}:
             return (f"skip {lkey}: thread is {thread.get('status')} on "
                     f"{model_list.identity(thread_model) or 'an unknown model'}, "
                     f"not the first available fix model; held until it is idle")
-        sendable = False
-        reroute = "model is not first available"
+        if thread.get("status") in {"completed", "interrupted", "failed"}:
+            sendable = False
+            reroute = "model is not first available"
     if sendable and worktree_only and root_workspace(thread):
         # Pull request work in a shared checkout of the repository moves
         # the branch everyone installs from, so it starts a fresh
