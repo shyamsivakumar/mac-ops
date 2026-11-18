@@ -394,6 +394,31 @@ class DiffValuesTest(unittest.TestCase):
         item = check.item_checks("found", text)
         self.assertEqual(item["status"], check.PASS)
 
+    def test_a_row_without_its_outer_pipes_is_a_row(self):
+        """A Markdown row does not have to carry its outer pipes.
+
+        A row that starts `build | make build | failed | compiler error`
+        records a failure, and the table cannot lose it because the row
+        has no leading pipe.
+        """
+        check = close_check()
+        text = ("| Check | Command | Result | Detail |\n"
+                "| --- | --- | --- | --- |\n"
+                "| lint | make lint | passed | |\n"
+                "build | make build | failed | compiler error\n")
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("failed", item["detail"])
+
+    def test_a_line_inside_the_table_that_is_not_a_row_blocks_the_close(self):
+        check = close_check()
+        text = ("| Check | Command | Result | Detail |\n"
+                "| --- | --- | --- | --- |\n"
+                "| lint | make lint | passed | |\n"
+                "the build failed\n")
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.FAIL)
+
     def test_a_failure_written_outside_the_table_still_fails(self):
         """A result outside the table is a check too."""
         check = close_check()

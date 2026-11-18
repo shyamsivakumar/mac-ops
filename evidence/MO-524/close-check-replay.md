@@ -72,7 +72,9 @@ The work goes back to its builder and the ticket stays open.
   too, so "heavy help: failed" in the proof file blocks the close as well. The
   header is the whole header row, so a first row that is not one is a check, and a
   command that holds a pipe is one cell, so a row is split on the pipes that are
-  not escaped.
+  not escaped. A Markdown row does not have to carry its outer pipes, and a line
+  inside the table that is not a row is a malformed row, so nothing the table
+  holds is dropped.
 
 The cost note item is skipped in both: MO-1068 (#504) is report only and its report
 (evidence/MO-1068/cost-report.md) does not exist yet.

@@ -353,9 +353,18 @@ def proof_rows(text):
     """
     rows = []
     header_seen = False
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if not line.startswith("|"):
+    in_table = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            in_table = False
+            continue
+        if "|" not in line:
+            if in_table:
+                # A line inside the table that is not a row is a malformed
+                # row: dropping it would hide whatever it recorded.
+                rows.append((line, ""))
+                continue
             # A result written outside the table is a check too: "lane
             # selection: failed" records a failure, and dropping it would
             # report that every check passed.
@@ -369,7 +378,9 @@ def proof_rows(text):
         name = cells[0] if cells else ""
         if not header_seen and tuple(cell.lower() for cell in cells) in PROOF_HEADERS:
             header_seen = True
+            in_table = True
             continue
+        in_table = True
         result = cells[2].lower() if len(cells) > 2 else ""
         rows.append((name or "(unnamed row)", result))
     return rows
