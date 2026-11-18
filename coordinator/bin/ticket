@@ -1664,6 +1664,32 @@ def thread_for_attempt(cfg, t, ledger):
     return thread
 
 
+def close_check_module():
+    """The close checklist module, loaded from the bin directory."""
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    if bin_dir not in sys.path:
+        sys.path.insert(0, bin_dir)
+    import close_check
+    return close_check
+
+
+def builder_thread(repo, number):
+    """The thread that built the ticket, when the ledger knows it."""
+    try:
+        cfg = load_config()
+        repo_config(cfg, repo)
+        issue = fetch_issue(repo, number)
+        ticket = parse_ticket(cfg, repo, issue)
+        ledger = ledger_of(issue, authed_login())
+        for attempt in sorted(intents(ledger), key=lambda entry: entry["attempt"], reverse=True):
+            thread = thread_for_attempt(cfg, ticket, [attempt])
+            if thread:
+                return thread["threadId"]
+    except (Refuse, GhError, OSError, ValueError, KeyError, SystemExit):
+        return None
+    return None
+
+
 def cmd_close(a):
     repo, number = parse_ref(a.ref)
     if repo.split("/")[0] != "shyamsivakumar":
@@ -1684,6 +1710,26 @@ def cmd_close(a):
             or not reply.endswith("VERDICT: PASS")):
         raise Refuse("completion requires exact-head gate verification of Provides, CHECK and VERDICT")
     merge = pull["mergeCommit"]["oid"]
+    close_check = close_check_module()
+    items = close_check.run_check(repo, a.pr, number)["items"]
+    failed = close_check.blocking(items)
+    if failed:
+        builder = builder_thread(repo, number)
+        body = close_check.report(items, f"{repo}#{number}")
+        comment = (f"The close checklist did not pass, so the ticket stays open and the work goes "
+                   f"back to its builder.\n\n```\n{body}\n```\n")
+        if builder:
+            comment += f"Builder thread: {builder}.\n"
+            message = (f"The close checklist failed on {repo}#{number} (merged via #{a.pr} at "
+                       f"{merge}). Fix the failing item and open a new pull request.\n\n{body}")
+            payload = {"threadId": builder, "message": message}
+            try:
+                run([COORDQ, "start", json.dumps(payload), "--tool", "t3_thread_send",
+                     "--priority", "800", "--title", f"close-check {repo}#{number}"], CALL_TIMEOUT)
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                comment += f"The send to the builder thread did not go through: {exc}\n"
+        gh(["issue", "comment", str(number), "-R", repo, "--body", comment])
+        raise Refuse("the close checklist failed; the ticket stays open")
     gh(["issue", "close", str(number), "-R", repo, "--comment",
         f"Provides verified by gate {a.gate_thread} on {a.head}; merged via #{a.pr} ({merge})."])
     print(f"closed {repo}#{number} via {merge}")
