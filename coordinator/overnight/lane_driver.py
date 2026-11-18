@@ -441,11 +441,17 @@ GLM = {"instanceId": "glm", "model": "zai/glm-5.3"}
 # The models a build may run on: GLM, MiniMax, DeepSeek or a router task
 # route (the route handles its own fallbacks). No OpenAI model and no
 # Sol/Terra/Luna ever builds (Shyam 2026-11-17).
-# Models a build may CONTINUE on: GLM, MiniMax, and DeepSeek, because a
-# task/* route executes DeepSeek as an in-route fallback. A router thread
-# continues only when its model is the route itself, never some other
-# model spelled through the router provider.
-CONTINUABLE_BUILDER_MODELS = {"zai/glm-5.3", "minimax/MiniMax-M3.1-Flash", "deepseek/deepseek-flash"}
+# The selections a build may CONTINUE on, as provider/model pairs: the
+# startable GLM and MiniMax pairs, plus DeepSeek on the pi instance,
+# which a task/* route executes as an in-route fallback. A pair is
+# checked whole — a model name alone never makes a provider permitted,
+# so a codex thread reporting zai/glm-5.3 is not continuable (Shyam
+# 2026-11-17).
+CONTINUABLE_BUILDER_SELECTIONS = (
+    {"instanceId": "glm", "model": "zai/glm-5.3"},
+    {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
+    {"instanceId": "pi", "model": "deepseek/deepseek-flash"},
+)
 # The selections a build may START on, as provider/model pairs: GLM 5.3 or
 # MiniMax on their own instances, plus a task/* route on the router (the
 # MiniMax-first pi route; DeepSeek is reached only as a fallback inside a
@@ -459,10 +465,11 @@ STARTABLE_BUILDER_SELECTIONS = (
 
 
 def allowed_builder(thread):
-    """True when a thread's model is one a build may continue on."""
+    """True when a thread's selection is one a build may continue on."""
     if thread.get("providerInstanceId") == "router":
         return (thread.get("model") or "").startswith("task/")
-    return (thread.get("model") or "") in CONTINUABLE_BUILDER_MODELS
+    return ({"instanceId": thread.get("providerInstanceId"),
+             "model": thread.get("model") or ""} in CONTINUABLE_BUILDER_SELECTIONS)
 LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
               "shyamsivakumar/catalouge"]
 NEVER_START = {("shyamsivakumar/strategy-replay-workbench", 468)}
