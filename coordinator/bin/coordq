@@ -572,7 +572,19 @@ def undispatchable_tool(item):
     return None
 
 
+def gate_reviewer_blocked(item):
+    """Whether a queued gate launch names a reviewer the block store has blocked."""
+    args = item.get("args") or {}
+    return (item.get("tool") == "t3_thread_launch"
+            and str(args.get("clientRequestId") or "").startswith("gate:")
+            and bool(args.get("modelSelection"))
+            and model_list.is_blocked(args["modelSelection"]))
+
+
 def drain():
+    """Launch queued items. The caller holds the block store lock and then the
+    queue lock, in that order, so a block cannot land between the reviewer
+    check here and the launch."""
     statuses = {}
     while True:
         queue = load()
@@ -596,6 +608,14 @@ def drain():
             queue["items"] = [i for i in queue["items"] if i["id"] not in dropped]
             save(queue)
         ready = sorted((i for i in dispatchable if i.get("attempts", 0) < MAX_ATTEMPTS), key=lambda i: (-i["priority"], i["id"]))
+        try:
+            held = [i for i in ready if gate_reviewer_blocked(i)]
+        except model_list.ModelsError as e:
+            log(f"nothing started, the block store cannot be read: {e}")
+            return
+        for item in held:
+            log(f"#{item['id']} waiting: its gate reviewer is blocked")
+        ready = [i for i in ready if i not in held]
         n = live()
         if n is None:
             log("cannot read thread count, nothing started")
@@ -823,7 +843,7 @@ def cmd_start(a):
     # then cannot be judged by it.
     started_before = started_snapshot(load())
     live = live_thread_ids() if started_before else None
-    with Lock(True):
+    with model_list.blocked_lock(), Lock(True):
         queue = load()
         key = (getattr(a, "action_key", None) or "").strip()
         if key:
@@ -1227,8 +1247,8 @@ def cmd_dispatch(a):
         log("dry run: the queue is left alone")
         safe_refill(a)
         return
-    with Lock(False) as lock:
-        if lock is None:
+    with model_list.blocked_lock(False) as store, Lock(False) as lock:
+        if not store or lock is None:
             log("lock held by another run, skipping")
             return
         drain()
