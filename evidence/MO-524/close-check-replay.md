@@ -69,7 +69,10 @@ The work goes back to its builder and the ticket stays open.
   hide behind it. The separator is recognized as the whole row too: a row whose
   first cell only marks it as a separator is a check with a malformed name, and a
   malformed row blocks the close. A result written outside the table is a check
-  too, so "heavy help: failed" in the proof file blocks the close as well.
+  too, so "heavy help: failed" in the proof file blocks the close as well. The
+  header is the whole header row, so a first row that is not one is a check, and a
+  command that holds a pipe is one cell, so a row is split on the pipes that are
+  not escaped.
 
 The cost note item is skipped in both: MO-1068 (#504) is report only and its report
 (evidence/MO-1068/cost-report.md) does not exist yet.
