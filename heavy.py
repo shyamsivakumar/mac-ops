@@ -440,27 +440,31 @@ def effective_executable(argv: Sequence[str]) -> Optional[str]:
     first = os.path.basename(str(argv[0]))
     if first != "env":
         return first
+    words: List[str] = []
     index = 1
     while index < len(argv):
         argument = str(argv[index])
         if argument in ENV_SPLIT_OPTION:
-            # env splits the operand into words and runs the first one.
+            # env splits the operand into words and runs them.
             if index + 1 >= len(argv):
                 return None
-            words = str(argv[index + 1]).split()
-            if not words:
-                return None
-            return os.path.basename(words[0])
+            words.extend(str(argv[index + 1]).split())
+            index += 2
+            continue
         if argument in ENV_OPTIONS_WITH_OPERAND:
             index += 2
             continue
-        if argument.startswith("-") or "=" in argument:
+        if argument.startswith("-"):
             index += 1
             continue
-        break
-    if index >= len(argv):
-        return None
-    return os.path.basename(str(argv[index]))
+        words.append(argument)
+        index += 1
+    for word in words:
+        if "=" in word:
+            # An assignment sets the environment; it is not the command.
+            continue
+        return os.path.basename(word)
+    return None
 
 
 def xcodebuild_executable(value: str) -> bool:
