@@ -585,13 +585,20 @@ def pr_changed_count(repo, number):
     return count if isinstance(count, int) else None
 
 
-def prompt_pull(repo, number, changed_files=None, attempts=2):
+def api_json(endpoint):
+    """One `gh api` read of an endpoint, parsed as JSON."""
+    return json.loads(run(["gh", "api", endpoint]) or "{}")
+
+
+def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths a pull request changed.
 
     An unreadable or short list is retried, then UNKNOWN: the lane defers a
     passing pull request it cannot read instead of merging it blind. The
     changed-file count the completeness check needs is read from the pull
-    request itself when the caller does not already hold it.
+    request itself when the caller does not already hold it, and a list that
+    cannot be completed falls back to the merge base's and the head's trees,
+    so a big pull request of ordinary code still merges.
     """
     try:
         count = changed_files if isinstance(changed_files, int) else pr_changed_count(repo, number)
@@ -606,6 +613,13 @@ def prompt_pull(repo, number, changed_files=None, attempts=2):
         state = prompt_paths.prompt_scan(paths)
         if state != prompt_paths.UNKNOWN:
             return state
+    if base and head:
+        try:
+            paths = prompt_paths.tree_diff(api_json, repo, base, head)
+        except (RuntimeError, ValueError, subprocess.SubprocessError):
+            paths = None
+        if paths is not None:
+            return prompt_paths.prompt_scan(paths)
     return prompt_paths.UNKNOWN
 
 
@@ -758,7 +772,9 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
-        held = prompt_pass(repo, number, head, prompt_pull(repo, number, pr.get("changedFiles")))
+        held = prompt_pass(repo, number, head,
+                           prompt_pull(repo, number, pr.get("changedFiles"),
+                                       pr.get("baseRefName") or "main", head))
         if held:
             return held
         if repo == "digitized/Concerning":

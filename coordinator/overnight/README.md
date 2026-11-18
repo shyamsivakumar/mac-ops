@@ -819,8 +819,10 @@ written without the list could order a merge of prompt text, so an unknown
 list never reads as clear. A list shorter than the pull request's own
 changed-file count is unknown too, because GitHub's files endpoint stops at
 3,000 and the dropped entry can be the prompt file; when the caller holds no
-count, the pull request itself is read for it, and a count that cannot be
-read is unknown as well. That read is paginated and slurped like the rest,
+count, the pull request itself is read for it. A list that can never be
+completed falls back to the complete diff, comparing the merge base's tree
+with the head's tree, so a 3,001-file pull request of ordinary code still
+merges while one that hides a prompt file still holds. That read is paginated and slurped like the rest,
 so the single pull request is the only row of a list and the count is read
 from that row. A renamed file counts
 under both names, so moving prompt text out of `prompts/` still holds the

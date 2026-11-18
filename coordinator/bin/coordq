@@ -1164,28 +1164,38 @@ def gate_changed_count(repo, number):
     return count if isinstance(count, int) else None
 
 
-def gate_prompt_state(repo, number, changed_files=None, attempts=2):
+def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths one pull request changed.
 
     A read GitHub cannot give is retried, then reported UNKNOWN. A list
     shorter than the pull request's own changed-file count may have left out
     the one prompt file (the files endpoint stops at 3,000), so it is
     UNKNOWN too; the count is read from the pull request itself when the
-    caller does not already hold it. An unknown list never reads as clear,
-    because clear is what authorizes the merge a gate brief orders, so the
-    caller defers the gate until the list is known.
+    caller does not already hold it. When the list cannot be completed, the
+    trees of the merge base and the head give the whole diff, so a big
+    pull request of ordinary code still clears. An unknown list never reads
+    as clear on its own, because clear is what authorizes the merge a gate
+    brief orders, so the caller defers the gate until the list is known.
     """
     count = changed_files if isinstance(changed_files, int) else gate_changed_count(repo, number)
     for _ in range(max(1, attempts)):
         try:
-            files = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
+            pages = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
         except (RuntimeError, ValueError):
             continue
+        files = pages
         if not isinstance(files, list):
             continue
         if not prompt_paths.list_is_complete(files, count):
             continue
         return prompt_paths.prompt_scan(prompt_paths.entries_paths(files))
+    if base and head:
+        try:
+            paths = prompt_paths.tree_diff(gh_json, repo, base, head)
+        except (RuntimeError, ValueError):
+            paths = None
+        if paths is not None:
+            return prompt_paths.prompt_scan(paths)
     return prompt_paths.UNKNOWN
 
 
@@ -1292,7 +1302,8 @@ def gate_candidates(config):
                     continue
                 key = f"gate:{repo}#{number}:{head}"
                 proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
-                prompt = gate_prompt_state(repo, number, pr.get("changed_files"))
+                prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
+                                           (pr.get("base") or {}).get("ref"), head)
                 if prompt == prompt_paths.UNKNOWN:
                     print(f"skip {repo}#{number}: changed files unreadable, gate deferred",
                           file=sys.stderr)
@@ -1584,7 +1595,8 @@ def gate_request(repo, pr, settings, config, receipts, login):
             return None
         key = f"gate:{repo}#{number}:{head}"
         proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
-        prompt = gate_prompt_state(repo, number, pr.get("changed_files"))
+        prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
+                                   (pr.get("base") or {}).get("ref"), head)
         if prompt == prompt_paths.UNKNOWN:
             return DEFER
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
@@ -1597,7 +1609,8 @@ def gate_request(repo, pr, settings, config, receipts, login):
         return None
     key = f"gate:{repo}#{number}:{head}"
     proof_state, proof, proof_path = gate_proof(settings, repo, None, head)
-    prompt = gate_prompt_state(repo, number, pr.get("changed_files"))
+    prompt = gate_prompt_state(repo, number, pr.get("changed_files"),
+                               (pr.get("base") or {}).get("ref"), head)
     if prompt == prompt_paths.UNKNOWN:
         return DEFER
     return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, []),
