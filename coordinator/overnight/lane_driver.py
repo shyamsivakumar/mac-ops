@@ -476,15 +476,17 @@ def worktree_branch(path):
     return listing.strip()
 
 
-def herdr_worktree(thread):
-    """Whether a thread works in a herdr worktree.
+def barred_worktree(path):
+    """Whether work may not go to the worktree at a path.
 
     A herdr branch is Shyam's to merge, so the lane never sends work
-    there and never hands a worktree on that branch to a builder."""
-    path = thread.get("worktreePath")
-    if not path:
-        return False
-    return worktree_branch(path).startswith("herdr/")
+    there and never hands a worktree on that branch to a builder. A
+    worktree whose branch cannot be read is not confirmed to be anywhere
+    else, so it is barred too: only a readable branch outside `herdr/`
+    is a destination.
+    """
+    branch = worktree_branch(path)
+    return not branch or branch.startswith("herdr/")
 
 
 def branch_on_origin(repo, branch):
@@ -609,17 +611,18 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                     f"not the chosen builder; {HELD_SKIP}")
         sendable = False
         reroute = "not the chosen builder"
-    if sendable and herdr_worktree(thread):
-        # A herdr branch is Shyam's to merge, so the lane never sends work
-        # there, and never hands that worktree to a builder either.
-        sendable = False
-        reroute = "herdr worktree"
     if sendable and root_workspace(thread):
         # Work in the shared checkout of the repository moves the branch
         # everyone installs from, so it never goes to the thread that
         # works there.
         sendable = False
         reroute = "root workspace"
+    if sendable and thread.get("worktreePath") and barred_worktree(thread["worktreePath"]):
+        # A herdr branch is Shyam's to merge, so the lane never sends work
+        # there, and never hands that worktree to a builder either. A
+        # branch that cannot be read is barred the same way.
+        sendable = False
+        reroute = "barred worktree"
     if sendable:
         workspace = None
         args = {"threadId": thread_id, "message": message}
@@ -629,7 +632,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         if not repo:
             raise ValueError(f"No repository for {lkey}")
         own_worktree = (thread.get("worktreePath") and not root_workspace(thread)
-                        and not herdr_worktree(thread)
+                        and not barred_worktree(thread["worktreePath"])
                         and os.path.isdir(thread["worktreePath"]))
         if own_worktree and (reroute in {"not the chosen builder", "builder blocked"} or pr is None):
             # The work stays in its own worktree; only the builder moves.
@@ -1661,6 +1664,9 @@ def recover_dead_runs(ledger):
                              "worktree", "list", "--porcelain"])
             if not any(line == f"worktree {path}" for line in worktrees.splitlines()):
                 print(f"DEAD {thread_id}: coordinator needed, worktree is unavailable")
+                continue
+            if barred_worktree(path):
+                print(f"DEAD {thread_id}: coordinator needed, worktree is on a herdr branch or its branch cannot be read")
                 continue
             ticket_url = f"https://github.com/{repo}/issues/{ticket}"
             message = (f"Continue {repo}#{ticket} ({ticket_url}) in this existing worktree. The prior thread {thread_id} stopped. "
