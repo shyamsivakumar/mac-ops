@@ -477,6 +477,18 @@ class XcodebuildExclusionTests(unittest.TestCase):
         self.assertIsNotNone(job_id)
         self.assertIsNone(reason)
 
+    def test_a_wrapped_command_is_not_a_build_for_the_exclusion(self):
+        self.running('first')
+        self.queue('second')
+        job_id, reason = self.reserve('second', command='env')
+        self.assertIsNotNone(job_id)
+        self.assertIsNone(reason)
+
+    def test_the_credit_and_the_exclusion_use_one_executable_identity(self):
+        self.assertTrue(heavy.xcodebuild_executable('/usr/bin/xcodebuild'))
+        self.assertFalse(heavy.xcodebuild_executable('/usr/bin/env'))
+        self.assertFalse(heavy.xcodebuild_executable('xcodebuild -destination'))
+
 
 class SimulatorProcessOwnershipTests(unittest.TestCase):
     """Only the simulator's own processes carry the credit."""
@@ -507,38 +519,157 @@ class SimulatorProcessOwnershipTests(unittest.TestCase):
 class SimulatorCreditRefreshTests(unittest.TestCase):
     """The credit is measured again for every admission attempt."""
 
-    def test_the_credit_is_measured_inside_the_admission_loop(self):
-        source = inspect.getsource(heavy._launch_job)
-        loop = source.index("while job_id is None:")
-        credit = source.index("simulator_memory_credit_bytes(", loop)
-        reserve = source.index("_reserve_job(", credit)
-        self.assertLess(loop, credit)
-        self.assertLess(credit, reserve)
+    BUILD = [
+        "xcodebuild",
+        "-destination",
+        "platform=iOS Simulator,name=CI-iPhone",
+    ]
 
-    def test_the_credit_is_not_measured_before_the_job_is_queued(self):
-        source = inspect.getsource(heavy._launch_job)
-        queue = source.index("_enqueue_job(")
-        credit = source.index("simulator_memory_credit_bytes(")
-        self.assertLess(queue, credit)
+    def deps(self):
+        return heavy.SupervisorDeps(
+            monotonic_ns=lambda: 700_000_000_000,
+            clock=lambda: 700,
+            wall_clock=lambda: 700,
+            boot_reader=lambda: "boot",
+            process_table_reader=lambda: {},
+            legacy_slots=lambda table: 0,
+            sample=lambda: sample(16, 5),
+            sleep=lambda seconds: None,
+        )
+
+    def host(self):
+        """A stub host with one booted simulator that grows between probes."""
+        listing = json.dumps(
+            {
+                "devices": {
+                    "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [
+                        {"name": "CI-iPhone", "udid": "BBB"}
+                    ]
+                }
+            }
+        )
+        state = {"process_reads": 0}
+
+        def runner(argv, timeout):
+            if "simctl" in " ".join(str(arg) for arg in argv):
+                return listing
+            state["process_reads"] += 1
+            rss = 100 if state["process_reads"] == 1 else 300
+            return (
+                "  %d     1     1 launchd_sim /Users/x/Library/Developer/"
+                "CoreSimulator/Devices/BBB/data/Library/x\n" % rss
+            )
+
+        return runner, state
+
+    def probe_with(self, runner):
+        """A credit probe that reads the stub host and records its arguments."""
+        probed = []
+        real_credit = heavy.simulator_memory_credit_bytes
+
+        def probe(argv, **kwargs):
+            probed.append(list(argv))
+            kwargs.setdefault("command_runner", runner)
+            return real_credit(argv, **kwargs)
+
+        return probe, probed
+
+    def test_two_admission_attempts_measure_the_credit_again(self):
+        runner, _state = self.host()
+        registry = Mock()
+        allowances = []
+        probe, probed = self.probe_with(runner)
+
+        def reserve(reg, task_key, task_id, basename, host_sample, deps, **kwargs):
+            allowances.append(kwargs.get("allowance_bytes"))
+            if len(allowances) == 1:
+                return None, "global-slots-busy"
+            return "job-id", None
+
+        with patch.object(heavy, "_enqueue_job", return_value="queue-id"), \
+                patch.object(
+                    heavy, "simulator_memory_credit_bytes", side_effect=probe
+                ), \
+                patch.object(heavy, "_reserve_job", side_effect=reserve), \
+                patch.object(heavy, "_record", return_value={"job_id": "job-id"}), \
+                patch.object(
+                    heavy,
+                    "_acquire_project_lock",
+                    side_effect=heavy.HeavyError("the test stops here"),
+                ):
+            with self.assertRaises(heavy.HeavyError):
+                heavy._launch_job(
+                    self.BUILD,
+                    task_key="task",
+                    task_id="task",
+                    command_basename="xcodebuild",
+                    registry=registry,
+                    deps=self.deps(),
+                )
+        self.assertEqual(probed, [self.BUILD, self.BUILD])
+        self.assertEqual(allowances, [100 * 1024, 300 * 1024])
+
+    def test_a_wrapped_executable_claims_no_credit(self):
+        runner, _state = self.host()
+        credit = heavy.simulator_memory_credit_bytes(
+            [
+                "/usr/bin/env",
+                "xcodebuild",
+                "-destination",
+                "platform=iOS Simulator,name=CI-iPhone",
+            ],
+            command_runner=runner,
+        )
+        self.assertEqual(credit, 0)
+
+    def test_a_wrapped_command_reaches_reservation_without_credit(self):
+        runner, _state = self.host()
+        registry = Mock()
+        allowances = []
+        probe, _probed = self.probe_with(runner)
+
+        def reserve(reg, task_key, task_id, basename, host_sample, deps, **kwargs):
+            allowances.append(kwargs.get("allowance_bytes"))
+            if len(allowances) == 1:
+                return None, "global-slots-busy"
+            return "job-id", None
+
+        wrapped = ["/usr/bin/env"] + self.BUILD
+        with patch.object(heavy, "_enqueue_job", return_value="queue-id"), \
+                patch.object(
+                    heavy, "simulator_memory_credit_bytes", side_effect=probe
+                ), \
+                patch.object(heavy, "_reserve_job", side_effect=reserve), \
+                patch.object(heavy, "_record", return_value={"job_id": "job-id"}), \
+                patch.object(
+                    heavy,
+                    "_acquire_project_lock",
+                    side_effect=heavy.HeavyError("the test stops here"),
+                ):
+            with self.assertRaises(heavy.HeavyError):
+                heavy._launch_job(
+                    wrapped,
+                    task_key="task",
+                    task_id="task",
+                    command_basename="env",
+                    registry=registry,
+                    deps=self.deps(),
+                )
+        self.assertEqual(allowances, [0, 0])
 
 
 class WrappedBuildCommandTests(unittest.TestCase):
-    """A taskpolicy-wrapped build still names its simulator."""
+    """The supervisor probes the command it was given, not the wrapped one."""
 
-    wrapped = [
-        "/usr/sbin/taskpolicy", "-b", "xcodebuild",
+    original = [
+        "xcodebuild",
         "-project", "Recoup.xcodeproj", "-scheme", "Recoup",
         "-destination", "platform=iOS Simulator,name=CI-iPhone",
         "-configuration", "Debug", "build",
     ]
+    wrapped = ["/usr/sbin/taskpolicy", "-b"] + original
 
-    def test_a_wrapped_command_still_names_its_simulator(self):
-        self.assertEqual(
-            heavy.simulator_destination_device(self.wrapped),
-            ("CI-iPhone", None, "iOS"),
-        )
-
-    def test_the_credit_probe_reads_a_wrapped_command(self):
+    def host(self):
         listing = json.dumps(
             {
                 "devices": {
@@ -549,7 +680,8 @@ class WrappedBuildCommandTests(unittest.TestCase):
             }
         )
         table = (
-            "  100     1     1 launchd_sim /Users/x/Library/Developer/CoreSimulator/Devices/BBB/data/x\n"
+            "  100     1     1 launchd_sim /Users/x/Library/Developer/"
+            "CoreSimulator/Devices/BBB/data/Library/x\n"
         )
 
         def runner(argv, timeout):
@@ -557,7 +689,68 @@ class WrappedBuildCommandTests(unittest.TestCase):
                 return listing
             return table
 
-        credit = heavy.simulator_memory_credit_bytes(
-            self.wrapped, command_runner=runner
+        return runner
+
+    def deps(self):
+        return heavy.SupervisorDeps(
+            monotonic_ns=lambda: 700_000_000_000,
+            clock=lambda: 700,
+            wall_clock=lambda: 700,
+            boot_reader=lambda: "boot",
+            process_table_reader=lambda: {},
+            legacy_slots=lambda table: 0,
+            sample=lambda: sample(16, 5),
+            sleep=lambda seconds: None,
         )
-        self.assertEqual(credit, 100 * 1024)
+
+    def test_the_original_command_names_the_simulator(self):
+        self.assertEqual(
+            heavy.simulator_destination_device(self.original),
+            ("CI-iPhone", None, "iOS"),
+        )
+
+    def test_the_wrapped_command_is_not_a_build_by_itself(self):
+        self.assertEqual(
+            heavy.simulator_destination_device(self.wrapped),
+            (None, None, None),
+        )
+
+    def test_the_supervisor_probes_the_original_arguments(self):
+        registry = Mock()
+        allowances = []
+        probed = []
+        real_credit = heavy.simulator_memory_credit_bytes
+        runner = self.host()
+
+        def probe(argv, **kwargs):
+            probed.append(list(argv))
+            kwargs.setdefault("command_runner", runner)
+            return real_credit(argv, **kwargs)
+
+        def reserve(reg, task_key, task_id, basename, host_sample, deps, **kwargs):
+            allowances.append(kwargs.get("allowance_bytes"))
+            return "job-id", None
+
+        with patch.object(heavy, "_enqueue_job", return_value="queue-id"), \
+                patch.object(
+                    heavy, "simulator_memory_credit_bytes", side_effect=probe
+                ), \
+                patch.object(heavy, "_reserve_job", side_effect=reserve), \
+                patch.object(heavy, "_record", return_value={"job_id": "job-id"}), \
+                patch.object(
+                    heavy,
+                    "_acquire_project_lock",
+                    side_effect=heavy.HeavyError("the test stops here"),
+                ):
+            with self.assertRaises(heavy.HeavyError):
+                heavy._launch_job(
+                    self.wrapped,
+                    task_key="task",
+                    task_id="task",
+                    command_basename="xcodebuild",
+                    registry=registry,
+                    deps=self.deps(),
+                    probe_argv=self.original,
+                )
+        self.assertEqual(probed, [self.original])
+        self.assertEqual(allowances, [100 * 1024])

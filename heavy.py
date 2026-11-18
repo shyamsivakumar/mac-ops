@@ -427,13 +427,21 @@ def required_headroom_bytes(
     return max(SMALL_HOST_HEADROOM_FLOOR_BYTES, scaled)
 
 
+def xcodebuild_executable(value: str) -> bool:
+    """Return whether a command's own executable is xcodebuild.
+
+    The simulator credit and the single-build exclusion must agree on what an
+    xcodebuild is: the executable the command runs, not an argument that
+    mentions xcodebuild. A wrapper or any other program is not a build.
+    """
+    return os.path.basename(str(value)) == "xcodebuild"
+
+
 def simulator_destination_device(
     argv: Sequence[str],
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Return the simulator device and OS version a command targets."""
-    if not argv or not any(
-        os.path.basename(str(arg)) == "xcodebuild" for arg in argv
-    ):
+    if not argv or not xcodebuild_executable(str(argv[0])):
         return None, None, None
     destinations: List[str] = []
     for index, arg in enumerate(argv):
@@ -2120,9 +2128,12 @@ def _reserve_job(
         ]
         same_task = any(row.get("task_key") == task_key for row in active)
         if (
-            command_basename == "xcodebuild"
+            xcodebuild_executable(command_basename)
             and sample.physical_bytes < SMALL_HOST_MEMORY_BYTES
-            and any(row.get("command_basename") == "xcodebuild" for row in active)
+            and any(
+                xcodebuild_executable(str(row.get("command_basename", "")))
+                for row in active
+            )
         ):
             if ephemeral_queue:
                 registry.remove_queue(queue_id)
@@ -3303,7 +3314,7 @@ def _watchdog_main(job_id: str) -> int:
 def _project_build_args(
     argv: Sequence[str], cwd: str
 ) -> Tuple[List[str], Optional[str]]:
-    if not argv or os.path.basename(argv[0]) != "xcodebuild":
+    if not argv or not xcodebuild_executable(str(argv[0])):
         return list(argv), None
     project_path = None
     for index, arg in enumerate(argv):
@@ -3404,7 +3415,7 @@ def run_supervisor(
     original = list(argv)
     command, project_key = _project_build_args(original, os.getcwd())
     command_basename = os.path.basename(command[0])
-    if command_basename == "xcodebuild" and role != "review":
+    if xcodebuild_executable(command_basename) and role != "review":
         taskpolicy = "/usr/sbin/taskpolicy"
         if not os.path.isfile(taskpolicy) or not os.access(taskpolicy, os.X_OK):
             raise HeavyError("taskpolicy is required for ordinary xcodebuild jobs")
