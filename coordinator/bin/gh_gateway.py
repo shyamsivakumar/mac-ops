@@ -362,6 +362,9 @@ def cacheable(argv):
     words = [str(word) for word in argv[1:]]
     if not words:
         return False
+    if any(word in ("--web", "-w") for word in argv[1:]):
+        # `--web` opens a browser; a cached answer would silently skip it.
+        return False
     if unknown_short_flag(argv):
         # A flag cluster may hide a method or a body: never cache it.
         return False
@@ -849,19 +852,25 @@ def record(argv, count=1, caller_name=None):
 
 
 def quota_key():
-    """Return the identity a quota sample belongs to.
+    """Return the identity a quota sample belongs to, or "" if unknown.
 
-    `GH_TOKEN` or `GH_HOST` can change inside a long-lived process, and a
-    balance read for one identity must not set the floor for another."""
+    The token, the host, the gh configuration directory and the account the
+    configuration selects can all change inside a long-lived process. A
+    balance read for one identity must not set the floor for another, and an
+    identity that cannot be established is never reused."""
     host = os.environ.get("GH_HOST") or "github.com"
-    return host + "|" + _token_id()
+    account = os.environ.get("COORDINATOR_GH_ACCOUNT") or _hosts_account(host)
+    if not account:
+        return ""
+    config = os.environ.get("GH_CONFIG_DIR") or ""
+    return "|".join([host, account, config, _token_id()])
 
 
 def api_remaining(timeout=60):
     """Return the remaining core and graphql calls, or raise."""
     now = time.time()
     key = quota_key()
-    entry = _REMAINING.get(key)
+    entry = _REMAINING.get(key) if key else None
     if entry and entry["at"] and now - entry["at"] < _REMAINING_TTL:
         return dict(entry["value"])
     try:
@@ -876,7 +885,8 @@ def api_remaining(timeout=60):
         value = {name: int(resources[name]["remaining"]) for name in ("core", "graphql")}
     except (ValueError, KeyError, TypeError) as exc:
         raise ApiBudgetExhausted("quota response is invalid") from exc
-    _REMAINING[key] = {"at": now, "value": value}
+    if key:
+        _REMAINING[key] = {"at": now, "value": value}
     return dict(value)
 
 
