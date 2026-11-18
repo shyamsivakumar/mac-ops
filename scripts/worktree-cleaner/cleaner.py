@@ -538,7 +538,7 @@ def _keep_moved(trash: Path, moved: Path, name: str) -> None:
     live. It is kept beside the other recovery copies.
     """
     try:
-        kept = _trash_path(trash, f"{name.replace('/', '_')}.cleared")
+        kept = _trash_path(trash, "cleared")
         os.replace(moved, kept)
     except OSError:
         pass
@@ -584,7 +584,7 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
             # Either the bytes are not the ones the scan verified or the file
             # changed after the scan, so its contents are kept as real work.
             return False
-        moved = _trash_path(trash, f"{name.replace('/', '_')}.moved")
+        moved = _trash_path(trash, "moved")
         try:
             storage = os.open(trash, os.O_RDONLY | os.O_DIRECTORY)
         except OSError:
@@ -1053,6 +1053,28 @@ def published_on_default_branch(result: dict[str, Any], github: GitHub, repo_slu
     return github.contains(repo_slug, default, head, refresh=refresh)
 
 
+def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, head: str, *, refresh: bool = False) -> tuple[bool, str | None, str | None]:
+    """True when a closed or merged pull request carries this exact head.
+
+    A detached worktree has no branch of its own, so the branches that
+    contain the head are looked up and each of them is checked.
+    """
+    if not repo_slug or not SHA_RE.fullmatch(head):
+        return False, "github_repository_unknown", None
+    try:
+        listing = git(repo_root, "branch", "-r", "--contains", head, "--format=%(refname:short)").splitlines()
+    except SafetyError:
+        return False, "github_pr_state_unavailable", None
+    for line in listing:
+        branch = line.strip().removeprefix("origin/")
+        if not branch:
+            continue
+        ok, why, pr_url = verify_pr(github, repo_slug, branch, head, refresh=refresh)
+        if ok:
+            return True, None, pr_url
+    return False, "github_pr_not_closed_for_head", None
+
+
 def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False, refresh_cwds: bool = True) -> dict[str, Any]:
     path = Path(record["path"])
     result: dict[str, Any] = {
@@ -1117,10 +1139,15 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
             result["published_on_default_branch"] = True
             result["eligible_reason"] = "commits_on_the_default_branch"
         else:
-            if idle is None or idle < 24 * 60 * 60:
-                reasons.append("detached_not_proven_24h_old")
+            # Inactivity alone never authorises the removal of a detached
+            # worktree: its head has to be published, either on the default
+            # branch or through a closed or merged pull request.
+            ok, why, pr_url = verify_pr_for_head(github, repo_slug, repo_root, str(record.get("head") or ""), refresh=refresh)
+            if ok:
+                result["pull_request"] = pr_url
+                result["eligible_reason"] = "merged_or_closed_pull_request"
             else:
-                result["eligible_reason"] = "detached_worktree_idle_24_hours"
+                reasons.append("detached_not_published")
     elif not result["main_checkout"]:
         ok, why, pr_url = verify_pr(github, repo_slug, record.get("branch"), str(record.get("head") or ""), refresh=refresh)
         result["pull_request"] = pr_url

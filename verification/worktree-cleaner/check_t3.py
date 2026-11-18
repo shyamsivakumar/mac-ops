@@ -98,6 +98,7 @@ def main() -> int:
             "lateThreads": threads + [thread("late-merged", paths["merged"]), thread("late-detached", detached)],
             "altPath": str(paths["active"]),
             "present": [base_sha] + [sha for name, sha in shas.items() if name != "unpublished"],
+            "contained": {"main": [base_sha] + [sha for name, sha in shas.items() if name != "unpublished"]},
             "prs": {name: [{"number": i + 1, "state": "MERGED", "headRefName": name, "headRefOid": sha}] for i, (name, sha) in enumerate(shas.items())},
         }
         fixture.write_text(json.dumps(payload))
@@ -110,12 +111,20 @@ from pathlib import Path
 args = sys.argv[1:]
 d = json.loads(Path(os.environ['MO125_FIXTURE']).read_text())
 if args[:2] == ['repo', 'view']:
-    print('fixture/fixture-repo')
+    if 'defaultBranchRef' in args:
+        print('main')
+    else:
+        print('fixture/fixture-repo')
 elif args[0] == 'api':
-    sha = args[1].rsplit('/', 1)[-1]
-    if sha not in d['present']:
-        sys.exit(1)
-    print(sha)
+    path = args[1]
+    if '/compare/' in path:
+        base, _, head = path.split('/compare/', 1)[1].partition('...')
+        print('behind' if head in d.get('contained', {}).get(base, []) else 'ahead')
+    else:
+        sha = path.rsplit('/', 1)[-1]
+        if sha not in d['present']:
+            sys.exit(1)
+        print(sha)
 elif args[:2] == ['pr', 'list']:
     print(json.dumps(d['prs'].get(args[args.index('--head') + 1], [])))
 else:
