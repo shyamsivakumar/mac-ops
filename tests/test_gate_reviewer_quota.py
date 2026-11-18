@@ -51,7 +51,7 @@ class ReviewerQuotaTests(unittest.TestCase):
                     # queue one reviewer, not two.
                     gate_candidates=lambda cfg: [event, event], load_receipts=lambda: receipts,
                     path=lambda name: d + '/' + name,
-                    call=lambda *a: (0, json.dumps({'thread': {'status': 'failed', 'model': 'gpt-6-astra', 'providerInstanceId': 'codex', 'error': {'code': 'insufficient_quota'}}, 'items': [{'type': 'assistant_message', 'text': 'spend limit'}]}))):
+                    call=lambda *a: (0, json.dumps({'thread': {'status': 'failed', 'model': 'gpt-6.2-astra', 'providerInstanceId': 'codex', 'error': {'code': 'insufficient_quota'}}, 'items': [{'type': 'assistant_message', 'text': 'spend limit'}]}))):
                 with redirect_stdout(io.StringIO()):
                     c.cmd_gatekeep(argparse.Namespace(config=config, dry_run=False))
                     c.cmd_gatekeep(argparse.Namespace(config=config, dry_run=False))
