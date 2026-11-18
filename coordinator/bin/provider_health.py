@@ -254,9 +254,9 @@ def reset_time(text, now=None):
         unit = match.group(2).lower()
         seconds = amount * 3600 if unit.startswith(("hour", "hr")) else amount * 60
         return now + seconds
-    match = re.search(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?", text)
+    match = re.search(r"\bresets?\s*(?:at\s*|[:=]\s*)(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)", text, re.I)
     if match:
-        stamp = match.group(0).replace(" ", "T")
+        stamp = match.group(1).replace(" ", "T")
         if stamp.endswith("Z"):
             stamp = stamp[:-1] + "+00:00"
         try:

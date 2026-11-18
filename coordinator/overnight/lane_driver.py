@@ -1508,7 +1508,7 @@ def probe_blocked_builders(ledger):
                       if thread_id else None) or {}
             status = thread.get("status")
             reply = last_reply(thread_id) if thread_id else ""
-            if status == "completed" and reply.strip() and not provider_health.block_reason(reply):
+            if status == "completed" and reply.strip() == "OK":
                 line = builders.recovered_builder(member, request_id) if not DRY else None
                 if line:
                     print(line)
