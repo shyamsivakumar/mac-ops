@@ -32,7 +32,7 @@ BUILDER_RUNS = [{"executedModel": "minimax/MiniMax-M3.1-Flash"}]
 # The gate died for a reviewer-side reason: no message, so no verdict. The
 # thread records the gate model coordq launches, which gatekeep requires before
 # it treats a dead gate as retryable; setUpModule checks it against coordq.
-ASTRA_GATE = {"providerInstanceId": "codex", "model": "gpt-6-astra"}
+ASTRA_GATE = {"providerInstanceId": "codex", "model": "gpt-6.2-astra"}
 OPUS_GATE = {"providerInstanceId": "claudeAgent", "model": "claude-opus-5-5"}
 DEAD_GATE = {"thread": {"status": "failed", **ASTRA_GATE},
              "items": [{"type": "user_message", "text": "review"}],
@@ -177,7 +177,10 @@ class NonAstraGateTest(RetryLimitBase):
         out, _ = self.run_gatekeep()
         self.assertNotIn("regating", out)
         self.assertEqual(self.gate_items(), [])
-        self.assertEqual(self.read_queue()["gatedHeads"][self.key], 4)
+        # The head record is a dict now: the dead Opus gate is not requeued
+        # and the head is recorded as given up.
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key],
+                         {"id": 4, "retries": 0, "at": None, "givenUp": True})
 
 
 class BackoffTest(RetryLimitBase):
