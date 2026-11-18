@@ -346,8 +346,12 @@ def has_flag(argv, name, short=None):
     `--paginate` and `--paginate=true` are the same flag, and a caller may
     use either; `=false` is not set."""
     for word in [str(token) for token in (argv or [])[1:]]:
-        if word == name or word == name + "=true":
+        if word == name:
             return True
+        if word.startswith(name + "="):
+            value = word.split("=", 1)[1].strip().lower()
+            if value in ("1", "true", "yes", "on"):
+                return True
         if short and word == short:
             return True
     return False

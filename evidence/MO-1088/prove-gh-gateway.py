@@ -547,6 +547,18 @@ print("HEADERS", gh_gateway.pages_unknown(headers))
 check("an unbounded array read is a lower bound",
       plain == ["PLAIN", "True", "SLURPED", "False", "HEADERS", "False"], str(plain))
 
+# `--paginate=1` is the same flag as `--paginate`.
+paginate_one = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+argv = ["gh", "api", "--paginate=1", "repos/a/b/issues?state=open"]
+print("PAGINATED", gh_gateway.paginated(argv))
+print("UNKNOWN", gh_gateway.pages_unknown(argv))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("--paginate=1 is recognised as paginate",
+      paginate_one == ["PAGINATED", "True", "UNKNOWN", "True"], str(paginate_one))
+
 # `gh issue` and `gh pr` are mixed groups: reads are GraphQL, writes may be
 # REST, so a write is reported as `other` rather than guessed.
 mixed = subprocess.run([sys.executable, "-c", f"""
@@ -775,11 +787,11 @@ import sys
 sys.path.insert(0, {str(BIN)!r})
 import gh_gateway
 for argv in (["gh", "pr", "list", "--web"], ["gh", "pr", "list", "--web=true"],
-             ["gh", "pr", "list", "-w"]):
+             ["gh", "pr", "list", "--web=1"], ["gh", "pr", "list", "-w"]):
     print("WEB", gh_gateway.cacheable(argv))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("--web is never cached in any spelling",
-      web == ["WEB", "False", "WEB", "False", "WEB", "False"], str(web))
+      web == ["WEB", "False"] * 4, str(web))
 
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
