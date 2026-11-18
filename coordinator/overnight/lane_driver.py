@@ -784,6 +784,16 @@ def act_on_pr(repo, number, ledger):
             return held
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
+        base = pr.get("baseRefName") or "main"
+        # A retarget moves the pull request onto another base without moving
+        # its head, and the same head can then introduce prompt text it did
+        # not introduce against the base this pass classified. The base is
+        # read again here, and a moved base merges nothing.
+        current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                                  "--json", "baseRefName"]))
+        if (current or {}).get("baseRefName") != base:
+            return (f"skip #{number}: gate PASS, the base moved from {base} to "
+                    f"{(current or {}).get('baseRefName')}, merge deferred")
         if DRY:
             return f"DRY merge #{number} {head}"
         run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
