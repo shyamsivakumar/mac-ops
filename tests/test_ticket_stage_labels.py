@@ -87,6 +87,9 @@ class FakeGitHub:
                 "labels": [{"name": name} for name in self.labels],
                 "blockedBy": {"nodes": [], "totalCount": 0}}
 
+    def gateway_run(self, argv, timeout=None, stdin=None, **options):
+        return self.run(argv, timeout, stdin)
+
     def run(self, cmd, timeout=None, stdin=None):
         args = cmd[1:]
         if args[:2] == ["issue", "view"]:
@@ -167,6 +170,7 @@ def start(github):
             stack.enter_context(patch.object(ticket, name, return_value=value))
         stack.enter_context(patch.object(ticket, "CACHE_DIR", scratch))
         stack.enter_context(patch.object(ticket, "run", github.run))
+        stack.enter_context(patch.object(ticket.gh_gateway, "run", github.gateway_run))
         stack.enter_context(patch.object(ticket.time, "sleep", lambda seconds: None))
         ticket.cmd_start(args)
 
@@ -176,6 +180,7 @@ def deliver(github):
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(ticket, "load_config", return_value=CFG))
         stack.enter_context(patch.object(ticket, "run", github.run))
+        stack.enter_context(patch.object(ticket.gh_gateway, "run", github.gateway_run))
         ticket.cmd_deliver(args)
 
 
