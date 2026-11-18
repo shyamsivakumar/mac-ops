@@ -550,9 +550,9 @@ def _read_at(parent: int, name: str) -> bytes | None:
         os.close(descriptor)
 
 
-def _snapshot_directory(fd: int) -> dict[str, tuple[int, int, int, int]]:
+def _snapshot_directory(fd: int) -> dict[str, tuple[int, int, int, int, int]]:
     """The identity and the stamp of every entry of an open directory."""
-    snapshot: dict[str, tuple[int, int, int, int]] = {}
+    snapshot: dict[str, tuple[int, int, int, int, int]] = {}
     try:
         entries = os.listdir(fd)
     except OSError:
@@ -562,7 +562,7 @@ def _snapshot_directory(fd: int) -> dict[str, tuple[int, int, int, int]]:
             info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
         except OSError:
             continue
-        snapshot[entry] = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        snapshot[entry] = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode)
     return snapshot
 
 
@@ -590,7 +590,7 @@ def _rename_exclusive(source: Path, destination: Path) -> bool:
     return False
 
 
-def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> int:
+def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int, int]) -> int:
     """Remove a file only when it is the one that was stamped.
 
     The file is renamed aside first, so the name that is removed belongs to
@@ -628,7 +628,7 @@ def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> in
         info = os.stat(moved, dir_fd=fd, follow_symlinks=False)
     except OSError:
         info = None
-    if info is not None and (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) == stamp:
+    if info is not None and (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode) == stamp:
         # The file is the one that was verified, so it is removed and the
         # space is reclaimed. The ticket removes finished worktrees, it does
         # not archive them.
@@ -650,13 +650,13 @@ def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> in
     return 1
 
 
-def _snapshot_all(fd: int, prefix: str = "") -> dict[str, dict[str, tuple[int, int, int, int]]]:
+def _snapshot_all(fd: int, prefix: str = "") -> dict[str, dict[str, tuple[int, int, int, int, int]]]:
     """The stamp of every entry of every directory below an open directory.
 
     The whole tree is stamped before the status check, so a file that is
     written afterwards has a stamp that no longer matches and is kept.
     """
-    result: dict[str, dict[str, tuple[int, int, int, int]]] = {}
+    result: dict[str, dict[str, tuple[int, int, int, int, int]]] = {}
     entries = _snapshot_directory(fd)
     result[prefix] = entries
     for entry in entries:
@@ -677,7 +677,7 @@ def _snapshot_all(fd: int, prefix: str = "") -> dict[str, dict[str, tuple[int, i
     return result
 
 
-def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapshots: dict[str, dict[str, tuple[int, int, int, int]]] | None = None, prefix: str = "") -> int:
+def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int, int]], snapshots: dict[str, dict[str, tuple[int, int, int, int, int]]] | None = None, prefix: str = "") -> int:
     """Remove the entries of a directory that have not changed since the
     snapshot, through the descriptor of the directory.
 
@@ -692,7 +692,7 @@ def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapsh
             info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
         except OSError:
             continue
-        if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != stamp:
+        if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode) != stamp:
             kept += 1
             continue
         if stat.S_ISDIR(info.st_mode):
@@ -1788,7 +1788,7 @@ def _registration_belongs_to(
 
 
 def _tree_matches(
-    path: Path, snapshot: dict[str, dict[str, tuple[int, int, int, int]]]
+    path: Path, snapshot: dict[str, dict[str, tuple[int, int, int, int, int]]]
 ) -> bool:
     """The tree at a path is the tree that was stamped.
 
