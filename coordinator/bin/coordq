@@ -1525,7 +1525,6 @@ def gate_request(repo, pr, settings, config, receipts, login):
     from then on. The gate model follows the builder's own rule."""
     head, number = pr["head"]["sha"], pr["number"]
     body = pr.get("body") or ""
-    prompt = gate_prompt_change(repo, number)
     for issue in dict.fromkeys(re.findall(r"\bRefs #(\d+)\b", body)):
         thread_id = builder_thread_for_issue(repo, issue)
         if not thread_id:
@@ -1541,7 +1540,7 @@ def gate_request(repo, pr, settings, config, receipts, login):
         proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
-                               prompt=prompt), builder_models(thread, runs)
+                               prompt=gate_prompt_change(repo, number)), builder_models(thread, runs)
     statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -1551,7 +1550,7 @@ def gate_request(repo, pr, settings, config, receipts, login):
     proof_state, proof, proof_path = gate_proof(settings, repo, None, head)
     return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, []),
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
-                           prompt=prompt), []
+                           prompt=gate_prompt_change(repo, number)), []
 
 
 def parse_ref(ref):

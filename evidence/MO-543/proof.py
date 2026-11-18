@@ -142,9 +142,30 @@ def queue_briefs():
           and "never auto-merges" not in briefs["code"], command)
 
 
+def ticket_file_read():
+    """The real read `ticket gate` makes: the paths of the pull request."""
+    ticket = load(BIN / "ticket", "proof_ticket_files")
+    command = "python3 evidence/MO-543/proof.py"
+    payload = [{"filename": "coordinator/config/AGENT-RULES.md"},
+               {"filename": "coordinator/overnight/lane_driver.py",
+                "previous_filename": "coordinator/overnight/old_lane.py"}]
+    with patch.object(ticket, "gh_json", return_value=payload):
+        paths = ticket.pull_files("shyamsivakumar/mac-ops", 544, 2)
+    grant("ticket's own file read returns every changed path",
+          paths == ["coordinator/config/AGENT-RULES.md",
+                    "coordinator/overnight/lane_driver.py",
+                    "coordinator/overnight/old_lane.py"], command)
+    # A shorter list than the pull request's own changed-file count is a
+    # truncated read, and a truncated read is not a known list: no hold.
+    with patch.object(ticket, "gh_json", return_value=payload[:1]):
+        short = ticket.pull_files("shyamsivakumar/mac-ops", 544, 2)
+    grant("a truncated file read is none, so it adds no hold", short is None, command)
+
+
 def main():
     gate_briefs()
     queue_briefs()
+    ticket_file_read()
     lane_replay()
     failures = [row for row in RESULTS if not row[1]]
     for gate, ok, command in RESULTS:

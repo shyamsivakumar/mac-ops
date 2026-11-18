@@ -51,8 +51,9 @@ closes nothing either.
 A prompt change never auto-merges (Shyam, 2026-11-17). Before the brief is
 built, `ticket gate` reads the paths the pull request changed and compares
 them with the list in `coordinator/bin/prompt_paths.py`: `AGENT-RULES.md`,
-`gate_bar.py`, `gate_policy.py`, `playbook.md`, `code-reviewer.md`, any
-`SKILL.md`, and anything under a `skills/` or `prompts/` directory.
+`answer_format.py`, `gate_bar.py`, `gate_policy.py`, `playbook.md`,
+`code-reviewer.md`, any `SKILL.md`, and anything under a `skills/` or
+`prompts/` directory.
 
 When one path matches, the brief's heading says `review only`, the merge
 order becomes `do not merge ... Shyam merges a passing one himself`, the
