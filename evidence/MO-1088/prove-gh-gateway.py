@@ -610,6 +610,48 @@ check("silent pagination is unknown", words[:2] == ["SILENT", "True"], str(words
 check("a printed error block is not counted twice", words[2:4] == ["BLOCK", "0"], str(words[2:4]))
 check("a missing error block is counted once", words[4:6] == ["NOBLOCK", "1"], str(words[4:6]))
 
+# A cache hit answers without a quota probe, and the report reads the log
+# the writer was configured with.
+deadline = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+
+def boom(*_args, **_kwargs):
+    raise AssertionError("the quota was probed for a cache hit")
+
+gh_gateway.api_remaining = boom
+gh_gateway.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+arg = ["gh", "api", "repos/a/b/issues?state=open"]
+gh_gateway.store(arg, "[]")
+result = gh_gateway.run(arg, timeout=5, limit=gh_gateway.floor())
+print("HIT", result.returncode, result.stdout)
+"""], capture_output=True, text=True, env=env)
+check("a cache hit does not wait for a quota probe",
+      "HIT 0 []" in deadline.stdout, deadline.stdout.strip()[:40] or deadline.stderr.strip()[-120:])
+
+env_log = scratch / "env-usage.jsonl"
+env_log.write_text(json.dumps({"ts": time.time() - 30, "caller": "envrun",
+                               "resource": "core", "verb": "list"}) + "\n")
+report_env = subprocess.run(
+    [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"), "--hours", "1"],
+    capture_output=True, text=True,
+    env={**env, "COORDINATOR_GH_USAGE_LOG": str(env_log)})
+check("the report defaults to the writer's log path",
+      "envrun" in report_env.stdout, report_env.stdout.strip()[:60] or report_env.stderr.strip()[-80:])
+
+# A first-request failure under --include is one attempt, not two.
+first_fail = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+argv = ["gh", "api", "--include", "--paginate", "repos/a/b/tags"]
+body, count = gh_gateway.settle(argv, "", False, failed=True)
+print("COUNT", count)
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("an include first-request failure is one attempt",
+      first_fail == ["COUNT", "1"], str(first_fail))
+
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
 host_read = ["gh", "api", "--hostname", "enterprise.example",
