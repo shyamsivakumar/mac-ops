@@ -717,6 +717,38 @@ print("TWO", gh_gateway.api_remaining()["core"])
 check("the quota cache follows the credential",
       quota == ["ONE", "3000", "TWO", "100"], str(quota))
 
+# The quota key names the account and the gh configuration too, and an
+# unknown identity is never reused.
+quota_key = subprocess.run([sys.executable, "-c", f"""
+import os, sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+os.environ["COORDINATOR_GH_ACCOUNT"] = "one"
+first = gh_gateway.quota_key()
+os.environ["COORDINATOR_GH_ACCOUNT"] = "two"
+second = gh_gateway.quota_key()
+os.environ["COORDINATOR_GH_ACCOUNT"] = "one"
+os.environ["GH_CONFIG_DIR"] = "/tmp/other-gh"
+third = gh_gateway.quota_key()
+os.environ["COORDINATOR_GH_ACCOUNT"] = ""
+os.environ["GH_CONFIG_DIR"] = "/tmp/no-such-config"
+print("ACCOUNT", first != second)
+print("CONFIG", first != third)
+print("UNKNOWN", gh_gateway.quota_key() == "")
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("the quota key follows the active account", quota_key[1] == "True", str(quota_key))
+check("the quota key follows the gh config dir", quota_key[3] == "True", str(quota_key))
+check("an unknown identity is not reused", quota_key[5] == "True", str(quota_key))
+
+# `--web` opens a browser, so it is never cached.
+web = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+print("WEB", gh_gateway.cacheable(["gh", "pr", "list", "--web"]))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("--web is never cached", web == ["WEB", "False"], str(web))
+
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
 host_read = ["gh", "api", "--hostname", "enterprise.example",
