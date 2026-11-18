@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from unittest import mock
 from pathlib import Path
 import subprocess
 import tempfile
@@ -75,9 +76,9 @@ def scan_digests(repo: Path, records: list[tuple[str, str, str | None]]) -> dict
     return digests
 
 
-def clear_bootstrap(repo: Path, records, trash: Path, digests=None):
+def clear_bootstrap(repo: Path, records, trash: Path, digests=None, index_before=None):
     """Call the cleaner across its signature changes."""
-    for arguments in ((repo, records, trash, digests), (repo, records, trash), (repo, records)):
+    for arguments in ((repo, records, trash, digests, index_before), (repo, records, trash, digests), (repo, records, trash), (repo, records)):
         try:
             return cleaner.clear_bootstrap_changes(*arguments)
         except TypeError:
@@ -303,6 +304,47 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             cleared = None
         self.assertEqual(sorted(cleared or []), [".specstory/session.md", "AGENTS.md"])
         self.assertEqual(cleaner.status_for(repo), [])
+
+    def test_a_staged_edit_after_the_scan_is_never_erased(self):
+        # Another process stages genuine content while the working copy
+        # stays as it was. The index must not be reset over that edit.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        index_before = cleaner.index_digest(self.repo)
+        staged = self.repo / "staged.txt"
+        staged.write_text("genuine staged edit\n", encoding="utf-8")
+        git(self.repo, "add", "staged.txt")
+        records = cleaner.status_for(self.repo)
+        digests = {"AGENTS.md": cleaner.file_digest(self.repo / "AGENTS.md")}
+        self.assertIsNone(clear_bootstrap(self.repo, records, self.trash, digests, index_before))
+        listing = git(self.repo, "ls-files", "-s", "--", "staged.txt")
+        self.assertIn("staged.txt", listing)
+
+    def test_a_recovery_keeps_both_copies(self):
+        # The file changes while it is moved aside and the editor recreates
+        # the path: neither copy may be overwritten.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        digests = {"AGENTS.md": cleaner.file_digest(self.repo / "AGENTS.md")}
+        original_replace = os.replace
+
+        def replace_and_save(source, destination):
+            result = original_replace(source, destination)
+            if str(source).endswith("AGENTS.md") and str(destination).startswith(str(self.trash)):
+                # The editor wrote through its open handle into the moved
+                # file and recreated the path with its own copy.
+                with open(destination, "a", encoding="utf-8") as handle:
+                    handle.write("saved by an editor\n")
+                with (self.repo / "AGENTS.md").open("w", encoding="utf-8") as handle:
+                    handle.write("saved by an editor\n")
+            return result
+
+        with mock.patch.object(cleaner.os, "replace", replace_and_save):
+            cleared = clear_bootstrap(self.repo, cleaner.status_for(self.repo), self.trash, digests)
+        self.assertIsNone(cleared)
+        self.assertIn("saved by an editor", (self.repo / "AGENTS.md").read_text(encoding="utf-8"))
+        kept = [item for item in self.trash.iterdir() if item.is_file()]
+        self.assertTrue(kept, "the recovered copy must be kept")
 
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
