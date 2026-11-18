@@ -34,9 +34,11 @@ def read(path):
                     continue
                 if isinstance(row, dict) and isinstance(row.get("ts"), (int, float)):
                     rows.append(row)
+    except FileNotFoundError:
+        return rows, "absent"
     except OSError:
-        pass
-    return rows
+        return rows, "error"
+    return rows, "ok"
 
 
 def hour(ts):
@@ -71,11 +73,26 @@ def main():
     try:
         if handle is not None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
-        rows = [row for source in sources for row in read(source) if row["ts"] >= since]
+        unreadable = []
+        for source in sources:
+            found, state = read(source)
+            if state == "error":
+                unreadable.append(source)
+            rows.extend(row for row in found if row["ts"] >= since)
     finally:
         if handle is not None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             handle.close()
+    if unreadable:
+        # A log that cannot be read means the hour is incomplete, not quiet:
+        # saying so and failing is the only honest result.
+        print(f"INCOMPLETE: could not read {', '.join(unreadable)}; "
+              f"the counts below cover only the files that could be read")
+        if not rows:
+            return 2
+        incomplete = True
+    else:
+        incomplete = False
     if not rows:
         print(f"no GitHub calls recorded in the last {args.hours:g}h at {args.log}")
         return 0
@@ -99,6 +116,9 @@ def main():
     print(f"{label:16} {'core':8} {core:6} {core / args.hours:9.0f}")
     all_label = "all requests (lower bound)" if unknown else "all requests"
     print(f"{all_label:16} {'':8} {len(rows):6} {len(rows) / args.hours:9.0f}")
+    if incomplete:
+        print("result: incomplete (an input log could not be read)")
+        return 2
     if unknown:
         # A formatted paginated read is one measured invocation whose page
         # count cannot be seen. It is named here so a low core total is
