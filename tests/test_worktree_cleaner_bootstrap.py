@@ -14,6 +14,7 @@ import os
 from unittest import mock
 from pathlib import Path
 import subprocess
+import time
 import tempfile
 import unittest
 
@@ -1053,6 +1054,29 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue(any(code.strip() == "!!" for code, _name, _original in records), records)
         plain = cleaner.status_for(repo)
         self.assertFalse(any(code.strip() == "!!" for code, _name, _original in plain), plain)
+
+    def test_the_sweep_keeps_a_recovery_copy_that_changed(self):
+        # A recovery copy is kept when anything inside it changed, and it is
+        # removed once nothing in it has changed for the retention.
+        base = Path(self.tmp.name)
+        state = base / "state"
+        state.mkdir()
+        recovery = base / "elsewhere" / "recovered"
+        recovery.mkdir(parents=True)
+        (recovery / "saved.txt").write_text("saved by an editor\n", encoding="utf-8")
+        cleaner._record_recovery(state, recovery)
+        older = time.time() - 48 * 60 * 60
+        # The root directory is old, but the file inside it changed now, so
+        # the whole copy has to be kept.
+        os.utime(recovery, (older, older))
+        (recovery / "saved.txt").write_text("saved by an editor\n", encoding="utf-8")
+        cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
+        self.assertTrue(recovery.exists(), "a recovery copy that changed has to be kept")
+        # Nothing in it changed for the retention, so it goes.
+        os.utime(recovery / "saved.txt", (older, older))
+        os.utime(recovery, (older, older))
+        cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
+        self.assertFalse(recovery.exists(), "a copy that did not change has to go")
 
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
