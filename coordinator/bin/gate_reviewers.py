@@ -278,7 +278,9 @@ def note_probe(selection, request_id, now=None):
 
     The reset the provider named is consumed here: the probe it scheduled
     has run, and a failed probe must not re-arm the reviewer against the
-    same expired reset. The next probe is an hour away."""
+    same expired reset. The next probe is an hour away. The record of the
+    last failure is cleared, so the failure of this probe is recorded
+    once, when it ends."""
     ident = identity(selection)
     with BlockedLock():
         state = load_blocked()
@@ -288,27 +290,42 @@ def note_probe(selection, request_id, now=None):
         record["probeAt"] = (time.time() if now is None else now) + PROBE_INTERVAL
         record["probeRequestId"] = request_id
         record["resetAt"] = None
+        record["probeFailedAt"] = None
+        record["probeFailedRequestId"] = None
         save_blocked(state)
     return record
 
 
-def note_probe_failure(selection, text, now=None):
+def note_probe_failure(selection, text, now=None, request_id=None):
     """Record a probe that ended without an answer.
 
-    The provider may name a new reset in the failure, and the next probe
-    waits for that reset. The deadline never moves earlier, so a failed
-    probe cannot bring the next one forward."""
+    The failure is recorded once per probe, and its deadline is anchored
+    to the failure itself: the next probe waits an hour after the failure,
+    or until the reset the provider names in the failure, whichever is
+    later. A later tick that reads the same failure again does not move
+    the deadline, so a failed probe cannot hold the reviewer blocked for
+    ever and cannot bring the next probe forward either."""
     ident = identity(selection)
     with BlockedLock():
         state = load_blocked()
         record = state.get(ident)
         if not record:
             return None
+        probe_request = record.get("probeRequestId")
+        if request_id is not None and probe_request is not None and request_id != probe_request:
+            # The failure is of an older probe. It says nothing about the
+            # probe that is current, so the deadline stays where it is.
+            return record
+        if probe_request is not None and record.get("probeFailedRequestId") == probe_request:
+            # This failure is already recorded. Its deadline stays where
+            # the failure put it.
+            return record
         now = time.time() if now is None else now
-        reset_at = reset_time(text)
-        deadline = next_probe_at(now, reset_at)
-        record["probeAt"] = max(float(record.get("probeAt") or 0), deadline)
+        reset_at = reset_time(text, now)
+        record["probeAt"] = next_probe_at(now, reset_at)
         record["resetAt"] = reset_at
+        record["probeFailedAt"] = now
+        record["probeFailedRequestId"] = probe_request
         save_blocked(state)
     return record
 
@@ -397,19 +414,21 @@ def provider_block_reason(payload):
     return None
 
 
-def reset_time(text):
+def reset_time(text, now=None):
     """The epoch seconds of the reset a provider error names, or None.
 
     A provider that says when its credits come back is probed at that
-    time, and not before."""
+    time, and not before. The countdown runs from the moment the error
+    was read, so the caller can name that moment."""
     if not isinstance(text, str) or not text:
         return None
+    now = time.time() if now is None else now
     match = re.search(r"resets?\s+in\s+(\d+)\s*(minutes?|mins?|hours?|hrs?)", text, re.I)
     if match:
         amount = int(match.group(1))
         unit = match.group(2).lower()
         seconds = amount * 3600 if unit.startswith(("hour", "hr")) else amount * 60
-        return time.time() + seconds
+        return now + seconds
     match = re.search(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?", text)
     if match:
         stamp = match.group(0).replace(" ", "T")
