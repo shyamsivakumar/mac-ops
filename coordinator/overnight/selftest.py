@@ -1165,6 +1165,15 @@ def zero_merge_fixture(scratch):
             lane.zero_merge(snapshot)
         exact(state["items"], [other])
         exact(len(calls), 10)
+        # A board that cannot be written is reported, not swallowed: the
+        # alarm is nowhere, and the tick has to say so.
+        with patch.object(alarms, "board_update", return_value="failed"):
+            try:
+                lane.zero_merge(snapshot)
+            except RuntimeError as exc:
+                exact("could not be published" in str(exc), True)
+            else:
+                raise AssertionError("a failed publication was swallowed")
         exact("ZERO-MERGE No merge" in healthy.getvalue(), False)
         # The board is written through the alarm module's own writer, and
         # the mute state beside it, each from a temporary file of its own.
