@@ -1454,17 +1454,20 @@ def probe_blocked_builders(ledger):
             thread = (t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread")
                       if thread_id else None) or {}
             status = thread.get("status")
-            if status == "completed" and last_reply(thread_id).strip():
+            reply = last_reply(thread_id) if thread_id else ""
+            if status == "completed" and reply.strip():
                 line = builders.recovered_builder(member, request_id)
                 if line:
                     print(line)
                 continue
-            if status in {"failed", "interrupted", "cancelled", "rolled_back"}:
-                reason = provider_health.block_reason(last_reply(thread_id)) or "the probe did not answer"
-                provider_health.note_probe_failure(member, reason, request_id=request_id)
+            if status == "completed" or status in {"failed", "interrupted", "cancelled", "rolled_back"}:
+                reason = provider_health.block_reason(reply) or "the probe did not answer"
+                provider_health.note_probe_failure(member, reply, request_id=request_id)
                 print(f"builder probe {ident}: still blocked ({reason})")
-            continue
-        if not provider_health.probe_due(member):
+                continue
+            if not provider_health.probe_due(member):
+                continue
+        elif not provider_health.probe_due(member):
             continue
         repo = MAC_OPS_REPO
         if DRY:

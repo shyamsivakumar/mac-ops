@@ -185,6 +185,61 @@ class LaneDriverTests(StoreCase):
         self.assertEqual(calls, [])
         self.assertIn("every builder is blocked", out)
 
+    def probe_with(self, module, status, reply):
+        from unittest.mock import patch
+        calls = []
+
+        def run(command, timeout=150):
+            calls.append(command)
+            return "#1 p950 started"
+
+        def t3(tool, args):
+            if args.get("view") == "messages":
+                return {"items": [{"type": "assistant_message", "text": reply}] if reply else []}
+            return {"thread": {"status": status}}
+
+        with patch.object(module, "stall_receipts",
+                          lambda: {"builder-probe:glm:1": "t-probe"}), \
+                patch.object(module, "t3", t3), patch.object(module, "run", run):
+            module.probe_blocked_builders({})
+        return calls
+
+    def blocked_glm_probe(self, now=None):
+        now = time.time() if now is None else now
+        builders.blocked_builder(GLM, "usage limit", now=now)
+        provider_health.note_probe(GLM, "builder-probe:glm:1", now=now)
+        return now
+
+    def test_a_terminal_probe_without_an_answer_is_a_failed_probe(self):
+        module = self.module()
+        self.blocked_glm_probe()
+        calls = self.probe_with(module, "completed", "")
+        record = provider_health.record(GLM)
+        self.assertNotIn("probeRequestId", record)
+        self.assertIsNotNone(record.get("probeFailedAt"))
+        self.assertTrue(provider_health.blocked(GLM))
+        self.assertFalse(provider_health.probe_due(GLM))
+        self.assertEqual(calls, [])
+
+    def test_a_failed_probe_keeps_the_reset_its_error_names(self):
+        module = self.module()
+        self.blocked_glm_probe()
+        self.probe_with(module, "failed",
+                        "429 code 1308: the 5-hour limit is reached, resets in 2 hours")
+        record = provider_health.record(GLM)
+        self.assertNotIn("probeRequestId", record)
+        self.assertAlmostEqual(record["resetAt"] - time.time(), 7200, delta=60)
+        self.assertFalse(provider_health.probe_due(GLM))
+        self.assertTrue(provider_health.probe_due(GLM, now=time.time() + 7200))
+
+    def test_a_probe_that_never_reported_is_retried_at_its_deadline(self):
+        module = self.module()
+        self.blocked_glm_probe(now=time.time() - provider_health.PROBE_INTERVAL - 60)
+        calls = self.probe_with(module, "running", "")
+        self.assertEqual(len(calls), 1)
+        self.assertIn('"clientRequestId": "builder-probe:', calls[0][2])
+        self.assertNotEqual(provider_health.record(GLM).get("probeRequestId"), "builder-probe:glm:1")
+
 
 class CallerTests(StoreCase):
     """Every caller falls back: the queue's dispatch and the ticket start."""
