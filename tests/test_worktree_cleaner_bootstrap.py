@@ -1065,6 +1065,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         recovery = base / "elsewhere" / "recovered"
         recovery.mkdir(parents=True)
         (recovery / "saved.txt").write_text("saved by an editor\n", encoding="utf-8")
+        cleaner._TRASH = base / "trash"
         cleaner._record_recovery(state, recovery)
         older = time.time() - 48 * 60 * 60
         # The root directory is old, but the file inside it changed now, so
@@ -1101,6 +1102,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             os.utime(entry, (older, older), follow_symlinks=False)
         os.utime(recovery / "sub", (older, older))
         os.utime(recovery, (older, older))
+        cleaner._TRASH = base / "trash"
         cleaner._record_recovery(state, recovery)
         manifest = state / "recovery.json"
         entries = json.loads(manifest.read_text(encoding="utf-8"))
@@ -1122,6 +1124,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         older = time.time() - 48 * 60 * 60
         os.utime(recovery / "saved.txt", (older, older))
         os.utime(recovery, (older, older))
+        cleaner._TRASH = base / "trash"
         cleaner._record_recovery(state, recovery)
         manifest = state / "recovery.json"
         entries = json.loads(manifest.read_text(encoding="utf-8"))
@@ -1153,6 +1156,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         for name in ("first.txt", "held.txt"):
             os.utime(recovery / name, (older, older))
         os.utime(recovery, (older, older))
+        cleaner._TRASH = base / "trash"
         cleaner._record_recovery(state, recovery)
         manifest = state / "recovery.json"
         entries = json.loads(manifest.read_text(encoding="utf-8"))
@@ -1163,6 +1167,32 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
             self.assertTrue((recovery / "first.txt").exists(), "the whole copy has to be kept")
             self.assertTrue((recovery / "held.txt").exists())
+
+    def test_the_sweep_moves_the_copy_and_keeps_its_names(self):
+        # The copy is moved, not unlinked: every file keeps its name, so a
+        # save an editor makes after the move still has a home.
+        base = Path(self.tmp.name)
+        state = base / "state"
+        state.mkdir()
+        trash = base / "trash"
+        recovery = base / "elsewhere" / "recovered"
+        recovery.mkdir(parents=True)
+        (recovery / "saved.txt").write_text("saved\n", encoding="utf-8")
+        older = time.time() - 48 * 60 * 60
+        os.utime(recovery / "saved.txt", (older, older))
+        os.utime(recovery, (older, older))
+        cleaner._TRASH = trash
+        cleaner._record_recovery(state, recovery)
+        manifest = state / "recovery.json"
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+        for entry in entries:
+            entry["recovered_at"] = older
+        manifest.write_text(json.dumps(entries), encoding="utf-8")
+        cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
+        self.assertFalse(recovery.exists(), "the copy has to leave the recovery storage")
+        moved = list(trash.iterdir())
+        self.assertEqual(len(moved), 1, moved)
+        self.assertTrue((moved[0] / "saved.txt").exists(), "every file keeps its name")
 
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
