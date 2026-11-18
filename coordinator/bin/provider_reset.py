@@ -71,6 +71,8 @@ def zone_of(text, start=0):
 
 def _epoch(date_text, time_text, zone):
     clock, _, fraction = time_text.partition(".")
+    hour, _, rest = clock.partition(":")
+    clock = f"{hour.zfill(2)}:{rest}"
     if fraction:
         clock = f"{clock}.{fraction[:6].ljust(6, '0')}"
     try:
@@ -97,7 +99,8 @@ def _absolute(message, base):
         when = datetime.fromtimestamp(base, timezone.utc).astimezone(zone)
         seconds = _epoch(when.date().isoformat(), match.group(1), zone)
         if seconds is not None and seconds < base:
-            seconds += 24 * 3600
+            tomorrow = when.date() + timedelta(days=1)
+            seconds = _epoch(tomorrow.isoformat(), match.group(1), zone)
         return seconds
     return None
 
