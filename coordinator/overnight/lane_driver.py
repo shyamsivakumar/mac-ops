@@ -589,6 +589,19 @@ MAC_OPS_REPO = "shyamsivakumar/mac-ops"
 SRW_REPO = "shyamsivakumar/strategy-replay-workbench"
 
 
+def fix_rounds_sent(repo, number, ledger):
+    """The fix rounds the ledger already holds for one pull request.
+
+    A fix round is the answer to one failed review, so the fix rounds
+    the ledger holds are the failed reviews the pull request already
+    had. The count starts from them, so a pull request that two earlier
+    lane sessions already sent two fix rounds to is not answered with a
+    third one: that would be the 4th review the rule refuses.
+    """
+    prefix = f"fix:{repo}#{number}:"
+    return sum(1 for key in ledger if key.startswith(prefix))
+
+
 def failed_reviews(repo, number, ledger):
     """The failed gate reviews of one pull request, and the head of the last.
 
@@ -598,7 +611,8 @@ def failed_reviews(repo, number, ledger):
     twice when a later pass sees it again.
     """
     state = ledger.get(f"rounds:{repo}#{number}") or {}
-    return int(state.get("count", 0)), state.get("head")
+    count = max(int(state.get("count", 0)), fix_rounds_sent(repo, number, ledger))
+    return count, state.get("head")
 
 
 def record_failed_review(repo, number, head, ledger):
@@ -652,6 +666,19 @@ def gate_round_decision(repo, number, head, ledger):
     ledger[lkey] = item["id"]
     return (f"#{number}: no fix round after {GATE_ROUND_CAP} failed reviews, "
             "one decisions item is on the board")
+
+
+def gate_rounds_used(repo, number, ledger):
+    """True when a pull request has used the reviews the rule gives it.
+
+    A pull request that used them is re-cut into smaller pull requests
+    or taken over by Shyam, so the lane sends it no 4th review of it as
+    it is. The check is asked before every review, not only after a
+    failed one: a new head with no verdict yet would otherwise be
+    reviewed again.
+    """
+    count, _ = failed_reviews(repo, number, ledger)
+    return count >= GATE_ROUND_CAP
 
 
 def clear_gate_round_decision(repo, number, ledger):
@@ -784,6 +811,12 @@ def act_on_pr(repo, number, ledger):
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
+    if gate_rounds_used(repo, number, ledger):
+        # The pull request has used the three reviews the rule gives it.
+        # It is re-cut into smaller pull requests, or Shyam takes it
+        # over, and it is not reviewed a 4th time as it is.
+        return (f"skip #{number}: {GATE_ROUND_CAP} review rounds without PASS, "
+                "no 4th review, the decisions item is on the board")
     tag = "regate" if verdict == "none" else "gate"
     reviewers = json.loads(run(["ticket", "gate", f"{repo}#{number}", "--print-model"]))
     if not reviewers:
