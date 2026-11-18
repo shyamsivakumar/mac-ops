@@ -23,6 +23,8 @@ import json
 import os
 from pathlib import Path
 
+import alarms
+
 # The cap the spec names: three ticks with no new commit and no new receipt.
 STALL_CAP = 3
 # The alert the coordinator's board shows Shyam.
@@ -185,43 +187,84 @@ def delivered(state):
     return state
 
 
-def alert(reason, path=None):
+def continues(state, cap=STALL_CAP):
+    """Return True when the board stall is still on.
+
+    The board is alerted once per episode and the flag says the alert was
+    delivered, so the rule stops asking. The shift keeps asking anyway:
+    the writer knows whether the alarm is due, it is quiet while the mute
+    runs, and it comes back when the four hours are over. Without this
+    the alarm could never come back during a stall that does not end."""
+    if not isinstance(state, dict):
+        return False
+    if not state.get("board_alerted"):
+        return False
+    return int(state.get("board_idle") or 0) >= cap
+
+
+def alarm_cause(reason, state):
+    """Return the cause of the board stall: the reason and the stalled repos.
+
+    The board stall is one alarm, and its cause names what is stuck: the
+    items the shift reported as stalled. Two stalls on different repos are
+    different causes, and a stall on the same repos is the same cause, so
+    the second one stays quiet after the first one was answered."""
+    items = state.get("items") if isinstance(state, dict) else None
+    stalled = sorted(
+        key for key, entry in (items or {}).items()
+        if isinstance(entry, dict) and entry.get("stalled")
+    )
+    return reason + " | stalled: " + (", ".join(stalled) if stalled else "none")
+
+
+def alert(reason, cause=None, path=None):
     """Write the alert that tells Shyam the board stopped moving.
 
     The alert is one item on the coordinator's board, the same board the
     merge alert and the watchdog use. The item is replaced, so one stalled
-    board shows one alert and not one per tick."""
+    board shows one alert and not one per tick.
+
+    An alert that was acknowledged stays quiet for four hours: the board
+    holds no item for it and the shift logs one line per tick. A
+    different cause is a different alert and is written at once.
+
+    Return the path it wrote and what it did: "wrote", "quiet" or
+    "failed"."""
     target = Path(path or BOARD_FILE)
-    try:
-        with open(target) as handle:
-            decisions = json.load(handle)
-    except (OSError, ValueError):
-        return ""
-    if not isinstance(decisions, dict):
-        return ""
-    items = decisions.get("items")
-    if not isinstance(items, list):
-        return ""
-    kept = [
-        item
-        for item in items
-        if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
-    ]
-    kept.append(
-        {
-            "id": ALERT_ID,
-            "group": "Coordinator",
-            "kind": "action",
-            "title": "Overnight shift stalled: no board progress for 3 ticks",
-            "why": reason,
-        }
-    )
-    decisions["items"] = kept
-    decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    try:
-        with open(str(target) + ".tmp", "w") as handle:
-            json.dump(decisions, handle, indent=1)
-        os.replace(str(target) + ".tmp", str(target))
-    except OSError:
-        return ""
-    return str(target)
+
+    def publish(action):
+        """Read the board, change it, and write it, under the board lock.
+
+        The board lock is taken first; when it cannot be taken the write
+        falls back to a compare-and-swap, so the alarm is still published
+        and two publishers still cannot erase one another's alarm."""
+        item = None
+        if action in ("raise", "unchecked"):
+            item = {
+                "id": ALERT_ID,
+                "group": "Coordinator",
+                "kind": "action",
+                "title": "Overnight shift stalled: no board progress for 3 ticks",
+                "cause": alarms.cause_of(cause or reason),
+                "why": reason,
+            }
+        if alarms.board_update(target, ALERT_ID,
+                               "raise" if item else "remove", item) != "wrote":
+            return "failed"
+        if action == "unchecked":
+            # The key could not be written, so the answer to this alarm
+            # cannot be recorded. The alarm is published anyway: a
+            # storage failure must not hide a real failure from Shyam.
+            print("stall: the alarm key could not be written; the answer to this alarm cannot be recorded")
+        return None
+
+    # The decision and the publication happen under the state lock, so an
+    # answer that lands between them cannot be missed, and the board is
+    # read, changed and written while another writer cannot read it
+    # stale.
+    action = alarms.decide_and_publish(ALERT_ID, cause or reason, publish)
+    if action == "quiet":
+        return "", "quiet"
+    if action == "failed":
+        return "", "failed"
+    return str(target), "wrote"

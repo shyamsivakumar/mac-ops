@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "coordinator/overnight"))
 
 import lane_driver as lane  # noqa: E402
 
+alarms = lane.alarms
 GATEKEEP = "dev.coordinator.gatekeep"
 STALE_MINUTES = 200
 LIMIT = 120
@@ -44,9 +45,12 @@ def run_pass(decisions_path, log_path, launchctl=None):
 
     With launchctl text, the pass reads that text instead of the live
     launchd state, so the parser is exercised on real launchctl output.
+    The mute state goes to a file beside the copy, never to the live
+    shift's folder.
     """
     lane.DECISIONS_PATH = str(decisions_path)
     lane.WATCH = {"gatekeep": (str(log_path), LIMIT, GATEKEEP)}
+    alarms.MUTE_PATH = str(decisions_path) + ".mute"
     buffer = io.StringIO()
 
     def fake_run(cmd, **kwargs):
