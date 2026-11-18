@@ -384,6 +384,8 @@ class GitHub:
             self.commits[key] = False
         if self.commits[key]:
             self.verified[cache_key] = time.time()
+        else:
+            self.verified.pop(cache_key, None)
         return self.commits[key]
 
     def save_cache(self) -> None:
