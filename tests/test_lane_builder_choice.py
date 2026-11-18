@@ -545,6 +545,31 @@ class HeldContinue(unittest.TestCase):
         self.assertEqual(queued[0]["threadId"], "thread-11")
         self.assertTrue(result.startswith("continue #11:"), result)
 
+    def unreachable_builder(self, name):
+        """A thread on the chosen builder that takes no send."""
+        return {**self.idle_builder(name), "canSend": False}
+
+    def test_a_handoff_that_queued_nothing_records_no_cooldown(self):
+        # The thread takes no send, its worktree is gone and the ticket has
+        # no pull request, so the send is skipped. Nothing is being worked,
+        # so no cooldown is recorded and the ticket stays eligible.
+        result, queued, ledger = self.unstick({11: self.unreachable_builder("thread-11")})
+        self.assertNotIn("cont:thread-11", ledger)
+        self.assertEqual([message.get("threadId") for message in queued], [None])
+        self.assertEqual(queued[0]["title"], "MO unstick #11")
+
+    def test_an_orphan_continuation_starts_again_in_the_worktree_it_has(self):
+        # The thread takes no send but its worktree is still on disk, so the
+        # work starts again there on the chosen builder.
+        real = os.path.isdir
+        with patch.object(self.lane.os.path, "isdir",
+                          lambda path: path == "/fixture/worktree" or real(path)):
+            result, queued, ledger = self.unstick({11: self.unreachable_builder("thread-11")})
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["workspaceStrategy"],
+                         {"type": "existing_worktree", "worktreePath": "/fixture/worktree"})
+        self.assertEqual(queued[0]["modelSelection"], MINIMAX)
+        self.assertIn("cont:thread-11", ledger)
 
     def test_a_queued_handoff_keeps_the_ticket_out_of_the_next_batch(self):
         # The idle legacy thread is rerouted: a fresh builder thread is
