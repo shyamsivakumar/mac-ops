@@ -113,6 +113,13 @@ VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "--raw-field", "--input", "-q", "--jq", "-t", "--template",
                "--cache", "--hostname")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
+# The flags this code understands. A cluster it does not know, such as
+# `-iXPOST`, may hide a method or a body, so such a command is never cached.
+KNOWN_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
+               "--raw-field", "--input", "-q", "--jq", "-t", "--template",
+               "--cache", "--hostname", "--paginate", "--slurp", "--include",
+               "-i", "--silent", "--verbose", "-v", "--raw", "--graphql",
+               "-p", "--preview")
 # The flags that format the output. With one of these, a page is not a JSON
 # value any more, so the page count has to come from the response headers.
 OUTPUT_FILTER_FLAGS = ("-q", "--jq", "-t", "--template")
@@ -247,21 +254,42 @@ def endpoint(argv):
     return ""
 
 
+def unknown_short_flag(argv):
+    """True when a short flag cluster may hide a method or a body.
+
+    `-iXPOST` carries a method inside the cluster. A cluster this code does
+    not understand, and that holds an `X`, `f` or `F`, could be a write, so
+    it is never cached."""
+    for word in [str(token) for token in (argv or [])[1:]]:
+        if not word.startswith("-") or word.startswith("--"):
+            continue
+        if word in KNOWN_FLAGS:
+            continue
+        if any(letter in word[1:] for letter in ("X", "f", "F")):
+            return True
+    return False
+
+
 def method(argv):
     """Return the HTTP method `gh api` will use, as GitHub counts it.
 
     `gh api` reads unless a method is named or a field is given; a field
-    without a method is a POST, and `-X GET` overrides a field."""
+    without a method is a POST, and `-X GET` overrides a field. The method
+    may be attached to another short flag, as in `-iXPOST`."""
     # `gh` uses the last method flag, so a repeated flag is read the same
     # way here. Reading only the first would call `-X GET -X POST` a read.
     named = None
     for word, value in tokens(argv):
         if word.startswith("--method="):
             named = word.split("=", 1)[1]
-        elif word.startswith("-X") and len(word) > 2:
-            named = word[2:].lstrip("=")
         elif word in ("-X", "--method"):
             named = value if value is not None else ""
+        elif word.startswith("-") and not word.startswith("--") and "X" in word[1:]:
+            # A combined short cluster such as `-iXPOST`: the method is the
+            # text after X.
+            named = word.split("X", 1)[1] or ""
+        elif word.startswith("-X") and len(word) > 2:
+            named = word[2:].lstrip("=")
     if named is not None:
         return named.strip().upper()
     if has_body(argv):
@@ -331,6 +359,9 @@ def cacheable(argv):
         return False
     words = [str(word) for word in argv[1:]]
     if not words:
+        return False
+    if unknown_short_flag(argv):
+        # A flag cluster may hide a method or a body: never cache it.
         return False
     if any(word in CREDENTIAL_FLAGS for word in argv[1:]):
         # `gh auth status --show-token` prints a token: never written down.
@@ -700,7 +731,8 @@ def settle(argv, stdout, headers_counted, failed=False):
     stdout = stdout or ""
     if headers_counted:
         pages = status_lines(stdout)
-        return strip_headers(stdout), max(1, pages) + _failed_request(argv, failed, pages)
+        return (strip_headers(stdout),
+                max(1, pages) + _failed_request(argv, failed, pages, True))
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
@@ -716,7 +748,7 @@ def settle(argv, stdout, headers_counted, failed=False):
         if has_include:
             # Unfiltered pages are JSON, so a header block is a real one.
             pages = status_lines(stdout)
-            return stdout, max(1, pages) + _failed_request(argv, failed, pages)
+            return stdout, max(1, pages) + _failed_request(argv, failed, pages, True)
 
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
@@ -731,13 +763,17 @@ def settle(argv, stdout, headers_counted, failed=False):
     return stdout, max(1, pages + _failed_request(argv, failed, pages))
 
 
-def _failed_request(argv, failed, pages):
+def _failed_request(argv, failed, pages, header_blocks=False):
     """One extra request when a paginated core read stopped on an error.
 
     `pages` is the number of pages already counted from the output. Only
     when a page got through: a read whose first request failed made exactly
     one attempt, and counting the failure as well would log two."""
     if not (failed and paginated(argv) and resource(argv) == CORE):
+        return 0
+    if header_blocks:
+        # A failed response that printed its own header block is already in
+        # the block count; adding one more would count it twice.
         return 0
     return 1 if pages else 0
 

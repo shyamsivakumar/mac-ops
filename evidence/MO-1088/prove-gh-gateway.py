@@ -581,6 +581,15 @@ check("--hostname does not hide the endpoint",
       routes == ["graphql graphql False", "search/issues?q=x search True",
                  "repos/a/b/issues?state=open core True"], str(routes))
 
+# A method attached to another short flag is a method, and an unknown flag
+# cluster is never cached.
+combined = ["gh", "api", "-iXPOST", "repos/a/b/issues?per_page=100"]
+before = calls_made()
+run(combined)
+run(combined)
+check("a combined short-flag write is never cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
 host_read = ["gh", "api", "--hostname", "enterprise.example",
