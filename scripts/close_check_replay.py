@@ -45,7 +45,8 @@ def local_reader(path, ref):
 
     The replay runs over pull requests that are already merged, so their
     merge commit is in this checkout. Reading the tree here keeps the
-    replay off the API, which has a rate limit.
+    replay from reading file contents through the API, which has a rate
+    limit; the pull request and ticket metadata still comes from `gh`.
     """
     if not has_ref(ref):
         return ("unreadable", "the merge commit is not in the local checkout")

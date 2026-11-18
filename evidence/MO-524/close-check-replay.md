@@ -1,9 +1,10 @@
 # Close checklist replay (MO-1077)
 
-Three merged pull requests, run through the close checklist with
-`python3 scripts/close_check_replay.py --pr 528 --pr 492 --pr 519` on 2026-11-18, with the
-tickets that own them. The replay reads the merged tree from the local checkout,
-so it runs without the GitHub API.
+Two merged pull requests, run through the close checklist with
+`python3 scripts/close_check_replay.py --pr 492 --pr 519` on 2026-11-18, with the tickets
+that own them. The replay reads the merged tree from the local checkout, so it reads
+no file contents through the GitHub API; the pull request and ticket metadata still
+comes from `gh`.
 
 close check: shyamsivakumar/mac-ops#492 (merge 13c79aedc6fa)
 scope: pass - every changed file is inside the ticket's stated scope
@@ -21,28 +22,8 @@ cost note: skipped - the MO-1068 cost report (evidence/MO-1068/cost-report.md) d
 RESULT: FAIL shyamsivakumar/mac-ops#517
 The work goes back to its builder and the ticket stays open.
 
-close check: shyamsivakumar/mac-ops#429 (merge 580535a0b096)
-scope: pass - every changed file is inside the ticket's stated scope
-proof file: fail - the pull request carries no proof file at evidence/MO-428/check-proof.md
-checks: skipped - there is no proof file to read
-cost note: skipped - the MO-1068 cost report (evidence/MO-1068/cost-report.md) does not exist yet
-RESULT: FAIL shyamsivakumar/mac-ops#428
-The work goes back to its builder and the ticket stays open.
-
-close check: shyamsivakumar/mac-ops#528 (merge 62676880acac)
-scope: pass - every changed file is inside the ticket's stated scope
-proof file: pass - evidence/MO-521/check-proof.md is present
-checks: pass - every one of the 9 checks the proof file lists passed
-cost note: skipped - the MO-1068 cost report (evidence/MO-1068/cost-report.md) does not exist yet
-RESULT: PASS shyamsivakumar/mac-ops#521
-
 ## What each case shows
 
-- #528 (the MO-521 ticket) passes every item. Its ticket names
-  `coordinator/bin/gate_reviewers.py` and says its existing tests may change only as far
-  as this needs. Both changed test files pin the model the change sets, so the
-  clause reaches them and nothing else; the proof file is there and all nine of its
-  checks passed.
 - #492 (the MO-491 ticket) is inside its stated scope, but the pull request carries
   no proof file at evidence/MO-491/check-proof.md, so the work goes back to its
   builder and the ticket stays open.
@@ -51,6 +32,16 @@ RESULT: PASS shyamsivakumar/mac-ops#521
   coordinator/overnight/selftest.py, which its ticket never names, so the diff is
   outside the stated scope: the work goes back to its builder and the ticket
   stays open.
+- **The passing case.** No merged pull request in this repository passes the
+  tightened rule, and the replay says so rather than dressing it up. The checklist
+  was read over every merged pull request here and over every open one: the only
+  pull requests that carry a proof file are #498 and #529 (MO-496), #510 (MO-501),
+  #519 (MO-517), #528 (MO-521), #534 (MO-530), #535 (MO-533), #536 (MO-532), #537
+  (MO-531) and #499 (MO-497), and each of their tickets names at most one file, so
+  each of them fails the scope item. Every mac-ops ticket describes its area in
+  prose, so the ticket authorizes no file, so the scope cannot be judged and the
+  close is refused. The passing path is proven by `tests/test_close_check.py`: a
+  checklist with no blocking item closes the ticket and reports `RESULT: PASS`.
 
 ## The rules the checklist reads
 
@@ -60,11 +51,12 @@ RESULT: PASS shyamsivakumar/mac-ops#521
 - An exclusion is not a permission. The words after an "out" marker, the list
   entries under it and the rest of its section are exclusions, so a change to one of
   them fails the scope item, and an excluded name never widens the scope.
-- A test ties to a source file by its name, and to a value only when the change set
-  that value: a pull request that copies a string from an unrelated test into a
-  file it changed ties nothing, because the change never introduced the string.
+- A test changes when the ticket names that test, or when it is the test of a file the
+  change touches by name. No string ties a test to a change: a pull request can
+  write the same string into an unrelated test and into a file it changed, whether
+  the change introduced that string or not, so a shared string proves nothing.
   Evidence is not a source, so a pull request cannot supply the file that
   authorizes its own test change.
 
-The cost note item is skipped in all three: MO-1068 (#504) is report only and its
-report (evidence/MO-1068/cost-report.md) does not exist yet.
+The cost note item is skipped in both: MO-1068 (#504) is report only and its report
+(evidence/MO-1068/cost-report.md) does not exist yet.
