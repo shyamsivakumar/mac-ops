@@ -307,6 +307,38 @@ secret = "sekrit-token-value"
 run(["gh", "api", "-H", f"Authorization: token {secret}", "repos/a/b/labels?per_page=100"])
 logged = (scratch / "usage.jsonl").read_text()
 check("the usage log holds no credential", secret not in logged and "Authorization" not in logged)
+
+# A caller that asks for the headers gets them back untouched: the
+# conditional path would split them off.
+set_mode("200")
+included = run(["gh", "api", "--include", "repos/a/b/labels?per_page=100"])
+check("caller-requested headers come back", "HTTP/" in included.stdout, repr(included.stdout[:40]))
+check("a caller-requested header read is not conditional",
+      not any("labels" in line and "If-None-Match" in line
+              for line in calls.read_text().splitlines()))
+
+# Two writers refreshing one cache key use their own temporary file, so the
+# entry is always whole.
+concurrent = run(["gh", "api", "repos/a/b/other?page=9"], floor=None)
+code = f"""
+import json, sys, threading
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+path = gh_gateway.CACHE_DIR / "race-entry.json"
+
+def write(number):
+    for _ in range(60):
+        gh_gateway._atomic_write(path, json.dumps({{"expiry": 0, "stdout": str(number)}}))
+
+threads = [threading.Thread(target=write, args=(n,)) for n in range(8)]
+[t.start() for t in threads]
+[t.join() for t in threads]
+entry = json.loads(path.read_text())
+print("WHOLE", isinstance(entry.get("stdout"), str))
+"""
+race = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+check("concurrent writers leave a whole entry", "WHOLE True" in race.stdout,
+      race.stdout.strip()[:40] or race.stderr.strip()[-80:])
 check("the usage log holds no arguments",
       all("command" not in row for row in rows()), "rows carry caller, quota and verb")
 
