@@ -740,6 +740,32 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             "a mode change has to be seen by the stamp",
         )
 
+    def test_the_lock_of_a_worktree_is_read(self):
+        # Git writes a marker in the registration of a locked worktree. The
+        # cleaner reads that marker, because a worktree its owner locked is
+        # never removed.
+        repo = Path(self.tmp.name) / "locked-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / "file.txt").write_text("text\n", encoding="utf-8")
+        git(repo, "add", "file.txt")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "text"], check=True, capture_output=True)
+        worktree = Path(self.tmp.name) / "locked-worktree"
+        git(repo, "worktree", "add", str(worktree), "-b", "side")
+        registration = cleaner._worktree_registration(worktree)
+        self.assertIsNotNone(registration, "the registration has to be found")
+        self.assertFalse(
+            cleaner._worktree_is_locked(registration),
+            "a worktree that is not locked must not look locked",
+        )
+        git(repo, "worktree", "lock", str(worktree))
+        self.assertTrue(
+            cleaner._worktree_is_locked(registration),
+            "a locked worktree has to be seen as locked",
+        )
+
     def _renamed_repo(self, name: str) -> Path:
         repo = Path(self.tmp.name) / name
         repo.mkdir()

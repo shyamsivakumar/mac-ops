@@ -1747,6 +1747,19 @@ def _recovery_manifest(state_root: Path) -> Path:
     return state_root / "recovery.json"
 
 
+def _worktree_is_locked(registration: Path) -> bool:
+    """The owner locked the worktree.
+
+    Git writes a marker in the registration of a locked worktree. A
+    locked worktree is never removed, and a lock that arrives after the
+    check keeps the checkout as well.
+    """
+    try:
+        return (registration / "locked").exists()
+    except OSError:
+        return True
+
+
 def _registration_belongs_to(
     registration: Path, repo_root: Path, worktree: Path
 ) -> bool:
@@ -2358,6 +2371,12 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_registration_mismatch"]
                     append_removal(state_root, candidate, "removal_blocked")
                     continue
+                # A worktree its owner locked is never removed.
+                if _worktree_is_locked(registration):
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_locked"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
                 try:
                     registered = (registration / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
                     registration_info = os.stat(registration)
@@ -2512,6 +2531,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                         if arrived is None or aside_identity is None or (arrived.st_dev, arrived.st_ino) != aside_identity:
                                             tree_gone = False
                                             moved_to = None
+                                        elif _worktree_is_locked(registration):
+                                            # The owner locked the worktree
+                                            # while it was being moved, so it
+                                            # goes back where it was.
+                                            tree_gone = False
                                         elif not _tree_matches(storage / aside, snapshot):
                                             # The tree changed after it was
                                             # stamped, so it holds real work and
