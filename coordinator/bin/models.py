@@ -170,3 +170,12 @@ def pi_routes():
         for e in entries("build")
         if "/" in e["selection"]["model"]
     ]
+
+
+def pi_identities():
+    """The blocked-store identity of each pi route spec, so pi can skip a blocked provider."""
+    return {
+        e["selection"]["model"]: identity(e["selection"])
+        for e in entries("build")
+        if "/" in e["selection"]["model"]
+    }
