@@ -599,6 +599,9 @@ def argv_host(argv):
             selector = words[index + 1]
         elif word.startswith("--repo="):
             selector = word.split("=", 1)[1]
+        elif word.startswith("-R") and len(word) > 2:
+            # The attached form: `-RHOST/OWNER/REPO`.
+            selector = word[2:]
     parts = selector.split("/")
     if len(parts) == 3 and parts[0]:
         return parts[0]
