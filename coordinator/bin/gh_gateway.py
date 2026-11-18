@@ -56,6 +56,20 @@ GROUPS = ("pr", "issue", "repo", "label", "release", "run", "workflow", "gist",
 # against the 5000 core calls an hour. A report that calls it a core call
 # overstates the core usage.
 SEARCH = "search"
+CORE = "core"
+GRAPHQL = "graphql"
+# A command that is not one of these is `other`: it is named as such and is
+# never counted as a core call.
+REST_GROUPS = ("run", "workflow", "cache", "release", "secret", "variable",
+               "ruleset", "gist", "codespace", "repo", "attestation",
+               "ssh-key", "gpg-key", "auth")
+GRAPHQL_GROUPS = ("pr", "issue", "project", "label", "org")
+# The `gh api` flags that take a value, so the endpoint can be found and the
+# method can be read without mistaking a value for the endpoint.
+VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
+               "--raw-field", "--input", "-q", "--jq", "-t", "--template",
+               "--cache")
+BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 CACHE_ON = "COORDINATOR_GH_CACHE"
 CACHE_DIR = Path(os.environ.get("COORDINATOR_GH_CACHE_DIR",
                                 os.path.expanduser("~/.cache/coordinator/gh")))
@@ -129,19 +143,63 @@ def verb(argv):
     return words[0]
 
 
+def endpoint(argv):
+    """Return the `gh api` endpoint, or "" when the command names none."""
+    words = [str(word) for word in argv[1:]]
+    if not words or words[0] != "api":
+        return ""
+    skip = False
+    for word in words[1:]:
+        if skip:
+            skip = False
+            continue
+        if word in VALUE_FLAGS:
+            skip = True
+            continue
+        if word.startswith("-"):
+            continue
+        return word
+    return ""
+
+
+def method(argv):
+    """Return the HTTP method `gh api` will use, as GitHub counts it.
+
+    `gh api` reads unless a method is named or a field is given; a field
+    without a method is a POST, and `-X GET` overrides a field."""
+    words = [str(word) for word in argv[1:]]
+    for index, word in enumerate(words):
+        if word in ("-X", "--method") and index + 1 < len(words):
+            return words[index + 1].upper()
+    if any(word in BODY_FLAGS for word in words):
+        return "POST"
+    return "GET"
+
+
 def resource(argv):
     """Return the GitHub quota a command spends.
 
-    `gh api` spends core calls; `gh search` spends the search bucket; the
-    other commands are backed by GraphQL and spend that bucket."""
+    The quota is read from the endpoint or the command, not from the first
+    word: `gh api search/issues` spends the search bucket, `gh run list`
+    spends core calls on the Actions REST API, and `gh pr list` spends the
+    GraphQL bucket. A command that is named in neither list is `other`."""
     words = [str(word) for word in argv[1:]]
     if not words:
-        return "core"
+        return CORE
     if words[0] == SEARCH:
         return SEARCH
     if words[0] == "api":
-        return "graphql" if "graphql" in words else "core"
-    return "graphql"
+        path = endpoint(argv).lstrip("/")
+        if path.startswith("search/") or "/search/" in path:
+            return SEARCH
+        if path == "graphql" or "graphql" in words:
+            return GRAPHQL
+        return CORE
+    if words[0] in REST_GROUPS:
+        return CORE
+    if words[0] in GRAPHQL_GROUPS:
+        return GRAPHQL
+    return "other"
 
 
 def cacheable(argv):
@@ -153,10 +211,19 @@ def cacheable(argv):
         return False
     if verb(argv) in CACHEABLE_COMMANDS:
         return True
-    # A paginated read of a list endpoint is a list read. A single pull or
-    # issue path is not: it may carry a head SHA into a merge decision.
-    return (words[0] == "api" and any("?" in word for word in words)
-            and not any("/pulls/" in word or "/issues/" in word for word in words))
+    if words[0] != "api":
+        return False
+    # An api read is cached only when it is a verified GET of a list
+    # endpoint. A write that carries a query string, such as
+    # `gh api -X POST repos/o/r/dispatches?ref=main`, must never be served
+    # from the cache: the cached success would answer a request that was
+    # never sent.
+    path = endpoint(argv)
+    if method(argv) != "GET" or "?" not in path:
+        return False
+    # A single pull or issue path may carry a head SHA into a merge
+    # decision, so it is never cached or answered from an ETag.
+    return re.match(r"^repos/[^/]+/[^/]+/(?:pulls|issues)/\d+", path.lstrip("/")) is None
 
 
 def conditional(argv):
