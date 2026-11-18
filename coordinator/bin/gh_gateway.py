@@ -329,6 +329,12 @@ def resource(argv):
         return CORE if subcommand in REPO_REST_VERBS else "other"
     if words[0] in REST_GROUPS:
         return CORE
+    if words[0] in ("issue", "pr"):
+        # A mixed group: list and view are GraphQL, but a write such as
+        # `gh issue comment` can post through REST. Its quota is not known
+        # here, so it is reported as `other` rather than counted as a
+        # GraphQL call it may not have made.
+        return GRAPHQL if verb(argv) in ("list", "view", "status") else "other"
     if words[0] in GRAPHQL_GROUPS:
         return GRAPHQL
     return "other"
@@ -362,8 +368,9 @@ def cacheable(argv):
     words = [str(word) for word in argv[1:]]
     if not words:
         return False
-    if any(word in ("--web", "-w") for word in argv[1:]):
+    if has_flag(argv, "--web", "-w"):
         # `--web` opens a browser; a cached answer would silently skip it.
+        # `--web=true` is the same flag.
         return False
     if unknown_short_flag(argv):
         # A flag cluster may hide a method or a body: never cache it.
