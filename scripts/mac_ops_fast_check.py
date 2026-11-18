@@ -222,6 +222,10 @@ def main():
         command = ["/bin/sh", "-n", name]
         proof.check(f"shell syntax: {name}", shlex.join(command),
                     lambda command=command: run(command, timeout=120))
+    if "scripts/worktree-cleaner/cleaner.py" in changes:
+        fixture = ["python3", "verification/worktree-cleaner/check_bootstrap.py"]
+        proof.check("worktree cleaner bootstrap fixture", shlex.join(fixture),
+                    lambda: run(fixture, timeout=300))
 
     scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
     model_dir = ROOT / "formal" / "heavy-queue"
