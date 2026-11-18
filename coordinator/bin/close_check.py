@@ -59,21 +59,83 @@ TEST_CLAUSE = re.compile(r"(?i)\bexisting tests?\b.{0,160}?\bmay change\b")
 DISTINCTIVE = re.compile(r"[\"']([^\"'\\\n]{10,})[\"']")
 
 
+# A ticket states its scope in prose, and it can exclude as well as permit.
+# "In: x. Out: y" says that y is not in scope, so the words after an "out"
+# marker, and the words of a sentence that forbids a change, name what the
+# ticket excludes. Those names are never permission.
+SEGMENT = re.compile(r"(?i)\b(in|inside|out|out of scope|not in scope|excludes|except)\b\s*:")
+PROHIBITION = re.compile(r"(?i)\b(must not|do not|never|without (?:changing|touching|editing))\b")
+SENTENCE = re.compile(r";|\.\s|\n")
+
+
+def scope_texts(body):
+    """The ticket's permission text and the ticket's exclusion text.
+
+    Everything the ticket says is permission until the ticket excludes
+    something. An "out" segment, a sentence that forbids a change, and
+    the words that follow them are exclusions.
+    """
+    permission = []
+    exclusion = []
+    for sentence in SENTENCE.split(body or ""):
+        if not sentence.strip():
+            continue
+        if PROHIBITION.search(sentence):
+            exclusion.append(sentence)
+            continue
+        position = 0
+        kind = "permission"
+        for match in SEGMENT.finditer(sentence):
+            text = sentence[position:match.start()]
+            (permission if kind == "permission" else exclusion).append(text)
+            kind = "exclusion" if match.group(1).lower() in ("out", "out of scope",
+                                                              "not in scope", "excludes",
+                                                              "except") else "permission"
+            position = match.end()
+        text = sentence[position:]
+        (permission if kind == "permission" else exclusion).append(text)
+    return "\n".join(permission), "\n".join(exclusion)
+
+
 def scope_tokens(body):
-    """The files and paths the ticket names.
+    """The files and paths the ticket permits.
 
     A ticket names its area in prose, so the tokens are the path-like
     words in the body: a path with a slash, or a file name with an
-    extension.
+    extension. A name the ticket excludes is not a permission, so it is
+    not a token.
     """
+    permission, exclusion = scope_texts(body)
+    excluded = exclusion_tokens(exclusion)
     tokens = set()
-    for match in PATH_TOKEN.finditer(body or ""):
+    for text in (permission,):
+        for match in PATH_TOKEN.finditer(text or ""):
+            token = match.group(0).strip(".,;:()[]")
+            if token and "://" not in token:
+                tokens.add(token)
+        for match in FILE_TOKEN.finditer(text or ""):
+            tokens.add(match.group(0).strip(".,;:()[]"))
+    return {token for token in tokens if not token_matches_any(token, excluded)}
+
+
+def exclusion_tokens(text):
+    """The files and paths the ticket excludes."""
+    tokens = set()
+    for match in PATH_TOKEN.finditer(text or ""):
         token = match.group(0).strip(".,;:()[]")
         if token and "://" not in token:
             tokens.add(token)
-    for match in FILE_TOKEN.finditer(body or ""):
+    for match in FILE_TOKEN.finditer(text or ""):
         tokens.add(match.group(0).strip(".,;:()[]"))
     return tokens
+
+
+def token_matches_any(token, tokens):
+    """Does a token name another token?"""
+    for other in tokens:
+        if token == other or token.rsplit("/", 1)[-1] == other.rsplit("/", 1)[-1]:
+            return True
+    return False
 
 
 def common_prefix(one, other):
@@ -98,14 +160,7 @@ def in_scope(path, tokens, changed=(), tests_allowed=False):
     if path.startswith("evidence/"):
         return True, f"{path} is evidence that travels with the change"
     for token in tokens:
-        if any(char in token for char in "*?["):
-            if fnmatch.fnmatch(path, token) or fnmatch.fnmatch(base, token):
-                return True, f"{path} matches {token}"
-            continue
-        if "/" in token:
-            if path == token or path.startswith(token.rstrip("/") + "/"):
-                return True, f"{path} is under {token}"
-        elif base == token:
+        if token_matches(path, token):
             return True, f"{path} is named by {token}"
     if path.startswith("tests/"):
         stem = os.path.splitext(base)[0].removeprefix("test_")
@@ -113,9 +168,23 @@ def in_scope(path, tokens, changed=(), tests_allowed=False):
             if other.startswith("tests/"):
                 continue
             other_stem = os.path.splitext(os.path.basename(other))[0]
-            if common_prefix(stem, other_stem) >= TEST_PREFIX:
+            if stem == other_stem:
                 return True, f"{path} tests {other}"
     return False, ""
+
+
+def token_matches(path, token):
+    """Does a token name this file?
+
+    A token names a file when it is the file, a directory that holds it,
+    a glob that matches it, or the file's own name.
+    """
+    base = os.path.basename(path)
+    if any(char in token for char in "*?["):
+        return fnmatch.fnmatch(path, token) or fnmatch.fnmatch(base, token)
+    if "/" in token:
+        return path == token or path.startswith(token.rstrip("/") + "/")
+    return base == token
 
 
 def distinctive_literals(text):
@@ -185,6 +254,12 @@ def item_scope(body, files, ties=None):
     this repository the scope cannot be judged, and an unjudged scope
     authorizes no close: the item fails.
     """
+    permission, exclusion = scope_texts(body)
+    excluded = exclusion_tokens(exclusion)
+    blocked = [path for path in files if any(token_matches(path, token) for token in excluded)]
+    if blocked:
+        return {"item": "scope", "status": FAIL, "required": True,
+                "detail": "the ticket excludes it: " + ", ".join(sorted(blocked))}
     tokens = scope_tokens(body)
     if not tokens or not names_a_file(tokens):
         return {"item": "scope", "status": FAIL, "required": True,
