@@ -73,7 +73,7 @@ def start_routing():
              "digitized/Concerning", "fixture/sixth"]
     board = json.loads(json.dumps([
         dict(repo=repo, number=n, key=f"F-{n}", stage=stage, problems=problems,
-             priority=2, title="bot", builderAlias="implementation",
+             priority=2, title="bot", type="standard", builderAlias="implementation",
              builderSelection={"model": "fixture-implementation"}, body="fixture", url="fixture")
         for repo in repos for n, stage, problems in
         [(1, "backlog", []), (2, "todo", ["blocked"]), (3, "todo", []), (4, "todo", [])]
@@ -1496,7 +1496,7 @@ def send_integrity():
                     exact(payload, {"threadId": "old", "message": "brief"})
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
-                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.model_list.first_available("fix")["selection"],
+                    exact(payload, {"projectId": "fixture", "title": "fix", "taskType": "fix", "modelSelection": lane.model_list.first_available("fix")["selection"],
                           "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief", "clientRequestId": key})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")

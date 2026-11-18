@@ -509,7 +509,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
         args = {"projectId": CFG[repo]["projectId"], "title": title,
-                "modelSelection": fixer["selection"], "runtimeMode": "full-access",
+                "taskType": "fix", "modelSelection": fixer["selection"], "runtimeMode": "full-access",
                 "workspaceStrategy": workspace, "message": message,
                 "clientRequestId": lkey}
         options = ["--priority", str(priority)]
@@ -554,7 +554,7 @@ def park(repo, number, issue, head, reply, ledger):
            "Re-cut the remaining work into at most 2 ordered tickets that each fit a 5-minute builder turn. Consolidate any further work into those tickets; never create a third ticket. Use the 12-section template in ~/.coordinator/tickets.json, "
            "with Requires/Provides lines, chained with --add-blocked-by, labels stage:todo,type:<type>,priority:<same>; reuse the PR branch as the base if most of it is right and say so in the first ticket. "
            f"Then comment on #{issue} with the new tickets and close it as not planned. Open every new ticket with `ticket open --repo {repo} --title \"<title>\" --body-file <file> --label stage:todo,type:<type>,priority:<n>`; the tool mints the key, so never type the key yourself and never use `gh issue create`. Device and live testing are waived. Start nothing, change no code, 10 minutes.\n\nLast gate report:\n" + reply[-5000:])
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "modelSelection": recutter["selection"],
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "taskType": "design", "modelSelection": recutter["selection"],
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "900"]).splitlines()[-1]
     ledger[lkey] = out
@@ -695,7 +695,7 @@ def act_on_pr(repo, number, ledger):
               f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
     key = CFG[repo]["key"]
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "modelSelection": model,
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "taskType": "review", "modelSelection": model,
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
@@ -755,7 +755,7 @@ def drift_ff(ledger):
                 "Report one line per repo: the two commit ids before, the single commit id after (or \"left alone, not fast-forwardable\").",
                 "Report the two commit ids before and the single commit id after (or \"left alone, not fast-forwardable\").")
             args = {"projectId": "f093cc9b-5332-48eb-a719-2187eb8cbabc", "title": f"Chore · level local main ({CFG[repo]['key']})",
-                    "modelSelection": {"instanceId": "router", "model": "task/chore"}, "runtimeMode": "full-access",
+                    "taskType": "chore", "runtimeMode": "full-access",
                     "workspaceStrategy": {"type": "root"}, "message": msg}
             out2 = run([COORDQ, "start", json.dumps(args), "--priority", "700"]).splitlines()[-1]
             ledger[lkey] = out2
@@ -858,7 +858,7 @@ def unstick(repo, ledger, excl=frozenset()):
     if unsticker is None:
         return "unstick waits, every builder is blocked"
     msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "modelSelection": unsticker["selection"],
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "taskType": "chore", "modelSelection": unsticker["selection"],
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).splitlines()[-1]
     stamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
@@ -1472,7 +1472,7 @@ def recover_dead_runs(ledger):
                                 if key.startswith(work_key + ":a")
                                 and (match := re.search(r":a(\d+)$", key))), default=0) + 1
             args = {"projectId": project_id, "clientRequestId": f"{work_key}:a{next_attempt}",
-                    "title": f"Continue {repo}#{ticket}: {title}", "modelSelection": model,
+                    "title": f"Continue {repo}#{ticket}: {title}", "taskType": "worker", "modelSelection": model,
                     "runtimeMode": "full-access", "workspaceStrategy": {"type": "existing_worktree", "worktreePath": path}, "message": message}
             print(f"DEAD {thread_id}: relaunch {model['model']}")
             if not DRY:
