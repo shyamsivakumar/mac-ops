@@ -13,7 +13,11 @@ GH_TIMEOUT = 40
 CALL_TIMEOUT = 30
 COORDQ_TIMEOUT = 120
 LIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"]
-STAGES = ("stage:backlog", "stage:todo")
+STAGE_PREFIX = "stage:"
+# The stage a started ticket holds. It is built in rather than read from the
+# config, so a machine whose config predates this stage still names it and
+# still accepts a started ticket. `ticket labels --apply` creates it.
+STARTED_STAGE = "started"
 # The hold label is named `stage:hold` so it reads as a stage on the board, but
 # it is a family of its own: a hold says the ticket waits for Shyam, and it
 # never counts as the one stage label a ticket needs.
@@ -126,9 +130,22 @@ def load_config():
         return json.load(f)
 
 
+def stage_values(cfg):
+    """The stage values a ticket may carry, configured stages first.
+
+    `started` is always one of them. The CLI sets that stage itself, so a
+    machine whose config is older than the stage must still read it and
+    still accept a started ticket.
+    """
+    values = list(cfg["labels"]["stage"])
+    if STARTED_STAGE not in values:
+        values.append(STARTED_STAGE)
+    return values
+
+
 def label_names(cfg):
     names = []
-    for stage in cfg["labels"]["stage"]:
+    for stage in stage_values(cfg):
         names.append(("stage", f"stage:{stage}"))
     names.append((HOLD_FAMILY, HOLD_LABEL))
     for p in cfg["labels"]["priority"]:
@@ -253,7 +270,7 @@ def split_labels(cfg, names):
 def label_problems(cfg, groups):
     problems = []
     valid = {
-        "stage": set(cfg["labels"]["stage"]),
+        "stage": set(stage_values(cfg)),
         HOLD_FAMILY: {HOLD_FAMILY},
         "priority": set(cfg["labels"]["priority"]),
         "type": set(cfg["labels"]["type"]),
@@ -267,6 +284,66 @@ def label_problems(cfg, groups):
             if value not in valid[family]:
                 problems.append(f"unknown {family} label: {value}")
     return problems
+
+
+def stage_labels(names):
+    """The stage-family labels of a ticket. `stage:hold` is its own family."""
+    return [name for name in names
+            if name.lower().startswith(STAGE_PREFIX) and name.lower() != HOLD_LABEL]
+
+
+def ensure_label(repo, name, color):
+    """Create one label in a repository that does not have it yet."""
+    existing = {l["name"].lower() for l in
+                gh_json(["label", "list", "-R", repo, "--limit", "1000", "--json", "name"])}
+    if name.lower() not in existing:
+        gh(["label", "create", name, "-R", repo, "--color", color])
+
+
+def edit_labels(repo, number, add, remove):
+    """One label update on one issue."""
+    args = ["issue", "edit", str(number), "-R", repo]
+    if add:
+        args += ["--add-label", ",".join(add)]
+    if remove:
+        args += ["--remove-label", ",".join(remove)]
+    gh(args)
+
+
+def move_stage(repo, number, stage):
+    """Put one ticket on exactly one stage label.
+
+    The old stage is removed and the new one added in one update, so the
+    ticket never passes through a state with no stage label. A failed update
+    puts back the stage labels the ticket started with, so a failure leaves
+    the ticket as it was. A ticket that already carries only the target
+    stage is not written at all. Return True when the ticket was written.
+    """
+    target = f"{STAGE_PREFIX}{stage}"
+    labels = gh_json(["issue", "view", str(number), "-R", repo, "--json", "labels"])
+    before = stage_labels([label["name"] for label in labels["labels"]])
+    remove = [name for name in before if name != target]
+    add = [] if target in before else [target]
+    if not add and not remove:
+        return False
+    if add:
+        ensure_label(repo, target, FAMILY_COLORS["stage"])
+    try:
+        edit_labels(repo, number, add, remove)
+    except GhError:
+        # A failed update may have removed the old stage before it failed, so
+        # the labels are read again and the earlier stage is put back.
+        try:
+            current = stage_labels([label["name"] for label in
+                                    gh_json(["issue", "view", str(number), "-R", repo,
+                                             "--json", "labels"])["labels"]])
+            edit_labels(repo, number,
+                        [name for name in before if name not in current],
+                        [name for name in current if name not in before])
+        except GhError:
+            pass
+        raise
+    return True
 
 
 def key_problems(rcfg, title):
@@ -1073,7 +1150,7 @@ def validate_start(cfg, repo, issue, check_text=True):
             raise Refuse(f"more than one {family} label: {', '.join(groups[family])}")
     if t["type"] not in cfg["labels"]["type"]:
         raise Refuse(f"unknown type label {t['type']}")
-    if t["stage"] not in cfg["labels"]["stage"]:
+    if t["stage"] not in stage_values(cfg):
         raise Refuse(f"unknown stage label {t['stage']}")
     if t["priority"] and t["priority"] not in cfg["labels"]["priority"]:
         raise Refuse(f"unknown priority label {t['priority']}")
@@ -1308,7 +1385,7 @@ def cmd_start(a):
         print(f"workspace: {strategy['type']} from {strategy['baseRef']}")
         print("command:\n" + shlex.join(command) + "\n")
         print(f"receipt comment (after coordq):\n<!-- coordinator-ticket {{\"kind\":\"receipt\",\"attempt\":{attempt},\"requestId\":\"{request_id}\",\"coordq\":\"<coordq output>\"}} -->\n")
-        print(f"then remove label stage:{t['stage']}")
+        print(f"then move the stage label to {STAGE_PREFIX}{STARTED_STAGE} (removing {STAGE_PREFIX}{t['stage']})")
         if a.print_brief:
             print("brief:\n" + brief)
         return
@@ -1332,9 +1409,46 @@ def cmd_start(a):
         except GhError as e:
             print(f"receipt comment failed ({e.kind}): {e}", file=sys.stderr)
             time.sleep(2)
-    gh(["issue", "edit", str(n), "-R", repo, "--remove-label", f"stage:{t['stage']}"])
+    try:
+        move_stage(repo, n, STARTED_STAGE)
+    except GhError as e:
+        die(f"started, but the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
+            f"({e.kind}): {e}; the ticket keeps {STAGE_PREFIX}{t['stage']}")
     if not posted:
         die(f"started, but the receipt comment could not be posted after 3 tries; coordq output was: {output}")
+
+
+def cmd_deliver(a):
+    """The delivery step: the builder is done and its pull request is open.
+
+    A delivered ticket keeps exactly one stage label, the started one. A
+    ticket that lost its stage label before delivery gets it back here, and a
+    ticket that carries two keeps the same one.
+    """
+    cfg = load_config()
+    repo, n = parse_ref(a.ref)
+    try:
+        repo_config(cfg, repo)
+        issue = fetch_issue(repo, n)
+        if issue["state"] != "OPEN":
+            raise Refuse(f"issue is {issue['state'].lower()}")
+        pulls = [pull for pull in referencing_pulls(repo, n) if pull["state"] == "open"]
+        if not pulls:
+            raise Refuse("no open pull request references this issue")
+    except Refuse as e:
+        die(f"refused: {e}", 2)
+    except GhError as e:
+        die(f"gh failed ({e.kind}): {e}")
+    if a.dry_run:
+        print(f"pull request: #{max(pull['number'] for pull in pulls)}")
+        print(f"stage label: {STAGE_PREFIX}{STARTED_STAGE}")
+        return
+    try:
+        moved = move_stage(repo, n, STARTED_STAGE)
+    except GhError as e:
+        die(f"the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
+            f"({e.kind}): {e}; the ticket keeps the stage it had")
+    print(f"{'moved' if moved else 'kept'} {repo}#{n} at {STAGE_PREFIX}{STARTED_STAGE}")
 
 
 def parse_pr_ref(ref):
@@ -1709,7 +1823,7 @@ def set_target(cfg, family, value):
     if value == "none":
         return None
     valid = {
-        "stage": cfg["labels"]["stage"],
+        "stage": stage_values(cfg),
         "priority": cfg["labels"]["priority"],
         "builder": list(cfg["models"]),
         "reviewer": [a for a, m in cfg["models"].items() if not m.get("noGate")],
@@ -1789,6 +1903,10 @@ def main():
     s.add_argument("--print-brief", action="store_true",
                    help="print the brief this start would send, then stop without starting")
     s.set_defaults(fn=cmd_start)
+    s = sub.add_parser("deliver", help="record a delivery: the builder is done and its pull request is open")
+    s.add_argument("ref")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_deliver)
     s = sub.add_parser("gate")
     s.add_argument("ref", help="the pull request to gate, owner/repo#number")
     s.add_argument("--dry-run", action="store_true",
