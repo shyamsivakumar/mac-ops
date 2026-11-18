@@ -1896,10 +1896,11 @@ export default class Board extends View {
     this.attempt(`${verb} sent`, async () => {
       const failed = [];
       for (const [g, text] of fresh) {
+        const eligible = g && this.seen[g.key]?.col === "needs";
         try {
           await send(text, g);
           this.sent.set(g.key, { action: verb, stamp: this.activity(g), at: Date.now() });
-          this.noteAct(g, ACT_OF[verb]);
+          this.noteAct(g, ACT_OF[verb], Date.now(), eligible);
         } catch {
           failed.push(g.task || this.cleanTitle(g));
         }
