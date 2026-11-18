@@ -77,6 +77,25 @@ class ScopeTest(unittest.TestCase):
         item = check.item_scope("Nothing here names a file.", ["a.py"])
         self.assertEqual(item["status"], check.SKIPPED)
 
+    def test_a_home_path_is_not_a_path_in_this_repository(self):
+        check = close_check()
+        body = "Source: ~/Code/inbox/2026-11-17-ideas.md, requested by Shyam."
+        self.assertEqual(check.scope_tokens(body), set())
+        item = check.item_scope(body, ["coordinator/bin/close_check.py"])
+        self.assertEqual(item["status"], check.SKIPPED)
+
+    def test_a_ticket_that_names_only_a_directory_is_skipped(self):
+        check = close_check()
+        item = check.item_scope("The change lands in coordinator/overnight and anthropics/claude-cookbooks.",
+                                ["coordinator/bin/close_check.py"])
+        self.assertEqual(item["status"], check.SKIPPED)
+
+    def test_a_ticket_that_names_a_file_in_another_directory_still_judges(self):
+        check = close_check()
+        item = check.item_scope("The board's state is decisions.json.",
+                                ["coordinator/overnight/lane_driver.py"])
+        self.assertEqual(item["status"], check.FAIL)
+
 
 class ProofTest(unittest.TestCase):
     def test_the_proof_rows_carry_the_result(self):

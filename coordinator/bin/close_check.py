@@ -34,8 +34,12 @@ COST_REPORT = "evidence/MO-1068/cost-report.md"
 COST_NOTE = re.compile(r"(?im)^[ \t>*-]*(cost|cost note|kosten)[ \t]*[:\-]")
 TICKET_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)\b")
 ISSUE_REF = re.compile(r"(?:refs|fixes|closes|resolves)[ \t]+#(\d+)", re.IGNORECASE)
-PATH_TOKEN = re.compile(r"[A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)+")
-FILE_TOKEN = re.compile(r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css)\b")
+# A token is a whole path, never the tail of a longer one: the part of
+# `~/Code/inbox/note.md` after the `~` or the `/` is not a path in this
+# repository, so the character before a token may not continue a path.
+_NOT_IN_PATH = r"(?<![A-Za-z0-9_.*~/\\-])"
+PATH_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)+")
+FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css)\b")
 
 PASS = "pass"
 FAIL = "fail"
@@ -87,12 +91,24 @@ def in_scope(path, tokens, changed=()):
     return False, ""
 
 
+def names_a_file(tokens):
+    """Does the ticket name a file, or a glob that can hold one?
+
+    A directory token and a reference outside the repository (another
+    repository's name, a home path) can only widen what is in scope, so a
+    ticket that names only those cannot say whether a diff left its scope: it
+    is skipped, not passed and not failed.
+    """
+    return any("*" in token or "?" in token or "[" in token
+               or FILE_TOKEN.fullmatch(token) for token in tokens)
+
+
 def item_scope(body, files):
     """Item 1: the diff stays inside the ticket's stated scope."""
     tokens = scope_tokens(body)
-    if not tokens:
+    if not tokens or not names_a_file(tokens):
         return {"item": "scope", "status": SKIPPED,
-                "detail": "the ticket names no file or path, so the scope cannot be judged"}
+                "detail": "the ticket names no file in this repository, so the scope cannot be judged"}
     outside = [path for path in files if not in_scope(path, tokens, files)[0]]
     if outside:
         return {"item": "scope", "status": FAIL,
