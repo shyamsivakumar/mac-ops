@@ -89,6 +89,9 @@ class ReplayTests(unittest.TestCase):
                     return json.dumps({"state": "OPEN", "mergedAt": None})
                 return json.dumps({"number": 20, "state": "OPEN",
                                    "headRefName": "builder/fixture", "baseRefName": "main"})
+            if cmd[0] == "git":
+                # The lane reads the branch of the worktree it would work in.
+                return "builder/fixture"
             if cmd[0] == self.lane.COORDQ:
                 return self.queue_start(cmd)
             raise AssertionError(f"unexpected command: {cmd}")
