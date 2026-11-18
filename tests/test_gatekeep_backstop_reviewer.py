@@ -83,7 +83,6 @@ class GatekeepBase(unittest.TestCase):
         self.addCleanup(lambda: [setattr(coordq, name, value)
                                  for name, value in self.saved.items()])
         self.pr = {"draft": False, "number": 7, "head": {"sha": HEAD},
-                   "changed_files": 1, "base": {"ref": "main"},
                    "body": f"Refs #9\nBuilder check: PASS {HEAD}\n"}
         coordq.subprocess = types.SimpleNamespace(
             run=lambda *a, **k: FakeRun("me\n"))
@@ -93,9 +92,6 @@ class GatekeepBase(unittest.TestCase):
         coordq.gh_json = self.fake_gh
 
     def fake_gh(self, endpoint):
-        if endpoint.endswith("/files?per_page=100"):
-            # The changed-file read the prompt hold makes: one ordinary file.
-            return [{"filename": "coordinator/bin/ticket"}]
         if endpoint.startswith(f"repos/{REPO}/pulls"):
             return [self.pr]
         if "/issues/" in endpoint and endpoint.endswith("/comments?per_page=100"):
