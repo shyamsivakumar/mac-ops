@@ -393,8 +393,17 @@ class GitHub:
             # usage log. A forced refresh skips its cache.
             result = gh_gateway.run(
                 ["gh", "api", f"repos/{repo}/commits/{sha}", "--jq", ".sha"],
-                timeout=30, fresh=refresh, caller_name="worktree-cleaner")
+                timeout=30, fresh=refresh, caller_name="worktree-cleaner",
+                # An inventory lookup is optional and takes the shared
+                # floor. The verification before a removal is required, so
+                # it passes none.
+                limit=None if refresh else gh_gateway.floor())
             self.commits[key] = result.returncode == 0 and result.stdout.strip().lower() == sha.lower()
+        except gh_gateway.ApiBudgetExhausted:
+            # The quota is below the floor: the lookup is skipped and the
+            # commit stays unverified, which is not a reason to remove.
+            self.commits[key] = False
+            return False
         except (OSError, subprocess.TimeoutExpired) as exc:
             # The refresh did not answer, so the positive it was checking is
             # no longer known good. Evict it and save before the error goes
