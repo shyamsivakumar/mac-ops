@@ -881,9 +881,64 @@ import gh_gateway
 print("R", gh_gateway.argv_host(["gh", "pr", "list", "-R", "ent.example/o/r"]))
 print("PLAIN", repr(gh_gateway.argv_host(["gh", "pr", "list", "-R", "o/r"])))
 print("HOSTNAME", gh_gateway.argv_host(["gh", "pr", "list", "--hostname", "h.example"]))
+print("ATTACHED", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r"]))
+print("VALUE", repr(gh_gateway.argv_host(["gh", "pr", "list", "--search", "-Release"])))
+print("BOTH", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r",
+                                   "--search", "-Release"]))
+print("SHORT", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r",
+                                    "-S", "-Release"]))
+print("SHORTONLY", repr(gh_gateway.argv_host(["gh", "pr", "list", "-S", "-Release"])))
+print("RUNALL", gh_gateway.argv_host(["gh", "run", "list", "-a", "-R", "ent.example/o/r"]))
+print("RUNWORKFLOW", gh_gateway.argv_host(["gh", "run", "list", "-R", "ent.example/o/r",
+                                          "-w", "-Release"]))
+print("NOOWNER", repr(gh_gateway.argv_host(["gh", "issue", "list", "-R", "o/r"])))
+print("SEARCHSELECTOR", gh_gateway.argv_host(
+    ["gh", "pr", "list", "-R", "actual.example/o/r", "--search",
+     "-Rother.example/o/r"]))
+print("HOSTNAMEFIRST", gh_gateway.argv_host(
+    ["gh", "pr", "list", "--hostname", "h.example", "-R", "a.example/o/r"]))
+print("HOSTNAMELAST", gh_gateway.argv_host(
+    ["gh", "pr", "list", "-R", "a.example/o/r", "--hostname", "h.example"]))
+print("REPOFLAG", gh_gateway.argv_host(["gh", "pr", "list", "--repo", "ent.example/o/r"]))
+print("REPOEQ", gh_gateway.argv_host(["gh", "pr", "list", "--repo=ent.example/o/r"]))
+print("SHORTSELECTOR", gh_gateway.argv_host(
+    ["gh", "pr", "list", "-R", "actual.example/o/r", "-S", "-Rother.example/o/r"]))
+print("SEARCHHOST", gh_gateway.argv_host(
+    ["gh", "pr", "list", "--search", "--hostname=other.example",
+     "-R", "actual.example/o/r"]))
+print("RUNBRANCH", gh_gateway.argv_host(
+    ["gh", "run", "list", "-R", "actual.example/o/r", "-b", "-Rother.example/o/r"]))
+print("LASTREPO", gh_gateway.argv_host(
+    ["gh", "pr", "list", "--repo", "first.example/o/r", "-R", "second.example/o/r"]))
+print("LASTSHORT", gh_gateway.argv_host(
+    ["gh", "pr", "list", "-R", "second.example/o/r", "--repo", "first.example/o/r"]))
+print("WORKFLOWALL", gh_gateway.argv_host(
+    ["gh", "workflow", "list", "-a", "-R", "ent.example/o/r"]))
+print("SELBEFORE", gh_gateway.argv_host(
+    ["gh", "-R", "actual.example/o/r", "run", "list", "-w", "-Rnightly"]))
+print("SELBEFORE2", gh_gateway.argv_host(
+    ["gh", "-R", "actual.example/o/r", "run", "list", "-w", "-Rother.example/o/r"]))
+print("COMMITVAL", gh_gateway.argv_host(
+    ["gh", "run", "list", "-R", "actual.example/o/r", "--commit",
+     "-Rother.example/o/r"]))
+print("REPOEQSHORT", gh_gateway.argv_host(["gh", "pr", "list", "-R=ent.example/o/r"]))
+print("CLUSTER", gh_gateway.argv_host(
+    ["gh", "pr", "list", "-dRent.example/team/repo"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
-      selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example"], str(selector))
+      selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
+                  "ATTACHED", "ent.example", "VALUE", "''", "BOTH", "ent.example",
+                  "SHORT", "ent.example", "SHORTONLY", "''", "RUNALL", "ent.example",
+                  "RUNWORKFLOW", "ent.example", "NOOWNER", "''",
+                  "SEARCHSELECTOR", "actual.example", "HOSTNAMEFIRST", "a.example",
+                  "HOSTNAMELAST", "h.example", "REPOFLAG", "ent.example",
+                  "REPOEQ", "ent.example", "SHORTSELECTOR", "actual.example",
+                  "SEARCHHOST", "actual.example", "RUNBRANCH", "actual.example",
+                  "LASTREPO", "second.example", "LASTSHORT", "first.example",
+                  "WORKFLOWALL", "ent.example", "SELBEFORE", "actual.example",
+                  "SELBEFORE2", "actual.example", "COMMITVAL", "actual.example",
+                  "REPOEQSHORT", "ent.example", "CLUSTER", "ent.example"],
+      str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.
 partial_log = scratch / "partial.jsonl"
@@ -897,6 +952,20 @@ check("a malformed record makes the result incomplete",
       partial.returncode != 0 and "kept" in partial.stdout
       and "INCOMPLETE" in (partial.stdout + partial.stderr),
       f"exit={partial.returncode}")
+
+# An explicit selector overrides GH_REPO, including when it names no host.
+override = subprocess.run([sys.executable, "-c", f"""
+import os, sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+os.environ["GH_REPO"] = "enterprise.example/team/old"
+print("TWOPART", repr(gh_gateway.argv_host(["gh", "pr", "list", "-R", "owner/repo"])))
+print("NOSEL", gh_gateway.argv_host(["gh", "pr", "list"]))
+print("HOSTED", gh_gateway.argv_host(["gh", "pr", "list", "-R", "ent.example/o/r"]))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("an explicit selector overrides GH_REPO, host or not",
+      override == ["TWOPART", "''", "NOSEL", "enterprise.example", "HOSTED", "ent.example"],
+      str(override))
 
 # `-i=true` is the same as `--include`: the caller's headers must survive.
 short_bool = subprocess.run([sys.executable, "-c", f"""
