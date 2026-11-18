@@ -1546,8 +1546,7 @@ def send_integrity():
             data = json.dumps({f"ticket:{repo}#385:a1": "old"}) if path == lane.RECEIPTS else "brief"
             return mock_open(read_data=data)()
         def command(cmd, timeout=150):
-            exact(json.loads(cmd[2])["projectId"], "fixture")
-            exact("t3_thread_send" in cmd, False)
+            exact(cmd, ["ticket", "start", f"{repo}#385"])
             actions.append("fresh")
             if failure:
                 raise subprocess.CalledProcessError(1, cmd)
@@ -1558,12 +1557,12 @@ def send_integrity():
              patch.object(lane, "t3", return_value={"thread": {"status": "deleted"}}), \
              patch.object(lane, "run", command):
             result = lane.unstick(repo, ledger)
-        exact(actions, [])
-        exact(f"cont:old" in ledger, True)
+        exact(actions, ["fresh"])
+        exact("cont:old" in ledger, False)
         if failure:
-            exact("started" in result, False)
+            exact(result, "continue failed")
         else:
-            exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
+            exact(result, "start #385: receipt")
 
 
 def root_workspace():

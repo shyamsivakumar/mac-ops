@@ -914,7 +914,8 @@ def unstick(repo, ledger, excl=frozenset()):
             v = ledger.get(f"cont:{best[1]}")
             if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
                 continue
-            if not t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread"):
+            thread = t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread")
+            if not thread or root_workspace(thread):
                 if DRY:
                     return f"DRY start #{n}"
                 out = run(["ticket", "start", f"{repo}#{n}"], timeout=200)
@@ -924,9 +925,11 @@ def unstick(repo, ledger, excl=frozenset()):
             if DRY:
                 return f"DRY continue #{n}"
             msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
+            queued = {}
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
-                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, issue=n)
-            ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
+                       queued, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, issue=n)
+            if queued:
+                ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
             return f"continue #{n}: {out}"
     if ledger.get("_item_failures", 0) > failures_before:
         return "continue failed"
