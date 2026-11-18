@@ -1,6 +1,7 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
 import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, theme } from "herdr";
+import { answerCause, isStale, restored } from "./answers.js";
 import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript, SESSION_NAME } from "./transcript.js";
 import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
 
@@ -50,11 +51,34 @@ const POP_WIDTH = 640;
 const POP_HEIGHT = 560;
 const DECISIONS_FILE = `${home()}/Code/coordinator/decisions.json`;
 
-const askOf = ({ id, group, title, why, kind, options }) => ({
+// An alarm Shyam answered stays quiet for four hours. The acknowledgement
+// is a record the shift reads, not a guess about the board: the shift
+// never silences an alarm nobody answered, and the board file has more
+// than one writer, so a lost board item says nothing. The command writes
+// the record for the cause the panel showed, so another cause of the same
+// alarm, which nobody answered, is not silenced. The command is the
+// installed one. An alarm that was never raised has no record: the
+// command says so, and the panel says so too, because an alarm that
+// cannot be acknowledged is an alarm that raises again.
+async function acknowledgeAlarm(id, cause) {
+  if (!cause) return;
+  const r = await exec(`${home()}/.local/bin/alarms.py`, ["ack", id, cause]);
+  // The command exits 0 when the acknowledgement was written. Any other
+  // exit means the acknowledgement did not reach the file, and the alarm
+  // can raise again on the next tick, so Shyam is told. An alarm on the
+  // board always has a key, so even the "no raised key" exit is a fault
+  // worth naming.
+  if (r.code !== 0) {
+    notify({ title: "The alarm was not acknowledged", body: `${id}: ${(r.stderr || "").trim() || `alarms exited ${r.code}`}. The alarm can raise again on the next tick.`, level: "warning" });
+  }
+}
+
+const askOf = ({ id, group, title, why, cause, kind, options }) => ({
   id,
   group,
   text: title,
   why,
+  cause: cause ?? "",
   action: kind === "action",
   choices: kind === "action"
     ? [{ kind: "done", text: "Done", label: "Done", detail: "", rec: false }]
@@ -74,6 +98,11 @@ export default class Coordinator extends View {
     this.typingTimers = new Map();
     this.opening = null;
     this.editing = new Set(this.pop ? this.typing().keys() : []);
+    // The cause each open reply is bound to: the one the panel showed
+    // when the reply started, not the one it shows when the reply is
+    // sent. It is kept in the shared state, so a reply the popup
+    // restores keeps the cause it belongs to.
+    this.replyCauses = new Map(shared("co.replyCauses") ?? []);
     this.sent = "";
     this.box = { width: 800, height: 240 };
     this.contentH = 0;
@@ -287,6 +316,10 @@ export default class Coordinator extends View {
     setShared("co.typing", [...typing]);
   }
 
+  setReplyCauses(causes) {
+    setShared("co.replyCauses", [...causes]);
+  }
+
   keepTyping(q, text) {
     this.typingTimers.get(q)?.cancel();
     const typing = this.typing();
@@ -315,7 +348,36 @@ export default class Coordinator extends View {
   }
 
   answers(drafts) {
-    return this.asks().flatMap((a, n) => (drafts.has(a.id) ? [{ n: n + 1, id: a.id, q: a.text, ...drafts.get(a.id) }] : []));
+    return this.asks().flatMap((a, n) => {
+      if (!drafts.has(a.id)) return [];
+      const draft = drafts.get(a.id);
+      // The answer carries the cause it was bound to when it was made,
+      // not the cause the board shows now: an alarm that was replaced in
+      // between is not acknowledged in the answer's place.
+      // The cause is the one the answer was bound to when it was made,
+      // and never the one the board shows now: an answer that was not
+      // bound carries no cause, so it acknowledges nothing.
+      return [{ n: n + 1, id: a.id, q: a.text, shown: a.cause ?? "", cause: answerCause(draft, a.cause), kind: draft.kind, text: draft.text }];
+    });
+  }
+
+  // An answer belongs to the alarm it was given for. When the alarm is
+  // replaced between the answer and the send, the answer is dropped and
+  // Shyam is told: sending it would answer the alarm that is there now,
+  // and he never answered that one. An answer that was never bound to a
+  // cause is dropped too, for the same reason: it cannot be shown to
+  // belong to the alarm that is there now.
+  dropStaleDrafts() {
+    const drafts = this.drafts();
+    const stale = [];
+    for (const [id, draft] of drafts) {
+      const shown = this.asks().find((a) => a.id === id)?.cause ?? "";
+      if (isStale(draft, shown)) stale.push(id);
+    }
+    if (!stale.length) return;
+    for (const id of stale) drafts.delete(id);
+    this.setDrafts(drafts);
+    notify({ title: "The answer was dropped", body: `${stale.length} answer(s) went to an alarm that changed. Choose the answer again.`, level: "warning" });
   }
 
   editor(q) {
@@ -394,14 +456,27 @@ export default class Coordinator extends View {
     cx.notify();
   }
 
+  // The cause of the ask as it is shown now. The answer is bound to it,
+  // and the cause is half of the alarm's key, so an alarm that is
+  // replaced between the answer and the send is not acknowledged in the
+  // answer's place.
+  causeOf(q) {
+    return this.asks().find((a) => a.id === q)?.cause ?? "";
+  }
+
   pick(q, choice, cx) {
     const list = this.asks();
     const at = list.findIndex((a) => a.id === q);
     if (at < 0) return;
     const drafts = this.drafts();
-    const same = drafts.get(q)?.kind === choice.kind && drafts.get(q).text === choice.text;
+    const cause = this.causeOf(q);
+    // The same choice for a cause that is not the one the draft was
+    // bound to is a new answer, for the cause that is shown now.
+    const same = drafts.get(q)?.kind === choice.kind
+      && drafts.get(q).text === choice.text
+      && (drafts.get(q)?.cause ?? "") === cause;
     if (same) drafts.delete(q);
-    else drafts.set(q, { kind: choice.kind, text: choice.text });
+    else drafts.set(q, { kind: choice.kind, text: choice.text, cause });
     this.setDrafts(drafts);
     this.keepTyping(q, "");
     this.editing.delete(q);
@@ -452,7 +527,23 @@ export default class Coordinator extends View {
   reply(q, cx) {
     const state = this.editor(q);
     const draft = this.drafts().get(q);
-    state.set_value(this.typing().get(q) ?? (draft?.kind === "reply" ? draft.text : ""));
+    const shown = this.causeOf(q);
+    const typed = this.typing().get(q);
+    const saved = this.replyCauses.get(q);
+    // The reply is bound to the cause it was started for. Text that was
+    // saved for another cause keeps that cause, so the answer is dropped
+    // instead of being sent for the alarm that is there now. Text saved
+    // without a cause is not restored at all: it cannot be bound to the
+    // alarm on the board now.
+    const { text, bound } = restored(draft, typed, saved, shown);
+    if (typed !== undefined && !text) {
+      const typing = this.typing();
+      typing.delete(q);
+      this.setTyping(typing);
+    }
+    this.replyCauses.set(q, bound);
+    this.setReplyCauses(this.replyCauses);
+    state.set_value(text);
     this.editing.add(q);
     cx.notify();
     cx.timer.after(60, () => state.focus());
@@ -461,7 +552,19 @@ export default class Coordinator extends View {
   commit(q, cx) {
     const text = this.editor(q).value().trim();
     const drafts = this.drafts();
-    if (text) drafts.set(q, { kind: "reply", text });
+    const bound = this.replyCauses.get(q);
+    if (text && bound === undefined) {
+      // A restored reply whose cause is not known: the alarm it belongs
+      // to may not be the one on the board now, so it is dropped rather
+      // than sent for an alarm nobody answered.
+      notify({ title: "The reply was dropped", body: "The reply was restored without the alarm it belongs to. Write it again.", level: "warning" });
+      const typing = this.typing();
+      typing.delete(q);
+      this.setTyping(typing);
+      drafts.delete(q);
+    } else if (text) {
+      drafts.set(q, { kind: "reply", text, cause: bound });
+    }
     else if (drafts.get(q)?.kind === "reply") drafts.delete(q);
     this.setDrafts(drafts);
     this.keepTyping(q, "");
@@ -476,7 +579,9 @@ export default class Coordinator extends View {
     for (const a of this.asks()) {
       const rec = a.choices.find((c) => c.rec);
       if (!rec || drafts.has(a.id) || decided[a.id]) continue;
-      drafts.set(a.id, { kind: rec.kind, text: rec.text });
+      // The answer is bound to the cause that is shown now, like every
+      // other answer.
+      drafts.set(a.id, { kind: rec.kind, text: rec.text, cause: a.cause ?? "" });
     }
     this.setDrafts(drafts);
     this.stepTo(this.asks().length, cx);
@@ -537,6 +642,7 @@ export default class Coordinator extends View {
   }
 
   send(cx) {
+    this.dropStaleDrafts();
     const text = this.message();
     const answered = this.answers(this.drafts());
     const typed = this.pop ? "" : draftText(this.input.content()).trim();
@@ -565,6 +671,10 @@ export default class Coordinator extends View {
           typing.delete(a.id);
           this.editing.delete(a.id);
           this.editors.get(a.id)?.set_value("");
+          // The answer is the acknowledgement: the alarm stays quiet for
+          // four hours. The shift reads the record, so the alarm comes
+          // back on its own when the four hours are over.
+          await acknowledgeAlarm(a.id, a.cause);
         }
         setShared("co.decided", decided);
         this.setDrafts(drafts);
