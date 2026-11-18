@@ -133,8 +133,7 @@ def gate_state(value):
     gatedHeads maps a head to its queue item, and to the record
     `{id, retries, at, givenUp, reviewer}` once a gate for the head has
     died without a verdict. The reviewer is the one the gate was launched
-    on, so a gate that died before it recorded one still moves down the
-    chain. A value written before that record is the bare queue item
+    on. A value written before that record is the bare queue item
     id, which is a head with no retry behind it.
     """
     if isinstance(value, dict):
@@ -1455,21 +1454,14 @@ def quota_failure(value):
 
 def selection_of(identity):
     """The selection a reviewer identity names, or None."""
-    for entry in model_list.entries("review"):
-        if model_list.identity(entry["selection"]) == identity:
-            return entry["selection"]
-    return None
+    return next((e["selection"] for e in model_list.entries("review")
+                 if model_list.identity(e["selection"]) == identity), None)
 
 
 def fallback_reviewer(queue, key, current, models=()):
-    """The next reviewer of a head that died without a verdict.
-
-    The reviewer is the next entry of the review list in models.json that
-    is not blocked and has not been tried for this head, so a head moves
-    down the chain once and never back to a reviewer it came from. The
-    blocked set is read fresh, so a block recorded after the choice was
-    made is seen here.
-    """
+    """The next reviewer of a head that died without a verdict: the next
+    entry of the review list that is not blocked and not tried for this
+    head. The blocked set is read fresh."""
     listed = [model_list.identity(e["selection"]) for e in model_list.entries("review")]
     if model_list.identity(current) not in listed:
         return None
@@ -1653,12 +1645,10 @@ def cmd_gatekeep(a):
                     continue
                 state = gate_state(heads.get(key))
                 retries = 0
+                retried = False
                 if key not in heads and model_list.is_blocked(args["modelSelection"]):
                     # The first reviewer was chosen before the locks were
-                    # taken, so a block recorded since then is seen here.
-                    # The choice is made again under the lock, so the head
-                    # is gated on a free reviewer, and a head with no free
-                    # reviewer waits.
+                    # taken, so it is checked again here and chosen again.
                     allowed = model_list.reviewers(event.get("builderModels", []))
                     if not allowed:
                         print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
@@ -1707,8 +1697,7 @@ def cmd_gatekeep(a):
                                "model": thread.get("model")}
                     if not current.get("instanceId") or not current.get("model"):
                         # A gate that died before it recorded a reviewer ran
-                        # on the reviewer the queue launched it on, so the
-                        # head moves down the chain instead of giving up.
+                        # on the reviewer the queue launched it on.
                         launched = selection_of(state.get("reviewer"))
                         if launched is not None:
                             current = launched
@@ -1718,37 +1707,40 @@ def cmd_gatekeep(a):
                             heads[key] = {**state, "givenUp": True}
                             save(queue)
                         continue
-                    if model_list.is_blocked(model):
-                        # A block landed between the choice and the queue
-                        # item, so the head waits for a free reviewer
-                        # instead of queueing a blocked one.
-                        print(f"waiting {event['pr']}: {model['instanceId']} {model['model']}"
-                              " is blocked", flush=True)
-                        continue
                     args["modelSelection"] = model
                     args["clientRequestId"] = key + ":" + model["model"] + ":retry"
                     print(f"regating {event['pr']}: {event['head'][:8]} (gate died without a verdict)", flush=True)
-                    if not a.dry_run:
-                        del heads[key]
-                        save(queue)
-                        del receipts[key]
-                        receipt_path = path("dispatch-receipts.json")
-                        with open(receipt_path + ".tmp", "w") as f:
-                            json.dump(receipts, f)
-                        os.replace(receipt_path + ".tmp", receipt_path)
+                    retried = True
                 attempted.add(key)
-                print(("would queue " if a.dry_run else "queued ") + key
-                      + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
-                      flush=True)
                 if a.dry_run:
+                    print("would queue " + key
+                          + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
+                          flush=True)
                     continue
                 item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
                         "title": args["title"], "priority": 5000, "builderModels": event.get("builderModels", [])}
                 queue["next"] += 1
                 queue["items"].append(item)
+                if model_list.is_blocked(args["modelSelection"]):
+                    # A block landed between the choice and the item, so the
+                    # item is taken back before it is written.
+                    queue["items"].pop()
+                    queue["next"] -= 1
+                    print(f"waiting {event['pr']}: {args['modelSelection']['instanceId']} "
+                          f"{args['modelSelection']['model']} is blocked", flush=True)
+                    continue
+                print("queued " + key
+                      + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
+                      flush=True)
                 heads[key] = {"id": item["id"], "retries": retries,
                               "at": time.time() if retries else None, "givenUp": False,
                               "reviewer": model_list.identity(args["modelSelection"])}
+                if retried:
+                    receipts.pop(key, None)
+                    receipt_path = path("dispatch-receipts.json")
+                    with open(receipt_path + ".tmp", "w") as f:
+                        json.dump(receipts, f)
+                    os.replace(receipt_path + ".tmp", receipt_path)
                 save(queue)
         write_counts(counts, seen, stuck, a.dry_run)
     except gh_gateway.ApiBudgetExhausted as e:
