@@ -71,6 +71,16 @@ class ScopeTest(unittest.TestCase):
                                ["coordinator/bin/close_check.py"])
         self.assertFalse(ok)
 
+    def test_the_ticket_may_allow_its_own_tests_to_change(self):
+        check = close_check()
+        allowed = check.item_scope(
+            "The change is in close_check.py. Existing tests that pin it may change only as "
+            "far as this needs.", ["tests/test_alarm_panel.py"])
+        self.assertEqual(allowed["status"], check.PASS)
+        denied = check.item_scope("The change is in close_check.py.",
+                                  ["tests/test_alarm_panel.py"])
+        self.assertEqual(denied["status"], check.FAIL)
+
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
         item = check.item_scope("The change is in lane_driver.py.",
@@ -89,15 +99,24 @@ class ScopeTest(unittest.TestCase):
         """The ticket is the only authority for the scope.
 
         A ticket limited to one file plus a pull request that declares a
-        different file must not let that file through: the pull request
-        cannot authorize work the ticket never asked for.
+        second file must not let that second file through: nothing in the
+        pull request is read for the scope, so the change the pull request
+        declares is judged against the ticket and fails.
         """
         check = close_check()
         ticket = "The change is in lane_driver.py."
-        pull_request = "**Scope.** `unrelated.py`."
-        item = check.item_scope(ticket, ["coordinator/unrelated.py"])
-        self.assertEqual(item["status"], check.FAIL)
-        self.assertIn("coordinator/unrelated.py", item["detail"])
+        pull_request = "**Scope.** `coordinator/overnight/lane_driver.py`, `coordinator/unrelated.py`."
+        items = check.checklist(ticket, pull_request,
+                                ["coordinator/overnight/lane_driver.py", "coordinator/unrelated.py"],
+                                "found",
+                                "| Check | Command | Result |\n| --- | --- | --- |\n"
+                                "| lane selection | `x` | passed |",
+                                "evidence/MO-1077/check-proof.md", "absent")
+        scope = items[0]
+        self.assertEqual(scope["status"], check.FAIL)
+        self.assertIn("coordinator/unrelated.py", scope["detail"])
+        self.assertNotIn("lane_driver.py, ", scope["detail"])
+        self.assertEqual([item["item"] for item in check.blocking(items)], ["scope"])
 
     def test_a_home_path_is_not_a_path_in_this_repository(self):
         check = close_check()
