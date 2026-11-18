@@ -54,12 +54,34 @@ DEAD_OPUS_GATE = {"thread": {"status": "failed", "providerInstanceId": "claudeAg
 VERDICT_GATE = {"thread": {"status": "completed"},
                 "items": [{"type": "assistant_message",
                            "text": f"CHECK: PASS {HEAD}\nVERDICT: PASS"}]}
+NO_CREDITS = "You have no credits left on this plan; it resets in 30 minutes."
 
 
 def recorded_no_credits():
     """The recorded gate run of 2026-11-17 whose provider ran out of credits."""
     with open(FIXTURES / "codex-astra-no-credits.json") as f:
         return json.load(f)
+
+
+def utc_text(seconds_from_now):
+    """A recorded time the provider would write, that many seconds from now."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                        time.gmtime(time.time() + seconds_from_now))
+
+
+def gate_failed_ago(seconds_ago, message=NO_CREDITS, run_id="run-late-1"):
+    """A gate whose run failed `seconds_ago`, read for the first time now."""
+    error = {"code": "usage_limit", "message": message}
+    return {"thread": {"threadId": "gate-late", "status": "failed",
+                       "providerInstanceId": "codex", "model": "gpt-6.2-astra",
+                       "latestRunId": run_id, "error": error,
+                       "updatedAt": utc_text(0)},
+            "items": [{"type": "user_message", "text": "review"}],
+            "recentRuns": [{"runId": run_id, "status": "failed",
+                             "executedModel": "gpt-6.2-astra",
+                             "startedAt": utc_text(-seconds_ago - 120),
+                             "completedAt": utc_text(-seconds_ago),
+                             "error": error}]}
 
 
 coordq = None
@@ -360,6 +382,109 @@ class BlockedReviewerTest(ReplayBase):
         for text in ("syntax error", "the diff does not build"):
             with self.subTest(text=text):
                 self.assertIsNone(gate_reviewers.blocking_until({"error": {"message": text}}))
+
+
+class LateReadWindowTest(ReplayBase):
+    """A failure read long after it happened holds only what is left.
+
+    The recorded review: the error says the plan resets in 30 minutes, it
+    happened at 10:00, and the queue first reads it at 10:25. The reset was
+    10:30, so the block ends at 10:30 and not at 10:55, and a failure read
+    after its window closed blocks nobody at all.
+    """
+
+    def test_a_failure_read_late_holds_the_reviewer_for_what_is_left(self):
+        self.gate = gate_failed_ago(25 * 60)
+        self.write_queue(heads={self.key: 4})
+        self.run_gatekeep()
+        records = self.blocked_records()
+        self.assertEqual(list(records), [identity(CHAIN_HEAD)])
+        # Five minutes of the window are left, not another thirty.
+        self.assertAlmostEqual(records[identity(CHAIN_HEAD)]["until"] - time.time(),
+                               300, delta=30)
+        lines = [line for line in self.log_lines() if "blocked until" in line]
+        self.assertEqual(len(lines), 1)
+
+    def test_a_window_that_closed_before_the_read_blocks_nobody(self):
+        # Failed 40 minutes ago, so the 30 minute reset it named ended already.
+        self.gate = gate_failed_ago(40 * 60)
+        self.write_queue(heads={self.key: {"id": 4, "retries": 0, "at": None,
+                                           "givenUp": False}})
+        out, _ = self.run_gatekeep()
+        self.assertEqual(self.blocked_records(), {})
+        self.assertEqual([line for line in self.log_lines() if "blocked" in line], [])
+        # The reviewer is free, so the chain still starts where it always does
+        # and the dead gate moves one place down it.
+        self.assertEqual(coordq.reviewer_model([]), CHAIN_HEAD)
+        self.assertEqual(coordq.starting_reviewer(), CHAIN_HEAD)
+        items = self.gate_items()
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["args"]["modelSelection"], NEXT_REVIEWER)
+        self.assertNotIn("every gate reviewer is blocked", out)
+
+    def test_a_window_with_no_stated_end_also_runs_from_the_failure(self):
+        message = "usage limit reached"
+        self.gate = gate_failed_ago(90 * 60, message)
+        self.assertIsNone(gate_reviewers.blocking_until(self.gate))
+        self.gate = gate_failed_ago(10 * 60, message)
+        # Fifty minutes of the hour are left, not a fresh hour.
+        self.assertAlmostEqual(gate_reviewers.blocking_until(self.gate) - time.time(),
+                               3000, delta=30)
+
+    def test_the_run_time_is_read_before_the_thread_time(self):
+        # The thread was updated now, the run failed 25 minutes ago. The run
+        # carries the error, so the run carries the clock too.
+        self.gate = gate_failed_ago(25 * 60)
+        self.assertAlmostEqual(gate_reviewers.blocking_until(self.gate) - time.time(),
+                               300, delta=30)
+
+    def test_a_failure_that_names_no_time_still_holds_its_stated_window(self):
+        # A dispatch refused before any run exists says only what the provider
+        # said, so there is no run clock and the window starts at this read.
+        until = gate_reviewers.blocking_until({"error": {"message": NO_CREDITS}})
+        self.assertAlmostEqual(until - time.time(), 1800, delta=30)
+        until = gate_reviewers.blocking_until({"error": {"message": "usage limit"}})
+        self.assertAlmostEqual(until - time.time(), 3600, delta=30)
+
+    def test_a_local_window_is_clamped_to_this_read(self):
+        # A run whose recorded end is in the future, because the two clocks
+        # disagree, holds no longer than its window from this read.
+        future = gate_failed_ago(-600)
+        self.assertAlmostEqual(gate_reviewers.blocking_until(future) - time.time(),
+                               1800, delta=30)
+
+    def test_a_recorded_time_reads_as_epoch_seconds(self):
+        self.assertEqual(gate_reviewers.parse_time("1970-01-01T00:01:40Z"), 100)
+        self.assertEqual(gate_reviewers.parse_time("1970-01-01T00:01:40+00:00"), 100)
+        self.assertEqual(gate_reviewers.parse_time(100.5), 100.5)
+        for value in (None, "", "  ", "soon", True, False, {}, [], float("nan"),
+                      float("inf")):
+            with self.subTest(value=value):
+                self.assertIsNone(gate_reviewers.parse_time(value))
+
+    def test_the_same_failure_read_twice_holds_the_same_end(self):
+        # A block written and then read again, after the queue record was lost
+        # midway, must not move the end or print a second line.
+        self.gate = gate_failed_ago(25 * 60)
+        first = coordq.block_failed_reviewer(CHAIN_HEAD, self.gate)
+        second = coordq.block_failed_reviewer(CHAIN_HEAD, self.gate)
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(self.blocked_records()[identity(CHAIN_HEAD)]["until"], first)
+        lines = [line for line in self.log_lines() if "blocked until" in line]
+        self.assertEqual(len(lines), 1)
+
+    def test_a_block_that_never_ends_is_released(self):
+        # A record whose end is not a finite time neither blocks nor expires
+        # on its own, so it is read as ended and dropped like an expired one.
+        now = time.time()
+        for until in (float("nan"), float("inf"), "soon", True):
+            with self.subTest(until=until):
+                self.write_blocked({identity(CHAIN_HEAD): {"until": until, "at": now}})
+                self.write_queue()
+                self.run_gatekeep()
+                self.assertEqual(self.blocked_records(), {})
+                self.assertEqual(coordq.starting_reviewer(), CHAIN_HEAD)
 
 
 if __name__ == "__main__":

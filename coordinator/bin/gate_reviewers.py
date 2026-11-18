@@ -4,11 +4,18 @@ A gate that ends without a verdict moves down this chain once. A reviewer that
 fails with a blocking provider error is blocked for every head until its
 window ends, and a new gate starts on the next reviewer meanwhile. The block
 is one small file beside the queue, replaced whole rather than edited in
-place, and its two callers write it while they hold the queue lock."""
+place, and its two callers write it while they hold the queue lock.
+
+The window runs from the moment the run failed, not from the moment this
+process first reads the failure: a gate can fail at 10:00 and be read at
+10:25, and a block measured from the read would hold the reviewer 25 minutes
+past the reset the provider named."""
 import json
+import math
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 REVIEWER_CHAIN = (
     {"instanceId": "codex", "model": "gpt-6.2-astra"},
@@ -50,6 +57,10 @@ RESET = re.compile(r"(?:resets?|try again|retry|available|back)\s+(?:in|after)\s
                    r"(\d+(?:\.\d+)?)\s*(second|minute|hour)s?", re.IGNORECASE)
 UNITS = {"second": 1.0, "minute": 60.0, "hour": 3600.0}
 
+# The moment a failed run failed, read in this order: the time it completed,
+# a run record that was updated without one, and its start.
+FAILED_AT_FIELDS = ("completedAt", "updatedAt", "startedAt")
+
 
 def identity(selection):
     """The name of one reviewer: the provider and the model together."""
@@ -78,10 +89,14 @@ def write(records, directory=None):
 
 
 def until_of(record):
-    """The time one record's block ends, or None for a record that cannot be read."""
+    """The time one record's block ends, or None for a record that cannot be read.
+
+    A record whose end is not a finite time reads as no end at all, so it is
+    released like an expired one instead of holding the reviewer forever: a
+    JSON `NaN` compares false against every deadline and would never expire."""
     until = record.get("until") if isinstance(record, dict) else None
     if isinstance(until, (int, float)) and not isinstance(until, bool):
-        return float(until)
+        return float(until) if math.isfinite(until) else None
     return None
 
 
@@ -182,18 +197,57 @@ def provider_refusal(code, message):
     return any(marker in lowered for marker in BLOCK_MARKERS)
 
 
+def parse_time(value):
+    """A recorded time as epoch seconds, or None for a value that is no time."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(value) else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def failed_at(value):
+    """When the failed run a value names failed, or None when it does not say.
+
+    The run's own record is read before the thread's, so the time and the
+    error come from the same run whenever the run is there."""
+    if not isinstance(value, dict):
+        return None
+    thread = value.get("thread") if isinstance(value.get("thread"), dict) else {}
+    for source in (failure_of(value) or {}, thread):
+        for field in FAILED_AT_FIELDS:
+            seconds = parse_time(source.get(field))
+            if seconds is not None:
+                return seconds
+    return None
+
+
 def blocking_until(value, now=None):
     """The time a blocking provider error lifts, or None for any other end.
 
     A provider that says when it comes back sets the end; any other blocking
-    error holds the reviewer for BLOCK_SECONDS."""
+    error holds the reviewer for BLOCK_SECONDS. Both windows start when the
+    run failed, so a failure read long after it happened holds the reviewer
+    for what is left of the window it named and not a minute more. A window
+    that closed before this read has already ended, so it blocks nobody."""
     now = time.time() if now is None else now
     code, message = error_fields(value)
     if not provider_refusal(code, message):
         return None
+    seconds = BLOCK_SECONDS
     match = RESET.search(message)
     if match:
-        seconds = float(match.group(1)) * UNITS[match.group(2).lower()]
-        if seconds > 0:
-            return now + seconds
-    return now + BLOCK_SECONDS
+        named = float(match.group(1)) * UNITS[match.group(2).lower()]
+        if named > 0:
+            seconds = named
+    start = failed_at(value)
+    until = (now if start is None else min(start, now)) + seconds
+    return until if until > now else None
