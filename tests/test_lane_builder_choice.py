@@ -160,6 +160,26 @@ class BuilderChoice(unittest.TestCase):
         self.assertEqual(payload["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
+    def test_a_worktree_whose_branch_cannot_be_read_takes_no_send(self):
+        # The branch read answers nothing, so the worktree is not
+        # confirmed to be outside herdr: it takes no send and no handoff.
+        out, payload = self.launch(self.thread(MINIMAX), branch="")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_worktree_whose_branch_cannot_be_read_is_never_handed_off(self):
+        out, payload = self.launch(self.thread(SOL), branch="")
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_failed_branch_read_bars_the_worktree(self):
+        # The git call itself times out, so the destination is not confirmed.
+        def run(cmd, timeout=150):
+            raise self.lane.subprocess.TimeoutExpired(cmd, timeout)
+        with patch.object(self.lane, "run", run):
+            self.assertTrue(self.lane.barred_worktree("/fixture/worktree"))
+
     def test_a_missing_worktree_on_a_blocked_builder_is_never_handed_off(self):
         # The thread's provider is blocked and its worktree is gone from
         # disk, so the work starts on the verified PR branch instead.
@@ -229,7 +249,7 @@ class DeadRunChoice(unittest.TestCase):
         self.lane.DRY = False
         self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
 
-    def relaunch(self, model, messages, builder_label=None, stopped_run="run-1"):
+    def relaunch(self, model, messages, builder_label=None, stopped_run="run-1", branch="builder/fixture"):
         """Replay one dead run and return the model of the relaunch."""
         thread = {"threadId": "fixture-dead", "title": "MO-7 build", "settled": False,
                   "providerInstanceId": model["instanceId"], "model": model["model"],
@@ -249,6 +269,8 @@ class DeadRunChoice(unittest.TestCase):
             raise AssertionError(f"unexpected T3 call {tool}")
 
         def run(cmd, timeout=150):
+            if cmd[0] == "git" and "--abbrev-ref" in cmd:
+                return branch
             if cmd[0] == "git":
                 return "worktree /fixture/worktree\n"
             launches.append(json.loads(cmd[2]))
@@ -278,6 +300,14 @@ class DeadRunChoice(unittest.TestCase):
         messages = [{"type": "assistant_message", "runId": "run-1",
                      "text": "the gate ended without a verdict; its quota was never read"}]
         self.assertEqual(self.relaunch(MINIMAX, messages), MINIMAX)
+
+    def test_a_dead_run_in_a_herdr_worktree_is_never_relaunched(self):
+        # The stopped builder's registered worktree is on a herdr branch,
+        # which is Shyam's to merge, so no builder starts there.
+        self.assertIsNone(self.relaunch(MINIMAX, [], branch="herdr/gh-trim"))
+
+    def test_a_dead_run_in_a_worktree_with_an_unreadable_branch_is_never_relaunched(self):
+        self.assertIsNone(self.relaunch(MINIMAX, [], branch=""))
 
     def test_a_provider_failure_names_the_builder_as_out(self):
         messages = [{"type": "provider_error", "runId": "run-1", "text": "429 rate limit reached"}]
