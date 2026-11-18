@@ -31,6 +31,12 @@ def load_cleaner():
 cleaner = load_cleaner()
 
 
+def git_bytes(repo: Path, *args: str) -> bytes:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, check=True
+    ).stdout
+
+
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
@@ -51,6 +57,14 @@ def commit(repo: Path, name: str, content: str) -> None:
         text=True,
         check=True,
     )
+
+
+def agents_bootstrap(repo: Path) -> bool:
+    """Call the cleaner across its signature changes."""
+    try:
+        return cleaner.agents_only_rules(repo)
+    except TypeError:
+        return cleaner.agents_only_rules(repo, untracked=False)
 
 
 class StatusColumnsTest(unittest.TestCase):
@@ -79,7 +93,7 @@ class AgentsBootstrapTest(unittest.TestCase):
         git(self.repo, "init", "-b", "main")
         git(self.repo, "config", "user.name", "Fixture")
         git(self.repo, "config", "user.email", "fixture@example.test")
-        commit(self.repo, "AGENTS.md", "# Repository rules\n")
+        commit(self.repo, "AGENTS.md", "# Repository rules\n\n")
         self.block = RULES.read_text(encoding="utf-8")
 
     def tearDown(self):
@@ -91,23 +105,23 @@ class AgentsBootstrapTest(unittest.TestCase):
 
     def test_exact_block_is_bootstrap(self):
         self.append(self.block)
-        self.assertTrue(cleaner.agents_only_rules(self.repo, untracked=False))
+        self.assertTrue(agents_bootstrap(self.repo))
 
     def test_block_plus_genuine_line_is_real_work(self):
         self.append(self.block + "++ genuine edit\n")
-        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+        self.assertFalse(agents_bootstrap(self.repo))
 
     def test_single_rule_is_real_work(self):
         self.append("- CI is agent checks only: no Woodpecker, no GitHub Actions.\n")
-        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+        self.assertFalse(agents_bootstrap(self.repo))
 
     def test_genuine_line_before_block_is_real_work(self):
         self.append("++ genuine edit\n" + self.block)
-        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+        self.assertFalse(agents_bootstrap(self.repo))
 
     def test_user_heading_between_file_and_block_is_real_work(self):
         self.append("# My own heading\n" + self.block)
-        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+        self.assertFalse(agents_bootstrap(self.repo))
 
     def test_staged_genuine_edit_is_real_work(self):
         with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
@@ -116,17 +130,32 @@ class AgentsBootstrapTest(unittest.TestCase):
         head = git(self.repo, "show", "HEAD:AGENTS.md")
         with (self.repo / "AGENTS.md").open("w", encoding="utf-8") as handle:
             handle.write(head + self.block)
-        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+        self.assertFalse(agents_bootstrap(self.repo))
 
     def test_mode_change_is_real_work(self):
         self.append(self.block)
         os.chmod(self.repo / "AGENTS.md", 0o755)
-        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+        self.assertFalse(agents_bootstrap(self.repo))
 
     def test_staged_mode_change_is_real_work(self):
         self.append(self.block)
         git(self.repo, "update-index", "--chmod=+x", "AGENTS.md")
-        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+        self.assertFalse(agents_bootstrap(self.repo))
+
+    def test_removed_trailing_newline_is_real_work(self):
+        # The committed file ends in two newlines. Removing one of them and
+        # appending the block is an edit, not the bootstrap.
+        head = git_bytes(self.repo, "show", "HEAD:AGENTS.md")
+        self.assertTrue(head.endswith(b"\n\n"))
+        with (self.repo / "AGENTS.md").open("wb") as handle:
+            handle.write(head.rstrip(b"\n") + b"\n" + self.block.encode("utf-8"))
+        self.assertFalse(agents_bootstrap(self.repo))
+
+    def test_line_ending_change_is_real_work(self):
+        head = git_bytes(self.repo, "show", "HEAD:AGENTS.md")
+        with (self.repo / "AGENTS.md").open("wb") as handle:
+            handle.write(head.replace(b"\n", b"\r\n") + self.block.encode("utf-8"))
+        self.assertFalse(agents_bootstrap(self.repo))
 
 
 class DefaultBranchTest(unittest.TestCase):
@@ -166,14 +195,28 @@ class DefaultBranchTest(unittest.TestCase):
         self.assertTrue(cleaner.on_default_branch(self.repo, main_head, refs))
 
     def test_stale_origin_head_grants_nothing(self):
-        # The default branch moved from master to main, but origin/HEAD still
-        # points at master. A stale ref must not qualify a worktree.
         git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
         github = cleaner.GitHub()
         github.default_branch = lambda repo: None
         self.assertEqual(cleaner.default_branch_refs(self.repo, github, "fixture/repo"), [])
         row = {"head": self.master_head, "unpushed": 0, "remote_commit_present": True}
         self.assertFalse(cleaner.published_on_default_branch(row, self.repo, []))
+
+    def test_valid_branch_names_are_accepted(self):
+        if not hasattr(cleaner, "valid_branch_name"):
+            self.fail("the cleaner rejects valid branch names")
+        self.assertTrue(cleaner.valid_branch_name("main"))
+        self.assertTrue(cleaner.valid_branch_name("release/main"))
+        self.assertTrue(cleaner.valid_branch_name("release-1.2"))
+        self.assertFalse(cleaner.valid_branch_name(""))
+        self.assertFalse(cleaner.valid_branch_name("bad name"))
+        self.assertFalse(cleaner.valid_branch_name("bad..name"))
+        self.assertFalse(cleaner.valid_branch_name("/leading"))
+        self.assertFalse(cleaner.valid_branch_name("trailing/"))
+        self.assertFalse(cleaner.valid_branch_name("name.lock"))
+        github = cleaner.GitHub()
+        github.default_branch = lambda repo: "release/main"
+        self.assertEqual(cleaner.default_branch_refs(self.repo, github, "fixture/repo"), ["refs/remotes/origin/release/main"])
 
 
 if __name__ == "__main__":
