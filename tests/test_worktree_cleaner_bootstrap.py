@@ -823,6 +823,21 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         # The classification path must not block on it either.
         self.assertFalse(cleaner.agents_only_rules(repo))
 
+    def test_a_changed_head_is_detected(self):
+        # A commit made after the scan moves the head, and the removal has to
+        # notice before git removes the worktree with the new commit in it.
+        repo = Path(self.tmp.name) / "head-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        commit(repo, "a.txt", "a\n")
+        first = git(repo, "rev-parse", "HEAD")
+        commit(repo, "b.txt", "b\n")
+        second = git(repo, "rev-parse", "HEAD")
+        self.assertFalse(cleaner._head_matches(repo, first))
+        self.assertTrue(cleaner._head_matches(repo, second))
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
