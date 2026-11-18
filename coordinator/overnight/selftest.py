@@ -542,7 +542,12 @@ def no_parking(status="interrupted"):
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
-    ledger = {f"fix:{repo}#20:old1": "sent", f"fix:{repo}#20:old2": "sent"}
+    # Earlier lane work on this pull request that was not a review round:
+    # the lane nudged the builder twice and the builder answered. A fix
+    # round would be a review round, and two of those are the reviews
+    # the convergence rule leaves for this pull request, so the capped
+    # case is asserted in the gate-round-cap eval and not here.
+    ledger = {f"continue:{repo}#20:old1": "sent", f"continue:{repo}#20:old2": "sent"}
     snapshot = {"repos": {repo: {"prs": [dict(number=20, state="OPEN", headRefOid=head,
         body=f"Builder check: PASS {head}", mergeable="MERGEABLE")],
         "issues": [dict(number=10, labels=[])]}}}
@@ -580,7 +585,8 @@ def no_parking(status="interrupted"):
         lane.act_on_pr(repo, 20, ledger)
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix", "continue", "fix", "continue"])
-        exact(sorted(ledger), sorted([f"fix:{repo}#20:{h}" for h in ["old1", "old2", head, "b" * 40]] +
+        exact(sorted(ledger), sorted([f"continue:{repo}#20:{h}" for h in ["old1", "old2"]] +
+                                    [f"fix:{repo}#20:{h}" for h in [head, "b" * 40]] +
                                     [f"continue:{repo}#20:{h}" for h in [head, "b" * 40]] +
                                     [f"rounds:{repo}#20"]))
     try:
@@ -1516,7 +1522,7 @@ def gate_round_cap():
     with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board:
 
         def command(cmd, timeout=150):
-            if cmd == ["gh", "pr", "view", "20", "-R", repo, "--json", "state,mergedAt"]:
+            if cmd[:3] == ["gh", "pr", "view"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             raise AssertionError(f"unexpected command: {cmd}")
 
@@ -1531,19 +1537,23 @@ def gate_round_cap():
             ledger[lkey] = "sent"
             return "sent"
 
-        ledger = {}
-        for head in heads:
-            pr = dict(number=20, state="OPEN", headRefOid=head,
+        def act(number, head, ledger, verdict=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL")):
+            """Run the lane over one pull request at one head."""
+            pr = dict(number=number, state="OPEN", headRefOid=head,
                       body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
             snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
             with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
-                 patch.object(lane, "gate_verdict", return_value=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL")), \
-                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "gate_verdict", return_value=verdict), \
+                 patch.object(lane, "read_json", return_value=dict(number=number, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch.object(lane, "send", send):
-                lane.act_on_pr(repo, 20, ledger)
+                return lane.act_on_pr(repo, number, ledger)
+
+        ledger = {}
+        for head in heads:
+            act(20, head, ledger)
         # Two fix rounds: the answers to the first and the second review.
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
         # The third failed review and the fourth raise one decisions item
@@ -1556,6 +1566,20 @@ def gate_round_cap():
         # The fix rounds of the pull request are its failed reviews before
         # the one in hand.
         exact(lane.failed_reviews(repo, 20, ledger), (4, heads[3]))
+        # A new head after the cap gets no 4th review. The lane asks no
+        # reviewer for a model or for a brief, so no such command runs,
+        # and no fix round is sent.
+        result = act(20, "e" * 40, ledger, verdict=("absent", None, ""))
+        exact(result.startswith("skip #20:"), True)
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        # A pull request that two earlier lane sessions already sent two
+        # fix rounds to has had two reviews. The third failed review
+        # raises the decisions item, and no third fix round is sent.
+        earlier = {f"fix:{repo}#21:{heads[0]}": "sent", f"fix:{repo}#21:{heads[1]}": "sent"}
+        result = act(21, heads[2], earlier)
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        exact(lane.failed_reviews(repo, 21, earlier), (3, heads[2]))
+        exact(result.endswith("one decisions item is on the board"), True)
 
 
 def decisions_board_guard():
