@@ -60,6 +60,7 @@ class SimulatorOwnerTests(unittest.TestCase):
             kill=lambda pid, signum: killed.append((pid, signum)),
             sleep=lambda seconds: None,
             clock=clock,
+            identity_reader=lambda pid: (os.getuid(), "1.000000"),
         )
         self.assertEqual(result["stopped"], 2)
         self.assertEqual(result["devices"], [DEVICE_B])
@@ -77,6 +78,40 @@ class SimulatorOwnerTests(unittest.TestCase):
             kill=lambda pid, signum: killed.append((pid, signum)),
             sleep=lambda seconds: None,
             clock=lambda: 0.0,
+            identity_reader=lambda pid: (os.getuid(), "1.000000"),
+        )
+        self.assertEqual(result["stopped"], 0)
+        self.assertEqual(killed, [])
+
+    def test_a_device_that_starts_booting_during_the_sweep_is_left_alone(self):
+        rows = [launchd_row(10, DEVICE_A), app_row(11, 10)]
+        killed = []
+        readings = [{DEVICE_A: "runtime-a"}, {}]
+
+        def booted_reader():
+            return readings.pop(0) if readings else {DEVICE_A: "runtime-a"}
+
+        result = heavy.stop_orphan_simulator_processes(
+            booted_reader=booted_reader,
+            rows_reader=lambda: rows,
+            kill=lambda pid, signum: killed.append((pid, signum)),
+            sleep=lambda seconds: None,
+            clock=lambda: 0.0,
+            identity_reader=lambda pid: (os.getuid(), "1.000000"),
+        )
+        self.assertEqual(result["stopped"], 0)
+        self.assertEqual(killed, [])
+
+    def test_a_process_whose_identity_cannot_be_read_is_not_killed(self):
+        rows = [launchd_row(10, DEVICE_B)]
+        killed = []
+        result = heavy.stop_orphan_simulator_processes(
+            booted_reader=lambda: {},
+            rows_reader=lambda: rows,
+            kill=lambda pid, signum: killed.append((pid, signum)),
+            sleep=lambda seconds: None,
+            clock=lambda: 0.0,
+            identity_reader=lambda pid: None,
         )
         self.assertEqual(result["stopped"], 0)
         self.assertEqual(killed, [])
@@ -161,6 +196,29 @@ class SimulatorShutdownTests(unittest.TestCase):
         result = heavy.shutdown_simulators_booted_by_job(
             record,
             other_records=[other],
+            booted_reader=lambda: {DEVICE_A: "runtime-a"},
+            rows_reader=lambda: rows,
+            epochs_reader=lambda table: {DEVICE_A: 1100.0},
+            shutdown=lambda udid: stopped.append(udid) or True,
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(stopped, [])
+
+    def test_cleanup_stops_when_the_competing_jobs_cannot_be_read(self):
+        rows = [launchd_row(10, DEVICE_A)]
+        stopped = []
+        record = {
+            "job_id": "0" * 31 + "3",
+            "task_id": "task",
+            "simulators": {"booted": [], "started_at": 1000.0},
+        }
+
+        def failing_reader():
+            raise RuntimeError("registry unavailable")
+
+        result = heavy.shutdown_simulators_booted_by_job(
+            record,
+            other_records_reader=failing_reader,
             booted_reader=lambda: {DEVICE_A: "runtime-a"},
             rows_reader=lambda: rows,
             epochs_reader=lambda table: {DEVICE_A: 1100.0},
