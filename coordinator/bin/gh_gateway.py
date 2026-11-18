@@ -617,6 +617,9 @@ SHORT_BOOLEAN = {
     ("pr", "review"): {"-a", "-c", "-r"},
     # `-d` is `--draft`, `-f` is `--fill` and `-w` is `--web`.
     ("pr", "create"): {"-d", "-f", "-w", "-e"},
+    # `gh issue create`: `-e` opens the editor and `-w` the browser; neither
+    # takes a value there either.
+    ("issue", "create"): {"-e", "-w"},
 }
 SHORT_VALUE = {
     # `-b` is `--branch string` for `run list`, not a boolean.
