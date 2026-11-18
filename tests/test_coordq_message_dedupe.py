@@ -167,6 +167,34 @@ class MessageDedupeTests(unittest.TestCase):
         self.assertEqual(refused.exception.code, 1)
         self.assertEqual(self.q.load()["items"], [])
 
+    def test_a_message_a_later_one_replaced_is_real_work_again(self):
+        # The finding: A finishes, B starts on the same thread, so the thread is
+        # live again. Asking for A again is real work, not a copy of B.
+        now = self.q.time.time()
+        self.q.save({"next": 3, "items": [], "started": [
+            {"id": 1, "title": TITLE, "target": THREAD, "thread": THREAD,
+             "actionKey": "", "at": now - 60},
+            {"id": 2, "title": "MO#544 check", "target": THREAD, "thread": THREAD,
+             "actionKey": "", "at": now}]})
+        with patch.object(self.q, "active_thread_ids", return_value={THREAD}):
+            code, err = self.start()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.q.load()["items"]), 1)
+
+    def test_the_latest_message_on_a_live_thread_is_still_refused(self):
+        # The same sequence asked the other way round: the message the thread
+        # is working now is still a duplicate.
+        now = self.q.time.time()
+        self.q.save({"next": 3, "items": [], "started": [
+            {"id": 1, "title": TITLE, "target": THREAD, "thread": THREAD,
+             "actionKey": "", "at": now - 60},
+            {"id": 2, "title": "MO#544 check", "target": THREAD, "thread": THREAD,
+             "actionKey": "", "at": now}]})
+        with patch.object(self.q, "active_thread_ids", return_value={THREAD}):
+            code, err = self.start(title="MO#544 check")
+        self.assertEqual(code, 1)
+        self.assertIn("already started as coordq #2", err)
+
     def test_a_started_message_whose_thread_stopped_goes_out(self):
         # The builder finished the work, so the message it took is spent and
         # the next pass may queue it again.

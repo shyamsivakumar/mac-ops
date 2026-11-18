@@ -334,13 +334,39 @@ def prune_messages(queue, live_ids=None):
     return changed
 
 
+def dispatch_is_active(queue, record):
+    """Whether a started record is the dispatch running on its thread now.
+
+    A thread runs one message at a time, so a later message started on the
+    same thread makes the earlier one spent: the thread moved on, and a caller
+    asking for the earlier message again is asking for real work. A record
+    whose thread is not known yet (a launch whose reply carried none) cannot
+    be ordered against another, so it stays active.
+    """
+    thread = record.get("thread") or ""
+    if not thread:
+        return True
+    at = record.get("at") or 0
+    for other in queue.get("started") or []:
+        if other is record or not isinstance(other, dict):
+            continue
+        if other.get("thread") != thread:
+            continue
+        later = other.get("at") or 0
+        if later > at or (later == at and (other.get("id") or 0) > (record.get("id") or 0)):
+            return False
+    return True
+
+
 def duplicate_message(queue, title, target, key="", live_ids=None, started_before=None):
     """The queued or running item that already carries this message, or None.
 
-    A started message counts while the thread that took it is live: the
-    same message is then already being worked. An unreadable thread list
-    counts it too, because a refused start costs one attempt while a second
-    copy of the message costs a second thread on the same work.
+    A started message counts while the thread that took it is live, and only
+    while it is the latest message started on that thread: once a later
+    message starts there, the earlier one is spent and asking for it again is
+    real work. An unreadable thread list counts a record too, because a refused
+    start costs one attempt while a second copy of the message costs a second
+    thread on the same work.
 
     An action key names one board action, and a new head is a new action on
     the same thread, so two different keys are two messages. A message with
@@ -361,6 +387,10 @@ def duplicate_message(queue, title, target, key="", live_ids=None, started_befor
         if (record.get("title"), record.get("target")) != (title, target):
             continue
         if key and record.get("actionKey") and record["actionKey"] != key:
+            continue
+        if not dispatch_is_active(queue, record):
+            # A later message started on this thread, so this one is spent and
+            # asking for it again is real work.
             continue
         if live_ids is None:
             # An unreadable thread list cannot say a thread stopped.
