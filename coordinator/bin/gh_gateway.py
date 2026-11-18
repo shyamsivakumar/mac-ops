@@ -713,15 +713,6 @@ def parse_options(argv):
     return options, positionals, ordered
 
 
-def looks_like_repo(value):
-    """True when a word has the shape of `OWNER/REPO` or `HOST/OWNER/REPO`."""
-    text = str(value or "")
-    if not text or text.startswith("-"):
-        return False
-    parts = text.split("/")
-    return 2 <= len(parts) <= 3 and all(part.strip() for part in parts)
-
-
 def argv_host(argv):
     """Return the host a command targets, or "" when it names none.
 
