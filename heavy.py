@@ -2279,6 +2279,17 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _process_identity(pid: int) -> Optional[Tuple[int, str]]:
+    """Return the uid and start token of a process, or None when it cannot be read."""
+    try:
+        info = _native_process_info(pid)
+    except HeavyError:
+        return None
+    if info is None:
+        return None
+    return (info.uid, info.start_token)
+
+
 def stop_orphan_simulator_processes(
     *,
     booted_reader: Callable[[], Dict[str, str]] = simulator_booted_devices,
@@ -2286,37 +2297,59 @@ def stop_orphan_simulator_processes(
     kill: Callable[[int, int], None] = os.kill,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = monotonic,
+    identity_reader: Callable[[int], Optional[Tuple[int, str]]] = _process_identity,
 ) -> Dict[str, Any]:
     """Stop simulator processes that belong to no booted device.
 
     A simulator process is an orphan when the device that owns it is not booted.
-    Processes of a booted device are never touched.
+    Processes of a booted device are never touched. The booted devices are read
+    again before any signal, so a device that starts booting in between is left
+    alone, and every signal is sent only to a process whose uid and start token
+    still match the ones read before the first signal.
     """
-    booted = booted_reader()
+    booted = set(booted_reader())
     rows = rows_reader()
     owners = simulator_device_owners(rows)
     orphans = sorted(pid for pid, udid in owners.items() if udid not in booted)
     if not orphans:
         return {"stopped": 0, "devices": []}
+    booted_now = set(booted_reader())
+    orphans = [pid for pid in orphans if owners[pid] not in booted_now]
+    if not orphans:
+        return {"stopped": 0, "devices": []}
+    identities: Dict[int, Tuple[int, str]] = {}
     for pid in orphans:
+        identity = identity_reader(pid)
+        if identity is None or identity[0] != os.getuid():
+            continue
+        identities[pid] = identity
+    if not identities:
+        return {"stopped": 0, "devices": []}
+    for pid in identities:
         try:
             kill(pid, signal.SIGTERM)
         except OSError:
             pass
     deadline = clock() + 2.0
-    remaining = list(orphans)
+    remaining = list(identities)
     while remaining and clock() < deadline:
-        remaining = [pid for pid in remaining if _pid_alive(pid)]
+        remaining = [
+            pid
+            for pid in remaining
+            if _pid_alive(pid) and identity_reader(pid) == identities[pid]
+        ]
         if remaining:
             sleep(0.2)
     for pid in remaining:
+        if identity_reader(pid) != identities[pid]:
+            continue
         try:
             kill(pid, signal.SIGKILL)
         except OSError:
             pass
     return {
-        "stopped": len(orphans),
-        "devices": sorted({owners[pid] for pid in orphans}),
+        "stopped": len(identities),
+        "devices": sorted({owners[pid] for pid in identities}),
     }
 
 
@@ -2358,6 +2391,7 @@ def shutdown_simulators_booted_by_job(
     record: Dict[str, Any],
     *,
     other_records: Sequence[Dict[str, Any]] = (),
+    other_records_reader: Optional[Callable[[], Sequence[Dict[str, Any]]]] = None,
     booted_reader: Callable[[], Dict[str, str]] = simulator_booted_devices,
     rows_reader: Callable[[], List[Tuple[int, int, str]]] = simulator_process_rows,
     epochs_reader: Callable[
@@ -2391,7 +2425,15 @@ def shutdown_simulators_booted_by_job(
         epoch = boot_epochs.get(udid)
         if epoch is None or epoch < float(started_at):
             continue
-        if _device_used_by_other_job(udid, epoch, other_records):
+        competitors = list(other_records)
+        if other_records_reader is not None:
+            try:
+                competitors = list(other_records_reader())
+            except Exception:
+                return []
+        if _device_used_by_other_job(udid, epoch, competitors):
+            continue
+        if udid not in booted_reader():
             continue
         if shutdown(udid):
             stopped.append(udid)
@@ -2412,20 +2454,28 @@ def _capture_simulator_state(
 
 
 def _cleanup_job_simulators(registry: Registry, record: Dict[str, Any]) -> List[str]:
-    """Shut down the simulators that one job booted and log the result once."""
+    """Shut down the simulators that one job booted and log the result once.
+
+    The competing jobs are read again for every device. A registry read that
+    fails stops the cleanup, so a device another running job may use is never
+    shut down because the registry could not be read.
+    """
     if not isinstance(record.get("simulators"), dict):
         return []
+
+    def competing_records():
+        with registry.lock(exclusive=False):
+            return [
+                row
+                for row in registry.records()
+                if row.get("job_id") != record.get("job_id")
+                and row.get("state") not in ("complete", "removed", "dead")
+            ]
+
     try:
-        other = [
-            row
-            for row in registry.records()
-            if row.get("job_id") != record.get("job_id")
-            and row.get("state") not in ("complete", "removed", "dead")
-        ]
-    except Exception:
-        other = []
-    try:
-        stopped = shutdown_simulators_booted_by_job(record, other_records=other)
+        stopped = shutdown_simulators_booted_by_job(
+            record, other_records_reader=competing_records
+        )
     except Exception:
         return []
     if stopped:
@@ -2460,9 +2510,9 @@ def reap_dead_jobs(
     slot is free on the next admission decision, and one event is logged.
     """
     boot_id = boot_reader()
-    table = table_reader()
     reaped: List[Dict[str, Any]] = []
     with registry.lock():
+        table = table_reader()
         for record in registry.records():
             if record.get("state") in ("complete", "removed", "dead"):
                 continue
