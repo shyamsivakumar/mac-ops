@@ -494,6 +494,15 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     if sendable:
         workspace = None
         args = {"threadId": thread_id, "message": message}
+        fallback_workspace = None
+        if thread.get("worktreePath"):
+            fallback_workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
+        elif pr is not None and pr.get("headRefName"):
+            fallback_workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"],
+                                  "startFromOrigin": True}
+        continuation = {"projectId": thread.get("projectId") or CFG.get(repo, {}).get("projectId"),
+                        "title": title, "modelSelection": thread_builder, "runtimeMode": "full-access",
+                        "workspaceStrategy": fallback_workspace, "message": message}
         options = ["--tool", "t3_thread_send", "--priority", str(priority), "--title", title]
     else:
         repo = repo or next((r for r in CFG if r in lkey), None)
@@ -521,7 +530,19 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         options = ["--priority", str(priority)]
     if DRY:
         return f"DRY {lkey}: {json.dumps(workspace) if workspace else 'send existing thread'}"
-    receipt = run([COORDQ, "start", json.dumps(args), *options]).strip()
+    command = [COORDQ, "start", json.dumps(args), *options]
+    if sendable:
+        old_continuation = os.environ.get("COORDQ_BUILDER_CONTINUATION")
+        os.environ["COORDQ_BUILDER_CONTINUATION"] = json.dumps(continuation)
+        try:
+            receipt = run(command).strip()
+        finally:
+            if old_continuation is None:
+                os.environ.pop("COORDQ_BUILDER_CONTINUATION", None)
+            else:
+                os.environ["COORDQ_BUILDER_CONTINUATION"] = old_continuation
+    else:
+        receipt = run(command).strip()
     if not receipt:
         raise RuntimeError(f"Empty dispatch receipt for {lkey}")
     out = receipt.splitlines()[-1]

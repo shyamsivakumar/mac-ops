@@ -31,7 +31,7 @@ PROBE_INTERVAL = 3600
 # 5-hour limit (429 code 1308) and MiniMax's Token Plan limit (429 code
 # 2056).
 BLOCK_MARKERS = (
-    "1308", "2056", "usage limit", "usage_limit", "token plan",
+    "usage limit", "usage_limit", "token plan",
     "5-hour limit", "5 hour limit", "no credits", "credit balance",
     "insufficient_quota", "insufficient quota", "quota exhausted",
     "quota exceeded", "exceeded your current quota", "spend limit",
@@ -231,11 +231,14 @@ def block_reason(text):
     if not isinstance(text, str) or not text:
         return None
     low = text.lower()
+    for code in ("1308", "2056"):
+        if re.search(r'(?:["\']?code["\']?\s*[:=]?\s*["\']?)' + code + r'\b', low):
+            return code
     for marker in BLOCK_MARKERS:
         if marker in low:
             return marker
     for code in BLOCK_CODES:
-        if f" {code} " in f" {low} " or f"status {code}" in low or f"code {code}" in low:
+        if re.search(r'(?:["\']?(?:status|code|error_code)["\']?\s*[:=]?\s*["\']?|http\s+)' + re.escape(code) + r'\b', low):
             return f"provider error {code}"
     return None
 

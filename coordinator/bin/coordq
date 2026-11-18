@@ -323,6 +323,29 @@ def probe_request(request_id):
     return str(request_id or "").startswith("builder-probe:")
 
 
+def safe_fallback_workspace(continuation):
+    workspace = continuation.get("workspaceStrategy")
+    if not isinstance(workspace, dict):
+        return False
+    if workspace.get("type") == "worktree":
+        return bool(workspace.get("baseRef"))
+    if workspace.get("type") != "existing_worktree" or not workspace.get("worktreePath"):
+        return False
+    path = workspace["worktreePath"]
+    try:
+        result = subprocess.run(["git", "-C", path, "rev-parse", "--git-dir", "--git-common-dir"],
+                                capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode:
+        return False
+    directories = result.stdout.splitlines()
+    if len(directories) != 2:
+        return False
+    return os.path.realpath(os.path.join(path, directories[0])) != os.path.realpath(
+        os.path.join(path, directories[1]))
+
+
 def drain():
     statuses = {}
     while True:
@@ -339,13 +362,21 @@ def drain():
             tool = undispatchable_tool(item)
             if tool is None:
                 args = item["args"]
-                selection = args.get("modelSelection")
+                continuation = item.get("builderContinuation") or args.get("builderContinuation")
+                selection = (continuation or args).get("modelSelection")
                 request_id = args.get("clientRequestId", "")
                 if builders.is_builder(selection) and not probe_request(request_id):
                     model = builders.choose_builder(selection)
                     if model is None:
                         continue
                     if model != selection:
+                        if continuation:
+                            if not safe_fallback_workspace(continuation):
+                                continue
+                            args = dict(continuation)
+                            item["args"] = args
+                            item["tool"] = "t3_thread_launch"
+                            item.pop("builderContinuation", None)
                         args["modelSelection"] = model
                         save(queue)
                 dispatchable.append(item)
@@ -397,7 +428,8 @@ def drain():
         code, out = 0, ""
         for index, (key, step) in enumerate(zip(keys, steps)):
             try:
-                code, out = call(step["tool"], step["args"], rules)
+                code, out = call(step["tool"], {k: v for k, v in step["args"].items()
+                    if k != "builderContinuation"}, rules)
             except (OSError, subprocess.SubprocessError) as e:
                 code, out = 1, str(e)
             if code != 0:
@@ -476,8 +508,16 @@ def drain():
                     log(f"gate retry {key}: {model['model']}")
                 else:
                     item["attempts"] = MAX_ATTEMPTS
-            elif builders.is_builder(item["args"].get("modelSelection")) and not probe_request(request_id):
-                model = failed_builder(item["args"]["modelSelection"], out)
+            elif builders.is_builder((item.get("builderContinuation") or item["args"].get("builderContinuation") or item["args"]).get("modelSelection")) and not probe_request(request_id):
+                continuation = item.get("builderContinuation") or item["args"].get("builderContinuation")
+                model = failed_builder((continuation or item["args"])["modelSelection"], out)
+                if model and continuation:
+                    if safe_fallback_workspace(continuation):
+                        item["args"] = dict(continuation)
+                        item["tool"] = "t3_thread_launch"
+                        item.pop("builderContinuation", None)
+                    else:
+                        model = None
                 if model:
                     if request_id:
                         item.setdefault("originRequestId", request_id)
@@ -559,6 +599,16 @@ def cmd_start(a):
     tool = a.tool or tool_for(args)
     if tool not in DISPATCHABLE_TOOLS:
         die(f"refused: {tool_refusal(tool)}")
+    if tool == "t3_thread_send" and "builderContinuation" not in args:
+        continuation = os.environ.get("COORDQ_BUILDER_CONTINUATION")
+        if continuation:
+            try:
+                continuation = json.loads(continuation)
+            except ValueError as e:
+                die(f"refused: invalid builder continuation: {e}")
+            if not isinstance(continuation, dict) or not builders.is_builder(continuation.get("modelSelection")):
+                die("refused: invalid builder continuation")
+            args["builderContinuation"] = continuation
     if a.title and tool == "t3_thread_launch":
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
