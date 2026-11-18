@@ -2,6 +2,19 @@ import json
 import re
 import sys
 
+STAGE_PREFIX = "stage:"
+# The hold label reads as a stage on the board but is its own family: a held
+# ticket keeps its stage beside the hold, so the hold never counts as the one
+# stage label a ticket needs.
+HOLD_LABEL = "stage:hold"
+
+
+def stage_labels(issue):
+    """The stage values of an open issue, without the hold family."""
+    names = [label["name"] for label in issue["labels"]]
+    return [name[len(STAGE_PREFIX):] for name in names
+            if name.lower().startswith(STAGE_PREFIX) and name.lower() != HOLD_LABEL]
+
 
 def defects(snapshot):
     found = []
@@ -13,10 +26,11 @@ def defects(snapshot):
             if issue["state"].upper() != "OPEN":
                 continue
             ref = f"{repo}#{number}"
-            stages = [l["name"][6:] for l in issue["labels"] if l["name"].startswith("stage:")]
+            names = [label["name"].lower() for label in issue["labels"]]
+            stages = stage_labels(issue)
             if len(stages) != 1:
-                found.append(f"{ref}: expected exactly one stage")
-            if any(s in ("backlog", "hold") for s in stages):
+                found.append(f"{ref}: expected exactly one stage label, found {len(stages)}")
+            if "backlog" in stages or HOLD_LABEL in names:
                 parked.add(number)
             match = re.match(r"^([A-Z][A-Z0-9]*-[1-9][0-9]*)(?=[:\s]|$)", issue["title"])
             if not match or not match[1].startswith(data["key"] + "-"):

@@ -22,8 +22,9 @@ Hub projects with a personal GitHub home (checked 2026-11-09, all private with i
   - An agent in that repo's worktree reads its ticket with `gh issue view n`.
   - GitHub numbers issues atomically per repo.
 - Work that spans repos: a parent issue in the main repo, with linked issues in the others (sub-issues or "blocked by" links).
-- Fields are labels, the same set in every repo: `stage:backlog`, `stage:todo`, `stage:hold`, `priority:1` to `priority:4`, `builder:<model>`, `reviewer:<model>` and `type:<taskType>`. A one-time script creates them in each repo.
+- Fields are labels, the same set in every repo: `stage:backlog`, `stage:todo`, `stage:started`, `stage:hold`, `priority:1` to `priority:4`, `builder:<model>`, `reviewer:<model>` and `type:<taskType>`. A one-time script creates them in each repo.
 - `stage:hold` is Shyam's hold. It is not a stage: the ticket keeps its own stage, and `ticket start` refuses a held ticket until Shyam removes the label.
+- A started ticket carries `stage:started`: `ticket start` moves the stage label in one update and `ticket deliver` (the builder is done and its pull request is open) keeps exactly that one, so no open ticket is left without a stage.
 - The board finds every repo's tickets with one search: `gh search issues --owner shyamsivakumar --state open label:stage:todo` (and the same for backlog), plus the same search with `--owner digitized` for Concerning. No GitHub Project and no `project` token scope; the Herdr board is the cross-repo view.
 - GitHub allows two labels of one kind (two `builder:` labels). The dispatcher refuses a ticket with more than one builder, reviewer, priority or stage label and shows why on the card.
 

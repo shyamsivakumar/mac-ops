@@ -157,7 +157,8 @@
   "labels": {
     "stage": [
       "backlog",
-      "todo"
+      "todo",
+      "started"
     ],
     "priority": [
       "1",

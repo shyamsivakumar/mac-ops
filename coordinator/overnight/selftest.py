@@ -100,6 +100,12 @@ def start_routing():
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, "fixture receipt", "")
         from argparse import Namespace
+        stages = []
+
+        def move(repo, number, stage):
+            stages.append((repo, number, stage))
+            return True
+
         with contextlib.ExitStack() as stack:
             for name, value in {"load_config": cfg, "repo_config": {}, "with_ticket_lock": None,
                                 "fetch_issue": {}, "validate_start": item, "authed_login": "fixture",
@@ -107,9 +113,11 @@ def start_routing():
                                 "post_comment": None, "gh": ""}.items():
                 stack.enter_context(patch.object(ticket, name, return_value=value))
             stack.enter_context(patch.object(ticket, "run", launch))
+            stack.enter_context(patch.object(ticket, "move_stage", side_effect=move))
             ticket.cmd_start(Namespace(ref=f"{item['repo']}#{item['number']}", force_text_blockers=False,
                                        print_brief=False, dry_run=False))
         exact(len(commands), 1)
+        exact(stages, [(item["repo"], item["number"], ticket.STARTED_STAGE)])
     actions.clear()
     chains = [dict(repo=repos[1], number=n, key=f"F-{n}", stage="todo", problems=[],
                    priority=1, title=title) for n, title in [(10, "bot"), (11, "census"), (12, "dashboard")]]
@@ -1144,14 +1152,14 @@ def board_integrity():
             issue(3, "bad key", ["todo"]), issue(4, "MO-4 duplicate", ["todo"]),
             issue(5, "MO-4 duplicate", ["todo"]), issue(6, "MO-6 started", ["todo"]),
             issue(7, "MO-7 parked", ["backlog"]), issue(8, "MO-8 blocked", ["todo"]),
-            issue(9, "MO-9 merged", ["todo"])]
+            issue(9, "MO-9 merged", ["todo"]), issue(10, "MO-10 held", ["todo", "hold"])]
     rows[7]["blockedBy"] = {"totalCount": 1, "nodes": [{"number": 7}]}
     snapshot = {"tickets": [{"repo": "fixture/repo", "number": 6, "stage": "started"}],
                 "repos": {"fixture/repo": {"key": "MO", "issues": rows, "prs": [
                     {"number": 10, "state": "OPEN", "body": "Refs #7"},
                     {"number": 11, "state": "MERGED", "body": "Refs #9"}]}}}
-    expected = sorted(["fixture/repo#1: expected exactly one stage",
-        "fixture/repo#2: expected exactly one stage", "fixture/repo#3: malformed key",
+    expected = sorted(["fixture/repo#1: expected exactly one stage label, found 0",
+        "fixture/repo#2: expected exactly one stage label, found 2", "fixture/repo#3: malformed key",
         "fixture/repo: duplicate key MO-4: [4, 5]", "fixture/repo#6: started lost stage:started",
         "fixture/repo#8: blocked by parked #7 with open PR #10",
         "fixture/repo#9: merged PR #11 issue still open"])
