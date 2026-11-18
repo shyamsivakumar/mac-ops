@@ -92,6 +92,13 @@ def main():
     core = sum(count for (_caller, quota), count in per_caller.items() if quota == "core")
     print(f"{'core total':16} {'core':8} {core:6} {core / args.hours:9.0f}")
     print(f"{'all requests':16} {'':8} {len(rows):6} {len(rows) / args.hours:9.0f}")
+    unknown = sum(1 for row in rows if row.get("pages") == "unknown")
+    if unknown:
+        # A formatted paginated read is one measured invocation whose page
+        # count cannot be seen. It is named here so a low core total is
+        # never mistaken for proof that nothing else was spent.
+        print(f"note: {unknown} formatted paginated read(s) counted as one "
+              f"request each, page count unknown")
     return 0
 
 
