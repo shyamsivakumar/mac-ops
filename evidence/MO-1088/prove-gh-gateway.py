@@ -505,6 +505,32 @@ check("a failed pagination counts its failed request",
       len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
 set_mode("200")
 
+# A CLI command that pages internally is not one request: its count is
+# unknown, so the report cannot present it as exact.
+rows_before = len(rows())
+run(["gh", "run", "list", "-R", "a/b", "--limit", "200"])
+check("an internally paginated command is marked unknown",
+      rows()[rows_before].get("pages") == "unknown", str(rows()[rows_before]))
+
+# The host-level account is read, not a nested `users:` entry.
+hosts = scratch / "gh-config"
+hosts.mkdir(exist_ok=True)
+(hosts / "hosts.yml").write_text(
+    "github.com:\n"
+    "    users:\n"
+    "        old-name:\n"
+    "            user: old-name\n"
+    "    user: active-name\n")
+account = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+print(gh_gateway._hosts_account("github.com"))
+"""], capture_output=True, text=True,
+    env={**env, "GH_CONFIG_DIR": str(hosts), "COORDINATOR_GH_ACCOUNT": ""}).stdout.strip()
+check("the host-level account wins over a nested users entry",
+      account == "active-name", account)
+
 # `gh repo` is a mixed command: list and view are GraphQL, writes are REST,
 # and a subcommand this code does not know is `other`, not core.
 import subprocess as _sp
