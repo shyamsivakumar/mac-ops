@@ -337,29 +337,38 @@ def gate_pipeline():
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
     failures = []
+    delivered = [{"name": "stage:started"}]
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["astra"]),
-        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
-        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
-        ("no-verdict", repo, "none", "interrupted", {}, ["astra"]),
+        ("checked-head", repo, "absent", "", {}, ["astra"], delivered),
+        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], delivered),
+        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], delivered),
+        ("no-verdict", repo, "none", "interrupted", {}, ["astra"], delivered),
         ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, [], delivered),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"]),
-        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
-        ("ascend", "ascend/fixture", "absent", "", {}, []),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"], delivered),
+        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], delivered),
+        ("ascend", "ascend/fixture", "absent", "", {}, [], delivered),
+        # A ticket that lost its stage label is delivered here, on the pass
+        # that sees the builder's open pull request, before the gate.
+        ("stage-less", repo, "PASS", "VERDICT: PASS", {},
+         ["deliver", "merge", "provides", "ff"], []),
     ]
-    for name, target, verdict, reply, ledger, expected in cases:
+    for name, target, verdict, reply, ledger, expected, labels in cases:
         actions = []
         pr = dict(number=20, state="OPEN", headRefOid=head,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
-        snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+        snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=labels)]}}}
 
         def command(cmd, timeout=150):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == [lane.COORDQ, "list"]:
                 return ""
+            if cmd[:2] == ["ticket", "deliver"]:
+                exact(cmd[2], f"{target}#10")
+                actions.append("deliver")
+                return f"moved {target}#10 at stage:started"
             if cmd[:2] == ["ticket", "gate"]:
                 return f"Gate exact head {head}"
             if cmd[:2] == ["ticket", "close"]:
@@ -500,7 +509,7 @@ def no_parking(status="interrupted"):
     ledger = {f"fix:{repo}#20:old1": "sent", f"fix:{repo}#20:old2": "sent"}
     snapshot = {"repos": {repo: {"prs": [dict(number=20, state="OPEN", headRefOid=head,
         body=f"Builder check: PASS {head}", mergeable="MERGEABLE")],
-        "issues": [dict(number=10, labels=[])]}}}
+        "issues": [dict(number=10, labels=[{"name": "stage:started"}])]}}}
     actions = []
 
     def command(cmd, timeout=150):

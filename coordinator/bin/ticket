@@ -104,6 +104,20 @@ class GhError(Exception):
         self.kind = kind
 
 
+class StageMoveError(GhError):
+    """A failed stage move, and the state the ticket was left in.
+
+    `restored` is True when the stage labels the ticket started with are back
+    on it, so the ticket is as it was, and False when putting them back failed
+    too, so the ticket may now carry no stage label at all. A caller that
+    reports the failure has to say which of the two happened.
+    """
+
+    def __init__(self, error, restored):
+        super().__init__(error.kind, str(error))
+        self.restored = restored
+
+
 def die(message, code=1):
     print(message, file=sys.stderr)
     sys.exit(code)
@@ -330,9 +344,12 @@ def move_stage(repo, number, stage):
         ensure_label(repo, target, FAMILY_COLORS["stage"])
     try:
         edit_labels(repo, number, add, remove)
-    except GhError:
+    except GhError as e:
         # A failed update may have removed the old stage before it failed, so
-        # the labels are read again and the earlier stage is put back.
+        # the labels are read again and the earlier stage is put back. When
+        # that also fails the ticket may have no stage label, and the caller
+        # is told so instead of reporting the stage it meant to keep.
+        restored = False
         try:
             current = stage_labels([label["name"] for label in
                                     gh_json(["issue", "view", str(number), "-R", repo,
@@ -340,9 +357,10 @@ def move_stage(repo, number, stage):
             edit_labels(repo, number,
                         [name for name in before if name not in current],
                         [name for name in current if name not in before])
+            restored = True
         except GhError:
             pass
-        raise
+        raise StageMoveError(e, restored)
     return True
 
 
@@ -1412,6 +1430,10 @@ def cmd_start(a):
     try:
         move_stage(repo, n, STARTED_STAGE)
     except GhError as e:
+        if isinstance(e, StageMoveError) and not e.restored:
+            die(f"started, but the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
+                f"({e.kind}): {e}; putting {STAGE_PREFIX}{t['stage']} back also failed, "
+                "so the ticket may now carry no stage label")
         die(f"started, but the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
             f"({e.kind}): {e}; the ticket keeps {STAGE_PREFIX}{t['stage']}")
     if not posted:
@@ -1446,6 +1468,10 @@ def cmd_deliver(a):
     try:
         moved = move_stage(repo, n, STARTED_STAGE)
     except GhError as e:
+        if isinstance(e, StageMoveError) and not e.restored:
+            die(f"the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
+                f"({e.kind}): {e}; putting the earlier stage back also failed, "
+                "so the ticket may now carry no stage label")
         die(f"the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
             f"({e.kind}): {e}; the ticket keeps the stage it had")
     print(f"{'moved' if moved else 'kept'} {repo}#{n} at {STAGE_PREFIX}{STARTED_STAGE}")
