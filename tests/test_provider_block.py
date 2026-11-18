@@ -252,6 +252,22 @@ class ProviderBlockTests(unittest.TestCase):
         self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T12:00:01")))
         self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
 
+    def test_a_reset_past_a_year_is_kept_when_the_store_can_write_it(self):
+        """8800 hours is a long wait, not a reason to drop what the
+        provider said. Only a moment the store cannot write is dropped."""
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(SELECTION, "429; retry after 8800 hours",
+                                              failed, now=failed)
+        self.assertEqual(record["until"], "2027-11-20T02:00:00+00:00")
+
+    def test_a_reset_the_store_cannot_write_is_dropped(self):
+        """A moment past the end of the calendar is no reset; the block
+        falls back to the hour it always had."""
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(SELECTION, "429; retry after 999999999 hours",
+                                              failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T11:00:00+00:00")
+
     def test_a_next_day_reset_in_a_named_zone_keeps_the_local_day(self):
         """A failure at 23:00 on October 31 with 'resets at 14:00
         America/Los_Angeles' blocks until 14:00 PST on November 1. Adding a
