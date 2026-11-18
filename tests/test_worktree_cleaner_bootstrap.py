@@ -82,7 +82,9 @@ class StatusColumnsTest(unittest.TestCase):
             bootstrap, real = cleaner.classify_changes(repo, records)
             self.assertEqual(bootstrap, [])
             self.assertEqual(real, ["x.specstory/notes"])
-            self.assertIsNone(cleaner.clear_bootstrap_changes(repo, records))
+            trash = Path(tmp) / "trash"
+            trash.mkdir()
+            self.assertIsNone(cleaner.clear_bootstrap_changes(repo, records, trash))
 
 
 class AgentsBootstrapTest(unittest.TestCase):
@@ -90,6 +92,8 @@ class AgentsBootstrapTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="mo514-agents-")
         self.repo = Path(self.tmp.name) / "repo"
         self.repo.mkdir()
+        self.trash = Path(self.tmp.name) / "trash"
+        self.trash.mkdir()
         git(self.repo, "init", "-b", "main")
         git(self.repo, "config", "user.name", "Fixture")
         git(self.repo, "config", "user.email", "fixture@example.test")
@@ -183,6 +187,8 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="mo514-clear-")
         self.repo = Path(self.tmp.name) / "repo"
         self.repo.mkdir()
+        self.trash = Path(self.tmp.name) / "trash"
+        self.trash.mkdir()
         git(self.repo, "init", "-b", "main")
         git(self.repo, "config", "user.name", "Fixture")
         git(self.repo, "config", "user.email", "fixture@example.test")
@@ -198,15 +204,45 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         (self.repo / ".specstory").mkdir()
         (self.repo / ".specstory" / "session.md").write_text("history\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
-        cleared = cleaner.clear_bootstrap_changes(self.repo, records)
+        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash)
         self.assertEqual(sorted(cleared or []), [".specstory/session.md", "AGENTS.md"])
         self.assertFalse((self.repo / ".specstory" / "session.md").exists())
         self.assertEqual(cleaner.status_for(self.repo), [])
 
+    def test_a_save_after_the_scan_keeps_the_worktree(self):
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        digests = {"AGENTS.md": cleaner.file_digest(self.repo / "AGENTS.md")}
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write("saved by an editor\n")
+        records = cleaner.status_for(self.repo)
+        self.assertIsNone(cleaner.clear_bootstrap_changes(self.repo, records, self.trash, digests))
+        self.assertIn("saved by an editor", (self.repo / "AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_a_newly_staged_bootstrap_file_is_cleared(self):
+        # A staged addition has no path in HEAD, so the cleanup must remove
+        # the file and drop the index entry instead of restoring from HEAD.
+        repo = Path(self.tmp.name) / "new-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        commit(repo, "base.txt", "base\n")
+        (repo / "AGENTS.md").write_text(self.block, encoding="utf-8")
+        git(repo, "add", "AGENTS.md")
+        (repo / ".specstory").mkdir()
+        (repo / ".specstory" / "session.md").write_text("history\n", encoding="utf-8")
+        git(repo, "add", ".specstory/session.md")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests)
+        self.assertEqual(sorted(cleared or []), [".specstory/session.md", "AGENTS.md"])
+        self.assertEqual(cleaner.status_for(repo), [])
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
-        self.assertIsNone(cleaner.clear_bootstrap_changes(self.repo, records))
+        self.assertIsNone(cleaner.clear_bootstrap_changes(self.repo, records, self.trash))
         self.assertTrue((self.repo / "notes.txt").exists())
 
 
