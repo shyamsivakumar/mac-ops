@@ -31,23 +31,18 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
     ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
     if ascend_override is not None:
         ascend = ascend_override
+    # No merge call pins both the base and the head, so the gate does not
+    # merge: on a PASS the lane writes one item for Shyam, who merges it.
+    lane_ask = ("this repository merges nothing automatically: no merge call pins both the base "
+                "and the head, so no race can land content this review did not read. On a PASS the "
+                "lane writes one decisions item asking Shyam to merge this head; do not merge and do not close")
     merge = (PROMPT_NO_MERGE if prompt else
              "Ascend repo: do not merge; stop at the verdict." if ascend else
-             f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-    fast_forward = ("" if ascend or not fast_forward_main else
-                    " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
-                    "find the worktree that has main checked out in `git worktree list` and run `git fetch origin` then "
-                    "`git merge --ff-only origin/main` there; when no worktree has main checked out, run `git fetch origin main:main`. "
-                    "Report `git rev-parse main origin/main` (one hash twice) or the exact refusal. Fast-forward no other repository.")
+             f"If and only if CHECK and VERDICT are PASS on {head}, {lane_ask}.")
+    fast_forward = ""
     close = (PROMPT_CLOSE_NOTHING if prompt else
              " Ascend repo: do not close the issue." if ascend else
-             f" Only when that merge produced a merge commit, verify every Provides claim from the ticket on that merge commit and report the commit SHA, evidence and result for each claim. If any Provides claim is false, missing or unverified, close nothing and report the refusal. "
-             f"Before the close, run the close checklist: `python3 coordinator/bin/close_check.py --repo {repo} --pr {number}"
-             + (f" --issue {issue}" if issue is not None else "") + "` (the coordinator's mac-ops checkout holds it). "
-             "If it ends `RESULT: FAIL`, send the work back to the builder with the failing item it names, close nothing, and report the refusal. "
-             f"Only after every Provides claim passes on the merge commit and the checklist passes, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
-    if issue is None:
-        close = " No ticket is associated with this PR; close no issue."
+             " Close nothing: Shyam merges this head himself, and the ticket is closed after that merge.")
     check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
              if publisher else f"Confirm the exact PR-body line `Builder check: PASS {head}`.")
     task = f"https://github.com/{repo}/issues/{issue}" if issue is not None else f"https://github.com/{repo}/pull/{number}"
