@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Proof for MO-520 (mac-ops#520, key MO-1075): the board's progress counts merges and closed tickets.
+"""Proof for mac-ops#520 (key MO-1075): the board's progress counts merges and closed tickets.
 
 The fixture is tonight's data (`tonight.json`): the tick times are the shift
 log's own lane pass lines, and the events are the pull requests that merged
