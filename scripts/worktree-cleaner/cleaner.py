@@ -1747,6 +1747,30 @@ def _recovery_manifest(state_root: Path) -> Path:
     return state_root / "recovery.json"
 
 
+def _index_hides_changes(worktree: Path) -> bool:
+    """The index hides changes that the status does not report.
+
+    A file marked assume-unchanged or skip-worktree is not reported by the
+    status, so a worktree that holds one cannot be checked with the status
+    and is never removed. The index lock is held while this is read, so the
+    flags cannot change under the check.
+    """
+    try:
+        listed = git(worktree, "ls-files", "-v").splitlines()
+    except (SafetyError, OSError):
+        return True
+    for line in listed:
+        if not line:
+            continue
+        tag = line[0]
+        # An upper case tag is the normal state of a file, a lower case tag
+        # means the file is marked assume-unchanged, and the tag S means the
+        # file is marked skip-worktree.
+        if tag == "S" or tag.islower():
+            return True
+    return False
+
+
 def _worktree_is_locked(registration: Path) -> bool:
     """The owner locked the worktree.
 
@@ -2444,6 +2468,16 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         append_removal(state_root, candidate, "removal_blocked")
                         candidate["eligible"] = False
                         candidate["reasons"] = ["worktree_index_locked"]
+                        continue
+                    # The index is read while its lock is held, so a file
+                    # that the index hides from the status keeps the
+                    # worktree here.
+                    if _index_hides_changes(Path(candidate["path"])):
+                        _release_index_lock(index_lock)
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_index_hides_changes"]
                         continue
                     try:
                         pending = status_for(Path(candidate["path"]), include_ignored=True)
