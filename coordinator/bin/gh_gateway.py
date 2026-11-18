@@ -817,7 +817,15 @@ def pages_unknown(argv):
     words = significant(argv)
     if words and words[0] != "api":
         return True
-    return bool(paginated(argv) and filtered(argv))
+    if paginated(argv) and filtered(argv):
+        return True
+    if (paginated(argv) and not has_flag(argv, "--slurp")
+            and not include_requested(argv)):
+        # Without slurp the pages arrive as several JSON values, but gh may
+        # also hand back one array for several pages. The boundaries are not
+        # visible, so the count is a lower bound.
+        return True
+    return False
 
 
 def record(argv, count=1, caller_name=None):
