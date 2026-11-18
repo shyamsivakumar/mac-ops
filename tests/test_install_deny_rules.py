@@ -191,10 +191,11 @@ class ListTest(unittest.TestCase):
             "cat $HOME/.ssh/id_rsa",
         ):
             self.assertTrue(text.search(command), command)
-        # the regex matches ls too; the exemption for a bare ls lives in the guard
+        # the regex matches ls too; the guard exempts one directory listing only
         self.assertTrue(text.search("ls -la ~/.ssh"))
         guard_text = (ROOT / "runtime/agents/deny-guard.ts").read_text()
-        self.assertIn('const bareLs = /^\\s*ls\\b/', guard_text)
+        self.assertIn("SINGLE_LS", guard_text)
+        self.assertNotIn("bareLs", guard_text)
 
         force, main = (re.compile(SPEC["bash_denies"][0][0]),
                        re.compile(SPEC["bash_denies"][1][0]))
@@ -248,37 +249,99 @@ class ListTest(unittest.TestCase):
 
 
 class HookTest(unittest.TestCase):
-    def run_hook(self, payload):
+    def run_hook(self, payload, role=None):
+        env = {k: v for k, v in os.environ.items() if k != "MAC_OPS_ROLE"}
+        if role is not None:
+            env["MAC_OPS_ROLE"] = role
         proc = subprocess.run(
             [sys.executable, str(HOOK)],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
             timeout=30,
+            env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc.stdout
 
+    PINNED = (
+        "gh pr merge 531 -R shyamsivakumar/mac-ops --squash "
+        "--match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223"
+    )
+
+    def decided(self, command, role=None):
+        out = self.run_hook(
+            {"tool_name": "Bash", "tool_input": {"command": command}}, role=role
+        )
+        return json.loads(out)["hookSpecificOutput"] if out.strip() else None
+
     def test_denies_unpinned_merge(self):
+        for role in (None, "gate"):
+            for command in (
+                "gh pr merge 531",
+                "gh pr merge 531 --squash",
+                "gh pr merge 531 -R shyamsivakumar/mac-ops --squash --delete-branch",
+            ):
+                decision = self.decided(command, role)
+                self.assertIsNotNone(decision, (role, command))
+                self.assertEqual(decision["permissionDecision"], "deny", (role, command))
+
+    def test_denies_pinned_merge_without_the_gate_role(self):
+        for role in (None, "builder", ""):
+            decision = self.decided(self.PINNED, role)
+            self.assertIsNotNone(decision, role)
+            self.assertEqual(decision["permissionDecision"], "deny", role)
+
+    def test_a_mentioned_pin_is_not_a_merge_argument(self):
         for command in (
-            "gh pr merge 531",
-            "gh pr merge 531 --squash",
-            "gh pr merge 531 -R shyamsivakumar/mac-ops --squash --delete-branch",
+            # the flag appears inside another argument's value, not as the pin
+            "gh pr merge 531 --squash --body 'see --match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223'",
+            # no value after the flag
+            "gh pr merge 531 --squash --match-head-commit",
+            # not a commit id
+            "gh pr merge 531 --squash --match-head-commit main",
+            "gh pr merge 531 --squash --match-head-commit abc123",
         ):
-            out = self.run_hook(
-                {"tool_name": "Bash", "tool_input": {"command": command}}
-            )
-            decision = json.loads(out)["hookSpecificOutput"]
+            decision = self.decided(command, "gate")
+            self.assertIsNotNone(decision, command)
             self.assertEqual(decision["permissionDecision"], "deny", command)
 
     def test_allows_pinned_merge(self):
-        command = (
-            "gh pr merge 531 -R shyamsivakumar/mac-ops --squash "
-            "--match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223"
-        )
-        self.assertEqual(
-            self.run_hook({"tool_name": "Bash", "tool_input": {"command": command}}), ""
-        )
+        self.assertIsNone(self.decided(self.PINNED, "gate"))
+
+    def test_denies_protected_branch_pushes_on_every_remote(self):
+        for command in (
+            "git push origin main",
+            "git push upstream main",
+            "git push other master",
+            "git push --set-upstream repo2 main",
+            "git push origin HEAD:main",
+            "git push repo2 feature:master",
+            "git -C /tmp/r push elsewhere refs/heads/main",
+        ):
+            decision = self.decided(command)
+            self.assertIsNotNone(decision, command)
+            self.assertEqual(decision["permissionDecision"], "deny", command)
+
+    def test_denies_force_push_on_every_remote(self):
+        for command in (
+            "git push --force origin t3/x",
+            "git push -f upstream t3/x",
+            "git push --force-with-lease other t3/x",
+            "git push repo2 +t3/x",
+        ):
+            decision = self.decided(command)
+            self.assertIsNotNone(decision, command)
+            self.assertEqual(decision["permissionDecision"], "deny", command)
+
+    def test_allows_task_branch_push(self):
+        for command in (
+            "git push origin t3/deny-rules",
+            "git push --set-upstream upstream t3/deny-rules",
+            "git -C /tmp/r push other t3/main-fix",
+            "git push origin feature/main-work",
+        ):
+            self.assertIsNone(self.decided(command), command)
 
     def test_ignores_other_tools_and_commands(self):
         self.assertEqual(
@@ -297,10 +360,13 @@ class GuardTest(unittest.TestCase):
     HARNESS = """
 const guard = await import(process.argv[2]);
 const events = JSON.parse(await Bun.file(process.argv[3]).text());
+const baseEnv = { ...process.env };
 let handler;
 guard.default({ on: (name, fn) => { if (name === "tool_call") handler = fn; } });
 const out = [];
 for (const item of events) {
+  for (const key of Object.keys(process.env)) if (!(key in baseEnv)) delete process.env[key];
+  Object.assign(process.env, baseEnv, item.env || {});
   const decision = await handler(item.event, { cwd: item.cwd });
   out.push(decision ? decision.reason : null);
 }
@@ -322,31 +388,70 @@ console.log(JSON.stringify(out));
         fake_env.parent.mkdir()
         fake_env.write_text("FAKE=1\n")
         ascend = str(Path.home() / "Code/slash-eureka/README.md")
+        pinned = "gh pr merge 531 --squash --match-head-commit " + "a" * 40
+        gate = {"MAC_OPS_ROLE": "gate"}
         cases = [
-            ({"toolName": "read", "input": {"path": ascend}}, True),
-            ({"toolName": "edit", "input": {"path": str(fake_env)}}, True),
-            ({"toolName": "write", "input": {"path": str(fake_env), "content": "x"}}, True),
-            ({"toolName": "bash", "input": {"command": f"cat {fake_env}"}}, True),
-            ({"toolName": "bash", "input": {"command": "git push --force origin main"}}, True),
-            ({"toolName": "bash", "input": {"command": "git push origin main"}}, True),
-            ({"toolName": "bash", "input": {"command": "gh pr merge 531 --squash"}}, True),
+            ({"toolName": "read", "input": {"path": ascend}}, True, {}),
+            ({"toolName": "edit", "input": {"path": str(fake_env)}}, True, {}),
+            (
+                {"toolName": "write", "input": {"path": str(fake_env), "content": "x"}},
+                True,
+                {},
+            ),
+            ({"toolName": "bash", "input": {"command": f"cat {fake_env}"}}, True, {}),
+            (
+                {"toolName": "bash", "input": {"command": "git push --force origin main"}},
+                True,
+                {},
+            ),
+            ({"toolName": "bash", "input": {"command": "git push origin main"}}, True, {}),
+            # The protected branch rule covers every remote, not only origin.
+            ({"toolName": "bash", "input": {"command": "git push other master"}}, True, {}),
+            (
+                {"toolName": "bash", "input": {"command": "git push repo2 HEAD:main"}},
+                True,
+                {},
+            ),
+            ({"toolName": "bash", "input": {"command": "gh pr merge 531 --squash"}}, True, {}),
+            # A pin in the command grants nothing without the gate role.
+            ({"toolName": "bash", "input": {"command": pinned}}, True, {}),
+            # A mentioned pin is not a merge argument.
             (
                 {
                     "toolName": "bash",
                     "input": {
-                        "command": "gh pr merge 531 --squash --match-head-commit " + "a" * 40
+                        "command": "gh pr merge 531 --squash --body 'pin " + "a" * 40 + "'"
                     },
                 },
-                False,
+                True,
+                gate,
             ),
             (
                 {
                     "toolName": "bash",
-                    "input": {"command": "git push -u origin t3/deny-rules"},
+                    "input": {
+                        "command": "gh pr merge 531 --squash --match-head-commit main"
+                    },
                 },
-                False,
+                True,
+                gate,
             ),
-            ({"toolName": "ls", "input": {"path": str(fake_env)}}, False),
+            ({"toolName": "bash", "input": {"command": pinned}}, False, gate),
+            (
+                {"toolName": "bash", "input": {"command": "git push -u origin t3/deny-rules"}},
+                False,
+                {},
+            ),
+            # A single directory listing only shows names.
+            ({"toolName": "ls", "input": {"path": str(fake_env)}}, False, {}),
+            ({"toolName": "bash", "input": {"command": "ls -la ~/.ssh"}}, False, {}),
+            # The same command with a second operation is a read of the key.
+            (
+                {"toolName": "bash", "input": {"command": "ls ~/.ssh; cat ~/.ssh/id_rsa"}},
+                True,
+                {},
+            ),
+            ({"toolName": "bash", "input": {"command": "ls ~/.ssh | xargs cat"}}, True, {}),
             # Writing prose that mentions a secret path is not a secret read.
             (
                 {
@@ -357,6 +462,7 @@ console.log(JSON.stringify(out));
                     },
                 },
                 False,
+                {},
             ),
             # Editing prose around a path is not a secret edit either.
             (
@@ -368,9 +474,13 @@ console.log(JSON.stringify(out));
                     },
                 },
                 False,
+                {},
             ),
         ]
-        events = [{"cwd": str(scratch), "event": event} for event, _ in cases]
+        events = [
+            {"cwd": str(scratch), "event": event, "env": extra}
+            for event, _, extra in cases
+        ]
         events_path = scratch / "events.json"
         events_path.write_text(json.dumps(events))
         proc = subprocess.run(
@@ -381,7 +491,7 @@ console.log(JSON.stringify(out));
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         reasons = json.loads(proc.stdout)
-        for (event, want_block), reason in zip(cases, reasons):
+        for (event, want_block, _), reason in zip(cases, reasons):
             self.assertEqual(
                 reason is not None,
                 want_block,

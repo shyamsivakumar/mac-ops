@@ -51,9 +51,12 @@ PINNED = (
 results: list[tuple[str, str, str]] = []
 
 
-def record(name: str, ok: bool, detail: str) -> None:
-    results.append(("PASS" if ok else "FAIL", name, detail))
-    print(f"{results[-1][0]} {name}: {detail}", flush=True)
+def record(name: str, ok: bool | None, detail: str) -> None:
+    """Record one probe result. `None` means the probe did not run: it is
+    reported, never counted as a pass."""
+    status = "not run" if ok is None else ("PASS" if ok else "FAIL")
+    results.append((status, name, detail))
+    print(f"{status} {name}: {detail}", flush=True)
 
 
 def pi_decisions(guard: Path, events: list[dict]) -> list[dict]:
@@ -80,13 +83,17 @@ def reason(decision: dict | None) -> str:
     return (decision or {}).get("reason", "")
 
 
-def hook_decision(command: str) -> dict | None:
+def hook_decision(command: str, role: str | None = None) -> dict | None:
+    env = {k: v for k, v in os.environ.items() if k != "MAC_OPS_ROLE"}
+    if role is not None:
+        env["MAC_OPS_ROLE"] = role
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
         capture_output=True,
         text=True,
         timeout=60,
+        env=env,
     )
     if proc.returncode != 0:
         raise SystemExit(f"hook failed: {proc.stderr}")
@@ -143,13 +150,37 @@ def probe_pi_guards() -> None:
             "event": {"toolName": "bash", "input": {"command": "git push origin HEAD:master"}},
         },
         {
+            "label": "push to main on a second remote",
+            "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": "git push other main"}},
+        },
+        {
+            "label": "one directory listing of the ssh directory",
+            "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": "ls -la ~/.ssh"}},
+        },
+        {
+            "label": "a listing followed by a key read",
+            "cwd": str(SCRATCH),
+            "event": {
+                "toolName": "bash",
+                "input": {"command": "ls ~/.ssh; cat ~/.ssh/id_ed25519"},
+            },
+        },
+        {
             "label": "unpinned gh pr merge",
             "cwd": str(SCRATCH),
             "event": {"toolName": "bash", "input": {"command": "gh pr merge 531 --squash"}},
         },
         {
-            "label": "pinned gate merge (dry run, never executed)",
+            "label": "pinned gh pr merge as a builder (dry run, never executed)",
             "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": PINNED}},
+        },
+        {
+            "label": "pinned gh pr merge from a gate role (dry run, never executed)",
+            "cwd": str(SCRATCH),
+            "env": {"MAC_OPS_ROLE": "gate"},
             "event": {"toolName": "bash", "input": {"command": PINNED}},
         },
         {
@@ -158,7 +189,10 @@ def probe_pi_guards() -> None:
             "event": {"toolName": "bash", "input": {"command": "git push --set-upstream origin t3/deny-probe"}},
         },
     ]
-    expect_block = [True, True, True, True, True, True, True, True, True, True, False, False]
+    expect_block = [
+        True, True, True, True, True, True, True, True, True, True,
+        False, True, True, True, False, False,
+    ]
     for instance in PI_INSTANCES:
         guard = HOME / ".pi" / instance / "extensions/deny-guard.ts"
         if not guard.is_file():
@@ -184,21 +218,36 @@ def probe_pi_guards() -> None:
 
 
 def probe_claude_settings() -> None:
+    """Claude Code decisions, taken from the enforcement points themselves.
+
+    `permissions.deny` is evaluated by Claude Code inside a session. Reading
+    the file back only proves an entry was written, not that a call is
+    refused, so those rows are reported `not run` with the check to make; they
+    are never counted as passes. The rules that live in the PreToolUse hook
+    are exercised on the hook's real payload, which is the decision Claude
+    Code acts on.
+    """
     settings = json.loads(SETTINGS.read_text())
     deny = (settings.get("permissions") or {}).get("deny") or []
-    required = {
-        "read under slash-eureka": any(e.startswith("Read(") and "slash-eureka" in e for e in deny),
-        "edit under slash-eureka": any(e.startswith("Edit(") and "slash-eureka" in e for e in deny),
-        "read an env file": "Read(**/.env)" in deny,
-        "edit an env file": "Edit(**/.env)" in deny,
-        "read the auth file": "Read(**/auth.json)" in deny,
-        "read the ssh directory": "Read(~/.ssh/**)" in deny,
-        "force-push": "Bash(git push --force:*)" in deny and "Bash(git push -f:*)" in deny,
-        "push to main": "Bash(git push origin main)" in deny,
-        "push to master": "Bash(git push origin master)" in deny,
-    }
-    for name, present in required.items():
-        record(f"claude permissions.deny: {name}", present, "present" if present else "MISSING")
+    for name, entry in (
+        ("read under slash-eureka", "Read(~/Code/slash-eureka/**)"),
+        ("edit under slash-eureka", "Edit(~/Code/slash-eureka/**)"),
+        ("read an env file", "Read(**/.env)"),
+        ("edit an env file", "Edit(**/.env)"),
+        ("read the auth file", "Read(**/auth.json)"),
+        ("read the ssh directory", "Read(~/.ssh/**)"),
+    ):
+        present = entry in deny
+        record(
+            f"claude permissions.deny: {name}",
+            None if present else False,
+            (
+                f"{entry} is installed; Claude evaluates it in-session, so run "
+                f"`claude -p '{name}'` in a scratch folder to record the decision"
+                if present
+                else f"MISSING {entry}"
+            ),
+        )
     commands = [
         h.get("command", "")
         for block in (settings.get("hooks") or {}).get("PreToolUse") or []
@@ -206,22 +255,27 @@ def probe_claude_settings() -> None:
     ]
     registered = [c for c in commands if "deny-merge-guard.py" in c]
     record(
-        "claude PreToolUse merge hook registered in settings.json",
+        "claude PreToolUse hook registered in settings.json",
         len(registered) == 1,
         registered[0] if registered else "MISSING",
     )
-    unpinned = hook_decision("gh pr merge 531 -R shyamsivakumar/mac-ops --squash")
-    record(
-        "claude hook blocks unpinned gh pr merge",
-        bool(unpinned and unpinned.get("permissionDecision") == "deny"),
-        (unpinned or {}).get("permissionDecisionReason", "no decision")[:90],
+    cases = (
+        ("unpinned gh pr merge", "gh pr merge 531 -R shyamsivakumar/mac-ops --squash", None, "deny"),
+        ("pinned gh pr merge as a builder", PINNED, None, "deny"),
+        ("pinned gh pr merge from a gate role (not executed)", PINNED, "gate", "allow"),
+        ("pin that is not a merge argument", "gh pr merge 531 --squash --body 'pin 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223'", "gate", "deny"),
+        ("push to master on a second remote", "git push other master", None, "deny"),
+        ("force-push on a second remote", "git push -f other t3/x", None, "deny"),
+        ("push a task branch", "git push --set-upstream origin t3/deny-probe", None, "allow"),
     )
-    pinned = hook_decision(PINNED)
-    record(
-        "claude hook allows the gate's pinned gh pr merge (not executed)",
-        pinned is None,
-        "no decision, command allowed to run" if pinned is None else json.dumps(pinned),
-    )
+    for label, command, role, want in cases:
+        decision = hook_decision(command, role)
+        got = (decision or {}).get("permissionDecision", "allow")
+        record(
+            f"claude hook: {label}",
+            got == want,
+            f"{got} ({str((decision or {}).get('permissionDecisionReason', 'no decision'))[:70]})",
+        )
 
 
 def probe_task_branch_push() -> None:
@@ -325,7 +379,12 @@ def main() -> int:
     finally:
         shutil.rmtree(SCRATCH, ignore_errors=True)
     failed = [r for r in results if r[0] == "FAIL"]
-    print(f"\n{len(results) - len(failed)} passed, {len(failed)} failed", flush=True)
+    not_run = [r for r in results if r[0] == "not run"]
+    passed = len(results) - len(failed) - len(not_run)
+    print(
+        f"\n{passed} passed, {len(failed)} failed, {len(not_run)} not run",
+        flush=True,
+    )
     return 1 if failed else 0
 
 

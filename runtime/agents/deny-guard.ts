@@ -24,11 +24,18 @@ const SECRET_TEXT_RE = new RegExp(SPEC.secret_text_re || "(?!)");
 const ASCEND_TEXT_RES = (SPEC.ascend_text_res || []).map((r) => new RegExp(r));
 const BASH_DENIES = (SPEC.bash_denies || []).map(([re, why]) => [new RegExp(re), why]);
 const MERGE = SPEC.merge_deny || null;
+const MERGE_RE = MERGE ? new RegExp(MERGE.match_re) : null;
+const PIN_RE = new RegExp((MERGE && MERGE.pin_re) || "(?!)");
 // Only keys that name a location are checked as paths. Prose keys (content,
 // pattern, oldText) are not: a document that mentions `.env` or `~/.ssh` is
 // not itself a secret, and blocking it would stop the agents from writing
 // about this list.
 const PATH_KEY = /path|file|dir|folder|target|root|cwd|workspace/i;
+// One directory listing, nothing else: no separators, pipes, redirects or
+// substitutions after the command. `ls ~/.ssh` is a name listing;
+// `ls ~/.ssh; cat ~/.ssh/id_rsa` is a read of the key and is denied.
+const SINGLE_LS = /^\s*ls(?:\s+[^\s;&|<>()$`]+)*\s*$/;
+const SHELL_SEPARATORS = /[;&|\n]+/;
 
 function abs(p, cwd) {
   if (!p) return "";
@@ -56,10 +63,10 @@ function secretPath(a) {
 // Path-bearing tools (read, edit, write, grep, find, ls, and MCP tools that
 // take a path) are denied on Ascend trees; secrets are denied on every
 // path-bearing tool except ls, which only lists names.
-function checkTool(name, input, cwd) {
+function checkTool(name, input, cwd, env) {
   const tool = String(name || "");
   const isBash = tool === "bash" || tool === "powershell";
-  if (isBash) return checkBash(String(input.command || ""));
+  if (isBash) return checkBash(String(input.command || ""), env);
   for (const [key, value] of Object.entries(input || {})) {
     if (typeof value !== "string") continue;
     if (!PATH_KEY.test(key)) continue;
@@ -74,23 +81,59 @@ function checkTool(name, input, cwd) {
   return undefined;
 }
 
-function checkBash(cmd) {
+// The commit a merge segment pins, or "" when the flag is absent or its value
+// is not a commit id. The value must be the next token (or `--flag=value`) of
+// the same `gh pr merge` invocation; a pin mentioned elsewhere in the command
+// is not an argument to the merge.
+function pinnedCommit(segment) {
+  const flag = MERGE.required_flag;
+  const tokens = segment.trim().split(/\s+/);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === flag) {
+      const value = tokens[i + 1] || "";
+      return PIN_RE.test(value) ? value : "";
+    }
+    if (token.startsWith(flag + "=")) {
+      const value = token.slice(flag.length + 1);
+      return PIN_RE.test(value) ? value : "";
+    }
+  }
+  return "";
+}
+
+// `gh pr merge` is denied unless both hold:
+//   1. the caller is a gate. The role comes from the environment the gate was
+//      launched with, never from the command text, so a builder cannot claim
+//      it by typing; a command that mentions the role grants nothing.
+//   2. the pin is a merge argument: a commit id passed to --match-head-commit
+//      in the same `gh pr merge` invocation.
+function mergeDeny(cmd, env) {
+  if (!MERGE || !MERGE_RE.test(cmd)) return undefined;
+  const role = String((env && env[MERGE.role_env]) || "");
+  if (role !== MERGE.role_value) return MERGE.reason;
+  for (const segment of cmd.split(SHELL_SEPARATORS)) {
+    if (!MERGE_RE.test(segment)) continue;
+    if (!pinnedCommit(segment)) return MERGE.pin_reason || MERGE.reason;
+  }
+  return undefined;
+}
+
+function checkBash(cmd, env) {
   for (const [re, why] of BASH_DENIES) {
     if (re.test(cmd)) return why;
   }
-  if (MERGE && new RegExp(MERGE.match_re).test(cmd) && !cmd.includes(MERGE.required_flag)) {
-    return MERGE.reason;
-  }
+  const merge = mergeDeny(cmd, env);
+  if (merge) return merge;
   if (ASCEND_TEXT_RES.some((re) => re.test(cmd))) return SPEC.ascend_bash_reason;
-  const bareLs = /^\s*ls\b/.test(cmd);
-  if (!bareLs && SECRET_TEXT_RE.test(cmd)) return SPEC.secret_bash_reason;
+  if (!SINGLE_LS.test(cmd) && SECRET_TEXT_RE.test(cmd)) return SPEC.secret_bash_reason;
   return undefined;
 }
 
 export default function (pi) {
   pi.on("tool_call", async (event, ctx) => {
     const cwd = (ctx && ctx.cwd) || process.cwd();
-    const why = checkTool(event.toolName, event.input || {}, cwd);
+    const why = checkTool(event.toolName, event.input || {}, cwd, process.env);
     if (why) {
       return {
         block: true,

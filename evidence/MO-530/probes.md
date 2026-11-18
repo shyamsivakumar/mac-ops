@@ -13,8 +13,8 @@ yes). This is a tightening-only change: no allow rule is added anywhere.
 | Point | Installed artifact | Probe |
 | --- | --- | --- |
 | pi: `~/.pi/agent`, `agent-minimax`, `agent-glm`, `agent-deepseek`, `agent-openai-api`, `agent-anthropic-api` | `extensions/deny-guard.ts` in each directory | `evidence/MO-530/pi-guard-probe.ts` loads the installed file the way pi loads it and sends the real `tool_call` event shapes |
-| Claude Code (`T3 claudeAgent`, Claude Code tabs) | `permissions.deny` in `~/.claude/settings.json` | probe asserts each list entry is present in the file the `claude` CLI reads |
-| Claude Code, unpinned merge | `PreToolUse` hook `~/.claude/hooks/deny-merge-guard.py` | probe pipes the real hook payload: unpinned denied, pinned allowed |
+| Claude Code (`T3 claudeAgent`, Claude Code tabs) | `permissions.deny` in `~/.claude/settings.json` | `not run` offline: Claude Code evaluates this list in-session, so reading the file back would prove only that an entry was written. Each row names the live check to record the decision; the installed entries are also asserted by `tests/test_install_deny_rules.py` |
+| Claude Code, merge role and remote-any push | `PreToolUse` hook `~/.claude/hooks/deny-merge-guard.py` | probe pipes the real hook payload: unpinned denied, pinned as a builder denied, pinned from a gate role allowed, a pin that is not a merge argument denied, `main`/`master` push on a second remote denied |
 | Task-branch push stays allowed | n/a | scratch repo and scratch bare remote under `$TMPDIR`, real `git push` of `t3/deny-probe` |
 
 ## Live block in a pi session
@@ -36,17 +36,23 @@ not write about the list itself.
 
 ## Probe results
 
-`python3 evidence/MO-530/probes.py` → `23 passed, 0 failed`, see
-`probes.txt`. It covers, for all six pi instances and for Claude Code:
+`python3 evidence/MO-530/probes.py` → `19 passed, 0 failed, 6 not run`, see
+`probes.txt`. The six `not run` rows are the Claude `permissions.deny`
+entries: Claude Code evaluates them inside a session, so the probe names the
+live check instead of counting the file's text as a refusal. The rows that
+did run are decisions taken by the enforcement points on scratch inputs, for
+all six pi instances and for Claude Code:
 
 - read under `~/Code/slash-eureka` refused
 - edit and write of a fake `.env` refused, `bash cat` of it refused
-- `bash cat` of an ssh-directory file refused
+- `bash cat` of an ssh-directory file refused; one `ls` of it allowed, and
+  `ls ~/.ssh; cat ~/.ssh/id_ed25519` refused
 - force-push, force-push-with-lease refused
-- push to `main` and `master` refused
-- `gh pr merge` without `--match-head-commit` refused
-- `gh pr merge ... --match-head-commit` allowed (dry run only; nothing was
-  merged)
+- push to `main` and `master` refused, including on a second remote
+- `gh pr merge` refused with no pin, and refused with a pin when the caller is
+  not a gate; a pin quoted inside another argument is not a pin
+- `gh pr merge ... --match-head-commit <head>` allowed only from the gate role
+  (dry run only; nothing was merged)
 - task-branch push to a scratch remote allowed, and the scratch remote has no
   `main` branch
 

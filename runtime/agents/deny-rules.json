@@ -27,7 +27,11 @@
   "merge_deny": {
     "match_re": "\\bgh\\s+pr\\s+merge\\b",
     "required_flag": "--match-head-commit",
-    "reason": "gh pr merge is denied for builders; gates merge only with the pinned --match-head-commit head"
+    "pin_re": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$",
+    "role_env": "MAC_OPS_ROLE",
+    "role_value": "gate",
+    "reason": "gh pr merge is denied for builders; only a gate thread may merge",
+    "pin_reason": "a gate merges only with the pinned --match-head-commit head as a merge argument"
   },
   "ascend_bash_reason": "reads and edits under ~/Code/slash-eureka (Ascend) are denied",
   "secret_bash_reason": "commands on secret files (.env, auth.json, keys, tokens, ~/.ssh) are denied",
@@ -38,7 +42,7 @@
       "source": "runtime/agents/deny-merge-guard.py",
       "target": "~/.claude/hooks/deny-merge-guard.py",
       "matcher": "Bash",
-      "note": "permissions.deny cannot express 'gh pr merge unless --match-head-commit', so the unpinned-merge deny lives in this PreToolUse hook in the same settings file."
+      "note": "permissions.deny cannot express 'gh pr merge unless the caller is a gate and --match-head-commit carries a commit id', nor can it name every remote a push targets, so those rules live in this PreToolUse hook in the same settings file. The hook denies a main/master push on any remote and any force-push, which is why the enumerate-as-remote entries below are only the common spellings."
     },
     "deny": [
       "Read(~/Code/slash-eureka/**)",
@@ -135,7 +139,7 @@
     "- No reads or edits under `~/Code/slash-eureka` (the Ascend repos: AUH, MCP, OPS, DBT, OMN).",
     "- No reads or edits of secret files: `.env` files, `auth.json`, key and token files, `~/.ssh`.",
     "- No force-push in any form, and no push to `main` or `master`. Pushing a task branch stays allowed.",
-    "- No `gh pr merge` without `--match-head-commit`; gate threads keep the pinned merge.",
+    "- No `gh pr merge` for a builder. Only a gate thread merges, and only with the pinned `--match-head-commit` head given as a merge argument.",
     ""
   ]
 }
