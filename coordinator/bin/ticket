@@ -754,12 +754,13 @@ def pull_files(repo, number, changed_files=None):
     truncated read is not a known list.
     """
     try:
-        files = gh_json(["api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
+        pages = gh_json(["api", "--paginate", "--slurp",
+                         f"repos/{repo}/pulls/{number}/files?per_page=100"])
     except (GhError, ValueError):
         return None
-    if not isinstance(files, list):
+    entries = prompt_paths.page_entries(pages)
+    if entries is None:
         return None
-    entries = [entry for entry in files if isinstance(entry, dict)]
     if not prompt_paths.list_is_complete(entries, changed_files):
         return None
     paths = []

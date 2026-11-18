@@ -206,7 +206,7 @@ def lane_truncation():
     command = "python3 evidence/MO-543/proof.py"
     written = []
     with patch.object(lane, "run",
-                      return_value='[{"filename": "coordinator/bin/ticket"}]'), \
+                      return_value='[[{"filename": "coordinator/bin/ticket"}]]'), \
             patch.object(lane, "publish_decision", lambda item: written.append(item)):
         state = lane.prompt_pull("shyamsivakumar/mac-ops", 544, 3001)
         held = lane.prompt_pass("shyamsivakumar/mac-ops", 544, HEAD, state)
@@ -218,7 +218,7 @@ def lane_truncation():
     def command_without_count(cmd, timeout=150):
         if cmd[:2] == ["gh", "api"] and cmd[2] != "--paginate":
             return '{"changed_files": 3001}'
-        return '[{"filename": "coordinator/bin/ticket"}]'
+        return '[[{"filename": "coordinator/bin/ticket"}]]'
 
     with patch.object(lane, "run", command_without_count), \
             patch.object(lane, "publish_decision", lambda item: written.append(item)):
@@ -291,9 +291,11 @@ def ticket_file_read():
     """The real read `ticket gate` makes: the paths of the pull request."""
     ticket = load(BIN / "ticket", "proof_ticket_files")
     command = "python3 evidence/MO-543/proof.py"
-    payload = [{"filename": "coordinator/config/AGENT-RULES.md"},
-               {"filename": "coordinator/overnight/lane_driver.py",
-                "previous_filename": "coordinator/overnight/old_lane.py"}]
+    # The read is slurped: a page is a list of entries, so two pages are two
+    # lists. The earlier payload was a flat list, which hid the multi-page case.
+    payload = [[{"filename": "coordinator/config/AGENT-RULES.md"},
+                {"filename": "coordinator/overnight/lane_driver.py",
+                 "previous_filename": "coordinator/overnight/old_lane.py"}]]
     with patch.object(ticket, "gh_json", return_value=payload):
         paths = ticket.pull_files("shyamsivakumar/mac-ops", 544, 2)
     grant("ticket's own file read returns every changed path",
@@ -302,9 +304,17 @@ def ticket_file_read():
                     "coordinator/overnight/old_lane.py"], command)
     # A shorter list than the pull request's own changed-file count is a
     # truncated read, and a truncated read is not a known list: no hold.
-    with patch.object(ticket, "gh_json", return_value=payload[:1]):
+    with patch.object(ticket, "gh_json", return_value=[[payload[0][0]]]):
         short = ticket.pull_files("shyamsivakumar/mac-ops", 544, 2)
     grant("a truncated file read is none, so the gate refuses it", short is None, command)
+    # Two pages are two arrays, and both are read: a 101-file pull request
+    # used to fail the parse and read as unknown on every run.
+    two_pages = [[{"filename": "coordinator/bin/ticket"}],
+                 [{"filename": "prompts/reviewer.md", "previous_filename": None}]]
+    with patch.object(ticket, "gh_json", return_value=two_pages):
+        paths = ticket.pull_files("shyamsivakumar/mac-ops", 544, 2)
+    grant("ticket's read flattens two pages, and page two still counts",
+          paths == ["coordinator/bin/ticket", "prompts/reviewer.md"], command)
     with patch.object(ticket, "pull_files", return_value=None):
         try:
             ticket.prompt_hold("shyamsivakumar/mac-ops", 544)

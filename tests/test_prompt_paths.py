@@ -86,6 +86,15 @@ class PromptPathTest(unittest.TestCase):
         self.assertFalse(prompt_paths.list_is_complete(entries, None))
         self.assertFalse(prompt_paths.list_is_complete(entries, []))
 
+    def test_slurped_pages_are_flattened(self):
+        """`--slurp` wraps every page, so 101 files arrive as two arrays."""
+        pages = [[{"filename": "a.py"}], [{"filename": "prompts/reviewer.md"}]]
+        self.assertEqual(prompt_paths.page_entries(pages),
+                         [{"filename": "a.py"}, {"filename": "prompts/reviewer.md"}])
+        self.assertIsNone(prompt_paths.page_entries([{"filename": "a.py"}]))
+        self.assertIsNone(prompt_paths.page_entries(None))
+        self.assertIsNone(prompt_paths.page_entries("not a page list"))
+
     def test_a_skills_directory_at_the_top_counts(self):
         self.assertTrue(prompt_paths.is_prompt_path("skills/SKILL.md"))
         self.assertTrue(prompt_paths.is_prompt_path("prompts/x.md"))
@@ -156,6 +165,15 @@ class TicketGateTest(unittest.TestCase):
         with patch.object(self.ticket, "pull_files",
                           return_value=["archive/reviewer.md", "prompts/reviewer.md"]):
             self.assertTrue(self.ticket.prompt_hold("shyamsivakumar/mac-ops", 544))
+
+    def test_the_read_flattens_pages(self):
+        """The files read is slurped, so 101 files arrive as two pages."""
+        pages = [[{"filename": "coordinator/bin/ticket"}],
+                 [{"filename": "prompts/reviewer.md"}]]
+        with patch.object(self.ticket, "gh_json", return_value=pages):
+            self.assertEqual(self.ticket.pull_files("shyamsivakumar/mac-ops", 544, 2),
+                             ["coordinator/bin/ticket", "prompts/reviewer.md"])
+            self.assertIsNone(self.ticket.pull_files("shyamsivakumar/mac-ops", 544, 3))
 
     def test_the_brief_does_not_hold_code(self):
         with patch.object(self.ticket, "pull_files", return_value=["coordinator/bin/ticket"]):
@@ -368,15 +386,15 @@ class LanePassTest(unittest.TestCase):
         self.assertIn("gh pr merge 544 -R shyamsivakumar/mac-ops", self.item["why"])
 
     def test_the_lane_reads_the_same_list(self):
-        with patch.object(self.lane, "run", return_value='[{"filename": "skills/x/SKILL.md"}]'):
+        with patch.object(self.lane, "run", return_value='[[{"filename": "skills/x/SKILL.md"}]]'):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.HOLD)
-        with patch.object(self.lane, "run", return_value='[{"filename": "coordinator/bin/ticket"}]'):
+        with patch.object(self.lane, "run", return_value='[[{"filename": "coordinator/bin/ticket"}]]'):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.CLEAR)
 
     def test_a_renamed_prompt_file_is_held(self):
-        files = '[{"filename": "archive/reviewer.md", "previous_filename": "prompts/reviewer.md"}]'
+        files = '[[{"filename": "archive/reviewer.md", "previous_filename": "prompts/reviewer.md"}]]'
         with patch.object(self.lane, "run", return_value=files):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.HOLD)
@@ -415,7 +433,7 @@ class LanePassTest(unittest.TestCase):
         """A short list may have hidden the prompt file, so it is no list."""
         written = []
         with patch.object(self.lane, "run",
-                          return_value='[{"filename": "coordinator/bin/ticket"}]'), \
+                          return_value='[[{"filename": "coordinator/bin/ticket"}]]'), \
                 patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
             state = self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 3001)
             held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40, state)
@@ -425,8 +443,21 @@ class LanePassTest(unittest.TestCase):
 
     def test_a_complete_list_of_code_is_clear(self):
         with patch.object(self.lane, "run",
-                          return_value='[{"filename": "coordinator/bin/ticket"}]'):
+                          return_value='[[{"filename": "coordinator/bin/ticket"}]]'):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
+                             prompt_paths.CLEAR)
+
+    def test_a_multi_page_list_holds_its_prompt_file(self):
+        """A 101-file PR arrives as two pages, and page 2 still counts."""
+        pages = ('[[{"filename": "coordinator/bin/ticket"}],'
+                 ' [{"filename": "prompts/reviewer.md"}]]')
+        with patch.object(self.lane, "run", return_value=pages):
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 2),
+                             prompt_paths.HOLD)
+        with patch.object(self.lane, "run",
+                          return_value='[[{"filename": "coordinator/bin/ticket"}],'
+                                       ' [{"filename": "docs/ticket-gate.md"}]]'):
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 2),
                              prompt_paths.CLEAR)
 
     def test_a_dry_run_writes_no_board_item(self):

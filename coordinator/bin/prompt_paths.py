@@ -61,6 +61,19 @@ def entries_paths(entries):
     return [path for entry in entries or () for path in entry_paths(entry)]
 
 
+def page_entries(pages):
+    """The file entries of a slurped page list, or None when it is not one.
+
+    `gh api --paginate --slurp` wraps every page in a single array, so one
+    page arrives as `[[entry, ...]]` and several as `[[...], [...]]`. Reading
+    the raw paginated output instead concatenates the pages, which is not JSON
+    at all: a 101-file pull request then read as unknown on every run.
+    """
+    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+        return None
+    return [entry for page in pages for entry in page if isinstance(entry, dict)]
+
+
 def prompt_change(paths):
     """True when one known path list carries prompt, skill or playbook text.
 

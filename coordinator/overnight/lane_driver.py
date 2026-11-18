@@ -556,12 +556,14 @@ def pr_paths(repo, number, changed_files=None):
     the pull request's own changed-file count may have left the one prompt
     file out (the files endpoint stops at 3,000), so it is no list at all.
     """
-    output = run(["gh", "api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
+    output = run(["gh", "api", "--paginate", "--slurp",
+                  f"repos/{repo}/pulls/{number}/files?per_page=100"])
     try:
-        entries = json.loads(output or "[]")
+        pages = json.loads(output or "[]")
     except ValueError:
         return None
-    if not isinstance(entries, list):
+    entries = prompt_paths.page_entries(pages)
+    if entries is None:
         return None
     if not prompt_paths.list_is_complete(entries, changed_files):
         return None
