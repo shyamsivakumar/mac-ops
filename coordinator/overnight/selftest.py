@@ -1148,9 +1148,14 @@ def zero_merge():
         exact(state["items"], [other, alert])
 
         snapshot["repos"]["fixture/one"]["prs"] = []
-        lane.zero_merge(snapshot)
+        # A healthy tick raises nothing, so it says nothing about an alarm:
+        # "with open PRs: none" is not a stall.
+        healthy = io.StringIO()
+        with contextlib.redirect_stdout(healthy):
+            lane.zero_merge(snapshot)
         exact(state["items"], [other])
         exact(len(calls), 10)
+        exact("ZERO-MERGE No merge" in healthy.getvalue(), False)
         # The board is written through the alarm module's own writer, and
         # the mute state beside it, each from a temporary file of its own.
         replaced = {(str(call.args[0]), str(call.args[1])) for call in replace.call_args_list}
@@ -1171,9 +1176,19 @@ def zero_merge():
         first = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
         exact(len(first), 1)
         exact(first[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one")
+        # The answer goes to the mute state the shift keeps. The replace
+        # above is observed by a mock, so the eval writes the record the
+        # panel writes, rather than replacing the file and losing it.
         answers = mute_rules.load_state()
-        mute_rules.acknowledge(answers, mute_rules.key_of("factory-zero-merge", first[0]["cause"]))
-        mute_rules.save_state(answers)
+        answered = mute_rules.key_of("factory-zero-merge", first[0]["cause"])
+        mute_rules.acknowledge(answers, answered, now)
+        Path(mute).write_text(json.dumps({mute_rules.STATE_KEY: answers}))
+        exact(mute_rules.muted(mute_rules.load_state(), answered, now), True)
+        # The answered cause is quiet: the same wait raises no board item.
+        lane.zero_merge(snapshot)
+        exact([i for i in state["items"] if i["id"] == "factory-zero-merge"], [])
+        # A repository that starts waiting is a different cause, so it
+        # alarms at once under its own key.
         snapshot["repos"]["fixture/two"]["prs"] = [{"number": 2}]
         lane.zero_merge(snapshot)
         raised = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
