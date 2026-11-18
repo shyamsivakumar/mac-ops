@@ -298,6 +298,10 @@ def item_proof(state, path):
             "detail": f"the proof file at {path} could not be read, so the checks are unproven"}
 
 
+# A check recorded outside the table: a name, a colon, and a result.
+RESULT_LINE = re.compile(r"(?i)^(?:[-*+]\s+)?(?P<name>[^:]+?)\s*:\s*(?P<result>passed|failed|not run)\s*$")
+
+
 def proof_rows(text):
     """Every check the proof file lists, with the result it recorded.
 
@@ -317,6 +321,12 @@ def proof_rows(text):
     for line in (text or "").splitlines():
         line = line.strip()
         if not line.startswith("|"):
+            # A result written outside the table is a check too: "lane
+            # selection: failed" records a failure, and dropping it would
+            # report that every check passed.
+            plain = RESULT_LINE.match(line)
+            if plain:
+                rows.append((plain.group("name").strip(), plain.group("result").lower()))
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
         if cells and all(cell and set(cell) <= set("-: ") for cell in cells):

@@ -328,6 +328,17 @@ class DiffValuesTest(unittest.TestCase):
         self.assertEqual(check.proof_rows(text),
                          [("lane selection", "passed"), ("heavy help", "failed")])
 
+    def test_a_failure_written_outside_the_table_still_fails(self):
+        """A result outside the table is a check too."""
+        check = close_check()
+        text = ("| Check | Command | Result | Detail |\n"
+                "| --- | --- | --- | --- |\n"
+                "| lane selection | `x` | passed | |\n"
+                "heavy help: failed\n")
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("failed", item["detail"])
+
     def test_a_row_that_only_looks_like_a_separator_is_a_check(self):
         """A separator is a row of separators, not a row whose name is one.
 
