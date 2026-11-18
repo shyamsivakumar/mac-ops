@@ -8,8 +8,15 @@ Lists: `build` (every build type), `fix` (fix and finish rounds), `review`
 A provider that fails for a blocking reason is recorded by the provider
 health store, `providers-blocked.json` in the queue folder. This module
 only reads that file, so every caller skips the same blocked providers.
+
+A caller that reads the blocked set and then acts on it holds
+`blocked_lock()`, the lock every writer of the store holds too. A block
+recorded while that lock is held cannot land between the decision and the
+action it decided on.
 """
 
+import contextlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -18,6 +25,7 @@ LISTS = ("build", "fix", "review", "panel")
 INSTALLED_PATH = "~/.coordinator/models.json"
 SEED_PATH = Path(__file__).resolve().parent.parent / "models.json"
 BLOCKED_FILE = "providers-blocked.json"
+BLOCKED_LOCK_FILE = "providers-blocked.lock"
 VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
 
 
@@ -101,8 +109,32 @@ def same_selection(a, b):
             and a.get("instanceId") == b.get("instanceId") and a.get("model") == b.get("model"))
 
 
+def queue_dir():
+    """The queue folder, where the block store and its lock live."""
+    return os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+
+
+@contextlib.contextmanager
+def blocked_lock():
+    """The lock on the provider block store.
+
+    A caller holds it while it reads the blocked set and acts on the
+    answer, so a block recorded in between cannot slip past the decision.
+    The store's writer holds the same lock while it writes, so the two
+    never overlap. The lock is taken before the queue lock, everywhere.
+    """
+    directory = queue_dir()
+    os.makedirs(directory, exist_ok=True)
+    handle = open(os.path.join(directory, BLOCKED_LOCK_FILE), "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        handle.close()
+
+
 def blocked_identities():
-    queue = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
+    queue = queue_dir()
     try:
         data = read_json(os.path.join(queue, BLOCKED_FILE))
     except FileNotFoundError:
