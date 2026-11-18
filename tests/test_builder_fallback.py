@@ -331,6 +331,34 @@ class CallerTests(StoreCase):
         self.assertEqual(launches[1]["modelSelection"], MINIMAX)
         self.assertTrue(provider_health.blocked(GLM))
 
+    def test_a_failed_build_keeps_the_request_id_it_was_asked_with(self):
+        # The fallback renames the retry, so the receipt keeps the request the
+        # caller asked with as an alias: a lookup by that ID still finds the
+        # thread that is running the build.
+        module = self.coordq()
+        self.queued(module, [{"id": 2, "tool": "t3_thread_launch", "priority": 0,
+                              "title": "ticket",
+                              "args": {"projectId": "p", "title": "ticket",
+                                       "modelSelection": dict(GLM), "clientRequestId": "build:2"}}])
+        launches = []
+
+        def dispatch(tool, args, rules=None):
+            if tool != "t3_thread_launch":
+                return 0, json.dumps({"thread": {"status": "completed"}})
+            launches.append(dict(args))
+            if len(launches) == 1:
+                return 1, "429 code 1308 usage limit"
+            return 0, json.dumps({"thread": {"threadId": "t-retry"}})
+
+        with patch.object(module, "active_thread_ids", lambda: set()), \
+                patch.object(module, "call", dispatch):
+            module.drain()
+        with open(os.path.join(self.scratch.name, "dispatch-receipts.json")) as f:
+            receipts = json.load(f)
+        self.assertEqual(launches[1]["clientRequestId"], "build:2:" + MINIMAX["model"] + ":retry")
+        self.assertEqual(receipts[launches[1]["clientRequestId"]], "t-retry")
+        self.assertEqual(receipts["build:2"], "t-retry")
+
     def ticket(self):
         from importlib.machinery import SourceFileLoader
         return SourceFileLoader("ticket_under_test", str(ROOT / "coordinator/bin/ticket")).load_module()

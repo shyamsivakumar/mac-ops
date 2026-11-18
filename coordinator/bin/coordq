@@ -444,6 +444,12 @@ def drain():
                 receipts[request_id] = thread_id
                 if request_id.startswith("gate:"):
                     receipts[":".join(request_id.split(":")[:3])] = thread_id
+                # A builder fallback renames the retry, so the receipt keeps
+                # the request the caller asked with as an alias. A caller
+                # that looks the build up by that ID still finds the thread.
+                origin = item.get("originRequestId")
+                if isinstance(origin, str) and origin and origin != request_id:
+                    receipts[origin] = thread_id
                 with open(receipts_path + ".tmp", "w") as f:
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
@@ -473,6 +479,8 @@ def drain():
             elif builders.is_builder(item["args"].get("modelSelection")) and not probe_request(request_id):
                 model = failed_builder(item["args"]["modelSelection"], out)
                 if model:
+                    if request_id:
+                        item.setdefault("originRequestId", request_id)
                     item["args"]["modelSelection"] = model
                     item["args"]["clientRequestId"] = ((request_id or f"build:{item['id']}")
                                                       + ":" + model["model"] + ":retry")
