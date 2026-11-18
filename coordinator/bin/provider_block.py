@@ -102,16 +102,38 @@ def lock_path():
     return os.path.join(queue_dir(), LOCK_FILE)
 
 
+_holding = [0]
+
+
 @contextmanager
-def locked():
-    """Hold the block file for one read-modify-write."""
+def locked(blocking=True):
+    """Hold the block file for one read-modify-write.
+
+    A caller that already holds the lock in this process keeps it, so a
+    writer called from inside a held lock does not wait on its own lock.
+    With `blocking=False` the lock is yielded as False when another process
+    holds it, and the caller waits."""
+    if _holding[0]:
+        _holding[0] += 1
+        try:
+            yield True
+        finally:
+            _holding[0] -= 1
+        return
     os.makedirs(queue_dir(), exist_ok=True)
     handle = open(lock_path(), "w")
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        _holding[0] = 1
+        try:
+            yield True
+        finally:
+            _holding[0] = 0
     finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
         handle.close()
 
 
