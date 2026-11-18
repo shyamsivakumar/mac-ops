@@ -340,13 +340,49 @@ def classify_changes(path: Path, records: list[tuple[str, str, str | None]]) -> 
     return bootstrap, real
 
 
-def removal_force_flags(path: Path, records: list[tuple[str, str, str | None]]) -> list[str]:
-    """Git flags needed to remove a worktree whose only changes are bootstrap files."""
-    bootstrap, real = classify_changes(path, records)
-    if real or not bootstrap:
-        return []
-    untracked = any(code.strip() == "??" for code, _name, _original in records)
-    return ["--force", "--force"] if untracked else ["--force"]
+def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None]]) -> list[str] | None:
+    """Clear the verified bootstrap changes of a worktree.
+
+    Only the bootstrap files are touched, and only the ones the scan already
+    verified. Every other change stays, so an unforced `git worktree remove`
+    refuses to delete a worktree that holds anything else, and a file saved
+    after the scan is never removed.
+    """
+    cleared: list[str] = []
+    for code, name, original in records:
+        if original is not None:
+            if not (bootstrap_path(original) and bootstrap_path(name)):
+                return None
+            git(path, "checkout", "HEAD", "--", original)
+            try:
+                (path / name).unlink(missing_ok=True)
+            except OSError:
+                return None
+            cleared.append(name)
+            continue
+        if name == AGENTS_FILE:
+            if not agents_only_rules(path):
+                return None
+            if code.strip() == "??":
+                try:
+                    (path / name).unlink(missing_ok=True)
+                except OSError:
+                    return None
+            else:
+                git(path, "checkout", "HEAD", "--", AGENTS_FILE)
+            cleared.append(name)
+            continue
+        if not bootstrap_path(name):
+            return None
+        if code.strip() == "??":
+            try:
+                (path / name).unlink(missing_ok=True)
+            except OSError:
+                return None
+        else:
+            git(path, "checkout", "HEAD", "--", name)
+        cleared.append(name)
+    return cleared
 
 
 def detached_idle_seconds(path: Path) -> int | None:
@@ -976,7 +1012,17 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["process_cwd_inside"]
                     continue
                 try:
-                    result = run(["git", "-C", str(repo_root), "worktree", "remove", *removal_force_flags(Path(candidate["path"]), latest_records), candidate["path"]], timeout=300)
+                    cleared = clear_bootstrap_changes(Path(candidate["path"]), latest_records)
+                except (SafetyError, OSError):
+                    cleared = None
+                if cleared is None:
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["bootstrap_clear_failed"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
+                candidate["cleared_bootstrap_changes"] = cleared
+                try:
+                    result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
                 except SafetyError:
                     append_removal(state_root, candidate, "removal_outcome_unknown")
                     candidate["eligible"] = False
