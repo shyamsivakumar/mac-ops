@@ -1487,12 +1487,9 @@ def recover_dead_runs(ledger):
                     settle_dead_run(thread_id)
                 continue
             model = dead_run_model(full_thread, limit_failure)
-            if block_reason:
-                # The run ended because its provider ran out. That builder
-                # cannot run the continue either, so it is blocked for every
-                # build and send and the work moves to the next builder.
+            if block_reason or not builders.is_builder(model):
                 current = builder_of(full_thread)
-                if current and not DRY:
+                if current and block_reason and not DRY:
                     line = builders.blocked_builder(
                         current, block_reason, reset_at=provider_health.reset_time(reply))
                     if line:
