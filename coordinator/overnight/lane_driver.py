@@ -16,6 +16,18 @@ import alarms
 import models as model_list
 import stall
 
+# The GitHub call path lives next to the coordq and ticket binaries: one
+# cache, one floor and one usage log for every caller.
+_BIN_DIR = str(Path(__file__).resolve().parents[1] / "bin")
+if _BIN_DIR not in sys.path:
+    sys.path.insert(0, _BIN_DIR)
+import gh_gateway
+
+# The lane driver loads inside the overnight command, so it names itself on
+# its own calls. A process-wide name would charge every later overnight call
+# to the lane driver and spoil the per-caller ranking.
+LANE_CALLER = "lane_driver"
+
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 CFG = {}
@@ -27,7 +39,9 @@ SNAPSHOT = {}
 # of the repository: work there moves the branch everyone installs from.
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
          "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
-API_FLOOR = 500
+# The calls left in reserve before an optional read is skipped. The lane
+# driver, gatekeep and the overnight shift share this one floor.
+API_FLOOR = gh_gateway.floor()
 BOARD_REFRESH_PASSES = 5
 # The stall events of the last pass: an item that was reported as stalled
 # and a board that stopped moving. The shift writes the records for them.
@@ -38,31 +52,30 @@ STALL_EVENTS = []
 STALL_STATE = {}
 
 
-class ApiBudgetExhausted(RuntimeError):
-    pass
+# The quota, its floor and its refusal are the shared helper's, so the
+# lane driver stops on the same number as every other caller.
+ApiBudgetExhausted = gh_gateway.ApiBudgetExhausted
 
 
 def api_remaining():
-    result = subprocess.run(["gh", "api", "rate_limit"], capture_output=True,
-                            text=True, timeout=60)
-    if result.returncode:
-        raise ApiBudgetExhausted("quota could not be read")
-    try:
-        resources = json.loads(result.stdout)["resources"]
-        return {name: int(resources[name]["remaining"]) for name in ("core", "graphql")}
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ApiBudgetExhausted("quota response is invalid") from exc
+    return gh_gateway.api_remaining()
 
 
 def require_api_budget():
+    """Stop an optional read below the shared floor.
+
+    The quota read is this module's `api_remaining`, so a caller that
+    already read the quota in this pass is not made to read it again."""
     remaining = api_remaining()
     if min(remaining.values()) < API_FLOOR:
-        raise ApiBudgetExhausted(f"optional reads stopped: remaining={remaining}, floor={API_FLOOR}")
+        raise ApiBudgetExhausted(
+            f"optional reads stopped: remaining={remaining}, floor={API_FLOOR}")
+    return remaining
 
 
 def read_json(cmd):
     require_api_budget()
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = gh_gateway.run(cmd, timeout=300, caller_name=LANE_CALLER)
     if result.returncode:
         raise RuntimeError(f"snapshot read failed: {cmd[:3]} (exit {result.returncode})")
     return json.loads(result.stdout)
@@ -102,7 +115,7 @@ ORDER = {
 def run(cmd, timeout=150):
     if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list")):
         require_api_budget()
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    p = gh_gateway.run(cmd, timeout=timeout, caller_name=LANE_CALLER)
     output = (p.stdout + p.stderr).strip()
     refusal = ("--dry-run" in cmd and cmd[:2] == ["ticket", "start"]
                and p.returncode == 2 and output.startswith("refused: ")
@@ -1194,8 +1207,8 @@ def dead_reference(repo, number):
     does not stop the pass. A read that fails raises: a thread is never
     settled or flagged on a state the driver could not see."""
     require_api_budget()
-    result = subprocess.run(["gh", "api", f"repos/{repo}/issues/{number}"],
-                            capture_output=True, text=True, timeout=120)
+    result = gh_gateway.run(["gh", "api", f"repos/{repo}/issues/{number}"],
+                            timeout=120, caller_name=LANE_CALLER)
     if result.returncode:
         output = result.stdout + result.stderr
         if "HTTP 404" in output or "Not Found" in output:
@@ -1221,10 +1234,10 @@ def dead_ticket_prs(repo, number):
     with more than a page of pull requests has an open one the read did not
     return, so the caller cannot settle on it."""
     require_api_budget()
-    result = subprocess.run(["gh", "pr", "list", "-R", repo, "--state", "all",
+    result = gh_gateway.run(["gh", "pr", "list", "-R", repo, "--state", "all",
                              "--limit", str(DEAD_PR_PAGE), "--search", f"#{number} in:body",
-                             "--json", "number,state,mergedAt,body"],
-                            capture_output=True, text=True, timeout=120)
+                             "--json", "number,state,mergedAt,body"], timeout=120,
+                            fresh=True, caller_name=LANE_CALLER)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(
@@ -1241,10 +1254,10 @@ def dead_ticket_numbers(repo, token):
     issue number, so the issue is found by its key in the title. Closed
     issues count: finished work is what settles a thread."""
     require_api_budget()
-    result = subprocess.run(["gh", "issue", "list", "-R", repo, "--state", "all",
+    result = gh_gateway.run(["gh", "issue", "list", "-R", repo, "--state", "all",
                              "--limit", "10", "--search", f"{token} in:title",
-                             "--json", "number,title"],
-                            capture_output=True, text=True, timeout=120)
+                             "--json", "number,title"], timeout=120,
+                            fresh=True, caller_name=LANE_CALLER)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(f"{repo} {token}: {first[0] if first else result.returncode}")

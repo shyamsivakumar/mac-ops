@@ -11,6 +11,11 @@ if _BIN_DIR not in sys.path:
 
 from gate_bar import GATE_BAR
 from tick_health import tick_alarm
+import gh_gateway
+
+# Every gh call here goes through the helper, and the helper uses this
+# module's launcher, so a test that replaces `subprocess` still sees them.
+gh_gateway.set_runner(lambda: subprocess.run)
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 T3MCP = os.environ.get("COORDQ_T3MCP", "t3mcp")
@@ -66,6 +71,9 @@ STAGE = "stage:todo"
 # tick can see it. A PR that is skipped on the same head this many times is
 # stuck; a new head starts the count again.
 STUCK_COUNT = 3
+# The calls kept in reserve before an optional read is skipped. The lane
+# driver, gatekeep and the shift share this one floor.
+FLOOR = gh_gateway.floor()
 STUCK_FILE = "gatekeep-stuck.txt"
 # A gate that dies without a verdict is queued again, but a reviewer that
 # cannot run at all fails the same way, so a retry with no end relaunches it
@@ -871,11 +879,11 @@ def mark_refill():
 
 def search_stage_todo(owner):
     """The open stage:todo issues of one owner, oldest first."""
-    run = subprocess.run(["gh", "search", "issues", "--owner", owner, "--state", "open",
+    run = gh_gateway.run(["gh", "search", "issues", "--owner", owner, "--state", "open",
                           "--label", STAGE, "--sort", "created", "--order", "asc",
                           "--limit", str(REFILL_LIMIT),
                           "--json", "repository,number,title,createdAt,updatedAt,labels"],
-                         capture_output=True, text=True, timeout=40)
+                         timeout=40, limit=FLOOR)
     if run.returncode:
         raise RuntimeError(f"GitHub search failed for {owner}: {run.stderr.strip()[:200]}")
     return json.loads(run.stdout)
@@ -961,9 +969,9 @@ def board_candidates():
     occupied = live_lane_repositories(cfg)
     rows = []
     for repo in cfg["repos"]:
-        run = subprocess.run(["gh", "api", "--paginate", "--slurp",
+        run = gh_gateway.run(["gh", "api", "--paginate", "--slurp",
                               f"repos/{repo}/issues?state=open&per_page=100"],
-                             capture_output=True, text=True, timeout=40)
+                             timeout=40, limit=FLOOR)
         if run.returncode:
             raise RuntimeError(f"open issue snapshot failed for {repo}")
         for page in json.loads(run.stdout):
@@ -1285,9 +1293,14 @@ def cmd_status(a):
 
 
 
-def gh_json(endpoint):
-    run = subprocess.run(["gh", "api", "--paginate", "--slurp", endpoint],
-                         capture_output=True, text=True, timeout=40)
+def gh_json(endpoint, optional=True, fresh=False):
+    """Read one endpoint as JSON.
+
+    `optional` is what the floor applies to: the polling reads that run on
+    a timer, and not an explicit `gate` an operator asked for."""
+    run = gh_gateway.run(["gh", "api", "--paginate", "--slurp", endpoint],
+                         timeout=40, limit=FLOOR if optional else None,
+                         fresh=fresh)
     if run.returncode:
         raise RuntimeError(f"GitHub request failed: {endpoint}")
     pages = json.loads(run.stdout)
@@ -1493,8 +1506,8 @@ def gate_candidates(config):
     Every event carries the pull request it belongs to, so the caller can
     count the skips of a pull request and report the ones it cannot gate.
     """
-    login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                               capture_output=True, text=True, timeout=40)
+    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
+                               timeout=40, limit=FLOOR)
     if login_run.returncode:
         raise RuntimeError("cannot identify authenticated GitHub user")
     login = login_run.stdout.strip()
@@ -1553,6 +1566,7 @@ def gate_candidates(config):
                         print(f"backstop {repo}#{number}: executed model unavailable, reviewer "
                               f"{model['instanceId']} {model['model']}", file=sys.stderr)
                         noted.add((repo, number))
+                # The gatekeep scan is optional polling: the floor applies.
                 statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
                 checks = [x for x in statuses if x["context"] == "srw/agent-check"]
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -1589,6 +1603,12 @@ def executed_models(value):
 def cmd_gatekeep(a):
     with open(a.config) as f:
         config = json.load(f)
+    # The gate is an optional read: below the shared floor it waits for the
+    # quota instead of spending the last calls and stalling every caller.
+    remaining = gh_gateway.remaining_or_none()
+    if remaining and min(remaining.values()) < FLOOR:
+        print(f"gatekeep skipped: below the API floor {FLOOR} {remaining}", flush=True)
+        return
     try:
         counts = load_counts()
         seen = set()
@@ -1678,6 +1698,10 @@ def cmd_gatekeep(a):
                               "at": time.time() if retries else None, "givenUp": False}
                 save(queue)
         write_counts(counts, seen, stuck, a.dry_run)
+    except gh_gateway.ApiBudgetExhausted as e:
+        # The quota fell below the floor mid-run: the gate is optional, so
+        # this run stops where it is instead of spending the last calls.
+        print(f"gatekeep skipped: {e}", flush=True)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
         die(f"gatekeep stopped: {e}")
 
@@ -1728,8 +1752,9 @@ def cmd_fix(a):
             receipts = json.load(f)
     except (OSError, ValueError) as e:
         die(f"refused: the dispatch receipts could not be read: {e}")
-    run = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
-                         capture_output=True, text=True, timeout=40)
+    # An explicit request is not optional polling: the floor is not applied,
+    # so a below-floor quota still lets the operator's read through.
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}"], timeout=40)
     if run.returncode:
         die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
     pr = json.loads(run.stdout)
@@ -1820,7 +1845,8 @@ def check_names_head(body, head, publisher, checks):
     return False
 
 
-def gate_request(repo, pr, settings, config, receipts, login):
+def gate_request(repo, pr, settings, config, receipts, login, optional=True,
+                 fresh=False):
     """Return the gate request of one open pull request, or None.
 
     The backstop gates a head the queue's own gatekeeper left alone. The
@@ -1837,7 +1863,8 @@ def gate_request(repo, pr, settings, config, receipts, login):
         model = reviewer_model(builder_models(thread, runs))
         if model is None:
             return None
-        statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
+        statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
+                           optional=optional, fresh=fresh)
         checks = [x for x in statuses if x["context"] == "srw/agent-check"]
         publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
         if not check_names_head(body, head, publisher, checks):
@@ -1846,7 +1873,8 @@ def gate_request(repo, pr, settings, config, receipts, login):
         proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
                                proof=proof, proof_path=proof_path, proof_state=proof_state), builder_models(thread, runs)
-    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
+    statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100",
+                       optional=optional, fresh=fresh)
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
     if not check_names_head(body, head, publisher, checks):
@@ -1882,8 +1910,9 @@ def cmd_gate(a):
     settings = (config.get("repos") or {}).get(repo)
     if not settings:
         die(f"refused: {repo} is not on the board")
-    run = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
-                         capture_output=True, text=True, timeout=40)
+    # An explicit request is not optional polling: the floor is not applied,
+    # so a below-floor quota still lets the operator's read through.
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}"], timeout=40)
     if run.returncode:
         die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
     pr = json.loads(run.stdout)
@@ -1901,12 +1930,13 @@ def cmd_gate(a):
         # kept, because the reviewer that could not run has not changed.
         if key in heads and not state["givenUp"]:
             die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
-    login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                               capture_output=True, text=True, timeout=40)
+    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"], timeout=40)
     if login_run.returncode:
         die("refused: the authenticated GitHub user is unknown")
     login = login_run.stdout.strip()
-    found = gate_request(repo, pr, settings, config, load_receipts(), login)
+    # An explicit gate is a required read: the floor applies to polling.
+    found = gate_request(repo, pr, settings, config, load_receipts(), login,
+                         optional=False, fresh=True)
     if not found:
         die(
             f"refused: no passing builder check of {repo}#{number} names the "
