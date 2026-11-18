@@ -84,6 +84,8 @@ the test that fails without the fix.
 | 82 | a changed file was restored with an overwriting rename, so a newer save at the original path was destroyed | the file is restored **exclusively** with a link, so a path that was taken by a newer save keeps that save and the copy that was moved aside is kept beside it | `verification/worktree-cleaner/check_bootstrap.py` |
 | 83 | the registration was removed on the earlier survival value even when the removal of the directory failed, so a surviving file was left without its pointer or registration | the registration is removed only when the **removal of the checkout was confirmed** | `verification/worktree-cleaner/check_bootstrap.py` |
 | 84 | the head lock was kept when the removal was refused, so the retained checkout was locked against commits | the lock is released on **every** path out of the removal | `verification/worktree-cleaner/check_bootstrap.py` |
+| 85 | the `.git` pointer was restored by pathname, so a replacement checkout at that path could have its valid pointer overwritten | the pointer is restored **exclusively**, through the descriptor of the directory that was verified, so a checkout that took the place keeps the pointer it has, and the conflict is reported | `verification/worktree-cleaner/check_bootstrap.py` |
+| 86 | the directory was removed by pathname after its descriptor was closed, so an empty directory that took the place was removed and the removal was taken as proof that the verified checkout was gone | the directory that is removed has to carry the identity that was verified, and the registration is removed only when that removal was confirmed | `verification/worktree-cleaner/check_bootstrap.py` |
 
 ## How the fixes are proved
 

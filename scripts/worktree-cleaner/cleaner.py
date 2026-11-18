@@ -1916,14 +1916,21 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     # that was created after the snapshot is not in the loop at all.
                     remaining = _snapshot_directory(directory)
                     survived = bool(remaining)
-                    os.close(directory)
                     tree_gone = False
                     if not survived:
+                        # The directory that is removed has to be the one
+                        # that was verified, so a replacement that took the
+                        # path is not removed.
                         try:
-                            os.rmdir(candidate["path"])
-                            tree_gone = True
+                            current = os.stat(candidate["path"], follow_symlinks=False)
                         except OSError:
-                            tree_gone = False
+                            current = None
+                        if current is not None and (not expected_identity or f"{current.st_dev}:{current.st_ino}" == expected_identity):
+                            try:
+                                os.rmdir(candidate["path"])
+                                tree_gone = True
+                            except OSError:
+                                tree_gone = False
                     # The registration is removed through its own descriptor, so a
                     # registration that replaced it in the meantime is not
                     # touched.
@@ -1933,10 +1940,17 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         # there and keeps its pointer, and the registration is
                         # kept with it.
                         if pointer:
+                            # The pointer is restored exclusively, through the
+                            # descriptor of the directory that was verified, so
+                            # a checkout that took the place keeps the
+                            # pointer it has.
                             try:
-                                (Path(candidate["path"]) / ".git").write_text(pointer, encoding="utf-8")
+                                descriptor = os.open(".git", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644, dir_fd=directory)
                             except OSError:
-                                pass
+                                candidate["pointer_conflict"] = True
+                            else:
+                                with os.fdopen(descriptor, "w") as handle:
+                                    handle.write(pointer)
                         try:
                             admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                         except OSError:
@@ -1994,6 +2008,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["eligible"] = False
                         candidate["reasons"] = ["worktree_not_fully_removed"]
                         continue
+                    os.close(directory)
                 finally:
                     if lock.exists():
                         try:
