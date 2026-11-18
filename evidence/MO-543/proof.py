@@ -214,6 +214,28 @@ def lane_truncation():
           and written == [], command)
 
 
+def board_reconcile():
+    """A merge ask whose pull request left the open list is taken down."""
+    import lane_driver as lane
+    command = "python3 evidence/MO-543/proof.py"
+    saved = lane.CFG
+    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+    board = {"items": [{"id": "prompt-merge-MO-544"}, {"id": "prompt-merge-MO-545"},
+                        {"id": "unrelated"}]}
+    # 544 is merged or closed between passes, so only 545 is still open.
+    snapshot = {"repos": {"shyamsivakumar/mac-ops": {"prs": [{"number": 545}]}}}
+    taken = []
+    try:
+        with patch.object(lane.alarms, "read_board", return_value=(b"", board)), \
+                patch.object(lane, "withdraw_decision",
+                             lambda item_id: (taken.append(item_id), "wrote")[1]):
+            removed = lane.reconcile_prompt_items(snapshot)
+    finally:
+        lane.CFG = saved
+    grant("board: a merge ask for a settled prompt PR is taken down, an open one stays",
+          taken == ["prompt-merge-MO-544"] and removed == 1, command)
+
+
 def ticket_file_read():
     """The real read `ticket gate` makes: the paths of the pull request."""
     ticket = load(BIN / "ticket", "proof_ticket_files")
@@ -248,6 +270,7 @@ def main():
     queue_briefs()
     ticket_file_read()
     lane_truncation()
+    board_reconcile()
     lane_replay()
     failures = [row for row in RESULTS if not row[1]]
     for gate, ok, command in RESULTS:
