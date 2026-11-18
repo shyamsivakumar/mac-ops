@@ -1475,6 +1475,7 @@ def consolidation_guard():
         calls.append(command)
         return "fixture-receipt"
     with patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
+         patch.object(lane, "repo_root", return_value="/fixture/repo"), \
          patch.object(lane, "CFG", {"fixture/repo": {"projectId": "fixture", "key": "FIX"}}):
         ledger = {}
         lane.park("fixture/repo", 2, 1, "a" * 40, "fixture verdict", ledger)

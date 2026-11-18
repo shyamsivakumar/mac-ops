@@ -188,6 +188,25 @@ class BuilderChoice(unittest.TestCase):
         with patch.object(self.lane, "run", run):
             self.assertTrue(self.lane.barred_worktree("/fixture/worktree"))
 
+    def test_a_park_on_a_herdr_root_waits(self):
+        # The re-cut thread works in the project root, so a root on a
+        # herdr branch is Shyam's to merge and takes no launch.
+        lane = self.lane
+        calls = []
+
+        def run(cmd, timeout=150):
+            if cmd[:1] == ["git"]:
+                return "herdr/gh-trim"
+            calls.append(cmd)
+            return "fixture-receipt"
+
+        with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
+             patch.object(lane, "CFG", {REPO: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "run", run), patch.object(lane, "DRY", False):
+            result = lane.park(REPO, 20, 10, "a" * 40, "findings", {})
+        self.assertIn("park waits", result)
+        self.assertEqual([c for c in calls if c[:2] == [lane.COORDQ, "start"]], [])
+
     def test_a_missing_worktree_on_a_blocked_builder_is_never_handed_off(self):
         # The thread's provider is blocked and its worktree is gone from
         # disk, so the work starts on the verified PR branch instead.
