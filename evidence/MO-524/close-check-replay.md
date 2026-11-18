@@ -49,10 +49,16 @@ the words of a sentence that forbids a change, name what the ticket excludes, so
 change to one of them fails the scope item.
 
 A ticket clause about its existing tests keeps its restriction. The clause lets a
-test change when the test pins what the change pins, that is when the two files
-share a distinctive value, or when the test is the test of a changed file by name.
-A shared prefix is not a relationship: `tests/test_close_window.py` is not the test of
-`close_check.py`.
+test change when the test pins what the change pins, that is when the test and a
+changed source file share a distinctive value, or when the test is the test of a
+changed source file by name. A shared prefix is not a relationship:
+`tests/test_close_window.py` is not the test of `close_check.py`.
+
+A test ties to a source file only. Evidence is not a source, so a pull request
+cannot add an evidence file that carries the name of its own test, and it cannot
+copy a value from an unrelated test into a changed evidence file to tie that test.
+A source file the ticket never names fails the scope item on its own, so tying to
+one grants nothing.
 
 The cost note item is skipped in all three: MO-1068 (#504) is report only and its
 report (evidence/MO-1068/cost-report.md) does not exist yet.

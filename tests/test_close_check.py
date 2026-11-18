@@ -143,6 +143,32 @@ class ScopeTest(unittest.TestCase):
         ticket = "Change `close_check.py`. Out of scope: `gate_policy.py`."
         self.assertEqual(check.scope_tokens(ticket), {"close_check.py"})
 
+    def test_evidence_cannot_authorize_a_test_change(self):
+        """A pull request cannot supply the file that ties its own test.
+
+        Adding `evidence/alarm_panel.md` and `tests/test_alarm_panel.py`
+        to a change scoped to `close_check.py` must fail: evidence is not
+        a source, and the test names nothing the change touches.
+        """
+        check = close_check()
+        ok, _ = check.in_scope("tests/test_alarm_panel.py", {"close_check.py"},
+                               ["coordinator/bin/close_check.py", "evidence/alarm_panel.md"])
+        self.assertFalse(ok)
+
+    def test_evidence_cannot_carry_the_value_that_ties_a_test(self):
+        """A copied literal in a changed evidence file ties nothing."""
+        check = close_check()
+        texts = {
+            "tests/test_alarm_panel.py": 'PATH = "coordinator/overnight/alarms.py"',
+            "coordinator/bin/close_check.py": 'REPORT = "evidence/MO-524/check-proof.md"',
+            "evidence/alarm_panel.md": 'copied coordinator/overnight/alarms.py',
+        }
+        named = ["coordinator/bin/close_check.py", "evidence/alarm_panel.md"]
+        with patch.object(check.proof_file, "fetch",
+                          side_effect=lambda repo, path, ref: ("found", texts.get(path))):
+            tied = check.test_ties("a/b", "a" * 40, "tests/test_alarm_panel.py", named)
+        self.assertEqual(tied, [])
+
     def test_a_test_with_a_similar_name_is_out_of_scope(self):
         """A shared prefix is not a relationship."""
         check = close_check()

@@ -164,13 +164,24 @@ def in_scope(path, tokens, changed=(), tests_allowed=False):
             return True, f"{path} is named by {token}"
     if path.startswith("tests/"):
         stem = os.path.splitext(base)[0].removeprefix("test_")
-        for other in changed:
-            if other.startswith("tests/"):
-                continue
+        for other in named_sources(changed, tokens):
             other_stem = os.path.splitext(os.path.basename(other))[0]
             if stem == other_stem:
                 return True, f"{path} tests {other}"
     return False, ""
+
+
+def named_sources(changed, tokens=None):
+    """The changed source files a test can tie to.
+
+    A test ties to a source file, never to evidence and never to another
+    test: a pull request can add an evidence file that carries the name
+    of its own test, and that must not authorize the test change. A
+    source file the ticket never names fails the scope item on its own,
+    so tying to it grants nothing.
+    """
+    return [path for path in changed
+            if not path.startswith("evidence/") and not path.startswith("tests/")]
 
 
 def token_matches(path, token):
@@ -208,20 +219,21 @@ def file_text(repo, path, ref, cache=None):
     return value
 
 
-def test_ties(repo, ref, path, changed, cache=None):
-    """The changed files whose values a test pins.
+def test_ties(repo, ref, path, named, cache=None):
+    """The named source files whose values a test pins.
 
     A test that pins what the change sets is part of the change: the two
     files share a distinctive value. A test of something else shares
     none, so a ticket that says its existing tests may change never
-    reaches it.
+    reaches it. Only files the ticket names can carry the value: a
+    pull request cannot hand its own evidence the authority to tie.
     """
     literals = distinctive_literals(file_text(repo, path, ref, cache))
     if not literals:
         return []
     tied = []
-    for other in changed:
-        if other.startswith("tests/") or other == path:
+    for other in named:
+        if other == path:
             continue
         if literals & distinctive_literals(file_text(repo, other, ref, cache)):
             tied.append(other)
@@ -451,10 +463,11 @@ def run_check(repo, pr, issue=None):
     ties = {}
     if TEST_CLAUSE.search(body or ""):
         tokens = scope_tokens(body)
+        named = named_sources(files, tokens)
         cache = {}
         for path in files:
             if path.startswith("tests/") and not in_scope(path, tokens, files)[0]:
-                tied = test_ties(repo, merge, path, files, cache)
+                tied = test_ties(repo, merge, path, named, cache)
                 if tied:
                     ties[path] = tied
     items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
