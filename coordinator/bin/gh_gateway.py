@@ -497,6 +497,10 @@ def filtered(argv):
             return True
         if word.startswith(("--jq=", "--template=", "-q=")):
             return True
+        # The short flags also take their value attached, as `-q.[].name`
+        # and `-t{{.name}}`.
+        if len(word) > 2 and word.startswith(("-q", "-t")):
+            return True
     return False
 
 
