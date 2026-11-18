@@ -439,8 +439,12 @@ def effective_executable(argv: Sequence[str]) -> Optional[str]:
     if first != "env":
         return first
     index = 1
-    while index < len(argv) and str(argv[index]).startswith("-"):
-        index += 1
+    while index < len(argv):
+        argument = str(argv[index])
+        if argument.startswith("-") or "=" in argument:
+            index += 1
+            continue
+        break
     if index >= len(argv):
         return None
     return os.path.basename(str(argv[index]))
@@ -3341,7 +3345,7 @@ def _watchdog_main(job_id: str) -> int:
 def _project_build_args(
     argv: Sequence[str], cwd: str
 ) -> Tuple[List[str], Optional[str]]:
-    if not argv or not xcodebuild_executable(effective_executable(argv) or ""):
+    if not argv or not xcodebuild_executable(str(argv[0])):
         return list(argv), None
     project_path = None
     for index, arg in enumerate(argv):
@@ -3441,8 +3445,13 @@ def run_supervisor(
         task_id = task_id or inferred_id
     original = list(argv)
     command, project_key = _project_build_args(original, os.getcwd())
-    command_basename = effective_executable(original) or os.path.basename(command[0])
-    if xcodebuild_executable(command_basename) and role != "review":
+    executed = os.path.basename(command[0])
+    # The job is registered under the executable it runs, so a wrapper that
+    # runs xcodebuild is the same build as xcodebuild. How it is executed is
+    # unchanged: only a command that runs xcodebuild directly is a project
+    # build and only that one is wrapped in taskpolicy.
+    command_basename = effective_executable(original) or executed
+    if xcodebuild_executable(executed) and role != "review":
         taskpolicy = "/usr/sbin/taskpolicy"
         if not os.path.isfile(taskpolicy) or not os.access(taskpolicy, os.X_OK):
             raise HeavyError("taskpolicy is required for ordinary xcodebuild jobs")
