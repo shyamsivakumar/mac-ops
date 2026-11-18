@@ -45,7 +45,9 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != 
         print("x-ratelimit-resource: core")
         print()
         print(name)
-elif mode == "bodyhttp" and "--paginate" in args:
+elif mode == "bodyhttp" and "--paginate" in args and any(
+        arg in ("-q", "--jq", "-t", "--template") or arg.startswith(("-q", "-t"))
+        for arg in args):
     for name in ("name1", "name2", "name3"):
         print("HTTP/2.0 200 OK")
         print("content-type: text/plain")
@@ -180,8 +182,8 @@ check("a slurped paginated read logs one row per page", len(rows()) - rows_befor
 # the response headers and the caller still gets only its own output.
 rows_before = len(rows())
 formatted = run(["gh", "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
-check("a formatted paginated read is counted as its first request",
-      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
+check("a formatted paginated read counts both paginations",
+      len(rows()) - rows_before == 6, f"rows={len(rows()) - rows_before}")
 check("a formatted paginated read returns only its bodies",
       formatted.stdout.split() == ["name1", "name2", "name3"]
       and "HTTP/" not in formatted.stdout, repr(formatted.stdout[:40]))
@@ -190,7 +192,7 @@ check("a formatted paginated read returns only its bodies",
 rows_before = len(rows())
 attached = run(["gh", "api", "--paginate", "-q.[].name", "repos/a/b/tags"])
 check("an attached -q filter keeps the caller's output whole",
-      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
+      len(rows()) - rows_before == 6, f"rows={len(rows()) - rows_before}")
 check("an attached -q filter returns only its bodies",
       attached.stdout.split() == ["name1", "name2", "name3"], repr(attached.stdout[:40]))
 rows_before = len(rows())
@@ -432,7 +434,7 @@ set_mode("200")
 set_mode("bodyhttp")
 rows_before = len(rows())
 bodyish = run(["gh", "api", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
-check("body text is never counted or stripped", len(rows()) - rows_before == 1,
+check("body text is never counted or stripped", len(rows()) - rows_before == 6,
       f"rows={len(rows()) - rows_before}")
 check("body text is not stripped from the output", bodyish.stdout.count("HTTP/1.1 200 OK") == 3,
       repr(bodyish.stdout[:60]))
