@@ -1483,7 +1483,7 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
 DEFER = object()
 
 
-def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False):
+def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False, base="main"):
     """The launch arguments of the gate for one pull request.
 
     One brief for every gate: the queue's own gatekeeper and the tick's
@@ -1491,7 +1491,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     whichever way it was queued."""
     key = f"gate:{repo}#{number}:{head}"
     from gate_policy import build_gate_brief
-    message = build_gate_brief(settings, repo, issue, number, head, publisher,
+    message = build_gate_brief(settings, repo, issue, number, head, publisher, base=base,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
                                prompt=prompt)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
@@ -1593,7 +1593,8 @@ def gate_candidates(config):
                        "builderModels": models,
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
                                          proof=proof, proof_path=proof_path, proof_state=proof_state,
-                                         prompt=prompt == prompt_paths.HOLD)}
+                                         prompt=prompt == prompt_paths.HOLD,
+                                         base=(pr.get("base") or {}).get("ref") or "main")}
                 break
             else:
                 found = gate_request(repo, pr, settings, config, receipts, login)
@@ -1880,7 +1881,8 @@ def gate_request(repo, pr, settings, config, receipts, login):
             return DEFER
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
-                               prompt=prompt == prompt_paths.HOLD), builder_models(thread, runs)
+                               prompt=prompt == prompt_paths.HOLD,
+                               base=(pr.get("base") or {}).get("ref") or "main"), builder_models(thread, runs)
     statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -1894,7 +1896,8 @@ def gate_request(repo, pr, settings, config, receipts, login):
         return DEFER
     return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, []),
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
-                           prompt=prompt == prompt_paths.HOLD), []
+                           prompt=prompt == prompt_paths.HOLD,
+                           base=(pr.get("base") or {}).get("ref") or "main"), []
 
 
 def parse_ref(ref):
