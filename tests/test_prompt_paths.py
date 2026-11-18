@@ -261,6 +261,13 @@ class GateBriefTest(unittest.TestCase):
         self.assertNotIn("never auto-merges", text)
         self.assertIn("review and merge", text)
 
+    def test_the_merge_order_pins_the_base(self):
+        """A retarget moves the base without moving the head, so it is pinned."""
+        text = self.brief(prompt=False)
+        self.assertIn("merge nothing unless it is still `main`", text)
+        self.assertLess(text.index("merge nothing unless it is still `main`"),
+                        text.index("gh pr merge"))
+
     def test_the_verdict_lines_are_the_same_either_way(self):
         for prompt in (True, False):
             with self.subTest(prompt=prompt):
