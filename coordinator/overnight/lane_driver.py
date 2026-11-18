@@ -502,11 +502,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         model = builders.choose_builder(thread_builder)
         if model is None:
             return f"skip {lkey}: every builder is blocked, waiting for a probe"
-        if reroute == "builder blocked":
-            path = thread.get("worktreePath")
-        elif reroute == "not a builder" and thread.get("worktreePath") and not root_workspace(thread):
-            # The work stays in the thread's own worktree; a build never
-            # runs in a shared checkout of the repository.
+        if reroute in {"builder blocked", "not a builder"} and not root_workspace(thread):
             path = thread.get("worktreePath")
         else:
             path = None

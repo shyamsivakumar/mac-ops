@@ -91,10 +91,12 @@ def load():
     try:
         with open(blocked_path()) as f:
             data = json.load(f)
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return {}
     blocked = data.get("blocked") if isinstance(data, dict) else None
-    return blocked if isinstance(blocked, dict) else {}
+    if not isinstance(blocked, dict):
+        raise ValueError("Invalid provider health store: expected blocked records")
+    return blocked
 
 
 def save(state):
