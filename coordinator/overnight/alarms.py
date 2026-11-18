@@ -213,10 +213,14 @@ def board_locked(path):
     lock: a mute storage that cannot be locked must not leave the board
     unprotected, or two publishers read the same board and one alarm
     disappears. The lock is held across the read, the update and the
-    replace, so the board a publisher writes is the board it read."""
+    replace, so the board a publisher writes is the board it read.
+
+    It yields False when the lock could not be taken: the publisher then
+    writes the board without it, because a lock that cannot be taken
+    must not hide a real failure from Shyam, and says so out loud."""
     handle = take_lock(str(path) + ".lock")
     try:
-        yield
+        yield handle is None
     finally:
         if handle is not None:
             drop_lock(handle)

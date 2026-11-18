@@ -239,7 +239,9 @@ def alert(reason, cause=None, path=None):
         now cannot slip between the decision and the alarm on the board,
         and the board is read now, not before the lock."""
         try:
-            with alarms.board_locked(target):
+            with alarms.board_locked(target) as unlocked:
+                if unlocked:
+                    print("stall: the board lock could not be taken; the board was written without it")
                 return write_alarm(target, action, cause, reason)
         except OSError:
             return "failed"
