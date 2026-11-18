@@ -126,3 +126,22 @@ The scratch file was deleted after the run; it is not in the change.
 - Step 3: pin all the check tools through `uvx`.
 - The 86 findings in the baseline are not fixed here; they are recorded, so the
   gate can land before the cleanup.
+
+## The close checklist and the scope of this ticket
+
+The close checklist reads the ticket for the scope of the change. A ticket
+that names no file in this repository has no scope that can be judged, and
+the scope item fails closed rather than fall back to the whole ticket. The
+ticket now names the files it changes in its scope section:
+`scripts/mac_ops_fast_check.py`, `scripts/ruff-baseline.txt`,
+`tests/test_check_proof.py`, `README.md` and `evidence/MO-553/`.
+
+The checklist, read against the merged pull request #567 and the ticket:
+
+```
+scope: pass - every changed file is inside the ticket's stated scope
+proof file: pass - evidence/MO-553/check-proof.md is present
+checks: pass - every one of the 10 checks the proof file lists passed
+cost note: skipped - the MO-1068 cost report (evidence/MO-1068/cost-report.md) does not exist yet
+RESULT: PASS shyamsivakumar/mac-ops#553
+```
