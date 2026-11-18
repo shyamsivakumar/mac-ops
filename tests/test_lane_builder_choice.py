@@ -70,7 +70,8 @@ class BuilderChoice(unittest.TestCase):
         path = Path(self.scratch.name) / "providers-blocked.json"
         path.write_text(json.dumps({"blocked": {identity: {"reason": "usage limit"} for identity in identities}}))
 
-    def launch(self, thread, issue=None, builder_label=None, pr=True, root_workspace=False, tickets=None):
+    def launch(self, thread, issue=None, builder_label=None, pr=True, root_workspace=False, tickets=None,
+               worktree_exists=True):
         """Replay one send and return the dispatch payload, or None."""
         calls = []
 
@@ -85,6 +86,7 @@ class BuilderChoice(unittest.TestCase):
              patch.object(self.lane, "run", run), \
              patch.object(self.lane, "root_workspace", return_value=root_workspace), \
              patch.object(self.lane, "branch_on_origin", return_value=True), \
+             patch.object(self.lane.os.path, "isdir", return_value=worktree_exists), \
              patch.object(self.lane, "SNAPSHOT", snapshot), \
              patch.object(self.lane, "read_json", return_value={"number": 20, "state": "OPEN",
                                                                "headRefName": "builder/fixture",
@@ -125,6 +127,28 @@ class BuilderChoice(unittest.TestCase):
         self.assertEqual(payload["modelSelection"], GLM)
         self.assertEqual(payload["workspaceStrategy"],
                          {"type": "existing_worktree", "worktreePath": "/fixture/worktree"})
+
+    def test_a_missing_worktree_is_never_handed_off(self):
+        # The ticket names glm and the minimax thread's worktree is gone
+        # from disk, so the work starts on the verified PR branch instead.
+        out, payload = self.launch(self.thread(MINIMAX), issue=10, builder_label="glm", worktree_exists=False)
+        self.assertEqual(payload["modelSelection"], GLM)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_missing_worktree_with_no_pull_request_is_skipped(self):
+        out, payload = self.launch(self.thread(SOL), pr=False, worktree_exists=False)
+        self.assertIsNone(payload)
+        self.assertIn("no verified PR branch", out)
+
+    def test_a_missing_worktree_on_a_blocked_builder_is_never_handed_off(self):
+        # The thread's provider is blocked and its worktree is gone from
+        # disk, so the work starts on the verified PR branch instead.
+        self.block("minimax:MiniMax-M3.1-Flash")
+        out, payload = self.launch(self.thread(MINIMAX), worktree_exists=False)
+        self.assertEqual(payload["modelSelection"], GLM)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
     def test_a_thread_on_the_second_builder_takes_no_send(self):
         # With no preference the first entry of the list is the builder,
@@ -443,7 +467,7 @@ class HeldContinue(unittest.TestCase):
         self.lane.DRY = False
         self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
 
-    def unstick(self, threads, passes=1, blocked=(), ledger=None):
+    def unstick(self, threads, passes=1, blocked=(), ledger=None, worktree_exists=False):
         """Replay the unstick path over the given tickets and their threads."""
         lane = self.lane
         issues = [{"number": number, "labels": []} for number in sorted(threads)]
@@ -478,10 +502,16 @@ class HeldContinue(unittest.TestCase):
 
         ledger = {} if ledger is None else ledger
         result = ""
+        real = os.path.isdir
+
+        def isdir(path):
+            return (path == "/fixture/worktree" and worktree_exists) or real(path)
+
         with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
              patch.object(lane, "SNAPSHOT", snapshot), \
              patch.object(lane, "run", run), patch.object(lane, "t3", t3), \
              patch.object(lane, "root_workspace", return_value=False), \
+             patch.object(lane.os.path, "isdir", isdir), \
              patch("builtins.open", files), redirect_stdout(io.StringIO()):
             for _ in range(passes):
                 result = lane.unstick(REPO, ledger)
@@ -627,7 +657,8 @@ class HeldContinue(unittest.TestCase):
         # The idle legacy thread is rerouted: a fresh builder thread is
         # queued for the ticket. On the next pass the ticket must stay out
         # of the batch, so the new builder does not get the ticket twice.
-        result, queued, ledger = self.unstick({11: self.idle_legacy("thread-11")}, passes=2)
+        result, queued, ledger = self.unstick({11: self.idle_legacy("thread-11")}, passes=2,
+                                                worktree_exists=True)
         self.assertEqual(len(queued), 1)
         self.assertNotIn("threadId", queued[0])
         self.assertEqual(queued[0]["modelSelection"], MINIMAX)

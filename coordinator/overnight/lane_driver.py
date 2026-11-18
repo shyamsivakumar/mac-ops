@@ -600,12 +600,13 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        own_worktree = thread.get("worktreePath") and not root_workspace(thread)
-        if own_worktree and (reroute in {"not the chosen builder", "builder blocked"}
-                             or (pr is None and os.path.isdir(thread["worktreePath"]))):
+        own_worktree = (thread.get("worktreePath") and not root_workspace(thread)
+                        and os.path.isdir(thread["worktreePath"]))
+        if own_worktree and (reroute in {"not the chosen builder", "builder blocked"} or pr is None):
             # The work stays in its own worktree; only the builder moves.
             # A thread that cannot take a send and has no pull request to
-            # name a branch also starts again in the worktree it has.
+            # name a branch also starts again in the worktree it has. A
+            # worktree that is gone from disk is never handed off.
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
