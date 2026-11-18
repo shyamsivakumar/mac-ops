@@ -1983,17 +1983,13 @@ def alarm_mute():
     # command did not record it.
     panel = panel_source()
     exact('shown: a.cause ?? ""' in panel, True)
-    exact("if (!draft.cause || draft.cause !== shown) stale.push(id);" in panel, True)
-    exact('cause: draft.cause ?? ""' in panel, True)
+    # The panel uses the rules in the module the probe runs, so the
+    # rules themselves are checked there, not here.
+    exact('from "./answers.js"' in panel, True)
     exact("await acknowledgeAlarm(a.id, a.cause)" in panel, True)
     exact("if (r.code !== 0) {" in panel, True)
     exact("`${home()}/.local/bin/alarms.py`" in panel, True)
-    exact("this.replyCauses.set(q, bound)" in panel, True)
     exact("const bound = this.replyCauses.get(q)" in panel, True)
-    # A reply that is reopened restores the text and the cause it
-    # belongs to together.
-    exact("bound = saved;" in panel, True)
-    exact("text = \"\";" in panel, True)
     # A restored reply keeps the cause it belongs to, and a restored
     # reply whose cause is unknown is dropped.
     exact('shared("co.replyCauses")' in panel, True)

@@ -1,6 +1,7 @@
 import { View } from "gpui-kit";
 import { v_flex, TextareaState } from "gpui-base";
 import { agents, appHome, closeOverlay, exec, hc, home, layout, notify, nextCommand, openOverlay, props, run, setShared, shared, theme } from "herdr";
+import { answerCause, isStale, restored } from "./answers.js";
 import { chipLabel, draftText, imagePathSpans, loadOlder, materialize, pathImages, readTranscript, SESSION_NAME } from "./transcript.js";
 import { askRow, clampFrom, composer, conversation, emptyPop, holdFrom, questionPop, status, taskStrip, TURN_ESTIMATE } from "./ui.js";
 
@@ -356,7 +357,7 @@ export default class Coordinator extends View {
       // The cause is the one the answer was bound to when it was made,
       // and never the one the board shows now: an answer that was not
       // bound carries no cause, so it acknowledges nothing.
-      return [{ n: n + 1, id: a.id, q: a.text, shown: a.cause ?? "", cause: draft.cause ?? "", kind: draft.kind, text: draft.text }];
+      return [{ n: n + 1, id: a.id, q: a.text, shown: a.cause ?? "", cause: answerCause(draft, a.cause), kind: draft.kind, text: draft.text }];
     });
   }
 
@@ -371,8 +372,7 @@ export default class Coordinator extends View {
     const stale = [];
     for (const [id, draft] of drafts) {
       const shown = this.asks().find((a) => a.id === id)?.cause ?? "";
-      if (!shown) continue;
-      if (!draft.cause || draft.cause !== shown) stale.push(id);
+      if (isStale(draft, shown)) stale.push(id);
     }
     if (!stale.length) return;
     for (const id of stale) drafts.delete(id);
@@ -535,19 +535,11 @@ export default class Coordinator extends View {
     // instead of being sent for the alarm that is there now. Text saved
     // without a cause is not restored at all: it cannot be bound to the
     // alarm on the board now.
-    let text = typed ?? (draft?.kind === "reply" ? draft.text : "");
-    let bound = shown;
-    if (draft?.kind === "reply" && draft.cause) {
-      bound = draft.cause;
-    } else if (typed !== undefined) {
-      if (saved === undefined) {
-        text = "";
-        const typing = this.typing();
-        typing.delete(q);
-        this.setTyping(typing);
-      } else {
-        bound = saved;
-      }
+    const { text, bound } = restored(draft, typed, saved, shown);
+    if (typed !== undefined && !text) {
+      const typing = this.typing();
+      typing.delete(q);
+      this.setTyping(typing);
     }
     this.replyCauses.set(q, bound);
     this.setReplyCauses(this.replyCauses);
