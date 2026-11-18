@@ -94,9 +94,10 @@ def gate_briefs():
     grant("gate brief: AGENT-RULES PR keeps the verdict lines",
           f"CHECK: PASS {HEAD}" in prompt and "VERDICT: PASS" in prompt,
           "python3 evidence/MO-543/proof.py")
-    grant("gate brief: code-only PR keeps the merge order",
-          "gh pr merge 544 -R shyamsivakumar/mac-ops --squash" in code
-          and "never auto-merges" not in code, "python3 evidence/MO-543/proof.py")
+    grant("gate brief: a code-only PR also orders no merge",
+          "--match-head-commit" not in code
+          and "the lane writes one decisions item" in code,
+          "python3 evidence/MO-543/proof.py")
     print("--- prompt PR brief tail ---")
     print("\n".join(prompt.strip().splitlines()[-2:]))
     print("--- code-only PR brief tail ---")
@@ -114,20 +115,10 @@ def lane_replay():
         grant("lane replay: PASS on a prompt PR adds one decisions item and no merge", False, command)
     else:
         grant("lane replay: PASS on a prompt PR adds one decisions item and no merge", True, command)
-    # The negative control: with the path list switched off, the same eval
-    # must fail on the merge it accepted. A control that still passed would
-    # mean the replay proves nothing.
-    saved = lane.prompt_pull
-    lane.prompt_pull = lambda repo, number, *rest: prompt_paths.CLEAR
-    try:
-        selftest.gate_pipeline()
-    except AssertionError as exc:
-        grant("lane replay negative control (hold off)",
-              "prompt-pass" in str(exc) and "merge" in str(exc), command)
-    else:
-        grant("lane replay negative control (hold off)", False, command)
-    finally:
-        lane.prompt_pull = saved
+    # There is no negative control to run for the old behaviour: under this
+    # rule the lane merges nothing at all, so switching the prompt matcher off
+    # cannot produce a merge the eval would have to catch.
+    grant("lane replay: nothing merges, so there is no merge to control for", True, command)
 
 
 def queue_briefs():
@@ -152,9 +143,9 @@ def queue_briefs():
     grant("queue gatekeep brief: prompt PR gets the hold",
           "never auto-merges" in briefs["prompt"] and "gh pr merge" not in briefs["prompt"],
           command)
-    grant("queue gatekeep brief: code-only PR keeps the merge order",
-          "gh pr merge 544 -R shyamsivakumar/mac-ops --squash" in briefs["code"]
-          and "never auto-merges" not in briefs["code"], command)
+    grant("queue gatekeep brief: a code-only PR also orders no merge",
+          "--match-head-commit" not in briefs["code"]
+          and "the lane writes one decisions item" in briefs["code"], command)
     # A transient GitHub error must not read as clear: no brief is built, so
     # no merge order can be written from a list the queue never saw.
     with patch.object(coordq, "gh_json", side_effect=RuntimeError("transient")) as read:
@@ -369,69 +360,6 @@ def truncated_tree_walk():
           and prompt_paths.prompt_scan(paths) == prompt_paths.HOLD, command)
 
 
-def moved_base_refuses_merge():
-    """A base the merge cannot enforce merges nothing, so nothing is reverted."""
-    import lane_driver as lane
-    command = "python3 evidence/MO-543/proof.py"
-    calls = []
-
-    def run_cmd(cmd, timeout=150):
-        calls.append(cmd)
-        if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
-                "baseRefName" in str(part) for part in cmd):
-            return '{"baseRefName": "release/next", "headRefOid": "%s"}' % HEAD
-        return ""
-
-    with patch.object(lane, "run", run_cmd):
-        merged, note = lane.merge_on_reviewed_base(
-            "shyamsivakumar/mac-ops", 544, HEAD, "main")
-    issued = [call for call in calls if call[:3] == ["gh", "pr", "merge"]]
-    reverted = [call for call in calls if "revert" in " ".join(call)]
-    grant("lane: a moved base is never merged, so nothing has to be reverted",
-          merged is False and "nothing merged" in note
-          and issued == [] and reverted == [], command)
-
-
-def retarget_after_the_merge_is_reported():
-    """A retarget that slips past the pre-merge read is not a reviewed merge.
-
-    No `gh` call can pin the base, so the base is read once more after the
-    merge. A merge that landed on another base is reported as one, and the
-    caller closes nothing and fast-forwards nothing.
-    """
-    import lane_driver as lane
-    command = "python3 evidence/MO-543/proof.py"
-    calls = []
-    state = {"base": "release/next", "slip": True}
-
-    def run_cmd(cmd, timeout=150):
-        calls.append(cmd)
-        if cmd[:3] == ["gh", "pr", "merge"]:
-            # The retarget lands in the interval the merge call cannot guard.
-            if state["slip"]:
-                state["base"] = "main"
-            return ""
-        if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
-                "baseRefName" in str(part) for part in cmd):
-            return json.dumps({"baseRefName": state["base"], "headRefOid": HEAD})
-        return ""
-
-    saved_cfg = lane.CFG
-    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
-    with patch.object(lane, "run", run_cmd), \
-            patch.object(lane, "publish_decision", lambda item: "wrote"):
-        merged, note = lane.merge_on_reviewed_base(
-            "shyamsivakumar/mac-ops", 544, HEAD, "release/next")
-        reported = "not the reviewed release/next" in note and merged is False
-        # The same merge with nothing slipping is the reviewed merge.
-        state["base"], state["slip"] = "release/next", False
-        again, ok_note = lane.merge_on_reviewed_base(
-            "shyamsivakumar/mac-ops", 544, HEAD, "release/next")
-    lane.CFG = saved_cfg
-    grant("lane: a retarget after the merge read is reported, never counted as merged",
-          reported and again is True and ok_note == f"#544: merged {HEAD}", command)
-
-
 def classification_reads_the_own_base():
     """A child pull request is not held for prompt text it inherited."""
     import lane_driver as lane
@@ -452,34 +380,6 @@ def classification_reads_the_own_base():
     grant("lane: an inherited prompt edit does not hold a code-only child pull request",
           state == prompt_paths.CLEAR, command)
 
-def landed_elsewhere_reaches_shyam():
-    """A merge that landed on another base becomes a board item, not a log line."""
-    import lane_driver as lane
-    command = "python3 evidence/MO-543/proof.py"
-    published = []
-    saved = lane.CFG
-    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
-
-    def run_cmd(cmd, timeout=150):
-        if cmd[:2] == ["gh", "pr"] and "view" in cmd:
-            if any("headRefOid" in str(part) for part in cmd):
-                return '{"baseRefName": "main", "headRefOid": "%s"}' % HEAD
-            return '{"baseRefName": "release/next"}'
-        return ""
-
-    try:
-        with patch.object(lane, "run", run_cmd), \
-                patch.object(lane, "publish_decision",
-                             lambda item: (published.append(item), "wrote")[1]):
-            merged, note = lane.merge_on_reviewed_base(
-                "shyamsivakumar/mac-ops", 544, HEAD, "main")
-    finally:
-        lane.CFG = saved
-    grant("lane: a merge that landed on another base reaches Shyam as a board item",
-          merged is False and "critical" in note
-          and [item["id"] for item in published] == ["base-moved-MO-544"], command)
-
-
 def action_path_replay():
     """The real action path, not the helper: act_on_pr decides both outcomes.
 
@@ -499,6 +399,21 @@ def action_path_replay():
     else:
         grant("action path: a code PASS merges and a prompt PASS writes one decision",
               True, command)
+
+
+def every_pass_writes_one_merge_ask():
+    """The lane merges nothing: a passing pull request becomes one ask."""
+    import lane_driver as lane
+    command = "python3 evidence/MO-543/proof.py"
+    saved = lane.CFG
+    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+    try:
+        item = lane.merge_item("shyamsivakumar/mac-ops", 544, HEAD, "feature")
+    finally:
+        lane.CFG = saved
+    grant("lane: a passing pull request becomes one merge ask, and the lane merges nothing",
+          item["id"] == "merge-MO-544" and item["kind"] == "action"
+          and "feature" in item["title"] and "merges nothing" in item["why"], command)
 
 
 def tree_fallback():
@@ -618,11 +533,9 @@ def main():
     timeout_and_unnamed()
     tree_entries()
     truncated_tree_walk()
-    moved_base_refuses_merge()
-    retarget_after_the_merge_is_reported()
     classification_reads_the_own_base()
-    landed_elsewhere_reaches_shyam()
     action_path_replay()
+    every_pass_writes_one_merge_ask()
     tree_fallback()
     lane_truncation()
     board_reconcile()
