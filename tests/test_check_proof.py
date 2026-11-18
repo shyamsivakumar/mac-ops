@@ -63,12 +63,31 @@ class ProofFileTest(unittest.TestCase):
             (Run(1, stderr="gh: Not Found (HTTP 404)"), proof_file.MISSING),
             (Run(1, stderr="gh: could not connect"), proof_file.UNREADABLE),
             (Run(0, stdout="not json"), proof_file.UNREADABLE),
-            (Run(0, stdout='{"content": ""}'), proof_file.MISSING),
+            (Run(0, stdout='{"content": ""}'), proof_file.UNREADABLE),
+            (Run(0, stdout='{"content": "", "encoding": "none"}'), proof_file.UNREADABLE),
+            (Run(0, stdout='{"content": "aGk=", "encoding": "base64"}'), proof_file.FOUND),
         ]
         for run, expected in cases:
             with patch.object(subprocess, "run", return_value=run):
                 state, _ = proof_file.fetch("a/b", "evidence/MO-501/check-proof.md", "a" * 40)
             self.assertEqual(state, expected)
+
+    def test_an_existing_empty_file_is_not_a_missing_file(self):
+        """A file that exists and carries nothing is a failed read."""
+        proof_file = load(BIN / "proof_file.py", "proof_file")
+
+        class Run:
+            returncode = 0
+            stdout = '{"content": "", "encoding": "base64"}'
+            stderr = ""
+
+        with patch.object(subprocess, "run", return_value=Run()):
+            state, detail = proof_file.fetch("a/b", "evidence/MO-501/check-proof.md", "a" * 40)
+        self.assertEqual(state, proof_file.UNREADABLE)
+        self.assertIn("empty", detail)
+        section = proof_file.section(state, detail, "evidence/MO-501/check-proof.md")
+        self.assertIn("could not be read", section)
+        self.assertNotIn("carries none", section)
 
     def test_gate_brief_reads_the_proof_file(self):
         gate_policy = load(BIN / "gate_policy.py", "gate_policy")
@@ -125,6 +144,12 @@ class CheckProofTest(unittest.TestCase):
         proof.check("heavy help", "python3 heavy.py --help", lambda: None)
         self.assertTrue(proof.failed)
         self.assertEqual([row[2] for row in proof.rows], ["failed", "not run"])
+
+    def test_the_check_keeps_the_original_deadlines(self):
+        """The proof file must not let a slower run pass the check."""
+        source = (ROOT / "scripts" / "mac_ops_fast_check.py").read_text()
+        self.assertIn('run(selftest, timeout=60)', source)
+        self.assertIn('run(tlc_command, cwd=scratch, timeout=55)', source)
 
 
 if __name__ == "__main__":
