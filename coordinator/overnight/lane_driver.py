@@ -778,6 +778,24 @@ def merge_on_reviewed_base(repo, number, head, base):
     base nobody reviewed.
     Return (merged, note): merged means the merge was issued onto the reviewed
     base; note is the line the pass prints.
+
+    The residue this cannot remove, and why it is accepted:
+
+    The merge call pins the head and squashes, and the pull request carries the
+    base. So a retarget landing between the read above and the merge below is
+    merged into the new base, and the read after it reports that instead of
+    claiming a merge on the reviewed base. No GitHub merge call pins a base and
+    a head together: the `merges` endpoint names the base but cannot squash and
+    takes a head commit, and pushing the squash by hand bypasses the pull
+    request merge and is refused where direct pushes are restricted. Six
+    designs along those lines were built, each losing one of the properties
+    this rule needs, which is why the ticket's own merge is the one kept.
+
+    Who reaches the window: retargeting a pull request needs write access to
+    the repository, so on a private repository it is the owner racing his own
+    two calls, not an outsider. The prompt rule itself is unaffected: the
+    classification decides on the pull request's own diff, and anything the
+    pull request introduces against the base this review read still holds.
     """
     current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
                               "--json", "baseRefName,headRefOid"])) or {}
