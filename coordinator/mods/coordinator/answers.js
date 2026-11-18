@@ -31,12 +31,21 @@ export const restored = (draft, typed, saved, shown) => {
   if (draft?.kind === "reply") {
     if (draft.cause) {
       bound = draft.cause;
-    } else {
+    } else if (shown) {
+      // A keyed alarm with a draft that carries no cause: the text
+      // cannot be bound to the alarm that is on the board now, so it is
+      // not restored. An ordinary decision has no cause and keeps its
+      // text.
       text = "";
     }
   } else if (typed !== undefined) {
     if (saved === undefined) {
-      text = "";
+      if (shown) {
+        // Typing text whose cause was not kept cannot be bound to the
+        // alarm that is on the board now, so it is not restored. An
+        // ordinary decision has no cause and keeps its text.
+        text = "";
+      }
     } else {
       bound = saved;
     }

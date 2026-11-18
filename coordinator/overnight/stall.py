@@ -246,35 +246,39 @@ def alert(reason, cause=None, path=None):
         for item in items
         if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
     ]
-    state = alarms.load_state()
-    action = alarms.decide(state, ALERT_ID, cause or reason)
-    if action == "quiet":
+    def publish(action):
+        """Write the board with the alarm, or without it.
+
+        This runs while the mute state is locked, so an answer that lands
+        now cannot slip between the decision and the alarm on the board."""
+        if action in ("raise", "unchecked"):
+            kept.append(
+                {
+                    "id": ALERT_ID,
+                    "group": "Coordinator",
+                    "kind": "action",
+                    "title": "Overnight shift stalled: no board progress for 3 ticks",
+                    "cause": alarms.cause_of(cause or reason),
+                    "why": reason,
+                }
+            )
         decisions["items"] = kept
         decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         if not write_board(target, decisions):
-            return "", "failed"
+            return "failed"
+        if action == "unchecked":
+            # The key could not be written, so the answer to this alarm
+            # cannot be recorded. The alarm is published anyway: a
+            # storage failure must not hide a real failure from Shyam.
+            print("stall: the alarm key could not be written; the answer to this alarm cannot be recorded")
+        return None
+
+    # The decision and the publication happen under the state lock, so an
+    # answer that lands between them cannot be missed.
+    action = alarms.decide_and_publish(ALERT_ID, cause or reason, publish)
+    if action == "quiet":
         return "", "quiet"
-    alarms.raised(state, ALERT_ID, cause or reason)
-    # The key is written before the alarm is published: an alarm on the
-    # board must have a key, so the answer Shyam gives it has something to
-    # acknowledge. A key that cannot be written is a fault the shift says
-    # out loud, and the alarm is published anyway: a storage failure must
-    # not hide a real failure from Shyam.
-    if not alarms.save_state(state):
-        print("stall: the alarm key could not be written; the answer to this alarm cannot be recorded")
-    kept.append(
-        {
-            "id": ALERT_ID,
-            "group": "Coordinator",
-            "kind": "action",
-            "title": "Overnight shift stalled: no board progress for 3 ticks",
-            "cause": alarms.cause_of(cause or reason),
-            "why": reason,
-        }
-    )
-    decisions["items"] = kept
-    decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if not write_board(target, decisions):
+    if action == "failed":
         return "", "failed"
     return str(target), "wrote"
 

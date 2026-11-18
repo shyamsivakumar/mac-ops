@@ -307,6 +307,49 @@ USAGE = """usage: alarms ack <alarm-id> <cause>   quiet that cause of that alarm
 """
 
 
+def decide_and_publish(alarm_id, cause, publish):
+    """Decide what to do with one alarm and publish it, under the lock.
+
+    The decision is taken from the state the lock protects, the state is
+    written, and the alarm is published, all while the lock is held. An
+    acknowledgement that lands while the caller works cannot slip between
+    the decision and the publication: the caller publishes exactly what
+    this decision says, and an acknowledgement that comes after it
+    applies from the next tick.
+
+    `publish` is called with the decision while the lock is held, and it
+    may return a decision of its own. Return the decision."""
+    try:
+        with locked():
+            state = load_state()
+            action = decide(state, alarm_id, cause)
+            if action == "raise":
+                raised(state, alarm_id, cause)
+            if not write_state(merge(load_state(), state)):
+                # The key could not be written, so the answer to this
+                # alarm cannot be recorded. The alarm is published
+                # anyway: a storage failure must not hide a real failure.
+                action = "unchecked"
+            return publish(action) or action
+    except OSError:
+        return "failed"
+
+
+def forget_and_save(alarm_id):
+    """Mark an alarm as not true any more and write the state.
+
+    The key keeps its acknowledgement, so an alarm that was answered
+    stays quiet for the rest of the four hours."""
+    try:
+        with locked():
+            state = load_state()
+            gone(state, alarm_id)
+            write_state(merge(load_state(), state))
+    except OSError:
+        return False
+    return True
+
+
 def main(argv):
     """Quiet one alarm, or show what is quiet, and print what it did.
 

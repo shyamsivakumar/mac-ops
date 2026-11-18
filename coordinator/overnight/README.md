@@ -1390,6 +1390,13 @@ beside the state, so the two writers cannot land in each other, and each
 writer replaces the file from a temporary file of its own. A lock that cannot
 be taken is not a lock: the write fails rather than going on unlocked.
 
+The decision and the publication happen under that lock as well. A tick
+takes the lock, reads the state, decides, writes the state and publishes
+the alarm, all before it lets go: an answer that lands in between cannot be
+missed, and the alarm on the board is exactly what the decision said. The
+panel's answer waits for the lock, so it is either in the state the tick
+read, or it comes after the tick published and applies from the next tick.
+
 An alarm on the board always has a key. The key is written before the alarm
 is published, so the answer Shyam gives it has something to acknowledge. A
 key that cannot be written is a fault the shift says out loud, and the
