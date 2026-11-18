@@ -182,6 +182,62 @@ class ScopeTest(unittest.TestCase):
                                ["coordinator/bin/close_check.py"])
         self.assertTrue(ok)
 
+    def test_a_markdown_list_under_an_exclusion_heading_is_excluded(self):
+        """An exclusion holds to the end of its section.
+
+        "Out of scope:" followed by a bullet list excludes every file the
+        list names: the list continues the exclusion the heading began.
+        """
+        check = close_check()
+        ticket = "Change `close_check.py`.\n\n## Out of scope:\n- `gate_policy.py`\n- `ticket`\n"
+        self.assertNotIn("gate_policy.py", check.scope_tokens(ticket))
+        self.assertNotIn("ticket", check.scope_tokens(ticket))
+        item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
+                                         "coordinator/bin/gate_policy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("coordinator/bin/gate_policy.py", item["detail"])
+
+    def test_a_heading_ends_an_exclusion(self):
+        """The next section states its own intent: permission again."""
+        check = close_check()
+        ticket = ("## Scope and non-goals\nIn: checklist at close. Out: `gate_policy.py`\n\n"
+                  "## Files\n`close_check.py` and `lane_driver.py`.\n")
+        self.assertEqual(check.scope_tokens(ticket), {"close_check.py", "lane_driver.py"})
+        item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
+                                         "coordinator/overnight/lane_driver.py"])
+        self.assertEqual(item["status"], check.PASS)
+
+    def test_a_copy_of_a_value_the_change_never_set_ties_nothing(self):
+        """A literal the file already carried is not the change's value.
+
+        The unrelated test copies a path literal the in-scope source file
+        already had. The change never set that value, so the copy does not
+        tie the test to the source file.
+        """
+        check = close_check()
+        texts = {
+            "tests/test_alarm_panel.py": 'PATH = "coordinator/overnight/alarms.py"',
+            "coordinator/bin/close_check.py": 'PATH = "coordinator/overnight/alarms.py"',
+        }
+        with patch.object(check.proof_file, "fetch",
+                          side_effect=lambda repo, path, ref: ("found", texts.get(path))):
+            tied = check.test_ties("a/b", "a" * 40, "tests/test_alarm_panel.py",
+                                   ["coordinator/bin/close_check.py"], None, {})
+        self.assertEqual(tied, [])
+
+    def test_a_value_the_change_set_ties_the_test(self):
+        check = close_check()
+        texts = {
+            "tests/test_alarm_panel.py": 'PATH = "coordinator/overnight/alarms.py"',
+            "coordinator/bin/close_check.py": 'PATH = "coordinator/overnight/alarms.py"',
+        }
+        touched = {"coordinator/bin/close_check.py": {"coordinator/overnight/alarms.py"}}
+        with patch.object(check.proof_file, "fetch",
+                          side_effect=lambda repo, path, ref: ("found", texts.get(path))):
+            tied = check.test_ties("a/b", "a" * 40, "tests/test_alarm_panel.py",
+                                   ["coordinator/bin/close_check.py"], None, touched)
+        self.assertEqual(tied, ["coordinator/bin/close_check.py"])
+
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
         item = check.item_scope("The change is in lane_driver.py.",
@@ -237,6 +293,31 @@ class ScopeTest(unittest.TestCase):
         item = check.item_scope("The board's state is decisions.json.",
                                 ["coordinator/overnight/lane_driver.py"])
         self.assertEqual(item["status"], check.FAIL)
+
+
+class DiffValuesTest(unittest.TestCase):
+    """The values a change sets come from its own added lines."""
+
+    def test_the_added_lines_carry_the_values(self):
+        check = close_check()
+        diff = ("diff --git a/coordinator/bin/gate.py b/coordinator/bin/gate.py\n"
+                "--- a/coordinator/bin/gate.py\n"
+                "+++ b/coordinator/bin/gate.py\n"
+                "@@ -1 +1,3 @@\n"
+                '-CHAIN = ["gpt-6.1-old"]\n'
+                '+CHAIN = ["gpt-6.2-astra"]\n'
+                '+NAME = "set-by-this-change"\n')
+        with patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=diff,
+                                                                  stderr="")):
+            values = check.introduced_literals("a/b", 1)
+        self.assertEqual(values, {"coordinator/bin/gate.py":
+                                  {"gpt-6.2-astra", "set-by-this-change"}})
+
+    def test_a_diff_that_cannot_be_read_answers_no_values(self):
+        check = close_check()
+        with patch("subprocess.run", return_value=SimpleNamespace(returncode=1, stdout="",
+                                                                  stderr="boom")):
+            self.assertEqual(check.introduced_literals("a/b", 1), {})
 
 
 class ProofTest(unittest.TestCase):

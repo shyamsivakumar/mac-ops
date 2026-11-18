@@ -45,9 +45,6 @@ PASS = "pass"
 FAIL = "fail"
 SKIPPED = "skipped"
 
-# A test file is in scope when it tests a file the change touches: the
-# two names share a prefix of this many characters.
-TEST_PREFIX = 6
 # The ticket template says whether its own tests may change. The clause is
 # the ticket's statement, so it is the ticket that allows the change. The
 # clause keeps its restriction: it lets a test change when the test pins
@@ -64,8 +61,14 @@ DISTINCTIVE = re.compile(r"[\"']([^\"'\\\n]{10,})[\"']")
 # marker, and the words of a sentence that forbids a change, name what the
 # ticket excludes. Those names are never permission.
 SEGMENT = re.compile(r"(?i)\b(in|inside|out|out of scope|not in scope|excludes|except)\b\s*:")
+OUT_MARKERS = ("out", "out of scope", "not in scope", "excludes", "except")
 PROHIBITION = re.compile(r"(?i)\b(must not|do not|never|without (?:changing|touching|editing))\b")
-SENTENCE = re.compile(r";|\.\s|\n")
+SENTENCE = re.compile(r";|\.\s")
+# A Markdown heading opens a section, and a section states its own intent.
+HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]*(.*)$")
+# A heading that names only exclusions excludes what its section names.
+EXCLUSION_HEADING = re.compile(
+    r"(?i)^[*_ ]*(out|out of scope|not in scope|excludes?|non-goals?|except(?: for)?)[*_ :]*$")
 
 
 def scope_texts(body):
@@ -73,27 +76,39 @@ def scope_texts(body):
 
     Everything the ticket says is permission until the ticket excludes
     something. An "out" segment, a sentence that forbids a change, and
-    the words that follow them are exclusions.
+    the words after them are exclusions, and an exclusion holds to the
+    end of its section: a Markdown list under an `Out of scope:` heading
+    stays excluded, because the list continues the exclusion the heading
+    began. A Markdown heading states its section's intent again, and an
+    "in" marker states it inside a line, so the words after either one
+    are permission.
     """
     permission = []
     exclusion = []
-    for sentence in SENTENCE.split(body or ""):
-        if not sentence.strip():
-            continue
-        if PROHIBITION.search(sentence):
-            exclusion.append(sentence)
-            continue
-        position = 0
-        kind = "permission"
-        for match in SEGMENT.finditer(sentence):
-            text = sentence[position:match.start()]
-            (permission if kind == "permission" else exclusion).append(text)
-            kind = "exclusion" if match.group(1).lower() in ("out", "out of scope",
-                                                              "not in scope", "excludes",
-                                                              "except") else "permission"
-            position = match.end()
-        text = sentence[position:]
+    kind = "permission"
+
+    def record(text, kind):
+        """File one piece of text, and answer the kind it leaves behind."""
+        if not text.strip():
+            return kind
+        if PROHIBITION.search(text):
+            exclusion.append(text)
+            return kind
         (permission if kind == "permission" else exclusion).append(text)
+        return kind
+
+    for line in (body or "").splitlines():
+        heading = HEADING.match(line)
+        if heading:
+            named = (heading.group(1) or "").strip()
+            kind = "exclusion" if EXCLUSION_HEADING.match(named) else "permission"
+        for sentence in SENTENCE.split(line):
+            position = 0
+            for match in SEGMENT.finditer(sentence):
+                kind = record(sentence[position:match.start()], kind)
+                kind = "exclusion" if match.group(1).lower() in OUT_MARKERS else "permission"
+                position = match.end()
+            kind = record(sentence[position:], kind)
     return "\n".join(permission), "\n".join(exclusion)
 
 
@@ -138,15 +153,7 @@ def token_matches_any(token, tokens):
     return False
 
 
-def common_prefix(one, other):
-    """How many characters two names share at the front."""
-    count = 0
-    while count < len(one) and count < len(other) and one[count] == other[count]:
-        count += 1
-    return count
-
-
-def in_scope(path, tokens, changed=(), tests_allowed=False):
+def in_scope(path, tokens, changed=()):
     """Is one changed file inside the ticket's stated scope?
 
     A file is in scope when the ticket names it, names a directory that
@@ -219,14 +226,62 @@ def file_text(repo, path, ref, cache=None):
     return value
 
 
-def test_ties(repo, ref, path, named, cache=None):
-    """The named source files whose values a test pins.
+DIFF_FILE = re.compile(r"^\+\+\+ b/(.+?)\s*$")
+
+
+def introduced_literals(repo, pr):
+    """The distinctive values each file's added lines carry in this change.
+
+    A value a file already carried is not the value the change set, so it
+    cannot tie a test to the change: a pull request that copies an old
+    literal out of an in-scope source file into a test of something else
+    would otherwise have the copy authorize the test change. Only the
+    added lines of the pull request's own diff are the change's values.
+
+    A diff that cannot be read answers no values at all, so no test is
+    tied: the tie is an exception to the scope item, and an unread diff
+    earns neither.
+    """
+    try:
+        result = subprocess.run(["gh", "pr", "diff", str(pr), "-R", repo],
+                                capture_output=True, text=True, timeout=GH_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError):
+        return {}
+    if result.returncode != 0:
+        return {}
+    added = {}
+    path = None
+    for line in result.stdout.splitlines():
+        if line.startswith("+++ "):
+            match = DIFF_FILE.match(line)
+            path = match.group(1) if match else None
+            if path:
+                added.setdefault(path, [])
+            continue
+        if path and line.startswith("+"):
+            added[path].append(line[1:])
+    values = {}
+    for path, lines in added.items():
+        found = set()
+        for line in lines:
+            found |= distinctive_literals(line)
+        values[path] = found
+    return values
+
+
+def test_ties(repo, ref, path, named, cache=None, touched=None):
+    """The named source files whose values, set by this change, a test pins.
 
     A test that pins what the change sets is part of the change: the two
     files share a distinctive value. A test of something else shares
     none, so a ticket that says its existing tests may change never
     reaches it. Only files the ticket names can carry the value: a
     pull request cannot hand its own evidence the authority to tie.
+
+    `touched` maps a file to the values its added lines carry, and when
+    it is given only those values count: a value the file already
+    carried is not what the change set, so a test that copies it pins
+    nothing.
     """
     literals = distinctive_literals(file_text(repo, path, ref, cache))
     if not literals:
@@ -235,7 +290,10 @@ def test_ties(repo, ref, path, named, cache=None):
     for other in named:
         if other == path:
             continue
-        if literals & distinctive_literals(file_text(repo, other, ref, cache)):
+        source = distinctive_literals(file_text(repo, other, ref, cache))
+        if touched is not None:
+            source &= touched.get(other, set())
+        if literals & source:
             tied.append(other)
     return tied
 
@@ -464,10 +522,11 @@ def run_check(repo, pr, issue=None):
     if TEST_CLAUSE.search(body or ""):
         tokens = scope_tokens(body)
         named = named_sources(files, tokens)
+        touched = introduced_literals(repo, pr)
         cache = {}
         for path in files:
             if path.startswith("tests/") and not in_scope(path, tokens, files)[0]:
-                tied = test_ties(repo, merge, path, named, cache)
+                tied = test_ties(repo, merge, path, named, cache, touched)
                 if tied:
                     ties[path] = tied
     items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
