@@ -385,6 +385,28 @@ class ReviewerFallbackTest(RetryLimitBase):
         out, _ = self.run_gatekeep()
         self.assertIn("waiting o/r#7", out)
         self.assertEqual(self.gate_items(), [])
+        self.assertNotIn(self.key, self.read_queue().get("gateReviewers", {}))
+
+    def test_a_head_taken_back_for_a_block_is_regated_when_the_reviewer_frees(self):
+        chosen = coordq.save
+        blocking = [True]
+
+        def save_then_block(queue):
+            chosen(queue)
+            if blocking[0]:
+                self.block(coordq.model_list.entries("review")[1]["selection"])
+
+        coordq.save = save_then_block
+        self.addCleanup(setattr, coordq, "save", chosen)
+        self.write_queue(heads=self.head())
+        self.run_gatekeep()
+        blocking[0] = False
+        self.clear_block()
+        out, _ = self.run_gatekeep()
+        self.assertNotIn("gave up", out)
+        self.assertIn("regating o/r#7", out)
+        self.assertEqual(self.gate_items()[0]["args"]["modelSelection"],
+                         coordq.model_list.entries("review")[1]["selection"])
 
     def test_a_first_gate_whose_reviewer_is_blocked_is_rechosen(self):
         chosen = coordq.reviewer_model

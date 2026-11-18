@@ -131,9 +131,10 @@ def gate_state(value):
     """The gate state of one recorded head.
 
     gatedHeads maps a head to its queue item, and to the record
-    `{id, retries, at, givenUp, reviewer}` once a gate for the head has
-    died without a verdict. The reviewer is the one the gate was launched
-    on. A value written before that record is the bare queue item
+    `{id, retries, at, givenUp, reviewer, moved}` once a gate for the head
+    has died without a verdict. The reviewer is the one the gate was
+    launched on, and `moved` says the head already moved down the chain.
+    A value written before that record is the bare queue item
     id, which is a head with no retry behind it.
     """
     if isinstance(value, dict):
@@ -144,8 +145,9 @@ def gate_state(value):
                 "retries": retries if isinstance(retries, int) and not isinstance(retries, bool) else 0,
                 "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
                 "givenUp": bool(value.get("givenUp")),
-                "reviewer": reviewer if isinstance(reviewer, str) and reviewer else None}
-    return {"id": value, "retries": 0, "at": None, "givenUp": False, "reviewer": None}
+                "reviewer": reviewer if isinstance(reviewer, str) and reviewer else None,
+                "moved": bool(value.get("moved"))}
+    return {"id": value, "retries": 0, "at": None, "givenUp": False, "reviewer": None, "moved": False}
 
 
 def gate_label(state):
@@ -1679,7 +1681,7 @@ def cmd_gatekeep(a):
                     if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
                         continue
                     retries = state["retries"] + 1
-                    moved = bool(queue.get("gateReviewers", {}).get(key))
+                    moved = state["moved"]
                     if retries > GATE_RETRY_LIMIT or moved:
                         # A head moves to one other reviewer. A head that
                         # already moved is not moved again, backoff or not.
@@ -1723,7 +1725,8 @@ def cmd_gatekeep(a):
                 queue["items"].append(item)
                 heads[key] = {"id": item["id"], "retries": retries,
                               "at": time.time() if retries else None, "givenUp": False,
-                              "reviewer": model_list.identity(args["modelSelection"])}
+                              "reviewer": model_list.identity(args["modelSelection"]),
+                              "moved": retried or state["moved"]}
                 save(queue)
                 if model_list.is_blocked(args["modelSelection"]):
                     # A block landed while the item was written, so the item
@@ -1734,6 +1737,10 @@ def cmd_gatekeep(a):
                     queue["next"] -= 1
                     if retried:
                         heads[key] = state
+                        tried = queue["gateReviewers"][key]
+                        tried.remove(model_list.identity(args["modelSelection"]))
+                        if not tried:
+                            del queue["gateReviewers"][key]
                     else:
                         heads.pop(key, None)
                     save(queue)
