@@ -1709,11 +1709,9 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
             return False
         if not stat.S_ISDIR(moved.st_mode) or (moved.st_dev, moved.st_ino) != identity:
             # The entry that was moved is not the directory that was checked, so
-            # it goes back where it was.
-            try:
-                os.rename(target, path)
-            except OSError:
-                pass
+            # it goes back where it was, unless a newer save took the path. An
+            # occupied path keeps both entries.
+            _rename_exclusive(target, path)
             return False
         return True
     # There is no trash to move the copy to, so it stays where it is: a move
