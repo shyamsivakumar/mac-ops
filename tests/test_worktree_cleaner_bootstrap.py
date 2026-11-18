@@ -756,6 +756,33 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertIsNone(cleared)
         self.assertFalse((self.repo / "AGENTS.md").exists(), "the deletion has to survive")
 
+    def test_the_moved_original_is_kept_when_the_mode_changed(self):
+        # The mode changes while the file is moved aside. The file goes back
+        # to its own path, and the moved original stays in the recovery
+        # storage, so an editor that still has it open can finish saving.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        records = cleaner.status_for(self.repo)
+        digests = {name: cleaner.file_digest(self.repo / name) for code, name, _original in records}
+        signatures = {name: cleaner._working_signature(self.repo / name) for code, name, _original in records}
+        index_before = cleaner.index_digest(self.repo)
+        original_replace = os.replace
+
+        def replace_and_change_mode(source, destination, *args, **kwargs):
+            result = original_replace(source, destination, *args, **kwargs)
+            if str(destination).startswith("moved"):
+                os.chmod(self.trash / str(destination), 0o755)
+            return result
+
+        with mock.patch.object(cleaner.os, "replace", replace_and_change_mode):
+            cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, digests, index_before, signatures)
+        self.assertIsNone(cleared)
+        restored = self.repo / "AGENTS.md"
+        self.assertTrue(restored.exists(), "the file must be back at its path")
+        self.assertTrue(restored.read_text(encoding="utf-8").endswith(self.block))
+        kept = [item for item in self.trash.iterdir() if item.is_file()]
+        self.assertTrue(kept, "the moved original has to stay in the recovery storage")
+
     def test_a_restore_refuses_an_occupied_path(self):
         # The path is taken by an editor between the check and the restore, so
         # the restore has to refuse it and keep the recovery copy.
