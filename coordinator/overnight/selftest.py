@@ -480,6 +480,8 @@ def completion_boundary():
                 return {"items": [{"item": "proof file", "status": "pass", "detail": "fixture"}]}
             def failures(self, items):
                 return []
+            def blocking(self, items):
+                return []
             def report(self, items, target=""):
                 return "fixture"
 

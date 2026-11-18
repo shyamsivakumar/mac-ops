@@ -3,6 +3,7 @@ import importlib.util
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 import sys
 import unittest
 from unittest.mock import patch
@@ -64,35 +65,49 @@ class ScopeTest(unittest.TestCase):
                                ["coordinator/bin/close_check.py"])
         self.assertTrue(ok)
 
+    def test_a_test_of_something_else_is_out_of_scope(self):
+        check = close_check()
+        ok, _ = check.in_scope("tests/test_alarm_panel.py", set(),
+                               ["coordinator/bin/close_check.py"])
+        self.assertFalse(ok)
+
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
-        item = check.item_scope("The change is in lane_driver.py.",
+        item = check.item_scope("The change is in lane_driver.py.", "",
                                 ["coordinator/overnight/lane_driver.py",
                                  "coordinator/mods/cockpit/ui.js"])
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("coordinator/mods/cockpit/ui.js", item["detail"])
 
-    def test_a_ticket_that_names_no_path_is_skipped(self):
+    def test_a_ticket_that_names_no_path_cannot_be_judged_and_fails(self):
         check = close_check()
-        item = check.item_scope("Nothing here names a file.", ["a.py"])
-        self.assertEqual(item["status"], check.SKIPPED)
+        item = check.item_scope("Nothing here names a file.", "", ["a.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("cannot be judged", item["detail"])
+
+    def test_the_pull_request_scope_line_states_the_scope(self):
+        check = close_check()
+        body = "**Scope.** `coordinator/bin/close_check.py`, `tests/test_close_check.py`."
+        item = check.item_scope("Nothing here names a file.", body,
+                                ["coordinator/bin/close_check.py", "tests/test_close_check.py"])
+        self.assertEqual(item["status"], check.PASS)
 
     def test_a_home_path_is_not_a_path_in_this_repository(self):
         check = close_check()
         body = "Source: ~/Code/inbox/2026-11-17-ideas.md, requested by Shyam."
         self.assertEqual(check.scope_tokens(body), set())
-        item = check.item_scope(body, ["coordinator/bin/close_check.py"])
-        self.assertEqual(item["status"], check.SKIPPED)
+        item = check.item_scope(body, "", ["coordinator/bin/close_check.py"])
+        self.assertEqual(item["status"], check.FAIL)
 
-    def test_a_ticket_that_names_only_a_directory_is_skipped(self):
+    def test_a_ticket_that_names_only_a_directory_cannot_be_judged(self):
         check = close_check()
-        item = check.item_scope("The change lands in coordinator/overnight and anthropics/claude-cookbooks.",
+        item = check.item_scope("The change lands in coordinator/overnight and anthropics/claude-cookbooks.", "",
                                 ["coordinator/bin/close_check.py"])
-        self.assertEqual(item["status"], check.SKIPPED)
+        self.assertEqual(item["status"], check.FAIL)
 
     def test_a_ticket_that_names_a_file_in_another_directory_still_judges(self):
         check = close_check()
-        item = check.item_scope("The board's state is decisions.json.",
+        item = check.item_scope("The board's state is decisions.json.", "",
                                 ["coordinator/overnight/lane_driver.py"])
         self.assertEqual(item["status"], check.FAIL)
 
@@ -139,18 +154,59 @@ class ProofTest(unittest.TestCase):
 class CostNoteTest(unittest.TestCase):
     def test_the_item_is_skipped_until_the_report_exists(self):
         check = close_check()
-        item = check.item_cost("Cost: 12 minutes", False)
+        item = check.item_cost("Cost: 12 minutes", "absent")
         self.assertEqual(item["status"], check.SKIPPED)
+        self.assertFalse(item["required"])
+
+    def test_a_lookup_that_did_not_answer_fails_the_item(self):
+        check = close_check()
+        item = check.item_cost("Cost: 12 minutes", "unknown", "the read timed out")
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("did not answer", item["detail"])
 
     def test_the_report_makes_the_note_needed(self):
         check = close_check()
-        item = check.item_cost("Nothing about cost here.", True)
+        item = check.item_cost("Nothing about cost here.", "exists")
         self.assertEqual(item["status"], check.FAIL)
 
     def test_a_cost_note_passes_the_item(self):
         check = close_check()
-        item = check.item_cost("Cost: 12 minutes, $0.40", True)
+        item = check.item_cost("Cost: 12 minutes, $0.40", "exists")
         self.assertEqual(item["status"], check.PASS)
+
+
+class ReportLookupTest(unittest.TestCase):
+    """The lookup of the cost report has three answers, not two."""
+
+    class Result:
+        def __init__(self, returncode, stderr=""):
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = stderr
+
+    def lookup(self, result=None, raises=None):
+        check = close_check()
+        with patch("subprocess.run", side_effect=raises) as runner:
+            if result is not None:
+                runner.side_effect = None
+                runner.return_value = result
+            return check.report_state("shyamsivakumar/mac-ops", "a" * 40)
+
+    def test_a_found_report_exists(self):
+        state, _ = self.lookup(self.Result(0))
+        self.assertEqual(state, "exists")
+
+    def test_a_404_is_a_confirmed_absence(self):
+        state, _ = self.lookup(self.Result(1, "gh: Not Found (HTTP 404)"))
+        self.assertEqual(state, "absent")
+
+    def test_a_service_error_is_not_a_confirmed_absence(self):
+        state, _ = self.lookup(self.Result(1, "gh: could not connect"))
+        self.assertEqual(state, "unknown")
+
+    def test_a_timeout_is_not_a_confirmed_absence(self):
+        state, _ = self.lookup(raises=subprocess.TimeoutExpired("gh", 60))
+        self.assertEqual(state, "unknown")
 
 
 class ChecklistTest(unittest.TestCase):
@@ -160,15 +216,34 @@ class ChecklistTest(unittest.TestCase):
                                 ["coordinator/bin/close_check.py"], "found",
                                 "| Check | Command | Result |\n| --- | --- | --- |\n"
                                 "| lane selection | `x` | passed |",
-                                "evidence/MO-1077/check-proof.md", False)
+                                "evidence/MO-1077/check-proof.md", "absent")
         self.assertEqual([item["item"] for item in items],
                          ["scope", "proof file", "checks", "cost note"])
         self.assertEqual(check.failures(items), [])
+        self.assertEqual(check.blocking(items), [])
+
+    def test_a_scope_that_cannot_be_judged_stops_the_close(self):
+        check = close_check()
+        items = check.checklist("Nothing here names a file.", "",
+                                ["a.py"], "found",
+                                "| Check | Command | Result |\n| --- | --- | --- |\n"
+                                "| lane selection | `x` | passed |",
+                                "evidence/MO-1077/check-proof.md", "absent")
+        self.assertEqual([item["item"] for item in check.blocking(items)], ["scope"])
+
+    def test_a_cost_note_before_the_report_does_not_stop_the_close(self):
+        check = close_check()
+        items = check.checklist("The change is in close_check.py.", "",
+                                ["coordinator/bin/close_check.py"], "found",
+                                "| Check | Command | Result |\n| --- | --- | --- |\n"
+                                "| lane selection | `x` | passed |",
+                                "evidence/MO-1077/check-proof.md", "absent")
+        self.assertEqual(check.blocking(items), [])
 
     def test_the_report_ends_with_the_result(self):
         check = close_check()
         items = check.checklist("nothing", "nothing", ["a.py"], "missing", None,
-                                "evidence/MO-1077/check-proof.md", False)
+                                "evidence/MO-1077/check-proof.md", "absent")
         text = check.report(items, "shyamsivakumar/mac-ops#524")
         self.assertIn("proof file: fail", text)
         self.assertTrue(text.endswith("RESULT: FAIL shyamsivakumar/mac-ops#524"))
