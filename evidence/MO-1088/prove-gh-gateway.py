@@ -873,6 +873,31 @@ check("the quota probe targets the requested host", host_quota[:2] == ["PROBE", 
 check("the probe passes the host to gh", host_quota[2:4] == ["ARGV", "True"], str(host_quota))
 check("the default host is probed separately", host_quota[4:6] == ["DEFAULT", "3000"], str(host_quota))
 
+# A host in the repository selector decides the account and its quota.
+selector = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+print("R", gh_gateway.argv_host(["gh", "pr", "list", "-R", "ent.example/o/r"]))
+print("PLAIN", repr(gh_gateway.argv_host(["gh", "pr", "list", "-R", "o/r"])))
+print("HOSTNAME", gh_gateway.argv_host(["gh", "pr", "list", "--hostname", "h.example"]))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("a host in -R is the effective host",
+      selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example"], str(selector))
+
+# A malformed record makes the measurement incomplete, not quiet.
+partial_log = scratch / "partial.jsonl"
+partial_log.write_text(
+    json.dumps({"ts": time.time() - 20, "caller": "kept", "resource": "core",
+                "verb": "list"}) + "\n" + '{"ts": 1, "caller": "trunc')
+partial = subprocess.run([sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"),
+                          "--log", str(partial_log), "--hours", "1"],
+                         capture_output=True, text=True, env=env)
+check("a malformed record makes the result incomplete",
+      partial.returncode != 0 and "kept" in partial.stdout
+      and "INCOMPLETE" in (partial.stdout + partial.stderr),
+      f"exit={partial.returncode}")
+
 # `-i=true` is the same as `--include`: the caller's headers must survive.
 short_bool = subprocess.run([sys.executable, "-c", f"""
 import sys
