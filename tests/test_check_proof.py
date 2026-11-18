@@ -3,6 +3,7 @@ import importlib.util
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 import subprocess
 import sys
 import tempfile
@@ -232,6 +233,36 @@ class CheckProofTest(unittest.TestCase):
         proof.check("ruff F,B", "uvx ruff@0.14.0 check", missing)
         self.assertFalse(proof.failed)
         self.assertTrue(proof.incomplete)
+
+    def test_the_gate_counts_every_new_finding(self):
+        """Three new findings with one message are three findings."""
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        key = ("a.py", "F841", "Local variable `x` is assigned to but never used")
+        with patch.object(check, "ruff_counts", return_value={key: 4}), \
+                patch.object(check, "read_baseline", return_value={key: 1}):
+            with self.assertRaises(RuntimeError) as raised:
+                check.check_ruff()
+        self.assertIn("3 Ruff findings are not in the baseline", str(raised.exception))
+
+    def test_a_ruff_run_with_no_report_is_not_a_clean_run(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        probe = SimpleNamespace(returncode=0, stdout="ruff 0.14.0", stderr="")
+        empty = SimpleNamespace(returncode=1, stdout="", stderr="")
+        with patch.object(check.shutil, "which", return_value="/usr/local/bin/uvx"), \
+                patch.object(check.subprocess, "run", side_effect=[probe, empty]):
+            with self.assertRaises(RuntimeError) as raised:
+                check.ruff_counts()
+        self.assertIn("without a JSON report", str(raised.exception))
+
+    def test_a_ruff_run_that_exits_one_with_no_findings_is_not_a_clean_run(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        probe = SimpleNamespace(returncode=0, stdout="ruff 0.14.0", stderr="")
+        empty = SimpleNamespace(returncode=1, stdout="[]", stderr="")
+        with patch.object(check.shutil, "which", return_value="/usr/local/bin/uvx"), \
+                patch.object(check.subprocess, "run", side_effect=[probe, empty]):
+            with self.assertRaises(RuntimeError) as raised:
+                check.ruff_counts()
+        self.assertIn("reported no findings", str(raised.exception))
 
     def test_the_check_keeps_the_original_deadlines(self):
         """The proof file must not let a slower run pass the check."""
