@@ -303,7 +303,7 @@ def names_a_scope(tokens):
     return False
 
 
-def item_scope(body, files, evidence=""):
+def item_scope(body, files, evidence="", error=""):
     """Item 1: the diff stays inside the ticket's stated scope.
 
     The ticket is the only authority for the scope. A pull request cannot
@@ -313,6 +313,10 @@ def item_scope(body, files, evidence=""):
     authorizes no close: the item fails. The evidence that travels is the
     evidence of this ticket, never another ticket's.
     """
+    if error:
+        return {"item": "scope", "status": FAIL, "required": True,
+                "detail": ("the files of the pull request were not read to the end, so the scope "
+                           f"cannot be judged: {error}")}
     permission, exclusion = scope_texts(body)
     excluded = exclusion_tokens(exclusion)
     blocked = [path for path in files if any(token_matches(path, token) for token in excluded)]
@@ -475,11 +479,11 @@ def item_cost(body, report_state, detail=""):
             "detail": "the cost report exists, but the pull request body carries no cost note"}
 
 
-def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", proof_detail="", scope_files=None):
+def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", proof_detail="", scope_files=None, scope_error=""):
     """The four items, in the order the checklist reads them."""
     return [
         item_scope(body, files if scope_files is None else scope_files,
-                   evidence_dir(proof_path)),
+                   evidence_dir(proof_path), scope_error),
         item_proof(proof_state, proof_path, proof_detail),
         item_checks(proof_state, proof_text),
         item_cost(pr_body, report_state, report_detail),
@@ -561,10 +565,14 @@ def fetch_files(repo, pr):
     """
     changed = []
     scope = []
+    error = ""
     for page in range(1, FILE_PAGES + 1):
         try:
             entries = gh_json(["api", f"repos/{repo}/pulls/{pr}/files?per_page=100&page={page}"])
-        except RuntimeError:
+        except RuntimeError as exc:
+            # The pages were not read to the end, so the diff is not known:
+            # the scope cannot be judged and the close is refused.
+            error = str(exc)
             break
         if not isinstance(entries, list) or not entries:
             break
@@ -578,7 +586,7 @@ def fetch_files(repo, pr):
                 scope.append(previous)
         if len(entries) < 100:
             break
-    return changed, scope
+    return changed, scope, error
 
 
 def ticket_key(title):
@@ -605,7 +613,7 @@ def run_check(repo, pr, issue=None, reader=None):
     pull = gh_json(["pr", "view", str(pr), "-R", repo, "--json",
                     "state,headRefOid,body,mergeCommit,title"])
     merge = (pull.get("mergeCommit") or {}).get("oid") or pull["headRefOid"]
-    files, scope_files = fetch_files(repo, pr)
+    files, scope_files, files_error = fetch_files(repo, pr)
     number = issue if issue is not None else issue_of(pull.get("body"))
     body = ""
     title = pull.get("title") or ""
@@ -632,7 +640,7 @@ def run_check(repo, pr, issue=None, reader=None):
         report = {"found": "exists", "missing": "absent"}.get(found, "unknown")
         report_detail = ""
     items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
-                      report_detail, proof_detail, scope_files)
+                      report_detail, proof_detail, scope_files, files_error)
     return {"repo": repo, "pr": pr, "issue": number, "merge": merge, "files": files, "items": items}
 
 
