@@ -425,7 +425,14 @@ def branch_on_origin(repo, branch):
     return bool(listing.strip())
 
 
-def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None):
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False):
+    """Send work to a thread, or start a fresh one when it cannot take it.
+
+    With `worktree_only` the work belongs in a worktree of its own: a
+    thread that works in a shared checkout of a repository never takes
+    it, and the work starts a fresh worktree instead. That is the
+    fix-check path's rule; the other paths keep their own routing.
+    """
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
     if pr_number is not None:
@@ -444,10 +451,10 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
-    if sendable and pr_number is not None and root_workspace(thread):
-        # Pull request work in the shared root of the repository moves the
-        # branch everyone installs from, so it starts a fresh worktree
-        # instead of the thread that works there.
+    if sendable and worktree_only and root_workspace(thread):
+        # Pull request work in a shared checkout of the repository moves
+        # the branch everyone installs from, so it starts a fresh
+        # worktree instead of the thread that works there.
         sendable = False
         reroute = "root workspace"
     if sendable:
@@ -460,7 +467,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             raise ValueError(f"No repository for {lkey}")
         if pr is None:
             return f"skip {lkey}: no verified PR branch for relaunch"
-        if not branch_on_origin(repo, pr["headRefName"]):
+        if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
             return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
         workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         args = {"projectId": CFG[repo]["projectId"], "title": title,
@@ -563,7 +570,7 @@ def act_on_pr(repo, number, ledger):
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
-        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number)
+        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
