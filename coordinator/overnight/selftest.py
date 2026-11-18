@@ -473,8 +473,21 @@ def completion_boundary():
             exact(cmd[:3], ["issue", "close", "10"])
             actions.append("close")
             return "closed"
+
+        class Checklist:
+            """The close checklist the close step now runs, stubbed to pass."""
+            def run_check(self, *args, **kwargs):
+                return {"items": [{"item": "proof file", "status": "pass", "detail": "fixture"}]}
+            def failures(self, items):
+                return []
+            def blocking(self, items):
+                return []
+            def report(self, items, target=""):
+                return "fixture"
+
         with patch.object(ticket, "gh_json", return_value=pull), \
              patch.object(ticket, "t3_call", return_value={"items": [dict(type="assistant_message", text=reply)]}), \
+             patch.object(ticket, "close_check_module", return_value=Checklist()), \
              patch.object(ticket, "gh", side_effect=close):
             try:
                 ticket.cmd_close(args)
@@ -1468,7 +1481,7 @@ def send_integrity():
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
                     exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
-                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief"})
+                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief", "clientRequestId": key})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
                 if failure == "error":
