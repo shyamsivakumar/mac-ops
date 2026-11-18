@@ -1078,7 +1078,18 @@ def watchdog():
 
 
 def zero_merge():
+    """Run the merge-alert fixture in a folder that is always cleaned up.
+
+    The folder holds the mute state the fixture writes, so it is a
+    temporary directory rather than a directory the run leaves behind:
+    the cleanup runs after a failed assertion too."""
+    with tempfile.TemporaryDirectory(prefix="zero-merge-mute-") as scratch:
+        zero_merge_fixture(Path(scratch))
+
+
+def zero_merge_fixture(scratch):
     import datetime as dt
+    import os
     import lane_driver as lane
     other = {"id": "unrelated"}
     state = {"items": [other]}
@@ -1102,11 +1113,31 @@ def zero_merge():
     def saved(value, handle, **kwargs):
         state.clear()
         state.update(json.loads(json.dumps(value)))
+    # The alarm's key names the repos that are waiting, so a stall on one
+    # repo does not silence a stall on another. The title stays one title.
     alert = {"id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
         "title": "No merge in 60 minutes with open PRs",
-        "why": "The coordinator must inspect blocked PRs and restore merge progress."}
+        "cause": "No merge in 60 minutes with open PRs: fixture/one",
+        "why": "The coordinator must inspect blocked PRs and restore merge progress: fixture/one"}
+    # The alarm's mute state goes to a file of its own, so the eval never
+    # reads or writes the live shift's folder.
+    mute = str(scratch / "mute-state.json")
+
+    def read_board(path):
+        return b"", json.loads(json.dumps(state))
+
+    def write_board(path, board):
+        state.clear()
+        state.update(json.loads(json.dumps(board)))
+        return True
+
+    import alarms
     with patch.object(dt, "datetime", Clock), patch.object(lane, "read_json", side_effect=read), \
          patch("builtins.open", side_effect=opened), patch.object(lane.json, "dump", side_effect=saved), \
+         patch.object(alarms, "MUTE_PATH", mute), \
+         patch.object(lane, "DECISIONS_PATH", str(Path(mute).parent / "decisions.json")), \
+         patch.object(alarms, "read_board", side_effect=read_board), \
+         patch.object(alarms, "write_board", side_effect=write_board), \
          patch.object(lane.os, "replace") as replace:
         for stamps, expected in [([], [other, alert]),
                 (["2026-11-15T10:59:59Z"], [other, alert]),
@@ -1125,15 +1156,63 @@ def zero_merge():
             else:
                 raise AssertionError("read failure was swallowed")
         exact(state["items"], [other, alert])
-        exact(replace.call_count, 5)
+
         snapshot["repos"]["fixture/one"]["prs"] = []
-        lane.zero_merge(snapshot)
+        # A healthy tick raises nothing, so it says nothing about an alarm:
+        # "with open PRs: none" is not a stall.
+        healthy = io.StringIO()
+        with contextlib.redirect_stdout(healthy):
+            lane.zero_merge(snapshot)
         exact(state["items"], [other])
         exact(len(calls), 10)
-        exact(replace.call_count, 6)
-        for call in replace.call_args_list:
-            exact(call.args, ("/Users/shyamsivakumar/Code/coordinator/decisions.json.tmp",
-                              "/Users/shyamsivakumar/Code/coordinator/decisions.json"))
+        # A board that cannot be written is reported, not swallowed: the
+        # alarm is nowhere, and the tick has to say so.
+        with patch.object(alarms, "board_update", return_value="failed"):
+            try:
+                lane.zero_merge(snapshot)
+            except RuntimeError as exc:
+                exact("could not be published" in str(exc), True)
+            else:
+                raise AssertionError("a failed publication was swallowed")
+        exact("ZERO-MERGE No merge" in healthy.getvalue(), False)
+        # The board is written through the alarm module's own writer, and
+        # the mute state beside it, each from a temporary file of its own.
+        replaced = {(str(call.args[0]), str(call.args[1])) for call in replace.call_args_list}
+        # The mute state was written: the exact pair was seen, and nothing
+        # else was replaced for it.
+        exact((f"{mute}.{os.getpid()}.tmp", mute) in replaced, True)
+
+        # The changed cause reaches the board. The alarm for one waiting
+        # repo is answered, a second repo starts waiting, and the next
+        # pass must raise an alarm whose cause names both repos. A
+        # producer that kept using the first repo as its cause would fail
+        # here, and would have silenced the newly stalled repo.
+        import alarms as mute_rules
+        snapshot["repos"]["fixture/one"]["prs"] = [{"number": 1}]
+        snapshot["repos"]["fixture/two"]["prs"] = []
+        rows = []
+        lane.zero_merge(snapshot)
+        first = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        exact(len(first), 1)
+        exact(first[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one")
+        # The answer goes to the mute state the shift keeps. The replace
+        # above is observed by a mock, so the eval writes the record the
+        # panel writes, rather than replacing the file and losing it.
+        answers = mute_rules.load_state()
+        answered = mute_rules.key_of("factory-zero-merge", first[0]["cause"])
+        mute_rules.acknowledge(answers, answered, now)
+        Path(mute).write_text(json.dumps({mute_rules.STATE_KEY: answers}))
+        exact(mute_rules.muted(mute_rules.load_state(), answered, now), True)
+        # The answered cause is quiet: the same wait raises no board item.
+        lane.zero_merge(snapshot)
+        exact([i for i in state["items"] if i["id"] == "factory-zero-merge"], [])
+        # A repository that starts waiting is a different cause, so it
+        # alarms at once under its own key.
+        snapshot["repos"]["fixture/two"]["prs"] = [{"number": 2}]
+        lane.zero_merge(snapshot)
+        raised = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        exact(len(raised), 1)
+        exact(raised[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one, fixture/two")
 
 
 def board_integrity():
