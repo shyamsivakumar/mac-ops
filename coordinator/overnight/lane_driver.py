@@ -1384,7 +1384,7 @@ def recover_dead_runs(ledger):
                 # cannot run the continue either, so it is blocked for every
                 # build and send and the work moves to the next builder.
                 current = builder_of(full_thread)
-                if current:
+                if current and not DRY:
                     line = builders.blocked_builder(
                         current, block_reason, reset_at=provider_health.reset_time(reply))
                     if line:
@@ -1456,7 +1456,7 @@ def probe_blocked_builders(ledger):
             status = thread.get("status")
             reply = last_reply(thread_id) if thread_id else ""
             if status == "completed" and reply.strip():
-                line = builders.recovered_builder(member, request_id)
+                line = builders.recovered_builder(member, request_id) if not DRY else None
                 if line:
                     print(line)
                 continue

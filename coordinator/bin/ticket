@@ -1232,17 +1232,7 @@ def default_branch(repo):
 
 
 def builder_model(selection):
-    """The builder a start runs on.
-
-    The label's builder comes first, then the next builder the provider
-    health store leaves unblocked (MO-1082). A ticket whose builder ran out
-    is started on the next one instead of waiting on an exhausted account;
-    a selection that names no builder in the list is left alone, because
-    this change moves builds between the allowed builders and does not
-    choose models.
-    """
-    if not builders.is_builder(selection):
-        return selection
+    """Choose an available allowed builder for every ticket start."""
     chosen = builders.choose_builder(selection)
     if chosen is None:
         raise Refuse("every builder is blocked, waiting for a probe to answer")
