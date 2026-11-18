@@ -154,7 +154,7 @@ def worktrees(repo: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def status_for(path: Path) -> list[tuple[str, str, str | None]]:
+def status_for(path: Path, *, include_ignored: bool = False) -> list[tuple[str, str, str | None]]:
     """Parse `git status --porcelain=v1 -z` into (code, path, original path).
 
     The records keep their status columns and are NUL separated, so a path
@@ -163,7 +163,10 @@ def status_for(path: Path) -> list[tuple[str, str, str | None]]:
     path is decoded with `os.fsdecode`, so a file name that is not valid
     UTF-8 cannot abort the scan.
     """
-    output = git_bytes(path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    arguments = ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
+    if include_ignored:
+        arguments.append("--ignored=matching")
+    output = git_bytes(path, *arguments)
     fields = output.split(b"\0")
     records: list[tuple[str, str, str | None]] = []
     index = 0
@@ -1935,7 +1938,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     except OSError:
                         pointer = ""
                     try:
-                        pending = status_for(Path(candidate["path"]))
+                        pending = status_for(Path(candidate["path"]), include_ignored=True)
                     except SafetyError:
                         pending = None
                     if pending is None:
@@ -1948,11 +1951,14 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     if pending:
                         # The same refusal git makes for a dirty worktree: a file
                         # that was saved after the last status check is real work
-                        # and is never removed.
+                        # and is never removed. An ignored file is local work
+                        # too, and the status without the ignored entries would
+                        # not show it.
                         os.close(directory)
                         append_removal(state_root, candidate, "removal_blocked")
                         candidate["eligible"] = False
-                        candidate["reasons"] = ["worktree_changed_before_remove"]
+                        ignored = any(code.strip() == "!!" for code, _name, _original in pending)
+                        candidate["reasons"] = ["worktree_has_ignored_files" if ignored else "worktree_changed_before_remove"]
                         continue
                     kept = _remove_tree(directory, {}, snapshot)
                     # What is left in the directory decides whether the checkout

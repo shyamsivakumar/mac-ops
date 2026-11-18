@@ -92,6 +92,7 @@ the test that fails without the fix.
 | 91 | the checkout and the registration were put back with a create and a rename, so a save that landed between the two was replaced | both are moved back with an **atomic rename that refuses an occupied destination** (`renamex_np` with `RENAME_EXCL`), so a save at that path is never replaced and the complete aside copy is kept | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_a_directory_restore_keeps_both_copies` |
 | 92 | the checkout was restored from a bare name, so it was looked for in the working directory of the process and could be stranded under the temporary name | the restore uses the same parent directory as the move | `verification/worktree-cleaner/check_bootstrap.py` |
 | 93 | without `renamex_np` the move fell back to a check and a rename, so a directory created in between was replaced | without an atomic rename that refuses an occupied destination the move is **refused** and the cleanup reports it | `verification/worktree-cleaner/check_bootstrap.py` |
+| 94 | the removal deleted ignored local work, because the status check does not show ignored files and the snapshot of the directory does | the final status check **includes the ignored entries**, so a checkout with an ignored file is refused with the reason `worktree_has_ignored_files` and nothing in it is deleted | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_an_ignored_file_keeps_the_worktree` |
 
 ## How the fixes are proved
 
