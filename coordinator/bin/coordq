@@ -512,8 +512,10 @@ def drain():
                 else:
                     item["attempts"] = MAX_ATTEMPTS
             elif probe_request(request_id):
+                # A failed probe stays on the provider it names and retries
+                # there, like any other failure. It is never rerouted, and it
+                # holds the block open for a later probe.
                 provider_health.note_probe_failure(item["args"].get("modelSelection"), out)
-                item["attempts"] = MAX_ATTEMPTS
             elif builders.is_builder((item.get("builderContinuation") or item["args"].get("builderContinuation") or item["args"]).get("modelSelection")) and not probe_request(request_id):
                 continuation = item.get("builderContinuation") or item["args"].get("builderContinuation")
                 model = failed_builder((continuation or item["args"])["modelSelection"], out)
