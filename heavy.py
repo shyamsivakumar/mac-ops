@@ -2462,9 +2462,10 @@ def stop_orphan_simulator_processes(
     booting in between is left alone. Immediately before each signal, SIGTERM
     and SIGKILL alike, the process identity and the device state are checked
     again for that one process, so a pid that was reused or a device that started
-    booting while earlier processes were being signalled is never hit. A signal
-    goes only to a process whose uid and start token match the ones read with
-    its classification.
+    booting while earlier processes were being signalled is never hit. The device
+    state is read first and the process identity last, so no query sits between
+    the identity check and the signal. A signal goes only to a process whose uid
+    and start token match the ones read with its classification.
     """
 
     def snapshot():
@@ -2477,10 +2478,10 @@ def stop_orphan_simulator_processes(
         )
 
     def revalidate(pid, udid, identity):
-        if identity_reader(pid) != identity:
-            return "reused"
         if udid is not None and udid in set(booted_reader()):
             return "booting"
+        if identity_reader(pid) != identity:
+            return "reused"
         return "orphan"
 
     targets = snapshot()
@@ -2647,6 +2648,11 @@ def _attach_simulator_state(
     evidence that the job may have booted a device. A device list that cannot be
     read records the booted baseline as unknown (None), and an unknown baseline
     protects every device while the job runs and shuts none down at its end.
+
+    The job calls this after it holds its project lock, so a device booted by
+    someone else while the job waited for that lock is part of the baseline and
+    never counts as booted by the job. A job that waits for the project lock has
+    no snapshot, and a competing job without a snapshot keeps every device on.
 
     The read and the write happen under the simulator lock, the same lock that
     job-end cleanup holds while it decides and shuts a device down. A job either
@@ -3525,8 +3531,6 @@ def _launch_job(
     project_fd = None
     try:
         record = _record(registry, job_id)
-        _attach_simulator_state(registry, job_id, command_basename, argv)
-        record = _record(registry, job_id)
         project_fd = _acquire_project_lock(
             registry,
             project_key,
@@ -3535,6 +3539,8 @@ def _launch_job(
             stop_event=stop_event,
             heartbeat=lambda: registry.write_heartbeat(job_id, deps.monotonic_ns()),
         )
+        _attach_simulator_state(registry, job_id, command_basename, argv)
+        record = _record(registry, job_id)
         launch = deps.launch_gated_workload or _default_launch_gated_workload
         workload_process, open_gate, close_gate = launch(argv)
         table = deps.process_table_reader()
