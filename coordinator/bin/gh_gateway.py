@@ -166,20 +166,32 @@ def _split_headers(text):
     return text[:match.start()], text[match.end():]
 
 
+def _status(headers):
+    """Return the status code of the last response in an `--include` output.
+
+    Only the status line counts. The body of a 200 can hold the number 304,
+    and an error message can too, so a search for "304" anywhere in the
+    output would answer an old body to a fresh read."""
+    codes = re.findall(r"(?m)^HTTP/[\d.]+\s+(\d{3})", headers or "")
+    return int(codes[-1]) if codes else None
+
+
 def _conditional_run(argv, timeout):
-    """Run one api GET with If-None-Match; a 304 answers from the etag file."""
+    """Run one api GET with If-None-Match; only a 304 answers from the file."""
     state = _read_etag(argv)
     extra = ["--include"]
     if state:
         extra += ["-H", f"If-None-Match: {state['etag']}"]
     result = _launch()(argv + extra, capture_output=True, text=True, timeout=timeout)
     headers, body = _split_headers(result.stdout or "")
-    combined = (headers + "\n" + (result.stdout or "") + "\n" + (result.stderr or ""))
-    if "304" in combined and state:
+    status = _status(headers)
+    if status == 304 and state:
         return subprocess.CompletedProcess(argv, 0, state["stdout"], "")
-    header = re.search(r"(?im)^etag:\s*(\S+)\s*$", headers)
-    if header and result.returncode == 0:
-        _write_etag(argv, header.group(1), body)
+    record(argv, 1)
+    if status is not None and 200 <= status < 300:
+        header = re.search(r"(?im)^etag:\s*(\S+)\s*$", headers)
+        if header:
+            _write_etag(argv, header.group(1), body)
     return subprocess.CompletedProcess(argv, result.returncode, body, result.stderr)
 
 
@@ -216,9 +228,46 @@ def store(argv, stdout):
         return
 
 
-def record(argv):
-    """Write one GitHub call to the usage log, one JSON line per call."""
+def requests(argv, stdout):
+    """Return the number of GitHub requests one command made.
+
+    A paginated read makes one request per page. With `--slurp` the pages
+    are the elements of one JSON array; without it they are the JSON values
+    written one after another. A read that is not paginated is one request.
+    """
     if not _gh(argv):
+        return 0
+    if "--paginate" not in argv:
+        return 1
+    if "--slurp" in argv:
+        # gh writes the pages as one JSON array here, so the pages are its
+        # elements and not one value.
+        try:
+            pages = json.loads((stdout or "").strip() or "[]")
+        except ValueError:
+            return 1
+        return max(1, len(pages)) if isinstance(pages, list) else 1
+    decoder = json.JSONDecoder()
+    text = (stdout or "").strip()
+    count, index = 0, 0
+    while index < len(text):
+        try:
+            _, end = decoder.raw_decode(text, index)
+        except ValueError:
+            break
+        count += 1
+        index = end
+        while index < len(text) and text[index].isspace():
+            index += 1
+    return max(1, count)
+
+
+def record(argv, count=1):
+    """Write one usage-log line per GitHub core request the command made.
+
+    A 304 is not a core call and is never passed here, so the log holds
+    what was spent and not what was wanted."""
+    if not _gh(argv) or count <= 0:
         return
     line = json.dumps({"ts": round(time.time(), 3), "caller": caller(),
                        "command": [str(word) for word in argv[1:4]]})
@@ -227,7 +276,8 @@ def record(argv):
             os.replace(USAGE_LOG, USAGE_LOG.with_suffix(".jsonl.1"))
         USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(USAGE_LOG, "a") as handle:
-            handle.write(line + "\n")
+            for _ in range(count):
+                handle.write(line + "\n")
     except OSError:
         return
 
@@ -310,7 +360,7 @@ def run(argv, timeout=60, stdin=None, limit=None):
         return _conditional_run(argv, timeout)
     result = _launch()(argv, input=stdin, capture_output=True, text=True,
                        timeout=timeout)
-    record(argv)
+    record(argv, requests(argv, result.stdout))
     if result.returncode == 0:
         store(argv, result.stdout)
     return result

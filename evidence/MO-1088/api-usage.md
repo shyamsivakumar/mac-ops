@@ -55,19 +55,23 @@ for the lane driver, coordq, the overnight shift and the ticket tool.
    every minute is served by the cache for three of its four reads
    (`TICKET_CACHE_TTL`, and `--fresh` still bypasses it).
 2. **Conditional reads.** A single-page `gh api` GET carries
-   `If-None-Match` from the last ETag. A 304 answers from the stored body
-   and costs no core call. A paginated read is not conditional: its header
-   blocks and bodies interleave, so the cache is the only saving there.
+   `If-None-Match` from the last ETag. The HTTP status line is parsed, so
+   only a status 304 answers from the stored body and costs no core call;
+   a 200 whose body happens to hold the number 304 is a fresh answer. A
+   paginated read is not conditional: its header blocks and bodies
+   interleave, so the cache is the only saving there.
 3. **Floor.** The shared reserve is 1500 remaining calls
    (`COORDINATOR_GH_FLOOR`, default 1500; the lane driver's old 500 is
    raised to it). Below the floor the gatekeep run and the overnight board
    read wait for the quota instead of spending the last calls. An optional
    read that is below the floor is skipped; a read that matters still runs
    and fails on its own if GitHub refuses it.
-4. **Measurement.** Every call that reaches GitHub is one line in
+4. **Measurement.** Every GitHub core request is one line in
    `~/Library/Logs/coordinator/gh-usage.jsonl`, with the caller and the
-   command. `python3 scripts/gh-usage-report.py --hours 1` prints the
-   count per caller per hour.
+   command. A paginated read logs one line per page it fetched. A
+   conditional 200 logs its line, and a 304 logs none.
+   `python3 scripts/gh-usage-report.py --hours 1` prints the count per
+   caller per hour.
 
 A cached answer and a 304 are not calls that cost core quota, so they are
 not in the log. That makes the log the count of what was spent, not of what
@@ -115,9 +119,12 @@ paste both. The core `remaining` must stay above 2500.
 ## Proof of the helper
 
 `python3 evidence/MO-1088/prove-gh-gateway.py` runs against a fake `gh` on
-PATH and asserts: a repeated list read runs once, a single-page read is
-conditional and a 304 serves the stored body, a head read always calls and
-is never conditional, the usage log names the caller, a cached or 304
-answer adds no core row, and a read below the floor is refused.
+PATH and asserts: a repeated list read runs once; a slurped and an
+un-slurped paginated read each log one row per page; a conditional 200 is
+counted and returns the new body; a 200 whose body holds the number `304`
+returns the new body and not the stored one; a real 304 serves the stored
+body and logs no row; a head read always calls, is counted and is never
+conditional; the usage log names the caller; and a read below the floor is
+refused.
 
 Last run: every line PASS.
