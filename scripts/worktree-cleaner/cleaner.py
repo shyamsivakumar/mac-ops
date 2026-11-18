@@ -1611,13 +1611,29 @@ _TRASH: Path | None = None
 
 
 def _trash_destination(name: str) -> Path | None:
-    """A place in the trash for a copy that may go."""
+    """The place a copy that may go is moved to.
+
+    The system trash is used when it is there, so emptying the trash in
+    Finder takes the copy with it. A trash that does not exist is not
+    invented: the copy stays in the recovery storage instead.
+    """
     trash = _TRASH or (Path.home() / "Trash")
     try:
-        trash.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not trash.is_dir():
+            return None
     except OSError:
         return None
     return trash / f"worktree-cleaner-{name}-{int(time.time())}"
+
+
+def _move_to_system_trash(path: Path) -> bool:
+    """Move a copy into the trash of its volume, the way the system does it."""
+    script = f'tell application "Finder" to delete POSIX file "{path}"'
+    try:
+        result = run(["osascript", "-e", script], timeout=120)
+    except SafetyError:
+        return False
+    return result.returncode == 0
 
 
 def _remove_recovery_copy(path: Path, older_than: float) -> bool:
@@ -1658,14 +1674,34 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
             except OSError:
                 pass
         os.close(descriptor)
-    target = _trash_destination(path.name)
-    if target is None:
-        return False
     try:
-        # One move, every name kept: nothing is unlinked, so a file an
-        # editor opens after this point still has a name.
-        os.rename(path, target)
+        identity = os.stat(path)
     except OSError:
+        return False
+    target = _trash_destination(path.name)
+    if target is not None:
+        try:
+            # One move, every name kept: nothing is unlinked, so a file an
+            # editor opens after this point still has a name.
+            os.rename(path, target)
+        except OSError:
+            return False
+        try:
+            moved = os.stat(target)
+        except OSError:
+            return False
+        if (moved.st_dev, moved.st_ino) != (identity.st_dev, identity.st_ino):
+            # The directory that was moved is not the one that was checked, so
+            # it goes back where it was.
+            try:
+                os.rename(target, path)
+            except OSError:
+                pass
+            return False
+        return True
+    if not _move_to_system_trash(path):
+        # The copy stays in the recovery storage: it cannot be shown to be
+        # safe to move.
         return False
     return True
 
