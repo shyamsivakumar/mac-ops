@@ -838,8 +838,8 @@ export default class Board extends View {
     localStorage.setItem(SEEN_KEY, JSON.stringify(next));
   }
 
-  noteAct(g, act, t = Date.now()) {
-    if (g && this.seen[g.key]?.col === "needs") logAct({ t, key: g.key, act, src: srcOf(g), project: g.project });
+  noteAct(g, act, t = Date.now(), eligible = g && this.seen[g.key]?.col === "needs") {
+    if (g && eligible) logAct({ t, key: g.key, act, src: srcOf(g), project: g.project });
   }
 
   logAnswers() {
@@ -1557,10 +1557,11 @@ export default class Board extends View {
     if (thread.issue) return this.confirm("abandon", this.replyKey, () => this.abandon(thread, cx), cx);
     const card = this.reviewMode ? this.reviewing(Date.now()).g : null;
     const target = card ?? this.entryOf(this.replyKey)?.group;
+    const eligible = target && this.seen[target.key]?.col === "needs";
     this.closeInput();
     this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
       const sent = await sendReply(thread.key, text);
-      this.noteAct(target, card ? "sendback" : "reply");
+      this.noteAct(target, card ? "sendback" : "reply", Date.now(), eligible);
       if (card) this.finishReview(card, "Sent back");
       return sent;
     }, cx);
@@ -1691,6 +1692,7 @@ export default class Board extends View {
   }
 
   async mergeOne(g, shown) {
+    const eligible = g && this.seen[g.key]?.col === "needs";
     const name = g.task || g.title;
     let problem;
     try {
@@ -1702,7 +1704,7 @@ export default class Board extends View {
     try {
       const r = await mergeThread(g, this.planned);
       if (r.queued) {
-        this.noteAct(g, "merge");
+        this.noteAct(g, "merge", Date.now(), eligible);
         return { name, queued: true, text: r.text };
       }
       return this.refuse(g, name, r.refused);
