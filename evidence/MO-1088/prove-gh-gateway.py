@@ -897,13 +897,22 @@ print("SEARCHSELECTOR", gh_gateway.argv_host(
      "-Rother.example/o/r"]))
 print("HOSTNAMEWINS", gh_gateway.argv_host(
     ["gh", "pr", "list", "--hostname", "h.example", "-R", "a.example/o/r"]))
+print("REPOFLAG", gh_gateway.argv_host(["gh", "pr", "list", "--repo", "ent.example/o/r"]))
+print("REPOEQ", gh_gateway.argv_host(["gh", "pr", "list", "--repo=ent.example/o/r"]))
+print("SHORTSELECTOR", gh_gateway.argv_host(
+    ["gh", "pr", "list", "-R", "actual.example/o/r", "-S", "-Rother.example/o/r"]))
+print("SEARCHHOST", gh_gateway.argv_host(
+    ["gh", "pr", "list", "--search", "--hostname=other.example",
+     "-R", "actual.example/o/r"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
                   "ATTACHED", "ent.example", "VALUE", "''", "BOTH", "ent.example",
                   "SHORT", "ent.example", "SHORTONLY", "''", "RUNALL", "ent.example",
                   "RUNWORKFLOW", "ent.example", "NOOWNER", "''",
-                  "SEARCHSELECTOR", "actual.example", "HOSTNAMEWINS", "h.example"],
+                  "SEARCHSELECTOR", "actual.example", "HOSTNAMEWINS", "h.example",
+                  "REPOFLAG", "ent.example", "REPOEQ", "ent.example",
+                  "SHORTSELECTOR", "actual.example", "SEARCHHOST", "actual.example"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.
