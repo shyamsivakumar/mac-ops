@@ -201,6 +201,17 @@ set_mode("304")
 forget_body_cache()
 d = run(single)
 check("a 304 answers the stored body", d.stdout.strip() == '[{"number": 304}]', d.stdout.strip()[:40])
+
+# The 304 renews the short-TTL body, so the next read is served without
+# asking GitHub again even once the ETag file is gone.
+import shutil
+for path in (cache / "etag").glob("*"):
+    path.unlink()
+before = calls_made()
+renewed = run(single)
+check("a 304 renews the body cache", calls_made() - before == 0,
+      f"calls={calls_made() - before}")
+check("the renewed body is the one that validated", renewed.stdout.strip() == '[{"number": 304}]')
 check("a 304 is not counted", len(rows()) - rows_before == 0,
       f"rows={len(rows()) - rows_before}")
 
@@ -268,6 +279,15 @@ labeled = rows()[rows_before:]
 check("an api read is logged as core",
       labeled and all(row["resource"] == "core" for row in labeled),
       f"resources={[row['resource'] for row in labeled]}")
+# A repository named `search` is a core endpoint, not the Search API.
+rows_before = len(rows())
+repo_named_search = run(["gh", "api", "--paginate", "--slurp",
+                         "repos/acme/search/issues?per_page=100"], cwd=str(Path(tempfile.mkdtemp())))
+check("a repo named search is core", all(row["resource"] == "core" for row in rows()[rows_before:]),
+      f"resources={[row['resource'] for row in rows()[rows_before:]]}")
+check("a repo named search counts pages", len(rows()) - rows_before == 3,
+      f"rows={len(rows()) - rows_before}")
+
 rows_before = len(rows())
 run(["gh", "api", "search/issues?q=repo:a/b+is:issue"])
 searched_api = rows()[rows_before:]
