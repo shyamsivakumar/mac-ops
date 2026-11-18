@@ -159,6 +159,40 @@ check("a head read is never conditional",
       not any("headRefOid" in line and "If-None-Match" in line
               for line in calls.read_text().splitlines()))
 
+pr_list = ["gh", "pr", "list", "-R", "a/b", "--state", "open", "--json", "number"]
+issue_list = ["gh", "issue", "list", "-R", "a/b", "--state", "open", "--json", "number"]
+before = calls_made()
+p1 = run(pr_list)
+p2 = run(pr_list)
+check("a repeated `gh pr list` runs once", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
+check("the cached `gh pr list` returns the same body", p1.stdout == p2.stdout)
+before = calls_made()
+run(issue_list)
+run(issue_list)
+check("a repeated `gh issue list` runs once", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
+
+rows_before = len(rows())
+run(["gh", "search", "issues", "--owner", "a", "--state", "open", "--limit", "5",
+     "--json", "number"])
+searched = rows()[rows_before:]
+check("a search is logged under the search quota",
+      searched and all(row["resource"] == "search" for row in searched),
+      f"resources={[row['resource'] for row in searched]}")
+rows_before = len(rows())
+run(["gh", "pr", "view", "7", "-R", "a/b", "--json", "state"])
+viewed = rows()[rows_before:]
+check("a GraphQL command is not logged as core",
+      viewed and all(row["resource"] == "graphql" for row in viewed),
+      f"resources={[row['resource'] for row in viewed]}")
+rows_before = len(rows())
+run(["gh", "api", "repos/a/b/labels?per_page=100"])
+labeled = rows()[rows_before:]
+check("an api read is logged as core",
+      labeled and all(row["resource"] == "core" for row in labeled),
+      f"resources={[row['resource'] for row in labeled]}")
+
 check("the usage log names the caller per call", all(row["caller"] == "proof" for row in rows()))
 
 result = run(fresh, floor=5000)
