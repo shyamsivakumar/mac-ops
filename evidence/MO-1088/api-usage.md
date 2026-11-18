@@ -52,7 +52,9 @@ for the lane driver, coordq, the overnight shift and the ticket tool.
 1. **Cache.** A repeated list read is served from
    `~/.cache/coordinator/gh` for 120 s. The verb is read from the command,
    so `gh pr list` and `gh issue list` are cached like `gh label list`; a
-   `view` is not. `ticket`'s own board cache keeps
+   `view` is not. An `gh api` read is cached only when it is a verified
+   GET of a list endpoint: a write that carries a query string, such as a
+   repository dispatch, is never answered from the cache. `ticket`'s own board cache keeps
    its list for 240 s instead of 60 s, so a poller that reads the board
    every minute is served by the cache for three of its four reads
    (`TICKET_CACHE_TTL`, and `--fresh` still bypasses it).
@@ -71,8 +73,10 @@ for the lane driver, coordq, the overnight shift and the ticket tool.
 4. **Measurement.** Every GitHub request is one line in
    `~/Library/Logs/coordinator/gh-usage.jsonl`, with the caller, the
    command and the quota it spends (`core`, `search` or `graphql`).
-   `gh search` spends the separate search bucket, not the core quota, so
-   the report counts only `core` rows against the 5000 an hour. A paginated read logs one line per page it fetched. A
+   The quota is read from the endpoint or the command, not from the first
+   word: `gh api search/issues` is the search bucket, `gh run list` is a
+   core call on the Actions REST API, and `gh pr list` is GraphQL. A
+   command named in neither list is `other` and is never counted as core. A paginated read logs one line per page it fetched. A
    conditional 200 logs its line, and a 304 logs none.
    `python3 scripts/gh-usage-report.py --hours 1` prints the count per
    caller per quota per hour and the core total.
