@@ -1147,17 +1147,24 @@ def failed_gate_reviewer(queue, key, current, failure):
     return None
 
 
-def gate_prompt_state(repo, number, attempts=2):
+def gate_prompt_state(repo, number, changed_files=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths one pull request changed.
 
-    A read GitHub cannot give is retried, then reported UNKNOWN. An unknown
-    list never reads as clear, because clear is what authorizes the merge a
-    gate brief orders, so the caller defers the gate until the list is known.
+    A read GitHub cannot give is retried, then reported UNKNOWN. A list
+    shorter than the pull request's own changed-file count may have left out
+    the one prompt file (the files endpoint stops at 3,000), so it is
+    UNKNOWN too. An unknown list never reads as clear, because clear is what
+    authorizes the merge a gate brief orders, so the caller defers the gate
+    until the list is known.
     """
     for _ in range(max(1, attempts)):
         try:
             files = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
         except (RuntimeError, ValueError):
+            continue
+        if not isinstance(files, list):
+            continue
+        if not prompt_paths.list_is_complete(files, changed_files):
             continue
         return prompt_paths.prompt_scan(prompt_paths.entries_paths(files))
     return prompt_paths.UNKNOWN
@@ -1266,7 +1273,7 @@ def gate_candidates(config):
                     continue
                 key = f"gate:{repo}#{number}:{head}"
                 proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
-                prompt = gate_prompt_state(repo, number)
+                prompt = gate_prompt_state(repo, number, pr.get("changed_files"))
                 if prompt == prompt_paths.UNKNOWN:
                     print(f"skip {repo}#{number}: changed files unreadable, gate deferred",
                           file=sys.stderr)
@@ -1558,7 +1565,7 @@ def gate_request(repo, pr, settings, config, receipts, login):
             return None
         key = f"gate:{repo}#{number}:{head}"
         proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
-        prompt = gate_prompt_state(repo, number)
+        prompt = gate_prompt_state(repo, number, pr.get("changed_files"))
         if prompt == prompt_paths.UNKNOWN:
             return DEFER
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
@@ -1571,7 +1578,7 @@ def gate_request(repo, pr, settings, config, receipts, login):
         return None
     key = f"gate:{repo}#{number}:{head}"
     proof_state, proof, proof_path = gate_proof(settings, repo, None, head)
-    prompt = gate_prompt_state(repo, number)
+    prompt = gate_prompt_state(repo, number, pr.get("changed_files"))
     if prompt == prompt_paths.UNKNOWN:
         return DEFER
     return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, []),

@@ -105,7 +105,7 @@ def lane_replay():
     # must fail on the merge it accepted. A control that still passed would
     # mean the replay proves nothing.
     saved = lane.prompt_pull
-    lane.prompt_pull = lambda repo, number: False
+    lane.prompt_pull = lambda repo, number, *rest: prompt_paths.CLEAR
     try:
         selftest.gate_pipeline()
     except AssertionError as exc:
@@ -153,6 +153,30 @@ def queue_briefs():
     with patch.object(coordq, "gh_json", return_value=renamed):
         state = coordq.gate_prompt_state(repo, 544)
     grant("queue gatekeep: a renamed prompt file holds the PR", state == prompt_paths.HOLD, command)
+    # GitHub stops the files endpoint at 3,000: a list shorter than the pull
+    # request's own changed-file count may have dropped the one prompt file.
+    short = [{"filename": "coordinator/bin/ticket"}]
+    with patch.object(coordq, "gh_json", return_value=short):
+        truncated = coordq.gate_prompt_state(repo, 544, 3001)
+        complete = coordq.gate_prompt_state(repo, 544, 1)
+    grant("queue gatekeep: a truncated file list is unknown, never clear",
+          truncated == prompt_paths.UNKNOWN and complete == prompt_paths.CLEAR, command)
+
+
+def lane_truncation():
+    """The lane defers a passing PR whose file list may be short."""
+    import lane_driver as lane
+    command = "python3 evidence/MO-543/proof.py"
+    written = []
+    with patch.object(lane, "run",
+                      return_value='[{"filename": "coordinator/bin/ticket"}]'), \
+            patch.object(lane, "publish_decision", lambda item: written.append(item)):
+        state = lane.prompt_pull("shyamsivakumar/mac-ops", 544, 3001)
+        held = lane.prompt_pass("shyamsivakumar/mac-ops", 544, HEAD, state)
+        complete = lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1)
+    grant("lane: a truncated file list defers the pass, and a complete one is clear",
+          state == prompt_paths.UNKNOWN and "next run retries" in (held or "")
+          and complete == prompt_paths.CLEAR and written == [], command)
 
 
 def ticket_file_read():
@@ -188,6 +212,7 @@ def main():
     gate_briefs()
     queue_briefs()
     ticket_file_read()
+    lane_truncation()
     lane_replay()
     failures = [row for row in RESULTS if not row[1]]
     for gate, ok, command in RESULTS:

@@ -59,7 +59,11 @@ When one path matches, the brief's heading says `review only`, the merge
 order becomes `do not merge ... Shyam merges a passing one himself`, the
 fast-forward is left out, and the brief closes no issue. A pull request that
 only changes code keeps the merge order. A renamed file counts under both
-names, so moving prompt text out of `prompts/` still holds it.
+names, so moving prompt text out of `prompts/` still holds it. A file list
+GitHub cannot give, or one shorter than the pull request's own changed-file
+count (the files endpoint stops at 3,000), is unknown: the read is retried
+and then the gate refuses, because a brief built without the list could
+order a merge of prompt text.
 
 A file list GitHub cannot give is not code: the read is retried, and a list
 still unknown defers the gate instead of building a brief. A brief written

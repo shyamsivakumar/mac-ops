@@ -760,7 +760,7 @@ def pull_files(repo, number, changed_files=None):
     if not isinstance(files, list):
         return None
     entries = [entry for entry in files if isinstance(entry, dict)]
-    if isinstance(changed_files, int) and len(entries) < changed_files:
+    if not prompt_paths.list_is_complete(entries, changed_files):
         return None
     paths = []
     for entry in entries:
