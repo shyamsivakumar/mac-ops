@@ -1575,6 +1575,16 @@ def _sweep_recovery(state_root: Path, older_than: float) -> None:
         if not isinstance(entry, dict):
             continue
         path = Path(str(entry.get("path")))
+        # The retention starts when the copy was recovered, so a copy whose
+        # contents already had old timestamps keeps its day.
+        recovered_at = entry.get("recovered_at")
+        try:
+            recovered_at = float(recovered_at)
+        except (TypeError, ValueError):
+            recovered_at = None
+        if recovered_at is None or recovered_at > older_than:
+            keep.append(entry)
+            continue
         newest = _newest_change(path)
         if newest is None or newest > older_than:
             keep.append(entry)
