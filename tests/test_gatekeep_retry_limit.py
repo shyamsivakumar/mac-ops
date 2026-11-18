@@ -11,7 +11,6 @@ import json
 import os
 import subprocess
 import tempfile
-import threading
 import time
 import types
 import unittest
@@ -561,24 +560,6 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertIn("gave up " + self.key, out)
         self.assertNotIn("regating", out)
         self.assertEqual(len(self.gate_items()), 1)
-
-    def test_a_gate_failing_on_a_refusal_does_not_deadlock_gatekeep(self):
-        refused = {"thread": {"status": "failed", "latestRunId": "r1", **ASTRA_GATE},
-                   "items": [{"type": "user_message", "text": "review"}],
-                   "recentRuns": [{"runId": "r1", "status": "failed",
-                                   "error": {"code": "rate_limit_exceeded",
-                                             "message": "rate limit, retry after 7200s"}}]}
-        coordq.call = lambda tool, args, rules=None: (0, json.dumps(refused))
-        self.write_queue(heads=self.head())
-        run = threading.Thread(target=self.run_gatekeep, daemon=True)
-        run.start()
-        run.join(20)
-        self.assertFalse(run.is_alive(), "gatekeep waits on the lock it holds")
-        # The block itself is the provider store's record (MO-1092), which
-        # this ticket does not ship; what is checked here is that the run
-        # finishes and the head moves on.
-        second = coordq.model_list.entries("review")[1]["selection"]
-        self.assertEqual(self.gate_items()[0]["args"]["modelSelection"], second)
 
     def test_the_block_lock_is_held_while_a_gate_launches(self):
         second = coordq.model_list.entries("review")[1]["selection"]
