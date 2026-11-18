@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -232,7 +233,7 @@ def dead_run_recovery():
         lane.recover_dead_runs(ledger)
         lane.recover_dead_runs(ledger)
     exact(len(launches), 1)
-    exact(launches[0]["modelSelection"], lane.ASTRA)
+    exact(launches[0]["modelSelection"], lane.builders.BUILDERS[0])
     exact(launches[0]["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/fixture-worktree"})
     exact(ledger[f"dead-relaunch-thread:fixture-dead"], "fixture-relaunch")
     exact(settled, ["fixture-dead", "fixture-dead"])
@@ -1388,7 +1389,7 @@ def send_integrity():
                     exact(payload, {"threadId": "old", "message": "brief"})
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
-                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
+                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.builders.BUILDERS[0],
                           "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief"})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
@@ -2589,6 +2590,25 @@ def alarm_mute():
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
+@contextlib.contextmanager
+def scratch_provider_health():
+    """The provider health store of one eval.
+
+    An eval reads and writes the blocks of the store, so it works in a
+    scratch directory: an eval never blocks a real provider and never reads
+    the live blocks."""
+    saved = os.environ.get("COORDQ_DIR")
+    with tempfile.TemporaryDirectory() as directory:
+        os.environ["COORDQ_DIR"] = directory
+        try:
+            yield directory
+        finally:
+            if saved is None:
+                os.environ.pop("COORDQ_DIR", None)
+            else:
+                os.environ["COORDQ_DIR"] = saved
+
+
 def main():
     failed = False
     try:
@@ -2602,7 +2622,7 @@ def main():
          patch.object(subprocess, "Popen", side_effect=AssertionError("live process forbidden")):
         for name, evaluate in EVALS.items():
             try:
-                with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stdout(io.StringIO()), scratch_provider_health():
                     evaluate()
                     if name == "send-integrity":
                         import lane_driver
