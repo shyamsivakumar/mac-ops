@@ -131,10 +131,15 @@ def one_object(value):
 
 
 def tree_paths(tree):
-    """Every blob path of one tree response mapped to its sha, or None.
+    """Every non-directory path of one tree response mapped to its entry, or None.
 
-    A tree GitHub truncated is not a complete list of paths, so it is None:
-    the same rule the capped file list follows.
+    A blob is a file and a `commit` entry is a submodule: both can carry
+    prompt text, so both are kept. Only the directory entries are dropped,
+    because a directory is not a changed path of its own. The whole entry is
+    kept (type, mode and sha) and not just the sha: a mode-only change keeps
+    the blob sha while changing what git records, and a submodule has no blob
+    sha at all. A tree GitHub truncated, or an entry without a usable path,
+    is not a complete picture of the paths, so it is None.
     """
     tree = one_object(tree)
     if not isinstance(tree, dict) or tree.get("truncated"):
@@ -144,19 +149,23 @@ def tree_paths(tree):
         return None
     paths = {}
     for entry in entries:
-        if not isinstance(entry, dict) or entry.get("type") != "blob":
+        if not isinstance(entry, dict) or entry.get("type") == "tree":
             continue
         path = entry.get("path")
         if not isinstance(path, str) or not path:
-            # A blob GitHub gave no path for is a tree that cannot be read
+            # An entry GitHub gave no path for is a tree that cannot be read
             # completely, so it decides nothing.
             return None
-        paths[path] = entry.get("sha")
+        paths[path] = (entry.get("type"), entry.get("mode"), entry.get("sha"))
     return paths
 
 
 def changed_paths(before, after):
-    """The paths whose presence or content differs between two commit trees."""
+    """The paths whose entry differs between two commit trees.
+
+    An entry is its type, mode and sha, so a renamed, retyped, re-moded or
+    rewritten path is changed. A path only on one side is changed too.
+    """
     if not isinstance(before, dict) or not isinstance(after, dict):
         return None
     changed = {path for path, sha in after.items() if before.get(path) != sha}

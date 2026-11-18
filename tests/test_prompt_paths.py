@@ -119,6 +119,41 @@ class PromptPathTest(unittest.TestCase):
         self.assertEqual(prompt_paths.prompt_scan(
             prompt_paths.tree_diff(fetch, "o/r", "main", "head")), prompt_paths.HOLD)
 
+    def test_a_submodule_under_a_prompt_directory_is_a_change(self):
+        """A submodule is a `commit` entry, not a blob, and still counts."""
+        def fetch(endpoint):
+            if "/compare/" in endpoint:
+                return {"merge_base_commit": {"sha": "base"}}
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "mode": "100644", "sha": "1"}]}
+            return {"tree": [{"type": "blob", "path": "a.py", "mode": "100644", "sha": "2"},
+                             {"type": "commit", "path": "skills/reviewer",
+                              "mode": "160000", "sha": "abc"}]}
+
+        paths = prompt_paths.tree_diff(fetch, "o/r", "main", "head")
+        self.assertEqual(paths, ["a.py", "skills/reviewer"])
+        self.assertEqual(prompt_paths.prompt_scan(paths), prompt_paths.HOLD)
+
+    def test_a_mode_only_change_is_a_change(self):
+        """The blob sha stays the same, yet the path changed."""
+        def fetch(endpoint):
+            if "/compare/" in endpoint:
+                return {"merge_base_commit": {"sha": "base"}}
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "prompts/reviewer.md",
+                                  "mode": "100644", "sha": "same"}]}
+            return {"tree": [{"type": "blob", "path": "prompts/reviewer.md",
+                              "mode": "100755", "sha": "same"}]}
+
+        self.assertEqual(prompt_paths.tree_diff(fetch, "o/r", "main", "head"),
+                         ["prompts/reviewer.md"])
+        self.assertEqual(prompt_paths.prompt_scan(
+            prompt_paths.tree_diff(fetch, "o/r", "main", "head")), prompt_paths.HOLD)
+
+    def test_a_tree_entry_without_a_path_is_no_diff(self):
+        self.assertIsNone(prompt_paths.tree_paths(
+            {"tree": [{"type": "blob", "sha": "1"}]}))
+
     def test_a_truncated_tree_is_no_diff(self):
         def fetch(endpoint):
             if "/compare/" in endpoint:

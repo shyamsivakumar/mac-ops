@@ -306,6 +306,29 @@ def timeout_and_unnamed():
           state == prompt_paths.UNKNOWN and "next run retries" in (held or ""), command)
 
 
+def tree_entries():
+    """A submodule and a mode-only change are changes too."""
+    command = "python3 evidence/MO-543/proof.py"
+
+    def fetch(endpoint):
+        if "/compare/" in endpoint:
+            return {"merge_base_commit": {"sha": "base"}}
+        if endpoint.endswith("/git/trees/base?recursive=1"):
+            return {"tree": [{"type": "blob", "path": "prompts/reviewer.md",
+                              "mode": "100644", "sha": "same"},
+                             {"type": "blob", "path": "a.py", "mode": "100644", "sha": "1"}]}
+        return {"tree": [{"type": "blob", "path": "prompts/reviewer.md",
+                          "mode": "100755", "sha": "same"},
+                         {"type": "blob", "path": "a.py", "mode": "100644", "sha": "1"},
+                         {"type": "commit", "path": "skills/reviewer",
+                          "mode": "160000", "sha": "cafe"}]}
+
+    paths = prompt_paths.tree_diff(fetch, "o/r", "main", "head")
+    grant("trees: a submodule and a mode-only change are both changed paths",
+          paths == ["prompts/reviewer.md", "skills/reviewer"]
+          and prompt_paths.prompt_scan(paths) == prompt_paths.HOLD, command)
+
+
 def tree_fallback():
     """A 3,001-file PR never fits the file list, so the trees classify it."""
     coordq = load(BIN / "coordq", "proof_coordq_trees")
@@ -404,6 +427,7 @@ def main():
     queue_briefs()
     ticket_file_read()
     timeout_and_unnamed()
+    tree_entries()
     tree_fallback()
     lane_truncation()
     board_reconcile()
