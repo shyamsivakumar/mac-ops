@@ -1637,6 +1637,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
         rows, excluded, excluded_rows = inventory(code_root, github, initial_state)
         eligible = [row for row in rows if row["eligible"]]
         removed = 0
+        prune_results: list[dict[str, Any]] = []
         if apply:
             def refreshed(candidate: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | SafetyError | None]:
                 repo_root = Path(candidate["repo"])
@@ -1786,6 +1787,31 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["reasons"] = ["worktree_directory_unavailable"]
                         continue
                     try:
+                        opened = os.fstat(directory)
+                    except OSError:
+                        opened = None
+                    if opened is None or (expected_identity and f"{opened.st_dev}:{opened.st_ino}" != expected_identity):
+                        # The directory that was opened is not the one the
+                        # scan saw, so nothing in it may be deleted.
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_replaced_before_remove"]
+                        continue
+                    try:
+                        pending = status_for(Path(candidate["path"]))
+                    except SafetyError:
+                        pending = []
+                    if pending:
+                        # The same refusal git makes for a dirty worktree: a
+                        # file that was saved after the last status check is
+                        # real work and is never deleted.
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_changed_before_remove"]
+                        continue
+                    try:
                         emptied = _clear_directory(directory)
                     finally:
                         os.close(directory)
@@ -1830,7 +1856,6 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
         # the only reference to a commit that was never published. A stale
         # registration is removed through the per worktree path below, which
         # verifies the commit first.
-        prune_results: list[dict[str, Any]] = []
         for row in rows:
             row["category"] = categorize(row)
         pruned = 0
