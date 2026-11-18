@@ -888,11 +888,16 @@ print("BOTH", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r",
 print("SHORT", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r",
                                     "-S", "-Release"]))
 print("SHORTONLY", repr(gh_gateway.argv_host(["gh", "pr", "list", "-S", "-Release"])))
+print("RUNALL", gh_gateway.argv_host(["gh", "run", "list", "-a", "-R", "ent.example/o/r"]))
+print("RUNWORKFLOW", gh_gateway.argv_host(["gh", "run", "list", "-R", "ent.example/o/r",
+                                          "-w", "-Release"]))
+print("NOOWNER", repr(gh_gateway.argv_host(["gh", "issue", "list", "-R", "o/r"])))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
                   "ATTACHED", "ent.example", "VALUE", "''", "BOTH", "ent.example",
-                  "SHORT", "ent.example", "SHORTONLY", "''"],
+                  "SHORT", "ent.example", "SHORTONLY", "''", "RUNALL", "ent.example",
+                  "RUNWORKFLOW", "ent.example", "NOOWNER", "''"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.

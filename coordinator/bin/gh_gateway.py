@@ -587,30 +587,39 @@ def _token_id():
     return hashlib.sha256("\0".join(tokens).encode()).hexdigest()[:16]
 
 
+def looks_like_repo(value):
+    """True when a word has the shape of `OWNER/REPO` or `HOST/OWNER/REPO`."""
+    text = str(value or "")
+    if not text or text.startswith("-"):
+        return False
+    parts = text.split("/")
+    return 2 <= len(parts) <= 3 and all(part.strip() for part in parts)
+
+
 def argv_host(argv):
     """Return the host a command targets, or "" when it names none.
 
-    Three forms name a host: `--hostname HOST`, a repository selector
-    `-R HOST/OWNER/REPO` (detached or attached, or `GH_REPO`), and nothing
-    else. Flags are paired with their values first, so a value that merely
-    starts with `-R`, such as `--search '-Release'`, is never mistaken for a
-    selector."""
+    Only two things name a host: `--hostname HOST`, and a repository
+    selector with a host in it (`-R HOST/OWNER/REPO`, `--repo=...`,
+    `GH_REPO`). A selector is recognised by its *shape*, never by pairing a
+    short flag with the next word: `-a` and `-w` mean different things in
+    different `gh` subcommands, so `gh run list -a -R ent.example/o/r` must
+    keep its selector, and `-w -Release` is not a selector at all."""
+    words = [str(word) for word in (argv or [])[1:]]
     selector = os.environ.get("GH_REPO") or ""
-    for word, value in tokens(argv):
-        if word in ("--hostname", "-H"):
-            if word == "-H":
-                continue
-            if value:
-                return value
-        elif word.startswith("--hostname="):
+    for index, word in enumerate(words):
+        following = words[index + 1] if index + 1 < len(words) else ""
+        if word == "--hostname" and following and not following.startswith("-"):
+            return following
+        if word.startswith("--hostname="):
             return word.split("=", 1)[1]
-        elif word in ("-R", "--repo"):
-            if value:
-                selector = value
+        if word in ("-R", "--repo") and looks_like_repo(following):
+            selector = following
         elif word.startswith("--repo="):
-            selector = word.split("=", 1)[1]
-        elif word.startswith("-R") and len(word) > 2 and value is None:
-            # The attached form: `-RHOST/OWNER/REPO`.
+            candidate = word.split("=", 1)[1]
+            if looks_like_repo(candidate):
+                selector = candidate
+        elif word.startswith("-R") and len(word) > 2 and looks_like_repo(word[2:]):
             selector = word[2:]
     parts = selector.split("/")
     if len(parts) == 3 and parts[0]:
