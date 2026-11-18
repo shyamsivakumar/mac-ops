@@ -838,6 +838,19 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertFalse(cleaner._head_matches(repo, first))
         self.assertTrue(cleaner._head_matches(repo, second))
 
+    def test_a_pull_request_is_found_by_its_commit(self):
+        # The branch of the pull request is gone, so the pull requests of the
+        # commit itself have to be asked for.
+        github = cleaner.GitHub()
+        head = "a" * 40
+        github.pulls_for_commit = lambda repo, sha, **_kwargs: [
+            {"number": 7, "state": "CLOSED", "merged": "2026-11-18T00:00:00Z", "headSha": head},
+            {"number": 8, "state": "OPEN", "merged": None, "headSha": head},
+        ]
+        ok, why, url = cleaner.verify_pr_for_head(github, "owner/repo", self.repo, head)
+        self.assertTrue(ok)
+        self.assertEqual(url, "https://github.com/owner/repo/pull/7")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

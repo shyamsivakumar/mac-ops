@@ -1026,6 +1026,7 @@ class GitHub:
         self.pull_requests: dict[tuple[str, str, str], list[dict[str, Any]] | None] = {}
         self.default_branches: dict[str, str | None] = {}
         self.contained: dict[tuple[str, str, str], bool] = {}
+        self.commit_pulls: dict[tuple[str, str], list[dict[str, Any]] | None] = {}
 
     def contains(self, repo: str, base: str, head: str, *, refresh: bool = False) -> bool:
         """True when GitHub says the head commit is contained in the base."""
@@ -1039,6 +1040,32 @@ class GitHub:
         status = result.stdout.strip() if result and result.returncode == 0 else ""
         self.contained[key] = status in {"behind", "identical"}
         return self.contained[key]
+
+    def pulls_for_commit(self, repo: str, head: str, *, refresh: bool = False) -> list[dict[str, Any]] | None:
+        """The pull requests that carry a commit, whatever the branch is called."""
+        key = (repo, head)
+        if key in self.commit_pulls and not refresh:
+            return self.commit_pulls[key]
+        try:
+            result = run([
+                "gh", "api", f"repos/{repo}/commits/{head}/pulls",
+                "--jq", "[.[] | {number: .number, state: .state, merged: .merged_at, headSha: .head.sha}]",
+            ])
+        except SafetyError:
+            result = None
+        if result is None or result.returncode != 0:
+            self.commit_pulls[key] = None
+            return None
+        try:
+            rows = json.loads(result.stdout)
+        except (ValueError, json.JSONDecodeError):
+            self.commit_pulls[key] = None
+            return None
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            self.commit_pulls[key] = None
+            return None
+        self.commit_pulls[key] = rows
+        return rows
 
     def default_branch(self, repo: str | None, *, refresh: bool = False) -> str | None:
         """The one default branch of the repository, or None when unknown."""
@@ -1170,7 +1197,7 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
     try:
         listing = git(repo_root, "branch", "-r", "--contains", head, "--format=%(refname:short)").splitlines()
     except SafetyError:
-        return False, "github_pr_state_unavailable", None
+        listing = []
     for line in listing:
         branch = line.strip().removeprefix("origin/")
         if not branch:
@@ -1178,7 +1205,39 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
         ok, why, pr_url = verify_pr(github, repo_slug, branch, head, refresh=refresh)
         if ok:
             return True, None, pr_url
+    # The branch of the pull request may be gone, so the pull requests of the
+    # commit itself are asked for as well.
+    for row in github.pulls_for_commit(repo_slug, head, refresh=refresh) or []:
+        if str(row.get("headSha", "")).lower() != head.lower():
+            continue
+        if str(row.get("state", "")).upper() != "CLOSED":
+            continue
+        return True, None, f"https://github.com/{repo_slug}/pull/{row.get('number')}"
     return False, "github_pr_not_closed_for_head", None
+
+
+def _claim_head_lock(path: Path) -> Path | None:
+    """Claim the lock of the head of a worktree, or None when it is taken.
+
+    A commit in the worktree has to update that head, so it cannot run
+    while the lock is held. The removal therefore runs with the head it
+    checked still in place.
+    """
+    try:
+        listed = git(path, "rev-parse", "--git-path", "HEAD").strip()
+    except SafetyError:
+        return None
+    head = Path(listed)
+    if not head.is_absolute():
+        head = path / head
+    head = Path(os.path.abspath(head))
+    lock = head.with_name(head.name + ".lock")
+    try:
+        descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        return None
+    os.close(descriptor)
+    return lock
 
 
 def _head_matches(path: Path, expected: str) -> bool:
@@ -1521,14 +1580,29 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 # The head is checked again after the cleanup, so a commit
                 # made in between stops the removal: git would see a clean
                 # worktree and remove it, and the new commit would be lost.
-                if not _head_matches(Path(candidate["path"]), str(candidate["head"])):
+                lock = _claim_head_lock(Path(candidate["path"]))
+                if lock is None:
                     candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_head_changed_before_remove"]
+                    candidate["reasons"] = ["worktree_head_locked"]
                     append_removal(state_root, candidate, "removal_blocked")
                     continue
                 try:
-                    result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
-                except SafetyError:
+                    if not _head_matches(Path(candidate["path"]), str(candidate["head"])):
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_head_changed_before_remove"]
+                        append_removal(state_root, candidate, "removal_blocked")
+                        continue
+                    try:
+                        result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
+                    except SafetyError:
+                        result = None
+                finally:
+                    if lock.exists():
+                        try:
+                            lock.unlink()
+                        except OSError:
+                            pass
+                if result is None:
                     append_removal(state_root, candidate, "removal_outcome_unknown")
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_remove_outcome_unknown"]
