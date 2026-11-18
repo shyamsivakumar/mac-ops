@@ -49,8 +49,14 @@ SKIPPED = "skipped"
 # two names share a prefix of this many characters.
 TEST_PREFIX = 6
 # The ticket template says whether its own tests may change. The clause is
-# the ticket's statement, so it is the ticket that allows the change.
+# the ticket's statement, so it is the ticket that allows the change. The
+# clause keeps its restriction: it lets a test change when the test pins
+# what the change pins, never when the test is about something else.
 TEST_CLAUSE = re.compile(r"(?i)\bexisting tests?\b.{0,160}?\bmay change\b")
+# A distinctive literal is a long quoted value with punctuation in it: a
+# model id, a path, a constant name. It is what two files share when one
+# pins what the other sets.
+DISTINCTIVE = re.compile(r"[\"']([^\"'\\\n]{10,})[\"']")
 
 
 def scope_tokens(body):
@@ -84,9 +90,9 @@ def in_scope(path, tokens, changed=(), tests_allowed=False):
     A file is in scope when the ticket names it, names a directory that
     holds it, or names a glob that matches it. Evidence travels with the
     change, so a file under `evidence/` is in scope. A test is in scope
-    only when it tests a file the change touches, or when the ticket says
-    its existing tests may change: a test of something else is not part of
-    this change.
+    only when it tests a file the change touches: a test of something
+    else is not part of this change, not even when the ticket says its
+    existing tests may change.
     """
     base = os.path.basename(path)
     if path.startswith("evidence/"):
@@ -109,9 +115,48 @@ def in_scope(path, tokens, changed=(), tests_allowed=False):
             other_stem = os.path.splitext(os.path.basename(other))[0]
             if common_prefix(stem, other_stem) >= TEST_PREFIX:
                 return True, f"{path} tests {other}"
-        if tests_allowed:
-            return True, f"{path} is a test the ticket says may change"
     return False, ""
+
+
+def distinctive_literals(text):
+    """The distinctive values a file carries: model ids, paths, constants."""
+    values = set()
+    for match in DISTINCTIVE.finditer(text or ""):
+        value = match.group(1)
+        if any(char in value for char in ".-_/"):
+            values.add(value)
+    return values
+
+
+def file_text(repo, path, ref, cache=None):
+    """The text of one file at a ref, read through the proof file reader."""
+    if cache is not None and path in cache:
+        return cache[path]
+    state, text = proof_file.fetch(repo, path, ref)
+    value = text if state == proof_file.FOUND else None
+    if cache is not None:
+        cache[path] = value
+    return value
+
+
+def test_ties(repo, ref, path, changed, cache=None):
+    """The changed files whose values a test pins.
+
+    A test that pins what the change sets is part of the change: the two
+    files share a distinctive value. A test of something else shares
+    none, so a ticket that says its existing tests may change never
+    reaches it.
+    """
+    literals = distinctive_literals(file_text(repo, path, ref, cache))
+    if not literals:
+        return []
+    tied = []
+    for other in changed:
+        if other.startswith("tests/") or other == path:
+            continue
+        if literals & distinctive_literals(file_text(repo, other, ref, cache)):
+            tied.append(other)
+    return tied
 
 
 def names_a_file(tokens):
@@ -131,7 +176,7 @@ def names_a_file(tokens):
     return False
 
 
-def item_scope(body, files):
+def item_scope(body, files, ties=None):
     """Item 1: the diff stays inside the ticket's stated scope.
 
     The ticket is the only authority for the scope. A pull request cannot
@@ -145,9 +190,15 @@ def item_scope(body, files):
         return {"item": "scope", "status": FAIL, "required": True,
                 "detail": ("the ticket names no file in this repository, so the scope cannot be "
                            "judged: the ticket has to name the files it changes")}
-    tests_allowed = bool(TEST_CLAUSE.search(body or ""))
-    outside = [path for path in files
-               if not in_scope(path, tokens, files, tests_allowed)[0]]
+    ties = ties or {}
+    clause = bool(TEST_CLAUSE.search(body or ""))
+    outside = []
+    for path in files:
+        ok, _ = in_scope(path, tokens, files)
+        if not ok and clause and ties.get(path):
+            ok = True
+        if not ok:
+            outside.append(path)
     if outside:
         return {"item": "scope", "status": FAIL, "required": True,
                 "detail": "outside the ticket's stated scope: " + ", ".join(sorted(outside))}
@@ -224,10 +275,10 @@ def item_cost(body, report_state, detail=""):
             "detail": "the cost report exists, but the pull request body carries no cost note"}
 
 
-def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail=""):
+def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", ties=None):
     """The four items, in the order the checklist reads them."""
     return [
-        item_scope(body, files),
+        item_scope(body, files, ties),
         item_proof(proof_state, proof_path),
         item_checks(proof_state, proof_text),
         item_cost(pr_body, report_state, report_detail),
@@ -322,7 +373,17 @@ def run_check(repo, pr, issue=None):
     proof_path = proof_file.path_for(ticket_key(title), number)
     state, text = proof_file.fetch(repo, proof_path, merge)
     report, report_detail = report_state(repo, merge)
-    items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report, report_detail)
+    ties = {}
+    if TEST_CLAUSE.search(body or ""):
+        tokens = scope_tokens(body)
+        cache = {}
+        for path in files:
+            if path.startswith("tests/") and not in_scope(path, tokens, files)[0]:
+                tied = test_ties(repo, merge, path, files, cache)
+                if tied:
+                    ties[path] = tied
+    items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
+                      report_detail, ties)
     return {"repo": repo, "pr": pr, "issue": number, "merge": merge, "files": files, "items": items}
 
 

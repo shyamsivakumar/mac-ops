@@ -71,15 +71,63 @@ class ScopeTest(unittest.TestCase):
                                ["coordinator/bin/close_check.py"])
         self.assertFalse(ok)
 
-    def test_the_ticket_may_allow_its_own_tests_to_change(self):
+    def test_the_ticket_clause_does_not_allow_an_unrelated_test(self):
+        """The clause keeps its restriction.
+
+        "Existing tests ... may change only as far as this needs" allows
+        the tests that pin what the change changes. A test of something
+        else is out of scope even with the clause, and the ticket has to
+        name that test for it to be in scope.
+        """
         check = close_check()
-        allowed = check.item_scope(
-            "The change is in close_check.py. Existing tests that pin it may change only as "
-            "far as this needs.", ["tests/test_alarm_panel.py"])
-        self.assertEqual(allowed["status"], check.PASS)
-        denied = check.item_scope("The change is in close_check.py.",
-                                  ["tests/test_alarm_panel.py"])
-        self.assertEqual(denied["status"], check.FAIL)
+        ticket = ("The change is in close_check.py. Existing tests that pin it may change "
+                  "only as far as this needs.")
+        item = check.item_scope(ticket, ["tests/test_alarm_panel.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("tests/test_alarm_panel.py", item["detail"])
+
+    def test_a_test_that_pins_what_the_change_pins_is_in_scope(self):
+        """A test that shares a value with the change is part of the change."""
+        check = close_check()
+        ticket = ("The change is in close_check.py. Existing tests that pin it may change "
+                  "only as far as this needs.")
+        ties = {"tests/test_alarm_panel.py": ["coordinator/bin/close_check.py"]}
+        item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
+                                         "tests/test_alarm_panel.py"], ties)
+        self.assertEqual(item["status"], check.PASS)
+
+    def test_a_tie_without_the_ticket_clause_is_not_in_scope(self):
+        check = close_check()
+        ties = {"tests/test_alarm_panel.py": ["coordinator/bin/close_check.py"]}
+        item = check.item_scope("The change is in close_check.py.",
+                                ["coordinator/bin/close_check.py",
+                                 "tests/test_alarm_panel.py"], ties)
+        self.assertEqual(item["status"], check.FAIL)
+
+    def test_a_ticket_that_names_the_test_puts_it_in_scope(self):
+        check = close_check()
+        item = check.item_scope("The change is in close_check.py and tests/test_alarm_panel.py.",
+                                ["coordinator/bin/close_check.py", "tests/test_alarm_panel.py"])
+        self.assertEqual(item["status"], check.PASS)
+
+    def test_the_distinctive_values_of_a_file(self):
+        check = close_check()
+        values = check.distinctive_literals('GATE = {"model": "gpt-6.2-astra"}\nname = "x"')
+        self.assertIn("gpt-6.2-astra", values)
+        self.assertNotIn("x", values)
+
+    def test_a_test_ties_to_the_file_it_pins(self):
+        check = close_check()
+        texts = {
+            "tests/test_gate.py": 'GATE = {"model": "gpt-6.2-astra"}',
+            "coordinator/bin/gate.py": 'CHAIN = ["gpt-6.2-astra", "claude-opus-5-5"]',
+            "coordinator/bin/other.py": 'NAME = "something-else"',
+        }
+        with patch.object(check.proof_file, "fetch",
+                          side_effect=lambda repo, path, ref: ("found", texts.get(path))):
+            tied = check.test_ties("a/b", "a" * 40, "tests/test_gate.py",
+                                   ["coordinator/bin/gate.py", "coordinator/bin/other.py"])
+        self.assertEqual(tied, ["coordinator/bin/gate.py"])
 
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
