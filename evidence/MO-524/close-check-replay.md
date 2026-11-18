@@ -73,7 +73,9 @@ The work goes back to its builder and the ticket stays open.
   now, so a rename cannot carry an out-of-scope file into an in-scope name. The files
   of a pull request are read to the end of their pages, so a pull request cannot hide
   its last files from the scope, and a page that cannot be read fails the scope item
-  rather than reading as the end of the diff.
+  rather than reading as the end of the diff, and the files that were read are counted
+  against the number of files the pull request changes, so pages that end early are
+  not taken for the whole diff.
 - An exclusion is not a permission. The words after an "out" marker, the list
   entries under it and the rest of its section are exclusions, so a change to one of
   them fails the scope item, and an excluded name never widens the scope.

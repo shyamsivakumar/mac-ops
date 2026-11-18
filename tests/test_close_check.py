@@ -237,6 +237,21 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("src/last.py", scope)
         self.assertEqual(reader.call_count, 2)
 
+    def test_the_files_read_are_compared_with_the_files_the_pull_request_changes(self):
+        """The pages that end early are not the whole diff.
+
+        A pull request that changes more files than the pages hold has a
+        diff nobody read, so the scope cannot be judged.
+        """
+        check = close_check()
+        page = [{"filename": f"src/file{index}.py"} for index in range(100)]
+        with patch.object(check, "gh_json", side_effect=[page, []]):
+            changed, scope, error = check.fetch_files("a/b", 12, expected=101)
+        self.assertNotEqual(error, "")
+        self.assertIn("101", error)
+        item = check.item_scope("In: src/", scope, "evidence/MO-524", error)
+        self.assertEqual(item["status"], check.FAIL)
+
     def test_a_page_that_cannot_be_read_fails_the_scope(self):
         """The diff is not known when its pages are not read to the end.
 

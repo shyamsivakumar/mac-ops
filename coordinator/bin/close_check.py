@@ -556,7 +556,7 @@ def report_state(repo, ref):
 FILE_PAGES = 30
 
 
-def fetch_files(repo, pr):
+def fetch_files(repo, pr, expected=None):
     """The files a pull request changes, and the path a rename came from.
 
     A rename has two paths: the file it came from and the file it is now.
@@ -586,6 +586,10 @@ def fetch_files(repo, pr):
                 scope.append(previous)
         if len(entries) < 100:
             break
+    if not error and expected is not None and len(changed) != expected:
+        # The pages ended before the diff did, so the diff is not known:
+        # the scope cannot be judged and the close is refused.
+        error = (f"the pull request changes {expected} files and {len(changed)} were read")
     return changed, scope, error
 
 
@@ -611,9 +615,9 @@ def run_check(repo, pr, issue=None, reader=None):
     """
     """Run the checklist on a merged pull request."""
     pull = gh_json(["pr", "view", str(pr), "-R", repo, "--json",
-                    "state,headRefOid,body,mergeCommit,title"])
+                    "state,headRefOid,body,mergeCommit,title,changedFiles"])
     merge = (pull.get("mergeCommit") or {}).get("oid") or pull["headRefOid"]
-    files, scope_files, files_error = fetch_files(repo, pr)
+    files, scope_files, files_error = fetch_files(repo, pr, pull.get("changedFiles"))
     number = issue if issue is not None else issue_of(pull.get("body"))
     body = ""
     title = pull.get("title") or ""
