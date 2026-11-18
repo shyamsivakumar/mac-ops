@@ -34,7 +34,7 @@ MAX_RESET_SECONDS = 366 * 24 * 3600.0
 
 # An absolute reset: a date and a time of day, or a time of day alone.
 DATETIME = re.compile(
-    r"\b(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:?\d{2})?\b")
+    r"\b(\d{4}-\d{2}-\d{2})[T ](\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:?\d{2})?\b")
 TIME_ONLY = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)")
 # The words that make a time a reset rather than any time in a message.
 RESET_WORD = re.compile(r"reset|retry|available|till|until|back\s+off", re.IGNORECASE)
