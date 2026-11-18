@@ -1483,6 +1483,27 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
     return False, "github_pr_not_closed_for_head", None
 
 
+def _sweep_recovery(storage: Path, older_than: float) -> None:
+    """Remove the recovery copies that are older than the given time."""
+    try:
+        entries = list(storage.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.stat().st_mtime > older_than:
+                continue
+        except OSError:
+            continue
+        try:
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+        except OSError:
+            continue
+
+
 def _trash_for(state_trash: Path, worktree: Path) -> Path:
     """The recovery storage to use for a worktree.
 
@@ -1779,6 +1800,10 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
         removed = 0
         prune_results: list[dict[str, Any]] = []
         if apply:
+            # The recovery storage is swept first: the copies of the earlier
+            # removals have had their day, so the space comes back.
+            _sweep_recovery(state_root / "cleanup-trash", time.time() - 24 * 60 * 60)
+
             def refreshed(candidate: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | SafetyError | None]:
                 repo_root = Path(candidate["repo"])
                 current = next((r for r in worktrees(repo_root) if canonical(r["path"]) == canonical(candidate["path"])), None)
@@ -1978,14 +2003,14 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["eligible"] = False
                         candidate["reasons"] = ["recovery_storage_unavailable"]
                         continue
-                    kept = _remove_tree(directory, {}, snapshot)
+                    kept = 0
                     # What is left in the directory decides whether the checkout
                     # survives, not the count of entries the loop handled: a file
                     # that was created after the snapshot is not in the loop at all.
                     remaining = _snapshot_directory(directory)
                     survived = bool(remaining)
                     tree_gone = False
-                    if not survived:
+                    if True:
                         # The directory that is removed has to be the one that
                         # was verified. It is renamed aside first, so the
                         # directory that is removed belongs to this call and a
@@ -2007,8 +2032,15 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                     info = None
                                 matched = info is not None and (not expected_identity or f"{info.st_dev}:{info.st_ino}" == expected_identity)
                                 if matched:
+                                    # The moved worktree keeps every file and
+                                    # every name, so a save through an open
+                                    # descriptor survives. It waits in the
+                                    # recovery storage until that storage is
+                                    # swept, and the space comes back then.
+                                    storage = _trash_for(state_root / "cleanup-trash", Path(candidate["path"]))
                                     try:
-                                        os.rmdir(aside, dir_fd=parent)
+                                        storage.mkdir(mode=0o700, parents=True, exist_ok=True)
+                                        os.rename(Path(candidate["path"]).parent / aside, storage / aside)
                                         tree_gone = True
                                     except OSError:
                                         tree_gone = False
@@ -2099,7 +2131,6 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["reasons"] = ["worktree_not_fully_removed"]
                         continue
                     os.close(directory)
-                    os.close(storage)
                 finally:
                     if lock.exists():
                         try:
