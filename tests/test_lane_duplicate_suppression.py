@@ -114,40 +114,53 @@ class ReplayTests(unittest.TestCase):
     def items(self):
         return [(item["title"], item["tool"]) for item in self.q.load()["items"]]
 
+    def title(self, head=HEAD, action="gate findings"):
+        """The title the lane gives one head's message for one pull request."""
+        return f"MO#20 {action} {head[:8]}"
+
     def test_two_passes_over_the_same_board_queue_one_findings_message(self):
         prs = [self.pr()]
         first, _ = self.pass_once({}, prs)
         self.assertTrue(first.startswith("#20 fix: "), first)
-        self.assertEqual(self.items(), [("MO#20 gate findings", "t3_thread_send")])
+        self.assertEqual(self.items(), [(self.title(), "t3_thread_send")])
         # The second pass has no ledger record: the queue is what holds.
         second, _ = self.pass_once({}, prs)
         self.assertIn("already holds this message", second)
-        self.assertEqual(self.items(), [("MO#20 gate findings", "t3_thread_send")])
+        self.assertEqual(self.items(), [(self.title(), "t3_thread_send")])
+
+    def test_a_second_head_is_not_refused_while_the_first_is_queued(self):
+        # The gate finding: the message carries its head, so head B's findings
+        # are not read as a copy of head A's queued ones.
+        first, _ = self.pass_once({}, [self.pr(head=HEAD)])
+        second, _ = self.pass_once({}, [self.pr(head="b" * 40)])
+        self.assertTrue(first.startswith("#20 fix: "), first)
+        self.assertTrue(second.startswith("#20 fix: "), second)
+        self.assertEqual(self.items(), [(self.title(HEAD), "t3_thread_send"),
+                                        (self.title("b" * 40), "t3_thread_send")])
 
     def test_a_message_whose_thread_finished_goes_out_again(self):
         # The builder work is done and its thread is not live, so the record
         # of the message is spent and the same message is allowed again.
         self.q.save({"next": 2, "items": [], "started": [{
-            "id": 1, "title": "MO#20 gate findings", "target": "live-builder",
+            "id": 1, "title": self.title(), "target": "live-builder",
             "thread": "live-builder", "actionKey": "", "at": self.q.time.time()}]})
         with patch.object(self.q, "active_thread_ids", return_value=set()):
             again, _ = self.pass_once({}, [self.pr()])
         self.assertTrue(again.startswith("#20 fix: "), again)
-        self.assertEqual(self.items(), [("MO#20 gate findings", "t3_thread_send")])
+        self.assertEqual(self.items(), [(self.title(), "t3_thread_send")])
 
     def test_a_new_head_goes_out_once_the_builder_stopped(self):
-        # Two heads of the same pull request are two messages, but a head the
-        # builder is still working does not take a second copy of the message.
+        # A head the builder is still working does not take a second copy of
+        # its own message, and another head is another message either way.
         self.q.save({"next": 2, "items": [], "started": [{
-            "id": 1, "title": "MO#20 gate findings", "target": "live-builder",
+            "id": 1, "title": self.title(), "target": "live-builder",
             "thread": "live-builder", "actionKey": "", "at": self.q.time.time()}]})
         with patch.object(self.q, "active_thread_ids", return_value={"live-builder"}):
-            while_running, _ = self.pass_once({}, [self.pr(head="b" * 40)])
-        self.assertIn("already holds this message", while_running)
-        with patch.object(self.q, "active_thread_ids", return_value=set()):
-            after, _ = self.pass_once({}, [self.pr(head="b" * 40)])
-        self.assertTrue(after.startswith("#20 fix: "), after)
-        self.assertEqual(self.items(), [("MO#20 gate findings", "t3_thread_send")])
+            same_head, _ = self.pass_once({}, [self.pr()])
+            other_head, _ = self.pass_once({}, [self.pr(head="b" * 40)])
+        self.assertIn("already holds this message", same_head)
+        self.assertTrue(other_head.startswith("#20 fix: "), other_head)
+        self.assertEqual(self.items(), [(self.title("b" * 40), "t3_thread_send")])
 
     def test_findings_already_with_a_running_builder_are_not_sent_again(self):
         head = self.pr()["headRefOid"]
