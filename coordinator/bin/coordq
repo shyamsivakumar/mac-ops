@@ -134,8 +134,9 @@ def gate_state(value):
     `{id, retries, at, givenUp, reviewer, moved}` once a gate for the head
     has died without a verdict. The reviewer is the one the gate was
     launched on, and `moved` says the head already moved down the chain.
-    A value written before that record is the bare queue item
-    id, which is a head with no retry behind it.
+    `moved` is None for a record written before it, and the caller then
+    reads it from the head's `gateReviewers` history. A value written before
+    the record is the bare queue item id, which is a head with no retry behind it.
     """
     if isinstance(value, dict):
         retries = value.get("retries")
@@ -146,8 +147,8 @@ def gate_state(value):
                 "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else None,
                 "givenUp": bool(value.get("givenUp")),
                 "reviewer": reviewer if isinstance(reviewer, str) and reviewer else None,
-                "moved": bool(value.get("moved"))}
-    return {"id": value, "retries": 0, "at": None, "givenUp": False, "reviewer": None, "moved": False}
+                "moved": bool(value["moved"]) if "moved" in value else None}
+    return {"id": value, "retries": 0, "at": None, "givenUp": False, "reviewer": None, "moved": None}
 
 
 def gate_label(state):
@@ -206,6 +207,19 @@ def queued_launch_args(tool, args):
 
 def is_gate_model(selection):
     return model_list.find(selection, ("review",)) is not None
+
+
+def blocked_launch(item):
+    """Why an item cannot be launched, or None.
+
+    A gate item whose reviewer was blocked after it was queued is not
+    launched: the provider cannot run it. The item is refused and the head
+    it belongs to is released, so the head is gated again later.
+    """
+    selection = (item.get("args") or {}).get("modelSelection")
+    if selection and model_list.is_blocked(selection):
+        return f"{model_list.identity(selection)} is blocked"
+    return None
 
 
 def tool_refusal(tool):
@@ -582,7 +596,16 @@ def drain():
                 continue
             tool = undispatchable_tool(item)
             if tool is None:
-                dispatchable.append(item)
+                reason = blocked_launch(item)
+                if reason is None:
+                    dispatchable.append(item)
+                    continue
+                dropped.add(item["id"])
+                release_action_key(queue, item)
+                head = item.get("head")
+                if head and head in queue.get("gatedHeads", {}):
+                    del queue["gatedHeads"][head]
+                log(f"REFUSED #{item['id']}: {reason}")
                 continue
             dropped.add(item["id"])
             release_action_key(queue, item)
@@ -1646,6 +1669,10 @@ def cmd_gatekeep(a):
                 if key in attempted:
                     continue
                 state = gate_state(heads.get(key))
+                if state["moved"] is None:
+                    # A record written before `moved` moved the head when the
+                    # older code recorded a fallback reviewer for it.
+                    state["moved"] = bool((queue.get("gateReviewers") or {}).get(key))
                 retries = 0
                 retried = False
                 if key not in heads and model_list.is_blocked(args["modelSelection"]):
@@ -1719,8 +1746,16 @@ def cmd_gatekeep(a):
                           + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
                           flush=True)
                     continue
+                if model_list.is_blocked(args["modelSelection"]):
+                    # Checked before the item is written, so a gatekeep that
+                    # is interrupted after the write never leaves a blocked
+                    # reviewer queued. Nothing was saved, so the head stays.
+                    print(f"waiting {event['pr']}: {args['modelSelection']['instanceId']} "
+                          f"{args['modelSelection']['model']} is blocked", flush=True)
+                    continue
                 item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
-                        "title": args["title"], "priority": 5000, "builderModels": event.get("builderModels", [])}
+                        "title": args["title"], "priority": 5000, "head": key,
+                        "builderModels": event.get("builderModels", [])}
                 queue["next"] += 1
                 queue["items"].append(item)
                 heads[key] = {"id": item["id"], "retries": retries,
