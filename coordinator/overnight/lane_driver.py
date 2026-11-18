@@ -441,17 +441,22 @@ GLM = {"instanceId": "glm", "model": "zai/glm-5.3"}
 # The models a build may run on: GLM, MiniMax, DeepSeek or a router task
 # route (the route handles its own fallbacks). No OpenAI model and no
 # Sol/Terra/Luna ever builds (Shyam 2026-11-17).
-ALLOWED_BUILDER_MODELS = {"zai/glm-5.3", "minimax/MiniMax-M3.1-Flash", "deepseek/deepseek-flash"}
-# Models that may have run a review gate under the old or new chain: a dead
-# run on one of these is a review when its title says so, and a build
-# otherwise.
+# Models a build may CONTINUE on: GLM, MiniMax, and DeepSeek, because a
+# task/* route executes DeepSeek as an in-route fallback. A router thread
+# continues only when its model is the route itself, never some other
+# model spelled through the router provider.
+CONTINUABLE_BUILDER_MODELS = {"zai/glm-5.3", "minimax/MiniMax-M3.1-Flash", "deepseek/deepseek-flash"}
+# The models a build may START on: GLM 5.3 or MiniMax only. DeepSeek is
+# reached solely as a fallback inside a task/* route, never a direct
+# start (Shyam 2026-11-17: "build with glm 5.3 or minimax first").
+STARTABLE_BUILDER_MODELS = {"zai/glm-5.3", "minimax/MiniMax-M3.1-Flash"}
 
 
 def allowed_builder(thread):
     """True when a thread's model is one a build may continue on."""
     if thread.get("providerInstanceId") == "router":
-        return True
-    return (thread.get("model") or "") in ALLOWED_BUILDER_MODELS
+        return (thread.get("model") or "").startswith("task/")
+    return (thread.get("model") or "") in CONTINUABLE_BUILDER_MODELS
 LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
               "shyamsivakumar/catalouge"]
 NEVER_START = {("shyamsivakumar/strategy-replay-workbench", 468)}
@@ -981,17 +986,18 @@ def dead_run_model(thread):
     Only ticket builder threads reach this — the receipt filter a few
     lines up keeps every key that is not a `ticket:` start receipt out —
     so nothing here may pick a reviewer, whatever the title says: a
-    router route passes through, an allowed builder is kept, and anything
-    else (Sol, Terra, Luna, Opus, any OpenAI model, unknown) falls to GLM
+    task/* router route passes through, a startable builder (GLM 5.3 or
+    MiniMax) is kept, and anything else (DeepSeek outside its route, Sol,
+    Terra, Luna, Opus, any OpenAI model, unknown) falls to GLM
     (Shyam 2026-11-17). Dead gates are retried by act_on_pr's regate on
     the reviewer chain, not here, so build work can never land on the
     reviewer or the gate queue.
     """
     provider = thread.get("providerInstanceId")
     model = thread.get("model") or ""
-    if provider == "router":
+    if provider == "router" and model.startswith("task/"):
         return {"instanceId": provider, "model": model}
-    if model in ALLOWED_BUILDER_MODELS:
+    if model in STARTABLE_BUILDER_MODELS:
         return {"instanceId": provider or "codex", "model": model}
     return GLM
 

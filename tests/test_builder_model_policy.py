@@ -46,12 +46,12 @@ NON_BUILDERS = (
     {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
     {"instanceId": "cursor", "model": "default"},
     {"instanceId": "codex", "model": "zai-coding/glm-5.3"},
+    {"instanceId": "pi", "model": "deepseek/deepseek-flash"},
 )
 
 BUILDERS = (
     {"instanceId": "glm", "model": "zai/glm-5.3"},
     {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
-    {"instanceId": "pi", "model": "deepseek/deepseek-flash"},
     {"instanceId": "router", "model": "task/standard"},
     {"instanceId": "router", "model": "task/risky"},
 )
@@ -93,6 +93,14 @@ class CoordqBuilderPermit(unittest.TestCase):
         resolved, refusal = coordq.with_model(
             {"taskType": "standard",
              "modelSelection": {"instanceId": "router", "model": "subscriptions/gpt-6.2-astra"}})
+        self.assertIsNone(resolved)
+        self.assertIn("builds run only on GLM 5.3", refusal)
+
+    def test_a_direct_deepseek_start_is_refused(self):
+        # DeepSeek is a fallback inside a task/* route, never a start.
+        resolved, refusal = coordq.with_model(
+            {"taskType": "risky",
+             "modelSelection": {"instanceId": "pi", "model": "deepseek/deepseek-flash"}})
         self.assertIsNone(resolved)
         self.assertIn("builds run only on GLM 5.3", refusal)
 

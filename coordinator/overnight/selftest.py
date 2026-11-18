@@ -235,9 +235,17 @@ def dead_run_recovery():
     exact(lane.dead_run_model({"providerInstanceId": "glm", "model": "zai/glm-5.3",
                                "title": "MO-5 widget"}),
           {"instanceId": "glm", "model": "zai/glm-5.3"})
+    # DeepSeek continues inside a route but never starts one: a dead
+    # DeepSeek thread relaunches on GLM (Shyam 2026-11-17).
+    exact(lane.dead_run_model({"providerInstanceId": "pi", "model": "deepseek/deepseek-flash",
+                               "title": "MO-9 widget"}), lane.GLM)
     exact(lane.dead_run_model({"providerInstanceId": "router", "model": "task/standard",
                                "title": "MO-6"}),
           {"instanceId": "router", "model": "task/standard"})
+    # A router provider with a non-route model spells a forbidden builder
+    # through the router: it does not pass the route through.
+    exact(lane.dead_run_model({"providerInstanceId": "router", "model": "subscriptions/gpt-6.2-astra",
+                               "title": "MO-10"}), lane.GLM)
     dead_run_no_receipt()
 
 
@@ -340,6 +348,10 @@ def gate_pipeline():
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("second-no-verdict", repo, "none", "interrupted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+        # The two cases above are the ticket's lane-driver dry run after two
+        # failed reviews (a dead gate and a dead retry, gate: plus regate: in
+        # the ledger): the expected action list is empty, so no Sol, Opus or
+        # any other escalation is launched.
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
         ("ascend", "ascend/fixture", "absent", "", {}, []),
     ]
@@ -1346,12 +1358,17 @@ def send_integrity():
     key = f"fix:{repo}#385:head"
     cases = [(dict(status=status, providerInstanceId="glm", model="zai/glm-5.3"), True) for status in
              ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
+    cases += [(thread, True) for thread in
+              (dict(status="running", providerInstanceId="router", model="task/standard"),)]
     cases += [(thread, False) for thread in ({}, dict(status="deleted"),
               dict(status="running", archived=True), dict(status="running", sendable=False),
               dict(status="running", canSend=False),
               # A Sol builder thread is never continued, whatever its state:
               # the fix round relaunches on GLM instead (Shyam 2026-11-17).
-              dict(status="running", providerInstanceId="codex", model="gpt-6.1-sol"))]
+              dict(status="running", providerInstanceId="codex", model="gpt-6.1-sol"),
+              # A router provider is not enough: a model spelled through it
+              # that is not a task/* route gets the same refusal.
+              dict(status="running", providerInstanceId="router", model="subscriptions/gpt-6.2-astra"))]
     for thread, live in cases:
         for failure in (None, "error", "empty"):
             actions, reads, ledger = [], [], {}
