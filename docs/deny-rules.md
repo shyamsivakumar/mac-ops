@@ -44,33 +44,28 @@ both hold:
   the merge is refused.
 
 A gate thread therefore needs `MAC_OPS_ROLE=gate` in the environment it is
-launched with, and the trusted launcher supplies it: the lane driver
-(`coordinator/overnight/lane_driver.py`) provisions the role on the pinned
-merge it runs itself, and that launcher is the process that performs the
-gate's merge. The role never comes from an agent's command text.
+launched with. T3 sets a thread's environment from its provider instance, and
+the thread-launch input has no environment field of its own, so the role is
+carried by a dedicated instance: `claudeAgentGate`, a `claudeAgent` entry whose
+`environment` holds `MAC_OPS_ROLE=gate`.
 
-An agent thread cannot be handed a role today. The T3 thread-launch input
-(`OrchestrationV2ThreadLaunchInput` in the T3 server schema) carries a project,
-title, model, runtime mode, interaction mode and workspace strategy, and no
-environment field, so `coordq` cannot set `MAC_OPS_ROLE` on a launched thread.
+That instance is part of the install, not a hand edit. `scripts/install_deny_rules.py
+install` writes it into `~/.t3/userdata/settings.json` next to the hook
+registration, `status` reports it, and `uninstall` removes it. Only the trusted
+launcher selects it: `coordinator/overnight/lane_driver.py` launches a gate on
+`claudeAgentGate` when the orchestrator reports that instance can run child
+tasks, so a gate thread holds the role from the moment it starts and performs
+its own pinned merge.
 
-T3 does apply an environment per provider instance, and it reads
-`~/.t3/userdata/settings.json` without a restart: adding an instance there makes
-it appear in the orchestrator's provider list (`orchestrator_capabilities`)
-with its `environment` entries. A dedicated gate instance carrying
-`MAC_OPS_ROLE=gate` is therefore the right channel, because only threads
-launched on that instance hold the role and a builder is launched on another
-instance. It cannot be used yet: a second `claudeAgent` instance is accepted by
-the settings file but reports `Provider executable is not installed` and cannot
-launch a thread (2026-11-17), so no Claude gate thread can be started on it. A
-role marker file or a transcript token is not an alternative: every file a
-thread can read it can also write, so a builder could forge either, and that
-would widen the permission this list only tightens.
+The role cannot be claimed by typing either. The hook refuses a thread launch,
+thread send or batch thread creation whose input names `claudeAgentGate` from a
+caller without the role, so a builder cannot hand itself the role by launching
+a child on that instance, and no file or transcript token is read anywhere.
 
-Until T3 can launch a second `claudeAgent` instance, a `gh pr merge` typed by
-any agent, gate included, is refused, and the pinned merge happens on the
-launcher path above, which is where it already happens. That direction only
-tightens: no builder gains the merge, and no merge depends on wording.
+When the orchestrator reports the instance cannot run child tasks, the gate is
+launched on the reviewer chain's own instance and the lane performs the pinned
+merge itself, with the role set on that call. A gate launch therefore never
+breaks, and no merge depends on wording.
 
 ## One source, installed into each enforcement point
 
