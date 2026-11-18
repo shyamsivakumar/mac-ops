@@ -262,15 +262,15 @@ def alert(reason, cause=None, path=None):
                     "why": reason,
                 }
             )
-        decisions["items"] = kept
-        decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        if not write_board(target, decisions):
-            return "failed"
         if action == "unchecked":
             # The key could not be written, so the answer to this alarm
             # cannot be recorded. The alarm is published anyway: a
             # storage failure must not hide a real failure from Shyam.
             print("stall: the alarm key could not be written; the answer to this alarm cannot be recorded")
+        decisions["items"] = kept
+        decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not write_board(target, decisions):
+            return "failed"
         return None
 
     # The decision and the publication happen under the state lock, so an

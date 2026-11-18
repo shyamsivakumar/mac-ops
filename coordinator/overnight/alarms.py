@@ -168,6 +168,43 @@ def merge(current, state):
     return merged
 
 
+def take_lock():
+    """Take the state lock and return the open handle, or None.
+
+    A lock that cannot be taken is not a lock. A writer that cannot take
+    it must fail its write, not write the file unlocked and take a
+    concurrent acknowledgement with it. The handle is let go with
+    `drop_lock`."""
+    path = Path(str(MUTE_PATH) + ".lock")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        handle = os.fdopen(descriptor, "r+")
+    except OSError:
+        return None
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except OSError:
+        try:
+            handle.close()
+        except OSError:
+            pass
+        return None
+    return handle
+
+
+def drop_lock(handle):
+    """Let go of the state lock."""
+    try:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        handle.close()
+    except OSError:
+        pass
+
+
 @contextlib.contextmanager
 def locked():
     """Hold the state lock while the state is read and written.
@@ -176,21 +213,13 @@ def locked():
     the same time: the tick and the panel both write it, and a write that
     lands between the read and the replace of the other writer is lost.
     The lock is held across the whole read, merge and replace."""
-    path = Path(str(MUTE_PATH) + ".lock")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # A lock that cannot be taken is not a lock. A writer that cannot take
-    # it must fail its write, not write the file unlocked and take a
-    # concurrent acknowledgement with it.
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    handle = os.fdopen(descriptor, "r+")
+    handle = take_lock()
+    if handle is None:
+        raise OSError("the mute state lock could not be taken")
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX)
         yield
     finally:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        finally:
-            handle.close()
+        drop_lock(handle)
 
 
 def write_state(state):
@@ -317,10 +346,19 @@ def decide_and_publish(alarm_id, cause, publish):
     this decision says, and an acknowledgement that comes after it
     applies from the next tick.
 
-    `publish` is called with the decision while the lock is held, and it
-    may return a decision of its own. Return the decision."""
+    `publish` is called once, with the decision, while the lock is
+    held. It returns "failed" when it could not write the board, and the
+    decision is returned otherwise. A lock that cannot be taken, or a
+    state that cannot be written, publishes the alarm as "unchecked":
+    the alarm cannot be quiet, and a storage failure must not hide a real
+    failure from Shyam."""
+    handle = take_lock()
+    if handle is None:
+        # The state cannot be locked, so the alarm cannot be quiet. It is
+        # published anyway, and the fault is said out loud.
+        return publish("unchecked") or "unchecked"
     try:
-        with locked():
+        try:
             state = load_state()
             action = decide(state, alarm_id, cause)
             if action == "raise":
@@ -330,24 +368,29 @@ def decide_and_publish(alarm_id, cause, publish):
                 # alarm cannot be recorded. The alarm is published
                 # anyway: a storage failure must not hide a real failure.
                 action = "unchecked"
+        except OSError:
+            action = "unchecked"
+        try:
             return publish(action) or action
-    except OSError:
-        return "failed"
+        except OSError:
+            return "failed"
+    finally:
+        drop_lock(handle)
 
 
 def forget_and_save(alarm_id):
     """Mark an alarm as not true any more and write the state.
 
     The key keeps its acknowledgement, so an alarm that was answered
-    stays quiet for the rest of the four hours."""
+    stays quiet for the rest of the four hours. Return True when the
+    state went to the file."""
     try:
         with locked():
             state = load_state()
             gone(state, alarm_id)
-            write_state(merge(load_state(), state))
+            return write_state(merge(load_state(), state))
     except OSError:
         return False
-    return True
 
 
 def main(argv):

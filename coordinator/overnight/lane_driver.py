@@ -927,7 +927,10 @@ def watchdog():
     # The alarm is not true any more, so the same cause can alarm again
     # the next time it is true. An acknowledgement that is still running
     # keeps the key quiet.
-    alarms.forget_and_save("factory-watchdog")
+    if not alarms.forget_and_save("factory-watchdog"):
+        # A write that fails is said out loud: the tick did not record
+        # what it did, and the next tick measures the alarms again.
+        print("WATCHDOG could not write the mute state; the alarm is not muted")
     d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     json.dump(d, open(p + ".tmp", "w"), indent=1)
     os.replace(p + ".tmp", p)
