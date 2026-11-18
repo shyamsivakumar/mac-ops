@@ -7,6 +7,7 @@ chain is exhausted. A reviewer that fails for a blocking provider reason
 start on the next reviewer until it recovers (Shyam 2026-11-17 18:15 PT).
 """
 
+import fcntl
 import json
 import os
 import re
@@ -41,10 +42,20 @@ BLOCK_CODES = ("401", "402", "429")
 
 
 def identity(selection):
-    """The identity of a reviewer selection."""
+    """The identity of a reviewer selection.
+
+    A selection that names a chain member gets that member's identity, so
+    a provider-prefixed spelling ("subscriptions/gpt-6.2-astra") blocks
+    the same reviewer as the plain one."""
     if not isinstance(selection, dict):
         return ""
-    return f"{selection.get('instanceId')}:{selection.get('model')}"
+    instance = selection.get("instanceId")
+    model = selection.get("model")
+    if instance and model:
+        for member in REVIEWER_CHAIN:
+            if same_reviewer(member, instance, model):
+                return f"{member['instanceId']}:{member['model']}"
+    return f"{instance}:{model}"
 
 
 def same_reviewer(selection, instance, model):
@@ -152,6 +163,28 @@ def blocked_path():
     return os.path.join(queue_dir(), "reviewers-blocked.json")
 
 
+def blocked_lock_path():
+    return os.path.join(queue_dir(), "reviewers-blocked.lock")
+
+
+class BlockedLock:
+    """The lock on the blocked state.
+
+    The lane driver and the queue both write it, so the read-modify-write
+    of one block cannot overwrite the block of the other."""
+
+    def __enter__(self):
+        os.makedirs(queue_dir(), exist_ok=True)
+        self.f = open(blocked_lock_path(), "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+        return False
+
+
 def load_blocked():
     """The blocked reviewers and their records."""
     try:
@@ -166,14 +199,30 @@ def load_blocked():
 def save_blocked(state):
     path = blocked_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".tmp", "w") as f:
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
         json.dump({"blocked": state}, f)
-    os.replace(path + ".tmp", path)
+    os.replace(tmp, path)
 
 
 def blocked_identities():
     """The identities of the reviewers that are blocked for every head."""
     return set(load_blocked())
+
+
+def next_probe_at(now, reset_at=None):
+    """When a blocked reviewer may be probed next.
+
+    A provider that names a reset time is probed at that time and not
+    before it. A block that names no reset is probed an hour later. The
+    deadline is set once and moves on after every probe, so a stale
+    reset time cannot make the reviewer due for ever."""
+    now = time.time() if now is None else now
+    if reset_at:
+        reset_at = float(reset_at)
+        if reset_at > now:
+            return reset_at
+    return now + PROBE_INTERVAL
 
 
 def block_reviewer(selection, reason, now=None, reset_at=None):
@@ -184,49 +233,62 @@ def block_reviewer(selection, reason, now=None, reset_at=None):
     ident = identity(selection)
     if not ident:
         return None
-    state = load_blocked()
-    if ident in state:
-        return None
-    now = time.time() if now is None else now
-    state[ident] = {"at": now, "reason": reason,
-                    "probeAt": now + PROBE_INTERVAL, "resetAt": reset_at}
-    save_blocked(state)
+    with BlockedLock():
+        state = load_blocked()
+        if ident in state:
+            return None
+        now = time.time() if now is None else now
+        state[ident] = {"at": now, "reason": reason,
+                        "probeAt": next_probe_at(now, reset_at), "resetAt": reset_at}
+        save_blocked(state)
     return f"blocked reviewer {ident}: {reason}"
 
 
 def unblock_reviewer(selection):
     """Unblock a reviewer. Returns the log line, or None."""
     ident = identity(selection)
-    state = load_blocked()
-    if ident not in state:
-        return None
-    del state[ident]
-    save_blocked(state)
+    with BlockedLock():
+        state = load_blocked()
+        if ident not in state:
+            return None
+        del state[ident]
+        save_blocked(state)
     return f"unblocked reviewer {ident}"
 
 
 def probe_due(selection, now=None):
-    """Whether a blocked reviewer may be probed again."""
+    """Whether a blocked reviewer may be probed again.
+
+    One deadline governs the probe: the hour after the last probe, or the
+    reset the provider named when that is later. A reset that has passed
+    does not make the reviewer due for ever: the deadline moves on after
+    every probe."""
     record = load_blocked().get(identity(selection))
     if not record:
         return False
     now = time.time() if now is None else now
-    reset = record.get("resetAt")
-    if reset and now >= float(reset):
-        return True
-    return now >= float(record.get("probeAt") or 0)
+    deadline = record.get("probeAt")
+    if deadline is None:
+        deadline = record.get("resetAt")
+    return now >= float(deadline or 0)
 
 
 def note_probe(selection, request_id, now=None):
-    """Record the probe of a blocked reviewer, so the next one waits."""
+    """Record the probe of a blocked reviewer, so the next one waits.
+
+    The reset the provider named is consumed here: the probe it scheduled
+    has run, and a failed probe must not re-arm the reviewer against the
+    same expired reset. The next probe is an hour away."""
     ident = identity(selection)
-    state = load_blocked()
-    record = state.get(ident)
-    if not record:
-        return None
-    record["probeAt"] = (time.time() if now is None else now) + PROBE_INTERVAL
-    record["probeRequestId"] = request_id
-    save_blocked(state)
+    with BlockedLock():
+        state = load_blocked()
+        record = state.get(ident)
+        if not record:
+            return None
+        record["probeAt"] = (time.time() if now is None else now) + PROBE_INTERVAL
+        record["probeRequestId"] = request_id
+        record["resetAt"] = None
+        save_blocked(state)
     return record
 
 

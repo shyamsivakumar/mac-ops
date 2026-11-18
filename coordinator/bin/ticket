@@ -1458,8 +1458,9 @@ def gate_reviewer(models, live=False):
     """The reviewer a new gate starts on.
 
     A reviewer that is blocked for every head is skipped, so a new gate
-    starts on the next one until it recovers (Shyam 2026-11-17 18:15 PT)."""
-    return first_reviewer(blocked_identities()) or GATE_ASTRA
+    starts on the next one until it recovers (Shyam 2026-11-17 18:15 PT).
+    None means every reviewer is blocked, and the gate waits."""
+    return first_reviewer(blocked_identities())
 
 
 def gate_live(title, gate_id):
@@ -1552,6 +1553,9 @@ def cmd_gate(a):
         check_ticket_key(repo, rcfg, issue["title"])
         models, live = builder_models(issue, authed_login())
         model = gate_reviewer(models, live)
+        if model is None:
+            raise Refuse("every gate reviewer is blocked for now, so the gate "
+                         "waits for a reviewer to recover")
         publisher = check_publisher(repo, head, rcfg)
         ascend = ascend_repo(repo, rcfg)
         base = pull.get("baseRefName") or "main"
