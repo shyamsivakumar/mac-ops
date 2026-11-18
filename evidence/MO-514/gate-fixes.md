@@ -14,6 +14,8 @@ the test that fails without the fix.
 | 7 | the ancestry check accepted `origin/main` or `origin/master`, so a commit unique to `master` could qualify a worktree for removal | only the one default branch of the repository qualifies | `verification/worktree-cleaner/check_bootstrap.py` (the `masteronly` worktree), `...::DefaultBranchTest::test_only_the_default_branch_qualifies` |
 | 8 | the `AGENTS.md` check compared contents only, so an executable bit change was invisible and the file looked untouched | the committed, staged and working copy must agree on the type and the executable bit as well as on the contents | `...::AgentsBootstrapTest::test_mode_change_is_real_work`, `...::test_staged_mode_change_is_real_work` |
 | 9 | the default branch lookup passed `--repo` to `gh repo view`, which takes the repository as a positional argument, so the lookup always failed and the cleaner fell back to `origin/HEAD`; after a default branch change that ref still points at the old branch | `gh repo view <repository> --json defaultBranchRef`; only a default branch verified by GitHub grants ancestry based eligibility, and a stale `origin/HEAD` is not trusted | `...::DefaultBranchTest::test_stale_origin_head_grants_nothing` |
+| 10 | the `AGENTS.md` check compared decoded text, so it stripped the committed trailing newlines and normalised CRLF to LF; a worktree whose committed file ended in two newlines, where the user removed one and appended the rules block, was accepted as the bootstrap and the removed newline or the changed line ending was discarded | the committed, staged and working files are compared as bytes; the committed bytes must stay intact in full and the only permitted change is the rules block appended to them | `...::AgentsBootstrapTest::test_removed_trailing_newline_is_real_work`, `...::test_line_ending_change_is_real_work` |
+| 11 | the default branch name filter rejected a valid branch name such as `release/main`, so an otherwise eligible worktree stayed on disk | any name git accepts as a branch name is accepted | `...::DefaultBranchTest::test_valid_branch_names_are_accepted` |
 
 ## How the fixes are proved
 
@@ -23,17 +25,19 @@ The unit tests above run in the repo check whenever the cleaner changes:
 python3 -m unittest tests.test_worktree_cleaner_bootstrap
 ```
 
-They were run against the cleaner at the head the gate reviewed, `84fd296`:
+They were run against the cleaner at the head the gate reviewed, `2b43775`:
 
 ```
-FAIL: test_mode_change_is_real_work
-FAIL: test_staged_mode_change_is_real_work
-FAIL: test_stale_origin_head_grants_nothing
-Ran 11 tests in 1.590s
+FAIL: test_line_ending_change_is_real_work
+FAIL: test_removed_trailing_newline_is_real_work
+FAIL: test_valid_branch_names_are_accepted
+Ran 14 tests in 1.877s
 FAILED (failures=3)
 ```
 
-and against the current cleaner, where all eleven pass.
+and against the current cleaner, where all fourteen pass. The same tests fail
+against `84fd296` for the mode, the stale `origin/HEAD` and the branch name
+findings (3 failures out of 11 there).
 
 The end to end fixture builds real repositories, a local bare remote and stub
 GitHub and `t3mcp` CLIs, and covers the worktrees that must be removed and the
