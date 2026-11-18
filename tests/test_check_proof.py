@@ -185,6 +185,54 @@ class CheckProofTest(unittest.TestCase):
             check.write_baseline(counts, path)
             self.assertEqual(check.read_baseline(path), counts)
 
+    def test_a_path_with_a_space_round_trips(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        counts = {("dir with spaces/a.py", "F401", "`os` imported but unused"): 1}
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "ruff-baseline.txt"
+            check.write_baseline(counts, path)
+            self.assertEqual(check.read_baseline(path), counts)
+
+    def test_the_gate_fails_on_a_finding_the_baseline_does_not_have(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        new = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 1}
+        with patch.object(check, "ruff_counts", return_value=new), \
+                patch.object(check, "read_baseline", return_value={}):
+            with self.assertRaises(RuntimeError) as raised:
+                check.check_ruff()
+        self.assertIn("not in the baseline", str(raised.exception))
+
+    def test_the_gate_passes_on_a_finding_the_baseline_has(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        known = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 1}
+        with patch.object(check, "ruff_counts", return_value=known), \
+                patch.object(check, "read_baseline", return_value=known):
+            detail = check.check_ruff()
+        self.assertIn("in the baseline", detail)
+
+    def test_the_check_runs_the_ruff_gate(self):
+        """The gate is wired into the run, not only defined."""
+        source = (ROOT / "scripts" / "mac_ops_fast_check.py").read_text()
+        self.assertIn("proof.check(f\"ruff {RUFF_RULES}\", shlex.join(ruff), check_ruff)", source)
+
+    def test_the_ruff_command_lints_the_runners_without_a_suffix(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        command = check.ruff_command()
+        for name in check.SUFFIXLESS_PYTHON:
+            if (ROOT / name).is_file():
+                self.assertIn(name, command)
+
+    def test_a_missing_tool_leaves_the_run_incomplete(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        proof = check.Proof("evidence/MO-501/check-proof.md")
+
+        def missing():
+            raise check.NotRun("uvx is not installed")
+
+        proof.check("ruff F,B", "uvx ruff@0.14.0 check", missing)
+        self.assertFalse(proof.failed)
+        self.assertTrue(proof.incomplete)
+
     def test_the_check_keeps_the_original_deadlines(self):
         """The proof file must not let a slower run pass the check."""
         source = (ROOT / "scripts" / "mac_ops_fast_check.py").read_text()
