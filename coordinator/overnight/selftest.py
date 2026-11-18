@@ -1078,6 +1078,16 @@ def watchdog():
 
 
 def zero_merge():
+    """Run the merge-alert fixture in a folder that is always cleaned up.
+
+    The folder holds the mute state the fixture writes, so it is a
+    temporary directory rather than a directory the run leaves behind:
+    the cleanup runs after a failed assertion too."""
+    with tempfile.TemporaryDirectory(prefix="zero-merge-mute-") as scratch:
+        zero_merge_fixture(Path(scratch))
+
+
+def zero_merge_fixture(scratch):
     import datetime as dt
     import os
     import lane_driver as lane
@@ -1111,7 +1121,7 @@ def zero_merge():
         "why": "The coordinator must inspect blocked PRs and restore merge progress: fixture/one"}
     # The alarm's mute state goes to a file of its own, so the eval never
     # reads or writes the live shift's folder.
-    mute = str(Path(tempfile.mkdtemp(prefix="zero-merge-mute-")) / "mute-state.json")
+    mute = str(scratch / "mute-state.json")
 
     def read_board(path):
         return b"", json.loads(json.dumps(state))
