@@ -996,6 +996,13 @@ def resolve_models(cfg, ticket):
         # or the MiniMax route and reviews own the OpenAI models (Shyam
         # 2026-11-17).
         raise Refuse(f"builder {builder} is an OpenAI model; builds run on GLM 5.3 or the MiniMax route")
+    permitted = cfg.get("builderAliases")
+    if permitted and builder not in permitted:
+        # The permit list, not a deny list: even a risky build starts on
+        # GLM 5.3 or the MiniMax-first route, so a builder: label may only
+        # pick one of those (Shyam 2026-11-17).
+        raise Refuse(f"builder {builder} is not a permitted builder ({', '.join(permitted)}); "
+                     "builds run on GLM 5.3 or the MiniMax route")
     if cfg["models"][reviewer].get("noGate"):
         raise Refuse(f"reviewer {reviewer} cannot gate (noGate)")
     if cfg["models"][builder]["vendor"] == cfg["models"][reviewer]["vendor"]:
