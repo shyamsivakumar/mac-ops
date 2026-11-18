@@ -63,7 +63,8 @@ names, so moving prompt text out of `prompts/` still holds it. A file list
 GitHub cannot give, or one shorter than the pull request's own changed-file
 count (the files endpoint stops at 3,000), is unknown: the read is retried
 and then the gate refuses, because a brief built without the list could
-order a merge of prompt text.
+order a merge of prompt text. The count is read from the pull request itself
+when the caller holds none, and a count that cannot be read is unknown too.
 
 A file list GitHub cannot give is not code: the read is retried, and a list
 still unknown defers the gate instead of building a brief. A brief written

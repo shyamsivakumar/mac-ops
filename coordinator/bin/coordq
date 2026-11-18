@@ -1147,16 +1147,32 @@ def failed_gate_reviewer(queue, key, current, failure):
     return None
 
 
+def gate_changed_count(repo, number):
+    """The pull request's own changed-file count, or None when unreadable.
+
+    The count is what tells a complete file list from a capped one, so a list
+    read without it is deferred rather than trusted.
+    """
+    try:
+        pull = gh_json(f"repos/{repo}/pulls/{number}")
+    except (RuntimeError, ValueError):
+        return None
+    count = pull.get("changed_files") if isinstance(pull, dict) else None
+    return count if isinstance(count, int) else None
+
+
 def gate_prompt_state(repo, number, changed_files=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths one pull request changed.
 
     A read GitHub cannot give is retried, then reported UNKNOWN. A list
     shorter than the pull request's own changed-file count may have left out
     the one prompt file (the files endpoint stops at 3,000), so it is
-    UNKNOWN too. An unknown list never reads as clear, because clear is what
-    authorizes the merge a gate brief orders, so the caller defers the gate
-    until the list is known.
+    UNKNOWN too; the count is read from the pull request itself when the
+    caller does not already hold it. An unknown list never reads as clear,
+    because clear is what authorizes the merge a gate brief orders, so the
+    caller defers the gate until the list is known.
     """
+    count = changed_files if isinstance(changed_files, int) else gate_changed_count(repo, number)
     for _ in range(max(1, attempts)):
         try:
             files = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
@@ -1164,7 +1180,7 @@ def gate_prompt_state(repo, number, changed_files=None, attempts=2):
             continue
         if not isinstance(files, list):
             continue
-        if not prompt_paths.list_is_complete(files, changed_files):
+        if not prompt_paths.list_is_complete(files, count):
             continue
         return prompt_paths.prompt_scan(prompt_paths.entries_paths(files))
     return prompt_paths.UNKNOWN

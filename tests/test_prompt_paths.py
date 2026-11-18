@@ -82,8 +82,8 @@ class PromptPathTest(unittest.TestCase):
         entries = [{"filename": "coordinator/bin/ticket"}]
         self.assertFalse(prompt_paths.list_is_complete(entries, 3001))
         self.assertTrue(prompt_paths.list_is_complete(entries, 1))
-        self.assertTrue(prompt_paths.list_is_complete(entries, None))
-        self.assertTrue(prompt_paths.list_is_complete(entries, []))
+        self.assertFalse(prompt_paths.list_is_complete(entries, None))
+        self.assertFalse(prompt_paths.list_is_complete(entries, []))
 
     def test_a_skills_directory_at_the_top_counts(self):
         self.assertTrue(prompt_paths.is_prompt_path("skills/SKILL.md"))
@@ -174,24 +174,49 @@ class CoordqGateTest(unittest.TestCase):
     def test_the_queue_reads_the_same_list(self):
         with patch.object(self.coordq, "gh_json",
                           return_value=[{"filename": "coordinator/config/AGENT-RULES.md"}]):
-            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.HOLD)
         with patch.object(self.coordq, "gh_json",
                           return_value=[{"filename": "coordinator/bin/ticket"}]):
-            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.CLEAR)
 
     def test_a_renamed_prompt_file_is_held(self):
         with patch.object(self.coordq, "gh_json",
                           return_value=[{"filename": "archive/reviewer.md",
                                          "previous_filename": "prompts/reviewer.md"}]):
-            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.HOLD)
+
+    def test_a_missing_changed_count_is_read_from_the_pull_request(self):
+        """The list entry's count is not trusted by presence alone."""
+        files = [{"filename": "coordinator/bin/ticket"}]
+
+        def gh(endpoint):
+            if endpoint.endswith("/files?per_page=100"):
+                return files
+            self.assertEqual(endpoint, "repos/shyamsivakumar/mac-ops/pulls/544")
+            return {"changed_files": 3001}
+
+        with patch.object(self.coordq, "gh_json", gh):
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.UNKNOWN)
+
+    def test_a_failed_changed_count_read_is_unknown(self):
+        """No count means no completeness, and no completeness means no merge."""
+        def gh(endpoint):
+            if endpoint.endswith("/files?per_page=100"):
+                return [{"filename": "coordinator/bin/ticket"}]
+            raise RuntimeError("count read failed")
+
+        with patch.object(self.coordq, "gh_json", gh):
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.UNKNOWN)
 
     def test_a_failed_read_is_unknown_never_clear(self):
         """A transient GitHub error must not authorize the merge it once did."""
         with patch.object(self.coordq, "gh_json", side_effect=RuntimeError("boom")) as read:
-            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.UNKNOWN)
         self.assertEqual(read.call_count, 2)
 
@@ -227,7 +252,7 @@ class CoordqGateTest(unittest.TestCase):
         head = self.HEAD
         repo = self.REPO
         pull = {"draft": False, "number": 7, "head": {"sha": head},
-                "body": f"Refs #9\nBuilder check: PASS {head}\n"}
+                "changed_files": len(changed), "body": f"Refs #9\nBuilder check: PASS {head}\n"}
         receipt = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
         comment = {"user": {"login": "me"},
                    "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
@@ -276,7 +301,7 @@ class CoordqGateTest(unittest.TestCase):
         coordq = self.coordq
         head, repo = self.HEAD, self.REPO
         pull = {"draft": False, "number": 7, "head": {"sha": head},
-                "body": f"Refs #9\nBuilder check: PASS {head}\n"}
+                "changed_files": 1, "body": f"Refs #9\nBuilder check: PASS {head}\n"}
         receipt = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
         comment = {"user": {"login": "me"},
                    "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
@@ -326,24 +351,42 @@ class LanePassTest(unittest.TestCase):
 
     def test_the_lane_reads_the_same_list(self):
         with patch.object(self.lane, "run", return_value='[{"filename": "skills/x/SKILL.md"}]'):
-            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544),
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.HOLD)
         with patch.object(self.lane, "run", return_value='[{"filename": "coordinator/bin/ticket"}]'):
-            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544),
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.CLEAR)
 
     def test_a_renamed_prompt_file_is_held(self):
         files = '[{"filename": "archive/reviewer.md", "previous_filename": "prompts/reviewer.md"}]'
         with patch.object(self.lane, "run", return_value=files):
-            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544),
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
                              prompt_paths.HOLD)
+
+    def test_a_missing_changed_count_defers_the_pass(self):
+        """Without a count the lane cannot tell a capped list from a complete one."""
+        written = []
+
+        def command(cmd, timeout=150):
+            if cmd[:2] == ["gh", "api"] and cmd[2] != "--paginate":
+                self.assertEqual(cmd[2], "repos/shyamsivakumar/mac-ops/pulls/544")
+                return '{"changed_files": 3001}'
+            return '[{"filename": "coordinator/bin/ticket"}]'
+
+        with patch.object(self.lane, "run", command), \
+                patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
+            state = self.lane.prompt_pull("shyamsivakumar/mac-ops", 544)
+            held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40, state)
+        self.assertEqual(state, prompt_paths.UNKNOWN)
+        self.assertIn("next run retries", held)
+        self.assertEqual(written, [])
 
     def test_an_unreadable_list_defers_the_pass(self):
         """A list the lane cannot read is retried, then merged nothing on."""
         written = []
         with patch.object(self.lane, "run", side_effect=RuntimeError("boom")), \
                 patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
-            state = self.lane.prompt_pull("shyamsivakumar/mac-ops", 544)
+            state = self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1)
             held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40, state)
         self.assertEqual(state, prompt_paths.UNKNOWN)
         self.assertIn("could not be read", held)

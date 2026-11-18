@@ -77,11 +77,12 @@ def list_is_complete(entries, changed_files):
 
     GitHub's pull-request files endpoint returns at most 3,000 files, so a
     list shorter than the pull request's own changed-file count may have
-    dropped the one prompt file. A count that is not known cannot be
-    compared, and only a known count can show the list is short.
+    dropped the one prompt file. A count that is not known is not a complete
+    list either: without it the caller cannot tell, and the safe answer for a
+    list that authorizes a merge is defer.
     """
     if not isinstance(changed_files, int):
-        return True
+        return False
     return len(entries or ()) >= changed_files
 
 

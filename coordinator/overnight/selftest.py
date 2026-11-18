@@ -345,7 +345,7 @@ def gate_pipeline():
     ]
     for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
-        pr = dict(number=20, state="OPEN", headRefOid=head,
+        pr = dict(number=20, state="OPEN", headRefOid=head, changedFiles=1,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 

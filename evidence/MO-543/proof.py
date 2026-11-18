@@ -133,7 +133,7 @@ def queue_briefs():
     for name, paths in (("prompt", PROMPT_PATHS), ("code", CODE_PATHS)):
         files = [{"filename": path} for path in paths]
         with patch.object(coordq, "gh_json", return_value=files):
-            state = coordq.gate_prompt_state(repo, 544)
+            state = coordq.gate_prompt_state(repo, 544, len(files))
         briefs[name] = coordq.gate_args(settings, repo, 543, 544, HEAD, False, model,
                                         prompt=state == prompt_paths.HOLD)["message"]
     grant("queue gatekeep brief: prompt PR gets the hold",
@@ -145,13 +145,13 @@ def queue_briefs():
     # A transient GitHub error must not read as clear: no brief is built, so
     # no merge order can be written from a list the queue never saw.
     with patch.object(coordq, "gh_json", side_effect=RuntimeError("transient")) as read:
-        unknown = coordq.gate_prompt_state(repo, 544)
+        unknown = coordq.gate_prompt_state(repo, 544, 1)
     grant("queue gatekeep: an unreadable file list is unknown, never clear",
           unknown == prompt_paths.UNKNOWN and read.call_count > 1, command)
     # A rename carries the name the file left, and that name can be a prompt.
     renamed = [{"filename": "archive/reviewer.md", "previous_filename": "prompts/reviewer.md"}]
     with patch.object(coordq, "gh_json", return_value=renamed):
-        state = coordq.gate_prompt_state(repo, 544)
+        state = coordq.gate_prompt_state(repo, 544, len(renamed))
     grant("queue gatekeep: a renamed prompt file holds the PR", state == prompt_paths.HOLD, command)
     # GitHub stops the files endpoint at 3,000: a list shorter than the pull
     # request's own changed-file count may have dropped the one prompt file.
@@ -161,6 +161,28 @@ def queue_briefs():
         complete = coordq.gate_prompt_state(repo, 544, 1)
     grant("queue gatekeep: a truncated file list is unknown, never clear",
           truncated == prompt_paths.UNKNOWN and complete == prompt_paths.CLEAR, command)
+    # The count is not taken on trust from the list entry: when the caller has
+    # none, the pull request itself gives it, and a count that cannot be read
+    # is unknown too. This is the path the earlier proof missed.
+    def gh(endpoint):
+        if endpoint.endswith("/files?per_page=100"):
+            return short
+        if endpoint == f"repos/{repo}/pulls/544":
+            return {"changed_files": 3001}
+        raise AssertionError(endpoint)
+
+    with patch.object(coordq, "gh_json", gh):
+        fetched = coordq.gate_prompt_state(repo, 544)
+
+    def gh_no_count(endpoint):
+        if endpoint.endswith("/files?per_page=100"):
+            return short
+        raise RuntimeError("count read failed")
+
+    with patch.object(coordq, "gh_json", gh_no_count):
+        no_count = coordq.gate_prompt_state(repo, 544)
+    grant("queue gatekeep: a missing or unreadable changed-file count is unknown too",
+          fetched == prompt_paths.UNKNOWN and no_count == prompt_paths.UNKNOWN, command)
 
 
 def lane_truncation():
@@ -177,6 +199,19 @@ def lane_truncation():
     grant("lane: a truncated file list defers the pass, and a complete one is clear",
           state == prompt_paths.UNKNOWN and "next run retries" in (held or "")
           and complete == prompt_paths.CLEAR and written == [], command)
+
+    def command_without_count(cmd, timeout=150):
+        if cmd[:2] == ["gh", "api"] and cmd[2] != "--paginate":
+            return '{"changed_files": 3001}'
+        return '[{"filename": "coordinator/bin/ticket"}]'
+
+    with patch.object(lane, "run", command_without_count), \
+            patch.object(lane, "publish_decision", lambda item: written.append(item)):
+        missing = lane.prompt_pull("shyamsivakumar/mac-ops", 544)
+        held = lane.prompt_pass("shyamsivakumar/mac-ops", 544, HEAD, missing)
+    grant("lane: a missing changed-file count is read from the pull request and defers",
+          missing == prompt_paths.UNKNOWN and "next run retries" in (held or "")
+          and written == [], command)
 
 
 def ticket_file_read():
