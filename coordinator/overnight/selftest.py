@@ -389,6 +389,20 @@ def gate_pipeline():
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
                 return "merged"
+            if cmd[0] == "git" and "merge" in cmd and "--squash" in cmd:
+                # The lane builds the squash from the reviewed head itself.
+                exact(head in cmd, True)
+                return ""
+            if cmd[0] == "git" and "push" in cmd:
+                exact(cmd[-1], "HEAD:refs/heads/main")
+                actions.append("merge")
+                return ""
+            if cmd[0] == "git" and "rev-parse" in cmd:
+                return "m" * 40
+            if cmd[0] == "git" and "commit" in cmd:
+                return ""
+            if cmd[0] == "git" and "fetch" in cmd:
+                return ""
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
             if cmd[0] == "git" and "symbolic-ref" in cmd:
@@ -1469,10 +1483,13 @@ def consolidation_guard():
         for emitted in briefs:
             exact("Builder check: PASS " + "a" * 40 in emitted, True)
             if ascend:
-                exact("gh pr merge" in emitted, False)
+                exact("refs/heads/main" in emitted, False)
                 exact("gh issue close" in emitted, False)
             else:
-                exact("--match-head-commit " + "a" * 40 in emitted, True)
+                # The squash is built from the reviewed head and pushed to the
+                # reviewed base by name, so a retarget cannot move it.
+                exact("git push origin HEAD:refs/heads/main" in emitted, True)
+                exact("git merge --squash " + "a" * 40 in emitted, True)
                 exact("verify every Provides claim" in emitted, True)
                 exact("false, missing or unverified, close nothing" in emitted, True)
                 exact(emitted.index("verify every Provides claim") < emitted.index("gh issue close"), True)

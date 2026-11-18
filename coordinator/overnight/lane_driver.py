@@ -764,40 +764,51 @@ def base_moved_item(repo, number, head, landed, base):
 
 
 def merge_on_reviewed_base(repo, number, head, base):
-    """Merge one pull request only when its base is still the reviewed one.
+    """Squash the reviewed head onto the reviewed base, and name both.
 
-    `--match-head-commit` pins the head, and nothing in the merge call pins
-    the base: a retarget leaves the head where it is. Two things guard the
-    interval around the merge. The base and head are read once immediately
-    before it, and a pull request that moved merges nothing. The base is read
-    once more after it: a merge cannot pin its base, so a retarget that slipped
-    into that interval would otherwise be reported as a merge on the reviewed
-    base. A merge that landed on another base is reported as one that is not
-    the reviewed review's, and the caller closes nothing and fast-forwards
-    nothing, so the outcome Shyam reads is never "merged as reviewed" for a
-    base nobody reviewed.
-    Return (merged, note): merged means the merge was issued onto the reviewed
-    base; note is the line the pass prints.
+    A merge call on the pull request pins the head but carries the pull
+    request's base, so a retarget after the last read lands the head somewhere
+    this review never read. The merges endpoint names the base but cannot
+    squash and cannot pin the head. Neither call is enough on its own.
+
+    So the lane builds the squash itself: it fetches, checks out the reviewed
+    base in a throwaway worktree, squash-merges exactly the reviewed head, and
+    pushes that one commit to the reviewed base ref. The destination is the
+    name the lane pushes to, the content is the head the review read, and the
+    commit is a squash. Nothing in the call comes from the pull request, so a
+    retarget cannot move it and a head pushed after PASS cannot slip in.
+
+    Return (merged, note, commit): merged means the squash was pushed;
+    commit is its sha, for the close step to name.
     """
-    current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
-                              "--json", "baseRefName,headRefOid"])) or {}
-    if current.get("baseRefName") != base or current.get("headRefOid") != head:
-        return False, (f"skip #{number}: gate PASS, but the pull request moved (base {base} -> "
-                       f"{current.get('baseRefName')}, head {head[:8]} -> "
-                       f"{str(current.get('headRefOid'))[:8]}); nothing merged, the next pass reviews it")
-    run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
-    landed = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
-                             "--json", "baseRefName"])) or {}
-    if landed.get("baseRefName") != base:
-        # The pull request cannot be retargeted once it is merged, so the base
-        # it names now is the base the merge landed on. The item puts that in
-        # front of Shyam; the pass itself claims no merge.
-        published = publish_decision(base_moved_item(repo, number, head,
-                                                     landed.get("baseRefName"), base))
-        return False, (f"critical #{number}: the merge landed on base "
-                       f"{landed.get('baseRefName')}, not the reviewed {base}; nothing closed, "
-                       f"nothing fast-forwarded, Shyam has the item ({published})")
-    return True, f"#{number}: merged {head}"
+    root = repo_root(repo)
+    if not root:
+        return False, f"skip #{number}: no checkout for {repo}, nothing merged", None
+    worktree = f"{root}/.merge-{number}"
+    try:
+        run(["git", "-C", root, "fetch", "origin", "--prune"])
+        run(["git", "-C", root, "worktree", "add", "--detach", worktree, f"origin/{base}"])
+        run(["git", "-C", worktree, "merge", "--squash", head])
+        run(["git", "-C", worktree, "commit", "-m",
+             f"Merge head {head[:8]} after its gate (reviewed base {base})"])
+        commit = run(["git", "-C", worktree, "rev-parse", "HEAD"]).strip()
+        run(["git", "-C", worktree, "push", "origin", f"HEAD:refs/heads/{base}"])
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        detail = " ".join(str(getattr(exc, "output", "") or "").split())[:160]
+        return (False, f"skip #{number}: gate PASS, but the squash onto {base} was refused "
+                       f"({detail or 'git failed'}); nothing merged, the next pass reviews it", None)
+    finally:
+        try:
+            run(["git", "-C", root, "worktree", "remove", "--force", worktree])
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            # A worktree left behind is cleaned on the next pass; it is not a
+            # reason to hide a merge that already succeeded or failed.
+            pass
+    if not commit:
+        return False, f"skip #{number}: gate PASS, but the squash produced no commit", None
+    return True, f"#{number}: merged {head} into {base} as {commit[:8]}", commit
+
+
 def message_title(repo, number, action, head):
     """The title of one message about one head of one pull request.
 
@@ -887,7 +898,7 @@ def act_on_pr(repo, number, ledger):
         # not introduce against the base this pass classified. The base and
         # head are read again inside the merge step, as close to the merge as
         # the merge can be guarded: a pull request that moved merges nothing.
-        merged, note = merge_on_reviewed_base(repo, number, head, base)
+        merged, note, commit = merge_on_reviewed_base(repo, number, head, base)
         if not merged:
             return note
         if issue:
