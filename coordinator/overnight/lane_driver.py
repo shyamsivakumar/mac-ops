@@ -509,23 +509,26 @@ def builder_for(repo=None, issue=None, preferred=None, blocked=None):
     return model_list.first_available("build", preferred, blocked)
 
 
-def allowed_builder(selection):
-    """Whether a thread's model is one the model list allows.
+def allowed_builder(selection, chosen):
+    """Whether a thread's model is the one the model list chose.
 
-    A thread that runs no model of the list - a legacy Sol thread - is
-    not allowed, so its work moves to a builder.
+    A thread that runs another model - a legacy Sol thread, or the
+    second builder of the list - runs work this ticket did not ask
+    for, so its work moves to the chosen builder. The models are read
+    by their identity, so a thread that names its model without the
+    provider prefix is the same builder.
     """
-    return model_list.find(selection, ("build", "fix")) is not None
+    return model_list.identity(selection) == model_list.identity(chosen)
 
 
 def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, issue=None):
     """Send work to a thread, or start a fresh one when it cannot take it.
 
-    A thread takes the send only when its model is one the model list
-    allows, its provider is not blocked, and it works in a worktree of
-    its own. A thread that fails any of those - a legacy Sol thread, a
-    blocked provider, the shared checkout of the repository - never
-    takes the work: a fresh thread on the first unblocked builder takes
+    A thread takes the send only when it runs the chosen builder, its
+    provider is not blocked, and it works in a worktree of its own. A
+    thread that fails any of those - a legacy Sol thread, another
+    builder, a blocked provider, the shared checkout of the repository
+    - never takes the work: a fresh thread on the chosen builder takes
     it instead, in the same worktree when the thread has one.
     """
     repo = repo or next((r for r in CFG if r in lkey), None)
@@ -551,23 +554,24 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     reroute = "unreachable"
     live = thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}
     thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    if not allowed_builder(thread_model):
-        # A thread that runs no model of the list - a legacy Sol thread -
-        # never takes the work, so it moves to a builder.
-        if live:
-            return (f"skip {lkey}: thread is {thread.get('status')} on "
-                    f"{model_list.identity(thread_model) or 'an unknown model'}, "
-                    f"not a builder; held until it is idle")
-        sendable = False
-        reroute = "not a builder"
-    elif model_list.is_blocked(thread_model):
+    if model_list.is_blocked(thread_model):
         # The thread's provider ran out, so its send would start on an
-        # exhausted provider and the work moves to the next builder.
+        # exhausted provider and the work moves to the chosen builder.
         if live:
             return (f"skip {lkey}: thread is {thread.get('status')} on the blocked "
                     f"{model_list.identity(thread_model)}; held until it is idle")
         sendable = False
         reroute = "builder blocked"
+    elif not allowed_builder(thread_model, chosen["selection"]):
+        # The thread runs another model than the one this ticket names -
+        # a legacy Sol thread, or another builder of the list - so the
+        # work moves to the chosen builder.
+        if live:
+            return (f"skip {lkey}: thread is {thread.get('status')} on "
+                    f"{model_list.identity(thread_model) or 'an unknown model'}, "
+                    f"not the chosen builder; held until it is idle")
+        sendable = False
+        reroute = "not the chosen builder"
     if sendable and root_workspace(thread):
         # Work in the shared checkout of the repository moves the branch
         # everyone installs from, so it never goes to the thread that
@@ -582,7 +586,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute in {"not a builder", "builder blocked"} and thread.get("worktreePath") and not root_workspace(thread):
+        if reroute in {"not the chosen builder", "builder blocked"} and thread.get("worktreePath") and not root_workspace(thread):
             # The work stays in its own worktree; only the builder moves.
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
