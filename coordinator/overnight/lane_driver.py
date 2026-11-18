@@ -930,6 +930,21 @@ def unstick(repo, ledger, excl=frozenset()):
                 and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc)
                      - __import__("datetime").datetime.fromisoformat(record[0])).total_seconds() < 1800)
 
+    def skipped(record):
+        """Whether a cooldown record names a send that queued nothing.
+
+        A send that queued nothing - a skip - is not a cooldown: the
+        ticket is tried again. A record that names a receipt or a live
+        hold keeps the ticket out of the batch. The old lane recorded a
+        skip as a cooldown, so such a record is recognised and the ticket
+        is retried instead of waiting for the record to expire.
+        """
+        if not isinstance(record, list) or len(record) < 2:
+            return False
+        out = record[1]
+        return (isinstance(out, str) and out.startswith("skip ")
+                and not out.endswith(HELD_SKIP))
+
     for n in orphans:
         with item_boundary(repo, n, ledger):
             prefix = f"ticket:{repo}#{n}:a"
@@ -943,7 +958,7 @@ def unstick(repo, ledger, excl=frozenset()):
                 held.add(n)
                 continue
             v = ledger.get(f"cont:{best[1]}")
-            if fresh(v):
+            if fresh(v) and not skipped(v):
                 # The continuation is fresh, so the ticket is being worked:
                 # whether the send was held on a live thread or handed to a
                 # fresh builder, the ticket stays out of the batch, so no
