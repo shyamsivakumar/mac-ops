@@ -1249,7 +1249,7 @@ def failed_gate_reviewer(queue, key, current, failure):
     return None
 
 
-def gate_args(settings, repo, issue, number, head, publisher, model):
+def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None):
     """The launch arguments of the gate for one pull request.
 
     One brief for every gate: the queue's own gatekeeper and the tick's
@@ -1257,10 +1257,24 @@ def gate_args(settings, repo, issue, number, head, publisher, model):
     whichever way it was queued."""
     key = f"gate:{repo}#{number}:{head}"
     from gate_policy import build_gate_brief
-    message = build_gate_brief(settings, repo, issue, number, head, publisher)
+    message = build_gate_brief(settings, repo, issue, number, head, publisher,
+                               proof=proof, proof_path=proof_path, proof_state=proof_state)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
             "modelSelection": model, "taskType": "review", "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
+
+
+def gate_proof(settings, repo, issue, head):
+    """The proof file a pull request carries, and the path it was read from.
+
+    The gate reads the record of the checks the builder ran. A pull
+    request that carries no proof file reads as none, never as a pass, and
+    a read that failed reads as unproven, never as none.
+    """
+    import proof_file
+    path = proof_file.path_for(settings.get("key"), issue)
+    state, text = proof_file.fetch(repo, path, head)
+    return state, text, path
 
 
 def gate_candidates(config):
@@ -1340,8 +1354,11 @@ def gate_candidates(config):
                 if not passed:
                     continue
                 key = f"gate:{repo}#{number}:{head}"
+                proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
-                       "builderModels": models, "args": gate_args(settings, repo, issue, number, head, publisher, model)}
+                       "builderModels": models,
+                       "args": gate_args(settings, repo, issue, number, head, publisher, model,
+                                         proof=proof, proof_path=proof_path, proof_state=proof_state)}
                 break
             else:
                 found = gate_request(repo, pr, settings, config, receipts, login)
@@ -1710,7 +1727,9 @@ def gate_request(repo, pr, settings, config, receipts, login):
         if not check_names_head(body, head, publisher, checks):
             return None
         key = f"gate:{repo}#{number}:{head}"
-        return key, gate_args(settings, repo, issue, number, head, publisher, model), builder_models(thread, runs)
+        proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
+        return key, gate_args(settings, repo, issue, number, head, publisher, model,
+                               proof=proof, proof_path=proof_path, proof_state=proof_state), builder_models(thread, runs)
     statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -1721,7 +1740,9 @@ def gate_request(repo, pr, settings, config, receipts, login):
     if model is None:
         # Every reviewer is blocked: the gate waits for one to recover.
         return None
-    return key, gate_args(settings, repo, None, number, head, publisher, model), []
+    proof_state, proof, proof_path = gate_proof(settings, repo, None, head)
+    return key, gate_args(settings, repo, None, number, head, publisher, model,
+                           proof=proof, proof_path=proof_path, proof_state=proof_state), []
 
 
 def parse_ref(ref):

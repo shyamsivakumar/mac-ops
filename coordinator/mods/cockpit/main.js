@@ -6,7 +6,7 @@ import { agents, closeOverlay, exec, hc, home, nextCommand, openOverlay, panes, 
 import { errorKind, load, loadBacklog, loadSessions, loadVerdict, mergeNotice, mergePlan, mergeThread, openThread, queueCap, queueStatus, readReview, readTask, readTicket, runModelOf, seedSessions, seedVerdicts, sendReply, sessionEntries, sessionOf, settle, verdictEntries, verdictOf } from "./hub.js";
 import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIssues, loadConfig, loadOrigins, originEntries, originOf, parentOf, parseOrigin, repoProjects, requestedModel, seedOrigins, setIssueField, showIssue, ticketAbandon, ticketStart } from "./tickets.js";
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
-import { ABANDON_LABEL, COLUMNS, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
+import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
 import { flushFlowLog, logLaneChange, markPass } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
@@ -29,9 +29,9 @@ const LOAD_STALE = 300000;
 const STUCK_AFTER = 25000;
 const COMPACT_BELOW = 700;
 const PROJECT_SHEET_WIDTH = 420;
-const COMPACT_ORDER = ["needs", "cifail", "ready", "review", "checks", "run", "done", "backlog", "dead"];
+const FAN_ORDER = ["needs", "stuck", "ready", "review", "checks", "run", "done", "backlog", "dead"];
 const MIN_COL = 136;
-const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", run: "Nothing working", checks: "No checks running", cifail: "No failing CI", review: "No reviews pending", ready: "No PRs ready to merge", done: "Nothing to settle", dead: "No dead runs" };
+const EMPTY = { needs: "Nothing needs you", stuck: "Nothing stuck", run: "Nothing working", review: "Nothing in review", done: "Nothing to settle" };
 const COLUMN_KEYS = COLUMNS.map((c) => c[0]);
 const DECIDE_GUARD = 800;
 const CONFIRM_GAP = 400;
@@ -70,7 +70,7 @@ const whenText = (ms) => {
 
 const conflicting = (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.mergeable === "CONFLICTING";
 
-const REBASE_LANES = [...PR_LANES, "needs"];
+const REBASE_COLUMNS = ["needs", "stuck", "review"];
 
 const failedIn = (cols) => cols.needs.groups.filter((g) => g.kind === "fail" && !g.asleep);
 
@@ -104,7 +104,7 @@ const readState = async (name) => {
 
 export default class Board extends View {
   init(_props, cx) {
-    this.pop = props()?.pop ?? null;
+    this.pop = COLUMN_KEYS.includes(props()?.pop) ? props().pop : null;
     this.overlay = props()?.overlay ?? null;
     this.dec = props()?.dec ?? null;
     this.reviewMode = props()?.review ?? null;
@@ -193,9 +193,8 @@ export default class Board extends View {
     this.wt = null;
     this.slots = null;
     this.queueBusy = false;
-    this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["backlog"]'));
-    this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["backlog","done"]'));
-    this.deadOpen = localStorage.getItem("dead-open") === "1";
+    this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? "[]"));
+    this.foldedCompact = new Set(JSON.parse(localStorage.getItem("folded-compact") ?? '["done"]'));
     this.fanView = false;
     this.fanFolded = new Set();
     this.compact = false;
@@ -424,10 +423,10 @@ export default class Board extends View {
   }
 
   apply(snap) {
-    const own = snap.key === "backlog";
     this.applied = snap.rev;
-    this.board = { groups: own ? [] : snap.groups, running: snap.running, at: snap.at };
-    this.backlog = own ? snap.groups : [];
+    const own = snap.key === "run";
+    this.board = { groups: own ? snap.groups.filter((g) => g.lane !== "backlog") : snap.groups, running: snap.running, at: snap.at };
+    this.backlog = own ? snap.groups.filter((g) => g.lane === "backlog") : [];
     this.backlogLoaded = true;
     this.cap = snap.cap;
     this.stale = snap.unsure;
@@ -593,13 +592,14 @@ export default class Board extends View {
       g.needs = needReasons(g, () => this.verdictFor(g)?.state === "fail", now);
       g.stalledAt = stallOf(g, now);
       const lane = laneOf(g, g.needs, () => !this.reviewBlock(g));
+      g.lane = lane;
       g.trail = lane === "ready" ? null : trailOf(g, now, () => this.verdictFor(g)?.state === "fail");
       return [g, lane];
     });
   }
 
   columns(t, now) {
-    const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, total: 0, groups: [] }]));
+    const cols = Object.fromEntries(COLUMN_KEYS.map((k) => [k, { rows: [], count: 0, total: 0, groups: [], lanes: Object.fromEntries(Object.keys(COLUMN_OF).filter((lane) => COLUMN_OF[lane] === k).map((lane) => [lane, 0])) }]));
     const live = this.groups();
     const replaced = new Set(this.issueGroups.map((g) => g.key));
     const liveKeys = new Set(live.map((g) => g.key));
@@ -614,11 +614,11 @@ export default class Board extends View {
     this.pruneSnoozed(live, now);
     this.pruneSent(live);
     this.pruneMarks([...live, ...queued]);
-    for (const [, key] of placed) cols[key].total += 1;
+    for (const [, lane] of placed) cols[COLUMN_OF[lane]].total += 1;
     if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
-    for (const [g, key] of placed) if (keep(g)) cols[key].groups.push(g);
-    cols.needs.groups = cols.needs.groups.map((g) => [this.enteredAt("needs", g), g]).sort((a, b) => a[0] - b[0]).map(([, g]) => g);
-    cols.backlog.groups.push(...queued.filter(keep));
+    for (const [g, lane] of placed) if (keep(g)) cols[COLUMN_OF[lane]].groups.push(g);
+    cols.run.groups.push(...queued.filter(keep).map((g) => Object.assign(g, { lane: "backlog" })));
+    for (const key of COLUMN_KEYS) cols[key].groups = cols[key].groups.map((g) => [LANE_RANK[g.lane], g.lane === "needs" || g.lane === "stuck" ? this.enteredAt(g.lane, g) : 0, g]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , g]) => g);
     const reviewed = cols.done.groups.flatMap((g) => g.threads).filter((c) => c.review);
     const cb = {
       press: (key, e, cx) => {
@@ -657,7 +657,7 @@ export default class Board extends View {
       approveAll: (cx) => this.approveAll(cx),
       retry: (cx) => this.openRetry(cx),
       rebase: (cx) => this.rebase(this.current(), cx),
-      rebaseAll: (cx, lane) => this.rebaseAll(cx, lane),
+      rebaseAll: (cx, column) => this.rebaseAll(cx, column),
       queue: (cx) => this.queue(this.current(), cx),
       openPr: () => this.openPr(this.current()),
       fold: (key, cx) => {
@@ -683,33 +683,35 @@ export default class Board extends View {
       const col = cols[key];
       const narrow = this.colW < 220;
       for (const g of col.groups) {
-        const variant = prCard(key, g.needs) ? "pr" : key === "backlog" ? "backlog" : "std";
+        const lane = g.lane;
+        const variant = prCard(lane, g.needs) ? "pr" : lane === "backlog" ? "backlog" : "std";
         col.count += 1;
+        col.lanes[lane] += 1;
         if (this.isFolded(key) && key !== this.pop) continue;
         const gkey = `g:${key}:${g.key}`;
         const expanded = this.expanded.has(g.key);
         const replying = this.replyKey === gkey;
         const selected = this.cursor === gkey;
         const c = { ...g.primary, title: g.title, task: g.task };
-        const refusal = key === "ready" ? this.refusalOf(g) : null;
+        const refusal = lane === "ready" ? this.refusalOf(g) : null;
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
         const session = variant !== "backlog" && g.kind !== "ask" && !g.issue;
-        const view = (extra) => ({ marked: this.marks.has(g.key), col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
-        const entry = { key: gkey, col: key, group: g, thread: null };
-        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length), session, g.trail), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
+        const view = (extra) => ({ marked: this.marks.has(g.key), col: lane, entered: this.enteredAt(lane, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: lane === "needs" || lane === "stuck" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const entry = { key: gkey, col: lane, column: key, group: g, thread: null };
+        col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length), session, g.trail), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (lane === "done" || lane === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
         for (const th of g.threads.slice(1)) {
           const tkey = `t:${th.key}`;
-          const child = { key: tkey, col: key, group: g, thread: th };
+          const child = { key: tkey, col: lane, column: key, group: g, thread: th };
           col.rows.push({ key: tkey, h: H.child, entry: child, el: () => childRow(t, child, view({ c: th, selected: this.cursor === tkey }), cb) });
         }
       }
       col.summary = this.summary(key, col, now);
     }
-    cols.fan = this.fanView ? this.fan(t, [...placed.filter(([g]) => keep(g)), ...cols.backlog.groups.filter((g) => g.issue && !placed.some(([live]) => live.task === g.task)).map((g) => [g, "backlog"])], cb, now) : { rows: [], count: 0, total: 0, groups: [] };
+    cols.fan = this.fanView ? this.fan(t, [...placed.filter(([g]) => keep(g)), ...cols.run.groups.filter((g) => g.lane === "backlog" && g.issue && !placed.some(([live]) => live.task === g.task)).map((g) => [g, "backlog"])], cb, now) : { rows: [], count: 0, total: 0, groups: [] };
     this.scope = { shown: COLUMN_KEYS.reduce((sum, k) => sum + cols[k].count, 0), total: [...live, ...queued].filter(inProject).length };
-    const open = [...cols.ready.groups, ...cols.review.groups].filter((g) => g.info.pr && !g.asleep);
+    const open = cols.review.groups.filter((g) => g.lane !== "checks" && g.info.pr && !g.asleep);
     const approvable = [];
     const blocked = new Map();
     for (const g of open) {
@@ -720,10 +722,10 @@ export default class Board extends View {
     }
     const why = [...BLOCK_BUCKETS.map(([, name]) => name), PLAN_BUCKET].filter((name) => blocked.has(name)).map((name) => `${blocked.get(name)} ${name}`).join(", ");
     const nothing = why ? `Nothing can merge: ${why}` : "Nothing can merge";
-    const lanes = new Map([...cols.backlog.groups.map((g) => [g.key, "backlog"]), ...placed.map(([g, lane]) => [g.key, lane])]);
+    const lanes = new Map([...cols.run.groups.filter((g) => g.lane === "backlog").map((g) => [g.key, "backlog"]), ...placed.map(([g, lane]) => [g.key, lane])]);
     const marked = this.keys().filter((k) => !this.isFolded(k)).flatMap((k) => cols[k].groups).filter((g) => this.marks.has(g.key));
     this.layout = { cols, reviewed, finished: cols.done.groups.flatMap((g) => g.threads).filter((c) => c.kind === "done"), approvable, skipped: open.length - approvable.length, nothing, marked, lanes };
-    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries(REBASE_LANES.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
+    return { cols, cb, state: { popup: Boolean(this.pop), colW: this.colW, armed: this.armed, failed: failedIn(cols).length, conflicts: Object.fromEntries(REBASE_COLUMNS.map((k) => [k, this.rebaseTargets(k, cols).length])), reviewed: reviewed.length, done: cols.done.count, approvable: approvable.length, nothing, running: this.board?.running ?? 0, cap: this.cap } };
   }
 
   fan(t, placed, cb, now) {
@@ -745,7 +747,7 @@ export default class Board extends View {
     const parents = [...features.values()].filter((f) => f.workers.length > 1);
     for (const f of features.values()) if (f.workers.length === 1) other.push(...f.workers);
     if (other.length) parents.push({ key: "other", title: "Other", workers: other, last: true });
-    const order = (list) => list.sort((a, b) => COMPACT_ORDER.indexOf(a[1]) - COMPACT_ORDER.indexOf(b[1]) || b[0].at - a[0].at);
+    const order = (list) => list.sort((a, b) => FAN_ORDER.indexOf(a[1]) - FAN_ORDER.indexOf(b[1]) || b[0].at - a[0].at);
     const urgency = (f) => f.workers.filter(([, lane]) => lane === "needs").length;
     parents.sort((a, b) => Number(a.last ?? false) - Number(b.last ?? false) || urgency(b) - urgency(a) || Math.max(...b.workers.map(([g]) => g.at)) - Math.max(...a.workers.map(([g]) => g.at)));
     const rows = [];
@@ -761,7 +763,7 @@ export default class Board extends View {
         groups.push(g);
         const key = `f:${g.key}`;
         const author = this.taskThread(g);
-        const entry = { key, col: lane, group: g, thread: null, parent: f.key };
+        const entry = { key, col: lane, column: COLUMN_OF[lane], group: g, thread: null, parent: f.key };
         const view = { marked: this.marks.has(g.key), col: lane, now, selected: this.cursor === key, mark: this.cursorMark(false), c: { ...g.primary, title: g.title, task: g.task }, pr: g.info?.pr, gh: g.info?.gh, merged: g.info?.status === "merged", needs: g.needs, entered: this.enteredAt(lane, g), issue: g.issue, session: g.issue ? null : sessionOf(author) };
         rows.push({ key, h: H.worker, entry, el: () => workerRow(t, entry, view, cb) });
       }
@@ -835,7 +837,7 @@ export default class Board extends View {
     if (key === "run") return g.runSince ?? g.primary.at;
     const seen = this.seen[g.key];
     const since = Math.max(g.at, seen?.col === key ? seen.at : 0);
-    if (key !== "needs") return since;
+    if (key !== "needs" && key !== "stuck") return since;
     const [first] = g.needs;
     if (first === "question") return g.primary.at;
     if (first === "stalled") return g.stalledAt + STALL_AFTER;
@@ -846,37 +848,32 @@ export default class Board extends View {
   }
 
   summary(key, col, now) {
-    if (!col.groups.length) return [...(key === "backlog" ? this.ticketNote(now) : []), [key === "backlog" && !this.backlogLoaded ? "loading" : "empty", "dim"]];
+    if (!col.groups.length) return [...(key === "run" ? this.ticketNote(now) : []), [key === "run" && !this.backlogLoaded ? "loading" : "empty", "dim"]];
     const groups = col.groups;
     const seg = (n, text, tone) => (n ? [[`${n} ${text}`, tone]] : []);
-    const oldest = ["oldest " + ago(Math.min(...groups.map((g) => (key === "needs" ? this.enteredAt(key, g) : g.at))), now), "dim"];
+    const inLane = (lane) => groups.filter((g) => g.lane === lane);
+    const oldest = ["oldest " + ago(Math.min(...groups.map((g) => (g.lane === "needs" || g.lane === "stuck" ? this.enteredAt(g.lane, g) : g.at))), now), "dim"];
     if (key === "needs") {
       const asking = groups.filter((g) => g.needs.includes("question"));
       const count = (reason) => groups.filter((g) => g.needs.includes(reason)).length;
       return [...seg(asking.filter((g) => g.kind === "ask").length, "decisions", "blocked"), ...seg(asking.filter((g) => g.kind === "wait").length, "waiting", "blocked"), ...seg(asking.filter((g) => g.kind !== "ask" && g.kind !== "wait").length, "asked", "blocked"), ...seg(count("stalled"), "stalled", "blocked"), ...seg(count("unrouted"), "not sent back", "blocked"), ...seg(count("ci"), "CI failed", "blocked"), ...seg(count("changes"), "changes requested", "blocked"), ...seg(count("conflict"), "conflict", "blocked"), oldest];
     }
-    if (key === DEAD) {
-      return [...seg(groups.filter((g) => g.kind === "fail").length, "failed", "dim"), ...seg(groups.filter((g) => g.kind === "stop").length, "stopped", "dim"), oldest];
+    if (key === "stuck") {
+      const dead = inLane(DEAD);
+      return [...seg(inLane("stuck").length, "stuck", "blocked"), ...seg(dead.filter((g) => g.kind === "fail").length, "failed", "dim"), ...seg(dead.filter((g) => g.kind === "stop").length, "stopped", "dim"), oldest];
     }
     if (key === "run") {
       const started = groups.map((g) => g.runSince).filter(Boolean);
-      const capSeg = this.board.running >= this.cap ? ["at cap", "blocked"] : [`${this.cap - this.board.running} free`, "dim"];
-      return started.length ? [capSeg, [`longest ${elapsed(now - Math.min(...started))}`, "working"]] : [capSeg];
+      const running = this.board?.running ?? 0;
+      const capSeg = running >= this.cap ? ["at cap", "blocked"] : [`${this.cap - running} free`, "dim"];
+      return [...this.ticketNote(now), ...seg(inLane("run").length, "running", "working"), ...seg(inLane("backlog").length, "queued", "idle"), capSeg, ...(started.length ? [[`longest ${elapsed(now - Math.min(...started))}`, "working"]] : [])];
     }
-    if (PR_LANES.has(key)) {
+    if (key === "review") {
       const conflicts = groups.filter(conflicting).length;
-      const conflict = seg(conflicts, "conflict", "blocked");
-      if (key === "checks") return [...seg(groups.length, "pending", "working"), ...conflict, oldest];
-      if (key === "cifail") return [...seg(groups.length, "failing", "blocked"), ...conflict, oldest];
-      if (key === "ready") return [...seg(groups.length - conflicts, "ready", "done"), ...conflict, oldest];
-      const draft = groups.filter((g) => g.info.gh?.draft).length;
-      return [...seg(groups.length - draft, "waiting", "working"), ...seg(draft, "draft", "dim"), ...conflict, oldest];
+      return [...seg(inLane("ready").length, "ready", "done"), ...seg(inLane("review").length, "review", "working"), ...seg(inLane("checks").length, "checks", "working"), ...seg(conflicts, "conflict", "blocked"), oldest];
     }
-    if (key === "done") {
-      const reviewedCards = groups.filter((g) => g.threads.some((c) => c.review)).length;
-      return [...seg(reviewedCards, "reviewed", "done"), ...seg(col.count - reviewedCards, "unreviewed", "dim"), oldest];
-    }
-    return [...this.ticketNote(now), ...seg(this.slots?.queued ?? 0, "queued", "idle"), oldest];
+    const reviewedCards = groups.filter((g) => g.threads.some((c) => c.review)).length;
+    return [...seg(reviewedCards, "reviewed", "done"), ...seg(col.count - reviewedCards, "unreviewed", "dim"), oldest];
   }
 
   ticketNote(now) {
@@ -894,25 +891,20 @@ export default class Board extends View {
   keys() {
     if (this.pop) return [this.pop];
     if (this.fanView) return ["fan"];
-    return this.compact ? COMPACT_ORDER : COLUMN_KEYS;
+    return COLUMN_KEYS;
   }
 
   toggleFold(key) {
-    if (key === DEAD) {
-      this.deadOpen = !this.deadOpen;
-      localStorage.setItem("dead-open", this.deadOpen ? "1" : "0");
-      return;
-    }
     const folded = this.foldSet();
     if (!this.peeked.delete(key)) {
       folded.has(key) ? folded.delete(key) : folded.add(key);
       localStorage.setItem(this.compact ? "folded-compact" : "folded", JSON.stringify([...folded]));
     }
     const cur = this.current();
-    if (!cur || !this.isFolded(cur.col)) return;
+    if (!cur || !this.isFolded(cur.column)) return;
     const keys = this.keys();
-    const from = keys.indexOf(cur.col);
-    const row = this.entries(cur.col).findIndex((r) => r.key === this.cursor);
+    const from = keys.indexOf(cur.column);
+    const row = this.entries(cur.column).findIndex((r) => r.key === this.cursor);
     for (let d = 1; d < keys.length; d++) {
       for (const i of [from - d, from + d]) {
         const open = keys[i];
@@ -958,7 +950,7 @@ export default class Board extends View {
 
   step(by) {
     const cur = this.current();
-    const list = this.compact || this.fanView ? this.keys().flatMap((k) => this.entries(k)) : this.entries(cur?.col ?? COLUMN_KEYS.find((k) => this.entries(k).length));
+    const list = this.compact || this.fanView ? this.keys().flatMap((k) => this.entries(k)) : this.entries(cur?.column ?? COLUMN_KEYS.find((k) => this.entries(k).length));
     if (!list.length) return;
     const at = list.findIndex((r) => r.key === this.cursor);
     this.moveTo(list[Math.min(list.length - 1, Math.max(0, at < 0 ? 0 : at + by))].key);
@@ -968,8 +960,8 @@ export default class Board extends View {
     if (this.fanView) return;
     const cur = this.current();
     const keys = this.keys();
-    const from = cur ? keys.indexOf(cur.col) : -1;
-    const row = cur ? this.entries(cur.col).findIndex((r) => r.key === this.cursor) : 0;
+    const from = cur ? keys.indexOf(cur.column) : -1;
+    const row = cur ? this.entries(cur.column).findIndex((r) => r.key === this.cursor) : 0;
     for (let i = from + by; i >= 0 && i < keys.length; i += by) {
       const list = this.entries(keys[i]);
       if (list.length) return this.moveTo(list[Math.min(row, list.length - 1)].key);
@@ -984,14 +976,13 @@ export default class Board extends View {
   }
 
   isFolded(key) {
-    if (key === DEAD) return !this.deadOpen;
     return this.foldSet().has(key) && !this.peeked.has(key);
   }
 
   jump() {
     if (this.pop) return;
-    const order = ["needs", "cifail", "ready"]
-      .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => (key === "needs" ? this.enteredAt(key, a) - this.enteredAt(key, b) : a.at - b.at)).map((g) => ({ col: key, key: this.rowKey(key, g) })));
+    const order = ["needs", "stuck", "ready"]
+      .flatMap((lane) => this.layout.cols[COLUMN_OF[lane]].groups.filter((g) => g.lane === lane).sort((a, b) => (lane === "needs" ? this.enteredAt(lane, a) - this.enteredAt(lane, b) : a.at - b.at)).map((g) => ({ col: COLUMN_OF[lane], key: this.rowKey(COLUMN_OF[lane], g) })));
     if (!order.length) return say("success", "Nothing needs you");
     const next = order[(order.findIndex((x) => x.key === this.cursor) + 1) % order.length];
     if (!this.fanView && this.isFolded(next.col)) this.peeked.add(next.col);
@@ -1049,7 +1040,7 @@ export default class Board extends View {
     const e = this.current();
     if (name === "settle" && e) this.settleEntry(e, cx);
     if (name === "open" && e) this.openEntry(e, cx);
-    if (name === "expand" && e) this.expand(e.col);
+    if (name === "expand" && e) this.expand(e.column);
   }
 
   watchPop(key) {
@@ -1085,7 +1076,7 @@ export default class Board extends View {
     if (this.pop || this.deciding === "review") return;
     this.deciding = "review";
     cx.timer.after(DECIDE_GUARD, () => (this.deciding = null));
-    openOverlay({ mod: "cockpit", kind: "dialog", width: DEC_WIDTH, height: DEC_HEIGHT, props: { review: { snap: this.watchPop("ready") } } });
+    openOverlay({ mod: "cockpit", kind: "dialog", width: DEC_WIDTH, height: DEC_HEIGHT, props: { review: { snap: this.watchPop("review") } } });
   }
 
   openKeys(cx) {
@@ -1228,17 +1219,17 @@ export default class Board extends View {
     this.confirm("rebase", e.key, () => this.tellEach([[e.group, this.ask("Rebase", e.group, REBASE_NOTE)]], "Rebase", cx), cx);
   }
 
-  rebaseTargets(lane, cols = this.layout.cols) {
-    const lanes = lane ? [lane] : REBASE_LANES.filter((k) => this.owns(k));
-    return lanes.flatMap((k) => cols[k].groups.filter((g) => prCard(k, g.needs))).filter((g) => this.rebasable(g) && !g.asleep);
+  rebaseTargets(column, cols = this.layout.cols) {
+    const columns = column ? [column] : REBASE_COLUMNS.filter((k) => this.owns(k));
+    return columns.flatMap((k) => cols[k].groups.filter((g) => prCard(g.lane, g.needs))).filter((g) => this.rebasable(g) && !g.asleep);
   }
 
-  rebaseAll(cx, lane) {
+  rebaseAll(cx, column) {
     if (this.guard(false)) return;
-    const armed = new Set(this.rebaseTargets(lane).map((g) => g.key));
+    const armed = new Set(this.rebaseTargets(column).map((g) => g.key));
     if (!armed.size) return say("info", "No conflicting PRs to rebase");
-    this.confirm("rebase-all", lane ?? "all", (seen) => {
-      const targets = this.rebaseTargets(lane).filter((g) => seen.has(g.key));
+    this.confirm("rebase-all", column ?? "all", (seen) => {
+      const targets = this.rebaseTargets(column).filter((g) => seen.has(g.key));
       if (!targets.length) return say("info", "No conflicting PRs to rebase");
       this.tellEach(targets.map((g) => [g, this.ask("Rebase", g, REBASE_NOTE)]), "Rebase", cx);
     }, cx, armed);
@@ -1822,7 +1813,7 @@ export default class Board extends View {
 
   snoozeMarked(cx) {
     const targets = this.markedTargets("snooze");
-    if (!targets.length) return say("info", "No marked card can be snoozed", "Snooze works on Needs you, CI failed, Review pending and Approved/Ready cards.");
+    if (!targets.length) return say("info", "No marked card can be snoozed", "Snooze works on Needs you, Stuck and In review cards.");
     this.openSnoozeChooser({ col: this.layout.lanes.get(targets[0].key) }, cx, targets);
   }
 
@@ -1834,7 +1825,7 @@ export default class Board extends View {
     this.replyLabel = `Send to ${targets.length}`;
     this.replyMarked = true;
     this.followed = false;
-    this.replyKey = this.rowKey(this.layout.lanes.get(host.key), host);
+    this.replyKey = this.rowKey(COLUMN_OF[this.layout.lanes.get(host.key)], host);
     this.cursor = this.replyKey;
     this.reveal = this.replyKey;
     this.input.set_value("");
@@ -1991,8 +1982,8 @@ export default class Board extends View {
     else if (k === "k" || k === "up") this.step(-1);
     else if (k === "h") this.shift(-1);
     else if (k === "l") this.shift(1);
-    else if (k === "g") this.moveTo(this.entries(this.fanView ? "fan" : c?.col)[0]?.key);
-    else if (k === "G") this.moveTo(this.entries(this.fanView ? "fan" : c?.col).at(-1)?.key);
+    else if (k === "g") this.moveTo(this.entries(this.fanView ? "fan" : c?.column)[0]?.key);
+    else if (k === "G") this.moveTo(this.entries(this.fanView ? "fan" : c?.column).at(-1)?.key);
     else if (k === "v" && !this.pop) this.toggleFan(cx);
     else if (this.fanView && (k === "left" || k === "right" || k === "f") && c) this.setParentFold(c.parent, k === "f" ? !this.fanFolded.has(c.parent) : k === "left");
     else if (k === "?" || (k === "/" && m.shift)) this.openKeys(cx);
@@ -2004,7 +1995,7 @@ export default class Board extends View {
     else if (k === "right" && c?.group.threads.length > 1) this.expanded.add(c.group.key);
     else if (k === "left" && c) {
       this.expanded.delete(c.group.key);
-      this.moveTo(`g:${c.col}:${c.group.key}`);
+      this.moveTo(`g:${c.column}:${c.group.key}`);
     } else if (k === "enter" && c) this.activate(c, cx);
     else if (k === "o" && c) this.openEntry(c, cx);
     else if (k === "r" && c) this.openReply(c, cx);
@@ -2025,9 +2016,8 @@ export default class Board extends View {
     else if (k === "w") this.openTab(c);
     else if (k === "n") this.jump();
     else if (k === "P" && !this.pop) this.openProjects(cx);
-    else if (k === "f" && c && !this.pop) this.toggleFold(c.col);
-    else if (k === "e" && c && !this.pop) this.expand(c.col);
-    else if (k === "b" && !this.pop) this.toggleFold("backlog");
+    else if (k === "f" && c && !this.pop) this.toggleFold(c.column);
+    else if (k === "e" && c && !this.pop) this.expand(c.column);
     else if (k === "s" && c) this.settleEntry(c, cx);
     else if (k === "R") this.refresh(cx, true);
     else return false;
@@ -2101,13 +2091,13 @@ export default class Board extends View {
   }
 
   column(t, key, col, state, cb) {
-    return v_flex().id(`col-${key}`).w(this.colW).flex_none().h_full().border_r(key === DEAD ? 0 : 1).border_color(t.border)
+    return v_flex().id(`col-${key}`).w(this.colW).flex_none().h_full().border_r(key === "done" ? 0 : 1).border_color(t.border)
       .child(columnHead(t, key, col, state, cb))
-      .child(this.list(t, key, col.rows, !this.board || (key === "backlog" && !this.backlogLoaded) ? (this.error ? "T3 unreachable. R to retry" : "Loading…") : key === "backlog" && this.failedSlots.has("backlog") ? "Backlog could not be loaded" : this.filtering() ? "No cards match" : EMPTY[key]));
+      .child(this.list(t, key, col.rows, !this.board || (key === "run" && !this.backlogLoaded) ? (this.error ? "T3 unreachable. R to retry" : "Loading…") : key === "run" && this.failedSlots.has("backlog") ? "Backlog could not be loaded" : this.filtering() ? "No cards match" : EMPTY[key]));
   }
 
   lane(t, cols, state, cb) {
-    const rows = COMPACT_ORDER.flatMap((key) => [
+    const rows = COLUMN_KEYS.flatMap((key) => [
       { key: `s:${key}`, h: H.head, el: () => columnHead(t, key, cols[key], { ...state, collapsed: this.isFolded(key) }, cb) },
       ...cols[key].rows,
     ]);
@@ -2248,7 +2238,7 @@ export default class Board extends View {
 
   renderReview(t, cx) {
     const popped = shared("cockpit.pop");
-    if (popped?.key === "ready" && popped.rev > this.applied) this.apply(popped);
+    if (popped?.key === "review" && popped.rev > this.applied) this.apply(popped);
     const now = Date.now();
     const { list, i, g } = this.reviewing(now);
     if (this.replyKey && this.replyKey !== g?.key) this.closeInput();
@@ -2313,7 +2303,7 @@ export default class Board extends View {
     const folded = COLUMN_KEYS.filter((k) => this.isFolded(k)).length;
     this.colW = this.pop ? POP_WIDTH : this.compact || this.fanView ? this.area.width : Math.max(MIN_COL, Math.floor((this.area.width - folded * H.folded) / Math.max(1, COLUMN_KEYS.length - folded)));
     const before = this.current();
-    const slot = before ? this.entries(before.col).findIndex((r) => r.key === this.cursor) : -1;
+    const slot = before ? this.entries(before.column).findIndex((r) => r.key === this.cursor) : -1;
     const replying = this.replyKey ? this.entryOf(this.replyKey) : null;
     const { cols, cb, state } = this.columns(t, now);
     const visible = this.keys().flatMap((k) => cols[k].groups.map((g) => g.key)).join("|");
@@ -2325,7 +2315,7 @@ export default class Board extends View {
     if (!all.some((r) => r.key === this.cursor)) {
       const next = this.successor(all, before);
       if (next && Date.now() - this.acted > ACT_GRACE) this.followed = true;
-      const beside = slot >= 0 ? all.filter((r) => r.entry.col === before.col) : [];
+      const beside = slot >= 0 ? all.filter((r) => r.entry.column === before.column) : [];
       this.cursor = (next ?? beside[Math.min(slot, beside.length - 1)] ?? all[0])?.key ?? null;
     }
     if (this.replyKey && !all.some((r) => r.key === this.replyKey)) {

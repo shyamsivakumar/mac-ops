@@ -353,10 +353,10 @@ def gate_pipeline():
     head = "a" * 40
     failures = []
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["openai-api:openai/gpt-6.2-astra"]),
+        ("checked-head", repo, "absent", "", {}, ["codex:gpt-6.2-astra"]),
         ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
-        ("no-verdict", repo, "none", "interrupted", {}, ["codex:gpt-6.2-astra"]),
+        ("no-verdict", repo, "none", "interrupted", {}, ["claudeAgent:claude-opus-5-5"]),
         ("quota", repo, "none", "Astra quota exhausted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("second-no-verdict", repo, "none", "interrupted",
@@ -1370,33 +1370,35 @@ def send_integrity():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     key = f"fix:{repo}#385:head"
-    cases = [(dict(status=status, providerInstanceId="glm", model="zai/glm-5.3"), True) for status in
+    cases = [(dict(status=status, providerInstanceId="glm", model="zai/glm-5.3"), True, "") for status in
              ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
-    cases += [(thread, True) for thread in
+    cases += [(thread, True, "") for thread in
               (dict(status="running", providerInstanceId="router", model="task/standard"),
                # The in-route DeepSeek fallback continues on its own pair.
                dict(status="running", providerInstanceId="pi", model="deepseek/deepseek-flash"))]
     # The archived/sendable/canSend fixtures carry the same permitted GLM
     # selection as the positive cases, so each one still tests its own
-    # lifecycle guard: the builder guard alone would send them.
-    cases += [(thread, False) for thread in ({}, dict(status="deleted"),
-              dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", archived=True),
-              dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", sendable=False),
-              dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", canSend=False),
+    # lifecycle guard: the builder guard alone would send them. Every
+    # negative case also names the reroute reason it tests.
+    cases += [(thread, False, reason) for thread, reason in (
+              ({}, "unreachable"), (dict(status="deleted"), "unreachable"),
+              (dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", archived=True), "unreachable"),
+              (dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", sendable=False), "unreachable"),
+              (dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", canSend=False), "unreachable"),
               # A Sol builder thread is never continued, whatever its state:
               # the fix round relaunches on GLM instead (Shyam 2026-11-17).
-              dict(status="running", providerInstanceId="codex", model="gpt-6.1-sol"),
+              (dict(status="running", providerInstanceId="codex", model="gpt-6.1-sol"), "forbidden builder"),
               # A permitted model name on a disallowed provider is not a
               # permitted pair: the fix relaunches on GLM, exactly as
-              # coordq refuses the pair for a new build.
-              dict(status="running", providerInstanceId="codex", model="zai/glm-5.3"),
+              # coordq would refuse the pair for a new build.
+              (dict(status="running", providerInstanceId="codex", model="zai/glm-5.3"), "forbidden builder"),
               # A router provider is not enough: a model spelled through it
               # that is not a task/* route gets the same refusal.
-              dict(status="running", providerInstanceId="router", model="subscriptions/gpt-6.2-astra"),
+              (dict(status="running", providerInstanceId="router", model="subscriptions/gpt-6.2-astra"), "forbidden builder"),
               # A router route the ticket does not name (task/risky) is
               # not continuable either: the fix relaunches on GLM.
-              dict(status="running", providerInstanceId="router", model="task/risky"))]
-    for thread, live in cases:
+              (dict(status="running", providerInstanceId="router", model="task/risky"), "forbidden builder"))]
+    for thread, live, reason in cases:
         for failure in (None, "error", "empty"):
             actions, reads, ledger = [], [], {}
             def read(tool, args):
@@ -1431,7 +1433,7 @@ def send_integrity():
                 else:
                     exact(failure, None)
                     exact(ledger, {key: "receipt"})
-                    exact(result, "receipt" if live else "fresh (old unreachable): receipt")
+                    exact(result, "receipt" if live else f"fresh (old {reason}): receipt")
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
@@ -1467,6 +1469,106 @@ def send_integrity():
             exact("started" in result, False)
         else:
             exact(result, f"continue #385: skip continue:{repo}#385:old: no verified PR branch for relaunch")
+
+
+def root_workspace():
+    """Pull request work never works in the shared root of a repository.
+
+    The lane sends pull request work to the builder thread of the ticket
+    that opened the pull request. A thread that works in the shared root
+    of the repository is refused: the work starts a fresh worktree
+    instead, so the branch everyone installs from never moves. The lane
+    also skips a herdr pull request and a pull request that is merged or
+    closed, so neither ever reaches a thread.
+    """
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    root = "/Users/shyamsivakumar/Code/mac-ops"
+    worktree = "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-fixture"
+    key = f"check:{repo}#512:head"
+    # The root checkout of a repository keeps the common git directory of
+    # the repository; a linked worktree keeps its own.
+    root_git = ".git\n.git\n"
+    worktree_git = ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
+                    "/Users/shyamsivakumar/Code/mac-ops/.git\n")
+    other_root_git = ("/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n"
+                      "/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n")
+
+    def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git,
+                worktree_only=True):
+        actions = []
+        def read(tool, args):
+            # Every fixture carries a permitted builder selection, so the
+            # root-workspace guard is the reason a thread is rerouted.
+            return {"thread": dict(thread, providerInstanceId="glm", model="zai/glm-5.3")}
+        def command(cmd, timeout=150):
+            if cmd[0] == "git":
+                if "rev-parse" in cmd:
+                    return git
+                exact(cmd[1:4], ["-C", root, "ls-remote"])
+                exact(cmd[4:], ["--heads", "origin", "builder/fixture"])
+                return listing
+            payload = json.loads(cmd[2])
+            if payload.get("threadId"):
+                actions.append("send")
+            else:
+                actions.append("fresh")
+                exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/builder/fixture",
+                                                     "startFromOrigin": True})
+            return "receipt"
+        pull = pr or dict(number=512, state="OPEN", headRefName="builder/fixture", baseRefName="main")
+        with patch.object(lane, "CFG", {repo: {"projectId": "fixture"}}), \
+             patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
+             patch.object(lane, "read_json", return_value=pull), \
+             patch.object(lane, "run", command), contextlib.redirect_stdout(io.StringIO()):
+            result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512,
+                               worktree_only=worktree_only)
+        return result, actions
+
+    # A thread without a worktree works in the shared root.
+    result, actions = send_to({"status": "running"})
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # So does a thread whose worktree is the root checkout of a repository.
+    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git)
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # And so does a thread whose worktree is the root checkout of another
+    # repository.
+    result, actions = send_to({"status": "running", "worktreePath": worktree}, git=other_root_git)
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # A worktree path that cannot be read cannot be shown to be a worktree
+    # of its own, so the work does not go there either.
+    result, actions = send_to({"status": "running", "worktreePath": worktree}, git="")
+    exact(result, "fresh (old root workspace): receipt")
+    exact(actions, ["fresh"])
+    # A thread with its own worktree takes the work.
+    result, actions = send_to({"status": "running", "worktreePath": worktree})
+    exact(result, "receipt")
+    exact(actions, ["send"])
+    # The other lane paths keep their own routing: a thread in a shared
+    # checkout still takes their work.
+    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
+                               worktree_only=False)
+    exact(result, "receipt")
+    exact(actions, ["send"])
+    # A branch that is not on origin has no safe worktree, so no work is
+    # dispatched at all.
+    result, actions = send_to({"status": "running"}, listing="")
+    exact(result, f"skip {key}: branch builder/fixture is not on origin, no safe worktree")
+    exact(actions, [])
+    # A herdr pull request is skipped, and a merged one is skipped too.
+    result, actions = send_to({"status": "running", "worktreePath": worktree},
+                               pr=dict(number=512, state="OPEN", headRefName="herdr/board-stuck-lane",
+                                       baseRefName="main"))
+    exact(result, "skip #512: herdr branch, Shyam merges")
+    exact(actions, [])
+    result, actions = send_to({"status": "running", "worktreePath": worktree},
+                               pr=dict(number=512, state="MERGED", headRefName="builder/fixture",
+                                       baseRefName="main"))
+    exact(result, "skip #512: PR is merged or closed")
+    exact(actions, [])
 
 
 def cycle_health():
@@ -1870,7 +1972,7 @@ def stall():
         exact(lane.unstick(repo, {}), "DRY unstick [9]")
 
 
-EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall}
 
 
 def main():
@@ -1897,6 +1999,15 @@ def main():
                                 pass
                             else:
                                 raise AssertionError("negative control accepted unchecked send")
+                    if name == "root-workspace":
+                        import lane_driver
+                        with patch.object(lane_driver, "root_workspace", return_value=False):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted pull request work in the shared root")
                     if name == "consolidation-guard":
                         import lane_driver
                         with patch.object(lane_driver, "park", return_value="unguarded"):

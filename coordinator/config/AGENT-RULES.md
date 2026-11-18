@@ -8,10 +8,12 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - Start the builder clock after worktree bootstrap. Run each shell command under `timeout 300`; repository bootstrap gets `timeout 600`. Never loop on retries or sleeps.
 - `WAITING: heavy busy` is resumable, not an attempt. Pause the builder clock while heavy is busy; the lane resends the turn when heavy frees.
 - The coordinator's brief is the approval for everything it names. Do not stop to ask for approval of a plan that stays inside the brief; this overrides contractor-gate and similar skills. Stop only on a stop condition the brief names or a hard limit.
+- Rule of three: do not reach for a shared helper until the third repeat. Two similar pieces of code are fine; the third one earns the helper.
+- A tidy commit never changes behavior (Kent Beck, Tidy First?). A commit that only renames, moves or reorders code must leave what the program does exactly the same.
 - Never read, print or commit secrets or `.env` files.
 - Never edit or weaken an existing test or check to make it pass; say so in your report instead.
 - Reference tickets as `Refs #<n>`, never `Fixes`, `Closes` or `Resolves`.
 - Builders and gates must not create follow-up issues. Put leftover work in the PR body under `Left for later`. Only the Coordinator or Sol may create issues for a re-cut, with at most two tickets per re-cut.
 - Open pull requests as READY, never as draft, unless the brief says draft.
-- In strategy-replay-workbench, do not run the heavy `scripts/check.sh` script; the Mac check publisher posts `srw/agent-check` on ready PRs. In other repos, run the repo's full local check and put `Builder check: PASS|FAIL <full sha>` in the PR body.
+- In strategy-replay-workbench, do not run the heavy `scripts/check.sh` script; the Mac check publisher posts `srw/agent-check` on ready PRs. In other repos, run the repo's full local check and put `Builder check: PASS|FAIL <full sha>` in the PR body. In mac-ops the check writes a proof file (`evidence/<KEY>-<issue>/check-proof.md`) that lists every check as passed, failed or not run with the command that ran it: commit that file with the change.
 - When you must ask Shyam, give a short summary plus a kpane diagram.

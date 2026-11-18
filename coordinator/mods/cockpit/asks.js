@@ -5,6 +5,7 @@ const TRAILING = /[\s>*_`"'”’)\]]+$/;
 const WAITING = /\bWAITING:/;
 
 export const NEEDS = "needs";
+export const STUCK = "stuck";
 export const DEAD = "dead";
 
 // The last thing a turn said is a question, or a WAITING: line, when it ends that way.
@@ -14,10 +15,10 @@ export function endsWithAsk(text) {
   return last.endsWith("?") || WAITING.test(last);
 }
 
-// The column a group of threads belongs to. Decisions and asked turns need Shyam; dead runs do not.
+// The column a group of threads belongs to. Decisions and asked turns need Shyam; dead runs and asks on a merged PR or an interrupted turn do not.
 function columnOf(group) {
   if (group.kind === "ask" || group.kind === "wait") return NEEDS;
-  if (group.threads.some((thread) => thread.ask)) return NEEDS;
+  if (group.info.status !== "merged" && group.threads.some((thread) => thread.ask && (thread.kind === "done" || thread.kind === "idle"))) return NEEDS;
   if (group.threads.some((thread) => thread.kind === "run")) return "run";
   if (group.kind === "fail" || group.kind === "stop") return DEAD;
   return "done";
@@ -80,14 +81,15 @@ export function needReasons(group, reviewFailed, now) {
   return reasons;
 }
 
-// The lane of a group, from live facts only: its reasons to need Shyam, thread state, then the open PR's CI and review.
+// The lane of a group, from live facts only: a question for Shyam, other reasons the coordinator can fix, thread state, then the open PR's CI and review.
 // `reviewCleared` is called only for an open PR whose CI is not failing or pending.
 export function laneOf(group, reasons, reviewCleared) {
-  if (reasons.length) return NEEDS;
+  if (reasons.includes("question")) return NEEDS;
+  if (reasons.length) return STUCK;
   const column = columnOf(group);
   if (column !== "done" || group.info.status !== "open") return column;
   const ci = group.info.gh?.ci ?? "loading";
-  if (ci === "fail") return "cifail";
+  if (ci === "fail") return STUCK;
   if (ci === "pending" || ci === "loading") return "checks";
   return reviewCleared() ? "ready" : "review";
 }

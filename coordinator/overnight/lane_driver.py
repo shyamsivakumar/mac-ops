@@ -33,6 +33,10 @@ RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DECISIONS_PATH = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
 DRY = False
 SNAPSHOT = {}
+# Where each lane repository is checked out. The path is the shared root
+# of the repository: work there moves the branch everyone installs from.
+PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
+         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
 API_FLOOR = 500
 BOARD_REFRESH_PASSES = 5
 # The stall events of the last pass: an item that was reported as stalled
@@ -420,7 +424,62 @@ def pr_action_skip(repo, number):
     return pr, None
 
 
-def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None):
+def repo_root(repo):
+    """Return the shared checkout of a repository, or none when unknown."""
+    folder = PATHS.get(repo)
+    return "/Users/shyamsivakumar/Code/" + folder if folder else None
+
+
+def root_workspace(thread):
+    """Say whether a thread works in the root checkout of a repository.
+
+    A thread without a worktree works in the project root. A worktree
+    that is the root checkout of a repository is that repository's shared
+    checkout: the root checkout keeps the common git directory of the
+    repository, while a linked worktree keeps its own. Pull request work
+    in a shared checkout moves the branch everyone installs from, so it
+    never belongs there.
+    """
+    path = thread.get("worktreePath")
+    if not path:
+        return True
+    try:
+        listing = run(["git", "-C", path, "rev-parse", "--git-dir", "--git-common-dir"], timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        # A path that cannot be read cannot be shown to be a worktree of
+        # its own, so pull request work does not go there.
+        return True
+    lines = listing.splitlines()
+    if len(lines) != 2:
+        return True
+    return os.path.realpath(os.path.join(path, lines[0])) == os.path.realpath(os.path.join(path, lines[1]))
+
+
+def branch_on_origin(repo, branch):
+    """Say whether a branch is on origin, so a worktree can start there.
+
+    A worktree that cannot start at its base ref would fall back to the
+    shared root of the repository, so a branch that is not on origin is
+    not a safe base for pull request work.
+    """
+    root = repo_root(repo)
+    if not root or not os.path.isdir(root):
+        return False
+    try:
+        listing = run(["git", "-C", root, "ls-remote", "--heads", "origin", branch], timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    return bool(listing.strip())
+
+
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False):
+    """Send work to a thread, or start a fresh one when it cannot take it.
+
+    With `worktree_only` the work belongs in a worktree of its own: a
+    thread that works in a shared checkout of a repository never takes
+    it, and the work starts a fresh worktree instead. That is the
+    fix-check path's rule; the other paths keep their own routing.
+    """
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
     if pr_number is not None:
@@ -438,11 +497,19 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
+    reroute = "unreachable"
     if sendable and not allowed_builder(thread):
         # A fix round never continues inside a thread that builds on a
         # forbidden model: it relaunches on GLM in the PR worktree instead
         # (Shyam 2026-11-17; the old thread is left alone, not interrupted).
         sendable = False
+        reroute = "forbidden builder"
+    if sendable and worktree_only and root_workspace(thread):
+        # Pull request work in a shared checkout of the repository moves
+        # the branch everyone installs from, so it starts a fresh
+        # worktree instead of the thread that works there.
+        sendable = False
+        reroute = "root workspace"
     if sendable:
         workspace = None
         args = {"threadId": thread_id, "message": message}
@@ -453,6 +520,8 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             raise ValueError(f"No repository for {lkey}")
         if pr is None:
             return f"skip {lkey}: no verified PR branch for relaunch"
+        if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
+            return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
         workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         args = {"projectId": CFG[repo]["projectId"], "title": title,
                 "modelSelection": GLM, "runtimeMode": "full-access",
@@ -467,7 +536,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     ledger[lkey] = out
     if not sendable:
         print(f"SEND REROUTE {thread_id}: {out}")
-        return f"fresh ({thread_id} unreachable): {out}"
+        return f"fresh ({thread_id} {reroute}): {out}"
     return out
 
 
@@ -535,6 +604,24 @@ def park(repo, number, issue, head, reply, ledger):
     return f"#{number}: parked, re-cut {out}"
 
 
+MAC_OPS_REPO = "shyamsivakumar/mac-ops"
+SRW_REPO = "shyamsivakumar/strategy-replay-workbench"
+
+
+def check_step(repo, proof_path):
+    """The step a builder takes to put a passing check on its head.
+
+    Only mac-ops writes a proof file, so only mac-ops is told to commit
+    one. The other repositories publish their own check.
+    """
+    if repo == MAC_OPS_REPO:
+        return (f"run the repo check (`python3 scripts/mac_ops_fast_check.py --proof {proof_path}`), "
+                f"commit the proof file `{proof_path}` it writes")
+    if repo == SRW_REPO:
+        return "rely on srw/agent-check (do not run scripts/check.sh)"
+    return "run the repo's full local check"
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -555,6 +642,7 @@ def act_on_pr(repo, number, ledger):
         return f"skip #{number}: coordq action already waiting"
     head, body = pr["headRefOid"], pr.get("body") or ""
     issue, builder = builder_thread(repo, body)
+    proof_path = f"evidence/{CFG[repo]['key']}-{issue}/check-proof.md" if issue else "evidence/check-proof.md"
     if issue:
         issue_record = next((i for i in SNAPSHOT["repos"][repo]["issues"] if i["number"] == int(issue)), None)
         if issue_record is None:
@@ -568,10 +656,10 @@ def act_on_pr(repo, number, ledger):
         why = "it conflicts with main" if pr.get("mergeable") == "CONFLICTING" else f"it has no passing check on head {head}"
         if not builder:
             return f"skip #{number}: {why}, no builder thread"
-        msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, run the repo check "
-               "(mac-ops: `python3 scripts/mac_ops_fast_check.py`; SRW: rely on srw/agent-check, do not run scripts/check.sh), push, set "
+        msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
+               f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
-        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number)
+        return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
@@ -598,7 +686,8 @@ def act_on_pr(repo, number, ledger):
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
-        msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, push, set "
+        msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, "
+               f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
@@ -644,10 +733,6 @@ def act_on_pr(repo, number, ledger):
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
-
-
-PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
-         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
 
 
 def fast_forward_main(repo):
