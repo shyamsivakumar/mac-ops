@@ -152,6 +152,17 @@ class BuilderChoice(unittest.TestCase):
         self.assertEqual(payload["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
+    def test_a_herdr_workspace_folder_takes_no_send(self):
+        # The folder is one herdr made, under the herdr workspace root, on
+        # an ordinary branch. The branch can be renamed while the folder
+        # stays Shyam's, so the folder is barred on its own.
+        thread = {**self.thread(MINIMAX),
+                  "worktreePath": "/Users/shyamsivakumar/.herdr/worktrees/mac-ops/work-2-example"}
+        out, payload = self.launch(thread, branch="builder/topic")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
     def test_a_herdr_worktree_is_never_handed_off(self):
         # The thread runs another model, so the work moves to the chosen
         # builder, but never into a worktree on a herdr branch.

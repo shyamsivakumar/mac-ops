@@ -490,6 +490,10 @@ def barred_worktree(path):
     """
     if os.path.basename(os.path.normpath(path)).startswith("herdr-"):
         return True
+    if any(part == ".herdr" for part in Path(path).parts):
+        # A folder under the herdr workspace root is one herdr made, and
+        # the branch inside it can be renamed while the folder stays.
+        return True
     branch = worktree_branch(path)
     return not branch or branch == "HEAD" or branch.startswith("herdr/")
 
