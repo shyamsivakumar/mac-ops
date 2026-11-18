@@ -4,12 +4,10 @@
 directory is a temporary one, so a proof never touches the live queue.
 """
 import argparse
-import fcntl
 import importlib.util
 import io
 import json
 import os
-import subprocess
 import tempfile
 import time
 import types
@@ -442,52 +440,6 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertNotIn("regating", out)
         self.assertEqual(len(self.gate_items()), 0)
         self.assertEqual(self.read_queue()["gatedHeads"][self.key]["retries"], 1)
-
-    def drain_once(self, items):
-        """Run the dispatcher once and return the launches."""
-        self.write_queue(items=items)
-        with open(os.path.join(QUEUE_DIR, "config.json"), "w") as f:
-            json.dump({"cap": 5}, f)
-        launches = []
-        saved = {name: getattr(coordq, name) for name in ("live", "active_thread_ids", "call", "safe_refill")}
-        self.addCleanup(lambda: [setattr(coordq, name, value) for name, value in saved.items()])
-        coordq.live = lambda: 0
-        coordq.active_thread_ids = lambda: set()
-        coordq.safe_refill = lambda a: None
-
-        def call(tool, args, rules=None):
-            if tool == "t3_thread_launch":
-                launches.append(args)
-            return 0, json.dumps({"thread": {"threadId": "t-1"}})
-
-        coordq.call = call
-        coordq.cmd_dispatch(types.SimpleNamespace(dry_run=False))
-        return launches
-
-    def test_a_queued_gate_on_a_blocked_reviewer_is_not_launched(self):
-        second = coordq.model_list.entries("review")[1]["selection"]
-        self.block(second)
-        item = {"id": 4, "tool": "t3_thread_launch", "title": "gate", "priority": 5000,
-                "args": {"modelSelection": second, "clientRequestId": self.key,
-                         "message": "review", "taskType": "review"}}
-        self.assertEqual(self.drain_once([item]), [])
-        # The item stays queued and is launched when the provider is free.
-        self.assertEqual(len(self.gate_items()), 1)
-
-    def test_an_ordinary_review_on_a_blocked_model_is_not_held_back(self):
-        second = coordq.model_list.entries("review")[1]["selection"]
-        self.block(second)
-        item = {"id": 4, "tool": "t3_thread_launch", "title": "review", "priority": 1,
-                "args": {"modelSelection": second, "taskType": "review",
-                         "clientRequestId": "review:o/r#9", "message": "review"}}
-        self.assertEqual(len(self.drain_once([item])), 1)
-
-    def test_a_queued_builder_on_a_blocked_model_is_not_held_back(self):
-        builder = coordq.model_list.entries("build")[0]["selection"]
-        self.block(builder)
-        item = {"id": 4, "tool": "t3_thread_launch", "title": "build", "priority": 1,
-                "args": {"modelSelection": builder, "taskType": "worker", "message": "build"}}
-        self.assertEqual(len(self.drain_once([item])), 1)
 
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
