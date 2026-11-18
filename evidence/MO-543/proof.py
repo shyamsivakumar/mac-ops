@@ -52,7 +52,8 @@ def dry_run_brief(ticket, paths):
             "url": "https://github.com/shyamsivakumar/mac-ops/pull/544",
             "changedFiles": len(paths)}
     import proof_file
-    args = argparse.Namespace(ref="shyamsivakumar/mac-ops#544", print_brief=True, dry_run=False)
+    args = argparse.Namespace(ref="shyamsivakumar/mac-ops#544", print_brief=True,
+                              dry_run=False, print_model=False)
     out = io.StringIO()
 
     def api_read(command):

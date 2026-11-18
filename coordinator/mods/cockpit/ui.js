@@ -25,7 +25,7 @@ export const LANE_RANK = Object.fromEntries(LANES.map((l, i) => [l[0], i]));
 export const PR_LANES = new Set(["checks", "review", "ready"]);
 const PR_REASONS = new Set(["unrouted", "ci", "changes", "conflict"]);
 export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "stuck" && !reasons?.length) || ((col === "needs" || col === "stuck") && PR_REASONS.has(reasons?.[0]));
-export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
+export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], asked: ["asked the Coordinator", "A thread ended on a question that does not name Shyam, so the Coordinator handles it"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
 const LANE_NAME = Object.fromEntries(LANES.map((l) => [l[0], l[1]]));
 export const COLUMN_LIMIT = { needs: 10 };
 const AGED_LANES = new Set(["needs", "stuck", "ready"]);
@@ -391,7 +391,7 @@ function ageTone(lane, ms) {
   return ms >= RED_AFTER ? "blocked" : ms >= AMBER_AFTER ? "working" : "muted";
 }
 
-const NEED_WORD = { question: "question", stalled: "stalled", unrouted: "not sent back", ci: "CI failed", changes: "changes", conflict: "conflict" };
+const NEED_WORD = { question: "question", asked: "asked", stalled: "stalled", unrouted: "not sent back", ci: "CI failed", changes: "changes", conflict: "conflict" };
 const LANE_WORD = { needs: "Needs you", stuck: "CI failed", run: "running", backlog: "queued", checks: "checks", review: "review", ready: "ready to merge", done: "done" };
 const stateWord = (v) => ((v.col === "needs" || v.col === "stuck") && v.needs?.length ? NEED_WORD[v.needs[0]] : v.col === "dead" ? (v.c.kind === "fail" ? "failed" : "stopped") : LANE_WORD[v.col]);
 const LANE_TONE = Object.fromEntries(LANES.map((l) => [l[0], l[2]]));
@@ -642,6 +642,9 @@ function decisionBase(col, g, info, verdict, now, tab) {
     return { headline: `Answer ${name}'s question`, primary: pick(best), why: [asked.question, `${g.project} · asked ${age} ago`], hint: "Press the number or click to send that answer to the thread now. Enter sends the recommended one.", other: [...rest, ...other], checks: null };
   }
   const checks = pr ? checksOf(info.gh, verdict) : null;
+  if (reasons?.[0] === "asked") {
+    return { headline: `${name} asked the Coordinator`, primary: { id: "open", key: "o", label: "Open thread" }, why: [c.context, `${g.title} · ${g.project} · asked ${age} ago`], other: other.filter((x) => x.id !== "open"), checks: null };
+  }
   if (reasons?.[0] === "stalled") {
     return { headline: `${name} has stalled`, primary: { id: "open", key: "o", label: "Open thread" }, why: [`No agent activity for ${elapsed(now - stallOf(g, now))}.`, `${g.title} · ${g.project}`], other: other.filter((x) => x.id !== "open"), checks: null };
   }

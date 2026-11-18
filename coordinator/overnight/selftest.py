@@ -346,22 +346,46 @@ def dead_run_no_receipt():
     exact(ledger["dead-run:fixture-full"].startswith("flagged "), True)
 
 
+_REAL_OPEN = open
+LIVE_STATE = ("queue", "decisions.json", "dispatch-receipts", "lanes-ledger",
+              "loop/", ".coordinator/tickets.json")
+
+
+def live_state_only(path, *args, **kwargs):
+    """Open a file unless it is coordinator state this eval must not touch.
+
+    The lane legitimately reads model lists and the gateway's own files now, so
+    the ban is narrowed to the live state: the queue, the decisions board, the
+    receipts, the ledger and the tickets config.
+    """
+    name = str(path)
+    mode = args[0] if args else kwargs.get("mode", "r")
+    writing = any(flag in mode for flag in "wax+")
+    if writing and any(marker in name for marker in LIVE_STATE):
+        raise AssertionError(f"live filesystem forbidden (write): {name}")
+    return _REAL_OPEN(path, *args, **kwargs)
+
+
 def gate_pipeline():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     head = "a" * 40
     failures = []
+    # The reviewer chain is one list now (#552): the first entry is the gate's
+    # reviewer, the last is the fallback when its quota is exhausted.
+    chain = [entry["selection"]["instanceId"] for entry in lane.model_list.entries("review")]
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["openai-api"], None),
+        ("checked-head", repo, "absent", "", {}, [chain[0]], None),
         ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
         ("prompt-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"],
          "coordinator/config/AGENT-RULES.md"),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
-        ("no-verdict", repo, "none", "interrupted", {}, ["openai-api"], None),
+        ("no-verdict", repo, "none", "interrupted", {}, [chain[0]], None),
         ("second-no-verdict", repo, "none", "interrupted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, [], None),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["codex"], None),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"},
+         [chain[chain.index(chain[0]) + 1]], None),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], None),
         ("ascend", "ascend/fixture", "absent", "", {}, [], None),
     ]
@@ -461,7 +485,7 @@ def gate_pipeline():
                  patch.object(lane, "publish_decision", decision), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
-                 patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
+                 patch("builtins.open", side_effect=live_state_only):
                 lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
             try:
