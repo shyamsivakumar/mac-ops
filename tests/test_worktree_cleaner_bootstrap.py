@@ -346,6 +346,37 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         kept = [item for item in self.trash.iterdir() if item.is_file()]
         self.assertTrue(kept, "the recovered copy must be kept")
 
+    def test_a_save_that_lands_before_the_restore_is_never_overwritten(self):
+        # The editor saves after the cleaner read the changed bytes and before
+        # it restores them, so the path looks free when the cleaner checks.
+        # The save must keep its file and the recovered copy must be kept.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        target = self.repo / "AGENTS.md"
+        digests = {"AGENTS.md": cleaner.file_digest(target)}
+        original_replace = os.replace
+        real_exists = Path.exists
+
+        def replace_and_save(source, destination):
+            result = original_replace(source, destination)
+            if Path(source) == target and str(destination).startswith(str(self.trash)):
+                with open(destination, "a", encoding="utf-8") as handle:
+                    handle.write("write-through bytes\n")
+                target.write_text("saved by an editor\n", encoding="utf-8")
+            return result
+
+        def exists(path):
+            if Path(path) == target:
+                return False
+            return real_exists(path)
+
+        with mock.patch.object(cleaner.os, "replace", replace_and_save), mock.patch.object(Path, "exists", exists):
+            cleared = clear_bootstrap(self.repo, cleaner.status_for(self.repo), self.trash, digests)
+        self.assertIsNone(cleared)
+        self.assertEqual(target.read_text(encoding="utf-8"), "saved by an editor\n")
+        kept = [item.read_text(encoding="utf-8") for item in self.trash.iterdir() if item.is_file()]
+        self.assertTrue(any("write-through bytes" in text for text in kept), "the recovered copy must be kept")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

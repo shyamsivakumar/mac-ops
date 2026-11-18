@@ -388,20 +388,28 @@ def _set_index_to_head(repo: Path, name: str, entry: tuple[str, str, bytes] | No
     return run(argv).returncode == 0
 
 
+def _exclusive_write(path: Path, data: bytes, mode: int) -> bool:
+    """Write bytes to a path only while nothing is there yet.
+
+    The create is exclusive, so a save that landed in between keeps its own
+    file and the caller still holds the copy it was going to restore.
+    """
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+    except OSError:
+        return False
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(data)
+    return True
+
+
 def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool:
     """Recreate a path from its committed bytes without replacing anything.
 
     The create is exclusive, so a file that appeared in the meantime is left
     alone and the worktree is kept.
     """
-    mode = int(entry[0], 8) & 0o777
-    try:
-        descriptor = os.open(repo / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
-    except OSError:
-        return False
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(entry[2])
-    return True
+    return _exclusive_write(repo / name, entry[2], int(entry[0], 8) & 0o777)
 
 
 def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None) -> bool:
@@ -409,7 +417,8 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
 
     The file is moved aside with an atomic rename, and the moved bytes are
     compared with the bytes that were read before the move. A write that
-    landed in between is put back, and the worktree is kept.
+    landed in between is put back into a free path only, and the worktree is
+    kept.
     """
     file_path = repo / name
     try:
@@ -435,15 +444,19 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
     except OSError:
         after = None
     if after != expected:
-        # Someone wrote the file while it was being cleared: keep both copies.
+        # Someone wrote the file while it was being cleared. Only a free path
+        # is restored, so a save that landed in the meantime keeps its own
+        # file and the recovered bytes stay beside it in the trash, because
+        # the copy that would overwrite them is never installed.
         try:
-            if file_path.exists():
-                kept = trash / f"{name.replace('/', '_')}.kept.{os.getpid()}"
-                os.replace(moved, kept)
-            else:
-                os.replace(moved, file_path)
+            mode = os.stat(moved).st_mode & 0o777
         except OSError:
-            pass
+            mode = 0o644
+        if after is not None and _exclusive_write(file_path, after, mode):
+            try:
+                moved.unlink()
+            except OSError:
+                pass
         return False
     if entry is None:
         try:
