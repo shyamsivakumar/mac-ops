@@ -63,8 +63,9 @@ The work goes back to its builder and the ticket stays open.
   permission. A ticket that declares no scope names no file, so its scope cannot be
   judged and the close is refused.
 - A heading under a section belongs to that section, so it keeps the section's intent: a
-  file under "### Protected files" inside "## Out of scope" stays excluded. Only a
-  heading of the same level or higher ends the section.
+  file under "### Protected files" inside "## Out of scope" stays excluded, and a
+  sibling heading restores the intent of the section around it rather than dropping
+  it. Only a heading of the same level or higher ends a section.
 - A declared directory bounds the scope: every changed path under it is inside the
   boundary, and every changed path outside it is not.
 - An exclusion is not a permission. The words after an "out" marker, the list

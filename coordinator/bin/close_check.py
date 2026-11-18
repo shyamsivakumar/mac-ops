@@ -113,27 +113,28 @@ def scope_texts(body):
             plain.append(text)
         return kind
 
-    level = 0
+    # The sections that are open, each with the intent it carries. A
+    # heading ends the sections at its level and deeper and opens one of
+    # its own, and it keeps the intent of the section it sits in: a file
+    # under "### Protected files" is still excluded by the
+    # "## Out of scope" section around it, and a sibling heading restores
+    # that section's intent rather than dropping it.
+    sections = []
     for line in (body or "").splitlines():
         heading = HEADING.match(line)
         if heading:
             named = (heading.group(2) or "").strip()
             depth = len(heading.group(1))
+            while sections and sections[-1][0] >= depth:
+                sections.pop()
+            enclosing = sections[-1][1] if sections else "plain"
             if EXCLUSION_HEADING.match(named):
                 kind = "exclusion"
-                level = depth
             elif SCOPE_HEADING.match(named):
                 kind = "declared"
-                level = depth
-            elif depth > level and level:
-                # A heading under the current one belongs to the current
-                # section, so it keeps the section's intent: a file under
-                # "### Protected files" is still excluded by the
-                # "## Out of scope" section it sits in.
-                pass
             else:
-                kind = "plain"
-                level = depth
+                kind = enclosing
+            sections.append((depth, kind))
         for sentence in SENTENCE.split(line):
             position = 0
             for match in SEGMENT.finditer(sentence):

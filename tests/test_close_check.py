@@ -266,6 +266,19 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("tests/test_alarm_panel.py", item["detail"])
         self.assertNotIn("pass", item["status"])
 
+    def test_a_sibling_heading_restores_the_enclosing_exclusion(self):
+        """A subsection does not take the enclosing section's intent away.
+
+        "### Non-goals" and "### Protected files" are siblings inside
+        "## Out of scope", so the second one is still excluded.
+        """
+        check = close_check()
+        ticket = ("In: src/\n## Out of scope\n### Non-goals\nsrc/old.py\n"
+                  "### Protected files\nsrc/legacy.py\n")
+        item = check.item_scope(ticket, ["src/parser.py", "src/legacy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("src/legacy.py", item["detail"])
+
     def test_a_nested_heading_keeps_the_enclosing_exclusion(self):
         """A heading under a section belongs to that section.
 
