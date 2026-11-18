@@ -1398,7 +1398,9 @@ from Shyam.
 
 The panel's answer is bound to the cause it showed when he chose it: the
 choice and the free-text reply alike take the cause when the answer
-starts, not when it is sent. When the alarm is replaced between the answer
+starts, not when it is sent. A reply the popup restores keeps the cause it
+belongs to, and a restored reply whose cause is not known is dropped
+rather than sent for an alarm nobody answered. When the alarm is replaced between the answer
 and the send, the answer is dropped and Shyam is told, because sending it
 would answer the alarm that is there now, and he never answered that one.
 

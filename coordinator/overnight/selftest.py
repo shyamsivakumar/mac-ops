@@ -12,6 +12,18 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent
 
 
+def panel_source():
+    """Return the coordinator panel's source.
+
+    The check runs in the checkout and in the installed layout, where the
+    panel lives beside the other Herdr files and not in the checkout."""
+    for candidate in (ROOT.parent / "mods" / "coordinator" / "main.js",
+                      Path.home() / ".config" / "herdr-app" / "mods" / "coordinator" / "main.js"):
+        if candidate.is_file():
+            return candidate.read_text()
+    raise AssertionError("the coordinator panel is not found")
+
+
 def load_runner():
     """Return the overnight runner as a module, so an eval runs the real path."""
     path = ROOT / "overnight" if (ROOT / "overnight").is_file() else ROOT.parent / "overnight" / "overnight"
@@ -1969,7 +1981,7 @@ def alarm_mute():
     # for, an answer whose alarm changed is dropped before the send, the
     # acknowledgement names that cause, and the panel warns when the
     # command did not record it.
-    panel = (ROOT.parent / "mods" / "coordinator" / "main.js").read_text()
+    panel = panel_source()
     exact('shown: a.cause ?? ""' in panel, True)
     exact('cause: draft.cause ?? a.cause ?? ""' in panel, True)
     exact("draft.cause && shown && draft.cause !== shown" in panel, True)
@@ -1977,7 +1989,11 @@ def alarm_mute():
     exact("if (r.code !== 0) {" in panel, True)
     exact("`${home()}/.local/bin/alarms.py`" in panel, True)
     exact("this.replyCauses.set(q, this.causeOf(q))" in panel, True)
-    exact("cause: this.replyCauses.get(q) ?? this.causeOf(q)" in panel, True)
+    exact("const bound = this.replyCauses.get(q)" in panel, True)
+    # A restored reply keeps the cause it belongs to, and a restored
+    # reply whose cause is unknown is dropped.
+    exact('shared("co.replyCauses")' in panel, True)
+    exact("bound === undefined" in panel, True)
     send = panel.index("send(cx) {")
     body = panel[send:send + 400]
     exact(body.index("this.dropStaleDrafts()") < body.index("this.message()"), True)
