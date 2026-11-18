@@ -692,7 +692,13 @@ def settle(argv, stdout, headers_counted, failed=False):
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
-        has_include = include_requested(argv)
+        if include_requested(argv):
+            # The caller asked for the headers, so each page starts with a
+            # real response block even when the bodies are formatted. Only a
+            # block carrying a GitHub header counts, so body text is not a
+            # page. A first request that failed printed no block: one request.
+            pages = status_lines(stdout)
+            return stdout, max(1, pages) + _failed_request(argv, failed, pages)
         if filtered(argv):
             # A filtered body is the caller's text. It cannot be counted by
             # parsing (the text may print anything) and it is not counted by
@@ -701,10 +707,6 @@ def settle(argv, stdout, headers_counted, failed=False):
             # one invocation with an unknown page count, and the report
             # labels the totals it feeds as lower bounds.
             return stdout, 1
-        if has_include:
-            # Unfiltered pages are JSON, so a header block is a real one.
-            pages = status_lines(stdout)
-            return stdout, max(1, pages) + _failed_request(argv, failed, pages)
 
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
@@ -734,10 +736,11 @@ def pages_unknown(argv):
     """True when a read's page count cannot be known from its output.
 
     A formatted paginated read prints the caller's text, so neither the
-    body nor a replay can tell how many pages it took. The row says so
-    instead of pretending to a number."""
-    return bool(_gh(argv) and paginated(argv)
-                and resource(argv) == CORE and filtered(argv))
+    body nor a replay can tell how many pages it took, unless the caller
+    asked for the headers, which count the pages. The row says so instead
+    of pretending to a number."""
+    return bool(_gh(argv) and paginated(argv) and resource(argv) == CORE
+                and filtered(argv) and not include_requested(argv))
 
 
 def record(argv, count=1, caller_name=None):
