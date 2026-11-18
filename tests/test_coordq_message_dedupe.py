@@ -90,15 +90,40 @@ class MessageDedupeTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(len(self.q.load()["items"]), 1)
 
-    def test_a_started_record_older_than_the_record_timeout_is_forgotten(self):
+    def test_an_old_started_record_still_counts_while_its_thread_is_live(self):
+        # Ticket #544 counts a running item: an age past the record timeout
+        # must not let a second copy of the message start a second thread.
         self.q.save({"next": 2, "items": [],
                      "started": [{"id": 1, "title": TITLE, "target": THREAD,
                                   "thread": THREAD, "actionKey": "",
                                   "at": self.q.time.time() - self.q.MESSAGE_TTL - 1}]})
         with patch.object(self.q, "active_thread_ids", return_value={THREAD}):
             code, err = self.start()
+        self.assertEqual(code, 1)
+        self.assertIn("already started as coordq #1", err)
+        self.assertEqual(self.q.load()["items"], [])
+
+    def test_an_old_started_record_whose_thread_is_gone_is_forgotten(self):
+        self.q.save({"next": 2, "items": [],
+                     "started": [{"id": 1, "title": TITLE, "target": THREAD,
+                                  "thread": THREAD, "actionKey": "",
+                                  "at": self.q.time.time() - self.q.MESSAGE_TTL - 1}]})
+        with patch.object(self.q, "active_thread_ids", return_value=set()):
+            code, err = self.start()
         self.assertEqual(code, 0, err)
         self.assertEqual(len(self.q.load()["items"]), 1)
+        self.assertEqual(self.q.load()["started"], [])
+
+    def test_an_old_started_record_survives_an_unreadable_thread_list(self):
+        self.q.save({"next": 2, "items": [],
+                     "started": [{"id": 1, "title": TITLE, "target": THREAD,
+                                  "thread": THREAD, "actionKey": "",
+                                  "at": self.q.time.time() - self.q.MESSAGE_TTL - 1}]})
+        with patch.object(self.q, "active_thread_ids", side_effect=RuntimeError("no t3")):
+            code, err = self.start()
+        self.assertEqual(code, 1)
+        self.assertIn("refused: duplicate message", err)
+        self.assertEqual(len(self.q.load()["started"]), 1)
 
     def test_an_unreadable_thread_list_still_refuses(self):
         # A refused start costs one attempt; a second copy of the message
