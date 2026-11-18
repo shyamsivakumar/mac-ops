@@ -167,15 +167,23 @@ class DeadRunChoice(unittest.TestCase):
         self.addCleanup(self.scratch.cleanup)
         self.previous = os.environ.get("COORDQ_DIR")
         os.environ["COORDQ_DIR"] = self.scratch.name
+
+        def restore():
+            if self.previous is None:
+                os.environ.pop("COORDQ_DIR", None)
+            else:
+                os.environ["COORDQ_DIR"] = self.previous
+        self.addCleanup(restore)
         self.lane = load_lane()
         self.lane.DRY = False
         self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
 
-    def relaunch(self, model, messages, builder_label=None):
+    def relaunch(self, model, messages, builder_label=None, stopped_run="run-1"):
         """Replay one dead run and return the model of the relaunch."""
         thread = {"threadId": "fixture-dead", "title": "MO-7 build", "settled": False,
                   "providerInstanceId": model["instanceId"], "model": model["model"],
-                  "worktreePath": "/fixture/worktree", "pullRequests": []}
+                  "worktreePath": "/fixture/worktree", "pullRequests": [],
+                  "latestRunId": stopped_run}
         launches = []
 
         def t3(tool, args):
@@ -216,13 +224,33 @@ class DeadRunChoice(unittest.TestCase):
     def test_a_gate_that_ended_without_a_verdict_is_not_a_builder_failure(self):
         # The thread talked, the provider did not fail: the builder is not
         # treated as failed, so the relaunch runs on it again.
-        messages = [{"type": "assistant_message",
+        messages = [{"type": "assistant_message", "runId": "run-1",
                      "text": "the gate ended without a verdict; its quota was never read"}]
         self.assertEqual(self.relaunch(MINIMAX, messages), MINIMAX)
 
     def test_a_provider_failure_names_the_builder_as_out(self):
-        messages = [{"type": "provider_error", "text": "429 rate limit reached"}]
+        messages = [{"type": "provider_error", "runId": "run-1", "text": "429 rate limit reached"}]
         self.assertEqual(self.relaunch(MINIMAX, messages), GLM)
+
+    def test_an_earlier_runs_failure_is_not_the_stopped_runs(self):
+        # The first run hit the quota. The second run stopped without a
+        # provider error, so the old error is not this run's and the
+        # builder is not out.
+        messages = [{"type": "provider_error", "runId": "run-1", "text": "429 rate limit reached"},
+                    {"type": "assistant_message", "runId": "run-2",
+                     "text": "the run stopped without a provider error"}]
+        self.assertEqual(self.relaunch(MINIMAX, messages, stopped_run="run-2"), MINIMAX)
+
+    def test_a_stopped_run_with_no_messages_does_not_take_an_earlier_runs_failure(self):
+        messages = [{"type": "provider_error", "runId": "run-1", "text": "429 rate limit reached"}]
+        self.assertEqual(self.relaunch(MINIMAX, messages, stopped_run="run-2"), MINIMAX)
+
+    def test_the_stopped_runs_failure_names_the_builder_as_out(self):
+        # The second run is the one that stopped, and it is the one that
+        # hit the quota.
+        messages = [{"type": "provider_error", "runId": "run-1", "text": "429 rate limit reached"},
+                    {"type": "provider_error", "runId": "run-2", "text": "429 rate limit reached"}]
+        self.assertEqual(self.relaunch(MINIMAX, messages, stopped_run="run-2"), GLM)
 
 
 class CompletedGate(unittest.TestCase):

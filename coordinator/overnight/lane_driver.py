@@ -174,17 +174,24 @@ def last_reply(thread_id):
     return (msgs[-1] if msgs else "").rstrip()
 
 
-def provider_diagnostic(thread_id):
-    """The provider's own failure message, or nothing.
+def provider_diagnostic(thread_id, run_id):
+    """The provider's own failure message of the run that stopped.
 
     Only a provider failure names a provider failure. An assistant
     reply - a progress note, a gate report that ended without a
     verdict - is the thread talking, so it never marks the builder as
     failed.
+
+    The diagnostic belongs to the run that stopped, so only that run's
+    messages are read. An earlier run's quota error says nothing about
+    the run that stopped now, so a stopped run that left no error of
+    its own supplies no diagnostic, because no reason is better than
+    another run's.
     """
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
     msgs = [i.get("text") or i.get("message") or "" for i in items
-            if i.get("type") in {"error", "run_error", "provider_error"}]
+            if run_id and i.get("runId") == run_id
+            and i.get("type") in {"error", "run_error", "provider_error"}]
     return (msgs[-1] if msgs else "").rstrip()
 
 
@@ -1536,7 +1543,7 @@ def recover_dead_runs(ledger):
                 if not DRY:
                     settle_dead_run(thread_id)
                 continue
-            failure = provider_diagnostic(thread_id).lower()
+            failure = provider_diagnostic(thread_id, full_thread.get("latestRunId")).lower()
             limit_failure = any(term in failure for term in ("rate limit", "spend limit", "quota", "individual spend"))
             day = time.strftime("%Y-%m-%d")
             count_key = f"dead-relaunch:{day}:{work_key}"
