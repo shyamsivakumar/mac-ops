@@ -631,6 +631,63 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             if item.is_file():
                 self.assertNotIn(b"outside\n", item.read_bytes())
 
+    def test_the_cleanup_does_not_leak_descriptors(self):
+        # Every cleared file opens a directory descriptor, and each one has
+        # to be closed again.
+        repo = Path(self.tmp.name) / "leak-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        for index in range(40):
+            (repo / ".specstory" / f"note{index}.md").write_text("history\n", encoding="utf-8")
+        git(repo, "add", ".specstory")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "notes"], check=True, capture_output=True)
+        for index in range(40):
+            (repo / ".specstory" / f"note{index}.md").write_text("edited\n", encoding="utf-8")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        before = len(os.listdir("/dev/fd"))
+        cleared = clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
+        after = len(os.listdir("/dev/fd"))
+        self.assertEqual(len(cleared or []), 40)
+        self.assertLessEqual(after - before, 2, "the cleanup must not leak descriptors")
+
+    def test_a_changed_link_target_is_restored_as_a_link(self):
+        # The editor repoints the link between the read and the move, so the
+        # recovery has to restore a link and not a file with the target.
+        repo = Path(self.tmp.name) / "changed-link-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        (repo / "notes.md").write_text("notes\n", encoding="utf-8")
+        os.symlink("../notes.md", repo / ".specstory" / "link.md")
+        git(repo, "add", ".specstory/link.md", "notes.md")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "link"], check=True, capture_output=True)
+        (repo / ".specstory" / "link.md").unlink()
+        os.symlink("../other.md", repo / ".specstory" / "link.md")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        original_replace = os.replace
+
+        def replace_and_repoint(source, destination, *args, **kwargs):
+            result = original_replace(source, destination, *args, **kwargs)
+            if ".moved" in str(destination):
+                moved = self.trash / str(destination)
+                moved.unlink()
+                os.symlink("../third.md", moved)
+            return result
+
+        with mock.patch.object(cleaner.os, "replace", replace_and_repoint):
+            cleared = clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
+        link = repo / ".specstory" / "link.md"
+        self.assertTrue(link.is_symlink(), "the link must be restored as a link")
+        self.assertEqual(os.readlink(link), "../third.md")
+        self.assertIsNone(cleared)
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

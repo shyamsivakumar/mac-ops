@@ -199,6 +199,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert len(removed) == 2, removed
         for entry in removed:
             assert entry["repo"] and entry["path"] and entry["branch"] and entry["head"], entry
+            assert entry.get("eligible_reason"), entry
         assert any(entry["path"].endswith("bootstrap") for entry in removed), removed
         assert any(entry["path"].endswith("onmain") for entry in removed), removed
         assert git(repo, "show-ref", "--verify", "refs/heads/bootstrap")

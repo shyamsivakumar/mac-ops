@@ -544,6 +544,21 @@ def _keep_moved(trash: Path, moved: Path, name: str) -> None:
         pass
 
 
+def _restore_link(repo: Path, relative: Path, target: bytes) -> bool:
+    """Restore a link at a path, exclusively and without following links."""
+    parent = _open_parent_fd(repo, relative.parent)
+    if parent is None:
+        return False
+    try:
+        try:
+            os.symlink(target.decode("utf-8", "surrogateescape"), relative.name, dir_fd=parent)
+        except OSError:
+            return False
+        return True
+    finally:
+        os.close(parent)
+
+
 def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None) -> bool:
     """Clear one verified bootstrap file without losing an intervening edit.
 
@@ -556,54 +571,64 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
     source = _open_parent_fd(repo, relative.parent)
     if source is None:
         return False
-    file_path = repo / relative
-    expected = _read_at(source, relative.name)
-    if expected is None:
-        # A delete or a rename has already taken the file away, so there is no
-        # edit to preserve and the committed bytes are restored, or nothing
-        # stays when HEAD has none. A path that came back is kept.
-        if entry is None:
-            return True
-        return _restore_entry(repo, name, entry)
-    if digest is None or hashlib.sha256(expected).hexdigest() != digest:
-        # Either the bytes are not the ones the scan verified or the file
-        # changed after the scan, so its contents are kept as real work.
-        return False
-    moved = _trash_path(trash, f"{name.replace('/', '_')}.moved")
     try:
-        storage = os.open(trash, os.O_RDONLY | os.O_DIRECTORY)
-    except OSError:
-        return False
-    try:
-        # The move is relative to the descriptor, so a parent that turned into
-        # a link cannot send an unrelated file into the recovery storage.
-        os.replace(relative.name, moved.name, src_dir_fd=source, dst_dir_fd=storage)
-    except OSError:
-        return False
-    finally:
-        os.close(storage)
-    after = _file_bytes(moved)
-    if after != expected:
-        # Someone wrote the file while it was being cleared. Only a free path
-        # is restored, so a save that landed in the meantime keeps its own
-        # file and the recovered bytes stay beside it in the trash, because
-        # the copy that would overwrite them is never installed.
+        expected = _read_at(source, relative.name)
+        if expected is None:
+            # A delete or a rename has already taken the file away, so there
+            # is no edit to preserve and the committed bytes are restored, or
+            # nothing stays when HEAD has none. A path that came back is kept.
+            if entry is None:
+                return True
+            return _restore_entry(repo, name, entry)
+        if digest is None or hashlib.sha256(expected).hexdigest() != digest:
+            # Either the bytes are not the ones the scan verified or the file
+            # changed after the scan, so its contents are kept as real work.
+            return False
+        moved = _trash_path(trash, f"{name.replace('/', '_')}.moved")
         try:
-            mode = os.stat(moved).st_mode & 0o777
+            storage = os.open(trash, os.O_RDONLY | os.O_DIRECTORY)
         except OSError:
-            mode = 0o644
-        if after is not None and _exclusive_write(repo, Path(name), after, mode):
+            return False
+        try:
+            # The move is relative to the descriptor, so a parent that turned
+            # into a link cannot send an unrelated file into the recovery
+            # storage.
+            os.replace(relative.name, moved.name, src_dir_fd=source, dst_dir_fd=storage)
+        except OSError:
+            return False
+        finally:
+            os.close(storage)
+        after = _file_bytes(moved)
+        if after != expected:
+            # Someone wrote the file while it was being cleared. Only a free
+            # path is restored, so a save that landed in the meantime keeps
+            # its own file and the recovered bytes stay beside it in the
+            # trash, because the copy that would overwrite them is never
+            # installed. A link is restored as a link, never as a file that
+            # holds its target.
+            try:
+                mode = os.stat(moved).st_mode & 0o777
+            except OSError:
+                mode = 0o644
+            if after is not None:
+                if moved.is_symlink():
+                    restored = _restore_link(repo, relative, after)
+                else:
+                    restored = _exclusive_write(repo, relative, after, mode)
+                if restored:
+                    _keep_moved(trash, moved, name)
+            return False
+        if entry is None:
             _keep_moved(trash, moved, name)
-        return False
-    if entry is None:
+            return True
+        if not _restore_entry(repo, name, entry):
+            # The file came back: someone saved it, so the worktree is kept.
+            _keep_moved(trash, moved, name)
+            return False
         _keep_moved(trash, moved, name)
         return True
-    if not _restore_entry(repo, name, entry):
-        # The file came back: someone saved it, so the worktree is kept.
-        _keep_moved(trash, moved, name)
-        return False
-    _keep_moved(trash, moved, name)
-    return True
+    finally:
+        os.close(source)
 
 
 def _reset_index_to_head(repo: Path, index_before: str | None) -> bool:
@@ -1091,14 +1116,19 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         if not published_on_default_branch(result, github, repo_slug, refresh=refresh):
             if idle is None or idle < 24 * 60 * 60:
                 reasons.append("detached_not_proven_24h_old")
+            else:
+                result["eligible_reason"] = "detached_worktree_idle_24_hours"
     elif not result["main_checkout"]:
         ok, why, pr_url = verify_pr(github, repo_slug, record.get("branch"), str(record.get("head") or ""), refresh=refresh)
         result["pull_request"] = pr_url
         if not ok and why:
             if why == "github_pr_not_closed_for_head" and published_on_default_branch(result, github, repo_slug, refresh=refresh):
                 result["published_on_default_branch"] = True
+                result["eligible_reason"] = "commits_on_the_default_branch"
             else:
                 reasons.append(why)
+        else:
+            result["eligible_reason"] = "merged_or_closed_pull_request"
     result["reasons"] = sorted(set(reasons))
     result["eligible"] = not result["reasons"]
     result["prunable"] = prunable(result, github)
@@ -1219,7 +1249,8 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str, extra: dic
         "removed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "repo": row["repo"], "path": row["path"], "branch": row["branch"],
         "head": row["head"], "pull_request": row["pull_request"],
-        "reason": "clean, remote commit verified, no live T3 thread, and merged or closed PR or commits already on the remote default branch",
+        "reason": "clean, remote commit verified, no live T3 thread, and the eligibility rule that authorised the removal",
+        "eligible_reason": row.get("eligible_reason"),
         "bootstrap_changes": row.get("bootstrap_changes", []),
         "published_on_default_branch": bool(row.get("published_on_default_branch")),
         **(extra or {}),

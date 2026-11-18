@@ -216,12 +216,16 @@ The append-only log `worktree-cleaner.log` recorded one `removal_attempted`
 and one `removed` entry per worktree, each with the repo, the path, the
 branch and the head:
 
-| path | branch | head | on the default branch |
+| path | branch | head | eligibility rule |
 | --- | --- | --- | --- |
-| `~/.t3/worktrees/fantasy-football-toolkit/t3-3973622e-531f491fa46dd6f7` | `t3/league-intelligence-workspace-6` | `974e10970ab80262b5d05732fc6e7d643d22f5d9` | yes |
-| `/private/tmp/macops-main` | detached | `13c79aedc6fa611f3eb171fb3904f72ffd3828f4` | no, removed by the 24 hour rule |
-| `~/.t3/worktrees/mac-ops/t3-e7e8696e-f284ea12ebd41fa7` | `t3/heavy-m1-memory-headroom-per-host` | `13c79aedc6fa611f3eb171fb3904f72ffd3828f4` | yes |
-| `~/Code/mac-ops/.claude/worktrees/agent-a95ad4d3bad0d5625` | `remove-empryo` | `758710924a397ab59a1418a6a816ad1e76f82090` | yes |
+| `~/.t3/worktrees/fantasy-football-toolkit/t3-3973622e-531f491fa46dd6f7` | `t3/league-intelligence-workspace-6` | `974e10970ab80262b5d05732fc6e7d643d22f5d9` | `commits_on_the_default_branch` |
+| `/private/tmp/macops-main` | detached | `13c79aedc6fa611f3eb171fb3904f72ffd3828f4` | `detached_worktree_idle_24_hours` |
+| `~/.t3/worktrees/mac-ops/t3-e7e8696e-f284ea12ebd41fa7` | `t3/heavy-m1-memory-headroom-per-host` | `13c79aedc6fa611f3eb171fb3904f72ffd3828f4` | `commits_on_the_default_branch` |
+| `~/Code/mac-ops/.claude/worktrees/agent-a95ad4d3bad0d5625` | `remove-empryo` | `758710924a397ab59a1418a6a816ad1e76f82090` | `commits_on_the_default_branch` |
+
+The log entry of each removal carries the rule that authorised it in its
+`eligible_reason` field, so a detached worktree removed by the 24 hour
+rule is no longer logged as if a pull request had authorised it.
 
 ## GitHub confirmation for every removed head
 
