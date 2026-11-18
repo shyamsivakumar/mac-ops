@@ -12,6 +12,7 @@ against a fake git runner, so it spends no GitHub quota.
 import importlib.util
 import json
 import subprocess
+import time
 import sys
 import tempfile
 from pathlib import Path
@@ -138,6 +139,30 @@ calls.clear()
 later = cleaner.GitHub(cache_path)
 check("a later scan asks GitHub again",
       later.commit_present(REPO, SHA) is False and len(calls) == 1, f"calls={len(calls)}")
+
+# Concurrent refreshes that all fail leave no positive behind: the
+# eviction, the snapshot and the write take one lock.
+import threading
+
+seed2 = cleaner.GitHub(cache_path)
+for index in range(8):
+    seed2.verified[f"{REPO}@{str(index) * 40}"] = time.time()
+seed2.save_cache()
+
+def fail_one(index):
+    worker = cleaner.GitHub(cache_path)
+    try:
+        worker.commit_present(REPO, str(index) * 40, refresh=True)
+    except cleaner.SafetyError:
+        pass
+
+cleaner.gh_gateway = type("GatewayStub", (), {"run": staticmethod(failing_gateway)})
+threads = [threading.Thread(target=fail_one, args=(index,)) for index in range(8)]
+[thread.start() for thread in threads]
+[thread.join() for thread in threads]
+left = json.loads(cache_path.read_text())
+check("concurrent failed refreshes leave no positive",
+      not any(key.startswith(REPO + "@") for key in left), f"entries={sorted(left)[:3]}")
 
 print("PROOF", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
