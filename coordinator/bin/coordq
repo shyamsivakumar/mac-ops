@@ -1653,6 +1653,19 @@ def cmd_gatekeep(a):
                     continue
                 state = gate_state(heads.get(key))
                 retries = 0
+                if key not in heads and model_list.is_blocked(args["modelSelection"]):
+                    # The first reviewer was chosen before the locks were
+                    # taken, so a block recorded since then is seen here.
+                    # The choice is made again under the lock, so the head
+                    # is gated on a free reviewer, and a head with no free
+                    # reviewer waits.
+                    allowed = model_list.reviewers(event.get("builderModels", []))
+                    if not allowed:
+                        print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
+                        continue
+                    print(f"rechoosing {event['pr']}: {args['modelSelection']['instanceId']} "
+                          f"{args['modelSelection']['model']} is blocked", flush=True)
+                    args["modelSelection"] = allowed[0]["selection"]
                 if key in heads:
                     # A head whose retries ran out is left alone until its
                     # head changes, so a reviewer that cannot run is not
@@ -1676,9 +1689,14 @@ def cmd_gatekeep(a):
                     if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
                         continue
                     retries = state["retries"] + 1
-                    if retries > GATE_RETRY_LIMIT:
-                        print(f"gave up {key} after {state['retries']} retries without a verdict",
-                              flush=True)
+                    moved = bool(queue.get("gateReviewers", {}).get(key))
+                    if retries > GATE_RETRY_LIMIT or moved:
+                        # A head moves to one other reviewer. A head that
+                        # already moved is not moved again, backoff or not.
+                        print(f"gave up {key} after "
+                              + ("one move down the reviewer chain" if moved
+                                 else f"{state['retries']} retries")
+                              + " without a verdict", flush=True)
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
                             save(queue)

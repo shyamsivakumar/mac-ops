@@ -202,9 +202,49 @@ class VerdictlessFallbackTest(FallbackBase):
         self.assertEqual(heads[self.key]["retries"], 1)
         self.assertEqual(heads[self.key]["reviewer"], coordq.model_list.identity(SECOND))
 
+    def test_a_head_already_moved_once_is_not_moved_again(self):
+        self.write_queue(heads={self.key: {"id": 4, "retries": 0, "at": None,
+                                           "givenUp": False, "reviewer": coordq.model_list.identity(FIRST)}})
+        self.run_gatekeep()
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(dead_gate(SECOND)))
+        queue = self.read_queue()
+        queue["gatedHeads"][self.key]["at"] = time.time() - coordq.GATE_RETRY_BACKOFF - 1
+        queue["items"] = []
+        with open(os.path.join(QUEUE_DIR, "queue.json"), "w") as f:
+            json.dump(queue, f)
+        out, _ = self.run_gatekeep()
+        self.assertIn("gave up " + self.key, out)
+        self.assertIn("one move down the reviewer chain", out)
+        self.assertNotIn("regating", out)
+        self.assertEqual(self.gate_items(), [])
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
+
 
 class BlockedReviewerTest(FallbackBase):
     """A blocked reviewer is never queued."""
+
+    def test_a_first_gate_whose_reviewer_is_blocked_before_the_lock_is_not_queued(self):
+        """The first reviewer is chosen before the locks are taken.
+
+        The gate chooses again under the lock, so the blocked reviewer is
+        never queued and the head is gated on a free one.
+        """
+        chosen = coordq.reviewer_model
+
+        def choose_then_block(models):
+            selection = chosen(models)
+            self.write_block(coordq.model_list.identity(selection))
+            return selection
+
+        coordq.reviewer_model = choose_then_block
+        self.addCleanup(setattr, coordq, "reviewer_model", chosen)
+        self.write_queue()
+        out, _ = self.run_gatekeep()
+        self.assertIn("rechoosing o/r#7", out)
+        items = self.gate_items()
+        self.assertEqual(len(items), 1)
+        self.assertFalse(coordq.model_list.is_blocked(items[0]["args"]["modelSelection"]))
+        self.assertEqual(items[0]["args"]["modelSelection"], SECOND)
 
     def test_a_blocked_reviewer_is_skipped(self):
         self.write_block(coordq.model_list.identity(SECOND))
