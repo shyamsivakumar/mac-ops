@@ -587,15 +587,15 @@ def _restore_moved(relative: Path, moved: Path, source: int, trash: Path) -> boo
         except OSError:
             return False
         try:
+            # The mode is set on the descriptor, so a name that was replaced
+            # in between cannot make the call follow a link.
+            os.fchmod(descriptor, mode)
             with os.fdopen(descriptor, "wb") as handle:
                 handle.write(data)
-            os.chmod(relative.name, mode, dir_fd=source)
         except OSError:
             return False
-    try:
-        moved.unlink()
-    except OSError:
-        pass
+    # The moved original stays in the recovery storage: an editor that still
+    # has it open can finish saving into it, and that save has to survive.
     return True
 
 
