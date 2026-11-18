@@ -47,7 +47,7 @@ UNITS = {"second": 1.0, "seconds": 1.0, "sec": 1.0, "secs": 1.0, "s": 1.0,
 # An absolute reset: a date and a time of day, or a time of day alone.
 DATETIME = re.compile(
     r"\b(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:?\d{2})?\b")
-TIME_ONLY = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?)\b")
+TIME_ONLY = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)")
 # The words that make a time a reset rather than any time in a message.
 RESET_WORD = re.compile(r"reset|retry|available|till|until|back\s+off", re.IGNORECASE)
 # The zone a message states for its reset: "UTC", "+08:00", "Asia/Shanghai".
@@ -273,6 +273,8 @@ def zone_of(text, start=0):
         offset = timedelta(hours=hours, minutes=minutes)
         return timezone(-offset if match.group(1) == "-" else offset)
     if re.search(r"\b(?:UTC|GMT)\b", window, re.IGNORECASE):
+        return timezone.utc
+    if re.match(r"\s*Z\b", window):
         return timezone.utc
     if ZoneInfo is not None:
         match = NAMED_ZONE.search(window)

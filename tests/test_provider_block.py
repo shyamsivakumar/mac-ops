@@ -186,6 +186,40 @@ class ProviderBlockTests(unittest.TestCase):
             SELECTION, "will reset at 2026-11-18 11:58:52 (UTC+08:00)", failed, now=failed)
         self.assertEqual(record["until"], "2026-11-18T03:58:52+00:00")
 
+    def test_a_newer_refusal_replaces_an_older_reset(self):
+        """The provider's latest word on when it comes back is the one that
+        holds: an 11:00 refusal that names noon replaces a 10:00 record
+        that named 14:00."""
+        older = moment("2026-11-18T10:00:00")
+        provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", older, now=older)
+        newer = moment("2026-11-18T11:00:00")
+        record = provider_block.record_block(SELECTION, "429; resets at 12:00 UTC", newer,
+                                             now=newer)
+        self.assertEqual(record["since"], "2026-11-18T11:00:00+00:00")
+        self.assertEqual(record["until"], "2026-11-18T12:00:00+00:00")
+        self.assertTrue(provider_block.is_blocked(SELECTION, moment("2026-11-18T11:59:59")))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T12:00:01")))
+
+    def test_an_iso_reset_keeps_its_fractional_second(self):
+        """A reset at 14:00:00.500 is half a second past 14:00:00, and the
+        whole timestamp is read."""
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(
+            SELECTION, "usage limit; resets at 2026-11-18T14:00:00.500Z", failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T14:00:00.500000+00:00")
+
+    def test_an_iso_reset_with_a_fraction_and_an_offset(self):
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(
+            SELECTION, "usage limit; resets at 2026-11-18T14:00:00.500+02:00", failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T12:00:00.500000+00:00")
+
+    def test_a_time_of_day_reset_keeps_its_fractional_second(self):
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(
+            SELECTION, "usage limit; resets at 14:00:00.500 UTC", failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T14:00:00.500000+00:00")
+
     def test_the_pi_reader_honours_the_end_of_a_block(self):
         """The generated route check reads the same store, so a block whose
         reset has passed may not skip a provider there and free it here."""
