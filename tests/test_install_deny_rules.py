@@ -221,9 +221,12 @@ class ListTest(unittest.TestCase):
             "git push origin feature/main-work",
             "git push origin main.fix",
             "git push origin master.fix",
+            "git push origin main/fix",
             "git push origin main2",
             "git push origin HEAD:main.fix",
+            "git push origin HEAD:main/fix",
             "git push origin refs/heads/main.fix",
+            "git push origin refs/heads/main/fix",
             "git push --set-upstream origin t3/x",
             "git -C /tmp/repo push origin t3/deny-rules",
         ):
@@ -301,6 +304,10 @@ class HookTest(unittest.TestCase):
         for command in (
             # the flag appears inside another argument's value, not as the pin
             "gh pr merge 531 --squash --body 'see --match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223'",
+            # a quoted, multiword subject keeps its words: the flag and id
+            # inside it are subject text, so they are not a merge argument
+            "gh pr merge 531 --squash --subject 'Merge --match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223'",
+            'gh pr merge 531 --squash --subject "Merge --match-head-commit=5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223"',
             # no value after the flag
             "gh pr merge 531 --squash --match-head-commit",
             # not a commit id
@@ -334,9 +341,13 @@ class HookTest(unittest.TestCase):
         for command in (
             "git push origin main.fix",
             "git push origin master.fix",
+            "git push origin main/fix",
+            "git push origin master/fix",
             "git push origin main2",
             "git push origin HEAD:main.fix",
+            "git push origin HEAD:main/fix",
             "git push origin refs/heads/main.fix",
+            "git push origin refs/heads/main/fix",
             "git push origin feature/main.fix",
         ):
             self.assertIsNone(self.decided(command), command)
@@ -448,6 +459,16 @@ console.log(JSON.stringify(out));
                 {
                     "toolName": "bash",
                     "input": {
+                        "command": "gh pr merge 531 --squash --subject 'Merge --match-head-commit " + "a" * 40 + "'"
+                    },
+                },
+                True,
+                gate,
+            ),
+            (
+                {
+                    "toolName": "bash",
+                    "input": {
                         "command": "gh pr merge 531 --squash --match-head-commit main"
                     },
                 },
@@ -457,6 +478,13 @@ console.log(JSON.stringify(out));
             ({"toolName": "bash", "input": {"command": pinned}}, False, gate),
             (
                 {"toolName": "bash", "input": {"command": "git push -u origin t3/deny-rules"}},
+                False,
+                {},
+            ),
+            # A task branch whose name continues past a protected one with a
+            # slash is a task branch, not the protected ref.
+            (
+                {"toolName": "bash", "input": {"command": "git push origin main/fix"}},
                 False,
                 {},
             ),

@@ -20,11 +20,15 @@ copy by hand; reinstall from mac-ops instead.
 import json
 import os
 import re
+import shlex
 import sys
 
 MERGE_RE = re.compile(r"\bgh\s+pr\s+merge\b")
 REQUIRED_FLAG = "--match-head-commit"
 PIN_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+# The merge flags that take a value. The word after one of these is that
+# flag's value, so it is never a merge argument of its own.
+MERGE_VALUE_FLAGS = {"--body", "-b", "--body-file", "-F", "--subject", "-t", "--author-email"}
 SHELL_SEPARATORS = re.compile(r"[;&|\n]+")
 ROLE_ENV = "MAC_OPS_ROLE"
 ROLE_VALUE = "gate"
@@ -62,16 +66,33 @@ def deny(reason):
     }
 
 
+def merge_words(segment):
+    """The merge invocation's words, with quoted text kept as one word.
+
+    A split on whitespace turns the inside of a quoted argument into words of
+    its own, so a flag and a commit id written inside a PR subject read as a
+    merge argument. The shell keeps a quoted argument whole, so the pin is
+    read from the words the shell would pass to `gh`.
+    """
+    try:
+        return shlex.split(segment, posix=True)
+    except ValueError:
+        return []
+
+
 def pinned_commit(segment):
     """The commit the merge segment pins, or "" when it is not an argument."""
-    tokens = segment.split()
-    for index, token in enumerate(tokens):
+    tokens = merge_words(segment)
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
         if token == REQUIRED_FLAG:
             value = tokens[index + 1] if index + 1 < len(tokens) else ""
             return value if PIN_RE.match(value) else ""
         if token.startswith(REQUIRED_FLAG + "="):
             value = token[len(REQUIRED_FLAG) + 1 :]
             return value if PIN_RE.match(value) else ""
+        index += 2 if token in MERGE_VALUE_FLAGS else 1
     return ""
 
 

@@ -184,6 +184,19 @@ def probe_pi_guards() -> None:
             "event": {"toolName": "bash", "input": {"command": PINNED}},
         },
         {
+            "label": "pin quoted inside a multiword PR subject",
+            "cwd": str(SCRATCH),
+            "env": {"MAC_OPS_ROLE": "gate"},
+            "event": {
+                "toolName": "bash",
+                "input": {
+                    "command": "gh pr merge 531 --squash --subject 'Merge --match-head-commit "
+                    + "a" * 40
+                    + "'"
+                },
+            },
+        },
+        {
             "label": "push a task branch",
             "cwd": str(SCRATCH),
             "event": {"toolName": "bash", "input": {"command": "git push --set-upstream origin t3/deny-probe"}},
@@ -194,6 +207,11 @@ def probe_pi_guards() -> None:
             "event": {"toolName": "bash", "input": {"command": "git push origin main.fix"}},
         },
         {
+            "label": "push a task branch named main/fix",
+            "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": "git push origin main/fix"}},
+        },
+        {
             "label": "push to main on a second remote",
             "cwd": str(SCRATCH),
             "event": {"toolName": "bash", "input": {"command": "git push upstream main"}},
@@ -201,7 +219,7 @@ def probe_pi_guards() -> None:
     ]
     expect_block = [
         True, True, True, True, True, True, True, True, True, True,
-        False, True, True, True, False, False, False, True,
+        False, True, True, True, False, True, False, False, False, True,
     ]
     for instance in PI_INSTANCES:
         guard = HOME / ".pi" / instance / "extensions/deny-guard.ts"
@@ -274,10 +292,17 @@ def probe_claude_settings() -> None:
         ("pinned gh pr merge as a builder", PINNED, None, "deny"),
         ("pinned gh pr merge from a gate role (not executed)", PINNED, "gate", "allow"),
         ("pin that is not a merge argument", "gh pr merge 531 --squash --body 'pin 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223'", "gate", "deny"),
+        (
+            "a pin quoted inside a multiword PR subject",
+            "gh pr merge 531 --squash --subject 'Merge --match-head-commit 5d3f2c1a4b5e6f70819283a4b5c6d7e8f9011223'",
+            "gate",
+            "deny",
+        ),
         ("push to master on a second remote", "git push other master", None, "deny"),
         ("force-push on a second remote", "git push -f other t3/x", None, "deny"),
         ("push a task branch", "git push --set-upstream origin t3/deny-probe", None, "allow"),
         ("push a branch named main.fix (a task branch, not main)", "git push origin main.fix", None, "allow"),
+        ("push a branch named main/fix (a task branch, not main)", "git push origin main/fix", None, "allow"),
         ("push to main on a second remote", "git push upstream main", None, "deny"),
     )
     for label, command, role, want in cases:

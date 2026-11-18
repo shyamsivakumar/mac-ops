@@ -15,7 +15,7 @@ each tool checks tools, and written into the scope files as prose.
    token files, `~/.ssh`.
 3. No force-push in any form, and no push to `main` or `master` on any
    remote. Task-branch pushes stay allowed, including a task branch whose
-   name merely starts with a protected one (`main.fix`).
+   name continues a protected one (`main.fix`, `main/fix`).
 4. No `gh pr merge` for a builder. Only a gate thread merges, and only with
    the pinned `--match-head-commit` head given as a merge argument.
 
@@ -34,9 +34,11 @@ both hold:
   was launched with (`MAC_OPS_ROLE=gate`), never from the command. A command
   that mentions the role, or a builder that types the flag, grants nothing.
 - **The pin is a merge argument.** A commit id (`--match-head-commit <sha>`, 40
-  or 64 hex characters) must be the next token of the same `gh pr merge`
-  invocation. A pin quoted inside another argument, a missing value or a
-  branch name is not a pin, and the merge is refused.
+  or 64 hex characters) must be the next word of the same `gh pr merge`
+  invocation, read with the shell's quoting: a flag and id written inside a
+  quoted multiword argument (a PR subject, a body) stay that argument's text
+  and are not a pin. A missing value or a branch name is not a pin either, and
+  the merge is refused.
 
 A gate thread therefore needs `MAC_OPS_ROLE=gate` in the environment it is
 launched with, and the trusted launcher supplies it: the lane driver
@@ -44,12 +46,16 @@ launched with, and the trusted launcher supplies it: the lane driver
 merge it runs itself, and that launcher is the process that performs the
 gate's merge. The role never comes from an agent's command text.
 
-An agent thread cannot be handed a role today: the T3 thread-launch call has
-no environment field, so `coordq` cannot set `MAC_OPS_ROLE` on a launched
-thread. A `gh pr merge` typed by any agent, gate included, is therefore
-refused, and the pinned merge happens on the launcher path above, which is
-where it already happens. That direction only tightens: no builder gains the
-merge, and no merge depends on wording.
+An agent thread cannot be handed a role today. The T3 thread-launch input
+(`OrchestrationV2ThreadLaunchInput` in the T3 server schema) carries a project,
+title, model, runtime mode, interaction mode and workspace strategy, and no
+environment field, so `coordq` cannot set `MAC_OPS_ROLE` on a launched thread.
+The only environment T3 applies per thread is the provider instance's, which is
+shared by every thread on that instance, and every file a thread can read is
+also a file it can write. A `gh pr merge` typed by any agent, gate included, is
+therefore refused, and the pinned merge happens on the launcher path above,
+which is where it already happens. That direction only tightens: no builder
+gains the merge, and no merge depends on wording.
 
 ## One source, installed into each enforcement point
 

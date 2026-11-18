@@ -36,7 +36,7 @@ not write about the list itself.
 
 ## Probe results
 
-`python3 evidence/MO-530/probes.py` → `19 passed, 0 failed, 6 not run`, see
+`python3 evidence/MO-530/probes.py` → `23 passed, 0 failed, 6 not run`, see
 `probes.txt`. The six `not run` rows are the Claude `permissions.deny`
 entries: Claude Code evaluates them inside a session, so the probe names the
 live check instead of counting the file's text as a refusal. The rows that
@@ -49,10 +49,11 @@ all six pi instances and for Claude Code:
   `ls ~/.ssh; cat ~/.ssh/id_ed25519` refused
 - force-push, force-push-with-lease refused
 - push to `main` and `master` refused, including on a second remote
-- a task branch whose name starts with a protected one (`main.fix`) allowed,
-  because the rule compares the complete destination ref, not a prefix
+- a task branch whose name starts with a protected one (`main.fix`, `main/fix`)
+  allowed, because the rule compares the complete destination ref, not a prefix
 - `gh pr merge` refused with no pin, and refused with a pin when the caller is
-  not a gate; a pin quoted inside another argument is not a pin
+  not a gate; a pin quoted inside another argument, including a pin and flag
+  written inside a quoted multiword PR subject, is not a pin
 - `gh pr merge ... --match-head-commit <head>` allowed only from the gate role
   (dry run only; nothing was merged). The role is provisioned by the trusted
   launcher: `coordinator/overnight/lane_driver.py` sets `MAC_OPS_ROLE=gate` on

@@ -81,23 +81,74 @@ function checkTool(name, input, cwd, env) {
   return undefined;
 }
 
+// The merge flags that take a value. The word after one of these is that
+// flag's value, so it is never a merge argument of its own.
+const MERGE_VALUE_FLAGS = new Set([
+  "--body",
+  "-b",
+  "--body-file",
+  "-F",
+  "--subject",
+  "-t",
+  "--author-email",
+]);
+
+// The words the shell would pass to `gh`, with quoted text kept as one word.
+// A split on whitespace turns the inside of a quoted argument into words of its
+// own, so a flag and a commit id written inside a PR subject would read as a
+// merge argument.
+function mergeWords(segment) {
+  const words = [];
+  let word = "";
+  let quote = "";
+  let started = false;
+  for (let i = 0; i < segment.length; i += 1) {
+    const ch = segment[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+      else if (ch === "\\" && quote === '"' && i + 1 < segment.length) {
+        word += segment[i + 1];
+        i += 1;
+      } else word += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) words.push(word);
+      word = "";
+      started = false;
+      continue;
+    }
+    word += ch;
+    started = true;
+  }
+  if (started) words.push(word);
+  return words;
+}
+
 // The commit a merge segment pins, or "" when the flag is absent or its value
-// is not a commit id. The value must be the next token (or `--flag=value`) of
+// is not a commit id. The value must be the next word (or `--flag=value`) of
 // the same `gh pr merge` invocation; a pin mentioned elsewhere in the command
 // is not an argument to the merge.
 function pinnedCommit(segment) {
   const flag = MERGE.required_flag;
-  const tokens = segment.trim().split(/\s+/);
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
-    if (token === flag) {
-      const value = tokens[i + 1] || "";
+  const words = mergeWords(segment);
+  let i = 0;
+  while (i < words.length) {
+    const word = words[i];
+    if (word === flag) {
+      const value = words[i + 1] || "";
       return PIN_RE.test(value) ? value : "";
     }
-    if (token.startsWith(flag + "=")) {
-      const value = token.slice(flag.length + 1);
+    if (word.startsWith(flag + "=")) {
+      const value = word.slice(flag.length + 1);
       return PIN_RE.test(value) ? value : "";
     }
+    i += MERGE_VALUE_FLAGS.has(word) ? 2 : 1;
   }
   return "";
 }
