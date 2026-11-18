@@ -30,9 +30,10 @@ The work goes back to its builder and the ticket stays open.
 ## What each case shows
 
 - #528 (the MO-521 ticket) passes every item. Its ticket names
-  `coordinator/bin/gate_reviewers.py` and says its existing tests may change, so both
-  changed test files are inside the scope the ticket states; the proof file is there
-  and all nine of its checks passed.
+  `coordinator/bin/gate_reviewers.py` and says its existing tests may change only as far
+  as this needs. Both changed test files pin the model the change sets, so the
+  clause reaches them and nothing else; the proof file is there and all nine of its
+  checks passed.
 - #429 (the MO-428 ticket) carries no proof file, so the work goes back to its
   builder and the ticket stays open. Its scope is inside the stated scope.
 - #519 (the MO-517 ticket) touches `coordinator/bin/hourly_selftest.py` and
@@ -42,6 +43,11 @@ The work goes back to its builder and the ticket stays open.
 
 The scope comes from the ticket alone: the pull request body is not read for it, so
 a pull request cannot widen the scope of the ticket that asked for the change.
+
+A ticket clause about its existing tests keeps its restriction. The clause lets a
+test change when the test pins what the change pins, that is when the two files
+share a distinctive value; a test of something else shares none, so the clause never
+reaches it.
 
 The cost note item is skipped in all three: MO-1068 (#504) is report only and its
 report (evidence/MO-1068/cost-report.md) does not exist yet.
