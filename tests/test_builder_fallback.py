@@ -271,10 +271,12 @@ class CallerTests(StoreCase):
         with self.assertRaises(ticket.Refuse):
             ticket.builder_model(GLM)
 
-    def test_a_start_leaves_a_selection_outside_the_list_alone(self):
+    def test_a_start_moves_a_selection_outside_the_list_to_a_builder(self):
+        # A label that names a Sol or OpenAI model must not start a build on
+        # it, so the start runs on the first unblocked builder instead.
         ticket = self.ticket()
         sol = {"instanceId": "codex", "model": "gpt-6.1-sol"}
-        self.assertEqual(ticket.builder_model(sol), sol)
+        self.assertEqual(ticket.builder_model(sol), GLM)
 
 if __name__ == "__main__":
     unittest.main()
