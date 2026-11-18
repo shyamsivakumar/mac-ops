@@ -33,6 +33,10 @@ def path():
     return installed if installed.exists() else SEED_PATH
 
 
+def nonempty_string(value):
+    return isinstance(value, str) and bool(value)
+
+
 def validate(data):
     if not isinstance(data, dict):
         raise ModelsError("models.json must be an object")
@@ -45,10 +49,8 @@ def validate(data):
             selection = entry.get("selection") if isinstance(entry, dict) else None
             if not (
                 isinstance(selection, dict)
-                and selection.get("instanceId")
-                and selection.get("model")
-                and entry.get("id")
-                and entry.get("vendor")
+                and all(nonempty_string(selection.get(key)) for key in ("instanceId", "model"))
+                and all(nonempty_string(entry.get(key)) for key in ("id", "vendor"))
             ):
                 raise ModelsError(
                     f"models.json {name} entry needs id, vendor and a selection with instanceId and model: {entry!r}"
