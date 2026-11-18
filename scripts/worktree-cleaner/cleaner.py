@@ -30,6 +30,7 @@ SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycac
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
 GITHUB_ORIGIN_RE = re.compile(r"^(?:https://(?:[^@/\s]+@)?|ssh://git@|git@)github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
 WORKERS = 8
+COMMIT_CACHE_TTL = 7 * 24 * 3600
 
 
 class SafetyError(RuntimeError):
@@ -328,7 +329,16 @@ class T3State:
 
 
 class GitHub:
-    def __init__(self):
+    def __init__(self, cache_path: Path | None = None):
+        self.cache_path = cache_path
+        self.verified: dict[str, float] = {}
+        if cache_path:
+            try:
+                loaded = json.loads(cache_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                loaded = {}
+            if isinstance(loaded, dict):
+                self.verified = {key: stamp for key, stamp in loaded.items() if isinstance(stamp, (int, float))}
         self.repos: dict[str, str | None] = {}
         self.commits: dict[tuple[str, str], bool] = {}
         self.pull_requests: dict[tuple[str, str, str], list[dict[str, Any]] | None] = {}
@@ -363,12 +373,27 @@ class GitHub:
         if not SHA_RE.fullmatch(sha):
             self.commits[key] = False
             return False
+        cache_key = f"{repo}@{sha.lower()}"
+        if not refresh and time.time() - self.verified.get(cache_key, 0) < COMMIT_CACHE_TTL:
+            self.commits[key] = True
+            return True
         try:
             result = run(["gh", "api", f"repos/{repo}/commits/{sha}", "--jq", ".sha"])
             self.commits[key] = result.returncode == 0 and result.stdout.strip().lower() == sha.lower()
         except SafetyError:
             self.commits[key] = False
+        if self.commits[key]:
+            self.verified[cache_key] = time.time()
+        else:
+            self.verified.pop(cache_key, None)
         return self.commits[key]
+
+    def save_cache(self) -> None:
+        if not self.cache_path:
+            return
+        cutoff = time.time() - COMMIT_CACHE_TTL
+        self.verified = {key: stamp for key, stamp in self.verified.items() if stamp > cutoff}
+        atomic_write(self.cache_path, json.dumps(self.verified, sort_keys=True))
 
     def prs(self, repo: str, branch: str, *, refresh: bool = False) -> list[dict[str, Any]] | None:
         owner = repo.split("/", 1)[0]
@@ -622,8 +647,9 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
     state_root = secure_state_dir(state_root)
     with cleaner_lock(state_root):
         initial_state = T3State()
-        github = GitHub()
+        github = GitHub(state_root / "github-commits.json")
         rows, excluded, excluded_rows = inventory(code_root, github, initial_state)
+        github.save_cache()
         eligible = [row for row in rows if row["eligible"]]
         removed = 0
         if apply:
@@ -739,6 +765,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 append_removal(state_root, row, "pruned")
                 row["category"] = "removed"
                 pruned += 1
+        # The refresh above reads GitHub again, and a failed refresh evicts
+        # the cached verification of that commit. Save once more inside the
+        # lock, so a later scan cannot reload a positive the refresh just
+        # disproved.
+        github.save_cache()
         summary = {
             "mode": "apply" if apply else "dry-run",
             "repositories_scanned": len({row["repo"] for row in rows}),
