@@ -318,5 +318,88 @@ class ExplicitGateTest(RetryLimitBase):
         self.assertEqual(self.gate_items(), [])
 
 
+class ReviewerFallbackTest(RetryLimitBase):
+    """A gate that died without a verdict moves to the next reviewer."""
+
+    def setUp(self):
+        super().setUp()
+        self.blocked_file = os.path.join(QUEUE_DIR, "providers-blocked.json")
+        self.addCleanup(self.clear_block)
+
+    def clear_block(self):
+        if os.path.exists(self.blocked_file):
+            os.remove(self.blocked_file)
+
+    def block(self, selection):
+        identity = coordq.model_list.identity(selection)
+        with open(self.blocked_file, "w") as f:
+            json.dump({"blocked": {identity: {"until": time.time() + 3600}}}, f)
+
+    def head(self):
+        first = coordq.model_list.entries("review")[0]["selection"]
+        return {self.key: {"id": 4, "retries": 0, "at": None, "givenUp": False,
+                           "reviewer": coordq.model_list.identity(first)}}
+
+    def test_a_dead_gate_moves_to_the_next_reviewer(self):
+        self.write_queue(heads=self.head())
+        out, _ = self.run_gatekeep()
+        second = coordq.model_list.entries("review")[1]["selection"]
+        self.assertIn("regating o/r#7", out)
+        self.assertEqual(self.gate_items()[0]["args"]["modelSelection"], second)
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["reviewer"],
+                         coordq.model_list.identity(second))
+
+    def test_a_blocked_reviewer_is_not_queued(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        self.block(second)
+        self.write_queue(heads=self.head())
+        self.run_gatekeep()
+        self.assertEqual(self.gate_items()[0]["args"]["modelSelection"],
+                         coordq.model_list.entries("review")[2]["selection"])
+
+    def test_a_block_landed_after_the_choice_is_not_queued(self):
+        chosen = coordq.fallback_reviewer
+
+        def choose_then_block(queue, key, current, models=()):
+            selection = chosen(queue, key, current, models)
+            self.block(selection)
+            return selection
+
+        coordq.fallback_reviewer = choose_then_block
+        self.addCleanup(setattr, coordq, "fallback_reviewer", chosen)
+        self.write_queue(heads=self.head())
+        out, _ = self.run_gatekeep()
+        self.assertIn("waiting o/r#7", out)
+        self.assertEqual(self.gate_items(), [])
+
+    def test_a_first_gate_whose_reviewer_is_blocked_is_rechosen(self):
+        chosen = coordq.reviewer_model
+
+        def choose_then_block(models):
+            selection = chosen(models)
+            self.block(selection)
+            return selection
+
+        coordq.reviewer_model = choose_then_block
+        self.addCleanup(setattr, coordq, "reviewer_model", chosen)
+        self.write_queue()
+        out, _ = self.run_gatekeep()
+        self.assertIn("rechoosing o/r#7", out)
+        self.assertEqual(len(self.gate_items()), 1)
+        self.assertFalse(coordq.model_list.is_blocked(self.gate_items()[0]["args"]["modelSelection"]))
+
+    def test_a_head_moves_down_the_chain_once(self):
+        self.write_queue(heads=self.head())
+        self.run_gatekeep()
+        second = coordq.model_list.entries("review")[1]["selection"]
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(
+            {"thread": {"status": "failed", "providerInstanceId": second["instanceId"],
+                        "model": second["model"]}, "items": [], "recentRuns": []}))
+        out, _ = self.run_gatekeep()
+        self.assertIn("gave up " + self.key, out)
+        self.assertNotIn("regating", out)
+        self.assertEqual(len(self.gate_items()), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

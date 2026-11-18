@@ -68,26 +68,16 @@ CHECK and VERDICT pass for the exact head, using --match-head-commit.
 A gate run that ends without a `VERDICT:` line is retried once on the next
 reviewer of the same head: the next entry of the `review` list in
 `models.json` that is not blocked and that the head has not been tried on. A
-run that ends `VERDICT: PASS` or `VERDICT: FAIL` is a verdict and is never
-retried elsewhere. The head record names the reviewer the gate was launched
-on (`reviewer`), so a gate that died before it recorded one still moves down
-the chain instead of giving the head up.
+run that ends with a verdict is never retried elsewhere, and a head moves once
+and no more. The head record names the reviewer the gate was launched on, so a
+gate that died before it recorded one still moves down the chain.
 
 The choice of the reviewer and the queue item that carries it happen under
 `models.blocked_lock()`, the lock the provider block store holds while it
-writes `providers-blocked.json`. A block recorded while that lock is held
-cannot land between the choice and the append, so a blocked reviewer is never
-queued. The block lock is taken before the queue lock, everywhere.
-
-The first reviewer of a head is chosen before the locks are taken, so it is
-checked again under them: a reviewer that was blocked in between is not
-queued, and the choice is made again on the free reviewer
-(`rechoosing <repo>#<pr>: <reviewer> is blocked`). A head with no free
-reviewer waits (`defer <repo>#<pr>: every gate reviewer is blocked`).
-
-A head moves to one other reviewer, once. A head that already moved is not
-moved again, backoff or not: the next verdictless run gives it up in one line
-(`gave up <head> after one move down the reviewer chain without a verdict`).
+writes `providers-blocked.json`, and the item is taken back when the reviewer
+turned out to be blocked (`waiting <repo>#<pr>`). The first reviewer of a head
+is chosen before the locks are taken, so it is checked again under them and
+chosen again on a free reviewer (`rechoosing <repo>#<pr>`).
 
 A loaded LaunchAgent runs after login. Reboot survival requires a real reboot
 and has not been demonstrated by plist validation or local checks.

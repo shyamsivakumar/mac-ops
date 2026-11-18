@@ -8,11 +8,8 @@ Lists: `build` (every build type), `fix` (fix and finish rounds), `review`
 A provider that fails for a blocking reason is recorded by the provider
 health store, `providers-blocked.json` in the queue folder. This module
 only reads that file, so every caller skips the same blocked providers.
-
 A caller that reads the blocked set and then acts on it holds
-`blocked_lock()`, the lock every writer of the store holds too. A block
-recorded while that lock is held cannot land between the decision and the
-action it decided on.
+`blocked_lock()`, the lock the store's writer holds too.
 """
 
 import contextlib
@@ -120,8 +117,6 @@ def blocked_lock():
 
     A caller holds it while it reads the blocked set and acts on the
     answer, so a block recorded in between cannot slip past the decision.
-    The store's writer holds the same lock while it writes, so the two
-    never overlap. The lock is taken before the queue lock, everywhere.
     """
     directory = queue_dir()
     os.makedirs(directory, exist_ok=True)
