@@ -7,6 +7,7 @@ _BIN_DIR = str(Path(__file__).resolve().parent)
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 
+from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
 
 
@@ -49,6 +50,7 @@ Read the {source} and diff only: `git fetch origin && git diff origin/{base}...{
 Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
 {GATE_BAR}
+{ANSWER_FORMAT}
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
 {manual_gate_ending() if manual_merge(settings) else merge + fast_forward + close + " Never call emp. Never print secrets."}"""
     if not fast_forward_main and not manual_merge(settings):
