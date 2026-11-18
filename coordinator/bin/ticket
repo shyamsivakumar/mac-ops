@@ -2,6 +2,7 @@
 import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import models as model_list
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
