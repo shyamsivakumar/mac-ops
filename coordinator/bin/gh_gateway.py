@@ -487,16 +487,28 @@ def _hosts_account(host):
     except OSError:
         return ""
     current = ""
+    # Only the host-level field counts: `hosts.yml` keeps a `users:` map
+    # beneath the host, and its entries are indented deeper. Reading the
+    # first `user:` anywhere would answer with an inactive account.
+    candidates = []
     for line in lines:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if not line[0].isspace():
             current = line.split(":", 1)[0].strip()
-        elif current == host:
-            key, _, value = line.strip().partition(":")
-            if key.strip() == "user" and value.strip():
-                return value.strip()
-    return ""
+            continue
+        if current != host:
+            continue
+        indent = len(line) - len(line.lstrip())
+        key, _, value = line.strip().partition(":")
+        if key.strip() == "user" and value.strip():
+            candidates.append((indent, value.strip()))
+    if not candidates:
+        return ""
+    shallowest = min(indent for indent, _value in candidates)
+    names = {value for indent, value in candidates if indent == shallowest}
+    # More than one host-level name is ambiguous, so no account is claimed.
+    return names.pop() if len(names) == 1 else ""
 
 
 # Every variable `gh` accepts a credential from. A fingerprint covers all
@@ -692,15 +704,17 @@ def settle(argv, stdout, headers_counted, failed=False):
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
+        has_include = include_requested(argv)
         if filtered(argv):
-            # Decided before any block count: the bodies are the caller's
-            # text, and a body can print a status line and a rate-limit
-            # header. This holds whether or not the caller asked for
-            # headers, so the count is unknown and the text is unchanged.
+            # A filtered body is the caller's text. It cannot be counted by
+            # parsing (the text may print anything) and it is not counted by
+            # a replay (that spends quota, can double-charge, and would send
+            # a write twice if the method were ever misread). So the read is
+            # one invocation with an unknown page count, and the report
+            # labels the totals it feeds as lower bounds.
             return stdout, 1
-        if include_requested(argv):
-            # Unfiltered pages are JSON, so each page starts with a real
-            # response block and the blocks are the page count.
+        if has_include:
+            # Unfiltered pages are JSON, so a header block is a real one.
             pages = status_lines(stdout)
             return stdout, max(1, pages) + _failed_request(argv, failed, pages)
 
@@ -729,14 +743,23 @@ def _failed_request(argv, failed, pages):
 
 
 def pages_unknown(argv):
-    """True when a read's page count cannot be known from its output.
+    """True when a read's page count cannot be known.
+
+    A CLI command such as `gh run list --limit 200` fetches as many pages as
+    it needs without `--paginate`, so one invocation is not one request.
+    Only `gh api` is counted exactly from its own output.
 
     A formatted paginated read prints the caller's text, so neither the
-    body nor a replay can tell how many pages it took, unless the caller
-    asked for the headers, which count the pages. The row says so instead
-    of pretending to a number."""
-    return bool(_gh(argv) and paginated(argv) and resource(argv) == CORE
-                and filtered(argv) and not include_requested(argv))
+    body nor a replay can tell how many pages it took. The row says so
+    instead of pretending to a number."""
+    if not _gh(argv):
+        return False
+    if resource(argv) != CORE:
+        return False
+    words = significant(argv)
+    if words and words[0] != "api":
+        return True
+    return bool(paginated(argv) and filtered(argv))
 
 
 def record(argv, count=1, caller_name=None):
