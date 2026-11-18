@@ -408,70 +408,95 @@ def _set_index_to_head(repo: Path, name: str, entry: tuple[str, str, bytes] | No
     return run(argv).returncode == 0
 
 
-def _exclusive_write(path: Path, data: bytes, mode: int) -> bool:
+def _exclusive_write(repo: Path, relative: Path, data: bytes, mode: int) -> bool:
     """Write bytes to a path only while nothing is there yet.
 
-    The create is exclusive, so a save that landed in between keeps its own
-    file and the caller still holds the copy it was going to restore.
+    The create is exclusive and relative to a directory descriptor that was
+    opened without following links, so a save that landed in between keeps
+    its own file, the caller still holds the copy it was going to restore,
+    and a link in the path cannot redirect the write out of the worktree.
     """
-    try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
-    except OSError:
+    parent = _open_parent_fd(repo, relative.parent)
+    if parent is None:
         return False
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(data)
-    return True
-
-
-def _prepare_parent(repo: Path, relative: Path) -> Path | None:
-    """The parent directory of a path, when it is a real directory in the worktree.
-
-    Every component is checked: a component that is a link, or that is not a
-    directory, stops the restore, so a link that replaced a directory after
-    the scan cannot move the restored file outside the worktree.
-    """
-    current = repo
-    for part in relative.parent.parts:
-        current = current / part
-        if current.is_symlink():
-            return None
-        if current.exists():
-            if not current.is_dir():
-                return None
-            continue
+    try:
         try:
-            current.mkdir()
+            descriptor = os.open(relative.name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode, dir_fd=parent)
         except OSError:
-            return None
-    parent = repo / relative.parent
-    root = os.path.realpath(repo)
-    resolved = os.path.realpath(parent)
-    if resolved != root and not resolved.startswith(root + os.sep):
+            return False
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+        return True
+    finally:
+        os.close(parent)
+
+
+def _open_parent_fd(repo: Path, relative: Path) -> int | None:
+    """Open the parent directory of a path inside the worktree, without links.
+
+    Every component is opened with `O_NOFOLLOW`, so a component that is a
+    link is refused, and the descriptor is what the creation that follows
+    uses, so a link that appears in between cannot redirect the write out
+    of the worktree.
+    """
+    if relative.is_absolute() or ".." in relative.parts:
         return None
-    return parent
+    try:
+        current = os.open(repo, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return None
+    for part in relative.parts:
+        try:
+            following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
+        except OSError:
+            try:
+                os.mkdir(part, 0o755, dir_fd=current)
+            except OSError:
+                pass
+            try:
+                following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
+            except OSError:
+                os.close(current)
+                return None
+        os.close(current)
+        current = following
+    return current
 
 
 def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool:
     """Recreate a path from its committed bytes without replacing anything.
 
-    The create is exclusive, so a file that appeared in the meantime is left
-    alone and the worktree is kept. A symlink is restored as a link, never as
-    a file that holds the link target, and the parent directories of the path
-    are created again when they are gone.
+    The create is exclusive and relative to a directory descriptor that was
+    opened without following links, so a file that appeared in the meantime
+    is left alone and a link in the path cannot move the restore out of the
+    worktree. A symlink is restored as a link, never as a file that holds
+    the link target, and the parent directories of the path are created
+    again when they are gone.
     """
     relative = Path(name)
     if relative.is_absolute() or ".." in relative.parts:
         return False
-    if _prepare_parent(repo, relative) is None:
+    parent = _open_parent_fd(repo, relative.parent)
+    if parent is None:
         return False
-    if entry[0] == "120000":
-        target = entry[2].decode("utf-8", "surrogateescape")
+    try:
+        if entry[0] == "120000":
+            target = entry[2].decode("utf-8", "surrogateescape")
+            try:
+                os.symlink(target, relative.name, dir_fd=parent)
+            except OSError:
+                return False
+            return True
+        mode = int(entry[0], 8) & 0o777
         try:
-            os.symlink(target, repo / relative)
+            descriptor = os.open(relative.name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode, dir_fd=parent)
         except OSError:
             return False
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(entry[2])
         return True
-    return _exclusive_write(repo / relative, entry[2], int(entry[0], 8) & 0o777)
+    finally:
+        os.close(parent)
 
 
 def _trash_path(trash: Path, prefix: str) -> Path:
@@ -531,7 +556,7 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
             mode = os.stat(moved).st_mode & 0o777
         except OSError:
             mode = 0o644
-        if after is not None and _exclusive_write(file_path, after, mode):
+        if after is not None and _exclusive_write(repo, Path(name), after, mode):
             _keep_moved(trash, moved, name)
         return False
     if entry is None:
