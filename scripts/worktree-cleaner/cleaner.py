@@ -532,7 +532,16 @@ def _read_at(parent: int, name: str) -> bytes | None:
         os.close(descriptor)
 
 
-def _open_parent_fd(repo: Path, relative: Path) -> int | None:
+def root_identity(path: Path) -> str | None:
+    """The identity of a worktree directory: its device and its inode."""
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return f"{info.st_dev}:{info.st_ino}"
+
+
+def _open_parent_fd(repo: Path, relative: Path, identity: str | None = None) -> int | None:
     """Open the parent directory of a path inside the worktree, without links.
 
     Every component is opened with `O_NOFOLLOW`, so a component that is a
@@ -556,6 +565,11 @@ def _open_parent_fd(repo: Path, relative: Path) -> int | None:
         os.close(current)
         return None
     if not stat.S_ISDIR(at_path.st_mode) or (opened.st_dev, opened.st_ino) != (at_path.st_dev, at_path.st_ino):
+        os.close(current)
+        return None
+    if identity is not None and f"{opened.st_dev}:{opened.st_ino}" != identity:
+        # The directory at that path is not the one the scan looked at, so
+        # the worktree was replaced and nothing in it may be touched.
         os.close(current)
         return None
     for part in relative.parts:
@@ -674,7 +688,7 @@ def _restore_moved(repo: Path, relative: Path, moved: Path, source: int, trash: 
     return True
 
 
-def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None, signature: tuple[str, bool] | None = None, deleted: bool = False) -> bool:
+def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None, signature: tuple[str, bool] | None = None, deleted: bool = False, identity: str | None = None) -> bool:
     """Clear one verified bootstrap file without losing an intervening edit.
 
     The file is moved aside with an atomic rename, and the moved bytes are
@@ -683,7 +697,7 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
     kept.
     """
     relative = Path(name)
-    source = _open_parent_fd(repo, relative.parent)
+    source = _open_parent_fd(repo, relative.parent, identity)
     if source is None:
         return False
     try:
@@ -830,7 +844,7 @@ def _reset_index_to_head(repo: Path, index_before: str | None) -> bool:
                 pass
 
 
-def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None]], trash: Path, digests: dict[str, str] | None = None, index_before: str | None = None, signatures: dict[str, tuple[str, bool]] | None = None, deleted: list[str] | None = None) -> list[str] | None:
+def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None]], trash: Path, digests: dict[str, str] | None = None, index_before: str | None = None, signatures: dict[str, tuple[str, bool]] | None = None, deleted: list[str] | None = None, identity: str | None = None) -> list[str] | None:
     """Clear the verified bootstrap changes of a worktree.
 
     Only the bootstrap files are touched, and only the ones the scan already
@@ -842,6 +856,21 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
     kept.
     """
     cleared: list[str] = []
+    if identity is not None:
+        # The directory at that path has to be the one the scan looked at
+        # before anything in it is read or moved.
+        root = _open_parent_fd(path, Path("."), identity)
+        if root is None:
+            return None
+        os.close(root)
+    try:
+        return _clear_bootstrap_files(path, records, trash, digests, index_before, signatures, deleted, identity)
+    except SafetyError:
+        return None
+
+
+def _clear_bootstrap_files(path: Path, records: list[tuple[str, str, str | None]], trash: Path, digests: dict[str, str] | None = None, index_before: str | None = None, signatures: dict[str, tuple[str, bool]] | None = None, deleted: list[str] | None = None, identity: str | None = None) -> list[str] | None:
+    cleared: list[str] = []
     for code, name, original in records:
         if original is not None:
             if not (bootstrap_path(original) and bootstrap_path(name)):
@@ -849,9 +878,9 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
             entry = _head_entry(path, original)
             if entry is None:
                 return None
-            if not _clear_bootstrap_file(path, trash, original, entry, (digests or {}).get(original), (signatures or {}).get(original), original in (deleted or [])):
+            if not _clear_bootstrap_file(path, trash, original, entry, (digests or {}).get(original), (signatures or {}).get(original), original in (deleted or []), identity):
                 return None
-            if not _clear_bootstrap_file(path, trash, name, None, (digests or {}).get(name), (signatures or {}).get(name), name in (deleted or [])):
+            if not _clear_bootstrap_file(path, trash, name, None, (digests or {}).get(name), (signatures or {}).get(name), name in (deleted or []), identity):
                 return None
             cleared.append(name)
             continue
@@ -861,7 +890,7 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
         elif not bootstrap_path(name):
             return None
         entry = _head_entry(path, name)
-        if not _clear_bootstrap_file(path, trash, name, entry, (digests or {}).get(name), (signatures or {}).get(name), name in (deleted or [])):
+        if not _clear_bootstrap_file(path, trash, name, entry, (digests or {}).get(name), (signatures or {}).get(name), name in (deleted or []), identity):
             return None
         cleared.append(name)
     if not _reset_index_to_head(path, index_before):
@@ -1346,6 +1375,7 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
             result["bootstrap_changes"] = bootstrap_changes
             result["bootstrap_digests"] = {name: file_digest(path / name) for name in bootstrap_changes}
             result["deleted_at_scan"] = [name for code, name, original in records if original is None and "D" in code] + [original for code, name, original in records if original is not None]
+            result["root_identity"] = root_identity(path)
             result["bootstrap_signatures"] = {name: _working_signature(path / name) for name in bootstrap_changes}
             result["index_digest"] = index_digest(path)
             result["dirty"] = bool(real_changes)
@@ -1629,7 +1659,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 if trash is not None:
                     trash = _trash_for(trash, Path(candidate["path"]))
                 try:
-                    cleared = clear_bootstrap_changes(Path(candidate["path"]), latest_records, trash, candidate.get("bootstrap_digests"), candidate.get("index_digest"), candidate.get("bootstrap_signatures"), candidate.get("deleted_at_scan")) if trash else None
+                    cleared = clear_bootstrap_changes(Path(candidate["path"]), latest_records, trash, candidate.get("bootstrap_digests"), candidate.get("index_digest"), candidate.get("bootstrap_signatures"), candidate.get("deleted_at_scan"), candidate.get("root_identity")) if trash else None
                 except (SafetyError, OSError):
                     cleared = None
                 if cleared is None:
