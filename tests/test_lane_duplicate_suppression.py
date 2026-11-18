@@ -96,9 +96,10 @@ class ReplayTests(unittest.TestCase):
         def threads(tool, args):
             if tool == "t3_thread_read":
                 if args.get("threadId") == "live-builder":
-                    fixer = self.lane.model_list.first_available("fix")["selection"]
-                    return {"thread": {"providerInstanceId": fixer["instanceId"], "model": fixer["model"],
-                                       "status": status, "sendable": True}}
+                    builder = self.lane.model_list.first_available("build")["selection"]
+                    return {"thread": {"providerInstanceId": builder["instanceId"], "model": builder["model"],
+                                       "status": status, "sendable": True,
+                                       "worktreePath": "/fixture/worktree"}}
             raise AssertionError(f"unexpected T3 call: {tool}")
 
         with patch.object(self.lane, "CFG", {REPO: {"key": "MO", "projectId": "fixture"}}), \
@@ -106,6 +107,7 @@ class ReplayTests(unittest.TestCase):
              patch.object(self.lane, "SNAPSHOT", self.snapshot(prs)), \
              patch.object(self.lane, "DRY", False), \
              patch.object(self.lane, "builder_thread", return_value=("10", builder)), \
+             patch.object(self.lane, "root_workspace", return_value=False), \
              patch.object(self.lane, "gate_verdict", return_value=(verdict, {"threadId": "gate"}, reply)), \
              patch.object(self.lane, "run", run), patch.object(self.lane, "t3", threads), \
              patch.object(self.lane, "read_json", return_value={"number": 20, "state": "OPEN",
