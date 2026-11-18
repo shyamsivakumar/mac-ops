@@ -82,7 +82,10 @@ chosen again on a free reviewer (`rechoosing <repo>#<pr>`).
 A queued gate whose reviewer was blocked after it was queued is not launched.
 The dispatcher checks the reviewer again under the block store lock just
 before it reserves the launch, refuses the item (`REFUSED #<id>`), and
-releases the head with its tried reviewers, so the head is gated again. The
+puts the head back as it was before the item. A fallback item carries the head
+record and receipt it replaced, and both are restored, so the next run retries
+the head on an eligible reviewer. A first launch has nothing to restore, so its
+head is released and gated again. The
 dispatcher already holds the queue lock, so it takes the block store lock
 without waiting and leaves the item queued for the next run when a writer
 holds it. Queued builders are never refused for a blocked model.
