@@ -5696,9 +5696,12 @@ def cmd_board(args: argparse.Namespace) -> int:
     remaining = (gh_gateway.remaining_or_none(timeout=max(1, min(GH_TIMEOUT, int(left))))
                  if left >= 1 else None)
     if remaining and min(remaining.values()) < API_FLOOR:
-        emit(f"overnight: the board read waits below the API floor "
+        # The board command promises the tick a JSON board on stdout. A
+        # success with nothing on stdout would be parsed as an empty board,
+        # so this is a refusal, not a quiet skip.
+        emit(f"overnight: REFUSED: the board read waits below the API floor "
              f"{API_FLOOR} {remaining}", err=True)
-        return 0
+        return 1
     cfg = load_config()
     budget = budget_of(policy_snapshot(report_root(getattr(args, "root", None))))
     repos = policy_repos(cfg, getattr(args, "allowed", None))

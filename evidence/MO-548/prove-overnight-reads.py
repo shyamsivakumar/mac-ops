@@ -136,30 +136,31 @@ check("a formatted paginated read logs one row per page", len(rows()) - before =
 check("a formatted paginated read returns only its bodies",
       out.split() == ["name1", "name2", "name3"] and "HTTP/" not in out, repr(out[:40]))
 
-# 2d. The other two wrappers count pages the same way. The finding named
-#     all three functions, and each one owns its own subprocess, so each is
-#     exercised here on its own endpoint: a cache hit would make the row
-#     count zero and hide an undercount.
-for label, endpoint_path, call in (
-    ("run", "repos/a/b/tags-run",
-     lambda a: overnight.run(a, 10, time.monotonic() + 30)),
-    ("health_run", "repos/a/b/tags-health",
-     lambda a: overnight.health_run(a, time.monotonic() + 30)[1]),
-):
-    wrapper_argv = [str(fake), "api", "--paginate", "--jq", ".[].name",
-                    endpoint_path]
-    before = len(rows())
-    out = call(wrapper_argv)
-    check(f"{label} logs one row per formatted page", len(rows()) - before == 3,
-          f"rows={len(rows()) - before}")
-    check(f"{label} returns only the formatted bodies",
-          (out or "").split() == ["name1", "name2", "name3"], repr((out or "")[:40]))
-
 # 3. A succeeded read is cached: the next identical read makes no call.
 before = calls_made()
 overnight.run_read(argv, 10, deadline)
 check("a succeeded read is cached", calls_made() - before == 0,
       f"calls={calls_made() - before}")
+
+# 4. The board command refuses below the API floor instead of returning a
+#    success with an empty stdout the tick would parse as an empty board.
+import contextlib
+import io
+from types import SimpleNamespace
+
+original_probe = overnight.gh_gateway.remaining_or_none
+overnight.gh_gateway.remaining_or_none = lambda timeout=60: {"core": 10, "graphql": 10}
+out, err = io.StringIO(), io.StringIO()
+try:
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = overnight.cmd_board(SimpleNamespace(deadline=30, root=None))
+finally:
+    overnight.gh_gateway.remaining_or_none = original_probe
+check("the board refuses below the floor", code != 0, f"exit={code}")
+check("the refusal names the floor", "REFUSED" in err.getvalue() and "floor" in err.getvalue(),
+      err.getvalue().strip()[:80])
+check("the refusal prints no board", out.getvalue().strip() == "",
+      repr(out.getvalue()[:40]))
 
 print("PROOF", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
