@@ -5,7 +5,7 @@ import { Shipped, loadShipped, since, windowStart } from "./shipped.js";
 
 const FLOW_DAYS = 14, SLOWEST = 5, SITTING = 3, BAR_MAX = 44;
 const HOUR = 3600000, DAY = 86400000;
-const LANES = [["needs", "Needs you"], ["run", "Working"], ["checks", "Checks running"], ["cifail", "CI failed"], ["review", "Review pending"], ["ready", "Approved/Ready"], ["backlog", "Backlog"]];
+const LANES = [["needs", "Needs you"], ["stuck", "Stuck"], ["run", "Working"], ["checks", "Checks running"], ["cifail", "CI failed"], ["review", "Review pending"], ["ready", "Approved/Ready"], ["backlog", "Backlog"]];
 const LOG = `${home()}/.local/state/herdr-board/flow.jsonl`;
 const WEEKDAY_LETTER = ["S", "M", "T", "W", "T", "F", "S"];
 
