@@ -76,8 +76,12 @@ def start_routing():
     exact(actions, [cmd for repo in repos for cmd in
                     (["ticket", "start", f"{repo}#3", "--dry-run"],
                      ["ticket", "start", f"{repo}#3"])])
+    # A start runs on the builder its label names. A label that names no
+    # builder, such as a Sol or OpenAI model, starts on the first builder.
+    glm = {"instanceId": "glm", "model": "zai/glm-5.3"}
+    minimax = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
     cfg = {"repos": {repo: {"projectId": repo} for repo in repos},
-           "models": {"implementation": {"selection": {"model": "fixture-implementation"}}}}
+           "models": {"implementation": {"selection": dict(glm)}}}
     with patch.object(ticket, "default_branch", return_value="main"), \
          patch.object(ticket, "brief_reviewer", return_value="astra"):
         for item in board:
@@ -85,18 +89,22 @@ def start_routing():
                 continue
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
-            exact(payload["modelSelection"], {"model": "fixture-implementation"})
+            exact(payload["modelSelection"], glm)
+        sol = {"selection": {"instanceId": "codex", "model": "gpt-6.1-sol"}, "vendor": "openai"}
+        _, _, payload = ticket.build_start(
+            dict(cfg, models=dict(cfg["models"], implementation=sol)), board[3], 1, {})
+        exact(payload["modelSelection"], glm)
     cfg["types"] = {"feature": "implementation", "chore": "maintenance", "review": "gate"}
-    cfg["models"].update({"maintenance": {"selection": {"model": "fixture-maintenance"}, "vendor": "builder"},
+    cfg["models"].update({"maintenance": {"selection": dict(minimax), "vendor": "builder"},
                           "gate": {"selection": {"model": "fixture-review"}, "vendor": "reviewer"}})
     cfg["models"]["implementation"]["vendor"] = "builder"
-    for kind, expected in [("feature", "fixture-implementation"), ("chore", "fixture-maintenance")]:
+    for kind, expected in [("feature", glm), ("chore", minimax)]:
         item = dict(board[3], type=kind, builder=None, reviewer=None)
         item["builderAlias"], item["reviewerAlias"] = ticket.resolve_models(cfg, item)
         commands = []
         def launch(command, timeout):
             payload = json.loads(command[2])
-            exact(payload["modelSelection"], {"model": expected})
+            exact(payload["modelSelection"], expected)
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, "fixture receipt", "")
