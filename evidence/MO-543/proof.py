@@ -392,6 +392,69 @@ def moved_base_refuses_merge():
           and issued == [] and reverted == [], command)
 
 
+def retarget_after_the_merge_is_reported():
+    """A retarget that slips past the pre-merge read is not a reviewed merge.
+
+    No `gh` call can pin the base, so the base is read once more after the
+    merge. A merge that landed on another base is reported as one, and the
+    caller closes nothing and fast-forwards nothing.
+    """
+    import lane_driver as lane
+    command = "python3 evidence/MO-543/proof.py"
+    calls = []
+    state = {"base": "release/next", "slip": True}
+
+    def run_cmd(cmd, timeout=150):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "pr", "merge"]:
+            # The retarget lands in the interval the merge call cannot guard.
+            if state["slip"]:
+                state["base"] = "main"
+            return ""
+        if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
+                "baseRefName" in str(part) for part in cmd):
+            return json.dumps({"baseRefName": state["base"], "headRefOid": HEAD})
+        return ""
+
+    with patch.object(lane, "run", run_cmd):
+        merged, note = lane.merge_on_reviewed_base(
+            "shyamsivakumar/mac-ops", 544, HEAD, "release/next")
+        reported = "not the reviewed release/next" in note and merged is False
+        # The same merge with nothing slipping is the reviewed merge.
+        state["base"], state["slip"] = "release/next", False
+        again, ok_note = lane.merge_on_reviewed_base(
+            "shyamsivakumar/mac-ops", 544, HEAD, "release/next")
+    grant("lane: a retarget after the merge read is reported, never counted as merged",
+          reported and again is True and ok_note == f"#544: merged {HEAD}", command)
+
+
+def classification_covers_the_default_branch():
+    """A base retarget cannot hide prompt text from the classification."""
+    import lane_driver as lane
+    command = "python3 evidence/MO-543/proof.py"
+
+    def fetch(endpoint):
+        # Against the feature branch the head only touches code; against main
+        # the same head introduces a skill file.
+        for ref in ("feature", "main"):
+            if endpoint.endswith(f"/compare/{ref}...{HEAD}"):
+                return {"merge_base_commit": {"sha": f"{ref}-base"}}
+        if endpoint.endswith("/git/trees/feature-base?recursive=1"):
+            return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}
+        if endpoint.endswith("/git/trees/main-base?recursive=1"):
+            return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"},
+                             {"type": "blob", "path": "skills/x/SKILL.md", "sha": "2"}]}
+        if endpoint.endswith(f"/git/trees/{HEAD}?recursive=1"):
+            return {"tree": [{"type": "blob", "path": "a.py", "sha": "3"}]}
+        raise AssertionError(endpoint)
+
+    with patch.object(lane, "api_json", fetch):
+        state = lane.prompt_pull("shyamsivakumar/mac-ops", 544, base="feature", head=HEAD)
+    grant("lane: a head that adds prompt text against main holds, whatever its base",
+          state == prompt_paths.HOLD
+          and prompt_paths.bases("feature") == ["feature", "main"], command)
+
+
 def tree_fallback():
     """A 3,001-file PR never fits the file list, so the trees classify it."""
     coordq = load(BIN / "coordq", "proof_coordq_trees")
@@ -510,6 +573,8 @@ def main():
     tree_entries()
     truncated_tree_walk()
     moved_base_refuses_merge()
+    retarget_after_the_merge_is_reported()
+    classification_covers_the_default_branch()
     tree_fallback()
     lane_truncation()
     board_reconcile()
