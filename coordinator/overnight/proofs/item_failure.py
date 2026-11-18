@@ -7,6 +7,9 @@ import sys
 import tempfile
 
 SOURCE = Path(__file__).resolve().parents[1] / "lane_driver.py"
+# The driver imports its sibling modules, so the sandbox gets the copies
+# it needs and not the checkout's.
+SIBLINGS = ("stall.py", "alarms.py")
 REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench",
          "shyamsivakumar/fantasy-football-toolkit", "shyamsivakumar/catalouge"]
 
@@ -68,6 +71,8 @@ else:
         driver = root / "driver.py"
         driver.write_text(SOURCE.read_text().replace("/Users/shyamsivakumar", str(home))
                           + "\nDRY = True\nmain()\n")
+        for name in SIBLINGS:
+            (root / name).write_text((SOURCE.parent / name).read_text())
         log = root / "commands.jsonl"
         marker = root / "exhausted"
         env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
