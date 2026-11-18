@@ -251,6 +251,10 @@ def dead_run_recovery():
     # selection, because coordq would refuse router/zai-glm-5.3.
     exact(lane.dead_run_model({"providerInstanceId": "router", "model": "zai/glm-5.3",
                                "title": "MO-11"}), lane.GLM)
+    # A router route the ticket does not name is not a permitted route
+    # either: task/risky relaunches on GLM, as coordq refuses it.
+    exact(lane.dead_run_model({"providerInstanceId": "router", "model": "task/risky",
+                               "title": "MO-13"}), lane.GLM)
     # And the kept pairs are exactly the canonical ones.
     exact(lane.dead_run_model({"providerInstanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash",
                                "title": "MO-12"}),
@@ -1387,7 +1391,10 @@ def send_integrity():
               dict(status="running", providerInstanceId="codex", model="zai/glm-5.3"),
               # A router provider is not enough: a model spelled through it
               # that is not a task/* route gets the same refusal.
-              dict(status="running", providerInstanceId="router", model="subscriptions/gpt-6.2-astra"))]
+              dict(status="running", providerInstanceId="router", model="subscriptions/gpt-6.2-astra"),
+              # A router route the ticket does not name (task/risky) is
+              # not continuable either: the fix relaunches on GLM.
+              dict(status="running", providerInstanceId="router", model="task/risky"))]
     for thread, live in cases:
         for failure in (None, "error", "empty"):
             actions, reads, ledger = [], [], {}

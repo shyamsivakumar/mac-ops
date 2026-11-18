@@ -458,6 +458,10 @@ CONTINUABLE_BUILDER_SELECTIONS = (
 # route, never a direct start). A pair is kept only whole — a router
 # provider with a bare model name is not a permitted selection (Shyam
 # 2026-11-17: "build with glm 5.3 or minimax first").
+# The five pi task routes a build may run on (standard, ui, research, rca,
+# chore), the same set coordq permits; a router thread or relaunch naming
+# any other route is not a permitted selection (Shyam 2026-11-17).
+TASK_ROUTES = ("task/standard", "task/ui", "task/research", "task/rca", "task/chore")
 STARTABLE_BUILDER_SELECTIONS = (
     {"instanceId": "glm", "model": "zai/glm-5.3"},
     {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
@@ -467,7 +471,7 @@ STARTABLE_BUILDER_SELECTIONS = (
 def allowed_builder(thread):
     """True when a thread's selection is one a build may continue on."""
     if thread.get("providerInstanceId") == "router":
-        return (thread.get("model") or "").startswith("task/")
+        return (thread.get("model") or "") in TASK_ROUTES
     return ({"instanceId": thread.get("providerInstanceId"),
              "model": thread.get("model") or ""} in CONTINUABLE_BUILDER_SELECTIONS)
 LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
@@ -1010,7 +1014,7 @@ def dead_run_model(thread):
     """
     provider = thread.get("providerInstanceId")
     model = thread.get("model") or ""
-    if provider == "router" and model.startswith("task/"):
+    if provider == "router" and model in TASK_ROUTES:
         return {"instanceId": provider, "model": model}
     selection = {"instanceId": provider, "model": model}
     if selection in STARTABLE_BUILDER_SELECTIONS:
