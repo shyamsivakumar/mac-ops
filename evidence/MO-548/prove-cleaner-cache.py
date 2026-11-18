@@ -91,7 +91,35 @@ reloaded_refresh.commit_present(REPO, SHA, refresh=True)
 check("a forced refresh skips the gateway cache",
       metered[-1].get("fresh") is True, str(metered[-1]))
 
+# 1c. A refresh that cannot run evicts the positive and saves before the
+#     error goes up.
+def failing_gateway(argv, **kwargs):
+    metered.append({"argv": list(argv), **kwargs})
+    raise OSError("gh: launch failed")
+
+
+# Put a positive back first, so the failure has something to evict.
+restored = cleaner.GitHub(cache_path)
+restored.commit_present(REPO, SHA)
+restored.save_cache()
+
+cleaner.gh_gateway = type("GatewayStub", (), {"run": staticmethod(failing_gateway)})
+reloaded_fail = cleaner.GitHub(cache_path)
+try:
+    reloaded_fail.commit_present(REPO, SHA, refresh=True)
+except cleaner.SafetyError:
+    pass
+else:
+    raise AssertionError("a failed refresh did not raise")
+on_disk = json.loads(cache_path.read_text())
+check("a refresh that cannot run evicts the positive", KEY not in on_disk, f"entries={sorted(on_disk)}")
+
+cleaner.gh_gateway = type("GatewayStub", (), {"run": staticmethod(fake_gateway)})
+
 # 2. A reload trusts it: no GitHub call is made for the same commit.
+seed = cleaner.GitHub(cache_path)
+seed.commit_present(REPO, SHA)
+seed.save_cache()
 calls.clear()
 reloaded = cleaner.GitHub(cache_path)
 check("a reload serves the positive without a call",

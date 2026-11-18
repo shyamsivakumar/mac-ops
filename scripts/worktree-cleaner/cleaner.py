@@ -391,6 +391,12 @@ class GitHub:
                 timeout=30, fresh=refresh, caller_name="worktree-cleaner")
             self.commits[key] = result.returncode == 0 and result.stdout.strip().lower() == sha.lower()
         except (OSError, subprocess.TimeoutExpired) as exc:
+            # The refresh did not answer, so the positive it was checking is
+            # no longer known good. Evict it and save before the error goes
+            # up, or the next scan reloads it and calls the commit verified.
+            self.commits[key] = False
+            self.verified.pop(cache_key, None)
+            self.save_cache()
             raise SafetyError("command_unavailable:gh") from exc
         except SafetyError:
             self.commits[key] = False
