@@ -1508,6 +1508,10 @@ def consolidation_guard():
         ledger = {}
         lane.park("fixture/repo", 2, 1, "a" * 40, "fixture verdict", ledger)
         lane.park("fixture/repo", 2, 1, "a" * 40, "fixture verdict", ledger)
+    edits = [command for command in calls if command[:3] == ["gh", "issue", "edit"]]
+    exact(len(edits), 1)
+    exact(edits[0][edits[0].index("--remove-label") + 1].split(","), ["stage:todo", "stage:started"])
+    exact(edits[0][edits[0].index("--add-label") + 1], "stage:backlog")
     launches = [command for command in calls if command[:2] == [lane.COORDQ, "start"]]
     exact(len(launches), 1)
     message = json.loads(launches[0][2])["message"]

@@ -610,7 +610,7 @@ def park(repo, number, issue, head, reply, ledger):
     if recutter is None:
         return f"#{number}: park waits, every builder is blocked"
     if issue:
-        run(["gh", "issue", "edit", str(issue), "-R", repo, "--remove-label", "stage:todo", "--add-label", "stage:backlog"])
+        run(["gh", "issue", "edit", str(issue), "-R", repo, "--remove-label", "stage:todo,stage:started", "--add-label", "stage:backlog"])
         run(["gh", "issue", "comment", str(issue), "-R", repo, "--body",
              f"Parked by the lane (specs/lane.md section 6): PR #{number} failed its gate after two fix rounds (head {head[:8]}). A builder re-cuts it into smaller tickets."])
     msg = (f"Type: design · {recutter['id']} (re-cut a parked ticket; coordinator specs/lane.md is at /Users/shyamsivakumar/Code/coordinator/specs/lane.md)\n\n"

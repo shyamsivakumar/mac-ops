@@ -69,8 +69,10 @@ class FakeGitHub:
     """
 
     def __init__(self, labels, pulls=(), failing_edits=0, fails_before_change=False,
-                 parks_on_failure=None):
+                 parks_on_failure=None, create_race=False, failing_comments=0):
         self.labels = list(labels)
+        self.create_race = create_race
+        self.failing_comments = failing_comments
         self.fails_before_change = fails_before_change
         self.parks_on_failure = parks_on_failure
         # The repository's label set is apart from the issue's labels, so a
@@ -97,12 +99,17 @@ class FakeGitHub:
         if args[:2] == ["issue", "edit"]:
             return self.edit(cmd, args)
         if args[:2] == ["issue", "comment"]:
+            if self.failing_comments and '"kind":"receipt"' in args[-1]:
+                self.failing_comments -= 1
+                return subprocess.CompletedProcess(cmd, 1, "", "HTTP 502: bad gateway")
             self.comments.append(args[-1])
             return self.done(cmd, "")
         if args[:2] == ["label", "list"]:
             return self.done(cmd, json.dumps([{"name": name} for name in sorted(self.repo_labels)]))
         if args[:2] == ["label", "create"]:
             self.repo_labels.add(args[2])
+            if self.create_race:
+                return subprocess.CompletedProcess(cmd, 1, "", "label already exists")
             return self.done(cmd, "")
         if args[:2] == ["api", "user"]:
             return self.done(cmd, "shyamsivakumar\n")
@@ -228,6 +235,22 @@ class StartTest(unittest.TestCase):
         # Nothing was lost, so the repair writes no labels of its own.
         self.assertEqual(github.stages(), ["stage:todo"])
         self.assertEqual(len(github.edits), 1)
+
+    def test_start_survives_another_process_creating_the_stage_label(self):
+        github = FakeGitHub(["stage:todo", "type:standard", "priority:1"], create_race=True)
+        start(github)
+        self.assertEqual(github.stages(), ["stage:started"])
+        self.assertEqual(len(github.edits), 1)
+
+    def test_start_reports_both_a_missing_receipt_and_a_stage_that_did_not_move(self):
+        github = FakeGitHub(["stage:todo", "type:standard", "priority:1"], failing_edits=1,
+                            failing_comments=3)
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as caught:
+                start(github)
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("keeps stage:todo", errors.getvalue())
+        self.assertIn("receipt comment could not be posted", errors.getvalue())
 
     def test_start_does_not_write_an_unchanged_stage(self):
         github = FakeGitHub(["stage:started", "type:standard", "priority:1"])

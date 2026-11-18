@@ -347,7 +347,15 @@ def ensure_label(repo, name, color):
     existing = {l["name"].lower() for l in
                 gh_json(["label", "list", "-R", repo, "--limit", "1000", "--json", "name"])}
     if name.lower() not in existing:
-        gh(["label", "create", name, "-R", repo, "--color", color])
+        try:
+            gh(["label", "create", name, "-R", repo, "--color", color])
+        except GhError:
+            # Another process may have created it since the list above; fresh
+            # because the gateway would answer the same list from its cache.
+            again = {l["name"].lower() for l in
+                     gh_json(["label", "list", "-R", repo, "--limit", "1000", "--json", "name"], fresh=True)}
+            if name.lower() not in again:
+                raise
 
 
 def edit_labels(repo, number, add, remove):
@@ -1543,19 +1551,22 @@ def cmd_start(a):
         except GhError as e:
             print(f"receipt comment failed ({e.kind}): {e}", file=sys.stderr)
             time.sleep(2)
+    problems = []
     try:
         move_stage(repo, n, STARTED_STAGE)
     except Refuse as e:
-        die(f"started, but the stage label did not move: {e}")
+        problems.append(f"the stage label did not move: {e}")
     except GhError as e:
+        moving = f"the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} ({e.kind}): {e}"
         if isinstance(e, StageMoveError) and not e.restored:
-            die(f"started, but the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
-                f"({e.kind}): {e}; putting {STAGE_PREFIX}{t['stage']} back also failed, "
-                "so the ticket may now carry no stage label")
-        die(f"started, but the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
-            f"({e.kind}): {e}; the ticket keeps {STAGE_PREFIX}{t['stage']}")
+            problems.append(f"{moving}; putting {STAGE_PREFIX}{t['stage']} back also failed, "
+                            "so the ticket may now carry no stage label")
+        else:
+            problems.append(f"{moving}; the ticket keeps {STAGE_PREFIX}{t['stage']}")
     if not posted:
-        die(f"started, but the receipt comment could not be posted after 3 tries; coordq output was: {output}")
+        problems.append(f"the receipt comment could not be posted after 3 tries; coordq output was: {output}")
+    if problems:
+        die("started, but " + "; ".join(problems))
 
 
 def cmd_deliver(a):
