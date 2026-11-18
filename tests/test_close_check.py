@@ -328,6 +328,21 @@ class DiffValuesTest(unittest.TestCase):
         self.assertEqual(check.proof_rows(text),
                          [("lane selection", "passed"), ("heavy help", "failed")])
 
+    def test_a_row_named_check_is_a_check(self):
+        """The header is recognized once; a later "check" row is a check.
+
+        A proof file with one passing row and a row named `check` that
+        failed must not report that every check passed.
+        """
+        check = close_check()
+        text = ("| Check | Command | Result | Detail |\n"
+                "| --- | --- | --- | --- |\n"
+                "| lane selection | `x` | passed | |\n"
+                "| check | make check | failed | compiler error |\n")
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("failed", item["detail"])
+
     def test_a_check_row_that_omits_its_result_is_carried(self):
         """An incomplete row is a check, not a line to drop."""
         check = close_check()

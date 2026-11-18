@@ -304,18 +304,24 @@ def proof_rows(text):
     A row that stops short of its result cell is still a check the file
     lists, and it carries no result: the empty result is what makes it
     fail the item, so the row is never dropped. Only the table's own
-    separator and header are not checks.
+    separator and header are not checks, and the header is recognized
+    once as the whole header row. A later row whose first cell reads
+    "check" is a check like any other, so a recorded failure cannot hide
+    behind a name that reads like the header.
     """
     rows = []
+    header_seen = False
     for line in (text or "").splitlines():
         line = line.strip()
         if not line.startswith("|"):
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        name = cells[0]
+        name = cells[0] if cells else ""
         if not name or set(name) <= set("-: "):
             continue
-        if name.lower() == "check":
+        if (not header_seen and len(cells) > 1 and name.lower() == "check"
+                and cells[1].lower() == "command"):
+            header_seen = True
             continue
         result = cells[2].lower() if len(cells) > 2 else ""
         rows.append((name, result))
