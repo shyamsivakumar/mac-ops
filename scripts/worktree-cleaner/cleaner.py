@@ -559,7 +559,7 @@ def _restore_link(repo: Path, relative: Path, target: bytes) -> bool:
         os.close(parent)
 
 
-def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None) -> bool:
+def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None, signature: tuple[str, bool] | None = None) -> bool:
     """Clear one verified bootstrap file without losing an intervening edit.
 
     The file is moved aside with an atomic rename, and the moved bytes are
@@ -584,6 +584,9 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
             # Either the bytes are not the ones the scan verified or the file
             # changed after the scan, so its contents are kept as real work.
             return False
+        if signature is not None and _working_signature(repo / relative) != signature:
+            # The file changed its type or its executable bit after the scan.
+            return False
         moved = _trash_path(trash, "moved")
         try:
             storage = os.open(trash, os.O_RDONLY | os.O_DIRECTORY)
@@ -598,6 +601,11 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
             return False
         finally:
             os.close(storage)
+        if signature is not None and _working_signature(moved) != signature:
+            # The file changed its type or its executable bit while it was
+            # being cleared, so the worktree is kept with that change in it.
+            _keep_moved(trash, moved, name)
+            return False
         after = _file_bytes(moved)
         if after != expected:
             # Someone wrote the file while it was being cleared. Only a free
@@ -684,7 +692,7 @@ def _reset_index_to_head(repo: Path, index_before: str | None) -> bool:
                 pass
 
 
-def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None]], trash: Path, digests: dict[str, str] | None = None, index_before: str | None = None) -> list[str] | None:
+def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None]], trash: Path, digests: dict[str, str] | None = None, index_before: str | None = None, signatures: dict[str, tuple[str, bool]] | None = None) -> list[str] | None:
     """Clear the verified bootstrap changes of a worktree.
 
     Only the bootstrap files are touched, and only the ones the scan already
@@ -703,7 +711,7 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
             entry = _head_entry(path, original)
             if entry is None:
                 return None
-            if not _clear_bootstrap_file(path, trash, original, entry, (digests or {}).get(original)):
+            if not _clear_bootstrap_file(path, trash, original, entry, (digests or {}).get(original), (signatures or {}).get(original)):
                 return None
             if not _clear_bootstrap_file(path, trash, name, None, (digests or {}).get(name)):
                 return None
@@ -715,7 +723,7 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
         elif not bootstrap_path(name):
             return None
         entry = _head_entry(path, name)
-        if not _clear_bootstrap_file(path, trash, name, entry, (digests or {}).get(name)):
+        if not _clear_bootstrap_file(path, trash, name, entry, (digests or {}).get(name), (signatures or {}).get(name)):
             return None
         cleared.append(name)
     if not _reset_index_to_head(path, index_before):
@@ -1113,6 +1121,7 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
             bootstrap_changes, real_changes = classify_changes(path, records)
             result["bootstrap_changes"] = bootstrap_changes
             result["bootstrap_digests"] = {name: file_digest(path / name) for name in bootstrap_changes}
+            result["bootstrap_signatures"] = {name: _working_signature(path / name) for name in bootstrap_changes}
             result["index_digest"] = index_digest(path)
             result["dirty"] = bool(real_changes)
             result["uncommitted"] = len(real_changes)
@@ -1393,7 +1402,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 except OSError:
                     trash = None
                 try:
-                    cleared = clear_bootstrap_changes(Path(candidate["path"]), latest_records, trash, candidate.get("bootstrap_digests"), candidate.get("index_digest")) if trash else None
+                    cleared = clear_bootstrap_changes(Path(candidate["path"]), latest_records, trash, candidate.get("bootstrap_digests"), candidate.get("index_digest"), candidate.get("bootstrap_signatures")) if trash else None
                 except (SafetyError, OSError):
                     cleared = None
                 if cleared is None:
