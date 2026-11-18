@@ -89,7 +89,7 @@ export function laneOf(group, reasons, reviewCleared) {
   const column = columnOf(group);
   if (column !== "done" || group.info.status !== "open") return column;
   const ci = group.info.gh?.ci ?? "loading";
-  if (ci === "fail") return "cifail";
+  if (ci === "fail") return STUCK;
   if (ci === "pending" || ci === "loading") return "checks";
   return reviewCleared() ? "ready" : "review";
 }

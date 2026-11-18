@@ -29,9 +29,9 @@ const LOAD_STALE = 300000;
 const STUCK_AFTER = 25000;
 const COMPACT_BELOW = 700;
 const PROJECT_SHEET_WIDTH = 420;
-const COMPACT_ORDER = ["needs", "stuck", "cifail", "ready", "review", "checks", "run", "done", "backlog", "dead"];
+const COMPACT_ORDER = ["needs", "stuck", "ready", "review", "checks", "run", "done", "backlog", "dead"];
 const MIN_COL = 136;
-const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", stuck: "Nothing stuck", run: "Nothing working", checks: "No checks running", cifail: "No failing CI", review: "No reviews pending", ready: "No PRs ready to merge", done: "Nothing to settle", dead: "No dead runs" };
+const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", stuck: "Nothing stuck", run: "Nothing working", checks: "No checks running", review: "No reviews pending", ready: "No PRs ready to merge", done: "Nothing to settle", dead: "No dead runs" };
 const COLUMN_KEYS = COLUMNS.map((c) => c[0]);
 const DECIDE_GUARD = 800;
 const CONFIRM_GAP = 400;
@@ -867,7 +867,6 @@ export default class Board extends View {
       const conflicts = groups.filter(conflicting).length;
       const conflict = seg(conflicts, "conflict", "blocked");
       if (key === "checks") return [...seg(groups.length, "pending", "working"), ...conflict, oldest];
-      if (key === "cifail") return [...seg(groups.length, "failing", "blocked"), ...conflict, oldest];
       if (key === "ready") return [...seg(groups.length - conflicts, "ready", "done"), ...conflict, oldest];
       const draft = groups.filter((g) => g.info.gh?.draft).length;
       return [...seg(groups.length - draft, "waiting", "working"), ...seg(draft, "draft", "dim"), ...conflict, oldest];
@@ -990,7 +989,7 @@ export default class Board extends View {
 
   jump() {
     if (this.pop) return;
-    const order = ["needs", "cifail", "ready"]
+    const order = ["needs", "stuck", "ready"]
       .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => (key === "needs" ? this.enteredAt(key, a) - this.enteredAt(key, b) : a.at - b.at)).map((g) => ({ col: key, key: this.rowKey(key, g) })));
     if (!order.length) return say("success", "Nothing needs you");
     const next = order[(order.findIndex((x) => x.key === this.cursor) + 1) % order.length];
