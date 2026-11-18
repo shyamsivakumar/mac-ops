@@ -484,8 +484,12 @@ def barred_worktree(path):
     worktree whose branch cannot be read is not confirmed to be anywhere
     else, so it is barred too: only a readable branch outside `herdr/`
     is a destination. A detached head names no branch, so it is barred
-    as well.
+    as well. A workspace folder that herdr made is barred whatever branch
+    it sits on, since the branch can be renamed and the folder stays
+    Shyam's.
     """
+    if os.path.basename(os.path.normpath(path)).startswith("herdr-"):
+        return True
     branch = worktree_branch(path)
     return not branch or branch == "HEAD" or branch.startswith("herdr/")
 

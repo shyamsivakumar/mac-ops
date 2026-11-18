@@ -160,6 +160,23 @@ class BuilderChoice(unittest.TestCase):
         self.assertEqual(payload["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
+    def test_a_herdr_workspace_on_a_topic_branch_takes_no_send(self):
+        # The folder is one herdr made, on a branch that is not herdr/*.
+        # The workspace is Shyam's whatever the branch, so the work
+        # starts on the verified pull request branch instead.
+        herdr = "/fixture/.worktrees/mac-ops/herdr-gh-trim"
+        out, payload = self.launch(self.thread(MINIMAX, worktreePath=herdr), branch="builder/topic")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_herdr_workspace_on_a_topic_branch_is_never_handed_off(self):
+        herdr = "/fixture/.worktrees/mac-ops/herdr-gh-trim"
+        out, payload = self.launch(self.thread(SOL, worktreePath=herdr), branch="builder/topic")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
     def test_a_worktree_whose_branch_cannot_be_read_takes_no_send(self):
         # The branch read answers nothing, so the worktree is not
         # confirmed to be outside herdr: it takes no send and no handoff.
@@ -276,11 +293,12 @@ class DeadRunChoice(unittest.TestCase):
         self.lane.DRY = False
         self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
 
-    def relaunch(self, model, messages, builder_label=None, stopped_run="run-1", branch="builder/fixture"):
+    def relaunch(self, model, messages, builder_label=None, stopped_run="run-1", branch="builder/fixture",
+                 worktree="/fixture/worktree"):
         """Replay one dead run and return the model of the relaunch."""
         thread = {"threadId": "fixture-dead", "title": "MO-7 build", "settled": False,
                   "providerInstanceId": model["instanceId"], "model": model["model"],
-                  "worktreePath": "/fixture/worktree", "pullRequests": [],
+                  "worktreePath": worktree, "pullRequests": [],
                   "latestRunId": stopped_run}
         launches = []
 
@@ -299,7 +317,7 @@ class DeadRunChoice(unittest.TestCase):
             if cmd[0] == "git" and "--abbrev-ref" in cmd:
                 return branch
             if cmd[0] == "git":
-                return "worktree /fixture/worktree\n"
+                return f"worktree {worktree}\n"
             launches.append(json.loads(cmd[2]))
             return "fixture-relaunch"
 
@@ -332,6 +350,10 @@ class DeadRunChoice(unittest.TestCase):
         # The stopped builder's registered worktree is on a herdr branch,
         # which is Shyam's to merge, so no builder starts there.
         self.assertIsNone(self.relaunch(MINIMAX, [], branch="herdr/gh-trim"))
+
+    def test_a_dead_run_in_a_herdr_workspace_on_a_topic_branch_is_never_relaunched(self):
+        herdr = "/fixture/.worktrees/mac-ops/herdr-gh-trim"
+        self.assertIsNone(self.relaunch(MINIMAX, [], branch="builder/topic", worktree=herdr))
 
     def test_a_dead_run_in_a_worktree_with_an_unreadable_branch_is_never_relaunched(self):
         self.assertIsNone(self.relaunch(MINIMAX, [], branch=""))
