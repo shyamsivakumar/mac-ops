@@ -353,12 +353,23 @@ def gate_pipeline():
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd[:2] == ["gh", "api"]:
-                # The changed-file list of the pull request: the case decides
-                # whether it carries one prompt path or only code. The read is
-                # slurped, so its pages arrive as one array of arrays.
-                exact(cmd[3], "--slurp")
-                exact(cmd[4], "repos/%s/pulls/20/files?per_page=100" % target)
-                return json.dumps([[{"filename": changed}]] if changed else [[]])
+                # The changed paths of the pull request: the case decides
+                # whether they carry one prompt path or only code. The lane
+                # reads the pinned merge base and head trees first, so that a
+                # file list read by pull-request number never decides a merge;
+                # the slurped list is still served for a caller without a pin.
+                endpoint = cmd[-1]
+                path = changed or "a.py"
+                if "/files?per_page=100" in endpoint:
+                    exact(cmd[3], "--slurp")
+                    return json.dumps([[{"filename": changed}]] if changed else [[]])
+                if "/compare/" in endpoint:
+                    return json.dumps({"merge_base_commit": {"sha": "base"}})
+                if endpoint.endswith("/git/trees/base?recursive=1"):
+                    return json.dumps({"tree": [{"type": "blob", "path": path, "sha": "1"}]})
+                if endpoint.endswith("/git/trees/%s?recursive=1" % head):
+                    return json.dumps({"tree": [{"type": "blob", "path": path, "sha": "2"}]})
+                raise AssertionError(f"unexpected gh api read: {cmd}")
             if cmd == [lane.COORDQ, "list"]:
                 return ""
             if cmd[:2] == ["ticket", "gate"]:

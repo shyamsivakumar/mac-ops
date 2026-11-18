@@ -1167,16 +1167,28 @@ def gate_changed_count(repo, number):
 def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths one pull request changed.
 
-    A read GitHub cannot give is retried, then reported UNKNOWN. A list
-    shorter than the pull request's own changed-file count may have left out
-    the one prompt file (the files endpoint stops at 3,000), so it is
-    UNKNOWN too; the count is read from the pull request itself when the
-    caller does not already hold it. When the list cannot be completed, the
-    trees of the merge base and the head give the whole diff, so a big
-    pull request of ordinary code still clears. An unknown list never reads
-    as clear on its own, because clear is what authorizes the merge a gate
-    brief orders, so the caller defers the gate until the list is known.
+    The paths are classified from the merge base and the head the gate
+    pinned, never from the pull request's current file list. A file list is
+    read by pull-request number, so it describes whatever head GitHub holds
+    at that moment: a code-only revision with the same file count could
+    clear a prompt-changing head, and `--match-head-commit` still merges
+    when the prompt head is restored before the merge. The trees of the two
+    pinned commits cannot move, so their diff is the answer. A read GitHub
+    cannot give is retried, then reported UNKNOWN, because CLEAR is what
+    authorizes the merge a gate brief orders.
+
+    A caller with no pinned pair has only the file list; that list is read
+    and a truncated or short one is UNKNOWN, never CLEAR.
     """
+    if base and head:
+        for _ in range(max(1, attempts)):
+            try:
+                paths = prompt_paths.tree_diff(gh_json, repo, base, head)
+            except (RuntimeError, ValueError, subprocess.SubprocessError):
+                continue
+            if paths is not None:
+                return prompt_paths.prompt_scan(paths)
+        return prompt_paths.UNKNOWN
     count = changed_files if isinstance(changed_files, int) else gate_changed_count(repo, number)
     for _ in range(max(1, attempts)):
         try:
@@ -1189,13 +1201,6 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
         if not prompt_paths.list_is_complete(files, count):
             continue
         return prompt_paths.prompt_scan(prompt_paths.entries_paths(files))
-    if base and head:
-        try:
-            paths = prompt_paths.tree_diff(gh_json, repo, base, head)
-        except (RuntimeError, ValueError, subprocess.SubprocessError):
-            paths = None
-        if paths is not None:
-            return prompt_paths.prompt_scan(paths)
     return prompt_paths.UNKNOWN
 
 

@@ -161,10 +161,11 @@ def tree_entries(tree, prefix=""):
 
 
 # A recursive tree listing stops at 100,000 entries or 7 MB, so a big
-# repository arrives truncated. Its directories are then read one by one
-# from a fresh root listing, and this bounds that walk: one request per
-# directory, so the bound is never the binding limit for a real repository,
-# and a walk that cannot finish is unknown, never clear.
+# repository arrives truncated. Its directories are then read in step, and
+# a directory whose subtree sha is the same on both sides is skipped without
+# a request, so a code-only change spends the budget on the directories it
+# touched rather than on every directory of the repository. The bound is
+# still finite: a walk that cannot finish is unknown, never clear.
 TREE_REQUESTS = 5000
 
 
@@ -219,6 +220,94 @@ def tree_paths(fetch, repo, ref, requests=None):
     return paths
 
 
+def parse_listing(listing):
+    """One tree listing as `(files, directories)`, or None when it is not whole.
+
+    A blob is a file and a `commit` entry is a submodule: both can carry
+    prompt text, so both are kept. A directory is not a changed path of its
+    own, so it is kept apart with its subtree sha: two sides of a walk that
+    hold the same sha hold the same paths, and neither needs reading.
+    """
+    listing = one_object(listing)
+    if not isinstance(listing, dict) or listing.get("truncated"):
+        return None
+    entries = listing.get("tree")
+    if not isinstance(entries, list):
+        return None
+    files, directories = {}, {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return None
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            return None
+        if entry.get("type") == "tree":
+            sha = entry.get("sha")
+            if not isinstance(sha, str) or not sha:
+                return None
+            directories[path] = sha
+            continue
+        files[path] = (entry.get("type"), entry.get("mode"), entry.get("sha"))
+    return files, directories
+
+
+def read_listing(fetch, repo, ref, budget, recursive=False):
+    """One tree listing read as `(files, directories)`, or None.
+
+    None means the budget is spent or the read is not a whole listing, so a
+    caller never reads it as an empty tree.
+    """
+    budget[0] -= 1
+    if budget[0] < 0:
+        return None
+    query = "?recursive=1" if recursive else ""
+    return parse_listing(fetch(f"repos/{repo}/git/trees/{ref}{query}"))
+
+
+def walked_changes(fetch, repo, before, base, after, head, budget):
+    """The changed paths of two trees, reading only the directories that differ.
+
+    A repository too big for one recursive listing is read directory by
+    directory, both sides in step. A directory whose subtree sha is the same
+    on both sides holds the same paths, so it is skipped without spending a
+    request: a code-only change pays for the directories it touched, not for
+    every directory of the repository. A side that already has a whole
+    listing contributes its root entries, so its root is not read again.
+    """
+    def root(side, ref):
+        if side is None:
+            return read_listing(fetch, repo, ref, budget)
+        files, directories = side
+        return ({path: entry for path, entry in files.items() if "/" not in path},
+                {path: sha for path, sha in directories.items() if "/" not in path})
+
+    before_root, after_root = root(before, base), root(after, head)
+    if before_root is None or after_root is None:
+        return None
+    changed = set()
+    stack = [(before_root, after_root, "")]
+    while stack:
+        (before_files, before_dirs), (after_files, after_dirs), prefix = stack.pop()
+        for name, entry in after_files.items():
+            if before_files.get(name) != entry:
+                changed.add(prefix + name)
+        for name in before_files:
+            if name not in after_files:
+                changed.add(prefix + name)
+        for name in set(before_dirs) | set(after_dirs):
+            before_sha, after_sha = before_dirs.get(name), after_dirs.get(name)
+            if before_sha is not None and before_sha == after_sha:
+                continue
+            sides = []
+            for sha in (before_sha, after_sha):
+                side = ({}, {}) if sha is None else read_listing(fetch, repo, sha, budget)
+                if side is None:
+                    return None
+                sides.append(side)
+            stack.append((sides[0], sides[1], f"{prefix}{name}/"))
+    return sorted(changed)
+
+
 def changed_paths(before, after):
     """The paths whose entry differs between two commit trees.
 
@@ -232,19 +321,26 @@ def changed_paths(before, after):
     return sorted(changed)
 
 
-def tree_diff(fetch, repo, base, head):
+def tree_diff(fetch, repo, base, head, requests=None):
     """The complete changed paths of a pull request, or None.
 
     `fetch(endpoint)` is a reader's own `gh api` read. The files endpoint
     stops at 3,000 entries, so a bigger pull request's list is incomplete by
     construction and can never be cleared; comparing the merge base's tree
     with the head's tree gives every changed path instead, which is what the
-    hold decides on. None means the diff could not be read completely.
+    hold decides on. Both refs are the ones the caller pinned, so a head that
+    moves during the gate cannot change the answer. A repository too big for
+    one recursive listing is walked with its unchanged directories skipped,
+    so the walk budgets for the changed paths and not for the whole tree.
+    None means the diff could not be read completely.
     """
+    budget = [TREE_REQUESTS] if requests is None else requests
     compare = one_object(fetch(f"repos/{repo}/compare/{base}...{head}"))
     merge_base = ((compare or {}).get("merge_base_commit") or {}).get("sha")
     if not isinstance(merge_base, str) or not merge_base:
         return None
-    before = tree_paths(fetch, repo, merge_base)
-    after = tree_paths(fetch, repo, head)
-    return changed_paths(before, after)
+    before = read_listing(fetch, repo, merge_base, budget, recursive=True)
+    after = read_listing(fetch, repo, head, budget, recursive=True)
+    if before is not None and after is not None:
+        return changed_paths(before[0], after[0])
+    return walked_changes(fetch, repo, before, merge_base, after, head, budget)

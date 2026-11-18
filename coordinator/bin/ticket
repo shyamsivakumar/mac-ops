@@ -1527,26 +1527,31 @@ def pull_changed_count(repo, number):
 def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths the pull request changed.
 
-    An unreadable or truncated list is retried, then UNKNOWN: `ticket gate`
-    refuses rather than building a brief that could order a prompt merge. The
-    changed-file count the completeness check needs is read from the pull
-    request itself when the caller does not already hold it, and a list that
-    cannot be completed falls back to the merge base's and the head's trees,
-    so a big pull request of ordinary code still clears.
+    The merge base and the head are pinned by the caller, so their trees are
+    read first: a file list is read by pull-request number and describes
+    whatever head GitHub holds at that moment, which lets a code-only
+    revision clear a prompt-changing head that is restored before the merge.
+    An unreadable tree diff is retried, then UNKNOWN: `ticket gate` refuses
+    rather than building a brief that could order a prompt merge.
+
+    A caller with no pinned pair has only the file list, which is read and
+    must be complete before it decides anything.
     """
+    if base and head:
+        for _ in range(max(1, attempts)):
+            try:
+                paths = prompt_paths.tree_diff(
+                    lambda endpoint: gh_json(["api", endpoint]), repo, base, head)
+            except (GhError, ValueError):
+                continue
+            if paths is not None:
+                return prompt_paths.prompt_scan(paths)
+        return prompt_paths.UNKNOWN
     count = changed_files if isinstance(changed_files, int) else pull_changed_count(repo, number)
     for _ in range(max(1, attempts)):
         state = prompt_paths.prompt_scan(pull_files(repo, number, count))
         if state != prompt_paths.UNKNOWN:
             return state
-    if base and head:
-        try:
-            paths = prompt_paths.tree_diff(
-                lambda endpoint: gh_json(["api", endpoint]), repo, base, head)
-        except (GhError, ValueError):
-            paths = None
-        if paths is not None:
-            return prompt_paths.prompt_scan(paths)
     return prompt_paths.UNKNOWN
 
 
