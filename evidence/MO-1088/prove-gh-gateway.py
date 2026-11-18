@@ -45,6 +45,16 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != 
         print("x-ratelimit-resource: core")
         print()
         print(name)
+elif mode == "partialheaders" and "--include" in args and "--paginate" in args:
+    # Two pages print headers, then the third request fails without headers.
+    for name in ("name1", "name2"):
+        print("HTTP/2.0 200 OK")
+        print("content-type: application/json")
+        print("x-ratelimit-resource: core")
+        print()
+        print(name)
+    sys.stderr.write("gh: HTTP 502\\n")
+    sys.exit(1)
 elif mode == "failfirst" and "--paginate" in args:
     # The first request fails: one attempt, no page printed.
     sys.stderr.write("gh: HTTP 502\\n")
@@ -489,6 +499,15 @@ check("importing the lane driver does not rename the process",
 check("the lane's own calls are named lane_driver",
       [row["caller"] for row in rows_after[-2:]] == ["overnight", "lane_driver"],
       f"callers={[row['caller'] for row in rows_after[-2:]]}")
+
+# A header-carrying read that fails after printing pages still counts the
+# request that failed: the blocks are the pages, not a JSON body.
+set_mode("partialheaders")
+rows_before = len(rows())
+run(["gh", "api", "--include", "--paginate", "repos/a/b/tags"])
+check("a failed header-carried pagination counts its failed request",
+      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+set_mode("200")
 
 # A read whose first request fails made one attempt, not two.
 set_mode("failfirst")
