@@ -24,6 +24,13 @@ TERMINAL_STATUSES = ["completed", "interrupted", "failed", "cancelled", "rolled_
 # A launch learns its thread only after the call, so its reservedThreads record
 # carries this prefix and reconcile knows the thread may not be listed live yet.
 LAUNCH_RECORD = "launch:"
+# One message is one item. A started item is recorded for this long, so the
+# same message is refused while the thread that took it still works it, while
+# a message the board asks for again after its thread stopped still goes out.
+MESSAGE_TTL = float(os.environ.get("COORDQ_MESSAGE_TTL", "1800"))
+# A reservation covers one step in flight. Past this age the step is over,
+# whatever its reply said, so the slot it holds goes back to the queue.
+RESERVATION_TIMEOUT = float(os.environ.get("COORDQ_RESERVATION_TIMEOUT", "180"))
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
@@ -273,15 +280,95 @@ def thread_status(thread_id):
     return json.loads(out).get("thread", {}).get("status")
 
 
+def message_identity(item):
+    """The title and the target of one message.
+
+    The target is the thread the message goes to. A launch has no thread
+    yet, so its client request names the work it starts: a second launch for
+    the same work is the same message.
+    """
+    args = item.get("args") or {}
+    return (str(item.get("title") or ""),
+            str(args.get("threadId") or args.get("clientRequestId") or ""))
+
+
+def prune_messages(queue):
+    """Drop the started-message records that are too old to be running.
+
+    Returns whether anything was dropped, so a caller saves only a change.
+    """
+    kept = [record for record in queue.get("started") or []
+            if isinstance(record, dict)
+            and time.time() - float(record.get("at") or 0) < MESSAGE_TTL]
+    changed = len(kept) != len(queue.get("started") or [])
+    queue["started"] = kept
+    return changed
+
+
+def duplicate_message(queue, title, target, key="", live_ids=None):
+    """The queued or running item that already carries this message, or None.
+
+    A started message counts while the thread that took it is live: the
+    same message is then already being worked. An unreadable thread list
+    counts it too, because a refused start costs one attempt while a second
+    copy of the message costs a second thread on the same work.
+
+    An action key names one board action, and a new head is a new action on
+    the same thread, so two different keys are two messages.
+    """
+    for item in queue.get("items") or []:
+        if message_identity(item) != (title, target):
+            continue
+        if key and item.get("actionKey") and item["actionKey"] != key:
+            continue
+        return "queued", item.get("id")
+    for record in queue.get("started") or []:
+        if (record.get("title"), record.get("target")) != (title, target):
+            continue
+        if key and record.get("actionKey") and record["actionKey"] != key:
+            continue
+        if live_ids is None or record.get("thread") in live_ids:
+            return "started", record.get("id")
+    return None
+
+
+def record_started(queue, item, thread):
+    """Remember a message the queue started, so it is not queued again."""
+    title, target = message_identity(item)
+    queue.setdefault("started", []).append({"id": item.get("id"), "title": title,
+                                            "target": target, "thread": thread or "",
+                                            "actionKey": item.get("actionKey") or "",
+                                            "at": time.time()})
+
+
+def started_thread(queue, item, key):
+    """The thread a dispatched item works, as far as the queue knows it."""
+    if item.get("tool") == "t3_thread_send":
+        return str((item.get("args") or {}).get("threadId") or "")
+    record = (queue.get("reservedThreads") or {}).get(key) or ""
+    if isinstance(record, str) and record.startswith(LAUNCH_RECORD):
+        return record[len(LAUNCH_RECORD):]
+    return ""
+
+
+def live_thread_ids():
+    """The live thread ids, or None when they cannot be read."""
+    try:
+        return active_thread_ids()
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError):
+        return None
+
+
 def reconcile_reservations(queue, active, statuses=None):
     reserved = queue.setdefault("reserved", {})
     threads = queue.setdefault("reservedThreads", {})
     known = {} if statuses is None else statuses
+    released = 0
     for key, at in list(reserved.items()):
         record = threads.get(key)
         launched = isinstance(record, str) and record.startswith(LAUNCH_RECORD)
         thread = record[len(LAUNCH_RECORD):] if launched else record
-        expired = time.time() - at >= 600
+        expired = time.time() - at >= RESERVATION_TIMEOUT
         seen = bool(thread) and thread in active
         finished = False
         if launched and not (expired or seen):
@@ -295,12 +382,14 @@ def reconcile_reservations(queue, active, statuses=None):
         if not (expired or seen or finished):
             continue
         if expired:
-            log(f"EXPIRED reservation #{key} after ten minutes")
+            log(f"EXPIRED reservation #{key} after {int(RESERVATION_TIMEOUT)}s")
         elif finished:
             log(f"released reservation #{key}: thread {thread} is {known[thread]}")
         reserved.pop(key)
         threads.pop(key, None)
-    save(queue)
+        released += 1
+    if released:
+        save(queue)
 
 
 def undispatchable_tool(item):
@@ -314,6 +403,8 @@ def drain():
     statuses = {}
     while True:
         queue = load()
+        if prune_messages(queue):
+            save(queue)
         dispatchable = []
         dropped = set()
         for item in queue["items"]:
@@ -425,6 +516,7 @@ def drain():
                     json.dump(receipts, f)
                 os.replace(receipts_path + ".tmp", receipts_path)
             queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
+            record_started(queue, item, started_thread(queue, item, reservation))
             if item.get("actionKey"):
                 set_action_key_state(queue, item["actionKey"], "dispatched")
             save(queue)
@@ -544,6 +636,14 @@ def cmd_start(a):
                     f"{action_key_state(queue, record.get('id'), record.get('state'))} "
                     f"{where}")
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
+        title, target = message_identity(item)
+        if prune_messages(queue):
+            save(queue)
+        duplicate = duplicate_message(queue, title, target, key,
+                                      live_thread_ids() if queue.get("started") else None)
+        if duplicate:
+            die(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "
+                f"already {duplicate[0]} as coordq #{duplicate[1]}")
         if key:
             item["actionKey"] = key
         queue["next"] += 1
@@ -969,10 +1069,20 @@ def cmd_drop(a):
 
 
 def cmd_status(a):
+    queue = load()
+    if queue.get("reserved"):
+        # A reservation outlives its launch when nothing reconciles it, so the
+        # read reconciles before it reports: a slot a finished launch no
+        # longer needs never shows as held.
+        try:
+            reconcile_reservations(queue, active_thread_ids())
+        except (RuntimeError, ValueError, KeyError, TypeError, OSError) as e:
+            log(f"status left the reservations alone: {e}")
+        queue = load()
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
-    print(json.dumps({"cap": cap(), "live": live(), "reserved": load().get("reserved", {}), "queued": len(load()["items"]), "failed": load().get("failed", []), "stuck": stuck, "tickAlarm": tick_alarm()}))
+    print(json.dumps({"cap": cap(), "live": live(), "reserved": queue.get("reserved", {}), "queued": len(queue["items"]), "failed": queue.get("failed", []), "stuck": stuck, "tickAlarm": tick_alarm()}))
 
 
 
