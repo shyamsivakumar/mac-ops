@@ -60,6 +60,13 @@ def commit(repo: Path, name: str, content: str) -> None:
     )
 
 
+def scan_deleted(records) -> list[str]:
+    """The paths the scan saw as deleted."""
+    deleted = [name for code, name, original in records if original is None and "D" in code]
+    deleted.extend(original for code, name, original in records if original is not None)
+    return deleted
+
+
 def agents_bootstrap(repo: Path) -> bool:
     """Call the cleaner across its signature changes."""
     try:
@@ -76,13 +83,16 @@ def scan_digests(repo: Path, records: list[tuple[str, str, str | None]]) -> dict
     return digests
 
 
-def clear_bootstrap(repo: Path, records, trash: Path, digests=None, index_before=None):
+def clear_bootstrap(repo: Path, records, trash: Path, digests=None, index_before=None, deleted=None):
     """Call the cleaner across its signature changes."""
+    if deleted is None:
+        deleted = [name for code, name, original in records if original is None and "D" in code]
+        deleted.extend(original for code, name, original in records if original is not None)
     if digests is None:
         digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
     if index_before is None:
         index_before = cleaner.index_digest(repo)
-    for arguments in ((repo, records, trash, digests, index_before), (repo, records, trash, digests), (repo, records, trash), (repo, records)):
+    for arguments in ((repo, records, trash, digests, index_before, None, deleted), (repo, records, trash, digests, index_before, None), (repo, records, trash, digests, index_before), (repo, records, trash, digests), (repo, records, trash), (repo, records)):
         try:
             return cleaner.clear_bootstrap_changes(*arguments)
         except TypeError:
@@ -239,7 +249,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         (self.repo / ".specstory").mkdir()
         (self.repo / ".specstory" / "session.md").write_text("history\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
-        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, scan_digests(self.repo, records), cleaner.index_digest(self.repo))
+        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, scan_digests(self.repo, records), cleaner.index_digest(self.repo), None, scan_deleted(records))
         self.assertEqual(sorted(cleared or []), [".specstory/session.md", "AGENTS.md"])
         self.assertFalse((self.repo / ".specstory" / "session.md").exists())
         self.assertEqual(cleaner.status_for(self.repo), [])
@@ -251,7 +261,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         git(repo, "mv", ".specstory/a.md", ".specstory/b.md")
         records = cleaner.status_for(repo)
         self.assertEqual(cleaner.classify_changes(repo, records), ([".specstory/b.md"], []))
-        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records), cleaner.index_digest(repo))
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records), cleaner.index_digest(repo), None, scan_deleted(records))
         self.assertEqual(cleared, [".specstory/b.md"])
         self.assertEqual((repo / ".specstory" / "a.md").read_text(encoding="utf-8"), "history\n")
         self.assertFalse((repo / ".specstory" / "b.md").exists())
@@ -261,7 +271,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         repo = self.tracked_specstory()
         (repo / ".specstory" / "a.md").unlink()
         records = cleaner.status_for(repo)
-        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records), cleaner.index_digest(repo))
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records), cleaner.index_digest(repo), None, scan_deleted(records))
         self.assertEqual(cleared, [".specstory/a.md"])
         self.assertEqual(cleaner.status_for(repo), [])
 
@@ -724,7 +734,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         records = cleaner.status_for(repo)
         digests = {name: cleaner.file_digest(repo / name) for code, name, _original in records}
         signatures = {name: cleaner._working_signature(repo / name) for code, name, _original in records}
-        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests, cleaner.index_digest(repo), signatures)
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests, cleaner.index_digest(repo), signatures, scan_deleted(records))
         self.assertEqual(sorted(cleared or []), [".specstory/b.md"])
         self.assertEqual(cleaner.status_for(repo), [])
 
@@ -737,7 +747,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         digests = {name: cleaner.file_digest(repo / name) for code, name, _original in records}
         signatures = {name: cleaner._working_signature(repo / name) for code, name, _original in records}
         os.chmod(repo / ".specstory" / "b.md", 0o755)
-        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests, cleaner.index_digest(repo), signatures)
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests, cleaner.index_digest(repo), signatures, scan_deleted(records))
         self.assertIsNone(cleared)
         destination = repo / ".specstory" / "b.md"
         self.assertTrue(destination.exists(), "the file must stay in the worktree")
