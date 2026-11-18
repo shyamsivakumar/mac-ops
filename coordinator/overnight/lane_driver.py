@@ -451,9 +451,10 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     it, and the work starts a fresh worktree instead. That is the
     fix-check path's rule; the other paths keep their own routing.
 
-    A thread whose builder is blocked never takes a send: a provider that
-    ran out cannot run the work, so the work starts a fresh thread on the
-    next builder in the same worktree instead (MO-1082).
+    A thread that runs no builder - a legacy Sol or OpenAI thread - never
+    takes a send either, and neither does a thread whose builder is
+    blocked: the work starts a fresh thread on the next builder instead
+    (MO-1082). Builds run on the builder list only.
     """
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
@@ -474,7 +475,12 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
     thread_builder = builder_of(thread)
-    if sendable and thread_builder and provider_health.blocked(thread_builder):
+    if sendable and not thread_builder:
+        # A thread that runs no builder - a legacy Sol or OpenAI thread -
+        # must never take a build, so the work moves to a builder.
+        sendable = False
+        reroute = "not a builder"
+    elif sendable and provider_health.blocked(thread_builder):
         # The thread's builder ran out. Its send would start on an
         # exhausted provider, so the work moves to the next builder.
         sendable = False
@@ -496,7 +502,14 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         model = builders.choose_builder(thread_builder)
         if model is None:
             return f"skip {lkey}: every builder is blocked, waiting for a probe"
-        path = thread.get("worktreePath") if reroute == "builder blocked" else None
+        if reroute == "builder blocked":
+            path = thread.get("worktreePath")
+        elif reroute == "not a builder" and thread.get("worktreePath") and not root_workspace(thread):
+            # The work stays in the thread's own worktree; a build never
+            # runs in a shared checkout of the repository.
+            path = thread.get("worktreePath")
+        else:
+            path = None
         if path:
             # The work stays in its own worktree; only the builder moves.
             workspace = {"type": "existing_worktree", "worktreePath": path}

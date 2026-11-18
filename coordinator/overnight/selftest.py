@@ -399,7 +399,7 @@ def gate_pipeline():
                     dict(threadId="gate", status="completed", updatedAt="fixture")]}
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
-                    return {"thread": {"status": "running", "sendable": True}}
+                    return {"thread": {"status": "running", "sendable": True, **builder_thread_fields()}}
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
@@ -409,6 +409,7 @@ def gate_pipeline():
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
+                 patch.object(lane.provider_health, "blocked", lambda selection: False), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
                 lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
@@ -522,7 +523,8 @@ def no_parking(status="interrupted"):
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
          patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
          patch.object(lane, "run", command), \
-         patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
+         patch.object(lane, "t3", return_value={"thread": {"status": status, **builder_thread_fields()}}), \
+         patch.object(lane.provider_health, "blocked", lambda selection: False), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
@@ -1452,15 +1454,27 @@ def consolidation_guard():
     exact("never create a third ticket" in message, True)
 
 
+def builder_thread_fields():
+    """The provider fields of a thread that runs a builder.
+
+    A real thread always names the model it runs, and a build never runs
+    off the builder list, so a fixture thread that should take a send names
+    the first builder (MO-1082)."""
+    import lane_driver as lane
+    member = lane.builders.BUILDERS[0]
+    return {"providerInstanceId": member["instanceId"], "model": member["model"]}
+
+
 def send_integrity():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     key = f"fix:{repo}#385:head"
-    cases = [(dict(status=status), True) for status in
+    build = builder_thread_fields()
+    cases = [(dict(status=status, **build), True) for status in
              ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
-    cases += [(thread, False) for thread in ({}, dict(status="deleted"),
-              dict(status="running", archived=True), dict(status="running", sendable=False),
-              dict(status="running", canSend=False))]
+    cases += [(thread, False) for thread in ({**build},
+              dict(status="deleted", **build), dict(status="running", **build, archived=True),
+              dict(status="running", **build, sendable=False), dict(status="running", **build, canSend=False))]
     for thread, live in cases:
         for failure in (None, "error", "empty"):
             actions, reads, ledger = [], [], {}
@@ -1500,7 +1514,7 @@ def send_integrity():
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
-         patch.object(lane, "t3", return_value={"thread": {"status": "running"}}), \
+         patch.object(lane, "t3", return_value={"thread": {"status": "running", **builder_thread_fields()}}), \
          patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
         ledger = {}
         exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}: send existing thread")
@@ -1559,6 +1573,9 @@ def root_workspace():
 
     def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git,
                 worktree_only=True):
+        # A real thread always names the model it runs; these fixtures name
+        # the first builder, so every case here keeps its own routing.
+        thread = {**builder_thread_fields(), **thread}
         actions = []
         def read(tool, args):
             return {"thread": thread}
