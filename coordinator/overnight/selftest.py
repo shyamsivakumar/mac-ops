@@ -1570,8 +1570,9 @@ def gate_round_cap():
         # reviewer for a model or for a brief, so no such command runs,
         # and no fix round is sent.
         result = act(20, "e" * 40, ledger, verdict=("absent", None, ""))
-        exact(result.startswith("skip #20:"), True)
+        exact(result, "#20: no fix round, the decisions item is on the board")
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        exact(len(json.loads(board.read_text())["items"]), 1)
         # A pull request that two earlier lane sessions already sent two
         # fix rounds to has had two reviews. The third failed review
         # raises the decisions item, and no third fix round is sent.
@@ -1580,6 +1581,16 @@ def gate_round_cap():
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
         exact(lane.failed_reviews(repo, 21, earlier), (3, heads[2]))
         exact(result.endswith("one decisions item is on the board"), True)
+        # A pull request with three historical fix rounds, a new head and
+        # no item on the board reaches the cap before any verdict. The lane
+        # publishes the item then, and it does not report an item that was
+        # never written.
+        history = {f"fix:{repo}#22:{head}": "sent" for head in heads[:3]}
+        result = act(22, "f" * 40, history, verdict=("absent", None, ""))
+        exact(result, f"#22: no fix round after {lane.GATE_ROUND_CAP} failed reviews, one decisions item is on the board")
+        exact(sorted(item["id"] for item in json.loads(board.read_text())["items"]),
+              [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (20, 21, 22)])
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
 
 
 def decisions_board_guard():
