@@ -40,6 +40,8 @@ DEAD_GATE = {"thread": {"status": "failed", **ASTRA_GATE},
 DEAD_OPUS_GATE = {"thread": {"status": "failed", **OPUS_GATE},
                  "items": [{"type": "user_message", "text": "review"}],
                  "recentRuns": [{"executedModel": None}]}
+# The provider refusing to run: a reviewer this block names is skipped.
+REFUSAL = {"error": {"code": "insufficient_quota", "message": "no credits remaining"}}
 # A dead Opus gate whose provider refusal says when it comes back, in a window
 # shorter than the head's own five-minute retry backoff.
 SHORT_RESET_GATE = {"thread": {"status": "failed", "latestRunId": "run-1", **OPUS_GATE},
@@ -181,6 +183,35 @@ class FirstRetryTest(RetryLimitBase):
         out, _ = self.run_gatekeep()
         self.assertEqual(self.gate_items(), [])
         self.assertNotIn("regating", out)
+
+
+class ReviewerBlockedBeforeQueueTest(RetryLimitBase):
+    """A new head whose reviewer became blocked between the choice and the
+    queue lock is queued on the next reviewer, not on the blocked one."""
+
+    def test_the_next_reviewer_is_queued_when_the_chosen_one_blocks(self):
+        # The candidate chooses its reviewer while it is still unblocked; a
+        # concurrent pass blocks that reviewer before this pass takes the
+        # queue lock. The head must not be queued on it.
+        self.write_queue()
+        chosen = coordq.gate_candidates
+        self.addCleanup(setattr, coordq, "gate_candidates", chosen)
+
+        def blocked_after_selection(config):
+            for event in chosen(config):
+                if event["kind"] == "candidate":
+                    self.assertEqual(event["args"]["modelSelection"], reviewer_of(ASTRA_GATE))
+                    coordq.block_reviewer(reviewer_of(ASTRA_GATE), REFUSAL)
+                yield event
+
+        coordq.gate_candidates = blocked_after_selection
+        out, _ = self.run_gatekeep()
+        items = self.gate_items()
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["args"]["modelSelection"], reviewer_of(OPUS_GATE))
+        self.assertIn("queued " + self.key + " reviewer claudeAgent claude-opus-5-5", out)
+        self.assertEqual(self.read_queue()["gatedHeads"][self.key]["reviewer"],
+                         reviewer_of(OPUS_GATE))
 
 
 class NonAstraGateTest(RetryLimitBase):
