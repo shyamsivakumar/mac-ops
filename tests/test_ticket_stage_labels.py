@@ -57,18 +57,21 @@ def body():
 class FakeGitHub:
     """The GitHub commands the ticket CLI makes, and the labels they change.
 
-    `fail_edit` makes one label update fail, which is the failure the helper
-    has to survive.
+    `failing_edits` counts how many of the next label updates fail. A real
+    update removes the labels it was told to remove before it reports that
+    the new one could not be added, so a failing update leaves the ticket
+    stage-less. One failing update is the failure the helper has to repair,
+    and two are the failure it cannot.
     """
 
-    def __init__(self, labels, pulls=()):
+    def __init__(self, labels, pulls=(), failing_edits=0):
         self.labels = list(labels)
         # The repository's label set is apart from the issue's labels, so a
         # created label does not land on the issue by itself.
         self.repo_labels = set(labels)
         self.pulls = list(pulls)
         self.edits = []
-        self.fail_edit = False
+        self.failing_edits = failing_edits
         self.comments = []
 
     def issue(self):
@@ -115,11 +118,13 @@ class FakeGitHub:
 
     def edit(self, cmd, args):
         self.edits.append(args)
-        if self.fail_edit:
+        for name in self.option(args, "--remove-label"):
+            if name in self.labels:
+                self.labels.remove(name)
+        if self.failing_edits:
+            self.failing_edits -= 1
             return subprocess.CompletedProcess(cmd, 1, "",
                                                "could not add label: 'stage:started' not found")
-        for name in self.option(args, "--remove-label"):
-            self.labels.remove(name)
         for name in self.option(args, "--add-label"):
             if name not in self.labels:
                 self.labels.append(name)
@@ -170,14 +175,27 @@ class StartTest(unittest.TestCase):
         self.assertEqual(FakeGitHub.option(github.edits[0], "--add-label"), ["stage:started"])
 
     def test_start_keeps_the_old_stage_when_the_add_fails(self):
-        github = FakeGitHub(["stage:todo", "type:standard", "priority:1"])
-        github.fail_edit = True
+        github = FakeGitHub(["stage:todo", "type:standard", "priority:1"], failing_edits=1)
         with contextlib.redirect_stderr(io.StringIO()) as errors:
             with self.assertRaises(SystemExit) as caught:
                 start(github)
         self.assertEqual(caught.exception.code, 1)
         self.assertIn("keeps stage:todo", errors.getvalue())
+        # The failed update removed the old stage, so the stage is back only
+        # because the helper put it back.
         self.assertEqual(github.stages(), ["stage:todo"])
+        self.assertEqual(len(github.edits), 2)
+        self.assertEqual(FakeGitHub.option(github.edits[1], "--add-label"), ["stage:todo"])
+
+    def test_start_says_when_the_old_stage_could_not_be_put_back(self):
+        github = FakeGitHub(["stage:todo", "type:standard", "priority:1"], failing_edits=2)
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as caught:
+                start(github)
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("may now carry no stage label", errors.getvalue())
+        self.assertNotIn("keeps stage:todo", errors.getvalue())
+        self.assertEqual(github.stages(), [])
 
     def test_start_does_not_write_an_unchanged_stage(self):
         github = FakeGitHub(["stage:started", "type:standard", "priority:1"])
@@ -210,6 +228,17 @@ class DeliverTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("refused: no open pull request references this issue", errors.getvalue())
         self.assertEqual(github.stages(), ["stage:todo"])
+
+    def test_start_then_deliver_leaves_one_stage_label_at_each_step(self):
+        github = FakeGitHub(["stage:todo", "type:standard", "priority:1"])
+        start(github)
+        self.assertEqual(github.stages(), ["stage:started"])
+        # The builder opens its pull request after the start.
+        github.pulls = [20]
+        deliver(github)
+        self.assertEqual(github.stages(), ["stage:started"])
+        # Delivery writes nothing on a ticket that is already delivered.
+        self.assertEqual(len(github.edits), 1)
 
 
 if __name__ == "__main__":

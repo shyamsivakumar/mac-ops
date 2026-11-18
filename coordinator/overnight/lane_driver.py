@@ -95,7 +95,7 @@ ORDER = {
 
 
 def run(cmd, timeout=150):
-    if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list")):
+    if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list", "deliver")):
         require_api_budget()
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     output = (p.stdout + p.stderr).strip()
@@ -294,6 +294,37 @@ def board_keys(snapshot):
             continue
         keys.add(f"{repo}#{number}")
     return keys
+
+
+STAGE_LABEL = "stage:"
+DELIVERED_STAGE = "stage:started"
+HOLD_LABEL = "stage:hold"
+
+
+def on_delivered_stage(labels):
+    """Say whether a ticket already carries exactly the delivered stage."""
+    stages = [label.get("name") or "" for label in labels]
+    return sorted(name for name in stages
+                  if name.startswith(STAGE_LABEL) and name != HOLD_LABEL) == [DELIVERED_STAGE]
+
+
+def deliver_stage(repo, issue):
+    """Record the delivery of a ticket whose pull request is open.
+
+    The builder opens its own pull request, so this pass is the delivery
+    step and nothing else moves the ticket then. `ticket deliver` writes
+    nothing when the ticket already carries exactly the delivered stage,
+    so it is called only when the stage label is missing or doubled. A
+    failure is printed and left for the next pass: one ticket's label does
+    not fail the whole lane pass.
+    """
+    if DRY:
+        return f"DRY deliver #{issue}"
+    try:
+        return run(["ticket", "deliver", f"{repo}#{issue}"], timeout=200)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        return (f"deliver #{issue} failed (exit {getattr(exc, 'returncode', 'timeout')}): "
+                f"{(getattr(exc, 'stderr', '') or '').strip()}")
 
 
 def builder_thread(repo, body):
@@ -561,6 +592,10 @@ def act_on_pr(repo, number, ledger):
             return None
         if any(label["name"] in ("stage:backlog", "stage:hold") for label in issue_record["labels"]):
             return None
+        if not on_delivered_stage(issue_record["labels"]):
+            note = deliver_stage(repo, issue)
+            if note:
+                print(f"{CFG[repo]['key']:5} #{number} {note}")
     agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "") and (c.get("state") or c.get("conclusion")) == "SUCCESS"
                    for c in pr.get("statusCheckRollup") or [])
     check_ok = f"Builder check: PASS {head}" in body or agent_ok
