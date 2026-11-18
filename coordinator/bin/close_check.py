@@ -40,10 +40,6 @@ ISSUE_REF = re.compile(r"(?:refs|fixes|closes|resolves)[ \t]+#(\d+)", re.IGNOREC
 _NOT_IN_PATH = r"(?<![A-Za-z0-9_.*~/\\-])"
 PATH_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)+")
 FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css)\b")
-# The scope a pull request declares for itself: a line that starts with
-# "scope", so a file named in the prose of a pull request does not widen
-# the scope on its own.
-SCOPE_LINE = re.compile(r"(?im)^[ \t]*(?:[*#>]+[ \t]*)*(?:the[ \t]+)?scope\b[ \t]*(?:\*\*)?[ \t]*[:.][ \t]*(.*)$")
 
 PASS = "pass"
 FAIL = "fail"
@@ -69,30 +65,6 @@ def scope_tokens(body):
     for match in FILE_TOKEN.finditer(body or ""):
         tokens.add(match.group(0).strip(".,;:()[]"))
     return tokens
-
-
-def pr_scope_text(pr_body):
-    """The scope the pull request declares for itself.
-
-    A pull request states what it changes in a line that starts with
-    "scope", and the paragraph that follows it belongs to the same
-    declaration. Only that paragraph counts: a file named in the prose of
-    a pull request does not widen the scope on its own.
-    """
-    lines = (pr_body or "").splitlines()
-    found = []
-    index = 0
-    while index < len(lines):
-        match = SCOPE_LINE.match(lines[index])
-        if not match:
-            index += 1
-            continue
-        found.append(match.group(1))
-        index += 1
-        while index < len(lines) and lines[index].strip():
-            found.append(lines[index])
-            index += 1
-    return "\n".join(found)
 
 
 def common_prefix(one, other):
@@ -153,20 +125,20 @@ def names_a_file(tokens):
     return False
 
 
-def item_scope(body, pr_body, files):
+def item_scope(body, files):
     """Item 1: the diff stays inside the ticket's stated scope.
 
-    The scope comes from the ticket and from the scope line of the pull
-    request. When neither names a file in this repository the scope cannot
-    be judged, and an unjudged scope does not authorize a close: the item
-    fails.
+    The ticket is the only authority for the scope. A pull request cannot
+    widen the scope of the ticket that asked for the change, so nothing in
+    the pull request body is read here. When the ticket names no file in
+    this repository the scope cannot be judged, and an unjudged scope
+    authorizes no close: the item fails.
     """
-    tokens = scope_tokens(body) | scope_tokens(pr_scope_text(pr_body))
+    tokens = scope_tokens(body)
     if not tokens or not names_a_file(tokens):
         return {"item": "scope", "status": FAIL, "required": True,
-                "detail": ("neither the ticket nor the pull request names a file in this "
-                           "repository, so the scope cannot be judged: state the scope in the "
-                           "pull request's scope line")}
+                "detail": ("the ticket names no file in this repository, so the scope cannot be "
+                           "judged: the ticket has to name the files it changes")}
     outside = [path for path in files if not in_scope(path, tokens, files)[0]]
     if outside:
         return {"item": "scope", "status": FAIL, "required": True,
@@ -247,7 +219,7 @@ def item_cost(body, report_state, detail=""):
 def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail=""):
     """The four items, in the order the checklist reads them."""
     return [
-        item_scope(body, pr_body, files),
+        item_scope(body, files),
         item_proof(proof_state, proof_path),
         item_checks(proof_state, proof_text),
         item_cost(pr_body, report_state, report_detail),
