@@ -3,7 +3,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 from tests.test_gatekeep_backstop_reviewer import load_coordq
@@ -287,6 +287,47 @@ class CapacityTests(unittest.TestCase):
                 self.q, "thread_status", return_value="waiting"):
             self.q.drain()
         self.assertIn("7", self.q.load()["reserved"])
+
+    def test_a_start_reads_the_thread_list_before_taking_the_writer_lock(self):
+        # The finding: a slow thread-list read while holding the writer lock
+        # holds every other start. The read happens first, and the records it
+        # speaks for are snapshotted, so a record written since counts as
+        # running.
+        self.q.save({"next": 2, "items": [],
+                     "started": [{"id": 1, "title": "older", "target": "other",
+                                  "thread": "other", "actionKey": "",
+                                  "at": self.q.time.time()}]})
+        real_lock, held, reads = self.q.Lock, [], []
+
+        class Recording(real_lock):
+            def __enter__(self):
+                held.append("enter")
+                return super().__enter__()
+
+            def __exit__(self, *exc):
+                held.append("exit")
+                return super().__exit__(*exc)
+
+        def live_ids():
+            reads.append(list(held))
+            return {"other"}
+
+        args = argparse.Namespace(
+            args=json.dumps({"threadId": "mcp:launch:builder", "message": "fix"}),
+            title="MO#544 gate findings", priority=800, tool="t3_thread_send",
+            action_key=None)
+        with patch.object(self.q, "Lock", Recording), \
+                patch.object(self.q, "active_thread_ids", side_effect=live_ids), \
+                patch.object(self.q, "cap", lambda: 0), redirect_stderr(io.StringIO()), \
+                redirect_stdout(io.StringIO()):
+            try:
+                self.q.cmd_start(args)
+            except SystemExit as e:
+                self.assertEqual(e.code, 0)
+        # The dedupe read is the first one and it runs with no lock held. The
+        # dispatch after it (drain) keeps its own, older, behaviour.
+        self.assertEqual(reads[0], [])
+        self.assertIn("enter", held)
 
     def test_launch_burst_does_not_overshoot_the_cap_with_a_lagging_count(self):
         self.q.save({"next": 40, "items": [
