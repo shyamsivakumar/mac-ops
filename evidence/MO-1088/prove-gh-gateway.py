@@ -45,7 +45,7 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != 
         print("x-ratelimit-resource: core")
         print()
         print(name)
-elif mode == "bodyhttp" and ("--include" in args or "-i" in args) and "--paginate" in args:
+elif mode == "bodyhttp" and "--paginate" in args:
     for name in ("name1", "name2", "name3"):
         print("HTTP/2.0 200 OK")
         print("content-type: text/plain")
@@ -79,6 +79,11 @@ elif "--include" in args or "-i" in args:
         print("x-ratelimit-resource: core")
         print()
         print(body)
+elif "--paginate" in args and any(
+        arg in ("-q", "--jq", "-t", "--template") or arg.startswith(("-q", "-t"))
+        for arg in args):
+    for name in ("name1", "name2", "name3"):
+        print(name)
 elif "--paginate" in args:
     pages = [[{{"number": 1}}], [{{"number": 2}}], [{{"number": 3}}]]
     if "--slurp" in args:
@@ -107,13 +112,13 @@ def check(name, condition, detail=""):
     print(f"{'PASS' if condition else 'FAIL'} {name}" + (f" ({detail})" if detail else ""))
 
 
-def run(argv, floor=None, cwd=None, extra_env=None):
+def run(argv, floor=None, cwd=None, extra_env=None, fresh=False):
     """Run one read in its own process, so the in-process quota cache is fresh."""
     code = f"""
 import sys
 sys.path.insert(0, {str(BIN)!r})
 import gh_gateway
-result = gh_gateway.run({argv!r}, timeout=20, limit={floor!r})
+result = gh_gateway.run({argv!r}, timeout=20, limit={floor!r}, fresh={fresh!r})
 sys.stdout.write(result.stdout)
 """
     return subprocess.run([sys.executable, "-c", code], capture_output=True,
@@ -175,8 +180,8 @@ check("a slurped paginated read logs one row per page", len(rows()) - rows_befor
 # the response headers and the caller still gets only its own output.
 rows_before = len(rows())
 formatted = run(["gh", "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
-check("a formatted paginated read logs one row per page", len(rows()) - rows_before == 3,
-      f"rows={len(rows()) - rows_before}")
+check("a formatted paginated read is counted as its first request",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 check("a formatted paginated read returns only its bodies",
       formatted.stdout.split() == ["name1", "name2", "name3"]
       and "HTTP/" not in formatted.stdout, repr(formatted.stdout[:40]))
@@ -184,8 +189,8 @@ check("a formatted paginated read returns only its bodies",
 # The short filter flag also takes its value attached, as `-q.[].name`.
 rows_before = len(rows())
 attached = run(["gh", "api", "--paginate", "-q.[].name", "repos/a/b/tags"])
-check("an attached -q filter logs one row per page", len(rows()) - rows_before == 3,
-      f"rows={len(rows()) - rows_before}")
+check("an attached -q filter keeps the caller's output whole",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 check("an attached -q filter returns only its bodies",
       attached.stdout.split() == ["name1", "name2", "name3"], repr(attached.stdout[:40]))
 rows_before = len(rows())
@@ -427,11 +432,22 @@ set_mode("200")
 set_mode("bodyhttp")
 rows_before = len(rows())
 bodyish = run(["gh", "api", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
-check("body text is not counted as a page", len(rows()) - rows_before == 3,
+check("body text is never counted or stripped", len(rows()) - rows_before == 1,
       f"rows={len(rows()) - rows_before}")
 check("body text is not stripped from the output", bodyish.stdout.count("HTTP/1.1 200 OK") == 3,
       repr(bodyish.stdout[:60]))
 set_mode("200")
+
+# A fresh read never comes from the cache and never fills it.
+fresh_read = ["gh", "api", "repos/a/b/issues?state=all&per_page=100&page=1"]
+before = calls_made()
+run(fresh_read, extra_env={"COORDINATOR_GH_CACHE": "on"}, fresh=True)
+run(fresh_read, extra_env={"COORDINATOR_GH_CACHE": "on"}, fresh=True)
+check("a fresh read always calls", calls_made() - before == 2, f"calls={calls_made() - before}")
+before = calls_made()
+run(fresh_read)
+check("a fresh read refreshes the cache for the next reader", calls_made() - before == 0,
+      f"calls={calls_made() - before}")
 
 # A pull's files collection is a list named by the ticket, so it is cached.
 rows_before = len(rows())

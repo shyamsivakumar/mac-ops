@@ -163,14 +163,18 @@ def classify(stderr):
     return "error"
 
 
-def gh(args, stdin=None):
+def gh(args, stdin=None, fresh=False):
     """Run one GitHub command through the shared helper.
 
     The helper counts the call for the usage report, serves a repeated
     list read from its cache, and makes a single-page read conditional so
-    GitHub answers 304 and does not charge the core quota for it."""
+    GitHub answers 304 and does not charge the core quota for it. A `fresh`
+    read goes past the helper's cache as well, because the board cache
+    above it can only be as fresh as the list it was built from; it then
+    refreshes that entry."""
     try:
-        result = gh_gateway.run(["gh"] + args, timeout=GH_TIMEOUT, stdin=stdin)
+        result = gh_gateway.run(["gh"] + args, timeout=GH_TIMEOUT, stdin=stdin,
+                                fresh=fresh)
     except subprocess.TimeoutExpired:
         raise GhError("offline", f"gh {' '.join(args[:2])} timed out after {GH_TIMEOUT}s")
     if result.returncode != 0:
@@ -178,8 +182,8 @@ def gh(args, stdin=None):
     return result.stdout
 
 
-def gh_json(args):
-    return json.loads(gh(args))
+def gh_json(args, fresh=False):
+    return json.loads(gh(args, fresh=fresh))
 
 
 def t3_call(tool, args):
@@ -327,11 +331,11 @@ def search_owner(owner, stage):
         limit = min(limit * 2, 1000)
 
 
-def fetch_list(cfg):
+def fetch_list(cfg, fresh=False):
     seen = {}
     for repo in cfg["repos"]:
         pages = gh_json(["api", "--paginate", "--slurp",
-                         f"repos/{repo}/issues?state=open&per_page=100"])
+                         f"repos/{repo}/issues?state=open&per_page=100"], fresh=fresh)
         if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
             raise GhError("invalid_response", f"invalid open issue pages for {repo}")
         for page in pages:
@@ -374,7 +378,10 @@ def repo_issues(repo):
     rows = []
     complete = False
     for page in range(1, ISSUE_PAGES + 1):
-        batch = gh_json(["api", f"repos/{repo}/issues?state=all&per_page=100&page={page}"])
+        # The key is allocated from this list, so it is read fresh: a
+        # cached list from before the last create would mint the key again.
+        batch = gh_json(["api", f"repos/{repo}/issues?state=all&per_page=100&page={page}"],
+                        fresh=True)
         if not batch:
             complete = True
             break
@@ -486,7 +493,7 @@ def cmd_list(a):
             out = {**cache, "stale": False, "cached": True}
         else:
             try:
-                data = {"fetchedAt": now(), "issues": fetch_list(cfg)}
+                data = {"fetchedAt": now(), "issues": fetch_list(cfg, fresh=a.fresh)}
             except GhError as e:
                 if cache is None:
                     die(f"list failed ({e.kind}) and no cache exists: {e}")
