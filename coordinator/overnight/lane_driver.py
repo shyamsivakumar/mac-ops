@@ -299,6 +299,19 @@ def board_keys(snapshot):
 STAGE_LABEL = "stage:"
 DELIVERED_STAGE = "stage:started"
 HOLD_LABEL = "stage:hold"
+BACKLOG_LABEL = "stage:backlog"
+
+
+def parked_by_hand(labels):
+    """Say whether Shyam parked the ticket, which no lane pass may move.
+
+    Label names are compared in lower case, the way `on_delivered_stage`
+    compares them. GitHub keeps the spelling a label was created with, so a
+    ticket parked as `Stage:Backlog` carries the same parking as
+    `stage:backlog` and must not be delivered.
+    """
+    names = {(label.get("name") or "").lower() for label in labels}
+    return bool(names & {BACKLOG_LABEL, HOLD_LABEL})
 
 
 def on_delivered_stage(labels):
@@ -595,7 +608,7 @@ def act_on_pr(repo, number, ledger):
         issue_record = next((i for i in SNAPSHOT["repos"][repo]["issues"] if i["number"] == int(issue)), None)
         if issue_record is None:
             return None
-        if any(label["name"] in ("stage:backlog", "stage:hold") for label in issue_record["labels"]):
+        if parked_by_hand(issue_record["labels"]):
             return None
         if not on_delivered_stage(issue_record["labels"]):
             note = deliver_stage(repo, issue)
