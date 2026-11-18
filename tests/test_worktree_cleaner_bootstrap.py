@@ -808,6 +808,18 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         kept = [item.read_bytes() for item in self.trash.iterdir() if item.is_file()]
         self.assertTrue(any(b"AGENTS.md" in item or b"standing rules" in item for item in kept), "the recovery copy has to be kept")
 
+    def test_a_fifo_is_never_read(self):
+        # A file replaced by a FIFO must not block the cleanup.
+        repo = Path(self.tmp.name) / "fifo-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        commit(repo, "AGENTS.md", "# Repository rules\n\n")
+        (repo / "AGENTS.md").unlink()
+        os.mkfifo(repo / "AGENTS.md")
+        self.assertEqual(cleaner._file_bytes(repo / "AGENTS.md"), None)
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
