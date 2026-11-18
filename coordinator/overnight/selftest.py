@@ -2024,6 +2024,58 @@ def alarm_mute():
             exact(alarms.muted(alarms.load_state(),
                                 alarms.key_of("factory-watchdog", cause), now), False)
 
+    # The decision and the publication happen under the lock, so an
+    # answer cannot slip between them: while the alarm is published, the
+    # lock is held and no other writer can record an acknowledgement.
+    import fcntl
+    import os
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            state = alarms.load_state()
+            alarms.raised(state, "factory-watchdog", cause, now)
+            alarms.save_state(state)
+            published = []
+            held = []
+
+            def publish(action):
+                # Another writer tries the lock while the alarm is
+                # published. It cannot have it: the tick holds it.
+                other = os.open(str(Path(str(mute) + ".lock")), os.O_RDWR | os.O_CREAT, 0o600)
+                try:
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held.append(False)
+                    fcntl.flock(other, fcntl.LOCK_UN)
+                except OSError:
+                    held.append(True)
+                finally:
+                    os.close(other)
+                published.append(action)
+                return None
+
+            action = alarms.decide_and_publish("factory-watchdog", cause, publish)
+            exact(action, "raise")
+            exact(published, ["raise"])
+            # The lock was held for the whole publication.
+            exact(held, [True])
+            # The key is on the board and in the state, so the answer has
+            # something to acknowledge.
+            exact(alarms.muted(alarms.load_state(), key, now), False)
+            exact("acked" in alarms.load_state()[key], False)
+
+    # A lock that cannot be taken does not hide the alarm: the alarm is
+    # published as unchecked and the fault is said out loud, because a
+    # storage failure must not hide a real failure from Shyam.
+    with tempfile.TemporaryDirectory() as scratch:
+        mute = str(Path(scratch) / "mute-state.json")
+        with patch.object(alarms, "MUTE_PATH", mute):
+            published = []
+            with patch.object(alarms, "take_lock", return_value=None):
+                action = alarms.decide_and_publish("factory-watchdog", cause,
+                                                   lambda a: published.append(a))
+            exact(action, "unchecked")
+            exact(published, ["unchecked"])
+
     # The stall's cause names the stalled repos, so two stalls on
     # different repos are different causes.
     stalled = {"items": {"a/one#1": {"stalled": True}, "b/two#2": {"stalled": False}}}
