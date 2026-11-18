@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 import sys
@@ -237,6 +238,15 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert unpublished_detached.exists(), "a detached worktree that is not published has to stay"
         listed = git(repo, "worktree", "list", "--porcelain")
         assert "stale-detached" in listed, "the registration of an unpublished head has to stay"
+        # A stale registration that is replaced by another worktree at the
+        # same path: the replacement and its detached head have to survive.
+        admin = repo / Path(git(repo, "rev-parse", "--git-path", "worktrees/stale-detached").strip())
+        shutil.rmtree(admin)
+        git(repo, "worktree", "add", "--detach", str(stale), shas["offmain"])
+        pruned = json.loads(command(args + ["--apply", "--prune"], env=env))
+        assert pruned["removed"] == 0, pruned["categories"]
+        assert stale.exists(), "the replacement worktree has to survive"
+        assert git(repo, "worktree", "list", "--porcelain").count("stale-detached") == 1, "the replacement registration has to stay"
         assert paths["masteronly"].exists(), applied
         assert ascend_tree.exists(), "ascend worktree must stay"
         log = (base / "worktree-cleaner.log").read_text(encoding="utf-8")
