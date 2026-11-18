@@ -339,9 +339,6 @@ def gate_pipeline():
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
                 actions.append("merge")
                 return "merged"
-            if cmd[0] == "git" and "rev-parse" in cmd:
-                return ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
-                        "/Users/shyamsivakumar/Code/mac-ops/.git\n")
             if cmd[0] == "git" and "worktree" in cmd:
                 return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
             if cmd[0] == "git" and "symbolic-ref" in cmd:
@@ -371,8 +368,7 @@ def gate_pipeline():
                     dict(threadId="gate", status="completed", updatedAt="fixture")]}
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
-                    return {"thread": {"status": "running", "sendable": True,
-                                       "worktreePath": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-fixture"}}
+                    return {"thread": {"status": "running", "sendable": True}}
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
@@ -482,9 +478,6 @@ def no_parking(status="interrupted"):
             return json.dumps({"state": "OPEN", "mergedAt": None})
         if cmd == [lane.COORDQ, "list"]:
             return ""
-        if cmd[0] == "git" and "rev-parse" in cmd:
-            return ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
-                    "/Users/shyamsivakumar/Code/mac-ops/.git\n")
         exact(cmd[0:2], [lane.COORDQ, "start"])
         exact(cmd[3:5], ["--tool", "t3_thread_send"])
         payload = json.loads(cmd[2])
@@ -498,8 +491,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
          patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
          patch.object(lane, "run", command), \
-         patch.object(lane, "t3", return_value={"thread": {"status": status,
-                     "worktreePath": "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-fixture"}}), \
+         patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
@@ -1327,8 +1319,7 @@ def send_integrity():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     key = f"fix:{repo}#385:head"
-    worktree = "/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-fixture"
-    cases = [(dict(status=status, worktreePath=worktree), True) for status in
+    cases = [(dict(status=status), True) for status in
              ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
     cases += [(thread, False) for thread in ({}, dict(status="deleted"),
               dict(status="running", archived=True), dict(status="running", sendable=False),
@@ -1342,13 +1333,6 @@ def send_integrity():
                 return {"thread": thread}
             def command(cmd, timeout=150):
                 exact(reads, ["read"])
-                if cmd[0] == "git":
-                    if "rev-parse" in cmd:
-                        # The thread keeps a linked worktree of its own.
-                        return ("/Users/shyamsivakumar/Code/mac-ops/.git/worktrees/t3-fixture\n"
-                                "/Users/shyamsivakumar/Code/mac-ops/.git\n")
-                    # The branch is on origin, so a worktree can start there.
-                    return "abc123\trefs/heads/builder/fixture"
                 exact(cmd[:2], [lane.COORDQ, "start"])
                 payload = json.loads(cmd[2])
                 if live:
@@ -1436,7 +1420,8 @@ def root_workspace():
     other_root_git = ("/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n"
                       "/Users/shyamsivakumar/Code/strategy-replay-workbench/.git\n")
 
-    def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git):
+    def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git,
+                worktree_only=True):
         actions = []
         def read(tool, args):
             return {"thread": thread}
@@ -1460,7 +1445,8 @@ def root_workspace():
              patch.object(lane, "DRY", False), patch.object(lane, "t3", read), \
              patch.object(lane, "read_json", return_value=pull), \
              patch.object(lane, "run", command), contextlib.redirect_stdout(io.StringIO()):
-            result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512)
+            result = lane.send("old", "brief", "MO#512 check", {}, key, repo=repo, pr_number=512,
+                               worktree_only=worktree_only)
         return result, actions
 
     # A thread without a worktree works in the shared root.
@@ -1483,6 +1469,12 @@ def root_workspace():
     exact(actions, ["fresh"])
     # A thread with its own worktree takes the work.
     result, actions = send_to({"status": "running", "worktreePath": worktree})
+    exact(result, "receipt")
+    exact(actions, ["send"])
+    # The other lane paths keep their own routing: a thread in a shared
+    # checkout still takes their work.
+    result, actions = send_to({"status": "running", "worktreePath": root}, git=root_git,
+                               worktree_only=False)
     exact(result, "receipt")
     exact(actions, ["send"])
     # A branch that is not on origin has no safe worktree, so no work is
