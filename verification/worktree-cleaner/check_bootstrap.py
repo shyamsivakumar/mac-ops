@@ -263,6 +263,13 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert detached_entry["eligible_reason"] == "commits_on_the_default_branch", detached_entry
         assert detached_entry["published_on_default_branch"] is True, detached_entry
         assert git(repo, "show-ref", "--verify", "refs/heads/bootstrap")
+        # The worktree and its registration are both gone, so the space is
+        # reclaimed and nothing is left behind.
+        listed = git(repo, "worktree", "list", "--porcelain")
+        assert str(paths["bootstrap"]) not in listed, listed
+        assert str(paths["onmain"]) not in listed, listed
+        aside = [item for item in trees.iterdir() if item.name.startswith(".worktree-cleaner-aside-")]
+        assert not aside, aside
         assert git(repo, "show-ref", "--verify", "refs/heads/real")
         print(json.dumps({"ok": True, "removed": applied["removed"], "bootstrap_only_removed": True, "real_work_kept": True, "ascend_untouched": True}))
     return 0
