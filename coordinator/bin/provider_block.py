@@ -245,16 +245,13 @@ def record_block(selection, reason, failed=None, now=None, by="provider_block"):
 
     The block runs from the moment the run failed to the reset the provider
     named, or to an hour after the failure when it named none. A window
-    that has already closed blocks nobody and is not written.
+    that has already closed is not written for a provider with no record.
 
     A failure read late never replaces a newer failure's record. A newer
-    failure always replaces an older one, even when its reset is sooner,
-    and even when its reset has already passed: the provider's latest word
-    about when it comes back is the one to keep, so an 11:00 refusal that
-    names noon replaces a 10:00 record that named 14:00, and a refusal that
-    says "retry after 0s" frees a provider a older refusal had held until
-    14:00. The newer expiry is written even when it has passed, so a late
-    replay of the older refusal cannot bring the block back."""
+    failure always replaces an older one, even when its reset is sooner or
+    has already passed: an 11:00 "retry after 0s" frees a provider that a
+    10:00 refusal held until 14:00, and the passed expiry is kept so a late
+    replay of the 10:00 refusal cannot bring the block back."""
     name = identity(selection)
     if not name:
         return None
@@ -267,6 +264,8 @@ def record_block(selection, reason, failed=None, now=None, by="provider_block"):
     with locked():
         state = read()
         current = state.get(name)
+        if current is None and until <= now:
+            return None
         if current is not None:
             current_failed = failure_time_of(current)
             if current_failed is not None and current_failed > since:
