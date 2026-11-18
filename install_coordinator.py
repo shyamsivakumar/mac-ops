@@ -229,8 +229,9 @@ def archive_model_lists(home: Path) -> list[Path]:
         target = archive / ARCHIVED_LISTS_FILE
         existing = read_regular(target)
         if existing is not None and existing[0] != copy:
-            target = archive / f"tickets.json.models-and-types.{time.strftime('%Y%m%d-%H%M%S')}.json"
-        if existing is None or existing[0] != copy:
+            target = archive / f"tickets.json.models-and-types.{digest(copy)[:16]}.json"
+            existing = read_regular(target)
+        if existing is None:
             atomic_write(target, copy, 0o644)
             moved.append(target)
     for path in old_list_files(home):
