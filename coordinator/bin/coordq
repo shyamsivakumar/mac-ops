@@ -28,8 +28,6 @@ WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
 from gate_reviewers import REVIEWER_CHAIN
-import builders
-import provider_health
 
 ASTRA_MODEL = REVIEWER_CHAIN[0]
 OPUS_MODEL = REVIEWER_CHAIN[-1]
@@ -312,17 +310,6 @@ def undispatchable_tool(item):
     return None
 
 
-def probe_request(request_id):
-    """Whether a dispatch is a builder probe.
-
-    A probe measures the provider it names, so the queue never moves one
-    off that provider: not at dispatch, and not when the dispatch fails.
-    A failed probe that rerouted would leave the blocked provider
-    unmeasured and spend another provider's capacity on the probe.
-    """
-    return str(request_id or "").startswith("builder-probe:")
-
-
 def drain():
     statuses = {}
     while True:
@@ -338,16 +325,6 @@ def drain():
                 continue
             tool = undispatchable_tool(item)
             if tool is None:
-                args = item["args"]
-                selection = args.get("modelSelection")
-                request_id = args.get("clientRequestId", "")
-                if builders.is_builder(selection) and not probe_request(request_id):
-                    model = builders.choose_builder(selection)
-                    if model is None:
-                        continue
-                    if model != selection:
-                        args["modelSelection"] = model
-                        save(queue)
                 dispatchable.append(item)
                 continue
             dropped.add(item["id"])
@@ -470,14 +447,6 @@ def drain():
                     log(f"gate retry {key}: {model['model']}")
                 else:
                     item["attempts"] = MAX_ATTEMPTS
-            elif builders.is_builder(item["args"].get("modelSelection")) and not probe_request(request_id):
-                model = failed_builder(item["args"]["modelSelection"], out)
-                if model:
-                    item["args"]["modelSelection"] = model
-                    item["args"]["clientRequestId"] = ((request_id or f"build:{item['id']}")
-                                                      + ":" + model["model"] + ":retry")
-                    item["attempts"] = 0
-                    log(f"builder retry {request_id or item['id']}: {model['model']}")
             save(queue)
             log(f"FAILED #{item['id']} attempt {item['attempts']}: {out[:200]}")
 
@@ -1166,24 +1135,6 @@ def fallback_reviewer(queue, key, current, models=()):
             tried.append(identity)
             return selection
     return None
-
-
-def failed_builder(selection, failure):
-    """The builder a failed build moves to, or None.
-
-    A build that ended because its provider ran out blocks that builder for
-    every new build and send, and the item runs again on the next builder in
-    the list (MO-1082). Any other failure is an ordinary retry: it says
-    nothing about the provider.
-    """
-    reason = provider_health.block_reason(failure)
-    if not reason:
-        return None
-    line = builders.blocked_builder(selection, reason,
-                                    reset_at=provider_health.reset_time(failure))
-    if line:
-        log(line)
-    return builders.choose_builder(selection)
 
 
 def failed_gate_reviewer(queue, key, current, failure):

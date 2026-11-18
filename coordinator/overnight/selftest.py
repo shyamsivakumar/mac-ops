@@ -3,7 +3,6 @@ import importlib.machinery
 import importlib.util
 import io
 import json
-import os
 import re
 from pathlib import Path
 import subprocess
@@ -76,12 +75,8 @@ def start_routing():
     exact(actions, [cmd for repo in repos for cmd in
                     (["ticket", "start", f"{repo}#3", "--dry-run"],
                      ["ticket", "start", f"{repo}#3"])])
-    # A start runs on the builder its label names. A label that names no
-    # builder, such as a Sol or OpenAI model, starts on the first builder.
-    glm = {"instanceId": "glm", "model": "zai/glm-5.3"}
-    minimax = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
     cfg = {"repos": {repo: {"projectId": repo} for repo in repos},
-           "models": {"implementation": {"selection": dict(glm)}}}
+           "models": {"implementation": {"selection": {"model": "fixture-implementation"}}}}
     with patch.object(ticket, "default_branch", return_value="main"), \
          patch.object(ticket, "brief_reviewer", return_value="astra"):
         for item in board:
@@ -89,22 +84,18 @@ def start_routing():
                 continue
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
-            exact(payload["modelSelection"], glm)
-        sol = {"selection": {"instanceId": "codex", "model": "gpt-6.1-sol"}, "vendor": "openai"}
-        _, _, payload = ticket.build_start(
-            dict(cfg, models=dict(cfg["models"], implementation=sol)), board[3], 1, {})
-        exact(payload["modelSelection"], glm)
+            exact(payload["modelSelection"], {"model": "fixture-implementation"})
     cfg["types"] = {"feature": "implementation", "chore": "maintenance", "review": "gate"}
-    cfg["models"].update({"maintenance": {"selection": dict(minimax), "vendor": "builder"},
+    cfg["models"].update({"maintenance": {"selection": {"model": "fixture-maintenance"}, "vendor": "builder"},
                           "gate": {"selection": {"model": "fixture-review"}, "vendor": "reviewer"}})
     cfg["models"]["implementation"]["vendor"] = "builder"
-    for kind, expected in [("feature", glm), ("chore", minimax)]:
+    for kind, expected in [("feature", "fixture-implementation"), ("chore", "fixture-maintenance")]:
         item = dict(board[3], type=kind, builder=None, reviewer=None)
         item["builderAlias"], item["reviewerAlias"] = ticket.resolve_models(cfg, item)
         commands = []
         def launch(command, timeout):
             payload = json.loads(command[2])
-            exact(payload["modelSelection"], expected)
+            exact(payload["modelSelection"], {"model": expected})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, "fixture receipt", "")
@@ -158,20 +149,14 @@ def start_routing():
 
     orphan_snapshot = {"tickets": [], "repos": {repos[1]: {"prs": [], "issues": [
         {"number": 9, "title": "bot repair", "labels": []}]}}}
-    from unittest.mock import mock_open
-    def orphan_files(path, *args, **kwargs):
-        # The lane pass also reads the provider health store, so the stub
-        # answers that path with an empty store rather than the receipts.
-        data = (json.dumps({"blocked": {}}) if str(path) == lane.provider_health.blocked_path()
-                else json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))
-        return mock_open(read_data=data)()
     with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
          patch.object(lane, "board_snapshot", return_value=orphan_snapshot), \
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
          patch.object(lane, "recover_dead_runs"), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
-         patch("builtins.open", orphan_files):
+         patch("builtins.open", __import__("unittest.mock", fromlist=["mock_open"]).mock_open(
+             read_data=json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))):
         def threads(tool, args):
             return {"threads": [{"title": "bot"}]} if tool == "t3_thread_list" else {}
         with patch.object(lane, "t3", side_effect=threads):
@@ -247,7 +232,7 @@ def dead_run_recovery():
         lane.recover_dead_runs(ledger)
         lane.recover_dead_runs(ledger)
     exact(len(launches), 1)
-    exact(launches[0]["modelSelection"], lane.builders.BUILDERS[0])
+    exact(launches[0]["modelSelection"], lane.ASTRA)
     exact(launches[0]["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/fixture-worktree"})
     exact(ledger[f"dead-relaunch-thread:fixture-dead"], "fixture-relaunch")
     exact(settled, ["fixture-dead", "fixture-dead"])
@@ -405,7 +390,7 @@ def gate_pipeline():
                     dict(threadId="gate", status="completed", updatedAt="fixture")]}
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
-                    return {"thread": {"status": "running", "sendable": True, **builder_thread_fields()}}
+                    return {"thread": {"status": "running", "sendable": True}}
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
@@ -415,7 +400,6 @@ def gate_pipeline():
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
-                 patch.object(lane.provider_health, "blocked", lambda selection: False), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
                 lane.act_on_pr(target, 20, dict(ledger))
             exact(actions, expected)
@@ -529,8 +513,7 @@ def no_parking(status="interrupted"):
          patch.object(lane, "gate_verdict", return_value=("FAIL", None, "findings")), \
          patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
          patch.object(lane, "run", command), \
-         patch.object(lane, "t3", return_value={"thread": {"status": status, **builder_thread_fields()}}), \
-         patch.object(lane.provider_health, "blocked", lambda selection: False), \
+         patch.object(lane, "t3", return_value={"thread": {"status": status}}), \
          patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix"])
@@ -1460,27 +1443,15 @@ def consolidation_guard():
     exact("never create a third ticket" in message, True)
 
 
-def builder_thread_fields():
-    """The provider fields of a thread that runs a builder.
-
-    A real thread always names the model it runs, and a build never runs
-    off the builder list, so a fixture thread that should take a send names
-    the first builder (MO-1082)."""
-    import lane_driver as lane
-    member = lane.builders.BUILDERS[0]
-    return {"providerInstanceId": member["instanceId"], "model": member["model"]}
-
-
 def send_integrity():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     key = f"fix:{repo}#385:head"
-    build = builder_thread_fields()
-    cases = [(dict(status=status, **build), True) for status in
+    cases = [(dict(status=status), True) for status in
              ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
-    cases += [(thread, False) for thread in ({**build},
-              dict(status="deleted", **build), dict(status="running", **build, archived=True),
-              dict(status="running", **build, sendable=False), dict(status="running", **build, canSend=False))]
+    cases += [(thread, False) for thread in ({}, dict(status="deleted"),
+              dict(status="running", archived=True), dict(status="running", sendable=False),
+              dict(status="running", canSend=False))]
     for thread, live in cases:
         for failure in (None, "error", "empty"):
             actions, reads, ledger = [], [], {}
@@ -1496,7 +1467,7 @@ def send_integrity():
                     exact(payload, {"threadId": "old", "message": "brief"})
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
-                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.builders.BUILDERS[0],
+                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
                           "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief"})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
@@ -1520,7 +1491,7 @@ def send_integrity():
                     exact(output.getvalue(), "" if live else "SEND REROUTE old: receipt\n")
                 exact(actions, ["send" if live else "fresh"])
     with patch.object(lane, "DRY", True), \
-         patch.object(lane, "t3", return_value={"thread": {"status": "running", **builder_thread_fields()}}), \
+         patch.object(lane, "t3", return_value={"thread": {"status": "running"}}), \
          patch.object(lane, "run", side_effect=AssertionError("dry dispatch")):
         ledger = {}
         exact(lane.send("old", "brief", "fix", ledger, key), f"DRY {key}: send existing thread")
@@ -1531,12 +1502,7 @@ def send_integrity():
     for failure in (False, True):
         ledger, actions = {}, []
         def files(path, *args, **kwargs):
-            # A send reads the provider health store, so the stub answers
-            # that path with an empty store rather than a brief.
-            if str(path) == lane.provider_health.blocked_path():
-                data = json.dumps({"blocked": {}})
-            else:
-                data = json.dumps({f"ticket:{repo}#385:a1": "old"}) if path == lane.RECEIPTS else "brief"
+            data = json.dumps({f"ticket:{repo}#385:a1": "old"}) if path == lane.RECEIPTS else "brief"
             return mock_open(read_data=data)()
         def command(cmd, timeout=150):
             exact(json.loads(cmd[2])["projectId"], "fixture")
@@ -1584,9 +1550,6 @@ def root_workspace():
 
     def send_to(thread, pr=None, listing="abc123\trefs/heads/builder/fixture", git=worktree_git,
                 worktree_only=True):
-        # A real thread always names the model it runs; these fixtures name
-        # the first builder, so every case here keeps its own routing.
-        thread = {**builder_thread_fields(), **thread}
         actions = []
         def read(tool, args):
             return {"thread": thread}
@@ -2705,25 +2668,6 @@ def alarm_mute():
 EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
-@contextlib.contextmanager
-def scratch_provider_health():
-    """The provider health store of one eval.
-
-    An eval reads and writes the blocks of the store, so it works in a
-    scratch directory: an eval never blocks a real provider and never reads
-    the live blocks."""
-    saved = os.environ.get("COORDQ_DIR")
-    with tempfile.TemporaryDirectory() as directory:
-        os.environ["COORDQ_DIR"] = directory
-        try:
-            yield directory
-        finally:
-            if saved is None:
-                os.environ.pop("COORDQ_DIR", None)
-            else:
-                os.environ["COORDQ_DIR"] = saved
-
-
 def main():
     failed = False
     try:
@@ -2737,7 +2681,7 @@ def main():
          patch.object(subprocess, "Popen", side_effect=AssertionError("live process forbidden")):
         for name, evaluate in EVALS.items():
             try:
-                with contextlib.redirect_stdout(io.StringIO()), scratch_provider_health():
+                with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
                     if name == "send-integrity":
                         import lane_driver

@@ -2,6 +2,7 @@
 import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 
+from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
@@ -82,7 +83,6 @@ QUOTE_WINDOW = 60
 # The review gate: the rules live in the coordinator CLAUDE.md sections
 # "Review gate" and "Ten minutes start to finish".
 from gate_reviewers import REVIEWER_CHAIN
-import builders
 
 GATE_ASTRA = REVIEWER_CHAIN[0]
 GATE_PRIORITY = 400
@@ -1212,7 +1212,7 @@ def assemble_brief(cfg, t, request_id, issue):
     head = [f"Ticket: {t['url']}", f"Reviewer for the gate: {brief_reviewer(cfg, t)}"]
     if not filled:
         head.append(f"Run id: `{request_id}`")
-    parts = ["\n".join(head), body]
+    parts = ["\n".join(head), ANSWER_FORMAT, body]
     decisions = coordinator_decisions(issue)
     if decisions:
         parts.append(DECISIONS_HEADING + "\n\n" + "\n\n".join(decisions))
@@ -1231,14 +1231,6 @@ def default_branch(repo):
     return gh(["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]).strip()
 
 
-def builder_model(selection):
-    """Choose an available allowed builder for every ticket start."""
-    chosen = builders.choose_builder(selection)
-    if chosen is None:
-        raise Refuse("every builder is blocked, waiting for a probe to answer")
-    return chosen
-
-
 def build_start(cfg, t, attempt, issue):
     rcfg = cfg["repos"][t["repo"]]
     request_id = f"ticket:{t['repo']}#{t['number']}:a{attempt}"
@@ -1248,7 +1240,7 @@ def build_start(cfg, t, attempt, issue):
         "clientRequestId": request_id,
         "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}",
                               "startFromOrigin": True},
-        "modelSelection": builder_model(cfg["models"][t["builderAlias"]]["selection"]),
+        "modelSelection": cfg["models"][t["builderAlias"]]["selection"],
     }
     title_rest = t["title"][len(t["key"]):].lstrip(" ·-:·").strip()
     title = f"{t['key']} · {title_rest}"

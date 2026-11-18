@@ -1,25 +1,19 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `d635774bed8ff1850810655255a608ead1dac7be`
+Checked commit: `07d50229d769b8446460ff72ba01784ce3879150`
 Working tree clean when the checks ran: no
 
 | Check | Command | Result | Detail |
 | --- | --- | --- | --- |
 | lane selection | `python3 scripts/mac_ops_fast_check.py --lane-selection` | passed |  |
 | overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-h291grm8 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-h291grm8/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| python syntax: coordinator/bin/answer_format.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/bin/answer_format.py` | passed |  |
+| python syntax: coordinator/bin/gate_policy.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/bin/gate_policy.py` | passed |  |
+| python syntax: tests/test_answer_format.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_answer_format.py` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-9o5tbr0u -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-9o5tbr0u/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
+| tests: tests.test_answer_format | `python3 -m unittest tests.test_answer_format` | passed |  |
 
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
 so every check after it is `not run`.
-
-Repair verification: choose() releases choosing in finally after success or failure. Duplicate choices remain blocked while the send is pending.
-
-- passed: `node --check coordinator/mods/cockpit/main.js`
-- passed: `git diff --check`
-- not run: device, handset, live-service and live-board cases were waived by Shyam (2026-11-14).
-- Comment diff review: no comments added or changed. Deslop review: no further cleanup in scope.
-
-Single in-session Luna Max review: no critical or major findings.
-Full suite: `python3 -m unittest discover -s tests` reports failures; final result recorded in PR body. Existing checks and tests were not changed.
