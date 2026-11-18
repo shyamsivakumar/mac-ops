@@ -574,9 +574,13 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
     try:
         expected = _read_at(source, relative.name)
         if expected is None:
-            # A delete or a rename has already taken the file away, so there
-            # is no edit to preserve and the committed bytes are restored, or
-            # nothing stays when HEAD has none. A path that came back is kept.
+            if digest is not None:
+                # The scan saw this file and it is gone now, so it was deleted
+                # after the scan. The deletion is kept and the cleanup stops.
+                return False
+            # A delete or a rename had already taken the file away when the
+            # scan ran, so there is no edit to preserve and the committed bytes
+            # are restored, or nothing stays when HEAD has none.
             if entry is None:
                 return True
             return _restore_entry(repo, name, entry)
@@ -713,7 +717,7 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
                 return None
             if not _clear_bootstrap_file(path, trash, original, entry, (digests or {}).get(original), (signatures or {}).get(original)):
                 return None
-            if not _clear_bootstrap_file(path, trash, name, None, (digests or {}).get(name)):
+            if not _clear_bootstrap_file(path, trash, name, None, (digests or {}).get(name), (signatures or {}).get(name)):
                 return None
             cleared.append(name)
             continue

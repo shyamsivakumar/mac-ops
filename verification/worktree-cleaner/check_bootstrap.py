@@ -119,6 +119,12 @@ def main() -> int:
         # One rule added by hand is not the bootstrap block: real work.
         with (paths["partial"] / "AGENTS.md").open("a", encoding="utf-8") as handle:
             handle.write("- CI is agent checks only: no Woodpecker, no GitHub Actions.\n")
+        # A staged rename whose destination changed its mode is real work.
+        moved = paths["marker"] / "moved.md"
+        moved.write_text("history\n", encoding="utf-8")
+        git(paths["marker"], "add", "moved.md")
+        git(paths["marker"], "mv", "moved.md", ".specstory/renamed-mode.md")
+        os.chmod(paths["marker"] / ".specstory" / "renamed-mode.md", 0o755)
         # A rename of a real file into .specstory/ is real work.
         (paths["renamed"] / ".specstory").mkdir(exist_ok=True)
         git(paths["renamed"], "mv", "renamed.txt", ".specstory/renamed.txt")
@@ -199,7 +205,8 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert by_name["shifted"]["eligible"] is False and "worktree_dirty" in by_name["shifted"]["reasons"], by_name["shifted"]
         assert by_name["shifted"]["bootstrap_changes"] == [], by_name["shifted"]
         assert by_name["marker"]["eligible"] is False and "worktree_dirty" in by_name["marker"]["reasons"], by_name["marker"]
-        assert by_name["marker"]["bootstrap_changes"] == [], by_name["marker"]
+        assert by_name["marker"]["bootstrap_changes"] == [".specstory/renamed-mode.md"], by_name["marker"]
+        assert by_name["marker"]["eligible"] is False and "worktree_dirty" in by_name["marker"]["reasons"], by_name["marker"]
         assert by_name["masteronly"]["eligible"] is False, by_name["masteronly"]
         detached_master = next(row for row in dry["rows"] if Path(row["path"]).name == "detached-master")
         assert detached_master["eligible"] is False, detached_master
