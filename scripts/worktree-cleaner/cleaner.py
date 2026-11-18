@@ -209,17 +209,26 @@ def bootstrap_path(name: str) -> bool:
     return any(name.startswith(prefix) for prefix in BOOTSTRAP_PREFIXES)
 
 
-def _heading_only(text: str) -> bool:
-    stripped = text.strip()
-    return bool(stripped) and stripped.startswith("#") and stripped.count("\n") == 0
+def _permitted_agents_text(text: str, head: str, block: str) -> bool:
+    """The only contents an AGENTS.md may hold after the bootstrap: the
+    committed file, or the committed file plus exactly the rules block."""
+    if text == head:
+        return True
+    if text == head + block:
+        return True
+    if text == head.rstrip("\n") + "\n" + block:
+        return True
+    return False
 
 
 def agents_only_rules(path: Path, *, untracked: bool) -> bool:
     """True when AGENTS.md holds the committed file plus exactly the rules block.
 
     The file contents are compared, not a diff, so nothing can hide behind a
-    line that looks like a diff marker. A part of the block, a single rule
-    added by hand, or any other edit is real work.
+    line that looks like a diff marker. The staged contents are compared too:
+    a genuine edit that is only staged is real work and must not be discarded.
+    A part of the block, a single rule added by hand, a heading of the user's
+    own, or any other edit is real work.
     """
     blocks = rules_blocks()
     if not blocks:
@@ -229,26 +238,31 @@ def agents_only_rules(path: Path, *, untracked: bool) -> bool:
     except OSError:
         return False
     head: str | None = None
-    if not untracked:
-        try:
-            head = git(path, "show", f"HEAD:{AGENTS_FILE}")
-        except SafetyError:
-            return False
+    try:
+        head = git(path, "show", f"HEAD:{AGENTS_FILE}")
+    except SafetyError:
+        head = None
+    staged: str | None = None
+    try:
+        staged = git(path, "show", f":{AGENTS_FILE}")
+    except SafetyError:
+        staged = None
     for block in blocks:
-        if not current.endswith(block):
-            continue
-        prefix = current[: len(current) - len(block)]
         if head is None:
-            if prefix == "" or _heading_only(prefix):
+            if staged is None:
+                if current == block:
+                    return True
+                continue
+            if staged == block and current == block:
                 return True
             continue
-        if prefix == head:
-            return True
-        stem = head.rstrip("\n") + "\n"
-        if prefix == stem:
-            return True
-        if prefix.startswith(stem) and _heading_only(prefix[len(stem):]):
-            return True
+        if staged is None:
+            continue
+        if not _permitted_agents_text(staged, head, block):
+            continue
+        if not _permitted_agents_text(current, head, block):
+            continue
+        return True
     return False
 
 
@@ -280,13 +294,24 @@ def removal_force_flags(path: Path, records: list[tuple[str, str, str | None]]) 
     return ["--force", "--force"] if untracked else ["--force"]
 
 
-def on_default_branch(repo_root: Path, head: str) -> bool:
+def on_default_branch(repo_root: Path, head: str, refs: list[str]) -> bool:
     """True when the head commit is already on the remote default branch."""
-    for ref in ("refs/remotes/origin/main", "refs/remotes/origin/master"):
+    for ref in refs:
         result = run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor", head, ref])
         if result.returncode == 0:
             return True
     return False
+
+
+def default_branch_refs(repo_root: Path, github: GitHub, repo_slug: str | None) -> list[str]:
+    """The remote tracking ref of the one default branch of the repository."""
+    name = github.default_branch(repo_slug) if repo_slug else None
+    if not name:
+        result = run(["git", "-C", str(repo_root), "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
+        name = result.stdout.strip().removeprefix("refs/remotes/origin/") if result.returncode == 0 else ""
+    if not name or "/" in name:
+        return []
+    return [f"refs/remotes/origin/{name}"]
 
 
 def detached_idle_seconds(path: Path) -> int | None:
@@ -484,6 +509,26 @@ class GitHub:
         self.repos: dict[str, str | None] = {}
         self.commits: dict[tuple[str, str], bool] = {}
         self.pull_requests: dict[tuple[str, str, str], list[dict[str, Any]] | None] = {}
+        self.default_branches: dict[str, str | None] = {}
+
+    def default_branch(self, repo: str | None) -> str | None:
+        """The one default branch of the repository, or None when unknown."""
+        if not repo:
+            return None
+        if repo in self.default_branches:
+            return self.default_branches[repo]
+        try:
+            result = run([
+                "gh", "repo", "view", "--repo", repo, "--json", "defaultBranchRef",
+                "--jq", ".defaultBranchRef.name",
+            ])
+        except SafetyError:
+            result = None
+        name = result.stdout.strip() if result and result.returncode == 0 else ""
+        if not name or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+            name = ""
+        self.default_branches[repo] = name or None
+        return self.default_branches[repo]
 
     def repo(self, root: Path, *, refresh: bool = False) -> str | None:
         key = canonical(root)
@@ -563,7 +608,7 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
-def published_on_default_branch(result: dict[str, Any], repo_root: Path) -> bool:
+def published_on_default_branch(result: dict[str, Any], repo_root: Path, refs: list[str]) -> bool:
     """True when every commit of the worktree is already on the remote default branch."""
     head = str(result.get("head") or "")
     if not SHA_RE.fullmatch(head):
@@ -572,7 +617,9 @@ def published_on_default_branch(result: dict[str, Any], repo_root: Path) -> bool
         return False
     if result.get("remote_commit_present") is not True:
         return False
-    return on_default_branch(repo_root, head)
+    if not refs:
+        return False
+    return on_default_branch(repo_root, head, refs)
 
 
 def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False, refresh_cwds: bool = True) -> dict[str, Any]:
@@ -627,20 +674,21 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         result["remote_commit_present"] = present
         if not present:
             reasons.append("remote_commit_unverified")
+    default_refs = default_branch_refs(repo_root, github, repo_slug)
     if record.get("detached"):
         try:
             idle = detached_idle_seconds(path) if path.is_dir() else None
         except SafetyError:
             idle = None
         result["detached_idle_seconds"] = idle
-        if not published_on_default_branch(result, repo_root):
+        if not published_on_default_branch(result, repo_root, default_refs):
             if idle is None or idle < 24 * 60 * 60:
                 reasons.append("detached_not_proven_24h_old")
     elif not result["main_checkout"]:
         ok, why, pr_url = verify_pr(github, repo_slug, record.get("branch"), str(record.get("head") or ""), refresh=refresh)
         result["pull_request"] = pr_url
         if not ok and why:
-            if why == "github_pr_not_closed_for_head" and published_on_default_branch(result, repo_root):
+            if why == "github_pr_not_closed_for_head" and published_on_default_branch(result, repo_root, default_refs):
                 result["published_on_default_branch"] = True
             else:
                 reasons.append(why)

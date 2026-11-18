@@ -104,6 +104,58 @@ class AgentsBootstrapTest(unittest.TestCase):
         self.append("++ genuine edit\n" + self.block)
         self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
 
+    def test_user_heading_between_file_and_block_is_real_work(self):
+        self.append("# My own heading\n" + self.block)
+        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+
+    def test_staged_genuine_edit_is_real_work(self):
+        # A genuine edit is staged, and the working copy holds only the
+        # committed file plus the rules block. The staged edit is real work.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write("genuine edit\n")
+        git(self.repo, "add", "AGENTS.md")
+        head = git(self.repo, "show", "HEAD:AGENTS.md")
+        with (self.repo / "AGENTS.md").open("w", encoding="utf-8") as handle:
+            handle.write(head + self.block)
+        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+
+
+class DefaultBranchTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mo514-default-")
+        base = Path(self.tmp.name)
+        self.repo = base / "repo"
+        self.remote = base / "remote.git"
+        self.remote.mkdir()
+        self.repo.mkdir()
+        subprocess.run(["git", "init", "--bare", str(self.remote)], capture_output=True, check=True)
+        git(self.repo, "init", "-b", "main")
+        git(self.repo, "config", "user.name", "Fixture")
+        git(self.repo, "config", "user.email", "fixture@example.test")
+        git(self.repo, "remote", "add", "origin", str(self.remote))
+        commit(self.repo, "base.txt", "base\n")
+        git(self.repo, "push", "-u", "origin", "main")
+        git(self.repo, "checkout", "-b", "master")
+        commit(self.repo, "master-only.txt", "master\n")
+        self.master_head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "push", "origin", "master")
+        git(self.repo, "fetch", "origin")
+        git(self.repo, "checkout", "main")
+        git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_only_the_default_branch_qualifies(self):
+        github = cleaner.GitHub()
+        github.default_branch = lambda repo: None
+        refs = cleaner.default_branch_refs(self.repo, github, "fixture/repo")
+        self.assertEqual(refs, ["refs/remotes/origin/main"])
+        self.assertFalse(cleaner.on_default_branch(self.repo, self.master_head, refs))
+        self.assertTrue(cleaner.on_default_branch(self.repo, self.master_head, ["refs/remotes/origin/master"]))
+        main_head = git(self.repo, "rev-parse", "main")
+        self.assertTrue(cleaner.on_default_branch(self.repo, main_head, refs))
+
 
 if __name__ == "__main__":
     unittest.main()
