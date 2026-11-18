@@ -1194,6 +1194,23 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertEqual(len(moved), 1, moved)
         self.assertTrue((moved[0] / "saved.txt").exists(), "every file keeps its name")
 
+    def test_the_sweep_never_moves_a_link(self):
+        # A link in place of the copy is not the directory that was checked,
+        # so it is not moved and the copy stays.
+        base = Path(self.tmp.name)
+        state = base / "state"
+        state.mkdir()
+        elsewhere = base / "elsewhere"
+        elsewhere.mkdir()
+        recovery = elsewhere / "recovered"
+        recovery.mkdir()
+        (recovery / "saved.txt").write_text("saved\n", encoding="utf-8")
+        link = base / "copy-link"
+        os.symlink(str(recovery), link)
+        self.assertFalse(cleaner._remove_recovery_copy(link, time.time() + 3600))
+        self.assertTrue(link.is_symlink(), "the link is not moved")
+        self.assertTrue((recovery / "saved.txt").exists(), "the copy stays")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
