@@ -64,13 +64,7 @@ function sharedBlocked(): Set<string> {
 	if (!existsSync(SHARED_BLOCKS_PATH)) return new Set();
 	const blocked = JSON.parse(readFileSync(SHARED_BLOCKS_PATH, "utf8")).blocked;
 	if (typeof blocked !== "object" || blocked === null || Array.isArray(blocked)) throw new Error(`${SHARED_BLOCKS_PATH} must hold a blocked object`);
-	const now = Date.now();
-	return new Set(Object.entries(blocked).filter(([, record]) => {
-		const until = record && typeof record === "object" ? record.until : undefined;
-		if (until === undefined || until === null) return true;
-		const end = Date.parse(until);
-		return Number.isNaN(end) || end > now;
-	}).map(([identity]) => identity));
+	return new Set(Object.keys(blocked));
 }
 """
 SHARED_CHECK = (
