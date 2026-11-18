@@ -44,6 +44,11 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args:
         print("content-type: application/json")
         print()
         print(name)
+elif mode == "noetag" and ("--include" in args or "-i" in args):
+    print("HTTP/2.0 200 OK")
+    print("content-type: application/json")
+    print()
+    print('[{{"number": 5}}]')
 elif "--include" in args or "-i" in args:
     if mode == "304":
         print("HTTP/2.0 304 Not Modified")
@@ -323,6 +328,49 @@ report = subprocess.run(
 check("the report counts the rotated log too",
       "rotated" in report.stdout and "core total" in report.stdout and " 3 " in report.stdout,
       report.stdout.strip().splitlines()[-3:] if report.stdout else report.stderr.strip()[-80:])
+
+# Rotation is serialised across processes: concurrent writers must not let
+# one replace the retained log with the new, nearly empty one.
+race_log = scratch / "race-usage.jsonl"
+# One rotation across the whole run: 240 rows of about 90 bytes is under
+# 24 KiB, so a 12 KiB threshold rotates once and keeps every other row.
+race_env = {**env, "COORDINATOR_GH_USAGE_LOG": str(race_log),
+            "COORDINATOR_GH_USAGE_MAX": "12000"}
+writers = []
+for _ in range(6):
+    code = f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+gh_gateway.USAGE_LOG = __import__("pathlib").Path({str(race_log)!r})
+for _ in range(40):
+    gh_gateway.record(["gh", "api", "repos/a/b/issues?state=open"], 1)
+"""
+    writers.append(subprocess.Popen([sys.executable, "-c", code], env=race_env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+for writer in writers:
+    writer.wait(timeout=60)
+kept = 0
+for path in (race_log, race_log.with_suffix(race_log.suffix + ".1")):
+    try:
+        kept += len(path.read_text().splitlines())
+    except OSError:
+        pass
+check("concurrent rotation keeps every row", kept == 240, f"rows={kept}")
+
+# A single-page read with no ETag still fills the short-TTL cache, so the
+# next identical read inside the window does not spend another core call.
+set_mode("noetag")
+noetag = ["gh", "api", "repos/a/b/topics?page=1"]
+before = calls_made()
+first_noetag = run(noetag)
+second_noetag = run(noetag)
+check("a conditional read with no ETag is cached for the TTL", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
+check("the cached no-ETag read returns the same body",
+      first_noetag.stdout.strip() == second_noetag.stdout.strip() == '[{"number": 5}]',
+      repr((first_noetag.stdout, second_noetag.stdout)))
+set_mode("200")
 
 # A required read is not optional polling: without a floor it still runs
 # when the quota is under the shared floor.

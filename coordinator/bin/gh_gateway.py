@@ -26,6 +26,7 @@ cacheable command here, so a short TTL on a list can never carry a stale
 head into a merge decision. The floor is checked by the caller, because a
 caller that may skip a read is the one that knows the read is optional.
 """
+import fcntl
 import json
 import os
 import re
@@ -115,7 +116,7 @@ CACHE_DIR = Path(os.environ.get("COORDINATOR_GH_CACHE_DIR",
 # The usage report reads this file. One line per call that reached GitHub.
 USAGE_LOG = Path(os.environ.get("COORDINATOR_GH_USAGE_LOG",
                                 os.path.expanduser("~/Library/Logs/coordinator/gh-usage.jsonl")))
-USAGE_LOG_MAX = 4 * 1024 * 1024
+USAGE_LOG_MAX = int(os.environ.get("COORDINATOR_GH_USAGE_MAX", 4 * 1024 * 1024))
 _CALLER = None
 # A caller whose tests replace its own `subprocess` name hands the helper a
 # getter for the launcher, so every gh call still goes through the one it
@@ -381,6 +382,9 @@ def _conditional_run(argv, timeout):
         header = re.search(r"(?im)^etag:\s*(\S+)\s*$", headers)
         if header:
             _write_etag(argv, header.group(1), body)
+        # Keep the body for the short TTL as well. A response with no ETag
+        # would otherwise make the next identical read a fresh core call.
+        store(argv, body)
     return subprocess.CompletedProcess(argv, result.returncode, body, result.stderr)
 
 
@@ -567,13 +571,23 @@ def record(argv, count=1):
     # the report and safe to keep.
     line = json.dumps({"ts": round(time.time(), 3), "caller": caller(),
                        "resource": resource(argv), "verb": verb(argv)})
+    lines = (line + "\n") * count
+    # The size check, the rotation and the append are one critical section
+    # under a lock. Without it two callers can both see a full log: the
+    # first rotates it, and the second replaces `.1` with the new, nearly
+    # empty log, destroying the retained history the report reads.
+    lock_path = USAGE_LOG.with_suffix(USAGE_LOG.suffix + ".lock")
     try:
-        if USAGE_LOG.exists() and USAGE_LOG.stat().st_size > USAGE_LOG_MAX:
-            os.replace(USAGE_LOG, USAGE_LOG.with_suffix(".jsonl.1"))
         USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with open(USAGE_LOG, "a") as handle:
-            for _ in range(count):
-                handle.write(line + "\n")
+        with open(lock_path, "a") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                if USAGE_LOG.exists() and USAGE_LOG.stat().st_size > USAGE_LOG_MAX:
+                    os.replace(USAGE_LOG, USAGE_LOG.with_suffix(USAGE_LOG.suffix + ".1"))
+                with open(USAGE_LOG, "a") as handle:
+                    handle.write(lines)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     except OSError:
         return
 
