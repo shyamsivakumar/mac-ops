@@ -1398,9 +1398,11 @@ from Shyam.
 
 The panel's answer is bound to the cause it showed when he chose it: the
 choice and the free-text reply alike take the cause when the answer
-starts, not when it is sent. A reply the popup restores keeps the cause it
-belongs to, and a restored reply whose cause is not known is dropped
-rather than sent for an alarm nobody answered. When the alarm is replaced between the answer
+starts, not when it is sent. An answer that was never bound to a cause is
+dropped rather than sent for the alarm that is there now, and so is an
+answer whose alarm was replaced in between. A reply the popup restores
+keeps the cause it belongs to, and text saved without a cause is not
+restored at all: it cannot be bound to the alarm on the board now. When the alarm is replaced between the answer
 and the send, the answer is dropped and Shyam is told, because sending it
 would answer the alarm that is there now, and he never answered that one.
 
