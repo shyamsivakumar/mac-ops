@@ -8,7 +8,7 @@ import { STALE_TEXT, changedSinceLaunch, fellBack, issueGroup, issueRef, listIss
 import { cachedFiles, fetchPr, loadChecks, loadFiles, prChanges, prEntries, prState, refreshPrs, seedPrs, storePr } from "./gh.js";
 import { ABANDON_LABEL, COLUMNS, COLUMN_OF, DECIDES, DEC_HEIGHT, DEC_WIDTH, H, LANE_RANK, LOADING_VERDICT, NOTE_LABEL, PR_LANES, SHEET_WIDTH, ago, canMerge, card, cardHeight, childRow, columnHead, decisionOf, decisionView, elapsed, hasReason, prCard, emptyRow, foldedColumn, issueDecision, keySheet, noticeHeight, parentCard, progressParts, workerRow, noticeSheet, projectSheet, projectSheetHeight, reviewView, rowSheet, rowSheetHeight, searchRow, sheetHeight, thumb, toolbar } from "./ui.js";
 import { CHECK_EVERY, alertState, checkAlerts, holds, hydrateAlerts, leaseOpen, setAlertsOn } from "./alerts.js";
-import { flushFlowLog, logLaneChange, markPass } from "./flowlog.js";
+import { flushFlowLog, logAct, logLaneChange, markPass } from "./flowlog.js";
 import { DEAD, STALL_AFTER, laneOf, needReasons, reviewThread, stallOf, trailOf } from "./asks.js";
 
 const CLICK_SLOP = 4;
@@ -41,6 +41,8 @@ const PLAN_STALE = 60000;
 const BULK_KEYS = new Set(["S", "A", "M", "F", "U"]);
 const SETTLEABLE = ["done", "fail", "stop"];
 const NOTE_KINDS = { settle: "not finished", approve: "not ready", retry: "not failed", rebase: "not conflicting", note: "no thread to reply to" };
+const ACT_OF = { Rebase: "rebase", Retry: "retry", Note: "reply" };
+const srcOf = (g) => (g.kind === "ask" ? "coordinator" : g.threads.some((t) => t.review) ? "review" : "task");
 const NAV_KEYS = new Set(["j", "k", "up", "down"]);
 const WT_STATE = `${home()}/.local/state/herdr-worktrees`;
 const WT_EVERY = 30000;
@@ -136,6 +138,7 @@ export default class Board extends View {
     this.born = 0;
     this.staleTimer = null;
     this.actedSeen = shared("cockpit.acted") ?? 0;
+    this.answerSeen = 0;
     this.handle = cx.focus_handle();
     this.input = InputState.new({ placeholder: "Write a reply" });
     this.input.on("submit", (_e, cx) => this.submitReply(cx));
@@ -252,7 +255,10 @@ export default class Board extends View {
     hydrateAlerts();
     cx.timer.every(BOARD_EVERY, (cx) => this.watching() && this.refresh(cx));
     cx.timer.every(CHECK_EVERY, (cx) => this.alertTick(cx));
-    cx.timer.every(TICK, (cx) => cx.spawn(() => flushFlowLog(Date.now())));
+    cx.timer.every(TICK, (cx) => {
+      if (!this.pop) this.logAnswers();
+      cx.spawn(() => flushFlowLog(Date.now()));
+    });
     cx.timer.every(WT_EVERY, (cx) => this.watching() && this.watchWorktrees(cx));
     this.watchWorktrees(cx);
     this.restore();
@@ -832,6 +838,16 @@ export default class Board extends View {
     localStorage.setItem(SEEN_KEY, JSON.stringify(next));
   }
 
+  noteAct(g, act, t = Date.now()) {
+    if (g && this.seen[g.key]?.col === "needs") logAct({ t, key: g.key, act, src: srcOf(g), project: g.project });
+  }
+
+  logAnswers() {
+    const fresh = Object.entries(shared("co.decided") ?? {}).filter(([, d]) => d.at > this.answerSeen);
+    for (const [key, d] of fresh) logAct({ t: d.at, key, act: "answer", src: "coordinator", project: null });
+    if (fresh.length) this.answerSeen = Math.max(...fresh.map(([, d]) => d.at));
+  }
+
   enteredAt(key, g) {
     if (key === "backlog") return g.issue ? g.at : g.primary.created;
     if (key === "run") return g.runSince ?? g.primary.at;
@@ -1150,7 +1166,7 @@ export default class Board extends View {
 
   runAct(act, cx) {
     if (act.kind === "retry") return this.retryFailed(act, cx);
-    if (act.kind === "snooze") return this.snooze(act.keys, act.until);
+    if (act.kind === "snooze") return this.snooze(act.keys, act.until, act.rev);
     if (act.all) this.snoozed = {};
     else delete this.snoozed[act.id];
     this.saveSnoozed();
@@ -1197,13 +1213,14 @@ export default class Board extends View {
     this.saveSnoozed();
   }
 
-  snooze(keys, choice) {
+  snooze(keys, choice, t) {
     const groups = this.groups().filter((g) => keys.includes(g.key));
     if (!groups.length) return;
     const until = snoozeUntil(choice, Date.now());
     for (const g of groups) {
       this.snoozed[g.key] = { until, stamp: this.activity(g) };
       this.marks.delete(g.key);
+      this.noteAct(g, "snooze", t);
     }
     this.saveSnoozed();
     say("info", groups.length === 1 ? `Snoozed ${groups[0].task || this.cleanTitle(groups[0])}` : `Snoozed ${groups.length} cards`, whenText(until));
@@ -1539,9 +1556,11 @@ export default class Board extends View {
     if (this.replyMarked) return this.sendMarked(text, cx);
     if (thread.issue) return this.confirm("abandon", this.replyKey, () => this.abandon(thread, cx), cx);
     const card = this.reviewMode ? this.reviewing(Date.now()).g : null;
+    const target = card ?? this.entryOf(this.replyKey)?.group;
     this.closeInput();
     this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
       const sent = await sendReply(thread.key, text);
+      this.noteAct(target, card ? "sendback" : "reply");
       if (card) this.finishReview(card, "Sent back");
       return sent;
     }, cx);
@@ -1682,7 +1701,10 @@ export default class Board extends View {
     if (problem) return this.refuse(g, name, problem);
     try {
       const r = await mergeThread(g, this.planned);
-      if (r.queued) return { name, queued: true, text: r.text };
+      if (r.queued) {
+        this.noteAct(g, "merge");
+        return { name, queued: true, text: r.text };
+      }
       return this.refuse(g, name, r.refused);
     } catch (error) {
       return this.refuse(g, name, `${error.message}. Check the relay queue before trying again.`);
@@ -1875,6 +1897,7 @@ export default class Board extends View {
         try {
           await send(text, g);
           this.sent.set(g.key, { action: verb, stamp: this.activity(g), at: Date.now() });
+          this.noteAct(g, ACT_OF[verb]);
         } catch {
           failed.push(g.task || this.cleanTitle(g));
         }
