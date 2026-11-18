@@ -449,10 +449,11 @@ class ReviewerFallbackTest(RetryLimitBase):
         with open(os.path.join(QUEUE_DIR, "config.json"), "w") as f:
             json.dump({"cap": 5}, f)
         launches = []
-        saved = {name: getattr(coordq, name) for name in ("live", "active_thread_ids", "call")}
+        saved = {name: getattr(coordq, name) for name in ("live", "active_thread_ids", "call", "safe_refill")}
         self.addCleanup(lambda: [setattr(coordq, name, value) for name, value in saved.items()])
         coordq.live = lambda: 0
         coordq.active_thread_ids = lambda: set()
+        coordq.safe_refill = lambda a: None
 
         def call(tool, args, rules=None):
             if tool == "t3_thread_launch":
@@ -460,7 +461,7 @@ class ReviewerFallbackTest(RetryLimitBase):
             return 0, json.dumps({"thread": {"threadId": "t-1"}})
 
         coordq.call = call
-        coordq.drain()
+        coordq.cmd_dispatch(types.SimpleNamespace(dry_run=False))
         return launches
 
     def test_a_queued_gate_on_a_blocked_reviewer_is_not_launched(self):

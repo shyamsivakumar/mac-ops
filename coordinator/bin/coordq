@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, contextlib, fcntl, json, os, re, signal, subprocess, sys, time
+import argparse, fcntl, json, os, re, signal, subprocess, sys, time
 from pathlib import Path
 
 # The modules below live next to this script. A caller that loads this file
@@ -650,17 +650,6 @@ def drain():
         item = next((i for i in ready if not blocked_launch(i)), None)
         if item is None:
             return
-        stack = contextlib.ExitStack()
-        if not stack.enter_context(model_list.blocked_lock(blocking=False)):
-            log(f"#{item['id']} waits, the provider block store is being written")
-            stack.close()
-            return
-        if blocked_launch(item):
-            # The reviewer was blocked while the lock was taken, so the
-            # item stays queued and is launched when the provider is free.
-            log(f"#{item['id']} waits, its reviewer is blocked")
-            stack.close()
-            continue
         try:
             steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
                      for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
@@ -719,7 +708,6 @@ def drain():
                 except (ValueError, TypeError, AttributeError):
                     log(f"reservation #{key} retained: launch reply has no thread ID")
             save(queue)
-        stack.close()
         request_id = item["args"].get("clientRequestId")
         if code == 0 and request_id and item["tool"] == "t3_thread_launch":
             try:
