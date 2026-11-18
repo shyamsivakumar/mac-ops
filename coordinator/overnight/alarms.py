@@ -122,11 +122,16 @@ def state_path():
 def load_state():
     """Return the mute state the shift keeps.
 
-    A state that cannot be read is an empty state: every alarm is
-    measured again from this tick on."""
+    A state file that is not there is an empty state: every alarm is
+    measured again from this tick on. A state file that cannot be read
+    is not an empty state: reading it as empty would let the next alarm
+    overwrite every acknowledgement it holds, and the alarms that were
+    answered would come back before their four hours are over. The read
+    failure is raised, and the caller publishes the alarm as unchecked
+    without writing over the state it could not read."""
     try:
         text = state_path().read_text()
-    except OSError:
+    except FileNotFoundError:
         return {}
     try:
         data = json.loads(text)
@@ -215,9 +220,9 @@ def board_locked(path):
     disappears. The lock is held across the read, the update and the
     replace, so the board a publisher writes is the board it read.
 
-    It yields False when the lock could not be taken: the publisher then
-    writes the board without it, because a lock that cannot be taken
-    must not hide a real failure from Shyam, and says so out loud."""
+    It yields True when the lock could not be taken: the publisher then
+    does not write the board, because two publishers writing the same
+    board would erase one another's alarm, and says so out loud."""
     handle = take_lock(str(path) + ".lock")
     try:
         yield handle is None

@@ -905,7 +905,12 @@ def watchdog():
                 # board and one alarm disappears.
                 with alarms.board_locked(p) as unlocked:
                     if unlocked:
-                        print("WATCHDOG the board lock could not be taken; the board was written without it")
+                        # The board cannot be written safely without its
+                        # lock: two publishers would read the same board
+                        # and one alarm would be erased. The alarm is not
+                        # published and the fault is said out loud.
+                        print("WATCHDOG the board lock could not be taken; the alarm is not published")
+                        return "failed"
                     with open(p) as handle:
                         d = json.load(handle)
                     if not isinstance(d, dict) or not isinstance(d.get("items"), list):
@@ -954,7 +959,10 @@ def watchdog():
         A board that cannot be written is said out loud: the item stays
         on the board and the next tick tries again."""
         try:
-            with alarms.board_locked(p):
+            with alarms.board_locked(p) as unlocked:
+                if unlocked:
+                    print("WATCHDOG the board lock could not be taken; the alarm stays on the board")
+                    return
                 with open(p) as handle:
                     d = json.load(handle)
                 if not isinstance(d, dict) or not isinstance(d.get("items"), list):

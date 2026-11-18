@@ -241,41 +241,15 @@ def alert(reason, cause=None, path=None):
         try:
             with alarms.board_locked(target) as unlocked:
                 if unlocked:
-                    print("stall: the board lock could not be taken; the board was written without it")
+                    # The board cannot be written safely without its
+                    # lock: two publishers would read the same board and
+                    # one alarm would be erased. The alarm is not
+                    # published and the fault is said out loud.
+                    print("stall: the board lock could not be taken; the alarm is not published")
+                    return "failed"
                 return write_alarm(target, action, cause, reason)
         except OSError:
             return "failed"
-        if not isinstance(decisions, dict):
-            return "failed"
-        items = decisions.get("items")
-        if not isinstance(items, list):
-            return "failed"
-        kept = [
-            item
-            for item in items
-            if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
-        ]
-        if action in ("raise", "unchecked"):
-            kept.append(
-                {
-                    "id": ALERT_ID,
-                    "group": "Coordinator",
-                    "kind": "action",
-                    "title": "Overnight shift stalled: no board progress for 3 ticks",
-                    "cause": alarms.cause_of(cause or reason),
-                    "why": reason,
-                }
-            )
-        decisions["items"] = kept
-        decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        if not write_board(target, decisions):
-            return "failed"
-        if action == "unchecked":
-            # The key could not be written, so the answer to this alarm
-            # cannot be recorded. The alarm is published anyway: a
-            # storage failure must not hide a real failure from Shyam.
-            print("stall: the alarm key could not be written; the answer to this alarm cannot be recorded")
-        return None
 
     # The decision and the publication happen under the state lock, so an
     # answer that lands between them cannot be missed, and the board is
