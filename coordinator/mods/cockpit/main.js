@@ -1556,12 +1556,14 @@ export default class Board extends View {
     if (!text || this.choosing || this.outdated || this.guard(true)) return;
     this.choosing = true;
     this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
-      const sent = await sendReply(thread.key, text);
-      logAct({ t: Date.now(), key: entry.group.key, act: "answer", src: "task", project: entry.group.project });
-      return sent;
-    }, cx, () => {
-      this.choosing = false;
-    });
+      try {
+        const sent = await sendReply(thread.key, text);
+        logAct({ t: Date.now(), key: entry.group.key, act: "answer", src: "task", project: entry.group.project });
+        return sent;
+      } finally {
+        this.choosing = false;
+      }
+    }, cx);
   }
 
   abandon(thread, cx) {
