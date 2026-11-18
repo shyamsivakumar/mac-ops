@@ -2393,10 +2393,12 @@ def stop_orphan_simulator_processes(
 
     A simulator process is an orphan when the device that owns it is not booted,
     or when it has no device at all. Processes of a booted device are never
-    touched. The booted devices and the process table are read again right before
-    the first signal and again right before escalating to SIGKILL, so a device
-    that starts booting in between is left alone. A signal goes only to a process
-    whose uid and start token match the ones read with its classification.
+    touched. Every device is handled on its own: the booted devices and the
+    process table are read again after the identities were collected and right
+    before that device's processes are signalled, so a device that starts
+    booting in between is left alone. The same check runs again before the
+    escalation to SIGKILL. A signal goes only to a process whose uid and start
+    token match the ones read with its classification.
     """
 
     def snapshot():
@@ -2408,40 +2410,58 @@ def stop_orphan_simulator_processes(
             epoch_clock=epoch_clock,
         )
 
-    if not snapshot():
-        return {"stopped": 0, "devices": []}
     targets = snapshot()
     if not targets:
         return {"stopped": 0, "devices": []}
-    for pid in targets:
-        try:
-            kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-    deadline = clock() + 2.0
-    remaining = list(targets)
-    while remaining and clock() < deadline:
-        remaining = [
+    groups: Dict[Optional[str], List[int]] = {}
+    for pid, (udid, _identity) in sorted(targets.items()):
+        groups.setdefault(udid, []).append(pid)
+    stopped = 0
+    devices: List[str] = []
+    for udid in sorted(groups, key=lambda value: (value is None, value or "")):
+        pids = sorted(groups[udid])
+        fresh = snapshot()
+        live = [
             pid
-            for pid in remaining
-            if _pid_alive(pid) and identity_reader(pid) == targets[pid][1]
+            for pid in pids
+            if pid in fresh and fresh[pid][1] == targets[pid][1]
         ]
-        if remaining:
-            sleep(0.2)
-    if remaining:
+        if not live:
+            continue
+        if udid is not None and udid in set(booted_reader()):
+            continue
+        for pid in live:
+            try:
+                kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        stopped += len(live)
+        if udid is not None:
+            devices.append(udid)
+        deadline = clock() + 2.0
+        remaining = list(live)
+        while remaining and clock() < deadline:
+            remaining = [
+                pid
+                for pid in remaining
+                if _pid_alive(pid) and identity_reader(pid) == targets[pid][1]
+            ]
+            if remaining:
+                sleep(0.2)
+        if not remaining:
+            continue
         still_orphans = snapshot()
         for pid in remaining:
             current = still_orphans.get(pid)
             if current is None or current[1] != targets[pid][1]:
                 continue
+            if udid is not None and udid in set(booted_reader()):
+                break
             try:
                 kill(pid, signal.SIGKILL)
             except OSError:
                 pass
-    return {
-        "stopped": len(targets),
-        "devices": sorted({udid for udid, _ in targets.values() if udid}),
-    }
+    return {"stopped": stopped, "devices": sorted(devices)}
 
 
 def _simulator_shutdown(udid: str) -> bool:
