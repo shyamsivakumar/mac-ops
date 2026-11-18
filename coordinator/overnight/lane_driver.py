@@ -746,38 +746,58 @@ def prompt_pass(repo, number, head, prompt):
     return f"skip #{number}: gate PASS, prompt change, Shyam merges"
 
 
-def merge_on_reviewed_base(repo, number, head, base):
-    """Merge one head into the base this review reads, by naming both.
+def base_moved_item(repo, number, head, landed, base):
+    """The item Shyam answers when a merge landed on a base nobody reviewed.
 
-    A merge call on the pull request pins the head only: the pull request
-    carries the base, and a retarget changes it without moving the head, so
-    the call can land the head somewhere this review never read. The merge
-    endpoint takes the base as an argument instead, so the reviewed base is
-    what the merge lands on, whatever the pull request is retargeted to
-    meanwhile. There is no interval left to race.
-
-    Returns (merged, note): merged means a merge commit was created on the
-    reviewed base; note is the line the pass prints.
+    The merge API pins no base, so the guard reads the base again after the
+    merge; a merge that landed elsewhere is not silently reported as a merge
+    on the reviewed base. The item is what makes that reach Shyam instead of
+    a log line nobody reads.
     """
-    try:
-        output = run(["gh", "api", "--method", "POST", f"repos/{repo}/merges",
-                      "-f", f"base={base}", "-f", f"head={head}",
-                      "-f", f"commit_message=Merge head {head[:8]} after its gate (reviewed base {base})"])
-    except subprocess.CalledProcessError as exc:
-        detail = " ".join(str(exc.output or "").split())[:160]
-        return False, (f"skip #{number}: gate PASS, but the merge into {base} was refused "
-                       f"({detail}); nothing merged, the next pass reviews it")
-    try:
-        merged_sha = (json.loads(output or "{}") or {}).get("sha")
-    except ValueError:
-        merged_sha = None
-    if not merged_sha:
-        # A 204 means the head is already in the base: nothing to merge and
-        # nothing to report as a new merge.
-        return False, f"skip #{number}: gate PASS, head {head[:8]} is already in {base}"
-    return True, f"#{number}: merged {head} into {base}"
+    key = CFG[repo]["key"]
+    return {"id": f"base-moved-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} merged into `{landed}`, not the reviewed `{base}`: "
+                      f"read head {head[:8]} and decide whether to keep it."),
+            "why": ("The merge call pins the head only, so a retarget inside the last moment before "
+                    "it cannot be refused by the merge. Nothing was closed and main was not "
+                    "fast-forwarded. Inspect the merged diff for prompt files before keeping it.")}
 
 
+def merge_on_reviewed_base(repo, number, head, base):
+    """Merge one pull request only when its base is still the reviewed one.
+
+    `--match-head-commit` pins the head, and nothing in the merge call pins
+    the base: a retarget leaves the head where it is. Two things guard the
+    interval around the merge. The base and head are read once immediately
+    before it, and a pull request that moved merges nothing. The base is read
+    once more after it: a merge cannot pin its base, so a retarget that slipped
+    into that interval would otherwise be reported as a merge on the reviewed
+    base. A merge that landed on another base is reported as one that is not
+    the reviewed review's, and the caller closes nothing and fast-forwards
+    nothing, so the outcome Shyam reads is never "merged as reviewed" for a
+    base nobody reviewed.
+    Return (merged, note): merged means the merge was issued onto the reviewed
+    base; note is the line the pass prints.
+    """
+    current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                              "--json", "baseRefName,headRefOid"])) or {}
+    if current.get("baseRefName") != base or current.get("headRefOid") != head:
+        return False, (f"skip #{number}: gate PASS, but the pull request moved (base {base} -> "
+                       f"{current.get('baseRefName')}, head {head[:8]} -> "
+                       f"{str(current.get('headRefOid'))[:8]}); nothing merged, the next pass reviews it")
+    run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+    landed = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                             "--json", "baseRefName"])) or {}
+    if landed.get("baseRefName") != base:
+        # The pull request cannot be retargeted once it is merged, so the base
+        # it names now is the base the merge landed on. The item puts that in
+        # front of Shyam; the pass itself claims no merge.
+        published = publish_decision(base_moved_item(repo, number, head,
+                                                     landed.get("baseRefName"), base))
+        return False, (f"critical #{number}: the merge landed on base "
+                       f"{landed.get('baseRefName')}, not the reviewed {base}; nothing closed, "
+                       f"nothing fast-forwarded, Shyam has the item ({published})")
+    return True, f"#{number}: merged {head}"
 def message_title(repo, number, action, head):
     """The title of one message about one head of one pull request.
 
