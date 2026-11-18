@@ -168,14 +168,14 @@ def merge(current, state):
     return merged
 
 
-def take_lock():
-    """Take the state lock and return the open handle, or None.
+def take_lock(path=None):
+    """Take a lock file and return the open handle, or None.
 
     A lock that cannot be taken is not a lock. A writer that cannot take
     it must fail its write, not write the file unlocked and take a
     concurrent acknowledgement with it. The handle is let go with
     `drop_lock`."""
-    path = Path(str(MUTE_PATH) + ".lock")
+    path = Path(path or (str(MUTE_PATH) + ".lock"))
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -203,6 +203,23 @@ def drop_lock(handle):
         handle.close()
     except OSError:
         pass
+
+
+@contextlib.contextmanager
+def board_locked(path):
+    """Hold the board lock while the board is read, changed and replaced.
+
+    The board lock is its own file, beside the board, and not the mute
+    lock: a mute storage that cannot be locked must not leave the board
+    unprotected, or two publishers read the same board and one alarm
+    disappears. The lock is held across the read, the update and the
+    replace, so the board a publisher writes is the board it read."""
+    handle = take_lock(str(path) + ".lock")
+    try:
+        yield
+    finally:
+        if handle is not None:
+            drop_lock(handle)
 
 
 @contextlib.contextmanager

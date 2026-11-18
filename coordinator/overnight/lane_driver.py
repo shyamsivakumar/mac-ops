@@ -899,21 +899,27 @@ def watchdog():
             A board that cannot be read or written returns "failed", so
             the tick says the alarm is nowhere instead of losing it."""
             try:
-                with open(p) as handle:
-                    d = json.load(handle)
-                if not isinstance(d, dict) or not isinstance(d.get("items"), list):
-                    return "failed"
-                d["items"] = [i for i in d["items"]
-                              if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
-                if action in ("raise", "unchecked"):
-                    d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                                       "title": "Factory job stopped or failing: " + cause,
-                                       "cause": alarms.cause_of(cause),
-                                       "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
-                d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                with open(p + ".tmp", "w") as handle:
-                    json.dump(d, handle, indent=1)
-                os.replace(p + ".tmp", p)
+                # The board lock is its own file, beside the board: a
+                # mute storage that cannot be locked must not leave the
+                # board unprotected, or two publishers read the same
+                # board and one alarm disappears.
+                with alarms.board_locked(p):
+                    with open(p) as handle:
+                        d = json.load(handle)
+                    if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+                        return "failed"
+                    d["items"] = [i for i in d["items"]
+                                  if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
+                    if action in ("raise", "unchecked"):
+                        d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
+                                           "title": "Factory job stopped or failing: " + cause,
+                                           "cause": alarms.cause_of(cause),
+                                           "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
+                    d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    temporary = f"{p}.{os.getpid()}.tmp"
+                    with open(temporary, "w") as handle:
+                        json.dump(d, handle, indent=1)
+                    os.replace(temporary, p)
             except (OSError, ValueError):
                 return "failed"
             if action == "quiet":
@@ -946,17 +952,19 @@ def watchdog():
         A board that cannot be written is said out loud: the item stays
         on the board and the next tick tries again."""
         try:
-            with open(p) as handle:
-                d = json.load(handle)
-            if not isinstance(d, dict) or not isinstance(d.get("items"), list):
-                print("WATCHDOG could not take the alarm off the board; the board file could not be read")
-                return
-            d["items"] = [i for i in d["items"]
-                          if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
-            d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            with open(p + ".tmp", "w") as handle:
-                json.dump(d, handle, indent=1)
-            os.replace(p + ".tmp", p)
+            with alarms.board_locked(p):
+                with open(p) as handle:
+                    d = json.load(handle)
+                if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+                    print("WATCHDOG could not take the alarm off the board; the board file could not be read")
+                    return
+                d["items"] = [i for i in d["items"]
+                              if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
+                d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                temporary = f"{p}.{os.getpid()}.tmp"
+                with open(temporary, "w") as handle:
+                    json.dump(d, handle, indent=1)
+                os.replace(temporary, p)
         except (OSError, ValueError):
             print("WATCHDOG could not take the alarm off the board; the board file could not be written")
 

@@ -831,7 +831,12 @@ def watchdog():
         raise AssertionError(f"unexpected subprocess: {cmd}")
 
     def opened(path, mode="r"):
-        exact(str(path), decisions + (".tmp" if mode == "w" else ""))
+        if mode == "w":
+            # The board is replaced from a temporary file of this
+            # writer's own, so two writers never share one.
+            exact(str(path) in (decisions + ".tmp", f"{decisions}.{os.getpid()}.tmp"), True)
+        else:
+            exact(str(path), decisions)
         if mode == "r":
             return io.StringIO(json.dumps(state))
         return mock_open()()
@@ -1057,6 +1062,7 @@ def watchdog():
         # from its own temporary file, and nothing else.
         replaced = {(str(call.args[0]), str(call.args[1])) for call in replace.call_args_list}
         exact(replaced - {(decisions + ".tmp", decisions),
+                          (f"{decisions}.{os.getpid()}.tmp", decisions),
                           (mute + ".tmp", mute),
                           (f"{mute}.{os.getpid()}.tmp", mute)}, set())
 
@@ -2326,6 +2332,32 @@ def alarm_mute():
             ids = [i["id"] for i in json.loads(board.read_text())["items"]]
             exact("factory-watchdog" in ids, True)
             exact("factory-overnight-stall" in ids, True)
+
+            # The board lock is held while the board is read, changed
+            # and replaced, and it is its own file, so a mute storage
+            # that cannot be locked does not leave the board open.
+            import fcntl
+            import os as _os
+            held = []
+
+            def watched_open(path, *args, **kwargs):
+                if str(path) == str(board):
+                    other = _os.open(str(str(board) + ".lock"),
+                                     _os.O_RDWR | _os.O_CREAT, 0o600)
+                    try:
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held.append(False)
+                        fcntl.flock(other, fcntl.LOCK_UN)
+                    except OSError:
+                        held.append(True)
+                    finally:
+                        _os.close(other)
+                return open(path, *args, **kwargs)
+
+            codes["code"] = 1
+            with patch.object(lane, "open", create=True, side_effect=watched_open):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=43))
+            exact(held, [True])
 
             # A board that cannot be written is said out loud: the alarm
             # is nowhere, and the tick says so.

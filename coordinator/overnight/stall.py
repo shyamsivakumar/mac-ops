@@ -239,9 +239,9 @@ def alert(reason, cause=None, path=None):
         now cannot slip between the decision and the alarm on the board,
         and the board is read now, not before the lock."""
         try:
-            with open(target) as handle:
-                decisions = json.load(handle)
-        except (OSError, ValueError):
+            with alarms.board_locked(target):
+                return write_alarm(target, action, cause, reason)
+        except OSError:
             return "failed"
         if not isinstance(decisions, dict):
             return "failed"
@@ -287,12 +287,57 @@ def alert(reason, cause=None, path=None):
     return str(target), "wrote"
 
 
+def write_alarm(target, action, cause, reason):
+    """Write the board with the alarm, or without it, under the lock.
+
+    The board is read, changed and replaced while the board lock is
+    held, so another publisher cannot read it stale and lose this
+    alarm."""
+    try:
+        with open(target) as handle:
+            decisions = json.load(handle)
+    except (OSError, ValueError):
+        return "failed"
+    if not isinstance(decisions, dict):
+        return "failed"
+    items = decisions.get("items")
+    if not isinstance(items, list):
+        return "failed"
+    kept = [
+        item
+        for item in items
+        if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
+    ]
+    if action in ("raise", "unchecked"):
+        kept.append(
+            {
+                "id": ALERT_ID,
+                "group": "Coordinator",
+                "kind": "action",
+                "title": "Overnight shift stalled: no board progress for 3 ticks",
+                "cause": alarms.cause_of(cause or reason),
+                "why": reason,
+            }
+        )
+    decisions["items"] = kept
+    decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not write_board(target, decisions):
+        return "failed"
+    if action == "unchecked":
+        # The key could not be written, so the answer to this alarm
+        # cannot be recorded. The alarm is published anyway: a storage
+        # failure must not hide a real failure from Shyam.
+        print("stall: the alarm key could not be written; the answer to this alarm cannot be recorded")
+    return None
+
+
 def write_board(target, decisions):
     """Write the board file and return True when it went to the board."""
+    temporary = f"{target}.{os.getpid()}.tmp"
     try:
-        with open(str(target) + ".tmp", "w") as handle:
+        with open(temporary, "w") as handle:
             json.dump(decisions, handle, indent=1)
-        os.replace(str(target) + ".tmp", str(target))
+        os.replace(temporary, str(target))
     except OSError:
         return False
     return True
