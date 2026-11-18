@@ -432,32 +432,25 @@ def retarget_after_the_merge_is_reported():
           reported and again is True and ok_note == f"#544: merged {HEAD}", command)
 
 
-def classification_covers_the_default_branch():
-    """A base retarget cannot hide prompt text from the classification."""
+def classification_reads_the_own_base():
+    """A child pull request is not held for prompt text it inherited."""
     import lane_driver as lane
     command = "python3 evidence/MO-543/proof.py"
 
     def fetch(endpoint):
-        # Against the feature branch the head only touches code; against main
-        # the same head introduces a skill file.
-        for ref in ("feature", "main"):
-            if endpoint.endswith(f"/compare/{ref}...{HEAD}"):
-                return {"merge_base_commit": {"sha": f"{ref}-base"}}
-        if endpoint.endswith("/git/trees/feature-base?recursive=1"):
-            return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}
-        if endpoint.endswith("/git/trees/main-base?recursive=1"):
-            return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"},
-                             {"type": "blob", "path": "skills/x/SKILL.md", "sha": "2"}]}
-        if endpoint.endswith(f"/git/trees/{HEAD}?recursive=1"):
-            return {"tree": [{"type": "blob", "path": "a.py", "sha": "3"}]}
-        raise AssertionError(endpoint)
+        if "/compare/" in endpoint:
+            return {"merge_base_commit": {"sha": "base"}}
+        if endpoint.endswith("/git/trees/base?recursive=1"):
+            return {"tree": [{"type": "blob", "path": "skills/x/SKILL.md",
+                              "mode": "100644", "sha": "2"}]}
+        return {"tree": [{"type": "blob", "path": "skills/x/SKILL.md",
+                          "mode": "100644", "sha": "2"},
+                         {"type": "blob", "path": "a.py", "mode": "100644", "sha": "3"}]}
 
     with patch.object(lane, "api_json", fetch):
         state = lane.prompt_pull("shyamsivakumar/mac-ops", 544, base="feature", head=HEAD)
-    grant("lane: a head that adds prompt text against main holds, whatever its base",
-          state == prompt_paths.HOLD
-          and prompt_paths.bases("feature") == ["feature", "main"], command)
-
+    grant("lane: an inherited prompt edit does not hold a code-only child pull request",
+          state == prompt_paths.CLEAR, command)
 
 def landed_elsewhere_reaches_shyam():
     """A merge that landed on another base becomes a board item, not a log line."""
@@ -606,7 +599,7 @@ def main():
     truncated_tree_walk()
     moved_base_refuses_merge()
     retarget_after_the_merge_is_reported()
-    classification_covers_the_default_branch()
+    classification_reads_the_own_base()
     landed_elsewhere_reaches_shyam()
     tree_fallback()
     lane_truncation()
