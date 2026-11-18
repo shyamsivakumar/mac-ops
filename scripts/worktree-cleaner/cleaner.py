@@ -1978,7 +1978,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["eligible"] = False
                         candidate["reasons"] = ["recovery_storage_unavailable"]
                         continue
-                    kept = _remove_tree(directory, {}, snapshot, "", storage)
+                    kept = _remove_tree(directory, {}, snapshot)
                     # What is left in the directory decides whether the checkout
                     # survives, not the count of entries the loop handled: a file
                     # that was created after the snapshot is not in the loop at all.
