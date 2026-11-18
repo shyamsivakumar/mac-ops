@@ -4,17 +4,21 @@ A gate that ends without a verdict moves down this chain once. A reviewer that
 fails with a blocking provider error is blocked for every head until its
 window ends, and a new gate starts on the next reviewer meanwhile. The block
 is one small file beside the queue, replaced whole rather than edited in
-place, and its two callers write it while they hold the queue lock.
+place, and it guards its own read-modify-write: the gatekeeper writes it while
+it holds the queue lock, and the dispatcher writes it while it holds no lock
+at all, so the file is what serializes them.
 
 The window runs from the moment the run failed, not from the moment this
 process first reads the failure: a gate can fail at 10:00 and be read at
 10:25, and a block measured from the read would hold the reviewer 25 minutes
 past the reset the provider named."""
+import fcntl
 import json
 import math
 import os
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 REVIEWER_CHAIN = (
@@ -23,6 +27,7 @@ REVIEWER_CHAIN = (
 )
 
 BLOCK_FILE = "reviewers-blocked.json"
+LOCK_FILE = "reviewers-blocked.lock"
 BLOCK_SECONDS = 3600.0
 DEFAULT_DIR = os.path.expanduser("~/Code/coordinator/queue")
 
@@ -71,6 +76,29 @@ def path(directory=None):
     return os.path.join(directory or os.environ.get("COORDQ_DIR", DEFAULT_DIR), BLOCK_FILE)
 
 
+def lock_path(directory=None):
+    return os.path.join(directory or os.environ.get("COORDQ_DIR", DEFAULT_DIR), LOCK_FILE)
+
+
+@contextmanager
+def locked(directory=None):
+    """Hold the block file for one read-modify-write.
+
+    The two writers hold different locks: the gatekeeper writes this file
+    while it holds the queue lock and the dispatcher failure path writes it
+    while it holds nothing. A bare read then write from either side replaces
+    the whole file with a copy the other's block was not in, dropping a block
+    a reviewer had just earned, or freeing one that had just been recorded.
+    Readers need nothing: a write is one atomic replace."""
+    handle = open(lock_path(directory), "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
+
+
 def read(directory=None):
     """The block records as written, as identity -> {until, at}."""
     try:
@@ -110,13 +138,14 @@ def blocked(now=None, directory=None):
 def release_expired(now=None, directory=None):
     """Drop the blocks that have ended, and name the reviewers they free."""
     now = time.time() if now is None else now
-    records = read(directory)
-    ended = sorted(name for name, record in records.items()
-                   if (until_of(record) or 0) <= now)
-    for name in ended:
-        del records[name]
-    if ended:
-        write(records, directory)
+    with locked(directory):
+        records = read(directory)
+        ended = sorted(name for name, record in records.items()
+                       if (until_of(record) or 0) <= now)
+        for name in ended:
+            del records[name]
+        if ended:
+            write(records, directory)
     return ended
 
 
@@ -135,15 +164,16 @@ def block_reviewer(selection, value, now=None, directory=None):
     if until is None:
         return None
     name = identity(selection)
-    records = read(directory)
-    current = until_of(records.get(name))
-    if current is not None and current > now:
-        if until > current:
-            records[name] = {"until": until, "at": now}
-            write(records, directory)
-        return None
-    records[name] = {"until": until, "at": now}
-    write(records, directory)
+    with locked(directory):
+        records = read(directory)
+        current = until_of(records.get(name))
+        if current is not None and current > now:
+            if until > current:
+                records[name] = {"until": until, "at": now}
+                write(records, directory)
+            return None
+        records[name] = {"until": until, "at": now}
+        write(records, directory)
     return until
 
 

@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -485,6 +486,74 @@ class LateReadWindowTest(ReplayBase):
                 self.run_gatekeep()
                 self.assertEqual(self.blocked_records(), {})
                 self.assertEqual(coordq.starting_reviewer(), CHAIN_HEAD)
+
+
+class BlockFileLockTest(unittest.TestCase):
+    """The block file guards its own read-modify-write.
+
+    The gatekeeper writes it while it holds the queue lock and the dispatcher
+    failure path (`coordq drain` -> `failed_gate_reviewer`) writes it while it
+    holds no lock at all, so a bare read then write from either side replaces
+    the whole file with a copy the other's block was not in.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="coordq-block-lock-", dir=QUEUE_DIR)
+        self.saved_dir = coordq.DIR
+        os.environ["COORDQ_DIR"] = self.dir
+        coordq.DIR = self.dir
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        coordq.DIR = self.saved_dir
+        os.environ["COORDQ_DIR"] = QUEUE_DIR
+
+    def run_while_held(self, action):
+        """Run one writer while this process holds the file, and say whether it waited."""
+        done = []
+        with gate_reviewers.locked(self.dir):
+            worker = threading.Thread(target=lambda: done.append(action()))
+            worker.start()
+            worker.join(0.5)
+            waited = worker.is_alive()
+            self.assertEqual(done, [], "a writer ran inside another writer's hold")
+        worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(done), 1)
+        return waited, done[0]
+
+    def test_a_block_waits_for_the_writer_holding_the_file(self):
+        waited, end = self.run_while_held(lambda: gate_reviewers.block_reviewer(
+            CHAIN_HEAD, {"error": {"message": NO_CREDITS}}, directory=self.dir))
+        self.assertTrue(waited)
+        self.assertIsNotNone(end)
+        self.assertEqual(list(gate_reviewers.read(self.dir)), [identity(CHAIN_HEAD)])
+
+    def test_a_release_waits_for_the_writer_holding_the_file(self):
+        now = time.time()
+        gate_reviewers.write({identity(CHAIN_HEAD): {"until": now - 1, "at": now - 3601}},
+                             self.dir)
+        waited, ended = self.run_while_held(
+            lambda: gate_reviewers.release_expired(directory=self.dir))
+        self.assertTrue(waited)
+        self.assertEqual(ended, [identity(CHAIN_HEAD)])
+        self.assertEqual(gate_reviewers.read(self.dir), {})
+
+    def test_a_block_and_a_release_keep_each_other_s_records(self):
+        # The interleaving the guard prevents: the release writes back the
+        # file it read, so a block recorded after that read is only kept if
+        # the writer was made to wait for it.
+        now = time.time()
+        gate_reviewers.write({identity(CHAIN_HEAD): {"until": now - 1, "at": now - 3601}},
+                             self.dir)
+        gate_reviewers.block_reviewer(NEXT_REVIEWER, {"error": {"message": NO_CREDITS}},
+                                      now=now, directory=self.dir)
+        self.assertEqual(gate_reviewers.release_expired(now=now, directory=self.dir),
+                         [identity(CHAIN_HEAD)])
+        self.assertEqual(list(gate_reviewers.read(self.dir)), [identity(NEXT_REVIEWER)])
+        self.assertEqual(gate_reviewers.starting_reviewer(now=now, directory=self.dir),
+                         CHAIN_HEAD)
+        self.assertTrue(gate_reviewers.is_blocked(NEXT_REVIEWER, now=now, directory=self.dir))
 
 
 if __name__ == "__main__":
