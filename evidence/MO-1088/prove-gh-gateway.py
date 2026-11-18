@@ -45,6 +45,10 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != 
         print("x-ratelimit-resource: core")
         print()
         print(name)
+elif mode == "failfirst" and "--paginate" in args:
+    # The first request fails: one attempt, no page printed.
+    sys.stderr.write("gh: HTTP 502\\n")
+    sys.exit(1)
 elif mode == "partial" and "--paginate" in args:
     # Two pages, then the third request fails: three requests were made.
     for page in (["1"], ["2"]):
@@ -485,6 +489,13 @@ check("importing the lane driver does not rename the process",
 check("the lane's own calls are named lane_driver",
       [row["caller"] for row in rows_after[-2:]] == ["overnight", "lane_driver"],
       f"callers={[row['caller'] for row in rows_after[-2:]]}")
+
+# A read whose first request fails made one attempt, not two.
+set_mode("failfirst")
+rows_before = len(rows())
+run(["gh", "api", "--paginate", "repos/a/b/issues?state=open"])
+check("a first-request failure is one request", len(rows()) - rows_before == 1,
+      f"rows={len(rows()) - rows_before}")
 
 # A read that fails part way still made the request that failed.
 set_mode("partial")

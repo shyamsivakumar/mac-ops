@@ -749,7 +749,8 @@ def run(
         die(f"{command} timed out")
     # The page count is what a paginated read spent, and only a succeeded
     # read is stored: a cached failure would read as an empty board.
-    body, count = gh_gateway.settle(argv, stdout, headers_counted)
+    body, count = gh_gateway.settle(argv, stdout, headers_counted,
+                                    failed=process.returncode != 0)
     gh_gateway.record(argv, count)
     if process.returncode != 0:
         tail = (stderr or stdout or "").strip().splitlines()[-3:]
@@ -4371,7 +4372,8 @@ def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
     # A failed read is never stored: a cached error would answer the next
     # identical read with a success, and a failed list would read as an
     # empty board. The page count is what the request actually spent.
-    body, count = gh_gateway.settle(argv, result.stdout, headers_counted)
+    body, count = gh_gateway.settle(argv, result.stdout, headers_counted,
+                                    failed=result.returncode != 0)
     gh_gateway.record(argv, count)
     if result.returncode == 0:
         gh_gateway.store(argv, body)
@@ -6045,7 +6047,8 @@ def health_run(argv: list[str], deadline: float) -> tuple[int, str, str]:
         return 127, "", f"{argv[0]} is not on PATH"
     except subprocess.TimeoutExpired:
         return 124, "", f"{' '.join(argv)} timed out"
-    body, count = gh_gateway.settle(argv, result.stdout, headers_counted)
+    body, count = gh_gateway.settle(argv, result.stdout, headers_counted,
+                                    failed=result.returncode != 0)
     gh_gateway.record(argv, count)
     if result.returncode == 0:
         gh_gateway.store(argv, body)
