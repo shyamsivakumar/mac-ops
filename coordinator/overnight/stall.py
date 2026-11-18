@@ -7,6 +7,11 @@ reported, never parked. When the whole board shows no progress for three
 ticks, the shift logs the stall, sweeps the board again and alerts Shyam.
 The shift keeps running until every item is done or parked.
 
+The board's progress is more than a moved item: a merged pull request, a
+closed ticket and a ticket that changed stage are progress too. The work
+landed, so the board moved, and a board that keeps landing work is not
+stalled (Refs #520).
+
 The rule lives in this one place: `observe` decides one item and `board`
 decides the board. Both are pure: they read a state mapping and return the
 new state and the event, so the shift writes the records (the shift log, the
@@ -25,6 +30,9 @@ from pathlib import Path
 
 # The cap the spec names: three ticks with no new commit and no new receipt.
 STALL_CAP = 3
+# How many board progress events the shift remembers. The memory is
+# bounded, so a long night cannot grow the state without limit.
+PROGRESS_MEMORY = 200
 # The alert the coordinator's board shows Shyam.
 ALERT_ID = "factory-overnight-stall"
 # The coordinator's board file. The driver writes its own alerts here, and
@@ -85,6 +93,45 @@ def pending(state, key, item_marker, cap=STALL_CAP):
 def board_pending(state, cap=STALL_CAP):
     """Return True when this tick could stall the board."""
     return int(state.get("board_idle") or 0) + 1 >= cap
+
+
+def progress(state, events):
+    """Return the board events the shift has not seen before.
+
+    An event is one thing that happened on the board: a merged pull
+    request, a closed ticket or a ticket that changed stage. Every event
+    counts once. An event the shift has already seen is not progress
+    again, or a board that merged one pull request would never stall."""
+    seen = state.get("board_events")
+    if not isinstance(seen, dict):
+        seen = {}
+    fresh = []
+    for event in events or []:
+        key = str(event)
+        if key not in seen:
+            seen[key] = True
+            fresh.append(key)
+    if len(seen) > PROGRESS_MEMORY:
+        for key in list(seen)[:len(seen) - PROGRESS_MEMORY]:
+            seen.pop(key, None)
+    state["board_events"] = seen
+    return fresh
+
+
+def staged(state, stages):
+    """Record the board's ticket stages and return True when one changed.
+
+    A ticket that changed stage is progress: the board moved. A ticket
+    that arrived is progress too, and `arrived` counts it. A ticket that
+    left the board is not counted here: a closed ticket is progress, and
+    the shift reads the closed tickets to know."""
+    previous = state.get("board_stages")
+    if not isinstance(previous, dict):
+        previous = {}
+    changed = any(key in previous and previous[key] != stage
+                  for key, stage in (stages or {}).items())
+    state["board_stages"] = dict(stages or {})
+    return changed
 
 
 def observe(state, key, item_marker, cap=STALL_CAP):

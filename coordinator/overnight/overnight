@@ -1759,7 +1759,9 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
     The fixture names its items and its ticks. A tick maps every item to
     its marker: the item's commit and the item's newest dispatch receipt.
     The command runs the real rule, so the stall line and the alert come
-    from the same code the shift runs.
+    from the same code the shift runs. A tick may also name the board's
+    progress: `progress` is a list of events (a merged pull request, a
+    closed ticket) and `stages` maps a ticket to its stage.
 
     The records go to `--root`, so a fixture run never touches the live
     records."""
@@ -1785,11 +1787,24 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
     for index, tick in enumerate(ticks, start=1):
         if not isinstance(tick, dict):
             die(f"tick {index} of the fixture {path} is not a mapping")
-        markers = {str(key): str(value) for key, value in tick.items()}
+        markers = {
+            str(key): str(value)
+            for key, value in tick.items()
+            if key not in ("progress", "stages", "at")
+        }
+        label = str(tick.get("at") or "")
+        suffix = f" ({label})" if label else ""
+        stages = tick.get("stages")
+        stages = {str(key): str(value) for key, value in stages.items()} if isinstance(stages, dict) else None
+        progress = tick.get("progress")
+        progress = [str(event) for event in progress] if isinstance(progress, list) else []
         fresh = stall.arrived(state, set(markers))
         progressed = any(
             stall.moved(state, key, marker) for key, marker in markers.items()
         ) or bool(fresh)
+        if stages is not None:
+            progressed = stall.staged(state, stages) or progressed
+        progressed = bool(stall.progress(state, progress)) or progressed
         board_event = stall.board(state, progressed, len(markers))
         for key, marker in sorted(markers.items()):
             event = stall.observe(state, key, marker)
@@ -1807,13 +1822,13 @@ def run_stall_fixture(args: argparse.Namespace) -> int:
             )
             emit(
                 f"STALL {key}: no new commit or receipt for {event['idle']} ticks; "
-                "reported, the shift keeps working it"
+                f"reported, the shift keeps working it{suffix}"
             )
             events.append(event)
         if board_event:
             emit(
                 f"STALL board: no board progress for {board_event['idle']} ticks; "
-                "the board is swept again"
+                f"the board is swept again{suffix}"
             )
             events.append(board_event)
     if args.root:

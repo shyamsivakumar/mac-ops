@@ -104,6 +104,7 @@ def start_routing():
          patch.object(lane, "recover_dead_runs"), \
          patch.object(lane, "t3", return_value={"threads": [{"title": "bot"}]}), \
          patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "board_activity", return_value=[]), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False):
         lane.run_pass({})
         for invalid in ({}, {"threads": None}, {"threads": {}}, {"threads": [None]}, {"threads": [{}]}):
@@ -132,6 +133,7 @@ def start_routing():
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
          patch.object(lane, "recover_dead_runs"), \
+         patch.object(lane, "board_activity", return_value=[]), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
          patch("builtins.open", __import__("unittest.mock", fromlist=["mock_open"]).mock_open(
              read_data=json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))):
@@ -1785,6 +1787,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "board_activity", return_value=[]), \
          patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
         lane.STALL_STATE = {}
         lane.STALL_EVENTS.clear()
@@ -1810,6 +1813,92 @@ def stall():
     exact(rule.arrived(state, {"a", "b"}), set())
     exact(rule.arrived(state, {"b", "c"}), {"c"})
     exact(sorted(state["board"]), ["b", "c"])
+
+    # A merged pull request and a closed ticket are progress on the board.
+    # Every event counts once: a merge that stays in the window does not
+    # count again, or a board that merged one pull request would never
+    # stall.
+    state = rule.new_state()
+    exact(rule.progress(state, ["merge:repo#1"]), ["merge:repo#1"])
+    exact(rule.progress(state, ["merge:repo#1"]), [])
+    exact(rule.progress(state, ["close:repo#2"]), ["close:repo#2"])
+    exact(sorted(state["board_events"]), ["close:repo#2", "merge:repo#1"])
+
+    # A ticket that changed stage is progress: the board moved.
+    state = rule.new_state()
+    exact(rule.staged(state, {"repo#1": "todo"}), False)
+    exact(rule.staged(state, {"repo#1": "started"}), True)
+    exact(rule.staged(state, {"repo#1": "started"}), False)
+    exact(rule.staged(state, {"repo#1": "todo"}), True)
+    # A ticket that left the board is not a stage change: a closed ticket
+    # is progress, and the shift reads the closed tickets to know.
+    state = rule.new_state()
+    exact(rule.staged(state, {"repo#1": "todo"}), False)
+    exact(rule.staged(state, {}), False)
+
+    # The driver reads the merged pull requests and the closed tickets and
+    # turns them into board events. An event that cannot be placed in the
+    # window is not evidence, and a read that fails counts no progress: the
+    # shift keeps the rule it had, so a real stall is still reported.
+    import datetime as dt
+    now = dt.datetime(2026, 11, 18, 2, 21, tzinfo=dt.timezone.utc).timestamp()
+    commands = []
+
+    def read(command):
+        commands.append(command)
+        if command[1] == "pr":
+            return [{"number": 1290, "mergedAt": "2026-11-18T02:19:48Z"},
+                    {"number": 1291, "mergedAt": "2026-11-17T02:19:48Z"}]
+        return [{"number": 1283, "closedAt": "2026-11-18T02:20:08Z"}]
+
+    with patch.object(lane, "LANE_REPOS", [repo]), \
+         patch.object(lane, "read_json", side_effect=read), \
+         patch.object(lane.time, "time", return_value=now):
+        events = lane.board_activity({}, 0)
+    exact(events, ["merge:shyamsivakumar/mac-ops#1290",
+                   "close:shyamsivakumar/mac-ops#1283"])
+    exact(commands[0][:2], ["gh", "pr"])
+    exact(commands[1][:2], ["gh", "issue"])
+
+    def failed(command):
+        raise RuntimeError("snapshot read failed")
+
+    with patch.object(lane, "LANE_REPOS", [repo]), \
+         patch.object(lane, "read_json", side_effect=failed), \
+         patch.object(lane.time, "time", return_value=now), \
+         contextlib.redirect_stdout(io.StringIO()):
+        exact(lane.board_activity({}, 0), [])
+
+    # The driver: a merge on the board is progress, so a board that lands
+    # work is not a stalled board even when no item moved (Refs #520).
+    merged_snapshot = {"tickets": [], "repos": {repo: {"prs": [pull], "issues": []}}}
+    windows = []
+
+    def merged(state, since=None):
+        windows.append(since)
+        return [f"merge:shyamsivakumar/mac-ops#{1290 + len(windows)}"]
+
+    with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+         patch.object(lane, "board_snapshot", return_value=merged_snapshot), \
+         patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+         patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+         patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+         patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "board_activity", merged), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+        lane.STALL_STATE = {}
+        lane.STALL_EVENTS.clear()
+        for _ in range(4):
+            lane.run_pass({})
+        found = list(lane.STALL_EVENTS)
+    lane.STALL_EVENTS.clear()
+    # The item stalled, the board did not: the merge was progress.
+    exact([event["kind"] for event in found], ["item"])
+    exact(lane.STALL_STATE["board_idle"], 0)
+    # The activity is read every tick, over the window since the last tick.
+    exact(len(windows), 4)
+    exact(windows[0], 0)
+    exact(windows[1] > 0, True)
 
     # A board that receives a new ticket every tick is a board that is
     # working, so it does not stall.
@@ -1837,6 +1926,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "board_activity", return_value=[]), \
          patch.object(lane, "act_on_pr", act), patch.object(lane, "run", run), \
          patch.object(lane, "DRY", False):
         for _ in range(3):
@@ -1864,6 +1954,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "board_activity", return_value=[]), \
          patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
         for _ in range(4):
             lane.run_pass({})
@@ -1880,6 +1971,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
+         patch.object(lane, "board_activity", return_value=[]), \
          patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
         lane.run_pass({})
     exact(lane.STALL_STATE.get("items", {}), {})
