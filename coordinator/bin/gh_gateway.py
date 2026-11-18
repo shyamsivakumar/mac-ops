@@ -699,6 +699,10 @@ def settle(argv, stdout, headers_counted, failed=False):
             # text is returned unchanged; only the count reads the blocks.
             pages = status_lines(stdout)
             return stdout, max(1, pages) + _failed_request(argv, failed, pages)
+        if has_include and not filtered(argv):
+            # Unfiltered pages are JSON, so a header block is a real one.
+            pages = status_lines(stdout)
+            return stdout, max(1, pages) + _failed_request(argv, failed, pages)
         if filtered(argv):
             # Without the headers a formatted body cannot be counted: a
             # number on each line is not a page. One invocation, one row,
