@@ -465,6 +465,13 @@ class ReviewerFallbackTest(RetryLimitBase):
             pass
         self.assertEqual(self.gate_items(), [])
 
+    def test_a_queued_gate_on_a_blocked_reviewer_is_not_launched(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        self.block(second)
+        self.assertIsNotNone(coordq.blocked_launch({"args": {"modelSelection": second}}))
+        first = coordq.model_list.entries("review")[0]["selection"]
+        self.assertIsNone(coordq.blocked_launch({"args": {"modelSelection": first}}))
+
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
         self.run_gatekeep()
