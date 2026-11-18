@@ -42,14 +42,17 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != 
     for name in ("name1", "name2", "name3"):
         print("HTTP/2.0 200 OK")
         print("content-type: application/json")
+        print("x-ratelimit-resource: core")
         print()
         print(name)
 elif mode == "bodyhttp" and ("--include" in args or "-i" in args) and "--paginate" in args:
     for name in ("name1", "name2", "name3"):
         print("HTTP/2.0 200 OK")
         print("content-type: text/plain")
+        print("x-ratelimit-resource: core")
         print()
         print("HTTP/1.1 200 OK")
+        print("Content-Type: text/plain")
         print()
         print(name)
 elif mode == "jqerror" and ("--include" in args or "-i" in args):
@@ -61,6 +64,7 @@ elif mode == "jqerror" and ("--include" in args or "-i" in args):
 elif mode == "noetag" and ("--include" in args or "-i" in args):
     print("HTTP/2.0 200 OK")
     print("content-type: application/json")
+    print("x-ratelimit-resource: core")
     print()
     print('[{{"number": 5}}]')
 elif "--include" in args or "-i" in args:
@@ -72,6 +76,7 @@ elif "--include" in args or "-i" in args:
         body = '[{{"number": 304}}]' if mode == "304body" else '[{{"number": 2}}]'
         print("HTTP/2.0 200 OK")
         print('etag: "v2"')
+        print("x-ratelimit-resource: core")
         print()
         print(body)
 elif "--paginate" in args:
@@ -209,6 +214,17 @@ set_mode("304")
 forget_body_cache()
 d = run(single)
 check("a 304 answers the stored body", d.stdout.strip() == '[{"number": 304}]', d.stdout.strip()[:40])
+
+# The 304 renews the short-TTL body, so the next read is served without a
+# call even once the ETag file is gone.
+for stale in (cache / "etag").glob("*"):
+    stale.unlink()
+before = calls_made()
+renewed = run(single)
+check("a 304 renews the body cache", calls_made() - before == 0,
+      f"calls={calls_made() - before}")
+check("the renewed body is the one that validated",
+      renewed.stdout.strip() == '[{"number": 304}]', renewed.stdout.strip()[:40])
 check("a 304 is not counted", len(rows()) - rows_before == 0,
       f"rows={len(rows()) - rows_before}")
 
