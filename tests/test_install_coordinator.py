@@ -693,6 +693,35 @@ class TestLocalBoardConfig(unittest.TestCase):
             self.assertNotIn("merge", settings, repo)
 
 
+class TestBuilderPromptRules(unittest.TestCase):
+    """The builder prompt is the installed agent rules file (mac-ops #506).
+
+    The coordinator prepends the installed rules to every ticket brief, so a
+    rule the builders need has to be in the file the installer writes."""
+
+    def test_the_installed_builder_prompt_carries_both_new_rules(self):
+        with temp_home() as td:
+            home = Path(td)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            prompt = (home / ".coordinator/AGENT-RULES.md").read_text()
+        self.assertIn("shared helper until the third repeat", prompt)
+        self.assertIn("tidy commit never changes behavior", prompt)
+
+    def test_the_repository_rules_are_the_source_of_the_installed_prompt(self):
+        source = (CHECKOUT / "coordinator/config/AGENT-RULES.md").read_text()
+        plan = {
+            target: source_path
+            for source_path, target, _mode in install_coordinator.plan(CHECKOUT, Path("/Users/example"))
+        }
+        self.assertEqual(
+            plan[Path("/Users/example/.coordinator/AGENT-RULES.md")],
+            CHECKOUT / "coordinator/config/AGENT-RULES.md",
+        )
+        self.assertIn("shared helper until the third repeat", source)
+        self.assertIn("tidy commit never changes behavior", source)
+
+
 class TestMainSourcePin(unittest.TestCase):
     """The installer only accepts clean canonical main that matches origin/main."""
 
