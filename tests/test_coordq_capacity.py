@@ -3,7 +3,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 from tests.test_gatekeep_backstop_reviewer import load_coordq
@@ -93,6 +93,145 @@ class CapacityTests(unittest.TestCase):
             self.q.drain()
         self.assertEqual(self.q.load()["reserved"], {})
 
+    def test_a_timeout_three_minutes_old_releases_a_slot_nobody_uses(self):
+        # A launch whose thread never shows live still comes back: the slot
+        # it holds is not held for ten minutes.
+        self.queue_sends()
+        data = self.q.load()
+        data["items"] = data["items"][:1]
+        data["reserved"] = {"stale": self.q.time.time() - 181}
+        data["reservedThreads"] = {"stale": "mcp:launch:gone"}
+        self.q.save(data)
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="running"), patch.object(
+                self.q, "call", return_value=(0, "{}")):
+            self.q.drain()
+        self.assertNotIn("stale", self.q.load()["reserved"])
+
+    def test_status_reconciles_under_the_writer_lock_the_start_takes(self):
+        # A start can enqueue between a read and a write, so a write of an
+        # older snapshot would drop the item it just queued. The read, the
+        # reconciliation and the write all happen under the writer lock.
+        self.q.save({"next": 2, "items": [],
+                     "reserved": {"7": self.q.time.time()},
+                     "reservedThreads": {"7": "launch:mcp:launch:one"}})
+        real_lock, real_save, held, saves, reads = (self.q.Lock, self.q.save, [], [], [])
+
+        class Recording(real_lock):
+            def __enter__(self):
+                held.append("enter")
+                return super().__enter__()
+
+            def __exit__(self, *exc):
+                held.append("exit")
+                return super().__exit__(*exc)
+
+        def save(queue):
+            saves.append(list(held))
+            return real_save(queue)
+
+        def live_ids():
+            reads.append(list(held))
+            return set()
+
+        with patch.object(self.q, "Lock", Recording), patch.object(self.q, "save", side_effect=save), \
+                patch.object(self.q, "active_thread_ids", side_effect=live_ids), \
+                patch.object(self.q, "thread_status", return_value="completed"), \
+                patch.object(self.q, "load_counts", return_value={}), \
+                redirect_stdout(io.StringIO()) as out:
+            self.q.cmd_status(None)
+        # The released reservation was written while the lock was held.
+        self.assertEqual(saves, [["enter"]])
+        # The thread list was read before the lock, so a t3 call never blocks
+        # a start.
+        self.assertEqual(reads, [[]])
+        self.assertEqual(json.loads(out.getvalue())["reserved"], {})
+
+    def test_a_reservation_taken_after_the_thread_read_is_left_alone(self):
+        # The finding: the thread list says T is live, T finishes, and a new
+        # send reserves T before the writer lock is taken. That reservation is
+        # not the one the list was read for, so it keeps its slot and the cap
+        # cannot be crossed.
+        now = self.q.time.time()
+        queue = {"next": 2, "items": [],
+                 "reserved": {"new": now},
+                 "reservedThreads": {"new": "mcp:launch:t"}}
+        with patch.object(self.q, "save"):
+            self.q.reconcile_reservations(queue, {"mcp:launch:t"}, {}, snapshot={})
+        self.assertIn("new", queue["reserved"])
+
+    def test_a_reservation_the_snapshot_holds_is_still_released(self):
+        now = self.q.time.time()
+        queue = {"next": 2, "items": [],
+                 "reserved": {"7": now},
+                 "reservedThreads": {"7": "mcp:launch:t"}}
+        snapshot = {"7": {"at": now, "thread": "mcp:launch:t"}}
+        with patch.object(self.q, "save"):
+            self.q.reconcile_reservations(queue, {"mcp:launch:t"}, {}, snapshot)
+        self.assertEqual(queue["reserved"], {})
+
+    def test_a_snapshot_reconciliation_never_looks_a_status_up(self):
+        # The second finding: the statuses are read before the writer lock, so
+        # a reconciliation that has a snapshot never calls t3 itself. A launch
+        # the read did not cover keeps its slot instead.
+        now = self.q.time.time()
+        queue = {"next": 2, "items": [],
+                 "reserved": {"7": now},
+                 "reservedThreads": {"7": "launch:mcp:launch:one"}}
+        snapshot = {"7": {"at": now, "thread": "launch:mcp:launch:one"}}
+        with patch.object(self.q, "thread_status") as status, patch.object(self.q, "save") as save:
+            self.q.reconcile_reservations(queue, set(), {}, snapshot)
+        status.assert_not_called()
+        save.assert_not_called()
+        self.assertIn("7", queue["reserved"])
+
+    def test_status_reads_launch_statuses_before_taking_the_writer_lock(self):
+        # The second finding: a status lookup under the lock would block every
+        # queue writer for its length.
+        self.q.save({"next": 2, "items": [],
+                     "reserved": {"7": self.q.time.time()},
+                     "reservedThreads": {"7": "launch:mcp:launch:one"}})
+        real_lock, held, lookups = self.q.Lock, [], []
+
+        class Recording(real_lock):
+            def __enter__(self):
+                held.append("enter")
+                return super().__enter__()
+
+            def __exit__(self, *exc):
+                held.append("exit")
+                return super().__exit__(*exc)
+
+        def status(thread):
+            lookups.append(list(held))
+            return "completed"
+
+        with patch.object(self.q, "Lock", Recording), \
+                patch.object(self.q, "active_thread_ids", return_value=set()), \
+                patch.object(self.q, "thread_status", side_effect=status), \
+                patch.object(self.q, "load_counts", return_value={}), \
+                redirect_stdout(io.StringIO()) as out:
+            self.q.cmd_status(None)
+        # The lookup happened with no lock held, and its answer released the
+        # slot inside the lock.
+        self.assertEqual(lookups, [[]])
+        self.assertEqual(json.loads(out.getvalue())["reserved"], {})
+        self.assertEqual(self.q.load()["reserved"], {})
+
+    def test_status_reconciles_a_reservation_its_launch_no_longer_needs(self):
+        # The reported reserved set is what the queue holds now, so a read
+        # does not show a slot that no thread uses.
+        self.q.save({"next": 2, "items": [],
+                     "reserved": {"7": self.q.time.time()},
+                     "reservedThreads": {"7": "launch:mcp:launch:one"}})
+        out = io.StringIO()
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="completed"), patch.object(
+                self.q, "load_counts", return_value={}), redirect_stdout(out):
+            self.q.cmd_status(None)
+        self.assertEqual(json.loads(out.getvalue())["reserved"], {})
+        self.assertEqual(self.q.load()["reserved"], {})
+
     def test_pre_steps_reserve_their_own_slots(self):
         self.queue_sends()
         data = self.q.load()
@@ -138,15 +277,57 @@ class CapacityTests(unittest.TestCase):
         self.assertIn("released reservation #7: thread mcp:launch:one is completed", log)
 
     def test_unfinished_thread_keeps_a_launch_slot_that_was_never_seen_live(self):
-        # Elapsed time alone must not free the slot: only a terminal status does.
+        # Elapsed time alone must not free the slot inside the timeout: only a
+        # terminal status does. The timeout is three minutes.
         self.q.save({"next": 2, "items": [],
-                     "reserved": {"7": self.q.time.time() - 300},
+                     "reserved": {"7": self.q.time.time() - 120},
                      "reservedThreads": {"7": "launch:mcp:launch:one"}})
         self.q.live = lambda: 0
         with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
                 self.q, "thread_status", return_value="waiting"):
             self.q.drain()
         self.assertIn("7", self.q.load()["reserved"])
+
+    def test_a_start_reads_the_thread_list_before_taking_the_writer_lock(self):
+        # The finding: a slow thread-list read while holding the writer lock
+        # holds every other start. The read happens first, and the records it
+        # speaks for are snapshotted, so a record written since counts as
+        # running.
+        self.q.save({"next": 2, "items": [],
+                     "started": [{"id": 1, "title": "older", "target": "other",
+                                  "thread": "other", "actionKey": "",
+                                  "at": self.q.time.time()}]})
+        real_lock, held, reads = self.q.Lock, [], []
+
+        class Recording(real_lock):
+            def __enter__(self):
+                held.append("enter")
+                return super().__enter__()
+
+            def __exit__(self, *exc):
+                held.append("exit")
+                return super().__exit__(*exc)
+
+        def live_ids():
+            reads.append(list(held))
+            return {"other"}
+
+        args = argparse.Namespace(
+            args=json.dumps({"threadId": "mcp:launch:builder", "message": "fix"}),
+            title="MO#544 gate findings", priority=800, tool="t3_thread_send",
+            action_key=None)
+        with patch.object(self.q, "Lock", Recording), \
+                patch.object(self.q, "active_thread_ids", side_effect=live_ids), \
+                patch.object(self.q, "cap", lambda: 0), redirect_stderr(io.StringIO()), \
+                redirect_stdout(io.StringIO()):
+            try:
+                self.q.cmd_start(args)
+            except SystemExit as e:
+                self.assertEqual(e.code, 0)
+        # The dedupe read is the first one and it runs with no lock held. The
+        # dispatch after it (drain) keeps its own, older, behaviour.
+        self.assertEqual(reads[0], [])
+        self.assertIn("enter", held)
 
     def test_launch_burst_does_not_overshoot_the_cap_with_a_lagging_count(self):
         self.q.save({"next": 40, "items": [
