@@ -1006,6 +1006,24 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertIn(str(first), listed)
         self.assertIn(str(second), listed)
 
+    def test_the_recovery_names_are_unique(self):
+        # Every file that is kept under a recovery name gets a name of its
+        # own, so a later cleanup cannot overwrite a preserved file.
+        repo = Path(self.tmp.name) / "recovery-repo"
+        repo.mkdir()
+        for index in range(6):
+            (repo / f"file{index}.md").write_text("content\n", encoding="utf-8")
+        descriptor = os.open(repo, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for index in range(6):
+                wrong = (0, 0, 0, 0)
+                self.assertEqual(cleaner._unlink_verified(descriptor, f"file{index}.md", wrong), 1)
+        finally:
+            os.close(descriptor)
+        kept = sorted(item.name for item in repo.iterdir())
+        self.assertEqual(len(kept), 6, kept)
+        self.assertEqual(len(set(kept)), 6, kept)
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
