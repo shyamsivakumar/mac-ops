@@ -1483,6 +1483,36 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
     return False, "github_pr_not_closed_for_head", None
 
 
+def _remove_recovery_copy(path: Path, older_than: float) -> bool:
+    """Remove a recovery copy file by file.
+
+    Every file is checked again immediately before it is removed, so a file
+    that an editor saved keeps its entry, and the copy is only removed when
+    nothing in it changed.
+    """
+    for root, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            entry = os.path.join(root, name)
+            try:
+                # The file is checked again right before it is removed, so a
+                # file an editor saved keeps its entry.
+                if os.stat(entry).st_mtime > older_than:
+                    return False
+                os.unlink(entry)
+            except OSError:
+                return False
+        for name in dirs:
+            try:
+                os.rmdir(os.path.join(root, name))
+            except OSError:
+                return False
+    try:
+        os.rmdir(path)
+    except OSError:
+        return False
+    return True
+
+
 def _newest_change(path: Path) -> float | None:
     """The newest change inside a directory, at any depth."""
     newest: float | None = None
@@ -1504,12 +1534,11 @@ def _recovery_manifest(state_root: Path) -> Path:
     return state_root / "recovery.json"
 
 
-def _record_recovery(state_root: Path, path: Path) -> None:
-    """Remember a recovery directory, so it is swept later.
+def _record_recovery(state_root: Path, path: Path) -> bool:
+    """Remember a recovery directory and the time it was taken.
 
-    The directory holds a marker with the time of the recovery, so the
-    retention of a copy starts when it was taken and not when its root
-    directory was last touched.
+    The time lives in the manifest, which the cleaner owns, so nothing is
+    written inside the recovered worktree.
     """
     manifest = _recovery_manifest(state_root)
     try:
@@ -1518,12 +1547,13 @@ def _record_recovery(state_root: Path, path: Path) -> None:
         entries = []
     if not isinstance(entries, list):
         entries = []
-    if str(path) not in entries:
-        entries.append(str(path))
+    kept = [entry for entry in entries if isinstance(entry, dict) and entry.get("path") != str(path)]
+    kept.append({"path": str(path), "recovered_at": time.time()})
     try:
-        atomic_write(manifest, json.dumps(sorted(entries), indent=1) + "\n")
+        atomic_write(manifest, json.dumps(kept, indent=1, sort_keys=True) + "\n")
     except OSError:
-        pass
+        return False
+    return True
 
 
 def _sweep_recovery(state_root: Path, older_than: float) -> None:
@@ -1540,19 +1570,20 @@ def _sweep_recovery(state_root: Path, older_than: float) -> None:
         entries = []
     if not isinstance(entries, list):
         entries = []
-    keep: list[str] = []
+    keep: list[dict[str, Any]] = []
     for entry in entries:
-        path = Path(entry)
+        if not isinstance(entry, dict):
+            continue
+        path = Path(str(entry.get("path")))
         newest = _newest_change(path)
         if newest is None or newest > older_than:
             keep.append(entry)
             continue
-        try:
-            shutil.rmtree(path)
-        except OSError:
-            keep.append(entry)
+        if _remove_recovery_copy(path, older_than):
+            continue
+        keep.append(entry)
     try:
-        atomic_write(manifest, json.dumps(sorted(keep), indent=1) + "\n")
+        atomic_write(manifest, json.dumps(keep, indent=1, sort_keys=True) + "\n")
     except OSError:
         pass
 
@@ -2084,11 +2115,14 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                     try:
                                         storage.mkdir(mode=0o700, parents=True, exist_ok=True)
                                         os.rename(Path(candidate["path"]).parent / aside, storage / aside)
-                                        marker = storage / aside / ".recovered-at"
-                                        marker.write_text(str(time.time()), encoding="utf-8")
-                                        _record_recovery(state_root, storage / aside)
                                         tree_gone = True
                                     except OSError:
+                                        tree_gone = False
+                                    if tree_gone and not _record_recovery(state_root, storage / aside):
+                                        # The recovery is not in the manifest, so it
+                                        # would never be swept. The checkout
+                                        # stays in the storage and the removal
+                                        # is reported as incomplete.
                                         tree_gone = False
                                 if not tree_gone:
                                     # The copy is moved back with a rename that
