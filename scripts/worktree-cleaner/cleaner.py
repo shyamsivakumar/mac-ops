@@ -577,11 +577,14 @@ def _rename_exclusive(source: Path, destination: Path) -> bool:
     return False
 
 
-def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> int:
-    """Unlink a file only when it is the one that was stamped.
+def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int], store: int | None = None) -> int:
+    """Remove a file only when it is the one that was stamped.
 
-    The file is renamed aside first, so the name that is unlinked belongs to
-    this call. A file that was replaced after the stamp is put back.
+    The file is renamed aside first, so the name that is removed belongs to
+    this call. The moved copy is kept in the recovery storage rather than
+    deleted, so a save that an editor makes through its own descriptor after
+    the move still has a home. A file that was replaced after the stamp is
+    put back.
     """
     # The name the file is moved to is reserved exclusively, so it can never
     # be the name a preserved copy already has.
@@ -612,6 +615,15 @@ def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> in
     except OSError:
         info = None
     if info is not None and (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) == stamp:
+        if store is not None:
+            # The copy is kept in the recovery storage: an editor that saves
+            # through its descriptor after this point writes into the inode
+            # that is kept there.
+            try:
+                os.rename(moved, os.path.basename(moved), src_dir_fd=fd, dst_dir_fd=store)
+                return 0
+            except OSError:
+                pass
         try:
             os.unlink(moved, dir_fd=fd)
             return 0
@@ -657,7 +669,7 @@ def _snapshot_all(fd: int, prefix: str = "") -> dict[str, dict[str, tuple[int, i
     return result
 
 
-def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapshots: dict[str, dict[str, tuple[int, int, int, int]]] | None = None, prefix: str = "") -> int:
+def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapshots: dict[str, dict[str, tuple[int, int, int, int]]] | None = None, prefix: str = "", store: int | None = None) -> int:
     """Remove the entries of a directory that have not changed since the
     snapshot, through the descriptor of the directory.
 
@@ -682,7 +694,7 @@ def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapsh
                 kept += 1
                 continue
             try:
-                kept += _remove_tree(child, {}, snapshots, prefix + entry + "/")
+                kept += _remove_tree(child, {}, snapshots, prefix + entry + "/", store)
             finally:
                 os.close(child)
             try:
@@ -690,7 +702,7 @@ def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapsh
             except OSError:
                 kept += 1
             continue
-        kept += _unlink_verified(fd, entry, stamp)
+        kept += _unlink_verified(fd, entry, stamp, store)
     return kept
 
 
@@ -1960,7 +1972,18 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         ignored = any(code.strip() == "!!" for code, _name, _original in pending)
                         candidate["reasons"] = ["worktree_has_ignored_files" if ignored else "worktree_changed_before_remove"]
                         continue
-                    kept = _remove_tree(directory, {}, snapshot)
+                    storage_path = _trash_for(state_root / "cleanup-trash", Path(candidate["path"]))
+                    try:
+                        storage = os.open(storage_path, os.O_RDONLY | os.O_DIRECTORY)
+                    except OSError:
+                        storage = None
+                    if storage is None:
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_failed")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["recovery_storage_unavailable"]
+                        continue
+                    kept = _remove_tree(directory, {}, snapshot, "", storage)
                     # What is left in the directory decides whether the checkout
                     # survives, not the count of entries the loop handled: a file
                     # that was created after the snapshot is not in the loop at all.
@@ -2081,6 +2104,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["reasons"] = ["worktree_not_fully_removed"]
                         continue
                     os.close(directory)
+                    os.close(storage)
                 finally:
                     if lock.exists():
                         try:
