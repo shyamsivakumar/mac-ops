@@ -5,58 +5,58 @@
 # Ruff version: 0.14.0.
 # Regenerate with: python3 scripts/mac_ops_fast_check.py --write-ruff-baseline
 #
-# Format: <count>\t<path>\t<rule>\t<message>
+# Format: one JSON array per line: [count, path, rule, message]
 
-1	coordinator/bin/close_check.py	B904	Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
-1	coordinator/overnight/lane_driver.py	F401	`datetime` imported but unused
-1	coordinator/overnight/lane_driver.py	F841	Local variable `key` is assigned to but never used
-1	coordinator/overnight/lane_driver.py	F841	Local variable `queue` is assigned to but never used
-1	coordinator/overnight/live_smoke.py	B023	Function definition does not bind loop variable `error`
-1	coordinator/overnight/live_smoke.py	B023	Function definition does not bind loop variable `output`
-1	coordinator/overnight/live_smoke.py	B023	Function definition does not bind loop variable `response`
-2	coordinator/overnight/overnight	B904	Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
-1	coordinator/overnight/overnight	F841	Local variable `budget` is assigned to but never used
-9	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `actions`
-1	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `after`
-1	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `branch`
-1	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `calls`
-2	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `commands`
-2	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `events`
-1	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `expected`
-3	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `failure`
-1	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `listing`
-2	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `live`
-3	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `outcome`
-2	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `reads`
-2	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `reply`
-1	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `target`
-1	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `thread`
-1	coordinator/overnight/selftest.py	B023	Function definition does not bind loop variable `verdict`
-2	coordinator/overnight/selftest.py	F541	f-string without any placeholders
-1	coordinator/overnight/stall.py	F401	`datetime` imported but unused
-1	coordinator/overnight/stall.py	F401	`json` imported but unused
-1	evidence/MO-220/prove-park.py	F841	Local variable `outcome` is assigned to but never used
-1	evidence/MO-548/prove-gate-floor.py	F401	`json` imported but unused
-1	evidence/MO-548/prove-gate-floor.py	F401	`subprocess` imported but unused
-1	evidence/MO-548/prove-gate-floor.py	F401	`tempfile` imported but unused
-1	formal/install-if-behind/replay_crash.py	F401	`json` imported but unused
-1	heavy.py	B023	Function definition does not bind loop variable `current`
-3	heavy.py	B904	Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
-1	install.py	F841	Local variable `new` is assigned to but never used
-2	replay_controller.py	B023	Function definition does not bind loop variable `board`
-1	replay_controller.py	B023	Function definition does not bind loop variable `boot`
-3	replay_controller.py	B023	Function definition does not bind loop variable `clock`
-8	replay_controller.py	B023	Function definition does not bind loop variable `context`
-1	replay_controller.py	B023	Function definition does not bind loop variable `helper`
-2	replay_controller.py	B023	Function definition does not bind loop variable `store`
-2	scripts/worktree-cleaner/cleaner.py	B905	`zip()` without an explicit `strict=` parameter
-1	tests/test_check_proof.py	F401	`sys` imported but unused
-1	tests/test_coordq_action_key.py	F541	f-string without any placeholders
-1	tests/test_coordq_message_dedupe.py	F401	`pathlib.Path` imported but unused
-1	tests/test_coordq_message_dedupe.py	F841	Local variable `out` is assigned to but never used
-1	tests/test_lane_duplicate_suppression.py	F841	Local variable `exc` is assigned to but never used
-1	tests/test_tick_external_call_bounds.py	F401	`json` imported but unused
-1	tests/test_tick_external_call_bounds.py	F401	`sys` imported but unused
-1	tests/test_tick_external_call_bounds.py	F841	Local variable `script` is assigned to but never used
-1	verification/verify_cursor_protocol.py	B905	`zip()` without an explicit `strict=` parameter
-1	verify_capacity.py	B020	Loop control variable `reading` overrides iterable it iterates
+[1, "coordinator/bin/close_check.py", "B904", "Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling"]
+[1, "coordinator/overnight/lane_driver.py", "F401", "`datetime` imported but unused"]
+[1, "coordinator/overnight/lane_driver.py", "F841", "Local variable `key` is assigned to but never used"]
+[1, "coordinator/overnight/lane_driver.py", "F841", "Local variable `queue` is assigned to but never used"]
+[1, "coordinator/overnight/live_smoke.py", "B023", "Function definition does not bind loop variable `error`"]
+[1, "coordinator/overnight/live_smoke.py", "B023", "Function definition does not bind loop variable `output`"]
+[1, "coordinator/overnight/live_smoke.py", "B023", "Function definition does not bind loop variable `response`"]
+[2, "coordinator/overnight/overnight", "B904", "Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling"]
+[1, "coordinator/overnight/overnight", "F841", "Local variable `budget` is assigned to but never used"]
+[9, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `actions`"]
+[1, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `after`"]
+[1, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `branch`"]
+[1, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `calls`"]
+[2, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `commands`"]
+[2, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `events`"]
+[1, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `expected`"]
+[3, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `failure`"]
+[1, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `listing`"]
+[2, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `live`"]
+[3, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `outcome`"]
+[2, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `reads`"]
+[2, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `reply`"]
+[1, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `target`"]
+[1, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `thread`"]
+[1, "coordinator/overnight/selftest.py", "B023", "Function definition does not bind loop variable `verdict`"]
+[2, "coordinator/overnight/selftest.py", "F541", "f-string without any placeholders"]
+[1, "coordinator/overnight/stall.py", "F401", "`datetime` imported but unused"]
+[1, "coordinator/overnight/stall.py", "F401", "`json` imported but unused"]
+[1, "evidence/MO-220/prove-park.py", "F841", "Local variable `outcome` is assigned to but never used"]
+[1, "evidence/MO-548/prove-gate-floor.py", "F401", "`json` imported but unused"]
+[1, "evidence/MO-548/prove-gate-floor.py", "F401", "`subprocess` imported but unused"]
+[1, "evidence/MO-548/prove-gate-floor.py", "F401", "`tempfile` imported but unused"]
+[1, "formal/install-if-behind/replay_crash.py", "F401", "`json` imported but unused"]
+[1, "heavy.py", "B023", "Function definition does not bind loop variable `current`"]
+[3, "heavy.py", "B904", "Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling"]
+[1, "install.py", "F841", "Local variable `new` is assigned to but never used"]
+[2, "replay_controller.py", "B023", "Function definition does not bind loop variable `board`"]
+[1, "replay_controller.py", "B023", "Function definition does not bind loop variable `boot`"]
+[3, "replay_controller.py", "B023", "Function definition does not bind loop variable `clock`"]
+[8, "replay_controller.py", "B023", "Function definition does not bind loop variable `context`"]
+[1, "replay_controller.py", "B023", "Function definition does not bind loop variable `helper`"]
+[2, "replay_controller.py", "B023", "Function definition does not bind loop variable `store`"]
+[2, "scripts/worktree-cleaner/cleaner.py", "B905", "`zip()` without an explicit `strict=` parameter"]
+[1, "tests/test_check_proof.py", "F401", "`sys` imported but unused"]
+[1, "tests/test_coordq_action_key.py", "F541", "f-string without any placeholders"]
+[1, "tests/test_coordq_message_dedupe.py", "F401", "`pathlib.Path` imported but unused"]
+[1, "tests/test_coordq_message_dedupe.py", "F841", "Local variable `out` is assigned to but never used"]
+[1, "tests/test_lane_duplicate_suppression.py", "F841", "Local variable `exc` is assigned to but never used"]
+[1, "tests/test_tick_external_call_bounds.py", "F401", "`json` imported but unused"]
+[1, "tests/test_tick_external_call_bounds.py", "F401", "`sys` imported but unused"]
+[1, "tests/test_tick_external_call_bounds.py", "F841", "Local variable `script` is assigned to but never used"]
+[1, "verification/verify_cursor_protocol.py", "B905", "`zip()` without an explicit `strict=` parameter"]
+[1, "verify_capacity.py", "B020", "Loop control variable `reading` overrides iterable it iterates"]

@@ -105,21 +105,21 @@ def repo_path(name):
 def read_baseline(path=None):
     """Read the baseline file: finding key to how many of it are known.
 
-    The fields are separated by a tab, so a path or a message with a space
-    in it still round trips.
+    Each line is a JSON array of count, path, rule and message, so a path or
+    a message with a tab or a space in it still round trips.
     """
     path = Path(path or ROOT / RUFF_BASELINE)
     baseline = {}
     for line in path.read_text().splitlines():
         if not line.strip() or line.startswith("#"):
             continue
-        count, name, code, message = line.split("\t")
+        count, name, code, message = json.loads(line)
         baseline[(name, code, message)] = int(count)
     return baseline
 
 
 def write_baseline(counts, path=None):
-    """Write the baseline file: one line per finding, with its count."""
+    """Write the baseline file: one JSON array per finding, with its count."""
     path = Path(path or ROOT / RUFF_BASELINE)
     lines = [
         "# Ruff baseline for mac-ops.",
@@ -129,11 +129,11 @@ def write_baseline(counts, path=None):
         f"# Ruff version: {RUFF_VERSION}.",
         "# Regenerate with: python3 scripts/mac_ops_fast_check.py --write-ruff-baseline",
         "#",
-        "# Format: <count>\\t<path>\\t<rule>\\t<message>",
+        "# Format: one JSON array per line: [count, path, rule, message]",
         "",
     ]
     for (name, code, message), count in sorted(counts.items()):
-        lines.append(f"{count}\t{name}\t{code}\t{message}")
+        lines.append(json.dumps([count, name, code, message]))
     path.write_text("\n".join(lines) + "\n")
 
 
