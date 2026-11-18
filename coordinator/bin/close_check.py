@@ -151,9 +151,19 @@ def exclusion_tokens(text):
 
 
 def token_matches_any(token, tokens):
-    """Does a token name another token?"""
+    """Does a token name another token?
+
+    Two qualified paths are compared in full, because a path that carries
+    its directory names one file: the exclusion `legacy/config.py` does
+    not reach `src/config.py`. A bare name carries no directory, so it
+    names any token that ends with it.
+    """
     for other in tokens:
-        if token == other or token.rsplit("/", 1)[-1] == other.rsplit("/", 1)[-1]:
+        if token == other:
+            return True
+        if "/" in token and "/" in other:
+            continue
+        if token.rsplit("/", 1)[-1] == other.rsplit("/", 1)[-1]:
             return True
     return False
 
@@ -301,6 +311,12 @@ def item_proof(state, path):
 # A Markdown cell holds a pipe that is written as \|, so a row is split on
 # the pipes that are not escaped, and the escape is read back as a pipe.
 PIPE_SPLIT = re.compile(r"(?<!\\)\|")
+# The header of the proof table, cell for cell. A row that only starts
+# like the header is a check, so the row that carries a failure can never
+# be dropped as a header. The short header is the one an older proof file
+# writes; the full header adds the detail the canonical template has.
+PROOF_HEADERS = (("check", "command", "result"),
+                 ("check", "command", "result", "detail"))
 # A check recorded outside the table: a name, a colon, and a result.
 RESULT_LINE = re.compile(r"(?i)^(?:[-*+]\s+)?(?P<name>[^:]+?)\s*:\s*(?P<result>passed|failed|not run)\s*$")
 
@@ -327,9 +343,10 @@ def proof_rows(text):
     lists, and it carries no result: the empty result is what makes it
     fail the item, so the row is never dropped. Only the table's own
     separator and header are not checks, and the header is recognized
-    once as the whole header row. A later row whose first cell reads
-    "check" is a check like any other, so a recorded failure cannot hide
-    behind a name that reads like the header. The separator is recognized
+    once as the whole header row: every cell of it, including the result
+    and detail cells, has to read as the header. A row that only starts
+    like the header is a check like any other, so a recorded failure
+    cannot hide behind a name that reads like the header. The separator is recognized
     as the whole row too: a row that only its first cell marks as a
     separator is a check with a malformed name, and a malformed row is a
     row that blocks the close.
@@ -350,8 +367,7 @@ def proof_rows(text):
         if cells and all(cell and set(cell) <= set("-: ") for cell in cells):
             continue
         name = cells[0] if cells else ""
-        if (not header_seen and len(cells) > 2 and name.lower() == "check"
-                and cells[1].lower() == "command" and cells[2].lower() == "result"):
+        if not header_seen and tuple(cell.lower() for cell in cells) in PROOF_HEADERS:
             header_seen = True
             continue
         result = cells[2].lower() if len(cells) > 2 else ""

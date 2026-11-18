@@ -253,6 +253,28 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("cannot be judged", item["detail"])
 
+    def test_a_qualified_exclusion_does_not_reach_another_directory(self):
+        """A qualified exclusion names one file, not every file of its name.
+
+        A ticket that permits `src/config.py` and excludes
+        `legacy/config.py` keeps its permission: the two paths differ, so
+        the exclusion reaches only the file it names.
+        """
+        check = close_check()
+        item = check.item_scope("In: src/config.py. Out: legacy/config.py.",
+                               ["src/config.py"])
+        self.assertEqual(item["status"], check.PASS, item["detail"])
+        item = check.item_scope("In: src/config.py. Out: legacy/config.py.",
+                               ["legacy/config.py"])
+        self.assertEqual(item["status"], check.FAIL)
+
+    def test_a_bare_exclusion_still_reaches_a_qualified_path(self):
+        """A bare name carries no directory, so it names every file of it."""
+        check = close_check()
+        item = check.item_scope("In: src/config.py. Out: config.py.",
+                               ["src/config.py"])
+        self.assertEqual(item["status"], check.FAIL)
+
     def test_the_pull_request_cannot_widen_the_scope(self):
         """The ticket is the only authority for the scope.
 
@@ -342,6 +364,21 @@ class DiffValuesTest(unittest.TestCase):
         item = check.item_checks("found", text)
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("failed", item["detail"])
+
+    def test_a_row_that_only_starts_like_the_header_is_a_check(self):
+        """Every header cell counts, the detail cell too.
+
+        A proof file with no header, whose first row reads
+        `| check | command | result | compiler error |`, records a check
+        whose result is not passed. It must not be read as a header and
+        dropped, which would report that every check passed.
+        """
+        check = close_check()
+        text = ("| check | command | result | compiler error |\n"
+                "| lint  | make lint | passed | |\n")
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("check", item["detail"])
 
     def test_an_escaped_pipe_stays_in_the_command(self):
         """A command can hold a pipe, and the result column is the third.
