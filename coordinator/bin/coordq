@@ -1403,8 +1403,9 @@ def probe_blocked_reviewers(config, dry_run=False):
                 if thread.get("status") in {"running", "queued", "starting", "preparing"}:
                     continue
                 # The probe ended without an answer. The provider may name a
-                # new reset, and the next probe waits for it.
-                note_probe_failure(selection, failure_text(data))
+                # new reset, and the next probe waits for it. The failure
+                # is recorded once, against the probe it belongs to.
+                note_probe_failure(selection, failure_text(data), request_id=request_id)
         if not probe_due(selection):
             continue
         request_id = f"probe:{name}:{int(time.time())}"

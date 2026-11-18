@@ -177,6 +177,54 @@ class RecordedFailureTests(FallbackBase):
         self.assertEqual(items, [])
 
 
+class ProbeRecoveryTests(unittest.TestCase):
+    """A failed health probe must not hold a reviewer blocked for ever."""
+
+    def setUp(self):
+        self.saved = {name: getattr(coordq, name)
+                      for name in ("load_receipts", "call")}
+        self.addCleanup(lambda: [setattr(coordq, name, value)
+                                  for name, value in self.saved.items()])
+        self.saved_dir = os.environ.get("COORDQ_DIR")
+        os.environ["COORDQ_DIR"] = tempfile.mkdtemp(prefix="coordq-probe-recovery-")
+        self.addCleanup(lambda: os.environ.__setitem__("COORDQ_DIR", self.saved_dir)
+                        if self.saved_dir is not None
+                        else os.environ.pop("COORDQ_DIR", None))
+        gate_reviewers.save_blocked({})
+        coordq.load_receipts = lambda: {"probe:api:1": "probe-thread"}
+        coordq.call = lambda tool, args, rules=None: (
+            0, json.dumps({"thread": {"status": "failed", "latestRunId": "r1"},
+                            "recentRuns": [{"runId": "r1", "status": "failed",
+                                            "error": {"code": "insufficient_quota",
+                                                      "message": "You have no credits remaining"}}],
+                            "items": []}))
+
+    def test_a_failed_probe_does_not_move_the_deadline_on_a_later_tick(self):
+        now = time.time()
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=now)
+        gate_reviewers.note_probe(API_REVIEWER, "probe:api:1", now=now)
+        coordq.probe_blocked_reviewers(CONFIG)
+        first = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
+        self.assertIsNotNone(first["probeFailedAt"])
+        deadline = first["probeAt"]
+        # A second tick reads the same failed probe again. The deadline
+        # must stay where the failure put it.
+        coordq.probe_blocked_reviewers(CONFIG)
+        second = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
+        self.assertEqual(second["probeAt"], deadline)
+
+    def test_a_failed_probe_is_probed_again_an_hour_later(self):
+        now = time.time()
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=now)
+        gate_reviewers.note_probe(API_REVIEWER, "probe:api:1", now=now)
+        coordq.probe_blocked_reviewers(CONFIG)
+        record = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
+        failed_at = record["probeFailedAt"]
+        self.assertGreaterEqual(record["probeAt"], failed_at + 3600)
+        self.assertFalse(gate_reviewers.probe_due(API_REVIEWER, now=failed_at + 3599))
+        self.assertTrue(gate_reviewers.probe_due(API_REVIEWER, now=failed_at + 3600))
+
+
 class ProviderErrorTests(unittest.TestCase):
     """The provider reasons that block a reviewer for every head."""
     def test_a_recorded_credit_error_blocks_the_reviewer(self):
@@ -374,6 +422,57 @@ class BlockedReviewerTests(unittest.TestCase):
         record = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
         self.assertIsNone(record["resetAt"])
         self.assertEqual(record["probeRequestId"], "probe-1")
+
+    def test_a_failed_probe_is_probed_again_an_hour_after_the_failure(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=1000)
+        gate_reviewers.note_probe(API_REVIEWER, "probe-1", now=1060)
+        gate_reviewers.note_probe_failure(API_REVIEWER, "no credits", now=1100,
+                                          request_id="probe-1")
+        self.assertFalse(gate_reviewers.probe_due(API_REVIEWER, now=1100))
+        self.assertFalse(gate_reviewers.probe_due(API_REVIEWER, now=1100 + 3600 - 1))
+        self.assertTrue(gate_reviewers.probe_due(API_REVIEWER, now=1100 + 3600))
+
+    def test_a_failed_probe_is_recorded_once(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=1000)
+        gate_reviewers.note_probe(API_REVIEWER, "probe-1", now=1060)
+        gate_reviewers.note_probe_failure(API_REVIEWER, "no credits", now=1100,
+                                          request_id="probe-1")
+        record = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
+        self.assertEqual(record["probeAt"], 1100 + 3600)
+        # A later tick that reads the same failed probe again must not move
+        # the deadline, or the reviewer is never probed again.
+        gate_reviewers.note_probe_failure(API_REVIEWER, "no credits", now=1200,
+                                          request_id="probe-1")
+        again = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
+        self.assertEqual(again["probeAt"], 1100 + 3600)
+        self.assertEqual(again["probeFailedAt"], 1100)
+
+    def test_a_failed_probe_waits_for_the_reset_it_names(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=1000)
+        gate_reviewers.note_probe(API_REVIEWER, "probe-1", now=1060)
+        gate_reviewers.note_probe_failure(API_REVIEWER, "usage limit, resets in 30 minutes",
+                                          now=1100, request_id="probe-1")
+        self.assertFalse(gate_reviewers.probe_due(API_REVIEWER, now=1100 + 1799))
+        self.assertTrue(gate_reviewers.probe_due(API_REVIEWER, now=1100 + 1800))
+
+    def test_a_failure_of_an_older_probe_does_not_move_the_deadline(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=1000)
+        gate_reviewers.note_probe(API_REVIEWER, "probe-1", now=1060)
+        gate_reviewers.note_probe(API_REVIEWER, "probe-2", now=4660)
+        gate_reviewers.note_probe_failure(API_REVIEWER, "no credits", now=4700,
+                                          request_id="probe-1")
+        record = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
+        self.assertEqual(record["probeAt"], 4660 + 3600)
+
+    def test_a_new_probe_clears_the_last_failure(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=1000)
+        gate_reviewers.note_probe(API_REVIEWER, "probe-1", now=1060)
+        gate_reviewers.note_probe_failure(API_REVIEWER, "no credits", now=1100,
+                                          request_id="probe-1")
+        gate_reviewers.note_probe(API_REVIEWER, "probe-2", now=4700)
+        record = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
+        self.assertIsNone(record["probeFailedAt"])
+        self.assertIsNone(record["probeFailedRequestId"])
 
 
 if __name__ == "__main__":
