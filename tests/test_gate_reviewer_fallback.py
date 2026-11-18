@@ -34,13 +34,11 @@ REPO = "o/r"
 HEAD = "a" * 40
 CONFIG = {"repos": {REPO: {"key": "T", "projectId": "P"}}}
 RECORDED = json.loads((ROOT / "tests" / "fixtures" / "gate" / "openai_api_no_credits.json").read_text())
-# The chain since #521 (2026-11-17): the Codex subscription on
-# gpt-6.2-astra first, the Claude Agent on Opus 5.5 as the fallback. The
-# openai-api reviewer left the chain when its org ran out of credits; the
-# recorded payload below is that incident's failure, kept as the shape of
-# a provider that cannot run.
-CHAIN_HEAD = {"instanceId": "codex", "model": "gpt-6.2-astra"}
-FALLBACK_REVIEWER = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
+# The chain MO-497 requires: the OpenAI API on API credits first, the
+# Codex subscription second, and a wait after both — Opus never reviews.
+# The recorded payload below is the no-credits failure of the chain head.
+CHAIN_HEAD = {"instanceId": "openai-api", "model": "openai/gpt-6.2-astra"}
+FALLBACK_REVIEWER = {"instanceId": "codex", "model": "gpt-6.2-astra"}
 
 coordq = None
 QUEUE_DIR = None
@@ -145,9 +143,9 @@ class FallbackBase(unittest.TestCase):
 def recorded_chain_head_failure():
     """The recorded no-credits failure, on the chain head.
 
-    The payload was recorded from the OpenAI API reviewer before it left
-    the chain (#521); its thread identity is rewritten to the chain head
-    so the recorded error shape exercises the chain that exists now."""
+    The recorded failure is the chain head's own, so the rewrite is an
+    identity; it stays so the recorded shape and the chain member are
+    pinned together even if the chain moves again."""
     payload = json.loads(json.dumps(RECORDED))
     payload["thread"]["providerInstanceId"] = CHAIN_HEAD["instanceId"]
     payload["thread"]["model"] = CHAIN_HEAD["model"]
@@ -215,7 +213,7 @@ class ProbeRecoveryTests(unittest.TestCase):
                         if self.saved_dir is not None
                         else os.environ.pop("COORDQ_DIR", None))
         gate_reviewers.save_blocked({})
-        coordq.load_receipts = lambda: {"probe:codex:1": "probe-thread"}
+        coordq.load_receipts = lambda: {"probe:api:1": "probe-thread"}
         coordq.call = lambda tool, args, rules=None: (
             0, json.dumps({"thread": {"status": "failed", "latestRunId": "r1"},
                             "recentRuns": [{"runId": "r1", "status": "failed",
@@ -226,7 +224,7 @@ class ProbeRecoveryTests(unittest.TestCase):
     def test_a_failed_probe_does_not_move_the_deadline_on_a_later_tick(self):
         now = time.time()
         gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits", now=now)
-        gate_reviewers.note_probe(CHAIN_HEAD, "probe:codex:1", now=now)
+        gate_reviewers.note_probe(CHAIN_HEAD, "probe:api:1", now=now)
         coordq.probe_blocked_reviewers(CONFIG)
         first = gate_reviewers.load_blocked()[gate_reviewers.identity(CHAIN_HEAD)]
         self.assertIsNotNone(first["probeFailedAt"])
@@ -237,10 +235,41 @@ class ProbeRecoveryTests(unittest.TestCase):
         second = gate_reviewers.load_blocked()[gate_reviewers.identity(CHAIN_HEAD)]
         self.assertEqual(second["probeAt"], deadline)
 
+    def test_a_dry_run_changes_no_reviewer_availability(self):
+        # A dry run reads the probe receipt and changes nothing: neither a
+        # successful probe unblocks the reviewer, nor a failed one moves
+        # the deadline (a diagnostic must not change availability).
+        now = time.time()
+        gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits", now=now)
+        gate_reviewers.note_probe(CHAIN_HEAD, "probe:api:1", now=now)
+        coordq.probe_blocked_reviewers(CONFIG, dry_run=True)
+        record = gate_reviewers.load_blocked()[gate_reviewers.identity(CHAIN_HEAD)]
+        self.assertIn(gate_reviewers.identity(CHAIN_HEAD), gate_reviewers.blocked_identities())
+        self.assertIsNone(record.get("probeFailedAt"))
+        deadline = record["probeAt"]
+        coordq.probe_blocked_reviewers(CONFIG, dry_run=True)
+        self.assertEqual(gate_reviewers.load_blocked()[gate_reviewers.identity(CHAIN_HEAD)]["probeAt"],
+                         deadline)
+        # The real run is the one that records the failure.
+        coordq.probe_blocked_reviewers(CONFIG)
+        self.assertIsNotNone(
+            gate_reviewers.load_blocked()[gate_reviewers.identity(CHAIN_HEAD)]["probeFailedAt"])
+
+    def test_a_successful_probe_unblocks_only_on_a_real_run(self):
+        gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits", now=1000)
+        gate_reviewers.note_probe(CHAIN_HEAD, "probe:api:1", now=1000)
+        coordq.call = lambda tool, args, rules=None: (
+            0, json.dumps({"thread": {"status": "completed", "latestRunId": "r1"},
+                           "items": [{"type": "assistant_message", "text": "probe ok"}]}))
+        coordq.probe_blocked_reviewers(CONFIG, dry_run=True)
+        self.assertIn(gate_reviewers.identity(CHAIN_HEAD), gate_reviewers.blocked_identities())
+        coordq.probe_blocked_reviewers(CONFIG)
+        self.assertNotIn(gate_reviewers.identity(CHAIN_HEAD), gate_reviewers.blocked_identities())
+
     def test_a_failed_probe_is_probed_again_an_hour_later(self):
         now = time.time()
         gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits", now=now)
-        gate_reviewers.note_probe(CHAIN_HEAD, "probe:codex:1", now=now)
+        gate_reviewers.note_probe(CHAIN_HEAD, "probe:api:1", now=now)
         coordq.probe_blocked_reviewers(CONFIG)
         record = gate_reviewers.load_blocked()[gate_reviewers.identity(CHAIN_HEAD)]
         failed_at = record["probeFailedAt"]
@@ -279,13 +308,15 @@ class ProviderErrorTests(unittest.TestCase):
 
 
 class ChainShapeTests(unittest.TestCase):
-    """The chain since #521: Codex gpt-6.2-astra first, Opus as fallback."""
+    """The chain MO-497 requires: API Astra, Codex Astra, no Opus."""
 
-    def test_the_codex_subscription_comes_first_and_opus_is_the_fallback(self):
+    def test_the_api_credits_come_first_and_the_codex_subscription_second(self):
         self.assertEqual(gate_reviewers.REVIEWER_CHAIN, (CHAIN_HEAD, FALLBACK_REVIEWER))
 
-    def test_the_chain_head_is_gpt_6_2_astra(self):
-        self.assertIn("gpt-6.2-astra", gate_reviewers.REVIEWER_CHAIN[0]["model"])
+    def test_every_chain_member_is_a_gpt_6_2_astra(self):
+        for member in gate_reviewers.REVIEWER_CHAIN:
+            with self.subTest(member=member):
+                self.assertIn("gpt-6.2-astra", member["model"])
 
 
 class ChainMovementTests(unittest.TestCase):
@@ -307,13 +338,12 @@ class ChainMovementTests(unittest.TestCase):
         self.assertIsNone(gate_reviewers.reviewer_after(CHAIN_HEAD, blocked))
 
     def test_a_model_name_finds_its_chain_member(self):
-        self.assertEqual(gate_reviewers.selection_for_model("gpt-6.2-astra"), CHAIN_HEAD)
-        self.assertEqual(gate_reviewers.selection_for_model("subscriptions/gpt-6.2-astra"),
-                         CHAIN_HEAD)
-        # The openai-api spelling left the chain with its reviewer; its
-        # last segment still names the Codex subscription member.
         self.assertEqual(gate_reviewers.selection_for_model("openai/gpt-6.2-astra"), CHAIN_HEAD)
-        self.assertEqual(gate_reviewers.selection_for_model("claude-opus-5-5"), FALLBACK_REVIEWER)
+        self.assertEqual(gate_reviewers.selection_for_model("gpt-6.2-astra"), FALLBACK_REVIEWER)
+        self.assertEqual(gate_reviewers.selection_for_model("subscriptions/gpt-6.2-astra"),
+                         FALLBACK_REVIEWER)
+        # Opus never reviews (MO-497), so its model names no chain member.
+        self.assertIsNone(gate_reviewers.selection_for_model("claude-opus-5-5"))
         self.assertIsNone(gate_reviewers.selection_for_model("gpt-5.6-terra"))
 
 
@@ -374,7 +404,7 @@ class NewGateStartTests(unittest.TestCase):
         gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits")
         gate_reviewers.block_reviewer(FALLBACK_REVIEWER, "no credits")
         args, refusal = coordq.with_model({"taskType": "review", "message": "probe",
-                                           "clientRequestId": "probe:codex:1",
+                                           "clientRequestId": "probe:api:1",
                                            "modelSelection": CHAIN_HEAD})
         self.assertIsNone(refusal)
         self.assertEqual(args["modelSelection"], CHAIN_HEAD)

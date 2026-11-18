@@ -353,10 +353,10 @@ def gate_pipeline():
     head = "a" * 40
     failures = []
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["codex:gpt-6.2-astra"]),
+        ("checked-head", repo, "absent", "", {}, ["openai-api:openai/gpt-6.2-astra"]),
         ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
-        ("no-verdict", repo, "none", "interrupted", {}, ["claudeAgent:claude-opus-5-5"]),
+        ("no-verdict", repo, "none", "interrupted", {}, ["codex:gpt-6.2-astra"]),
         ("quota", repo, "none", "Astra quota exhausted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("second-no-verdict", repo, "none", "interrupted",

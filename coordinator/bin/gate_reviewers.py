@@ -14,14 +14,14 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
-# The chain, in order: the Codex subscription on gpt-6.2-astra first —
-# the openai-api reviewer left the chain when its org ran out of credits
-# (Refs #521, 2026-11-17 19:20 PT) — then the Claude Agent on Opus 5.5
-# as the fallback. Reviews run on GPT-6.2 Astra first; Opus takes over
-# only when Astra cannot run (Shyam 2026-11-17).
+# The chain, in order: the OpenAI API on API credits first, the Codex
+# subscription second, and nothing after it — a gate waits when both are
+# exhausted (MO-497: reviews run on GPT-6.2 Astra only, never Opus; the
+# merge acceptance takes no other reviewer). main's #521 chain is not
+# taken here: the ticket this change serves forbids an Opus review.
 REVIEWER_CHAIN = (
+    {"instanceId": "openai-api", "model": "openai/gpt-6.2-astra"},
     {"instanceId": "codex", "model": "gpt-6.2-astra"},
-    {"instanceId": "claudeAgent", "model": "claude-opus-5-5"},
 )
 
 # One tiny probe per blocked reviewer, at most once an hour.

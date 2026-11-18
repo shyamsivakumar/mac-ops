@@ -1401,7 +1401,10 @@ def probe_blocked_reviewers(config, dry_run=False):
             continue
         request_id = record.get("probeRequestId")
         thread_id = receipts.get(request_id) if request_id else None
-        if thread_id:
+        if thread_id and not dry_run:
+            # Only a real run may change reviewer availability: a dry run
+            # reads the probe and changes nothing, so an unblock or a new
+            # deadline is never written by a diagnostic.
             code, out = call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 2000})
             if code == 0:
                 try:
