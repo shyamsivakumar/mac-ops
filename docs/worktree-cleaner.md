@@ -12,7 +12,9 @@ The cleaner never deletes remote branches. It removes a worktree with `git workt
 
 ## Agent bootstrap files
 
-The files an agent bootstrap leaves in a worktree are not the user's work, so they do not make a worktree dirty: `.specstory/`, `.agents/legacy-instructions.md`, and an `AGENTS.md` that gained exactly the standing agent rules block. The `AGENTS.md` rule holds only when the file added lines and removed none, and the added lines match a known rules file line for line, in order (`coordinator/config/AGENT-RULES.md`, `runtime/pi/AGENTS.md`, `runtime/omp/AGENTS.md`, or the installed agent rules). A part of the block, or one rule added by hand, is real work: the cleaner cannot recognise the bootstrap exactly, so it keeps the worktree. A rename is a bootstrap change only when both the source and the destination are bootstrap files; a rename of a real file into `.specstory/` is real work. Any other change to `AGENTS.md` is real work.
+The files an agent bootstrap leaves in a worktree are not the user's work, so they do not make a worktree dirty: `.specstory/`, `.agents/legacy-instructions.md`, and an `AGENTS.md` that gained exactly the standing agent rules block. The `AGENTS.md` rule compares the file contents, not a diff: the current file must be the committed file plus exactly the block, line for line and in order (`coordinator/config/AGENT-RULES.md`, `runtime/pi/AGENTS.md`, `runtime/omp/AGENTS.md`, or the installed agent rules). A part of the block, one rule added by hand, or any other edit is real work: the cleaner cannot recognise the bootstrap exactly, so it keeps the worktree. A rename is a bootstrap change only when both the source and the destination are bootstrap files; a rename of a real file into `.specstory/` is real work. Any other change to `AGENTS.md` is real work.
+
+The cleaner reads the status with `git status --porcelain=v1 -z`, so every record keeps its status columns and its path byte for byte. A path that starts with a space, or a path that only looks like a bootstrap path, cannot shift the columns of a record.
 
 ## Run a scan
 
@@ -42,7 +44,7 @@ launchctl enable "$DOMAIN/$LABEL"
 
 This task added the plist but did not install or run it. Run the complete T3 regression fixture with `python3 verification/worktree-cleaner/check.py`. It creates temporary repositories, a local bare remote, and stub GitHub and `t3mcp` CLIs. It covers pagination, worktreePath holds, live and non-live statuses, incomplete/unavailable listings, late-arriving threads, dirty and unpublished trees, and dry-run/apply behavior. `check.py` delegates to the proof in `check_t3.py`.
 
-Run `python3 verification/worktree-cleaner/check_bootstrap.py` for the bootstrap-aware behaviour: a worktree that holds the exact bootstrap block is removed, a worktree with one rule added by hand or a real file renamed into `.specstory/` is kept, a worktree that also holds real work is kept, a branch whose commits are already on the remote default branch is removed without a pull request, an unpublished branch is kept, and an Ascend repository is never touched.
+Run `python3 verification/worktree-cleaner/check_bootstrap.py` for the bootstrap-aware behaviour: a worktree that holds the exact bootstrap block is removed, a worktree with one rule added by hand, with a real file renamed into `.specstory/`, with a real file whose name only looks like a bootstrap path, or with the block plus one genuine line is kept, a worktree that also holds real work is kept, a branch whose commits are already on the remote default branch is removed without a pull request, an unpublished branch is kept, and an Ascend repository is never touched.
 
 ## Limits
 

@@ -149,9 +149,30 @@ def worktrees(repo: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def status_for(path: Path) -> tuple[bool, str]:
-    output = git(path, "status", "--porcelain=v1", "--untracked-files=all")
-    return bool(output.strip()), output.strip()
+def status_for(path: Path) -> list[tuple[str, str, str | None]]:
+    """Parse `git status --porcelain=v1 -z` into (code, path, original path).
+
+    The records keep their status columns and are NUL separated, so a path
+    that starts with a space, or that looks like a bootstrap path, cannot
+    shift the columns of the record.
+    """
+    output = git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    fields = output.split("\0")
+    records: list[tuple[str, str, str | None]] = []
+    index = 0
+    while index < len(fields):
+        field = fields[index]
+        index += 1
+        if not field:
+            continue
+        code = field[:2]
+        name = field[3:]
+        original: str | None = None
+        if code[0] in "RC" or code[1] in "RC":
+            original = fields[index] if index < len(fields) else None
+            index += 1
+        records.append((code, name, original))
+    return records
 
 
 _rules_blocks: list[list[str]] | None = None
@@ -176,9 +197,8 @@ def rules_blocks() -> list[list[str]]:
                 text = source.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            lines = [line.strip() for line in text.splitlines() if line.strip()]
-            if lines:
-                blocks.append(lines)
+            if text.strip():
+                blocks.append(text)
         _rules_blocks = blocks
     return _rules_blocks
 
@@ -189,67 +209,60 @@ def bootstrap_path(name: str) -> bool:
     return any(name.startswith(prefix) for prefix in BOOTSTRAP_PREFIXES)
 
 
-def agents_only_rules(path: Path, *, untracked: bool) -> bool:
-    """True when AGENTS.md gained exactly the standing agent rules block.
+def _heading_only(text: str) -> bool:
+    stripped = text.strip()
+    return bool(stripped) and stripped.startswith("#") and stripped.count("\n") == 0
 
-    The block must match a known rules file line for line, in order. A part
-    of the block, or a single rule added by hand, is real work.
+
+def agents_only_rules(path: Path, *, untracked: bool) -> bool:
+    """True when AGENTS.md holds the committed file plus exactly the rules block.
+
+    The file contents are compared, not a diff, so nothing can hide behind a
+    line that looks like a diff marker. A part of the block, a single rule
+    added by hand, or any other edit is real work.
     """
     blocks = rules_blocks()
     if not blocks:
         return False
-    if untracked:
+    try:
+        current = (path / AGENTS_FILE).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    head: str | None = None
+    if not untracked:
         try:
-            text = (path / AGENTS_FILE).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return False
-        added = [line.strip() for line in text.splitlines() if line.strip()]
-        removed: list[str] = []
-    else:
-        try:
-            diff = git(path, "diff", "HEAD", "--", AGENTS_FILE)
+            head = git(path, "show", f"HEAD:{AGENTS_FILE}")
         except SafetyError:
             return False
-        added: list[str] = []
-        removed = []
-        for line in diff.splitlines():
-            if line.startswith("+++") or line.startswith("---"):
-                continue
-            if line.startswith("+"):
-                added.append(line[1:].strip())
-            elif line.startswith("-"):
-                removed.append(line[1:].strip())
-    if any(removed):
-        return False
-    if not added:
-        return False
     for block in blocks:
-        if added == block:
+        if not current.endswith(block):
+            continue
+        prefix = current[: len(current) - len(block)]
+        if head is None:
+            if prefix == "" or _heading_only(prefix):
+                return True
+            continue
+        if prefix == head:
             return True
-        if len(added) == len(block) + 1 and added[0].startswith("#") and added[1:] == block:
+        stem = head.rstrip("\n") + "\n"
+        if prefix == stem:
+            return True
+        if prefix.startswith(stem) and _heading_only(prefix[len(stem):]):
             return True
     return False
 
 
-def classify_changes(path: Path, status: str) -> tuple[list[str], list[str]]:
+def classify_changes(path: Path, records: list[tuple[str, str, str | None]]) -> tuple[list[str], list[str]]:
     """Split porcelain status into bootstrap files and real work."""
     bootstrap: list[str] = []
     real: list[str] = []
-    for line in status.splitlines():
-        if not line.strip():
-            continue
-        code = line[:2]
-        name = line[3:].strip() if len(line) > 3 else ""
-        if " -> " in name:
-            source, _, destination = name.partition(" -> ")
-            source = source.strip().strip('"')
-            destination = destination.strip().strip('"')
-            if bootstrap_path(source) and bootstrap_path(destination):
-                bootstrap.append(destination)
+    for code, name, original in records:
+        if original is not None:
+            if bootstrap_path(original) and bootstrap_path(name):
+                bootstrap.append(name)
             else:
-                real.append(f"{source} -> {destination}")
+                real.append(f"{original} -> {name}")
             continue
-        name = name.strip('"')
         if name == AGENTS_FILE:
             only_rules = agents_only_rules(path, untracked=code.strip() == "??")
             (bootstrap if only_rules else real).append(name)
@@ -258,12 +271,12 @@ def classify_changes(path: Path, status: str) -> tuple[list[str], list[str]]:
     return bootstrap, real
 
 
-def removal_force_flags(path: Path, status: str) -> list[str]:
+def removal_force_flags(path: Path, records: list[tuple[str, str, str | None]]) -> list[str]:
     """Git flags needed to remove a worktree whose only changes are bootstrap files."""
-    bootstrap, real = classify_changes(path, status)
+    bootstrap, real = classify_changes(path, records)
     if real or not bootstrap:
         return []
-    untracked = any(line.startswith("??") for line in status.splitlines() if line.strip())
+    untracked = any(code.strip() == "??" for code, _name, _original in records)
     return ["--force", "--force"] if untracked else ["--force"]
 
 
@@ -596,8 +609,8 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
             root = Path(git(path, "rev-parse", "--show-toplevel").strip())
             if canonical(root) != canonical(path):
                 reasons.append("worktree_root_mismatch")
-            _, status = status_for(path)
-            bootstrap_changes, real_changes = classify_changes(path, status)
+            records = status_for(path)
+            bootstrap_changes, real_changes = classify_changes(path, records)
             result["bootstrap_changes"] = bootstrap_changes
             result["dirty"] = bool(real_changes)
             result["uncommitted"] = len(real_changes)
@@ -646,8 +659,8 @@ def excluded_row(repo_root: Path, record: dict[str, Any], reason: str, t3_state:
     }
     if not row["gone"]:
         try:
-            _, status = status_for(path)
-            _bootstrap, real = classify_changes(path, status)
+            records = status_for(path)
+            _bootstrap, real = classify_changes(path, records)
             row["dirty"] = bool(real)
             row["uncommitted"] = len(real)
         except SafetyError:
@@ -818,11 +831,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 try:
                     latest_head = git(Path(candidate["path"]), "rev-parse", "HEAD").strip()
-                    _dirty, latest_status = status_for(Path(candidate["path"]))
-                    _bootstrap, latest_real = classify_changes(Path(candidate["path"]), latest_status)
+                    latest_records = status_for(Path(candidate["path"]))
+                    _bootstrap, latest_real = classify_changes(Path(candidate["path"]), latest_records)
                 except SafetyError:
                     latest_head = ""
-                    latest_status = ""
+                    latest_records = []
                     latest_real = ["worktree_status_unknown"]
                 if latest_head.lower() != str(candidate["head"]).lower() or latest_real:
                     candidate["eligible"] = False
@@ -842,11 +855,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 try:
                     latest_head = git(Path(candidate["path"]), "rev-parse", "HEAD").strip()
-                    _dirty, latest_status = status_for(Path(candidate["path"]))
-                    _bootstrap, latest_real = classify_changes(Path(candidate["path"]), latest_status)
+                    latest_records = status_for(Path(candidate["path"]))
+                    _bootstrap, latest_real = classify_changes(Path(candidate["path"]), latest_records)
                 except SafetyError:
                     latest_head = ""
-                    latest_status = ""
+                    latest_records = []
                     latest_real = ["worktree_status_unknown"]
                 if latest_head.lower() != str(candidate["head"]).lower() or latest_real:
                     candidate["eligible"] = False
@@ -859,7 +872,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["process_cwd_inside"]
                     continue
                 try:
-                    result = run(["git", "-C", str(repo_root), "worktree", "remove", *removal_force_flags(Path(candidate["path"]), latest_status), candidate["path"]], timeout=300)
+                    result = run(["git", "-C", str(repo_root), "worktree", "remove", *removal_force_flags(Path(candidate["path"]), latest_records), candidate["path"]], timeout=300)
                 except SafetyError:
                     append_removal(state_root, candidate, "removal_outcome_unknown")
                     candidate["eligible"] = False
