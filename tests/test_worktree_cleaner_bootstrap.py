@@ -716,6 +716,30 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue(os.access(self.repo / "AGENTS.md", os.X_OK), "the mode change has to survive")
         self.assertNotEqual(cleaner.status_for(self.repo), [])
 
+    def test_the_stamp_sees_a_mode_change(self):
+        # The stamp of a checkout has to hold the mode of a file. A file
+        # that only gained its executable bit leaves the bytes, the size and
+        # the time alone, so without the mode the change would not be seen
+        # and the checkout that holds it would be removed.
+        directory = Path(self.tmp.name) / "checkout"
+        directory.mkdir()
+        script = directory / "run.sh"
+        script.write_text("echo hello\n", encoding="utf-8")
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            stamp = cleaner._snapshot_all(descriptor)
+        finally:
+            os.close(descriptor)
+        self.assertTrue(
+            cleaner._tree_matches(directory, stamp),
+            "the stamp has to match the tree it was taken from",
+        )
+        os.chmod(script, 0o755)
+        self.assertFalse(
+            cleaner._tree_matches(directory, stamp),
+            "a mode change has to be seen by the stamp",
+        )
+
     def _renamed_repo(self, name: str) -> Path:
         repo = Path(self.tmp.name) / name
         repo.mkdir()
