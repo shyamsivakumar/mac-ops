@@ -159,9 +159,15 @@ def with_model(args):
         if entry is None:
             return None, f"refused: every model for taskType {task_type!r} is blocked"
         resolved["modelSelection"] = entry["selection"]
-    elif task_type == "review" and not is_gate_model(resolved["modelSelection"]):
-        return None, (f"refused: taskType 'review' runs on a model from the review list, "
-                      f"but the payload names {resolved['modelSelection']!r}")
+    elif task_type:
+        list_name = task_list(task_type)
+        allowed = model_list.find(resolved["modelSelection"], (list_name,))
+        if allowed is None:
+            return None, (f"refused: taskType {task_type!r} runs on a model from the {list_name} list, "
+                          f"but the payload names {resolved['modelSelection']!r}")
+        if model_list.is_blocked(allowed["selection"]):
+            return None, (f"refused: {model_list.identity(allowed['selection'])} is blocked, "
+                          f"so taskType {task_type!r} cannot run on it")
     return resolved, None
 
 
@@ -1787,7 +1793,7 @@ def gate_request(repo, pr, settings, config, receipts, login):
         if not thread_id:
             continue
         thread, runs = read_builder_thread(thread_id)
-        model = backstop_model(thread, runs)
+        model = reviewer_model(builder_models(thread, runs))
         if model is None:
             return None
         statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
