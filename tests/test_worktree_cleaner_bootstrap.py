@@ -1139,6 +1139,31 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
         self.assertTrue(recovery.exists(), "a copy has to be kept when the open files are unknown")
 
+    def test_a_held_file_keeps_the_whole_copy(self):
+        # A file that a process holds open keeps the whole copy: nothing in
+        # it is removed.
+        base = Path(self.tmp.name)
+        state = base / "state"
+        state.mkdir()
+        recovery = base / "elsewhere" / "recovered"
+        recovery.mkdir(parents=True)
+        (recovery / "first.txt").write_text("one\n", encoding="utf-8")
+        (recovery / "held.txt").write_text("two\n", encoding="utf-8")
+        older = time.time() - 48 * 60 * 60
+        for name in ("first.txt", "held.txt"):
+            os.utime(recovery / name, (older, older))
+        os.utime(recovery, (older, older))
+        cleaner._record_recovery(state, recovery)
+        manifest = state / "recovery.json"
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+        for entry in entries:
+            entry["recovered_at"] = older
+        manifest.write_text(json.dumps(entries), encoding="utf-8")
+        with (recovery / "held.txt").open("r") as held:
+            cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
+            self.assertTrue((recovery / "first.txt").exists(), "the whole copy has to be kept")
+            self.assertTrue((recovery / "held.txt").exists())
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

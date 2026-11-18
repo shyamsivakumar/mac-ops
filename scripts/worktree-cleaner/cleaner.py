@@ -1497,42 +1497,49 @@ def _open_paths() -> set[str] | None:
 def _remove_recovery_copy(path: Path, older_than: float) -> bool:
     """Remove a recovery copy file by file.
 
-    The open files are read as late as possible, and a copy is kept when
-    they cannot be read: the sweep never removes a copy it cannot show to
-    be safe. A file that a process holds open is never removed, so a save an
-    editor makes through its own descriptor keeps its entry, and a link is
-    removed as a link and never followed into its target.
+    Everything is checked before anything is removed: the copy is kept when a
+    file is newer than the retention, when a file is held open by a process,
+    or when the open files cannot be read. A file that appears while the copy
+    is being emptied is newer than the retention and is kept.
     """
-    for root, _dirs, files in os.walk(path, topdown=False):
-        for name in files:
-            entry = os.path.join(root, name)
-            try:
-                if os.lstat(entry).st_mtime > older_than:
-                    return False
-            except OSError:
+    files: list[str] = []
+    directories: list[str] = []
+    for root, dirs, names in os.walk(path, topdown=False):
+        for name in names:
+            files.append(os.path.join(root, name))
+        for name in dirs:
+            directories.append(os.path.join(root, name))
+    for entry in files:
+        try:
+            if os.lstat(entry).st_mtime > older_than:
                 return False
+        except OSError:
+            return False
     held = _open_paths()
     if held is None:
         # The open files are not known, so the copy is kept.
         return False
-    for root, dirs, files in os.walk(path, topdown=False):
-        for name in files:
-            entry = os.path.join(root, name)
-            if os.path.realpath(entry) in held:
-                return False
-            try:
+    for entry in files:
+        if os.path.realpath(entry) in held:
+            # A file that a process holds open keeps the whole copy.
+            return False
+    for entry in files:
+        try:
+            # A file that appeared while the copy was emptied is newer than
+            # the retention and is kept.
+            if os.lstat(entry).st_mtime > older_than:
+                continue
+            os.unlink(entry)
+        except OSError:
+            return False
+    for entry in directories:
+        try:
+            if os.path.islink(entry):
                 os.unlink(entry)
-            except OSError:
-                return False
-        for name in dirs:
-            entry = os.path.join(root, name)
-            try:
-                if os.path.islink(entry):
-                    os.unlink(entry)
-                    continue
-                os.rmdir(entry)
-            except OSError:
-                return False
+                continue
+            os.rmdir(entry)
+        except OSError:
+            return False
     try:
         os.rmdir(path)
     except OSError:
