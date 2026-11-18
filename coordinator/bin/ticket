@@ -82,6 +82,7 @@ QUOTE_WINDOW = 60
 # The review gate: the rules live in the coordinator CLAUDE.md sections
 # "Review gate" and "Ten minutes start to finish".
 from gate_reviewers import REVIEWER_CHAIN
+import builders
 
 GATE_ASTRA = REVIEWER_CHAIN[0]
 GATE_PRIORITY = 400
@@ -1230,6 +1231,14 @@ def default_branch(repo):
     return gh(["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]).strip()
 
 
+def builder_model(selection):
+    """Choose an available allowed builder for every ticket start."""
+    chosen = builders.choose_builder(selection)
+    if chosen is None:
+        raise Refuse("every builder is blocked, waiting for a probe to answer")
+    return chosen
+
+
 def build_start(cfg, t, attempt, issue):
     rcfg = cfg["repos"][t["repo"]]
     request_id = f"ticket:{t['repo']}#{t['number']}:a{attempt}"
@@ -1239,7 +1248,7 @@ def build_start(cfg, t, attempt, issue):
         "clientRequestId": request_id,
         "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}",
                               "startFromOrigin": True},
-        "modelSelection": cfg["models"][t["builderAlias"]]["selection"],
+        "modelSelection": builder_model(cfg["models"][t["builderAlias"]]["selection"]),
     }
     title_rest = t["title"][len(t["key"]):].lstrip(" ·-:·").strip()
     title = f"{t['key']} · {title_rest}"
