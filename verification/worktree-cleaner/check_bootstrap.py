@@ -136,6 +136,11 @@ def main() -> int:
         with (paths["marker"] / "AGENTS.md").open("a", encoding="utf-8") as handle:
             handle.write(rules_block() + "++ genuine edit\n")
         git(paths["marker"], "add", "AGENTS.md")
+        # A worktree whose directory is gone leaves a stale registration. Its
+        # detached head was never published, so the registration has to stay.
+        stale = trees / "stale-detached"
+        git(repo, "worktree", "add", "--detach", str(stale), shas["offmain"])
+        subprocess.run(["rm", "-rf", str(stale)], check=True, capture_output=True)
         # An Ascend repository is never touched.
         ascend = code / "ascend-mcp"
         command(["git", "init", "-b", "main", str(ascend)])
@@ -230,6 +235,8 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert paths["partial"].exists() and paths["renamed"].exists(), applied
         assert paths["shifted"].exists() and paths["marker"].exists(), applied
         assert unpublished_detached.exists(), "a detached worktree that is not published has to stay"
+        listed = git(repo, "worktree", "list", "--porcelain")
+        assert "stale-detached" in listed, "the registration of an unpublished head has to stay"
         assert paths["masteronly"].exists(), applied
         assert ascend_tree.exists(), "ascend worktree must stay"
         log = (base / "worktree-cleaner.log").read_text(encoding="utf-8")
