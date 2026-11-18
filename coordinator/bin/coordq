@@ -1171,18 +1171,23 @@ def block_failed_reviewer(current, failure, dry_run=False):
     return until
 
 
-def failed_gate_reviewer(queue, key, current, failure, dry_run=False):
-    """The next reviewer of a gate that ended without a verdict.
-
-    A blocking provider error blocks this reviewer for every head first; a
-    diagnostic blocks nothing."""
-    block_failed_reviewer(current, failure, dry_run)
+def next_gate_reviewer(queue, key, current):
+    """The reviewer a dead gate moves down to, or None when none is left."""
     selection = fallback_reviewer(queue, key, current)
     if selection is not None:
         return selection
     state = queue.setdefault("gateInfrastructure", {}).setdefault(key, {"retries": 0})
     state.update(status="needs-you", reason="Gate reviewer chain exhausted")
     return None
+
+
+def failed_gate_reviewer(queue, key, current, failure, dry_run=False):
+    """The next reviewer of a gate that ended without a verdict.
+
+    A blocking provider error blocks this reviewer for every head first; a
+    diagnostic blocks nothing."""
+    block_failed_reviewer(current, failure, dry_run)
+    return next_gate_reviewer(queue, key, current)
 
 
 def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None):
@@ -1361,11 +1366,11 @@ def cmd_gatekeep(a):
                         continue
                     retries = state["retries"] + 1
                     current = ran_reviewer(thread, state["reviewer"])
+                    # The block is recorded before this head's own backoff and
+                    # before it gives up, so a reviewer that is out of credits
+                    # is not handed another head during the wait.
+                    block_failed_reviewer(current, data, a.dry_run)
                     if retries > GATE_RETRY_LIMIT:
-                        # The block is recorded before the head gives up, so a
-                        # reviewer that is out of credits is not handed the
-                        # next head once this one's retries are spent.
-                        block_failed_reviewer(current, data, a.dry_run)
                         print(f"gave up {key} after {state['retries']} retries without a verdict",
                               flush=True)
                         if not a.dry_run:
@@ -1374,7 +1379,7 @@ def cmd_gatekeep(a):
                         continue
                     if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
                         continue
-                    model = failed_gate_reviewer(queue, key, current, data, a.dry_run)
+                    model = next_gate_reviewer(queue, key, current)
                     if model is None:
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
@@ -1629,6 +1634,12 @@ def cmd_gate(a):
         # kept, because the reviewer that could not run has not changed.
         if key in heads and not state["givenUp"]:
             die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
+    if starting_reviewer() is None:
+        # An explicit gate waits while every reviewer is blocked. Queued now it
+        # would start on a reviewer the queue recorded as unable, and the gate
+        # would spend the head's retries on one that cannot run.
+        die(f"refused: every gate reviewer is blocked, so {repo}#{number} waits "
+            "until one of them is free")
     login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
                                capture_output=True, text=True, timeout=40)
     if login_run.returncode:

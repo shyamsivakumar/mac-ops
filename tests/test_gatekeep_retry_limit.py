@@ -102,6 +102,7 @@ class RetryLimitBase(unittest.TestCase):
         self.config = os.path.join(QUEUE_DIR, "gatekeep-config.json")
         with open(self.config, "w") as f:
             json.dump(CONFIG, f)
+        self.addCleanup(self.clear_blocks)
 
     def fake_gh(self, endpoint):
         if endpoint.startswith(f"repos/{REPO}/pulls"):
@@ -125,6 +126,11 @@ class RetryLimitBase(unittest.TestCase):
     def gate_items(self):
         return [item for item in self.read_queue()["items"]
                 if item["tool"] == "t3_thread_launch"]
+
+    def clear_blocks(self):
+        path = os.path.join(QUEUE_DIR, "reviewers-blocked.json")
+        if os.path.exists(path):
+            os.unlink(path)
 
     def run_gatekeep(self, dry_run=False):
         args = argparse.Namespace(config=self.config, dry_run=dry_run)
@@ -195,6 +201,25 @@ class BackoffTest(RetryLimitBase):
         out, _ = self.run_gatekeep()
         self.assertEqual(self.gate_items(), [])
         self.assertNotIn("regating", out)
+
+    def test_a_blocking_failure_in_the_backoff_still_blocks_the_reviewer(self):
+        # The head still has retry budget, so the backoff holds it. The block
+        # is recorded anyway, or the next head starts on the reviewer that just
+        # refused for want of credits.
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(
+            {"thread": {"status": "failed", **OPUS_GATE, "latestRunId": "run-1"},
+             "items": [{"type": "user_message", "text": "review"}],
+             "recentRuns": [{"runId": "run-1", "status": "failed", "executedModel": None,
+                              "error": {"code": "insufficient_quota",
+                                        "message": "no credits remaining"}}]}))
+        self.write_queue(heads={self.key: {"id": 4, "retries": 1,
+                                          "at": time.time(), "givenUp": False,
+                                          "reviewer": OPUS_GATE}})
+        out, _ = self.run_gatekeep()
+        self.assertNotIn("regating", out)
+        self.assertEqual(self.gate_items(), [])
+        self.assertTrue(coordq.is_blocked(reviewer_of(OPUS_GATE)))
+        self.assertEqual(coordq.reviewer_model([]), reviewer_of(ASTRA_GATE))
 
     def test_a_second_retry_happens_after_the_backoff(self):
         self.write_queue(heads={self.key: {"id": 4, "retries": 1,
@@ -315,6 +340,19 @@ class ExplicitGateTest(RetryLimitBase):
                 self.gate_once()
         self.assertEqual(self.gate_items(), [])
 
+    def test_every_reviewer_blocked_refuses_an_explicit_gate(self):
+        now = time.time()
+        with open(os.path.join(QUEUE_DIR, "reviewers-blocked.json"), "w") as f:
+            json.dump({f"{entry['instanceId']}:{entry['model']}": {"until": now + 600, "at": now}
+                       for entry in coordq.REVIEWER_CHAIN}, f)
+        args = argparse.Namespace(ref=f"{REPO}#7", config=self.config)
+        err = io.StringIO()
+        with self.assertRaises(SystemExit):
+            with redirect_stderr(err):
+                coordq.cmd_gate(args)
+        self.assertIn("every gate reviewer is blocked", err.getvalue())
+        self.assertEqual(self.gate_items(), [])
+
 
 def reviewer_of(thread):
     """The chain-shaped selection of a reviewer a gate thread ran on."""
@@ -340,12 +378,6 @@ class RetryLimitBlocksReviewerTest(RetryLimitBase):
         self.addCleanup(setattr, coordq, "GATE_RETRY_LIMIT", saved_limit)
         coordq.GATE_RETRY_LIMIT = 1
         self.clear_blocks()
-        self.addCleanup(self.clear_blocks)
-
-    def clear_blocks(self):
-        blocks = os.path.join(QUEUE_DIR, "reviewers-blocked.json")
-        if os.path.exists(blocks):
-            os.unlink(blocks)
 
     def test_the_reviewer_out_of_credits_is_blocked_when_the_head_gives_up(self):
         refusal = {"error": {"code": "insufficient_quota",
