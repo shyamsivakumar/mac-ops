@@ -5,9 +5,10 @@ the lane driver and the pi route generator read it through this module.
 Lists: `build` (every build type), `fix` (fix and finish rounds), `review`
 (the gate) and `panel` (only when Shyam asks for one).
 
-A provider that fails for a blocking reason is recorded by the provider
-health store, `providers-blocked.json` in the queue folder. This module
-only reads that file, so every caller skips the same blocked providers.
+A provider that fails for a blocking reason is recorded by the shared
+provider block store, `providers-blocked.json` in the queue folder. This
+module reads that store through `provider_block`, so every caller skips
+the same blocked providers and a block that has ended is not a block.
 A caller that reads the blocked set and then acts on it holds
 `blocked_lock()`, the lock the store's writer holds too.
 """
@@ -18,11 +19,11 @@ import json
 import os
 from pathlib import Path
 
+import provider_block
+
 LISTS = ("build", "fix", "review", "panel")
 INSTALLED_PATH = "~/.coordinator/models.json"
 SEED_PATH = Path(__file__).resolve().parent.parent / "models.json"
-BLOCKED_FILE = "providers-blocked.json"
-BLOCKED_LOCK_FILE = "providers-blocked.lock"
 VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
 
 
@@ -93,11 +94,7 @@ def entries(list_name):
 def identity(selection):
     """`instanceId:model`, the model on its last segment, so a provider
     prefixed spelling names the same provider as the plain one."""
-    if not isinstance(selection, dict):
-        return ""
-    instance = selection.get("instanceId")
-    model = str(selection.get("model") or "").split("/")[-1]
-    return f"{instance}:{model}" if instance and model else ""
+    return provider_block.identity(selection)
 
 
 def same_selection(a, b):
@@ -121,9 +118,9 @@ def blocked_lock(blocking=True):
     because gatekeep takes this lock before the queue lock: the lock is then
     yielded as False when someone else holds it, and the caller waits.
     """
-    directory = queue_dir()
+    directory = provider_block.queue_dir()
     os.makedirs(directory, exist_ok=True)
-    handle = open(os.path.join(directory, BLOCKED_LOCK_FILE), "w")
+    handle = open(provider_block.lock_path(), "w")
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
@@ -136,15 +133,14 @@ def blocked_lock(blocking=True):
 
 
 def blocked_identities():
-    queue = queue_dir()
+    """The providers blocked now, as the shared provider block store holds them.
+
+    The store is one file beside the queue and every caller reads it here,
+    so a block one caller wrote is a block every caller sees."""
     try:
-        data = read_json(os.path.join(queue, BLOCKED_FILE))
-    except FileNotFoundError:
-        return set()
-    blocked = data.get("blocked") if isinstance(data, dict) else None
-    if not isinstance(blocked, dict):
-        raise ModelsError(f"{BLOCKED_FILE} must hold a blocked object")
-    return set(blocked)
+        return provider_block.blocked_identities()
+    except ValueError as e:
+        raise ModelsError(str(e)) from e
 
 
 def is_blocked(selection, blocked=None):
