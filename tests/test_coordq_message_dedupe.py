@@ -119,6 +119,27 @@ class MessageDedupeTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("refused: duplicate message", err)
 
+    def test_a_different_action_key_does_not_make_a_second_copy(self):
+        # The finding: two callers with different action keys and the same
+        # title and target were queued twice. The title and the target name the
+        # message; the key names one board action, not a second message.
+        self.assertEqual(self.start(key="fix:o/r#544:aaa")[0], 0)
+        code, err = self.start(key="fix:o/r#544:bbb")
+        self.assertEqual(code, 1)
+        self.assertIn("refused: duplicate message", err)
+        self.assertEqual(len(self.q.load()["items"]), 1)
+
+    def test_a_different_action_key_does_not_make_a_second_copy_when_running(self):
+        self.q.save({"next": 2, "items": [],
+                     "started": [{"id": 1, "title": TITLE, "target": THREAD,
+                                  "thread": THREAD, "actionKey": "fix:o/r#544:aaa",
+                                  "at": self.q.time.time()}]})
+        with patch.object(self.q, "active_thread_ids", return_value={THREAD}):
+            code, err = self.start(key="fix:o/r#544:bbb")
+        self.assertEqual(code, 1)
+        self.assertIn("refused: duplicate message", err)
+        self.assertEqual(self.q.load()["items"], [])
+
     def test_another_thread_is_another_message(self):
         self.assertEqual(self.start()[0], 0)
         other = json.dumps({"threadId": "mcp:launch:other", "message": "fix the findings"})

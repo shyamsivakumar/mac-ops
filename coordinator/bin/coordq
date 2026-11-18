@@ -358,7 +358,7 @@ def dispatch_is_active(queue, record):
     return True
 
 
-def duplicate_message(queue, title, target, key="", live_ids=None, started_before=None):
+def duplicate_message(queue, title, target, live_ids=None, started_before=None):
     """The queued or running item that already carries this message, or None.
 
     A started message counts while the thread that took it is live, and only
@@ -368,8 +368,10 @@ def duplicate_message(queue, title, target, key="", live_ids=None, started_befor
     start costs one attempt while a second copy of the message costs a second
     thread on the same work.
 
-    An action key names one board action, and a new head is a new action on
-    the same thread, so two different keys are two messages. A message with
+    An action key names one board action, but it does not make a second copy
+    of the same message a different message: the queue names a message by its
+    title and its target, and the lane puts the whole head in its title, so
+    messages for different heads stay distinct without the key. A message with
     no title or no target is never a duplicate: without a title the caller
     supplied, or without a thread or a client request, there is nothing to
     tell two of them apart, and refusing one would drop work the queue was
@@ -380,13 +382,9 @@ def duplicate_message(queue, title, target, key="", live_ids=None, started_befor
     for item in queue.get("items") or []:
         if message_identity(item) != (title, target):
             continue
-        if key and item.get("actionKey") and item["actionKey"] != key:
-            continue
         return "queued", item.get("id")
     for record in queue.get("started") or []:
         if (record.get("title"), record.get("target")) != (title, target):
-            continue
-        if key and record.get("actionKey") and record["actionKey"] != key:
             continue
         if not dispatch_is_active(queue, record):
             # A later message started on this thread, so this one is spent and
@@ -790,7 +788,7 @@ def cmd_start(a):
         title, target = message_identity(item)
         if prune_messages(queue, live):
             save(queue)
-        duplicate = duplicate_message(queue, title, target, key, live,
+        duplicate = duplicate_message(queue, title, target, live,
                                       started_before if started_before else None)
         if duplicate:
             die(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "
