@@ -74,9 +74,12 @@ def main():
         if handle is not None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         unreadable = []
+        absent = True
         truncated = False
         for index, source in enumerate(sources):
             found, state = read(source)
+            if state != "absent":
+                absent = False
             if state == "error":
                 unreadable.append(source)
             rows.extend(row for row in found if row["ts"] >= since)
@@ -100,6 +103,12 @@ def main():
     else:
         incomplete = False
     if not rows:
+        if absent:
+            # No log at all is not a quiet hour: a wrong path or a collector
+            # that never started looks identical, so the result is incomplete.
+            print(f"INCOMPLETE: no usage log at {args.log} (or its rotation); "
+                  f"nothing was measured")
+            return 2
         print(f"no GitHub calls recorded in the last {args.hours:g}h at {args.log}")
         return 0
     per_hour = collections.Counter(
