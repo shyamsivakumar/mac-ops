@@ -216,10 +216,21 @@ def probe_pi_guards() -> None:
             "cwd": str(SCRATCH),
             "event": {"toolName": "bash", "input": {"command": "git push upstream main"}},
         },
+        {
+            "label": "push a task branch from a protected source ref (main:task-530)",
+            "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": "git push origin main:task-530"}},
+        },
+        {
+            "label": "push to main as a refspec destination (feature:main)",
+            "cwd": str(SCRATCH),
+            "event": {"toolName": "bash", "input": {"command": "git push origin feature:main"}},
+        },
     ]
     expect_block = [
         True, True, True, True, True, True, True, True, True, True,
         False, True, True, True, False, True, False, False, False, True,
+        False, True,
     ]
     for instance in PI_INSTANCES:
         guard = HOME / ".pi" / instance / "extensions/deny-guard.ts"
@@ -304,6 +315,8 @@ def probe_claude_settings() -> None:
         ("push a branch named main.fix (a task branch, not main)", "git push origin main.fix", None, "allow"),
         ("push a branch named main/fix (a task branch, not main)", "git push origin main/fix", None, "allow"),
         ("push to main on a second remote", "git push upstream main", None, "deny"),
+        ("push a task branch from a protected source ref (main:task-530)", "git push origin main:task-530", None, "allow"),
+        ("push to main as a refspec destination (feature:main)", "git push origin feature:main", None, "deny"),
     )
     for label, command, role, want in cases:
         decision = hook_decision(command, role)

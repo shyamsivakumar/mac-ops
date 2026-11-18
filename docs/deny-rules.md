@@ -15,7 +15,10 @@ each tool checks tools, and written into the scope files as prose.
    token files, `~/.ssh`.
 3. No force-push in any form, and no push to `main` or `master` on any
    remote. Task-branch pushes stay allowed, including a task branch whose
-   name continues a protected one (`main.fix`, `main/fix`).
+   name continues a protected one (`main.fix`, `main/fix`), and including a
+   push whose *source* is a protected ref while its destination is a task
+   branch (`main:task-530`). The rule compares the destination of each
+   refspec, never its source.
 4. No `gh pr merge` for a builder. Only a gate thread merges, and only with
    the pinned `--match-head-commit` head given as a merge argument.
 
@@ -50,12 +53,24 @@ An agent thread cannot be handed a role today. The T3 thread-launch input
 (`OrchestrationV2ThreadLaunchInput` in the T3 server schema) carries a project,
 title, model, runtime mode, interaction mode and workspace strategy, and no
 environment field, so `coordq` cannot set `MAC_OPS_ROLE` on a launched thread.
-The only environment T3 applies per thread is the provider instance's, which is
-shared by every thread on that instance, and every file a thread can read is
-also a file it can write. A `gh pr merge` typed by any agent, gate included, is
-therefore refused, and the pinned merge happens on the launcher path above,
-which is where it already happens. That direction only tightens: no builder
-gains the merge, and no merge depends on wording.
+
+T3 does apply an environment per provider instance, and it reads
+`~/.t3/userdata/settings.json` without a restart: adding an instance there makes
+it appear in the orchestrator's provider list (`orchestrator_capabilities`)
+with its `environment` entries. A dedicated gate instance carrying
+`MAC_OPS_ROLE=gate` is therefore the right channel, because only threads
+launched on that instance hold the role and a builder is launched on another
+instance. It cannot be used yet: a second `claudeAgent` instance is accepted by
+the settings file but reports `Provider executable is not installed` and cannot
+launch a thread (2026-11-17), so no Claude gate thread can be started on it. A
+role marker file or a transcript token is not an alternative: every file a
+thread can read it can also write, so a builder could forge either, and that
+would widen the permission this list only tightens.
+
+Until T3 can launch a second `claudeAgent` instance, a `gh pr merge` typed by
+any agent, gate included, is refused, and the pinned merge happens on the
+launcher path above, which is where it already happens. That direction only
+tightens: no builder gains the merge, and no merge depends on wording.
 
 ## One source, installed into each enforcement point
 
