@@ -1285,7 +1285,7 @@ def api_budget():
         return subprocess.CompletedProcess(command, 2, "refused: fixture", "")
     ledger = {}
     with patch.object(dt, "datetime", Clock), patch.object(lane, "unstick", return_value="nothing ready"), \
-         patch.object(lane, "api_remaining", return_value={"core": 1000, "graphql": 1000}), \
+         patch.object(lane, "api_remaining", return_value={"core": lane.API_FLOOR + 500, "graphql": lane.API_FLOOR + 500}), \
          patch.object(subprocess, "run", side_effect=refused):
         lane.start_next(repo, tickets, ledger)
         exact(commands, [["ticket", "start", f"{repo}#{n}", "--dry-run"] for n in (1, 2, 3)])

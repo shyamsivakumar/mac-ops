@@ -157,12 +157,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tick_health import tick_alarm
 
 import alarms
+import gh_gateway
 import stall
 
 from typing import NoReturn
 
 TICKET = os.environ.get("OVERNIGHT_TICKET", "ticket")
 GH = os.environ.get("OVERNIGHT_GH", "gh")
+# The calls kept in reserve before an optional read is skipped. The lane
+# driver, gatekeep and the shift share this one floor.
+API_FLOOR = gh_gateway.floor()
 OVERNIGHT_BIN = os.environ.get("OVERNIGHT_BIN", "overnight")
 TICKET_TIMEOUT = 300
 GH_TIMEOUT = 60
@@ -702,6 +706,9 @@ def run(
         die("the intake deadline passed before the next command could run")
     seconds = max(1, min(timeout, int(left)))
     command = " ".join(argv)
+    hit = gh_gateway.cached(argv)
+    if hit is not None:
+        return hit
     try:
         process = subprocess.Popen(
             argv,
@@ -736,11 +743,13 @@ def run(
                 pass
             return None
         die(f"{command} timed out")
+    gh_gateway.record(argv)
     if process.returncode != 0:
         tail = (stderr or stdout or "").strip().splitlines()[-3:]
         raise RepoError(
             f"{command} failed ({process.returncode}): " + " | ".join(tail)
         )
+    gh_gateway.store(argv, stdout)
     return stdout
 
 
@@ -4336,6 +4345,9 @@ def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
     left = deadline - time.monotonic()
     if left <= 0:
         die("the attended night ran out of time before the next command could run")
+    hit = gh_gateway.cached(argv)
+    if hit is not None:
+        return 0, hit
     try:
         result = subprocess.run(
             argv,
@@ -4348,6 +4360,8 @@ def run_read(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]:
         die(f"{argv[0]} is not on PATH")
     except subprocess.TimeoutExpired:
         return 124, f"{' '.join(argv)} timed out"
+    gh_gateway.record(argv)
+    gh_gateway.store(argv, result.stdout)
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
 
@@ -5127,6 +5141,7 @@ def run_write(argv: list[str], timeout: int, deadline: float) -> tuple[int, str]
         die(f"{argv[0]} is not on PATH")
     except subprocess.TimeoutExpired:
         return 124, f"{' '.join(argv)} timed out"
+    gh_gateway.record(argv)
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
 
@@ -5660,6 +5675,11 @@ def cmd_board(args: argparse.Namespace) -> int:
     request head that has none, and sends a failed gate's findings back to
     the builder that holds the pull request."""
     deadline = time.monotonic() + min(args.deadline, BOARD_DEADLINE)
+    remaining = gh_gateway.remaining_or_none()
+    if remaining and min(remaining.values()) < API_FLOOR:
+        emit(f"overnight: the board read waits below the API floor "
+             f"{API_FLOOR} {remaining}", err=True)
+        return 0
     cfg = load_config()
     budget = budget_of(policy_snapshot(report_root(getattr(args, "root", None))))
     repos = policy_repos(cfg, getattr(args, "allowed", None))
@@ -5987,6 +6007,9 @@ def health_run(argv: list[str], deadline: float) -> tuple[int, str, str]:
     left = deadline - time.monotonic()
     if left <= 0:
         return 124, "", "the cycle ran out of time before the check could run"
+    hit = gh_gateway.cached(argv)
+    if hit is not None:
+        return 0, hit, ""
     try:
         result = subprocess.run(
             argv,
@@ -5999,6 +6022,8 @@ def health_run(argv: list[str], deadline: float) -> tuple[int, str, str]:
         return 127, "", f"{argv[0]} is not on PATH"
     except subprocess.TimeoutExpired:
         return 124, "", f"{' '.join(argv)} timed out"
+    gh_gateway.record(argv)
+    gh_gateway.store(argv, result.stdout)
     return result.returncode, result.stdout or "", result.stderr or ""
 
 
