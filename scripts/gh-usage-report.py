@@ -25,12 +25,16 @@ from datetime import datetime, timezone
 
 def read(path):
     rows = []
+    bad = 0
     try:
         with open(path) as handle:
             for line in handle:
                 try:
                     row = json.loads(line)
                 except ValueError:
+                    # A truncated record is not a reason to call the hour
+                    # quiet: the file is read but part of it is unreadable.
+                    bad += 1
                     continue
                 if isinstance(row, dict) and isinstance(row.get("ts"), (int, float)):
                     rows.append(row)
@@ -38,7 +42,7 @@ def read(path):
         return rows, "absent"
     except OSError:
         return rows, "error"
-    return rows, "ok"
+    return rows, ("bad" if bad else "ok")
 
 
 def hour(ts):
@@ -80,7 +84,7 @@ def main():
             found, state = read(source)
             if state != "absent":
                 absent = False
-            if state == "error":
+            if state in ("error", "bad"):
                 unreadable.append(source)
             rows.extend(row for row in found if row["ts"] >= since)
             if index == 1 and found and min(row["ts"] for row in found) > since:
