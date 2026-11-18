@@ -1,8 +1,8 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `32802d985f70e0ebcac757b5cd4aeb5334befac5`
-Working tree clean when the checks ran: no
+Checked commit: `1525833944fc3833c5d65c3b95cd6136680280e6`
+Working tree clean when the checks ran: yes
 
 | Check | Command | Result | Detail |
 | --- | --- | --- | --- |
@@ -13,7 +13,7 @@ Working tree clean when the checks ran: no
 | python syntax: coordinator/overnight/lane_driver.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/lane_driver.py` | passed |  |
 | python syntax: coordinator/overnight/selftest.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/selftest.py` | passed |  |
 | python syntax: tests/test_builder_fallback.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_builder_fallback.py` | passed |  |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-hcoc31hw -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-hcoc31hw/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-cf3z98qy -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-cf3z98qy/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_builder_fallback | `python3 -m unittest tests.test_builder_fallback` | passed |  |
 
@@ -22,4 +22,8 @@ so every check after it is `not run`.
 
 Device, handset and live-service testing: waived by Shyam on 2026-11-14; not run.
 
-Probe ordering repair: note_probe runs before synchronous coordq dispatch; no post-dispatch state write replaces a failure reset.
+Dispatch repair: empty receipts, command failures, timeouts and OS errors record a probe failure for the affected request and continue to the next builder. Request recording remains before dispatch.
+
+Additional unittest discovery: failed (failures observed); not a passing full-suite claim. Command: `timeout 300 python3 -m unittest discover -s tests`.
+
+In-session reviewer: not run successfully. MiniMax M3 High failed before execution with HTTP 401 invalid stored credentials. Coordinator exact-head Astra gate remains required.
