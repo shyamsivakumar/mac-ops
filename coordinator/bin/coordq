@@ -235,7 +235,9 @@ def refuse_blocked_gate(queue, item, reason):
     refused reviewer never ran, so only its attempt is undone.
     """
     release_action_key(queue, item)
-    head = item.get("head") or str((item.get("args") or {}).get("clientRequestId") or "")
+    head = item.get("head") or next(
+        (key for key, value in (queue.get("gatedHeads") or {}).items()
+         if gate_state(value)["id"] == item.get("id")), "")
     identity = model_list.identity((item.get("args") or {}).get("modelSelection") or {})
     tried = (queue.get("gateReviewers") or {}).get(head)
     if tried and identity in tried:

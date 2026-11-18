@@ -567,6 +567,18 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertEqual(queue["gateReviewers"][self.key], [first])
         self.assertFalse(queue["gatedHeads"][self.key]["moved"])
 
+    def test_a_legacy_retry_item_finds_its_head_by_item_id(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        identity = coordq.model_list.identity(second)
+        first = coordq.model_list.identity(coordq.model_list.entries("review")[0]["selection"])
+        item = {"id": 9, "args": {"modelSelection": second,
+                                  "clientRequestId": self.key + ":" + second["model"] + ":retry"}}
+        queue = {"items": [item], "gatedHeads": {self.key: {"id": 9, "moved": True}},
+                 "gateReviewers": {self.key: [first, identity]}}
+        coordq.refuse_blocked_gate(queue, item, "blocked")
+        self.assertEqual(queue["gateReviewers"][self.key], [first])
+        self.assertFalse(queue["gatedHeads"][self.key]["moved"])
+
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
         self.run_gatekeep()
