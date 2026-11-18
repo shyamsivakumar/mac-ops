@@ -13,9 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 BIN = Path(__file__).resolve().parents[1] / "coordinator" / "bin"
+ROOT = Path(__file__).resolve().parents[1]
 if str(BIN) not in sys.path:
     sys.path.insert(0, str(BIN))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
+import install_coordinator
 import models
 import provider_block
 
@@ -151,6 +155,30 @@ class ProviderBlockTests(unittest.TestCase):
         provider_block.write({IDENTITY: {"reason": "manual", "since": "2026-11-18T10:00:00+00:00"}})
         self.assertEqual(provider_block.blocked_identities(), {IDENTITY})
         self.assertTrue(provider_block.is_blocked(SELECTION))
+
+    def test_a_reset_at_the_moment_of_the_failure_is_not_pushed_to_the_next_day(self):
+        """A failure at the very moment the provider says it resets is not a
+        failure that holds the provider for another day."""
+        failed = moment("2026-11-18T14:00:00")
+        self.assertEqual(provider_block.reset_at("resets at 14:00 UTC", failed), failed)
+        record = provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", failed,
+                                              now=failed)
+        self.assertIsNone(record)
+        self.assertEqual(provider_block.blocked_identities(), set())
+
+    def test_an_offset_wins_over_a_bare_utc(self):
+        """'UTC+08:00' is eight hours ahead of UTC, not UTC."""
+        failed = moment("2026-11-18T02:00:00")
+        record = provider_block.record_block(
+            SELECTION, "will reset at 2026-11-18 11:58:52 (UTC+08:00)", failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T03:58:52+00:00")
+
+    def test_the_pi_reader_honours_the_end_of_a_block(self):
+        """The generated route check reads the same store, so a block whose
+        reset has passed may not skip a provider there and free it here."""
+        generated = install_coordinator.SHARED_BLOCKS
+        self.assertIn("until", generated)
+        self.assertIn("Date.now()", generated)
 
 
 if __name__ == "__main__":

@@ -162,15 +162,19 @@ def failed_at(run):
 
 
 def zone_of(text, start=0):
-    """The zone a message states for its reset, or None when it states none."""
+    """The zone a message states for its reset, or None when it states none.
+
+    An offset wins over a bare "UTC": "UTC+08:00" is eight hours ahead of
+    UTC, not UTC, and reading it as UTC would hold the provider eight hours
+    past the reset it named."""
     window = text[start:start + 48]
-    if re.search(r"\b(?:UTC|GMT)\b", window, re.IGNORECASE):
-        return timezone.utc
     match = OFFSET.search(window)
     if match:
         hours, minutes = int(match.group(2)), int(match.group(3))
         offset = timedelta(hours=hours, minutes=minutes)
         return timezone(-offset if match.group(1) == "-" else offset)
+    if re.search(r"\b(?:UTC|GMT)\b", window, re.IGNORECASE):
+        return timezone.utc
     if ZoneInfo is not None:
         match = NAMED_ZONE.search(window)
         if match:
@@ -205,7 +209,7 @@ def _absolute(message, base):
         zone = zone_of(message, match.end()) or timezone.utc
         when = datetime.fromtimestamp(base, timezone.utc).astimezone(zone)
         seconds = _epoch(when.date().isoformat(), match.group(1), zone)
-        if seconds is not None and seconds <= base:
+        if seconds is not None and seconds < base:
             seconds += 24 * 3600
         return seconds
     return None
