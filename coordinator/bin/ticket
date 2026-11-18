@@ -1650,7 +1650,7 @@ def cmd_close(a):
     merge = pull["mergeCommit"]["oid"]
     close_check = close_check_module()
     items = close_check.run_check(repo, a.pr, number)["items"]
-    failed = close_check.failures(items)
+    failed = close_check.blocking(items)
     if failed:
         builder = builder_thread(repo, number)
         body = close_check.report(items, f"{repo}#{number}")

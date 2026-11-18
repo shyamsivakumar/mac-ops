@@ -40,10 +40,18 @@ ISSUE_REF = re.compile(r"(?:refs|fixes|closes|resolves)[ \t]+#(\d+)", re.IGNOREC
 _NOT_IN_PATH = r"(?<![A-Za-z0-9_.*~/\\-])"
 PATH_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+(?:/[A-Za-z0-9_.*-]+)+")
 FILE_TOKEN = re.compile(_NOT_IN_PATH + r"[A-Za-z0-9_.*-]+\.(?:py|js|mjs|cjs|json|md|sh|ts|tsx|jsx|yml|yaml|cfg|toml|txt|html|css)\b")
+# The scope a pull request declares for itself: a line that starts with
+# "scope", so a file named in the prose of a pull request does not widen
+# the scope on its own.
+SCOPE_LINE = re.compile(r"(?im)^[ \t]*(?:[*#>]+[ \t]*)*(?:the[ \t]+)?scope\b[ \t]*(?:\*\*)?[ \t]*[:.][ \t]*(.*)$")
 
 PASS = "pass"
 FAIL = "fail"
 SKIPPED = "skipped"
+
+# A test file is in scope when it tests a file the change touches: the
+# two names share a prefix of this many characters.
+TEST_PREFIX = 6
 
 
 def scope_tokens(body):
@@ -63,19 +71,50 @@ def scope_tokens(body):
     return tokens
 
 
+def pr_scope_text(pr_body):
+    """The scope the pull request declares for itself.
+
+    A pull request states what it changes in a line that starts with
+    "scope", and the paragraph that follows it belongs to the same
+    declaration. Only that paragraph counts: a file named in the prose of
+    a pull request does not widen the scope on its own.
+    """
+    lines = (pr_body or "").splitlines()
+    found = []
+    index = 0
+    while index < len(lines):
+        match = SCOPE_LINE.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        found.append(match.group(1))
+        index += 1
+        while index < len(lines) and lines[index].strip():
+            found.append(lines[index])
+            index += 1
+    return "\n".join(found)
+
+
+def common_prefix(one, other):
+    """How many characters two names share at the front."""
+    count = 0
+    while count < len(one) and count < len(other) and one[count] == other[count]:
+        count += 1
+    return count
+
+
 def in_scope(path, tokens, changed=()):
     """Is one changed file inside the ticket's stated scope?
 
     A file is in scope when the ticket names it, names a directory that
     holds it, or names a glob that matches it. Evidence travels with the
-    change, so a file under `evidence/` is in scope, and a test comes with
-    the change, so a file under `tests/` is in scope.
+    change, so a file under `evidence/` is in scope. A test is in scope
+    only when it tests a file the change touches: a test of something
+    else is not part of this change.
     """
     base = os.path.basename(path)
     if path.startswith("evidence/"):
         return True, f"{path} is evidence that travels with the change"
-    if path.startswith("tests/"):
-        return True, f"{path} is a test that comes with the change"
     for token in tokens:
         if any(char in token for char in "*?["):
             if fnmatch.fnmatch(path, token) or fnmatch.fnmatch(base, token):
@@ -87,7 +126,13 @@ def in_scope(path, tokens, changed=()):
         elif base == token:
             return True, f"{path} is named by {token}"
     if path.startswith("tests/"):
-        return True, f"{path} is a test that comes with the change"
+        stem = os.path.splitext(base)[0].removeprefix("test_")
+        for other in changed:
+            if other.startswith("tests/"):
+                continue
+            other_stem = os.path.splitext(os.path.basename(other))[0]
+            if common_prefix(stem, other_stem) >= TEST_PREFIX:
+                return True, f"{path} tests {other}"
     return False, ""
 
 
@@ -96,35 +141,48 @@ def names_a_file(tokens):
 
     A directory token and a reference outside the repository (another
     repository's name, a home path) can only widen what is in scope, so a
-    ticket that names only those cannot say whether a diff left its scope: it
-    is skipped, not passed and not failed.
+    ticket that names only those cannot say whether a diff left its
+    scope: the scope cannot be judged, and an unjudged scope authorizes
+    no close.
     """
-    return any("*" in token or "?" in token or "[" in token
-               or FILE_TOKEN.fullmatch(token) for token in tokens)
+    for token in tokens:
+        if any(char in token for char in "*?["):
+            return True
+        if FILE_TOKEN.fullmatch(token.rsplit("/", 1)[-1]):
+            return True
+    return False
 
 
-def item_scope(body, files):
-    """Item 1: the diff stays inside the ticket's stated scope."""
-    tokens = scope_tokens(body)
+def item_scope(body, pr_body, files):
+    """Item 1: the diff stays inside the ticket's stated scope.
+
+    The scope comes from the ticket and from the scope line of the pull
+    request. When neither names a file in this repository the scope cannot
+    be judged, and an unjudged scope does not authorize a close: the item
+    fails.
+    """
+    tokens = scope_tokens(body) | scope_tokens(pr_scope_text(pr_body))
     if not tokens or not names_a_file(tokens):
-        return {"item": "scope", "status": SKIPPED,
-                "detail": "the ticket names no file in this repository, so the scope cannot be judged"}
+        return {"item": "scope", "status": FAIL, "required": True,
+                "detail": ("neither the ticket nor the pull request names a file in this "
+                           "repository, so the scope cannot be judged: state the scope in the "
+                           "pull request's scope line")}
     outside = [path for path in files if not in_scope(path, tokens, files)[0]]
     if outside:
-        return {"item": "scope", "status": FAIL,
+        return {"item": "scope", "status": FAIL, "required": True,
                 "detail": "outside the ticket's stated scope: " + ", ".join(sorted(outside))}
-    return {"item": "scope", "status": PASS,
+    return {"item": "scope", "status": PASS, "required": True,
             "detail": "every changed file is inside the ticket's stated scope"}
 
 
 def item_proof(state, path):
     """Item 2: the pull request carries a proof file."""
     if state == proof_file.FOUND:
-        return {"item": "proof file", "status": PASS, "detail": f"{path} is present"}
+        return {"item": "proof file", "status": PASS, "required": True, "detail": f"{path} is present"}
     if state == proof_file.MISSING:
-        return {"item": "proof file", "status": FAIL,
+        return {"item": "proof file", "status": FAIL, "required": True,
                 "detail": f"the pull request carries no proof file at {path}"}
-    return {"item": "proof file", "status": FAIL,
+    return {"item": "proof file", "status": FAIL, "required": True,
             "detail": f"the proof file at {path} could not be read, so the checks are unproven"}
 
 
@@ -150,36 +208,49 @@ def proof_rows(text):
 def item_checks(state, text):
     """Item 3: every check the proof file lists passed."""
     if state != proof_file.FOUND:
-        return {"item": "checks", "status": SKIPPED, "detail": "there is no proof file to read"}
+        return {"item": "checks", "status": SKIPPED, "required": True,
+                "detail": "there is no proof file to read"}
     rows = proof_rows(text)
     if not rows:
-        return {"item": "checks", "status": FAIL, "detail": "the proof file lists no check"}
+        return {"item": "checks", "status": FAIL, "required": True,
+                "detail": "the proof file lists no check"}
     failed = [f"{name} ({result})" for name, result in rows if result != "passed"]
     if failed:
-        return {"item": "checks", "status": FAIL,
+        return {"item": "checks", "status": FAIL, "required": True,
                 "detail": "the proof file lists a check that is not passed: " + ", ".join(failed)}
-    return {"item": "checks", "status": PASS,
+    return {"item": "checks", "status": PASS, "required": True,
             "detail": f"every one of the {len(rows)} checks the proof file lists passed"}
 
 
-def item_cost(body, report_exists):
-    """Item 4: a cost note, once the MO-1068 cost report exists."""
-    if not report_exists:
-        return {"item": "cost note", "status": SKIPPED,
+def item_cost(body, report_state, detail=""):
+    """Item 4: a cost note, once the MO-1068 cost report exists.
+
+    The lookup of the report has three answers, not two: the report
+    exists, the report does not exist, or the lookup did not answer. A
+    lookup that did not answer is not a confirmed absence, so the cost
+    note cannot be waived and the item fails.
+    """
+    if report_state == "absent":
+        return {"item": "cost note", "status": SKIPPED, "required": False,
                 "detail": f"the MO-1068 cost report ({COST_REPORT}) does not exist yet"}
+    if report_state == "unknown":
+        return {"item": "cost note", "status": FAIL, "required": True,
+                "detail": (f"the lookup of the cost report did not answer, so the cost note "
+                           f"cannot be confirmed: {detail}")}
     if COST_NOTE.search(body or ""):
-        return {"item": "cost note", "status": PASS, "detail": "the pull request body carries a cost note"}
-    return {"item": "cost note", "status": FAIL,
+        return {"item": "cost note", "status": PASS, "required": True,
+                "detail": "the pull request body carries a cost note"}
+    return {"item": "cost note", "status": FAIL, "required": True,
             "detail": "the cost report exists, but the pull request body carries no cost note"}
 
 
-def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_exists):
+def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail=""):
     """The four items, in the order the checklist reads them."""
     return [
-        item_scope(body, files),
+        item_scope(body, pr_body, files),
         item_proof(proof_state, proof_path),
         item_checks(proof_state, proof_text),
-        item_cost(pr_body, report_exists),
+        item_cost(pr_body, report_state, report_detail),
     ]
 
 
@@ -188,11 +259,23 @@ def failures(items):
     return [item for item in items if item["status"] == FAIL]
 
 
+def blocking(items):
+    """The items that stop the close.
+
+    A failure stops the close, and so does a check that could not be
+    judged: an unknown scope or an unanswered lookup authorizes nothing.
+    Only a requirement that does not exist yet, the cost note before the
+    MO-1068 report lands, is skipped without blocking.
+    """
+    return [item for item in items
+            if item["status"] == FAIL or (item["status"] == SKIPPED and item.get("required", True))]
+
+
 def report(items, target=""):
     """The checklist as text, one line per item."""
     lines = [f"{item['item']}: {item['status']} - {item['detail']}" for item in items]
-    failed = failures(items)
-    lines.append(f"RESULT: {'FAIL' if failed else 'PASS'}{(' ' + target) if target else ''}")
+    stopped = blocking(items)
+    lines.append(f"RESULT: {'FAIL' if stopped else 'PASS'}{(' ' + target) if target else ''}")
     return "\n".join(lines)
 
 
@@ -207,13 +290,28 @@ def gh_json(args, timeout=GH_TIMEOUT):
     return json.loads(result.stdout)
 
 
-def gh_ok(args, timeout=GH_TIMEOUT):
-    """Did `gh` succeed? A reader that fails is not a confirmed absence."""
+def report_state(repo, ref):
+    """Does the cost report exist, and did the lookup answer?
+
+    Three answers: the report exists, the report does not exist, or the
+    lookup did not answer. A timeout, a permission error and a GitHub
+    service error are all the third one, and the third one is never a
+    confirmed absence.
+    """
+    args = ["api", f"repos/{repo}/contents/{COST_REPORT}?ref={ref}"]
     try:
-        result = subprocess.run(["gh"] + list(args), capture_output=True, text=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    return result.returncode == 0
+        result = subprocess.run(["gh"] + args, capture_output=True, text=True, timeout=GH_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return "unknown", f"the read timed out after {GH_TIMEOUT}s"
+    except OSError as exc:
+        return "unknown", str(exc)
+    if result.returncode == 0:
+        return "exists", ""
+    error = result.stderr.strip()
+    if "404" in error or "Not Found" in error:
+        return "absent", error
+    first = error.splitlines()[0] if error else f"gh exited {result.returncode}"
+    return "unknown", first
 
 
 def ticket_key(title):
@@ -243,8 +341,8 @@ def run_check(repo, pr, issue=None):
         title = ticket.get("title") or title
     proof_path = proof_file.path_for(ticket_key(title), number)
     state, text = proof_file.fetch(repo, proof_path, merge)
-    report_exists = gh_ok(["api", f"repos/{repo}/contents/{COST_REPORT}?ref={merge}"])
-    items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report_exists)
+    report, report_detail = report_state(repo, merge)
+    items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report, report_detail)
     return {"repo": repo, "pr": pr, "issue": number, "merge": merge, "files": files, "items": items}
 
 
@@ -264,8 +362,8 @@ def main(argv=None):
     for item in result["items"]:
         print(f"{item['item']}: {item['status']} - {item['detail']}")
     target = f" {args.repo}#{result['issue']}" if result["issue"] is not None else ""
-    print(f"RESULT: {'FAIL' if failures(result['items']) else 'PASS'}{target}")
-    return 1 if failures(result["items"]) else 0
+    print(f"RESULT: {'FAIL' if blocking(result['items']) else 'PASS'}{target}")
+    return 1 if blocking(result["items"]) else 0
 
 
 if __name__ == "__main__":

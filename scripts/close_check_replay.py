@@ -48,7 +48,7 @@ def main(argv=None):
         for item in result["items"]:
             print(f"{item['item']}: {item['status']} - {item['detail']}")
         target = f" {args.repo}#{result['issue']}" if result["issue"] is not None else ""
-        failed_items = close_check.failures(result["items"])
+        failed_items = close_check.blocking(result["items"])
         print(f"RESULT: {'FAIL' if failed_items else 'PASS'}{target}")
         if failed_items:
             print("The work goes back to its builder and the ticket stays open.")
