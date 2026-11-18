@@ -14,6 +14,7 @@ import os
 import pwd
 import re
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -56,6 +57,9 @@ WATCHDOG_INTERVAL = 2.0
 WATCHDOG_STALE_SECONDS = 6.0
 REGISTRY_NAME = "heavy-jobs"
 CAPACITY_NAME = "capacity.json"
+CONFIG_NAME = "board_governor.json"
+HOST_HEADROOM_KEY = "min_headroom_bytes_by_host"
+MAX_HOST_HEADROOM_BYTES = 64 * GIB
 LEGACY_MARKER_NAME = "legacy-registry.json"
 PROTOCOL_RECORD_ID = "0" * 32
 LEGACY_SLOTS = Path("/tmp/heavy-slots")
@@ -295,6 +299,110 @@ def sample_host(
     )
 
 
+def host_config_path() -> Path:
+    """Return the path of the installed configuration file beside heavy."""
+    return Path(__file__).resolve().parent / CONFIG_NAME
+
+
+def read_installed_config(path: Path) -> Optional[Dict[str, Any]]:
+    """Return the installed configuration, or None when it cannot be trusted.
+
+    The file is opened without following a final symlink and without waiting
+    for a writer, and the opened descriptor is checked, so a file swapped
+    between the check and the read cannot replace the settings and a pipe
+    cannot block the lookup. A file that is too large, malformed, or nested
+    deeply enough to exhaust the parser is not usable.
+    """
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
+    fd = None
+    try:
+        fd = os.open(str(path), flags)
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.getuid()
+            or opened.st_mode & 0o022
+        ):
+            return None
+        with os.fdopen(fd, "rb") as handle:
+            fd = None
+            raw = handle.read(4097)
+    except OSError:
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+    if len(raw) > 4096:
+        return None
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _usable_headroom(value: Any) -> bool:
+    """Return True when a configured headroom is a usable byte count."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    return 0 < value <= MAX_HOST_HEADROOM_BYTES
+
+
+def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
+    """Return the headroom floor this host needs, or the default 6 GiB floor.
+
+    The installed configuration names hosts and the headroom each one needs.
+    Host names are matched without regard to case, so a configured
+    ``Shyams-MacBook-Pro.local`` still names the ``shyams-macbook-pro.local``
+    host. Two configured names that differ only by case are ambiguous, so
+    neither of them is used and that host keeps the default floor. Short-name
+    fallback is allowed only when either the configured name or the observed
+    hostname is unqualified, so a qualified name never lowers the floor of a
+    different qualified host. A missing, unreadable, malformed, or unlisted
+    host keeps the default floor.
+    """
+    path = host_config_path() if config_path is None else Path(config_path)
+    value = read_installed_config(path)
+    if value is None:
+        return MIN_HEADROOM_BYTES
+    hosts = value.get(HOST_HEADROOM_KEY)
+    if not isinstance(hosts, dict):
+        return MIN_HEADROOM_BYTES
+    try:
+        hostname = socket.gethostname().strip().lower()
+    except OSError:
+        return MIN_HEADROOM_BYTES
+    short_hostname = hostname.split(".")[0]
+    host_is_short = "." not in hostname
+    exact: Dict[str, Any] = {}
+    short: Dict[str, Any] = {}
+
+    def record(mapping: Dict[str, Any], key: str, headroom: Any) -> None:
+        if key in mapping:
+            mapping[key] = None
+        else:
+            mapping[key] = headroom
+
+    for name, headroom in hosts.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        key = name.strip().lower()
+        record(exact, key, headroom)
+        if "." not in key or host_is_short:
+            record(short, key.split(".")[0], headroom)
+    candidates = (hostname, short_hostname)
+    for mapping in (exact, short):
+        for candidate in candidates:
+            headroom = mapping.get(candidate)
+            if _usable_headroom(headroom):
+                return headroom
+    return MIN_HEADROOM_BYTES
+
+
 def admission_block_reason(
     sample: Sample,
     *,
@@ -371,7 +479,7 @@ def memory_load_block_reason(
     physical,
     headroom_fraction=HEADROOM_FRACTION,
     allowance_bytes: int = 0,
-    required_bytes: Optional[int] = None,
+    min_headroom_bytes=None,
 ):
     """Return the reason memory blocks admission, or None."""
     if pressure == CRITICAL_PRESSURE_LEVEL:
@@ -393,40 +501,17 @@ def memory_load_block_reason(
         return "memory-pressure-warning-low-free"
     if not all(_finite_nonnegative(rate) for rate in rates):
         return "first swap sample; normal wait, a few seconds"
+    floor = (
+        host_headroom_bytes()
+        if min_headroom_bytes is None
+        else int(min_headroom_bytes)
+    )
     credit = 0
     if physical < SMALL_HOST_MEMORY_BYTES:
         credit = min(max(0, allowance_bytes), physical // 8)
-    if required_bytes is None:
-        required_bytes = required_headroom_bytes(physical, headroom_fraction)
-    if headroom + credit < required_bytes:
+    if headroom + credit < max(floor, int(physical * headroom_fraction)):
         return "memory-headroom"
     return None
-
-
-def pause_headroom_bytes(physical_bytes: int, paused: bool = False) -> int:
-    """Return the headroom a running job needs, with the original rule.
-
-    A running job keeps the host's original pause and resume thresholds on
-    every host; only the headroom a job needs to start scales with the host's
-    memory.
-    """
-    fraction = HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
-    return max(MIN_HEADROOM_BYTES, int(physical_bytes * fraction))
-
-
-def required_headroom_bytes(
-    physical_bytes: int, headroom_fraction: float = HEADROOM_FRACTION
-) -> int:
-    """Return the headroom a job needs, scaled to the host's memory size.
-
-    A host with less than 24 GiB of memory cannot keep 6 GiB free and still
-    run one build, so its requirement scales with its size instead. Every
-    other host keeps the original max(6 GiB, a share of RAM) rule.
-    """
-    scaled = int(physical_bytes * headroom_fraction)
-    if physical_bytes >= SMALL_HOST_MEMORY_BYTES:
-        return max(MIN_HEADROOM_BYTES, scaled)
-    return max(SMALL_HOST_HEADROOM_FLOOR_BYTES, scaled)
 
 
 def effective_executable(argv: Sequence[str]) -> Optional[str]:
@@ -2063,7 +2148,6 @@ def _host_reason(
         headroom_fraction=(
             HEADROOM_FRACTION if paused else PAUSE_HEADROOM_FRACTION
         ),
-        required_bytes=pause_headroom_bytes(sample.physical_bytes, paused),
     ) in ("memory-pressure-warning-low-free", "swap-growth", "memory-headroom"):
         return "memory-headroom-or-swap-pressure"
     return None
@@ -3523,7 +3607,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "Usage: heavy [--review|--deploy] <command...> | status | request-curtail\n"
             "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
-            "Admission requires stable swap, CPU and memory below 95%, and enough headroom to start: max(6 GiB, 15% of the host's memory) on a host with 24 GiB or more of memory, 15% of the host's memory (at least 2 GiB) on a smaller host. On a smaller host the simulator a job drives counts as that job's own memory. A running job pauses below max(6 GiB, 12.5% of RAM) and resumes above max(6 GiB, 15% of RAM) on every host; level 2 is allowed above 30% free memory, level 4 is blocked.\n"
+            "Admission requires stable swap, CPU and memory below 95%, and at least max(per-host headroom, 15% RAM) headroom to start or resume (a running job pauses only below max(per-host headroom, 12.5% RAM)); on a host with less than 24 GiB of memory the simulator a job drives counts as that job's own memory. Level 2 is allowed above 30% free memory, level 4 is blocked.\n"
             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
             "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
         )

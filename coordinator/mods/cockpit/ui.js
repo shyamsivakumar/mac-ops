@@ -18,14 +18,14 @@ export const canMerge = (verdict) => verdict?.state === "pass" || verdict?.state
 const MERGE = { MERGEABLE: ["merge ✓", "done", "Mergeable"], CONFLICTING: ["merge ✗", "blocked", "Merge conflict"], UNKNOWN: ["merge ?", "dim", "Merge status unknown"] };
 const DRAFT = ["Draft", "dim", "Draft PR, not ready to merge"];
 const mergeOf = (gh) => (gh?.draft ? DRAFT : MERGE[gh?.mergeable] ?? MERGE.UNKNOWN);
-export const COLUMNS = [["needs", "Needs you", "blocked", "Needs you"], ["run", "Working", "working", "Working"], ["checks", "Checks running", "idle", "Checks"], ["cifail", "CI failed", "blocked", "CI failed"], ["review", "Review pending", "working", "Review"], ["ready", "Approved/Ready", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"], ["backlog", "Backlog", "idle", "Backlog"], ["dead", "Dead runs", "idle", "Dead"]];
-export const PR_LANES = new Set(["checks", "cifail", "review", "ready"]);
+export const COLUMNS = [["needs", "Needs you", "blocked", "Needs you"], ["stuck", "Stuck · coordinator fixing", "working", "Stuck"], ["run", "Working", "working", "Working"], ["checks", "Checks running", "idle", "Checks"], ["review", "Review pending", "working", "Review"], ["ready", "Approved/Ready", "accent", "Ready"], ["done", "Done · not settled", "done", "Done"], ["backlog", "Backlog", "idle", "Backlog"], ["dead", "Dead runs", "idle", "Dead"]];
+export const PR_LANES = new Set(["checks", "review", "ready"]);
 const PR_REASONS = new Set(["unrouted", "ci", "changes", "conflict"]);
-export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "needs" && PR_REASONS.has(reasons?.[0]));
+export const prCard = (col, reasons) => PR_LANES.has(col) || (col === "stuck" && !reasons?.length) || ((col === "needs" || col === "stuck") && PR_REASONS.has(reasons?.[0]));
 export const NEED_CHIP = { question: ["question", "A thread is asking or waiting for you"], stalled: ["stalled", "A thread is running but has shown no agent activity for over 20 minutes"], unrouted: ["not sent back", "A failure was reported over 10 minutes ago and no fix round was started"], ci: ["CI failed", "The open PR has failing CI and no thread is working on it"], changes: ["changes requested", "A review asked for changes and no thread is working on it"], conflict: ["conflict", "The open PR conflicts with main and no thread is working on it"] };
 const COLUMN_NAME = Object.fromEntries(COLUMNS.map((c) => [c[0], c[3]]));
 export const COLUMN_LIMIT = { needs: 10, ready: 10 };
-const AGED_COLUMNS = new Set(["needs", "cifail", "ready"]);
+const AGED_COLUMNS = new Set(["needs", "stuck", "ready"]);
 const DAY = 86400000;
 const AMBER_AFTER = DAY;
 const RED_AFTER = 3 * DAY;
@@ -390,7 +390,7 @@ function ageTone(col, ms) {
 }
 
 const NEED_WORD = { question: "question", stalled: "stalled", unrouted: "not sent back", ci: "CI failed", changes: "changes", conflict: "conflict" };
-const stateWord = (v) => (v.col === "needs" && v.needs?.length ? NEED_WORD[v.needs[0]] : COLUMN_NAME[v.col]);
+const stateWord = (v) => ((v.col === "needs" || v.col === "stuck") && v.needs?.length ? NEED_WORD[v.needs[0]] : v.col === "stuck" ? "CI failed" : COLUMN_NAME[v.col]);
 
 function columnAge(t, e, v) {
   const ms = v.now - v.entered;
@@ -519,7 +519,7 @@ export function parentCard(t, p, v, cb) {
 
 export function workerRow(t, e, v, cb) {
   const { c, selected, mark, now, pr, gh } = v;
-  const word = v.col === "needs" && v.needs?.length ? NEED_WORD[v.needs[0]] : COLUMN_NAME[v.col];
+  const word = stateWord(v);
   const branch = v.session?.branch;
   const tree = v.session?.worktree?.split("/").at(-1);
   const where = v.issue ? `${issueRef(v.issue)} · ${v.issue.stage ?? "no stage"}` : [branch, tree && `worktree ${tree}`].filter(Boolean).join(" · ");
@@ -599,7 +599,7 @@ function decisionBase(col, g, info, verdict, now, tab) {
   const c = g.primary;
   const pr = info.status === "open" ? info.pr : null;
   const settle = (col === "done" || col === "dead") && g.threads.some((x) => SETTLEABLE.includes(x.kind));
-  const reasons = col === "needs" ? needReasons({ ...g, info }, () => verdict?.state === "fail", now) : null;
+  const reasons = col === "needs" || col === "stuck" ? needReasons({ ...g, info }, () => verdict?.state === "fail", now) : null;
   const sendBack = (col === "ready" || col === "review") && pr && verdict?.state === "fail";
   const other = [
     { id: "open", key: "o", label: "Open thread" },
@@ -632,7 +632,7 @@ function decisionBase(col, g, info, verdict, now, tab) {
   if (reasons?.[0] === "stalled") {
     return { headline: `${name} has stalled`, primary: { id: "open", key: "o", label: "Open thread" }, why: [`No agent activity for ${elapsed(now - stallOf(g, now))}.`, `${g.title} · ${g.project}`], other: other.filter((x) => x.id !== "open"), checks: null };
   }
-  if ((col === "cifail" || (col === "needs" && prCard(col, reasons))) && pr) {
+  if ((col === "needs" || col === "stuck") && prCard(col, reasons) && pr) {
     return { headline: `Fix PR #${pr.number}`, primary: { id: "answer", key: "r", label: "Send back" }, why: [g.task ? `${g.task} · ${g.title}` : g.title, checkWords(info.gh, verdict)], other, checks };
   }
   if ((col === "ready" || col === "review") && pr) {
@@ -965,7 +965,7 @@ export function reviewView(t, v, input, cb) {
           .when(Boolean(v.trail), (el) => el.child(trailRows(t, v.trail, cb))))));
 }
 
-export const DECIDES = new Set(["needs", "cifail", "review", "ready"]);
+export const DECIDES = new Set(["needs", "stuck", "review", "ready"]);
 export const KEY_TABLE = [
   { keys: "⏎", group: "Card", all: "Open the card's ticket and decision pop-up" },
   { keys: "a", group: "Card", all: "Approve the merge, press twice (Approved/Ready cards)" },
@@ -977,7 +977,7 @@ export const KEY_TABLE = [
   { keys: "w", group: "Card", all: "Open the Herdr tab whose terminal runs in the task's worktree (only when one exists)" },
   { keys: "c", group: "Card", all: "Open the pull request's changed files on GitHub (the pop-up lists them and clicking a file opens them too)" },
   { keys: "u", group: "Card", all: "Send a conflicting PR back to its builder for a rebase, press twice (PR cards)" },
-  { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, CI failed, Review pending and Approved/Ready cards)" },
+  { keys: "z", group: "Card", all: "Snooze the card until tomorrow, 3 days, next Monday, or until it changes (Needs you, Stuck, Review pending and Approved/Ready cards)" },
   { keys: "q", group: "Card", all: "Queue the task, press twice (Backlog cards without a GitHub issue)" },
   { keys: "x", group: "Marked", all: "Mark or unmark the selected card, in any lane and in the fan-out view. The toolbar shows how many are marked" },
   { keys: "X Esc", group: "Marked", all: "Clear every mark (Esc only when no search is open)" },
@@ -987,7 +987,7 @@ export const KEY_TABLE = [
   { keys: "u", group: "Marked", all: "With marks: send the marked conflicting PRs back for a rebase, press twice" },
   { keys: "z", group: "Marked", all: "With marks: snooze every marked card, choosing how long once" },
   { keys: "r d", group: "Marked", all: "With marks: write one note and send it to each marked card's thread, press Enter twice" },
-  { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then CI failed, then Approved/Ready, and cycle" },
+  { keys: "n", group: "Move", all: "Jump to the oldest Needs you card, then Stuck, then Approved/Ready, and cycle" },
   { keys: "⌥⌘N", group: "Move", all: "Jump to the next blocked agent in any space, else the next Needs you card (bind cockpit.needs)" },
   { keys: "j k", group: "Move", all: "Next or previous card (the arrow keys work too)" },
   { keys: "h l", group: "Move", all: "Previous or next column (section on a narrow board)" },

@@ -28,6 +28,12 @@ def sample(physical_gib, headroom_gib, *, captured=700.0, cores=10):
 
 
 class SmallHostAdmissionTests(unittest.TestCase):
+    """The M1's floor comes from its installed configuration."""
+
+    def setUp(self):
+        p = patch.object(heavy, "host_headroom_bytes", return_value=2 * heavy.GIB)
+        p.start()
+        self.addCleanup(p.stop)
     def test_a_sixteen_gigabyte_host_admits_a_build_the_simulator_leaves_room_for(self):
         reason = heavy.admission_block_reason(
             sample(16, 5),
@@ -90,50 +96,28 @@ class SmallHostAdmissionTests(unittest.TestCase):
         )
         self.assertEqual(reason, "memory-headroom")
 
-    def test_a_small_host_scales_its_headroom_with_its_memory(self):
-        self.assertEqual(
-            heavy.required_headroom_bytes(16 * heavy.GIB),
-            int(16 * heavy.GIB * 0.15),
+    def test_a_small_host_uses_the_floor_its_configuration_names(self):
+        reason = heavy.admission_block_reason(
+            sample(16, 2.5),
+            now=700.0,
+            active_count=0,
+            task_already_active=False,
+            slot_limit=2,
         )
-        self.assertEqual(
-            heavy.required_headroom_bytes(48 * heavy.GIB),
-            int(48 * heavy.GIB * 0.15),
-        )
+        self.assertIsNone(reason)
 
     def test_a_large_host_keeps_the_old_max_of_six_gigabytes_and_a_share_of_ram(self):
-        self.assertEqual(
-            heavy.required_headroom_bytes(48 * heavy.GIB),
-            max(6 * heavy.GIB, int(48 * heavy.GIB * 0.15)),
-        )
-        self.assertEqual(
-            heavy.required_headroom_bytes(48 * heavy.GIB, 0.125),
-            max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
-        )
-
-    def test_a_running_job_keeps_the_original_pause_threshold(self):
-        self.assertEqual(
-            heavy._host_reason(sample(16, 3)), "memory-headroom-or-swap-pressure"
-        )
-        self.assertIsNone(heavy._host_reason(sample(16, 7)))
-
-    def test_a_large_host_pause_threshold_is_unchanged(self):
-        self.assertEqual(
-            heavy.required_headroom_bytes(48 * heavy.GIB, heavy.PAUSE_HEADROOM_FRACTION),
-            max(6 * heavy.GIB, int(48 * heavy.GIB * 0.125)),
-        )
-        self.assertEqual(
-            heavy.pause_headroom_bytes(16 * heavy.GIB),
-            max(6 * heavy.GIB, int(16 * heavy.GIB * 0.125)),
-        )
-
-    def test_the_resume_threshold_keeps_the_old_share_of_ram(self):
-        self.assertEqual(
-            heavy.pause_headroom_bytes(48 * heavy.GIB, True),
-            max(6 * heavy.GIB, int(48 * heavy.GIB * 0.15)),
-        )
-        reason = heavy._host_reason(sample(48, 7), paused=True)
-        self.assertEqual(reason, "memory-headroom-or-swap-pressure")
-        self.assertIsNone(heavy._host_reason(sample(48, 7.5), paused=True))
+        with patch.object(
+            heavy, "host_headroom_bytes", return_value=6 * heavy.GIB
+        ):
+            reason = heavy.admission_block_reason(
+                sample(48, 7),
+                now=700.0,
+                active_count=0,
+                task_already_active=False,
+                slot_limit=2,
+            )
+        self.assertEqual(reason, "memory-headroom")
 
     def test_the_simulator_credit_does_not_relax_a_large_host(self):
         reason = heavy.admission_block_reason(
@@ -426,7 +410,7 @@ class XcodebuildExclusionTests(unittest.TestCase):
             '_supervisor_identity': {'pid': os.getpid()},
             '_identity_matches': True, '_read_capacity_config': {'heavy_slots': 2},
             '_record_live': (True, True), '_signal_owned_group': True,
-            '_log_event': None,
+            '_log_event': None, 'host_headroom_bytes': 2 * heavy.GIB,
         }
         for name, value in patches.items():
             p = patch.object(heavy, name, return_value=value)
