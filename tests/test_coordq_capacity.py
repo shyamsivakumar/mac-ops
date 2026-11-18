@@ -170,6 +170,21 @@ class CapacityTests(unittest.TestCase):
             self.q.reconcile_reservations(queue, {"mcp:launch:t"}, {}, snapshot)
         self.assertEqual(queue["reserved"], {})
 
+    def test_a_snapshot_reconciliation_never_looks_a_status_up(self):
+        # The second finding: the statuses are read before the writer lock, so
+        # a reconciliation that has a snapshot never calls t3 itself. A launch
+        # the read did not cover keeps its slot instead.
+        now = self.q.time.time()
+        queue = {"next": 2, "items": [],
+                 "reserved": {"7": now},
+                 "reservedThreads": {"7": "launch:mcp:launch:one"}}
+        snapshot = {"7": {"at": now, "thread": "launch:mcp:launch:one"}}
+        with patch.object(self.q, "thread_status") as status, patch.object(self.q, "save") as save:
+            self.q.reconcile_reservations(queue, set(), {}, snapshot)
+        status.assert_not_called()
+        save.assert_not_called()
+        self.assertIn("7", queue["reserved"])
+
     def test_status_reads_launch_statuses_before_taking_the_writer_lock(self):
         # The second finding: a status lookup under the lock would block every
         # queue writer for its length.

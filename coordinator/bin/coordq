@@ -398,6 +398,14 @@ def reservation_snapshot(queue):
             for key, at in (queue.get("reserved") or {}).items()}
 
 
+def thread_status_or_none(thread):
+    """The status of `thread`, or None when it cannot be read."""
+    try:
+        return thread_status(thread)
+    except (RuntimeError, ValueError, TypeError, AttributeError):
+        return None
+
+
 def launch_statuses(queue, live_ids):
     """The status of every launch the snapshot holds that is not live.
 
@@ -418,10 +426,7 @@ def launch_statuses(queue, live_ids):
         thread = record[len(LAUNCH_RECORD):]
         if not thread or thread in live_ids:
             continue
-        try:
-            statuses[thread] = thread_status(thread)
-        except (RuntimeError, ValueError, TypeError, AttributeError):
-            statuses[thread] = None
+        statuses[thread] = thread_status_or_none(thread)
     return statuses
 
 
@@ -450,10 +455,11 @@ def reconcile_reservations(queue, active, statuses=None, snapshot=None):
         if launched and not (expired or seen):
             # A launch thread can finish before any pass lists it live.
             if thread and thread not in known:
-                try:
-                    known[thread] = thread_status(thread)
-                except (RuntimeError, ValueError, TypeError, AttributeError):
-                    known[thread] = None
+                # With a snapshot the statuses were read before the writer
+                # lock was taken. A launch they do not cover keeps its slot:
+                # looking it up here would hold every start for the length of
+                # a t3 call.
+                known[thread] = None if snapshot is not None else thread_status_or_none(thread)
             finished = known.get(thread) in TERMINAL_STATUSES
         if not (expired or seen or finished):
             continue
