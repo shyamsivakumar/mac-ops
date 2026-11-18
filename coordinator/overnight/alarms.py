@@ -363,11 +363,15 @@ def decide_and_publish(alarm_id, cause, publish):
             action = decide(state, alarm_id, cause)
             if action == "raise":
                 raised(state, alarm_id, cause)
-            if not write_state(merge(load_state(), state)):
-                # The key could not be written, so the answer to this
-                # alarm cannot be recorded. The alarm is published
-                # anyway: a storage failure must not hide a real failure.
-                action = "unchecked"
+                if not write_state(merge(load_state(), state)):
+                    # The key could not be written, so the answer to this
+                    # alarm cannot be recorded. The alarm is published
+                    # anyway: a storage failure must not hide a real
+                    # failure.
+                    action = "unchecked"
+            # A quiet tick changes nothing, so it writes nothing: a write
+            # that fails must not turn a muted alarm into a published
+            # one.
         except OSError:
             action = "unchecked"
         try:
@@ -378,17 +382,22 @@ def decide_and_publish(alarm_id, cause, publish):
         drop_lock(handle)
 
 
-def forget_and_save(alarm_id):
-    """Mark an alarm as not true any more and write the state.
+def forget_and_save(alarm_id, publish=None):
+    """Mark an alarm as not true any more, write the state, and publish.
 
     The key keeps its acknowledgement, so an alarm that was answered
-    stays quiet for the rest of the four hours. Return True when the
-    state went to the file."""
+    stays quiet for the rest of the four hours. `publish` runs under the
+    same lock, so the board is read, changed and written while another
+    writer cannot read it stale. Return True when the state went to the
+    file."""
     try:
         with locked():
             state = load_state()
             gone(state, alarm_id)
-            return write_state(merge(load_state(), state))
+            written = write_state(merge(load_state(), state))
+            if publish is not None:
+                publish()
+            return written
     except OSError:
         return False
 

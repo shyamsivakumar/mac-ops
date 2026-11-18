@@ -887,25 +887,35 @@ def watchdog():
         if alarm:
             stale.append(alarm)
     p = DECISIONS_PATH
-    d = json.load(open(p))
-    d["items"] = [i for i in d["items"] if i.get("id") != "factory-watchdog"]
     if stale:
         cause = "; ".join(stale)
 
         def publish(action):
-            """Write the board with the alarm, or without it.
+            """Read the board, change it, and write it, under the lock.
 
             This runs while the mute state is locked, so an answer that
             lands now cannot slip between the decision and the alarm on
-            the board."""
-            if action in ("raise", "unchecked"):
-                d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
-                                   "title": "Factory job stopped or failing: " + cause,
-                                   "cause": alarms.cause_of(cause),
-                                   "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
-            d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            json.dump(d, open(p + ".tmp", "w"), indent=1)
-            os.replace(p + ".tmp", p)
+            the board, and the board is read now, not before the lock.
+            A board that cannot be read or written returns "failed", so
+            the tick says the alarm is nowhere instead of losing it."""
+            try:
+                with open(p) as handle:
+                    d = json.load(handle)
+                if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+                    return "failed"
+                d["items"] = [i for i in d["items"]
+                              if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
+                if action in ("raise", "unchecked"):
+                    d["items"].append({"id": "factory-watchdog", "group": "Coordinator", "kind": "action",
+                                       "title": "Factory job stopped or failing: " + cause,
+                                       "cause": alarms.cause_of(cause),
+                                       "why": "A coordinator job is stopped or failing. The coordinator is routing a fix; nothing for you unless this stays up."})
+                d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                with open(p + ".tmp", "w") as handle:
+                    json.dump(d, handle, indent=1)
+                os.replace(p + ".tmp", p)
+            except (OSError, ValueError):
+                return "failed"
             if action == "quiet":
                 # The alarm was acknowledged, so the same cause stays
                 # quiet for four hours. The tick still says what it did
@@ -922,18 +932,40 @@ def watchdog():
 
         # The decision and the publication happen under the state lock, so
         # an answer that lands between them cannot be missed.
-        alarms.decide_and_publish("factory-watchdog", cause, publish)
+        action = alarms.decide_and_publish("factory-watchdog", cause, publish)
+        if action == "failed":
+            # The board could not be written, so the alarm is nowhere.
+            print("WATCHDOG the alarm could not be published; the board file could not be written")
         return
+
+    def publish_healthy():
+        """Take the watchdog's item off the board, under the lock.
+
+        The board is read and written while the state lock is held, so
+        another writer cannot replace it between the read and the write.
+        A board that cannot be written is said out loud: the item stays
+        on the board and the next tick tries again."""
+        try:
+            with open(p) as handle:
+                d = json.load(handle)
+            if not isinstance(d, dict) or not isinstance(d.get("items"), list):
+                print("WATCHDOG could not take the alarm off the board; the board file could not be read")
+                return
+            d["items"] = [i for i in d["items"]
+                          if not (isinstance(i, dict) and i.get("id") == "factory-watchdog")]
+            d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            with open(p + ".tmp", "w") as handle:
+                json.dump(d, handle, indent=1)
+            os.replace(p + ".tmp", p)
+        except (OSError, ValueError):
+            print("WATCHDOG could not take the alarm off the board; the board file could not be written")
+
     # The alarm is not true any more, so the same cause can alarm again
     # the next time it is true. An acknowledgement that is still running
-    # keeps the key quiet.
-    if not alarms.forget_and_save("factory-watchdog"):
-        # A write that fails is said out loud: the tick did not record
-        # what it did, and the next tick measures the alarms again.
+    # keeps the key quiet. The board is read and written under the lock,
+    # so another writer cannot read it stale.
+    if not alarms.forget_and_save("factory-watchdog", publish_healthy):
         print("WATCHDOG could not write the mute state; the alarm is not muted")
-    d["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    json.dump(d, open(p + ".tmp", "w"), indent=1)
-    os.replace(p + ".tmp", p)
 
 
 def zero_merge(snapshot):
