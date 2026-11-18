@@ -117,6 +117,22 @@ class ProviderBlockTests(unittest.TestCase):
             record = provider_block.record_block(SELECTION, message, failed, now=failed)
             self.assertEqual(record["until"], "2026-11-18T11:30:00+00:00", message)
 
+    def test_a_relative_reset_in_days_holds_the_provider_that_many_days(self):
+        failed = moment("2026-11-18T10:00:00")
+        for message, until in (("429; resets in 1 day", "2026-11-19T10:00:00+00:00"),
+                               ("429; retry after 2 days", "2026-11-20T10:00:00+00:00"),
+                               ("429; retry after 1d", "2026-11-19T10:00:00+00:00")):
+            record = provider_block.record_block(SELECTION, message, failed, now=failed)
+            self.assertEqual(record["until"], until, message)
+
+    def test_a_hyphenated_zone_name_is_read_whole(self):
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(
+            SELECTION,
+            "quota exhausted, will reset at 2026-11-18 11:58:52 America/Port-au-Prince",
+            failed, now=failed)
+        self.assertEqual(record["until"], "2026-11-18T16:58:52+00:00")
+
     def test_an_iso_reset_is_taken_as_it_is_written(self):
         failed = moment("2026-11-18T10:00:00")
         record = provider_block.record_block(
