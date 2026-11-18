@@ -4,6 +4,7 @@ One path list decides it, and two places read it: the gate brief built by
 `ticket gate`, and the lane driver that merges a passing pull request. The
 tests here pin the list and both call sites.
 """
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -196,11 +197,28 @@ class CoordqGateTest(unittest.TestCase):
             if endpoint.endswith("/files?per_page=100"):
                 return files
             self.assertEqual(endpoint, "repos/shyamsivakumar/mac-ops/pulls/544")
-            return {"changed_files": 3001}
+            # The real helper slurps its pages, so one pull request arrives as
+            # the only row of a list. A dict here hid that shape, and the
+            # missing count deferred every code-only pull request.
+            return [{"changed_files": 3001}]
 
         with patch.object(self.coordq, "gh_json", gh):
             self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
                              prompt_paths.UNKNOWN)
+
+    def test_a_code_pull_request_without_a_list_count_is_clear(self):
+        """The count read is a one-row list, and its count is used."""
+        files = [{"filename": "coordinator/bin/ticket"},
+                 {"filename": "docs/ticket-gate.md"}]
+
+        def gh(endpoint):
+            if endpoint.endswith("/files?per_page=100"):
+                return files
+            return [{"changed_files": len(files)}]
+
+        with patch.object(self.coordq, "gh_json", gh):
+            self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
+                             prompt_paths.CLEAR)
 
     def test_a_failed_changed_count_read_is_unknown(self):
         """No count means no completeness, and no completeness means no merge."""
@@ -448,7 +466,7 @@ class LanePassTest(unittest.TestCase):
 
 
 class BoardReconcileTest(unittest.TestCase):
-    """A merge ask for a pull request that left the open list is taken down."""
+    """A merge ask for a settled pull request is taken down."""
 
     def setUp(self):
         import lane_driver
@@ -458,26 +476,54 @@ class BoardReconcileTest(unittest.TestCase):
         self.addCleanup(lambda: setattr(lane_driver, "CFG", self.saved_cfg))
         self.board = {"items": [{"id": "prompt-merge-MO-544"},
                                 {"id": "prompt-merge-MO-545"},
+                                {"id": "prompt-merge-MO-546"},
                                 {"id": "unrelated"}]}
         self.snapshot = {"repos": {"shyamsivakumar/mac-ops": {"prs": [{"number": 545}]}}}
 
-    def reconcile(self, removed_writes=("wrote",)):
+    def reconcile(self, states=None, removed_writes=("wrote",), read_error=None):
         taken = []
+        # 544 is merged, 546 is still open but fell outside the capped list.
+        by_number = states or {544: {"state": "MERGED", "mergedAt": "2026-11-18T00:00:00Z"},
+                               546: {"state": "OPEN", "mergedAt": None}}
+
+        def read(cmd, timeout=150):
+            if read_error is not None:
+                raise read_error
+            return json.dumps(by_number[int(cmd[3])])
 
         def withdraw(item_id):
             taken.append(item_id)
             return removed_writes[0]
 
-        with patch.object(self.lane.alarms, "read_board", return_value=(b"", self.board)), \
+        with patch.object(self.lane, "run", read), \
+                patch.object(self.lane.alarms, "read_board", return_value=(b"", self.board)), \
                 patch.object(self.lane, "withdraw_decision", withdraw):
             removed = self.lane.reconcile_prompt_items(self.snapshot)
         return removed, taken
 
     def test_a_merged_prompt_request_is_taken_down(self):
-        """The PR is gone from the snapshot, which is the only signal there is."""
+        """The pull request's own state says it is settled."""
         removed, taken = self.reconcile()
         self.assertEqual(taken, ["prompt-merge-MO-544"])
         self.assertEqual(removed, 1)
+
+    def test_a_closed_prompt_request_is_taken_down(self):
+        removed, taken = self.reconcile(
+            states={544: {"state": "CLOSED", "mergedAt": None},
+                    546: {"state": "CLOSED", "mergedAt": None}})
+        self.assertEqual(taken, ["prompt-merge-MO-544", "prompt-merge-MO-546"])
+        self.assertEqual(removed, 2)
+
+    def test_an_open_request_outside_the_capped_list_stays(self):
+        """Absence from a 200-row snapshot is not proof of closure."""
+        removed, taken = self.reconcile()
+        self.assertNotIn("prompt-merge-MO-546", taken)
+        self.assertEqual(removed, 1)
+
+    def test_an_unread_state_leaves_the_card(self):
+        """A state that did not come back is not a closed pull request."""
+        removed, taken = self.reconcile(read_error=RuntimeError("gh failed"))
+        self.assertEqual((removed, taken), (0, []))
 
     def test_an_open_prompt_request_stays(self):
         self.assertNotIn("prompt-merge-MO-545", self.reconcile()[1])

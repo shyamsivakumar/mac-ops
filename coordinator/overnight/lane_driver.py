@@ -384,8 +384,10 @@ def pr_action_skip(repo, number):
         return pr, f"skip #{number}: missing PR branch names"
     if any(branch.startswith("herdr/") for branch in branches):
         return pr, f"skip #{number}: herdr branch, Shyam merges"
-    if pr.get("state") != "OPEN":
+    if pr.get("state") in ("MERGED", "CLOSED"):
         return pr, f"skip #{number}: PR is merged or closed"
+    if pr.get("state") != "OPEN":
+        return pr, f"skip #{number}: PR state could not be read"
     return pr, None
 
 
@@ -626,14 +628,35 @@ def withdraw_decision(item_id):
     return alarms.board_update(DECISIONS_PATH, item_id, "remove", None)
 
 
+def pull_settled(repo, number):
+    """True only when the pull request itself says it is merged or closed.
+
+    The open list the snapshot holds stops at 200 pull requests, so an older
+    open request can fall outside it; absence from that list is not proof
+    that Shyam settled it. Only the pull request's own state answers that,
+    and a read that fails answers nothing: the card stays until the state is
+    known rather than disappearing while its pull request is still open.
+    """
+    try:
+        state = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                                "--json", "state,mergedAt"]))
+    except (subprocess.SubprocessError, RuntimeError, ValueError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    return state.get("state") in ("MERGED", "CLOSED") or bool(state.get("mergedAt"))
+
+
 def reconcile_prompt_items(snapshot):
-    """Take merge asks off the board for pull requests that left the open list.
+    """Take merge asks off the board for pull requests Shyam settled.
 
     A prompt pull request Shyam merged or closed between two passes is not in
     the snapshot any more, so no per-pull-request action ever reaches its
     item: the board would keep asking for work that is done. The items are
     read once here and the stale ones are removed by the key and number their
-    id carries. Return how many were removed.
+    id carries. A request that left the capped open list without being
+    settled is still open, so each candidate's own state is read before its
+    card goes. Return how many were removed.
     """
     try:
         _bytes, board = alarms.read_board(Path(DECISIONS_PATH))
@@ -651,9 +674,14 @@ def reconcile_prompt_items(snapshot):
         match = re.fullmatch(r"prompt-merge-([A-Za-z0-9]+)-(\d+)", str(item.get("id") or ""))
         if not match or match.group(1) not in repos_by_key:
             continue
-        if (repos_by_key[match.group(1)], int(match.group(2))) in open_prs:
+        repo, number = repos_by_key[match.group(1)], int(match.group(2))
+        if (repo, number) in open_prs:
             continue
         if DRY:
+            continue
+        # Absent from the capped list is not settled: confirm it on the pull
+        # request, and leave the card when the state cannot be read.
+        if not pull_settled(repo, number):
             continue
         if withdraw_decision(item["id"]) == "wrote":
             removed += 1
@@ -688,10 +716,11 @@ def act_on_pr(repo, number, ledger):
         return None
     current_pr, skip = pr_action_skip(repo, number)
     if skip:
-        if current_pr.get("state") != "OPEN" and not DRY:
-            # The pull request is settled, so its merge ask is answered by
-            # whoever settled it. Leaving the card would keep the board
-            # asking after the work is done.
+        if current_pr.get("state") in ("MERGED", "CLOSED") and not DRY:
+            # The pull request says it is settled, so its merge ask is
+            # answered by whoever settled it. A state that did not come back
+            # says nothing, so the card stays: an unread state is not a
+            # closed pull request.
             withdraw_decision(f"prompt-merge-{CFG[repo]['key']}-{number}")
         return skip
     pr = {**pr, **current_pr}
