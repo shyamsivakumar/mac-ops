@@ -1181,6 +1181,15 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
     return False, "github_pr_not_closed_for_head", None
 
 
+def _head_matches(path: Path, expected: str) -> bool:
+    """True when the worktree still points at the commit that was checked."""
+    try:
+        head = git(path, "rev-parse", "HEAD").strip()
+    except SafetyError:
+        return False
+    return head.lower() == expected.lower()
+
+
 def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False, refresh_cwds: bool = True) -> dict[str, Any]:
     path = Path(record["path"])
     result: dict[str, Any] = {
@@ -1509,6 +1518,14 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     append_removal(state_root, candidate, "removal_blocked")
                     continue
                 candidate["cleared_bootstrap_changes"] = cleared
+                # The head is checked again after the cleanup, so a commit
+                # made in between stops the removal: git would see a clean
+                # worktree and remove it, and the new commit would be lost.
+                if not _head_matches(Path(candidate["path"]), str(candidate["head"])):
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_head_changed_before_remove"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
                 try:
                     result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
                 except SafetyError:

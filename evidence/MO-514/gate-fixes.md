@@ -49,6 +49,7 @@ the test that fails without the fix.
 | 41 | the restore set the mode by name after closing the file, so a name replaced by a link in between could make the call follow it | the mode is set on the open descriptor with `os.fchmod` before it is closed | `...::ClearBootstrapChangesTest::test_a_restore_refuses_an_occupied_path` |
 | 42 | a scanned bootstrap file replaced by a FIFO was opened for a blocking read, so the cleanup could hang before it reached the type check | the file is opened with `O_NONBLOCK` and the descriptor is checked with `fstat`, and a file that is not regular is never read | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_a_fifo_is_never_read` |
 | 43 | the return code of `git worktree prune` was discarded, so a failed prune left no trace in the removal report | the result of the prune is recorded per repository in the summary, with the error when it failed | `scripts/worktree-cleaner/cleaner.py` (`prune_results`) |
+| 45 | the last head check was before the bootstrap cleanup, so a commit made after the cleanup left git with a clean worktree and it removed the worktree with the new commit in it | the head is checked again after the cleanup and right before the removal, and a head that moved stops the removal | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_a_changed_head_is_detected` |
 
 ## How the fixes are proved
 
