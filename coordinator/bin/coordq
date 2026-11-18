@@ -285,7 +285,9 @@ def message_identity(item):
 
     The target is the thread the message goes to. A launch has no thread
     yet, so its client request names the work it starts: a second launch for
-    the same work is the same message.
+    the same work is the same message. A message that names neither a thread
+    nor a client request has no target, and no target cannot be compared: two
+    launches with the same title and different projects are two launches.
     """
     args = item.get("args") or {}
     return (str(item.get("title") or ""),
@@ -326,8 +328,13 @@ def duplicate_message(queue, title, target, key="", live_ids=None):
     copy of the message costs a second thread on the same work.
 
     An action key names one board action, and a new head is a new action on
-    the same thread, so two different keys are two messages.
+    the same thread, so two different keys are two messages. A message with
+    no target is never a duplicate: without a thread or a client request
+    there is nothing to tell two of them apart, and refusing one would drop
+    work the queue was asked to start.
     """
+    if not target:
+        return None
     for item in queue.get("items") or []:
         if message_identity(item) != (title, target):
             continue

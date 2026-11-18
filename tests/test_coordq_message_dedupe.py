@@ -21,6 +21,7 @@ from tests.test_gatekeep_backstop_reviewer import load_coordq
 
 TITLE = "MO#544 gate findings"
 THREAD = "mcp:launch:builder"
+KEY = "fix:o/r#544:aaa"
 
 
 class MessageDedupeTests(unittest.TestCase):
@@ -158,6 +159,45 @@ class MessageDedupeTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("refused: duplicate message", err)
         self.assertEqual(self.launch("fix:o/r#544:bbb")[0], 0)
+
+    def test_two_launches_with_no_target_are_not_one_message(self):
+        # The gate finding: a launch without a client request has no target,
+        # so two launches with the same title and different projects are two
+        # launches. Refusing the second would drop work the queue was asked
+        # to start.
+        first = self.launch_payload("project-one")
+        second = self.launch_payload("project-two")
+        self.assertEqual(self.launch_no_request(first)[0], 0)
+        code, err = self.launch_no_request(second)
+        self.assertEqual(code, 0, err)
+        items = self.q.load()["items"]
+        self.assertEqual([i["args"]["projectId"] for i in items],
+                         ["project-one", "project-two"])
+
+    def test_a_board_action_key_still_guards_a_message_with_no_target(self):
+        # The action key is the identity when the message carries one, so a
+        # keyless launch is allowed and a repeated key is still refused.
+        payload = self.launch_payload("project-one")
+        self.assertEqual(self.launch_no_request(payload, key=KEY)[0], 0)
+        code, err = self.launch_no_request(payload, key=KEY)
+        self.assertEqual(code, 1)
+        self.assertIn(KEY, err)
+        self.assertEqual(len(self.q.load()["items"]), 1)
+
+    def launch_payload(self, project_id, title=TITLE):
+        return json.dumps({"projectId": project_id, "title": title, "message": "work",
+                           "modelSelection": {"instanceId": "codex", "model": "gpt-6.1-sol"}})
+
+    def launch_no_request(self, payload, key=None):
+        args = argparse.Namespace(args=payload, title=None, priority=800,
+                                  tool="t3_thread_launch", action_key=key)
+        err = io.StringIO()
+        with patch.object(self.q, "read_rules", return_value="rules"), redirect_stderr(err):
+            try:
+                self.q.cmd_start(args)
+            except SystemExit as e:
+                return e.code, err.getvalue()
+        return 0, err.getvalue()
 
     def test_the_dispatch_records_the_started_message(self):
         self.q.live = lambda: 0
