@@ -1509,14 +1509,31 @@ def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proo
                             prompt=prompt)
 
 
+def pull_changed_count(repo, number):
+    """The pull request's own changed-file count, or None when unreadable.
+
+    The count is what tells a complete file list from a capped one, so a list
+    read without it is refused rather than trusted.
+    """
+    try:
+        pull = gh_json(["api", f"repos/{repo}/pulls/{number}"])
+    except (GhError, ValueError):
+        return None
+    count = pull.get("changed_files") if isinstance(pull, dict) else None
+    return count if isinstance(count, int) else None
+
+
 def prompt_pull(repo, number, changed_files=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths the pull request changed.
 
     An unreadable or truncated list is retried, then UNKNOWN: `ticket gate`
-    refuses rather than building a brief that could order a prompt merge.
+    refuses rather than building a brief that could order a prompt merge. The
+    changed-file count the completeness check needs is read from the pull
+    request itself when the caller does not already hold it.
     """
+    count = changed_files if isinstance(changed_files, int) else pull_changed_count(repo, number)
     for _ in range(max(1, attempts)):
-        state = prompt_paths.prompt_scan(pull_files(repo, number, changed_files))
+        state = prompt_paths.prompt_scan(pull_files(repo, number, count))
         if state != prompt_paths.UNKNOWN:
             return state
     return prompt_paths.UNKNOWN

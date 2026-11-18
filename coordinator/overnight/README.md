@@ -814,7 +814,9 @@ still unknown defers the gate or the merge instead of guessing. A brief
 written without the list could order a merge of prompt text, so an unknown
 list never reads as clear. A list shorter than the pull request's own
 changed-file count is unknown too, because GitHub's files endpoint stops at
-3,000 and the dropped entry can be the prompt file. A renamed file counts
+3,000 and the dropped entry can be the prompt file; when the caller holds no
+count, the pull request itself is read for it, and a count that cannot be
+read is unknown as well. A renamed file counts
 under both names, so moving prompt text out of `prompts/` still holds the
 pull request. The list covers
 `AGENT-RULES.md`,

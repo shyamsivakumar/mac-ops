@@ -565,15 +565,36 @@ def pr_paths(repo, number, changed_files=None):
     return prompt_paths.entries_paths(entries)
 
 
+def pr_changed_count(repo, number):
+    """The pull request's own changed-file count, or None when unreadable.
+
+    The count is what tells a complete file list from a capped one, so a list
+    read without it is deferred rather than trusted.
+    """
+    output = run(["gh", "api", f"repos/{repo}/pulls/{number}"])
+    try:
+        pull = json.loads(output or "{}")
+    except ValueError:
+        return None
+    count = pull.get("changed_files") if isinstance(pull, dict) else None
+    return count if isinstance(count, int) else None
+
+
 def prompt_pull(repo, number, changed_files=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths a pull request changed.
 
     An unreadable or short list is retried, then UNKNOWN: the lane defers a
-    passing pull request it cannot read instead of merging it blind.
+    passing pull request it cannot read instead of merging it blind. The
+    changed-file count the completeness check needs is read from the pull
+    request itself when the caller does not already hold it.
     """
+    try:
+        count = changed_files if isinstance(changed_files, int) else pr_changed_count(repo, number)
+    except (RuntimeError, ValueError):
+        return prompt_paths.UNKNOWN
     for _ in range(max(1, attempts)):
         try:
-            paths = pr_paths(repo, number, changed_files)
+            paths = pr_paths(repo, number, count)
         except (RuntimeError, ValueError):
             # A `gh` read that failed is retried, never guessed at.
             continue
