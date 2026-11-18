@@ -10,14 +10,19 @@ import json
 import os
 import plistlib
 import pwd
+import re
 import stat
 import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
+from unittest import mock
 from xml.parsers.expat import ExpatError
 from xml.sax.saxutils import escape
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "coordinator/bin"))
+import models
 
 RECEIPT_NAME = "coordinator-installation.json"
 HOME_TOKEN = "@HOME@"
@@ -31,6 +36,55 @@ LOCAL_CONFIG_FILES = ("tickets.json",)
 MODS_DIR = ".config/herdr-app/mods"
 MODS = ("cockpit", "coordinator", "ops", "git-graph", "worktrees", "ops-panels", "outputs", "shy-tabs", "kpane")
 HERDR_FILES = ("keys.json", "layouts/shyam.json")
+TASK_ROUTER = ".pi/agent/extensions/task-router.ts"
+ROUTE_LEVELS = {
+    "quick": "low",
+    "chore": "medium",
+    "standard": "medium",
+    "ui": "medium",
+    "research": "medium",
+    "rca": "high",
+    "risky": "high",
+    "design": "high",
+    "hard": "xhigh",
+}
+ROUTES_COMMENT = (
+    "// Generated from ~/.coordinator/models.json by mac-ops install_coordinator.py."
+    " Do not edit by hand.\n"
+)
+ROUTES_BLOCK = re.compile(
+    r"(?:// Generated from[^\n]*\n)?const ROUTES: Record<string, string\[\]> = \{.*?\n\};\n",
+    re.DOTALL,
+)
+OWNERSHIP_PARAGRAPH = re.compile(r" \* Ownership:.*?\n \*\n", re.DOTALL)
+OWNERSHIP_TEXT = (
+    " * Ownership: mac-ops install_coordinator.py regenerates the ROUTES table on every\n"
+    " * install from ~/.coordinator/models.json. Change the model list there.\n"
+    " *\n"
+)
+POLICY_PARAGRAPH = re.compile(r" \* Routing policy.*?\n(?= \* Reviews are not routed)", re.DOTALL)
+POLICY_TEXT = (
+    " * Routing policy: every route tries the pi models of the build list in\n"
+    " * ~/.coordinator/models.json, in that order.\n"
+)
+ARCHIVE_DIR = ".coordinator/archive/2026-11-18-model-lists"
+ARCHIVED_LISTS_FILE = "tickets.json.models-and-types.json"
+OLD_LIST_SECTIONS = ("models", "types")
+OLD_LIST_FILES = (
+    (".coordinator", "tickets.json.bak-*"),
+    (".pi/agent/extensions", "task-router-blocks.json*"),
+)
+ARCHIVE_README = (
+    "# Model lists replaced by models.json (2026-11-18)\n\n"
+    "`~/.coordinator/models.json` is the only place models are listed. "
+    "These files held the lists it replaced:\n\n"
+    f"- `{ARCHIVED_LISTS_FILE}`: the `models` and `types` sections of `tickets.json`.\n"
+    "- `tickets.json.bak-*`: earlier backups of `tickets.json`.\n"
+    "- `task-router-blocks.json*`: the pi route block list from the extensions folder.\n\n"
+    "To roll back, reinstall the earlier mac-ops release, put the `models` and `types` "
+    "sections back into `~/.coordinator/tickets.json`, and move the other files back "
+    "to where they were.\n"
+)
 # The pi coordinator's own files: guard extension, sandbox profile, settings,
 # phone relay note and launchers.
 PI_BIN_FILES = ("coord-pi", "coord-ask", "coord-phone", "coord-tick", "kpane", "kshow")
@@ -91,6 +145,7 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
         if name not in LOCAL_CONFIG_FILES
         or not (home / ".coordinator" / name).exists()
     ]
+    items.append((root / "models.json", home / ".coordinator/models.json", 0o644))
     items += [
         (root / "overnight" / name, home / ".local/bin" / name, 0o755)
         for name in OVERNIGHT_BIN_FILES
@@ -119,6 +174,76 @@ def plan(checkout: Path, home: Path) -> list[tuple[Path, Path, int]]:
             if f.is_file()
         ]
     return items
+
+
+def task_router_text(text: str, routes: list[str]) -> str:
+    """Return the task-router.ts text with its ROUTES table rebuilt from routes.
+
+    Every route tries each model of routes in order, at the route's thinking
+    level. The header paragraphs that told a reader to edit the table by hand
+    are replaced."""
+    lines = "".join(
+        f"\t{route}: [{', '.join(json.dumps(f'{model}:{level}') for model in routes)}],\n"
+        for route, level in ROUTE_LEVELS.items()
+    )
+    block = f"{ROUTES_COMMENT}const ROUTES: Record<string, string[]> = {{\n{lines}}};\n"
+    for pattern, replacement in (
+        (ROUTES_BLOCK, block),
+        (OWNERSHIP_PARAGRAPH, OWNERSHIP_TEXT),
+        (POLICY_PARAGRAPH, POLICY_TEXT),
+    ):
+        text, count = pattern.subn(lambda _match, new=replacement: new, text, count=1)
+        if not count:
+            raise RuntimeError(f"task-router.ts has no section matching {pattern.pattern[:40]}")
+    return text
+
+
+def without_old_lists(data: bytes) -> bytes | None:
+    """Return tickets.json without its model lists, or None when it has none."""
+    config = json.loads(data)
+    if not any(section in config for section in OLD_LIST_SECTIONS):
+        return None
+    kept = {k: v for k, v in config.items() if k not in OLD_LIST_SECTIONS}
+    return (json.dumps(kept, indent=2) + "\n").encode()
+
+
+def old_list_files(home: Path) -> list[Path]:
+    return sorted(
+        path for folder, pattern in OLD_LIST_FILES for path in (home / folder).glob(pattern)
+    )
+
+
+def archive_model_lists(home: Path) -> list[Path]:
+    """Copy the old lists into the archive and move the old list files there.
+
+    Nothing is deleted. The copy of the `models` and `types` sections is taken
+    from the live tickets.json before the install strips them, so it runs
+    before the files are written."""
+    archive = home / ARCHIVE_DIR
+    live = read_regular(home / ".coordinator/tickets.json")
+    if live is None:
+        return []
+    config = json.loads(live[0])
+    sections = {k: config[k] for k in OLD_LIST_SECTIONS if k in config}
+    moved = []
+    if sections:
+        atomic_write(archive / ARCHIVED_LISTS_FILE, (json.dumps(sections, indent=2) + "\n").encode(), 0o644)
+        moved.append(archive / ARCHIVED_LISTS_FILE)
+    for path in old_list_files(home):
+        target = archive / path.name
+        if target.exists():
+            raise RuntimeError(f"{target} already exists, so {path} was not archived")
+        archive.mkdir(parents=True, exist_ok=True)
+        path.rename(target)
+        moved.append(target)
+    if moved:
+        atomic_write(archive / "README.md", ARCHIVE_README.encode(), 0o644)
+    return moved
+
+
+def checkout_pi_routes(checkout: Path) -> list[str]:
+    with mock.patch.dict(os.environ, {"COORDINATOR_MODELS": str(checkout / "coordinator/models.json")}):
+        return models.pi_routes()
 
 
 def coordinator_dir(home: Path, override: str | None = None) -> Path:
@@ -611,6 +736,17 @@ def changes(
         (target, src.read_bytes(), mode) for src, target, mode in plan(checkout, home)
     ]
     wanted += [(target, data, 0o644) for data, target in render_plists(checkout, home)]
+    router = home / TASK_ROUTER
+    live_router = read_regular(router)
+    if live_router is not None:
+        text = task_router_text(live_router[0].decode(), checkout_pi_routes(checkout))
+        wanted.append((router, text.encode(), stat.S_IMODE(live_router[1].st_mode)))
+    tickets = home / ".coordinator/tickets.json"
+    live_tickets = read_regular(tickets)
+    if live_tickets is not None:
+        stripped = without_old_lists(live_tickets[0])
+        if stripped is not None:
+            wanted.append((tickets, stripped, stat.S_IMODE(live_tickets[1].st_mode)))
     coordinator = coordinator or coordinator_dir(home)
     readme = checkout.joinpath("coordinator", *OVERNIGHT_README)
     if readme.is_file() and coordinator.is_dir():
@@ -797,6 +933,7 @@ def install(
                 "would_write": [str(t) for t, _, _ in pending],
                 "kept_local": [str(t) for t in kept],
                 "would_retire": [str(path) for path in retired_plists(home)],
+                "would_archive": [str(path) for path in old_list_files(home)],
                 "would_reload": [
                     label or str(target)
                     for label, target in changed_launchd_jobs(pending)
@@ -811,6 +948,8 @@ def install(
         return
     for note in retire_jobs(home):
         print(note)
+    for path in archive_model_lists(home):
+        print(f"Archived model list: {path}")
     created, _refused = ensure_log_dirs(log_dirs(render_plists(checkout, home)), home)
     for directory in created:
         print(f"Created log directory: {directory}")

@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -43,6 +44,22 @@ def load_ticket():
     return module
 
 
+@contextlib.contextmanager
+def fixture_models():
+    """The one model list from the checkout, with no blocked provider.
+
+    The evals forbid live files, so the list and the blocked state are read
+    once here and the module answers from them."""
+    seed = ROOT.parent / "models.json"
+    env = {"COORDINATOR_MODELS": str(seed)} if seed.is_file() else {}
+    with patch.dict(os.environ, env):
+        import lane_driver as lane
+        lists = lane.model_list.load()
+        with patch.object(lane.model_list, "entries", side_effect=lambda name: lists[name]), \
+             patch.object(lane.model_list, "blocked_identities", return_value=set()):
+            yield
+
+
 def exact(actual, expected):
     if actual != expected:
         raise AssertionError(f"expected {expected!r}, got {actual!r}")
@@ -56,7 +73,8 @@ def start_routing():
              "digitized/Concerning", "fixture/sixth"]
     board = json.loads(json.dumps([
         dict(repo=repo, number=n, key=f"F-{n}", stage=stage, problems=problems,
-             priority=2, title="bot", builderAlias="implementation", body="fixture", url="fixture")
+             priority=2, title="bot", builderAlias="implementation",
+             builderSelection={"model": "fixture-implementation"}, body="fixture", url="fixture")
         for repo in repos for n, stage, problems in
         [(1, "backlog", []), (2, "todo", ["blocked"]), (3, "todo", []), (4, "todo", [])]
     ]))
@@ -75,8 +93,7 @@ def start_routing():
     exact(actions, [cmd for repo in repos for cmd in
                     (["ticket", "start", f"{repo}#3", "--dry-run"],
                      ["ticket", "start", f"{repo}#3"])])
-    cfg = {"repos": {repo: {"projectId": repo} for repo in repos},
-           "models": {"implementation": {"selection": {"model": "fixture-implementation"}}}}
+    cfg = {"repos": {repo: {"projectId": repo} for repo in repos}}
     with patch.object(ticket, "default_branch", return_value="main"), \
          patch.object(ticket, "brief_reviewer", return_value="astra"):
         for item in board:
@@ -85,17 +102,15 @@ def start_routing():
             _, _, payload = ticket.build_start(cfg, item, 1, {})
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             exact(payload["modelSelection"], {"model": "fixture-implementation"})
-    cfg["types"] = {"feature": "implementation", "chore": "maintenance", "review": "gate"}
-    cfg["models"].update({"maintenance": {"selection": {"model": "fixture-maintenance"}, "vendor": "builder"},
-                          "gate": {"selection": {"model": "fixture-review"}, "vendor": "reviewer"}})
-    cfg["models"]["implementation"]["vendor"] = "builder"
-    for kind, expected in [("feature", "fixture-implementation"), ("chore", "fixture-maintenance")]:
-        item = dict(board[3], type=kind, builder=None, reviewer=None)
-        item["builderAlias"], item["reviewerAlias"] = ticket.resolve_models(cfg, item)
+    for kind, label, expected in [("standard", None, "minimax/MiniMax-M3.1-Flash"), ("risky", None, "minimax/MiniMax-M3.1-Flash"),
+                                  ("chore", "glm", "zai/glm-5.3")]:
+        item = dict(board[3], type=kind, builder=label, reviewer=None)
+        builder, reviewer = ticket.resolve_models(cfg, item)
+        item.update(builderAlias=builder["id"], reviewerAlias=reviewer["id"], builderSelection=builder["selection"])
         commands = []
         def launch(command, timeout):
             payload = json.loads(command[2])
-            exact(payload["modelSelection"], {"model": expected})
+            exact(payload["modelSelection"]["model"], expected)
             exact(payload["workspaceStrategy"], {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
             commands.append(command)
             return subprocess.CompletedProcess(command, 0, "fixture receipt", "")
@@ -232,7 +247,7 @@ def dead_run_recovery():
         lane.recover_dead_runs(ledger)
         lane.recover_dead_runs(ledger)
     exact(len(launches), 1)
-    exact(launches[0]["modelSelection"], lane.ASTRA)
+    exact(launches[0]["modelSelection"], lane.model_list.first_available("build")["selection"])
     exact(launches[0]["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/fixture-worktree"})
     exact(ledger[f"dead-relaunch-thread:fixture-dead"], "fixture-relaunch")
     exact(settled, ["fixture-dead", "fixture-dead"])
@@ -330,14 +345,14 @@ def gate_pipeline():
     head = "a" * 40
     failures = []
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["astra"]),
+        ("checked-head", repo, "absent", "", {}, ["openai-api"]),
         ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
         ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
-        ("no-verdict", repo, "none", "interrupted", {}, ["astra"]),
+        ("no-verdict", repo, "none", "interrupted", {}, ["openai-api"]),
         ("second-no-verdict", repo, "none", "interrupted",
          {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"]),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["codex"]),
         ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
         ("ascend", "ascend/fixture", "absent", "", {}, []),
     ]
@@ -353,6 +368,8 @@ def gate_pipeline():
             if cmd == [lane.COORDQ, "list"]:
                 return ""
             if cmd[:2] == ["ticket", "gate"]:
+                if "--print-model" in cmd:
+                    return json.dumps(lane.model_list.reviewers(["minimax"]))
                 return f"Gate exact head {head}"
             if cmd[:2] == ["ticket", "close"]:
                 actions.append("provides")
@@ -378,8 +395,7 @@ def gate_pipeline():
                     actions.append("builder")
                 else:
                     exact(head in payload["message"], True)
-                    model = payload["modelSelection"]["model"]
-                    actions.append("astra" if model == "gpt-6-astra" else "opus" if "opus" in model else model)
+                    actions.append(payload["modelSelection"]["instanceId"])
                 return "fixture-receipt"
             raise AssertionError(f"unexpected command: {cmd}")
 
@@ -1412,9 +1428,9 @@ def script_results():
 def consolidation_guard():
     import lane_driver as lane
     ticket = load_ticket()
-    cfg = {"types": {"review": "gate"}}
+    cfg = {}
     item = {"body": "Implement the scoped fixture. Report leftover work in the PR.",
-            "url": "https://fixture/issue/1"}
+            "url": "https://fixture/issue/1", "reviewerAlias": "astra-api"}
     builder = ticket.assemble_brief(cfg, item, "fixture-run", {"comments": []})
     gate = ticket.gate_brief("fixture/repo", {"key": "FIX"}, 1, 2,
                              "a" * 40, "main", False, False)
@@ -1480,7 +1496,7 @@ def send_integrity():
                     exact(payload, {"threadId": "old", "message": "brief"})
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
-                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
+                    exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.model_list.first_available("fix")["selection"],
                           "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief", "clientRequestId": key})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
@@ -2691,7 +2707,8 @@ def main():
         print("FAIL negative-control: equality accepted wrong actions")
         return 1
     with patch.object(subprocess, "run", side_effect=AssertionError("live subprocess forbidden")), \
-         patch.object(subprocess, "Popen", side_effect=AssertionError("live process forbidden")):
+         patch.object(subprocess, "Popen", side_effect=AssertionError("live process forbidden")), \
+         fixture_models():
         for name, evaluate in EVALS.items():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
