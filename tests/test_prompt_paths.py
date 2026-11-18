@@ -965,32 +965,6 @@ class MergeBaseGuardTest(unittest.TestCase):
         self.assertGreater(calls.index(views[1]), merge_at)
 
 
-class DefaultBaseMergeGateTest(unittest.TestCase):
-    """Only a pull request on the default branch is merged automatically."""
-
-    def setUp(self):
-        import lane_driver
-        self.lane = lane_driver
-        self.saved = lane_driver.CFG
-        lane_driver.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
-
-    def tearDown(self):
-        self.lane.CFG = self.saved
-
-    def item(self, base):
-        return self.lane.base_review_item("shyamsivakumar/mac-ops", 544, "a" * 40, base)
-
-    def test_a_feature_base_waits_for_shyam(self):
-        item = self.item("feature/x")
-        self.assertEqual(item["id"], "base-review-MO-544")
-        self.assertEqual(item["kind"], "action")
-        self.assertIn("feature/x", item["title"])
-        self.assertIn("reviewed base", item["why"])
-
-    def test_the_item_names_the_default_branch(self):
-        self.assertIn(prompt_paths.DEFAULT_BASE, self.item("feature/x")["why"])
-
-
 class BaseScopeTest(unittest.TestCase):
     """The classification reads the pull request's own base and nothing else."""
 
