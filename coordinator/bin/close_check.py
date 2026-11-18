@@ -49,7 +49,12 @@ SKIPPED = "skipped"
 # the ticket's statement, so it is the ticket that allows the change. The
 # clause keeps its restriction: it lets a test change when the test pins
 # what the change pins, never when the test is about something else.
-TEST_CLAUSE = re.compile(r"(?i)\bexisting tests?\b.{0,160}?\bmay change\b")
+# A ticket says whether its existing tests may change. Its clause keeps its
+# restriction: a test may change as far as this needs, that is when the
+# ticket names that test or when the test is the test of a file the change
+# touches. No string ties a test to a change: a pull request can write the
+# same string into an unrelated test and into a file it changed, and that
+# proves nothing.
 # A distinctive literal is a long quoted value with punctuation in it: a
 # model id, a path, a constant name. It is what two files share when one
 # pins what the other sets.
@@ -209,99 +214,6 @@ def token_matches(path, token):
     return base == token
 
 
-def distinctive_literals(text):
-    """The distinctive values a file carries: model ids, paths, constants."""
-    values = set()
-    for match in DISTINCTIVE.finditer(text or ""):
-        value = match.group(1)
-        if any(char in value for char in ".-_/"):
-            values.add(value)
-    return values
-
-
-def file_text(repo, path, ref, cache=None):
-    """The text of one file at a ref, read through the proof file reader."""
-    if cache is not None and path in cache:
-        return cache[path]
-    state, text = proof_file.fetch(repo, path, ref)
-    value = text if state == proof_file.FOUND else None
-    if cache is not None:
-        cache[path] = value
-    return value
-
-
-DIFF_FILE = re.compile(r"^\+\+\+ b/(.+?)\s*$")
-
-
-def introduced_literals(repo, pr):
-    """The distinctive values each file's added lines carry in this change.
-
-    A value a file already carried is not the value the change set, so it
-    cannot tie a test to the change: a pull request that copies an old
-    literal out of an in-scope source file into a test of something else
-    would otherwise have the copy authorize the test change. Only the
-    added lines of the pull request's own diff are the change's values.
-
-    A diff that cannot be read answers no values at all, so no test is
-    tied: the tie is an exception to the scope item, and an unread diff
-    earns neither.
-    """
-    try:
-        result = subprocess.run(["gh", "pr", "diff", str(pr), "-R", repo],
-                                capture_output=True, text=True, timeout=GH_TIMEOUT)
-    except (subprocess.TimeoutExpired, OSError):
-        return {}
-    if result.returncode != 0:
-        return {}
-    added = {}
-    path = None
-    for line in result.stdout.splitlines():
-        if line.startswith("+++ "):
-            match = DIFF_FILE.match(line)
-            path = match.group(1) if match else None
-            if path:
-                added.setdefault(path, [])
-            continue
-        if path and line.startswith("+"):
-            added[path].append(line[1:])
-    values = {}
-    for path, lines in added.items():
-        found = set()
-        for line in lines:
-            found |= distinctive_literals(line)
-        values[path] = found
-    return values
-
-
-def test_ties(repo, ref, path, named, cache=None, touched=None):
-    """The named source files whose values, set by this change, a test pins.
-
-    A test that pins what the change sets is part of the change: the two
-    files share a distinctive value. A test of something else shares
-    none, so a ticket that says its existing tests may change never
-    reaches it. Only files the ticket names can carry the value: a
-    pull request cannot hand its own evidence the authority to tie.
-
-    `touched` maps a file to the values its added lines carry, and when
-    it is given only those values count: a value the file already
-    carried is not what the change set, so a test that copies it pins
-    nothing.
-    """
-    literals = distinctive_literals(file_text(repo, path, ref, cache))
-    if not literals:
-        return []
-    tied = []
-    for other in named:
-        if other == path:
-            continue
-        source = distinctive_literals(file_text(repo, other, ref, cache))
-        if touched is not None:
-            source &= touched.get(other, set())
-        if literals & source:
-            tied.append(other)
-    return tied
-
-
 def names_a_file(tokens):
     """Does the ticket name a file, or a glob that can hold one?
 
@@ -319,7 +231,7 @@ def names_a_file(tokens):
     return False
 
 
-def item_scope(body, files, ties=None):
+def item_scope(body, files):
     """Item 1: the diff stays inside the ticket's stated scope.
 
     The ticket is the only authority for the scope. A pull request cannot
@@ -339,13 +251,9 @@ def item_scope(body, files, ties=None):
         return {"item": "scope", "status": FAIL, "required": True,
                 "detail": ("the ticket names no file in this repository, so the scope cannot be "
                            "judged: the ticket has to name the files it changes")}
-    ties = ties or {}
-    clause = bool(TEST_CLAUSE.search(body or ""))
     outside = []
     for path in files:
         ok, _ = in_scope(path, tokens, files)
-        if not ok and clause and ties.get(path):
-            ok = True
         if not ok:
             outside.append(path)
     if outside:
@@ -424,10 +332,10 @@ def item_cost(body, report_state, detail=""):
             "detail": "the cost report exists, but the pull request body carries no cost note"}
 
 
-def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail="", ties=None):
+def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail=""):
     """The four items, in the order the checklist reads them."""
     return [
-        item_scope(body, files, ties),
+        item_scope(body, files),
         item_proof(proof_state, proof_path),
         item_checks(proof_state, proof_text),
         item_cost(pr_body, report_state, report_detail),
@@ -535,19 +443,8 @@ def run_check(repo, pr, issue=None, reader=None):
         found, _ = reader(COST_REPORT, merge)
         report = {"found": "exists", "missing": "absent"}.get(found, "unknown")
         report_detail = ""
-    ties = {}
-    if TEST_CLAUSE.search(body or ""):
-        tokens = scope_tokens(body)
-        named = named_sources(files, tokens)
-        touched = introduced_literals(repo, pr)
-        cache = {}
-        for path in files:
-            if path.startswith("tests/") and not in_scope(path, tokens, files)[0]:
-                tied = test_ties(repo, merge, path, named, cache, touched)
-                if tied:
-                    ties[path] = tied
     items = checklist(body, pull.get("body") or "", files, state, text, proof_path, report,
-                      report_detail, ties)
+                      report_detail)
     return {"repo": repo, "pr": pr, "issue": number, "merge": merge, "files": files, "items": items}
 
 

@@ -86,48 +86,11 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("tests/test_alarm_panel.py", item["detail"])
 
-    def test_a_test_that_pins_what_the_change_pins_is_in_scope(self):
-        """A test that shares a value with the change is part of the change."""
-        check = close_check()
-        ticket = ("The change is in close_check.py. Existing tests that pin it may change "
-                  "only as far as this needs.")
-        ties = {"tests/test_alarm_panel.py": ["coordinator/bin/close_check.py"]}
-        item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
-                                         "tests/test_alarm_panel.py"], ties)
-        self.assertEqual(item["status"], check.PASS)
-
-    def test_a_tie_without_the_ticket_clause_is_not_in_scope(self):
-        check = close_check()
-        ties = {"tests/test_alarm_panel.py": ["coordinator/bin/close_check.py"]}
-        item = check.item_scope("The change is in close_check.py.",
-                                ["coordinator/bin/close_check.py",
-                                 "tests/test_alarm_panel.py"], ties)
-        self.assertEqual(item["status"], check.FAIL)
-
     def test_a_ticket_that_names_the_test_puts_it_in_scope(self):
         check = close_check()
         item = check.item_scope("The change is in close_check.py and tests/test_alarm_panel.py.",
                                 ["coordinator/bin/close_check.py", "tests/test_alarm_panel.py"])
         self.assertEqual(item["status"], check.PASS)
-
-    def test_the_distinctive_values_of_a_file(self):
-        check = close_check()
-        values = check.distinctive_literals('GATE = {"model": "gpt-6.2-astra"}\nname = "x"')
-        self.assertIn("gpt-6.2-astra", values)
-        self.assertNotIn("x", values)
-
-    def test_a_test_ties_to_the_file_it_pins(self):
-        check = close_check()
-        texts = {
-            "tests/test_gate.py": 'GATE = {"model": "gpt-6.2-astra"}',
-            "coordinator/bin/gate.py": 'CHAIN = ["gpt-6.2-astra", "claude-opus-5-5"]',
-            "coordinator/bin/other.py": 'NAME = "something-else"',
-        }
-        with patch.object(check.proof_file, "fetch",
-                          side_effect=lambda repo, path, ref: ("found", texts.get(path))):
-            tied = check.test_ties("a/b", "a" * 40, "tests/test_gate.py",
-                                   ["coordinator/bin/gate.py", "coordinator/bin/other.py"])
-        self.assertEqual(tied, ["coordinator/bin/gate.py"])
 
     def test_a_file_the_ticket_excludes_is_out_of_scope(self):
         """An exclusion is not permission."""
@@ -154,20 +117,6 @@ class ScopeTest(unittest.TestCase):
         ok, _ = check.in_scope("tests/test_alarm_panel.py", {"close_check.py"},
                                ["coordinator/bin/close_check.py", "evidence/alarm_panel.md"])
         self.assertFalse(ok)
-
-    def test_evidence_cannot_carry_the_value_that_ties_a_test(self):
-        """A copied literal in a changed evidence file ties nothing."""
-        check = close_check()
-        texts = {
-            "tests/test_alarm_panel.py": 'PATH = "coordinator/overnight/alarms.py"',
-            "coordinator/bin/close_check.py": 'REPORT = "evidence/MO-524/check-proof.md"',
-            "evidence/alarm_panel.md": 'copied coordinator/overnight/alarms.py',
-        }
-        named = ["coordinator/bin/close_check.py", "evidence/alarm_panel.md"]
-        with patch.object(check.proof_file, "fetch",
-                          side_effect=lambda repo, path, ref: ("found", texts.get(path))):
-            tied = check.test_ties("a/b", "a" * 40, "tests/test_alarm_panel.py", named)
-        self.assertEqual(tied, [])
 
     def test_a_test_with_a_similar_name_is_out_of_scope(self):
         """A shared prefix is not a relationship."""
@@ -207,37 +156,6 @@ class ScopeTest(unittest.TestCase):
                                          "coordinator/overnight/lane_driver.py"])
         self.assertEqual(item["status"], check.PASS)
 
-    def test_a_copy_of_a_value_the_change_never_set_ties_nothing(self):
-        """A literal the file already carried is not the change's value.
-
-        The unrelated test copies a path literal the in-scope source file
-        already had. The change never set that value, so the copy does not
-        tie the test to the source file.
-        """
-        check = close_check()
-        texts = {
-            "tests/test_alarm_panel.py": 'PATH = "coordinator/overnight/alarms.py"',
-            "coordinator/bin/close_check.py": 'PATH = "coordinator/overnight/alarms.py"',
-        }
-        with patch.object(check.proof_file, "fetch",
-                          side_effect=lambda repo, path, ref: ("found", texts.get(path))):
-            tied = check.test_ties("a/b", "a" * 40, "tests/test_alarm_panel.py",
-                                   ["coordinator/bin/close_check.py"], None, {})
-        self.assertEqual(tied, [])
-
-    def test_a_value_the_change_set_ties_the_test(self):
-        check = close_check()
-        texts = {
-            "tests/test_alarm_panel.py": 'PATH = "coordinator/overnight/alarms.py"',
-            "coordinator/bin/close_check.py": 'PATH = "coordinator/overnight/alarms.py"',
-        }
-        touched = {"coordinator/bin/close_check.py": {"coordinator/overnight/alarms.py"}}
-        with patch.object(check.proof_file, "fetch",
-                          side_effect=lambda repo, path, ref: ("found", texts.get(path))):
-            tied = check.test_ties("a/b", "a" * 40, "tests/test_alarm_panel.py",
-                                   ["coordinator/bin/close_check.py"], None, touched)
-        self.assertEqual(tied, ["coordinator/bin/close_check.py"])
-
     def test_a_prohibition_phrase_excludes_only_what_it_forbids(self):
         """A phrase that forbids no file excludes no file.
 
@@ -257,6 +175,22 @@ class ScopeTest(unittest.TestCase):
                                          "coordinator/bin/gate_policy.py"])
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("coordinator/bin/gate_policy.py", item["detail"])
+
+    def test_a_copied_string_does_not_tie_a_test(self):
+        """No string ties a test to a change.
+
+        A pull request can add a value to a file the ticket allows and
+        the same value to an unrelated test. The test is still out of
+        scope: a test changes when the ticket names it, or when it is the
+        test of a file the change touches.
+        """
+        check = close_check()
+        ticket = ("The change is in close_check.py. Existing tests that pin it may change "
+                  "only as far as this needs.")
+        item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
+                                         "tests/test_alarm_panel.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("tests/test_alarm_panel.py", item["detail"])
 
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
@@ -318,29 +252,6 @@ class ScopeTest(unittest.TestCase):
 class DiffValuesTest(unittest.TestCase):
     """The values a change sets come from its own added lines."""
 
-    def test_the_added_lines_carry_the_values(self):
-        check = close_check()
-        diff = ("diff --git a/coordinator/bin/gate.py b/coordinator/bin/gate.py\n"
-                "--- a/coordinator/bin/gate.py\n"
-                "+++ b/coordinator/bin/gate.py\n"
-                "@@ -1 +1,3 @@\n"
-                '-CHAIN = ["gpt-6.1-old"]\n'
-                '+CHAIN = ["gpt-6.2-astra"]\n'
-                '+NAME = "set-by-this-change"\n')
-        with patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=diff,
-                                                                  stderr="")):
-            values = check.introduced_literals("a/b", 1)
-        self.assertEqual(values, {"coordinator/bin/gate.py":
-                                  {"gpt-6.2-astra", "set-by-this-change"}})
-
-    def test_a_diff_that_cannot_be_read_answers_no_values(self):
-        check = close_check()
-        with patch("subprocess.run", return_value=SimpleNamespace(returncode=1, stdout="",
-                                                                  stderr="boom")):
-            self.assertEqual(check.introduced_literals("a/b", 1), {})
-
-
-class ProofTest(unittest.TestCase):
     def test_the_proof_rows_carry_the_result(self):
         check = close_check()
         text = ("| Check | Command | Result | Detail |\n"
