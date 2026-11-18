@@ -611,6 +611,9 @@ def run(argv, timeout=60, stdin=None, limit=None):
     run_argv = argv + ["--include"] if count_headers else argv
     result = _launch()(run_argv, input=stdin, capture_output=True, text=True,
                        timeout=timeout)
+    # A caller's launcher need not be a real CompletedProcess, so every part
+    # is read with a default.
+    result.stdout = getattr(result, "stdout", "") or ""
     body = result.stdout
     if count_headers:
         body = strip_headers(result.stdout)
@@ -620,4 +623,5 @@ def run(argv, timeout=60, stdin=None, limit=None):
     record(argv, count)
     if result.returncode == 0:
         store(argv, body)
-    return subprocess.CompletedProcess(argv, result.returncode, body, result.stderr)
+    return subprocess.CompletedProcess(argv, result.returncode, body,
+                                       getattr(result, "stderr", "") or "")
