@@ -1170,16 +1170,26 @@ def board_integrity():
             issue(3, "bad key", ["todo"]), issue(4, "MO-4 duplicate", ["todo"]),
             issue(5, "MO-4 duplicate", ["todo"]), issue(6, "MO-6 started", ["todo"]),
             issue(7, "MO-7 parked", ["backlog"]), issue(8, "MO-8 blocked", ["todo"]),
-            issue(9, "MO-9 merged", ["todo"]), issue(10, "MO-10 held", ["todo", "hold"])]
+            issue(9, "MO-9 merged", ["todo"]), issue(10, "MO-10 held", ["todo", "hold"]),
+            issue(12, "MO-12 case blocked", ["todo"]), issue(13, "MO-13 case parked", ["backlog"]),
+            issue(14, "MO-14 case started", ["started"])]
     rows[7]["blockedBy"] = {"totalCount": 1, "nodes": [{"number": 7}]}
-    snapshot = {"tickets": [{"repo": "fixture/repo", "number": 6, "stage": "started"}],
+    # GitHub keeps the spelling a label was created with, so the audit has to
+    # read `Stage:Backlog` as parking and `Stage:Started` as the started stage
+    # (mac-ops #533).
+    rows[10]["blockedBy"] = {"totalCount": 1, "nodes": [{"number": 13}]}
+    rows[11]["labels"] = [{"name": "Stage:Backlog"}]
+    rows[12]["labels"] = [{"name": "Stage:Started"}]
+    snapshot = {"tickets": [{"repo": "fixture/repo", "number": 6, "stage": "started"},
+                             {"repo": "fixture/repo", "number": 14, "stage": "started"}],
                 "repos": {"fixture/repo": {"key": "MO", "issues": rows, "prs": [
-                    {"number": 10, "state": "OPEN", "body": "Refs #7"},
+                    {"number": 10, "state": "OPEN", "body": "Refs #7\nRefs #13"},
                     {"number": 11, "state": "MERGED", "body": "Refs #9"}]}}}
     expected = sorted(["fixture/repo#1: expected exactly one stage label, found 0",
         "fixture/repo#2: expected exactly one stage label, found 2", "fixture/repo#3: malformed key",
         "fixture/repo: duplicate key MO-4: [4, 5]", "fixture/repo#6: started lost stage:started",
         "fixture/repo#8: blocked by parked #7 with open PR #10",
+        "fixture/repo#12: blocked by parked #13 with open PR #10",
         "fixture/repo#9: merged PR #11 issue still open"])
     exact(audit.defects(snapshot), expected)
     with patch("sys.stdin", io.StringIO(json.dumps(snapshot))), contextlib.redirect_stdout(io.StringIO()) as output:

@@ -223,6 +223,16 @@ class StartTest(unittest.TestCase):
         self.assertEqual(github.stages(), ["stage:started"])
         self.assertEqual(github.edits, [])
 
+    def test_start_refuses_a_parked_ticket(self):
+        github = FakeGitHub(["stage:backlog", "type:standard", "priority:1"])
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as caught:
+                start(github)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("refused: parked (stage:backlog)", errors.getvalue())
+        self.assertEqual(github.stages(), ["stage:backlog"])
+        self.assertEqual(github.edits, [])
+
 
 class DeliverTest(unittest.TestCase):
     def test_deliver_gives_a_stageless_ticket_its_stage_back(self):
@@ -231,9 +241,31 @@ class DeliverTest(unittest.TestCase):
         self.assertEqual(github.stages(), ["stage:started"])
 
     def test_deliver_leaves_exactly_one_stage_label(self):
-        github = FakeGitHub(["stage:todo", "stage:backlog", "type:standard"], pulls=[20])
+        github = FakeGitHub(["stage:todo", "stage:started", "type:standard"], pulls=[20])
         deliver(github)
         self.assertEqual(github.stages(), ["stage:started"])
+
+    def test_deliver_refuses_a_ticket_parked_before_delivery(self):
+        # Shyam parks a ticket to stop the lane working on it (mac-ops #533),
+        # and delivery must not take that parking off.
+        github = FakeGitHub(["stage:backlog", "type:standard"], pulls=[20])
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as caught:
+                deliver(github)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("refused: parked (stage:backlog)", errors.getvalue())
+        self.assertEqual(github.labels, ["stage:backlog", "type:standard"])
+        self.assertEqual(github.edits, [])
+
+    def test_deliver_refuses_a_ticket_parked_in_another_case(self):
+        github = FakeGitHub(["Stage:Backlog", "type:standard"], pulls=[20])
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as caught:
+                deliver(github)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("refused: parked (stage:backlog)", errors.getvalue())
+        self.assertEqual(github.labels, ["Stage:Backlog", "type:standard"])
+        self.assertEqual(github.edits, [])
 
     def test_deliver_does_not_churn_a_stage_label_written_in_another_case(self):
         # GitHub matches label names without regard to case, and a ticket that

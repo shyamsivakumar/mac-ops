@@ -22,6 +22,9 @@ STARTED_STAGE = "started"
 # it is a family of its own: a hold says the ticket waits for Shyam, and it
 # never counts as the one stage label a ticket needs.
 HOLD_LABEL = "stage:hold"
+# The labels that park a ticket. Shyam parks a ticket to stop the lane working
+# on it, so no lane pass may move a parked ticket to another stage.
+PARKED_LABELS = frozenset({f"{STAGE_PREFIX}backlog", HOLD_LABEL})
 HOLD_FAMILY = "hold"
 FAMILIES = ("stage", HOLD_FAMILY, "priority", "type", "builder", "reviewer")
 FAMILY_COLORS = {"stage": "1d76db", HOLD_FAMILY: "b60205", "priority": "d93f0b", "type": "0e8a16", "builder": "5319e7", "reviewer": "fbca04"}
@@ -306,6 +309,16 @@ def stage_labels(names):
             if name.lower().startswith(STAGE_PREFIX) and name.lower() != HOLD_LABEL]
 
 
+def parked_label(names):
+    """The parking label a ticket carries, or None.
+
+    Label names are compared in lower case, the way GitHub matches them, so a
+    ticket written `Stage:Backlog` is as parked as one written `stage:backlog`.
+    """
+    parked = sorted({name.lower() for name in names} & PARKED_LABELS)
+    return parked[0] if parked else None
+
+
 def ensure_label(repo, name, color):
     """Create one label in a repository that does not have it yet."""
     existing = {l["name"].lower() for l in
@@ -335,7 +348,14 @@ def move_stage(repo, number, stage):
     """
     target = f"{STAGE_PREFIX}{stage}"
     labels = gh_json(["issue", "view", str(number), "-R", repo, "--json", "labels"])
-    before = stage_labels([label["name"] for label in labels["labels"]])
+    names = [label["name"] for label in labels["labels"]]
+    # The labels are read again here, after the caller decided to move the
+    # stage. A ticket Shyam parked between those two reads is parked now, and
+    # moving it would take the parking off, so it keeps the labels it has.
+    parking = parked_label(names)
+    if parking:
+        raise Refuse(f"parked ({parking}); only Shyam clears it")
+    before = stage_labels(names)
     # Label names are compared case-insensitively, the way GitHub matches them
     # and the way `stage_labels` recognizes the family. A ticket whose label is
     # written `Stage:Started` already holds the target stage, so it is not
@@ -1154,6 +1174,11 @@ def validate_start(cfg, repo, issue, check_text=True):
     # else it is missing.
     if t["groups"][HOLD_FAMILY]:
         raise Refuse(f"on hold ({HOLD_LABEL}); only Shyam clears it")
+    # A parked ticket is Shyam's block too: the same label the lane reads as a
+    # parking must stop a start, so a parked ticket is never moved to started.
+    parking = parked_label([label["name"] for label in issue["labels"]])
+    if parking:
+        raise Refuse(f"parked ({parking}); only Shyam clears it")
     if t["state"] != "OPEN":
         suffix = ""
         if check_text:
@@ -1437,6 +1462,8 @@ def cmd_start(a):
             time.sleep(2)
     try:
         move_stage(repo, n, STARTED_STAGE)
+    except Refuse as e:
+        die(f"started, but the ticket was {e} before the stage label moved, so it keeps the stage it had")
     except GhError as e:
         if isinstance(e, StageMoveError) and not e.restored:
             die(f"started, but the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
@@ -1475,6 +1502,8 @@ def cmd_deliver(a):
         return
     try:
         moved = move_stage(repo, n, STARTED_STAGE)
+    except Refuse as e:
+        die(f"refused: {e}", 2)
     except GhError as e:
         if isinstance(e, StageMoveError) and not e.restored:
             die(f"the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
