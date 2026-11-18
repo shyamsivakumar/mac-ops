@@ -422,7 +422,7 @@ the label of the tick, which the command prints with the stall it reports.
 }
 ```
 
-`evidence/MO-1075-520/tonight.json` is a fixture of a real night: the tick
+`evidence/MO-520/tonight.json` is a fixture of a real night: the tick
 times are the shift log's own lane pass lines and the events are the pull
 requests that merged and the tickets that closed. `proof.py` next to it
 replays that night through the real command and shows that a tick with a
@@ -1445,9 +1445,13 @@ across the read, the change and the replace. It is not the mute lock: a
 mute storage that cannot be locked must not leave the board unprotected,
 or the watchdog and the stall writer read the same board and one alarm
 disappears. Each publisher also replaces the board from a temporary file
-of its own. A board lock that cannot be taken stops the publication: two
-publishers writing the same board would erase one another's alarm, so the
-alarm is not published and the fault is said out loud.
+of its own. A board lock that cannot be taken does not stop the
+publication: the write falls back to a compare-and-swap, which re-reads
+the board and replaces it only when nobody else wrote in between, and the
+board is read back so a write another publisher replaced is not counted as
+delivered. So an unacknowledged alarm is still delivered when the lock file
+cannot be opened, and two publishers still cannot erase one another's
+alarm. A publication that cannot be made safe after a few tries says so.
 
 An alarm on the board always has a key. The key is written before the alarm
 is published, so the answer Shyam gives it has something to acknowledge. A
