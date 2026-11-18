@@ -1481,7 +1481,7 @@ def send_integrity():
                     exact(cmd[3:], ["--tool", "t3_thread_send", "--priority", "800", "--title", "fix"])
                 else:
                     exact(payload, {"projectId": "fixture", "title": "fix", "modelSelection": lane.SOL,
-                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief"})
+                          "runtimeMode": "full-access", "workspaceStrategy": {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True}, "message": "brief", "clientRequestId": key})
                     exact(cmd[3:], ["--priority", "800"])
                 actions.append("send" if live else "fresh")
                 if failure == "error":
