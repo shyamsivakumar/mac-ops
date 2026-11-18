@@ -593,13 +593,25 @@ def api_json(endpoint):
 def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths a pull request changed.
 
-    An unreadable or short list is retried, then UNKNOWN: the lane defers a
-    passing pull request it cannot read instead of merging it blind. The
-    changed-file count the completeness check needs is read from the pull
-    request itself when the caller does not already hold it, and a list that
-    cannot be completed falls back to the merge base's and the head's trees,
-    so a big pull request of ordinary code still merges.
+    The merge base and the head are pinned by the caller, so their trees are
+    read first: a file list is read by pull-request number and describes
+    whatever head GitHub holds at that moment, so a code-only revision could
+    clear a prompt-changing head that is restored before the merge. An
+    unreadable tree diff is retried, then UNKNOWN: the lane defers a passing
+    pull request it cannot read instead of merging it blind.
+
+    A caller with no pinned pair has only the file list, and a list that is
+    unreadable or short is UNKNOWN.
     """
+    if base and head:
+        for _ in range(max(1, attempts)):
+            try:
+                paths = prompt_paths.tree_diff(api_json, repo, base, head)
+            except (RuntimeError, ValueError, subprocess.SubprocessError):
+                continue
+            if paths is not None:
+                return prompt_paths.prompt_scan(paths)
+        return prompt_paths.UNKNOWN
     try:
         count = changed_files if isinstance(changed_files, int) else pr_changed_count(repo, number)
     except (RuntimeError, ValueError, subprocess.SubprocessError):
@@ -613,13 +625,6 @@ def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts
         state = prompt_paths.prompt_scan(paths)
         if state != prompt_paths.UNKNOWN:
             return state
-    if base and head:
-        try:
-            paths = prompt_paths.tree_diff(api_json, repo, base, head)
-        except (RuntimeError, ValueError, subprocess.SubprocessError):
-            paths = None
-        if paths is not None:
-            return prompt_paths.prompt_scan(paths)
     return prompt_paths.UNKNOWN
 
 

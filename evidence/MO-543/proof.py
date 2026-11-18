@@ -54,6 +54,18 @@ def dry_run_brief(ticket, paths):
     import proof_file
     args = argparse.Namespace(ref="shyamsivakumar/mac-ops#544", print_brief=True, dry_run=False)
     out = io.StringIO()
+
+    def api_read(command):
+        """The pinned trees of the pull request, which now classify it."""
+        endpoint = command[-1]
+        if "/compare/" in endpoint:
+            return {"merge_base_commit": {"sha": "base"}}
+        if endpoint.endswith("/git/trees/base?recursive=1"):
+            return {"tree": [{"type": "blob", "path": path, "sha": "1"} for path in paths]}
+        if endpoint.endswith(f"/git/trees/{HEAD}?recursive=1"):
+            return {"tree": [{"type": "blob", "path": path, "sha": "2"} for path in paths]}
+        raise AssertionError(f"unexpected read {command}")
+
     with patch.object(ticket, "load_config", return_value={}), \
             patch.object(ticket, "repo_config", return_value={"key": "MO", "projectId": "fixture"}), \
             patch.object(ticket, "fetch_pull", return_value=pull), \
@@ -63,7 +75,7 @@ def dry_run_brief(ticket, paths):
             patch.object(ticket, "authed_login", return_value="shyamsivakumar"), \
             patch.object(ticket, "check_publisher", return_value=False), \
             patch.object(ticket, "ascend_repo", return_value=False), \
-            patch.object(ticket, "pull_files", return_value=paths), \
+            patch.object(ticket, "gh_json", side_effect=api_read), \
             patch.object(proof_file, "fetch", return_value=(proof_file.MISSING, None)), \
             redirect_stdout(out):
         ticket.cmd_gate(args)
@@ -378,6 +390,23 @@ def tree_fallback():
         code = coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 3001, "main", "head")
     grant("queue gatekeep: a 3,001-file code PR clears through the trees",
           code == prompt_paths.CLEAR, command)
+
+    def pinned_only(endpoint):
+        """The pinned trees, and a live file list that must never be read."""
+        if "/files" in endpoint:
+            raise AssertionError("a file list read by number describes a live head")
+        if "/compare/" in endpoint:
+            return [{"merge_base_commit": {"sha": "base"}}]
+        if endpoint.endswith("/git/trees/base?recursive=1"):
+            return [{"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}]
+        if endpoint.endswith("/git/trees/head?recursive=1"):
+            return [{"tree": [{"type": "blob", "path": "skills/x/SKILL.md", "sha": "2"}]}]
+        raise AssertionError(endpoint)
+
+    with patch.object(coordq, "gh_json", pinned_only):
+        pinned = coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1, "main", "head")
+    grant("queue gatekeep: the pinned head and base decide, never the live file list",
+          pinned == prompt_paths.HOLD, command)
 
     def gh_prompt(endpoint):
         if endpoint.endswith("/files?per_page=100"):

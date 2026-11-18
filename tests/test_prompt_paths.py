@@ -177,6 +177,44 @@ class PromptPathTest(unittest.TestCase):
         self.assertEqual(paths, ["AGENT-RULES.md", "a.py", "skills/x/SKILL.md"])
         self.assertEqual(prompt_paths.prompt_scan(paths), prompt_paths.HOLD)
 
+    def test_a_walk_spends_its_requests_on_the_changed_directories(self):
+        """Two truncated trees are walked in step, and equal subtrees are skipped.
+
+        A code-only pull request in a repository of 5,000 directories gives
+        the same subtree sha on both sides for every directory it did not
+        touch, so those cost no request at all.
+        """
+        reads = []
+
+        def fetch(endpoint):
+            reads.append(endpoint)
+            if "/compare/" in endpoint:
+                return {"merge_base_commit": {"sha": "base"}}
+            if endpoint.endswith("?recursive=1"):
+                return {"truncated": True, "tree": []}
+            if endpoint.endswith("/git/trees/base"):
+                return {"tree": [{"type": "tree", "path": "docs", "sha": "same-docs"},
+                                 {"type": "tree", "path": "vendor", "sha": "same-vendor"},
+                                 {"type": "tree", "path": "bin", "sha": "old-bin"}]}
+            if endpoint.endswith("/git/trees/head"):
+                return {"tree": [{"type": "tree", "path": "docs", "sha": "same-docs"},
+                                 {"type": "tree", "path": "vendor", "sha": "same-vendor"},
+                                 {"type": "tree", "path": "bin", "sha": "new-bin"}]}
+            if endpoint.endswith("/git/trees/old-bin"):
+                return {"tree": [{"type": "blob", "path": "run.py", "sha": "1"}]}
+            if endpoint.endswith("/git/trees/new-bin"):
+                return {"tree": [{"type": "blob", "path": "run.py", "sha": "2"}]}
+            raise AssertionError(f"unexpected endpoint {endpoint}")
+
+        self.assertEqual(prompt_paths.tree_diff(fetch, "o/r", "main", "head"),
+                         ["bin/run.py"])
+        # compare, the two truncated listings, the two roots, and the one
+        # directory that changed: the untouched subtrees cost nothing.
+        self.assertEqual(len(reads), 7)
+        for endpoint in reads:
+            self.assertNotIn("same-docs", endpoint)
+            self.assertNotIn("same-vendor", endpoint)
+
     def test_a_walk_that_runs_out_of_requests_is_no_diff(self):
         def fetch(endpoint):
             if "/compare/" in endpoint:
@@ -418,6 +456,30 @@ class CoordqGateTest(unittest.TestCase):
             self.assertEqual(
                 self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
                 prompt_paths.CLEAR)
+
+    def test_the_pinned_head_decides_the_paths(self):
+        """The gate never decides from a file list read by pull-request number.
+
+        Such a list describes whatever head GitHub holds at that moment, so a
+        code-only revision with the same file count could clear a prompt
+        head, and `--match-head-commit` still merges when that head is
+        restored before the merge.
+        """
+        def gh(endpoint):
+            if "/files" in endpoint:
+                raise AssertionError("a file list read by number describes a live head")
+            if "/compare/" in endpoint:
+                return [{"merge_base_commit": {"sha": "base"}}]
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return [{"tree": [{"type": "blob", "path": "skills/x/SKILL.md", "sha": "1"}]}]
+            if endpoint.endswith(f"/git/trees/{self.HEAD}?recursive=1"):
+                return [{"tree": [{"type": "blob", "path": "skills/x/SKILL.md", "sha": "2"}]}]
+            raise AssertionError(f"unexpected endpoint {endpoint}")
+
+        with patch.object(self.coordq, "gh_json", gh):
+            self.assertEqual(
+                self.coordq.gate_prompt_state(self.REPO, 7, 1, base="main", head=self.HEAD),
+                prompt_paths.HOLD)
 
     def test_the_queued_brief_says_do_not_merge(self):
         settings = {"key": "MO", "projectId": "fixture"}
