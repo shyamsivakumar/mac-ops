@@ -1574,10 +1574,12 @@ export default class Board extends View {
     const thread = this.threadOf(entry);
     const text = thread.choices?.options[Number(id.slice("choice:".length))];
     if (!text || this.choosing || this.outdated || this.guard(true)) return;
+    const eligible = this.seen[entry.group.key]?.col === "needs";
     this.choosing = true;
     this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
       try {
         const sent = await sendReply(thread.key, text);
+        this.noteAct(entry.group, "reply", Date.now(), eligible);
         return sent;
       } finally {
         this.choosing = false;
