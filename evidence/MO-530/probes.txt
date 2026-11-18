@@ -1,0 +1,25 @@
+PASS installer status: every pi guard installed and current: {"/Users/shyamsivakumar/.pi/agent/extensions/deny-guard.ts": "installed", "/Users/shyamsivakumar/.pi/agent-minimax/extensions/deny-guard.ts": "installed", "/Users/shyamsivakumar/.pi/agent-glm/extensions/deny-guard.ts": "installed", "/Users/shyamsivakumar/.pi/agent-deepseek/extensions/deny-guard.ts": "installed", "/Users/shyamsivakumar/.pi/agent-openai-api/extensions/deny-guard.ts": "installed", "/Users/shyamsivakumar/.pi/agent-anthropic-api/extensions/deny-guard.ts": "installed"}
+PASS installer status: claude deny list complete: missing=[]
+PASS installer status: merge hook file present: /Users/shyamsivakumar/.claude/hooks/deny-merge-guard.py
+PASS pi guard agent: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-minimax: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-glm: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-deepseek: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-openai-api: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS pi guard agent-anthropic-api: read a file under ~/Code/slash-eureka -> blocked (mac-ops deny rules (#530): reads and edits under ~/Code/slas...); edit an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); write an env file -> blocked (mac-ops deny rules (#530): secret file: /var/folders/d3/kwh8...); bash cat of an env file -> blocked (mac-ops deny rules (#530): commands on secret files (.env, a...) ...
+PASS claude permissions.deny: read under slash-eureka: present
+PASS claude permissions.deny: edit under slash-eureka: present
+PASS claude permissions.deny: read an env file: present
+PASS claude permissions.deny: edit an env file: present
+PASS claude permissions.deny: read the auth file: present
+PASS claude permissions.deny: read the ssh directory: present
+PASS claude permissions.deny: force-push: present
+PASS claude permissions.deny: push to main: present
+PASS claude permissions.deny: push to master: present
+PASS claude PreToolUse merge hook registered in settings.json: python3 /Users/shyamsivakumar/.claude/hooks/deny-merge-guard.py
+PASS claude hook blocks unpinned gh pr merge: mac-ops deny rules (#530): gh pr merge is denied for builders; gates merge only with the p
+PASS claude hook allows the gate's pinned gh pr merge (not executed): no decision, command allowed to run
+PASS pushing a task branch is still allowed (scratch remote): pushed to /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/deny-rules-probe-zrl1unzb/remote.git: ['refs/heads/t3/deny-probe']
+PASS scratch remote has no main branch (nothing was pushed to main): refs on scratch remote: ['refs/heads/t3/deny-probe']
+
+23 passed, 0 failed
