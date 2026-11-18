@@ -30,7 +30,8 @@ DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
 from gate_reviewers import (REVIEWER_CHAIN, block_reviewer, blocked_identities,
                             chain_index, failed_reviewer, failure_text,
                             first_reviewer, identity, load_blocked, next_reviewer,
-                            note_probe, probe_due, provider_block_reason,
+                            note_probe, note_probe_failure, probe_due,
+                            provider_block_reason,
                             reset_time, selection_for, unblock_reviewer)
 
 # The gate reviewer: GPT-6.2 Astra only. The chain starts on the API
@@ -204,11 +205,29 @@ def with_model(args):
         return None, (f"refused: builds run only on GLM 5.3, MiniMax or a task/* route "
                       f"({', '.join(TASK_ROUTES)}), "
                       f"but the payload names {resolved['modelSelection']!r}; Shyam 2026-11-17")
+    if (task_type == "review" and resolved.get("modelSelection")
+            and not is_health_probe(resolved)
+            and identity(resolved["modelSelection"]) in blocked_identities()):
+        # A gate that names a reviewer that is blocked for every head waits
+        # for a reviewer to recover instead of running on a provider that
+        # is known to be blocked. A health probe is the one launch that may
+        # name a blocked reviewer: it is the check on that provider.
+        return None, (f"refused: reviewer {identity(resolved['modelSelection'])} is "
+                      "blocked for every head, so the gate waits for a reviewer "
+                      "to recover")
     return resolved, None
 
 
 def is_gate_model(selection):
     return chain_index(selection) >= 0
+
+
+def is_health_probe(args):
+    """Whether a launch is a reviewer health probe.
+
+    The probe names the blocked reviewer it is checking, so it is the one
+    launch that may run on a blocked provider. Its request id says so."""
+    return str(args.get("clientRequestId") or "").startswith("probe:")
 
 
 def is_allowed_builder(selection):
@@ -1383,6 +1402,9 @@ def probe_blocked_reviewers(config, dry_run=False):
                     continue
                 if thread.get("status") in {"running", "queued", "starting", "preparing"}:
                     continue
+                # The probe ended without an answer. The provider may name a
+                # new reset, and the next probe waits for it.
+                note_probe_failure(selection, failure_text(data))
         if not probe_due(selection):
             continue
         request_id = f"probe:{name}:{int(time.time())}"
@@ -1395,6 +1417,10 @@ def probe_blocked_reviewers(config, dry_run=False):
                 "message": PROBE_MESSAGE}
         with Lock(True):
             queue = load()
+            if not probe_due(selection):
+                # Another run took the probe while this one waited for the
+                # lock, so only one probe an hour is queued.
+                continue
             note_probe(selection, request_id)
             item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
                     "title": args["title"], "priority": 9000, "builderModels": []}
