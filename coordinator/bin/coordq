@@ -327,6 +327,16 @@ def drain():
                 continue
             tool = undispatchable_tool(item)
             if tool is None:
+                args = item["args"]
+                selection = args.get("modelSelection")
+                request_id = args.get("clientRequestId", "")
+                if builders.is_builder(selection) and not request_id.startswith("builder-probe:"):
+                    model = builders.choose_builder(selection)
+                    if model is None:
+                        continue
+                    if model != selection:
+                        args["modelSelection"] = model
+                        save(queue)
                 dispatchable.append(item)
                 continue
             dropped.add(item["id"])
