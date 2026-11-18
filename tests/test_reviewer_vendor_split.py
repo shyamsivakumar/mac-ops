@@ -1,9 +1,25 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 from tests.test_gatekeep_backstop_reviewer import load_coordq
 
 
 class ReviewerVendorSplitTest(unittest.TestCase):
+    def setUp(self):
+        # The blocked reviewers live in the queue directory. A proof must
+        # never read or write the live queue, so the directory is a
+        # temporary one for the length of the test.
+        self.saved = os.environ.get("COORDQ_DIR")
+        os.environ["COORDQ_DIR"] = tempfile.mkdtemp(prefix="coordq-vendor-split-")
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        if self.saved is None:
+            os.environ.pop("COORDQ_DIR", None)
+        else:
+            os.environ["COORDQ_DIR"] = self.saved
+
     def test_vendor_split(self):
         q = load_coordq()
         for model, expected in [('claude-sonnet-5', q.ASTRA_MODEL),

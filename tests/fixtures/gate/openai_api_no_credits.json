@@ -1,0 +1,29 @@
+{
+  "recorded": "2026-11-17 18:00 PT, mac-ops#509 gate on the OpenAI API, after the API organization ran out of credits",
+  "note": "The run failed without an error text, without an executed model and without an answer, so the reason for the failure is only in the provider's account.",
+  "thread": {
+    "threadId": "mcp:launch:90f42ab0cf94ca549dbe0f5ad07b6ef76635daa122b7cfb0f3f28f1ad67a6929",
+    "title": "MO-508 review #509 d8d623b7 (openai/gpt-6.2-astra)",
+    "status": "failed",
+    "providerInstanceId": "openai-api",
+    "model": "openai/gpt-6.2-astra",
+    "latestRunId": "run:thread:mcp%3Alaunch%3A90f42ab0cf94ca549dbe0f5ad07b6ef76635daa122b7cfb0f3f28f1ad67a6929:ordinal:1"
+  },
+  "recentRuns": [
+    {
+      "runId": "run:thread:mcp%3Alaunch%3A90f42ab0cf94ca549dbe0f5ad07b6ef76635daa122b7cfb0f3f28f1ad67a6929:ordinal:1",
+      "status": "failed",
+      "providerInstanceId": "openai-api",
+      "model": "openai/gpt-6.2-astra",
+      "executedModel": null,
+      "completedAt": "2026-11-18T01:25:14.608Z"
+    }
+  ],
+  "items": [
+    {
+      "type": "user_message",
+      "status": "completed",
+      "text": "MO-508 review and merge - #509 d8d623b7803cca5f437b079252df5fd0ae1e2735"
+    }
+  ]
+}

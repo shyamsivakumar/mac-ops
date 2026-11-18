@@ -427,6 +427,7 @@ def gate_pipeline():
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "blocked_reviewers", return_value=set()), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
                 lane.act_on_pr(target, 20, dict(ledger))

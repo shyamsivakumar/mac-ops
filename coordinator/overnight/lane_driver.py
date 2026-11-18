@@ -18,7 +18,10 @@ for _candidate in (_GATE_DIR, os.path.join(os.path.dirname(_GATE_DIR), "bin")):
         if _candidate not in sys.path:
             sys.path.insert(0, _candidate)
         break
-from gate_reviewers import REVIEWER_CHAIN
+from gate_reviewers import (REVIEWER_CHAIN, block_reviewer, blocked_identities,
+                            chain_index, first_reviewer,
+                            provider_block_reason, reviewer_after,
+                            selection_for_model)
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
@@ -348,6 +351,36 @@ def pr_action(pr, builder, verdict="absent", gate_live=False, builder_live=False
     return (state, action) if builder else ("needs-you", "needs-you")
 
 
+def blocked_reviewers():
+    """The reviewers that are blocked for every head.
+
+    The state is shared with the queue, so a reviewer blocked there is
+    skipped here as well."""
+    return blocked_identities()
+
+
+def gate_reviewer(thread):
+    """The chain member a gate thread ran on, and the blocking provider
+    reason in its failure, if any.
+
+    The thread is read, because the listing does not name the model the
+    run used. A gate title carries the model in brackets and is the
+    fallback when the read names none. A gate that failed without reaching
+    a model never got an answer from the provider, which blocks that
+    reviewer for every head (Shyam 2026-11-17 18:15 PT)."""
+    if not thread:
+        return None, None
+    data = t3("t3_thread_read", {"threadId": thread["threadId"], "maxCharsPerItem": 4000})
+    read = data.get("thread") or {}
+    instance = read.get("providerInstanceId") or thread.get("providerInstanceId")
+    model = read.get("model") or thread.get("model")
+    selection = {"instanceId": instance, "model": model} if instance and model else None
+    if selection is None:
+        match = re.search(r"\(([^()]+)\)\s*$", thread.get("title") or "")
+        selection = selection_for_model(match.group(1)) if match else None
+    return selection, provider_block_reason(data)
+
+
 def gate_verdict(repo, number, head):
     key = CFG[repo]["key"]
     threads = t3("t3_thread_list", {"projectId": CFG[repo]["projectId"], "titleContains": f"review #{number} {head[:8]}", "limit": 10}).get("threads") or []
@@ -569,13 +602,23 @@ def act_on_pr(repo, number, ledger):
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
     tag = "regate" if verdict == "none" else "gate"
-    model = ASTRA
     if verdict == "none":
-        # The first gate ran on the chain head (API credits). Its retry takes
-        # the next reviewer in the chain, Codex Astra, instead of retrying a
-        # provider whose credits may be gone; a gate that dies twice waits
-        # for Shyam (Shyam 2026-11-17: GPT-6.2 Astra only, no other model).
-        model = REVIEWER_CHAIN[1] if len(REVIEWER_CHAIN) > 1 else ASTRA
+        # The gate ended without a verdict, for any reason. The head moves
+        # down the chain to the next reviewer, once per reviewer, and waits
+        # when the chain is exhausted (Shyam 2026-11-17 18:10 PT).
+        ran, reason = gate_reviewer(gate)
+        blocked = blocked_reviewers()
+        if reason and chain_index(ran) >= 0:
+            line = block_reviewer(ran, reason)
+            if line:
+                print(line, flush=True)
+            blocked = blocked_reviewers()
+        model = reviewer_after(ran, blocked)
+        if model is None:
+            ledger[f"needs-you:{repo}#{number}:{head}"] = "gate reviewer chain exhausted"
+            return f"#{number}: needs-you, gate reviewer chain exhausted"
+    else:
+        model = first_reviewer(blocked_reviewers()) or ASTRA
     if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
         # No Opus escalation any more: a gate that ended without a verdict
         # twice waits for Shyam instead of running on another model
