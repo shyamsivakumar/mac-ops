@@ -819,6 +819,9 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         (repo / "AGENTS.md").unlink()
         os.mkfifo(repo / "AGENTS.md")
         self.assertEqual(cleaner._file_bytes(repo / "AGENTS.md"), None)
+        self.assertEqual(cleaner.file_digest(repo / "AGENTS.md"), None)
+        # The classification path must not block on it either.
+        self.assertFalse(cleaner.agents_only_rules(repo))
 
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")

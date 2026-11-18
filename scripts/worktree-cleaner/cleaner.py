@@ -288,7 +288,7 @@ def agents_only_rules(path: Path) -> bool:
         # it would follow the link to whatever it points at.
         return False
     try:
-        current = (path / AGENTS_FILE).read_bytes()
+        current = _read_regular(path / AGENTS_FILE)
     except OSError:
         return False
     if committed is not None and (staged is None or staged != committed or working != committed):
@@ -373,14 +373,44 @@ def _file_bytes(path: Path) -> bytes | None:
         os.close(descriptor)
 
 
+def _read_regular(path: Path) -> bytes | None:
+    """The bytes of a regular file, read without blocking and without links.
+
+    The file is opened without blocking and the type is checked on the same
+    descriptor, so a file that was replaced by a FIFO cannot hang the scan
+    and a link is never read through.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
 def file_digest(path: Path) -> str | None:
     """The digest of a file, or of the target of a link, or None."""
     try:
         if path.is_symlink():
             data = os.readlink(path).encode("utf-8", "surrogateescape")
         else:
-            data = path.read_bytes()
+            data = _read_regular(path)
     except OSError:
+        return None
+    if data is None:
         return None
     return hashlib.sha256(data).hexdigest()
 
