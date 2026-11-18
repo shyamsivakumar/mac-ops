@@ -5681,7 +5681,13 @@ def cmd_board(args: argparse.Namespace) -> int:
     request head that has none, and sends a failed gate's findings back to
     the builder that holds the pull request."""
     deadline = time.monotonic() + min(args.deadline, BOARD_DEADLINE)
-    remaining = gh_gateway.remaining_or_none()
+    # The probe gets what is left of the board deadline, so a stalled
+    # quota read cannot outlast a shorter --deadline.
+    left = deadline - time.monotonic()
+    # A budget under a second is no budget: a one-second floor would spend
+    # time the caller does not have.
+    remaining = (gh_gateway.remaining_or_none(timeout=max(1, min(GH_TIMEOUT, int(left))))
+                 if left >= 1 else None)
     if remaining and min(remaining.values()) < API_FLOOR:
         emit(f"overnight: the board read waits below the API floor "
              f"{API_FLOOR} {remaining}", err=True)

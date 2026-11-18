@@ -90,6 +90,9 @@ VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "--raw-field", "--input", "-q", "--jq", "-t", "--template",
                "--cache")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
+# The flags that format the output. With one of these, a page is not a JSON
+# value any more, so the page count has to come from the response headers.
+OUTPUT_FILTER_FLAGS = ("-q", "--jq", "-t", "--template")
 
 
 def has_body(argv):
@@ -374,26 +377,35 @@ def _hosts_account(host):
     return ""
 
 
-def _token_id(token):
-    """Return a short fingerprint of a token, never the token itself."""
-    if not token:
-        return ""
+# Every variable `gh` accepts a credential from. A fingerprint covers all
+# of them, so switching a fallback token changes the cache key too.
+TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN",
+              "GITHUB_ENTERPRISE_TOKEN")
+
+
+def _token_id():
+    """Return a short fingerprint of the credentials in the environment.
+
+    The value is never kept, only a hash of every credential variable that
+    is set, so any change of identity changes the key."""
     import hashlib
-    return hashlib.sha256(token.encode()).hexdigest()[:16]
+    tokens = [os.environ.get(name) or "" for name in TOKEN_VARS]
+    if not any(tokens):
+        return ""
+    return hashlib.sha256("\0".join(tokens).encode()).hexdigest()[:16]
 
 
 def context():
     """Return (host, identity, checkout, repo_override, token_id) for this call.
 
     `gh pr list` resolves its repository from the working directory and its
-    account from `GH_TOKEN` or gh's hosts file, so two identical commands
-    under different overrides are different reads. The token is kept as a
-    fingerprint, never as the value."""
+    account from a credential variable or gh's hosts file, so two identical
+    commands under different overrides are different reads. A credential is
+    kept as a fingerprint of every variable that is set, never as a value."""
     host = os.environ.get("GH_HOST") or "github.com"
     account = os.environ.get("COORDINATOR_GH_ACCOUNT") or _hosts_account(host)
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GH_ENTERPRISE_TOKEN") or ""
     repo_override = os.environ.get("GH_REPO") or ""
-    return host, account, os.getcwd(), repo_override, _token_id(token)
+    return host, account, os.getcwd(), repo_override, _token_id()
 
 
 def _key(argv):
@@ -429,6 +441,29 @@ def store(argv, stdout):
         os.replace(tmp, path)
     except OSError:
         return
+
+
+def filtered(argv):
+    """True when the command formats its output, so pages are not JSON."""
+    for word in [str(token) for token in argv[1:]]:
+        if word in OUTPUT_FILTER_FLAGS:
+            return True
+        if word.startswith(("--jq=", "--template=", "-q=")):
+            return True
+    return False
+
+
+def status_lines(text):
+    """Return how many response status lines an `--include` output holds.
+
+    One status line is one request, whatever the output formatting did to
+    the body, so this is the page count before formatting."""
+    return len(re.findall(r"(?m)^HTTP/[\d.]+\s+\d{3}", text or ""))
+
+
+def strip_headers(text):
+    """Remove every `--include` header block, keeping the formatted bodies."""
+    return re.sub(r"(?m)^HTTP/[\d.]+[^\n]*\n(?:[^\n:]+:[^\n]*\n)*\n", "", text or "")
 
 
 def requests(argv, stdout):
@@ -511,14 +546,15 @@ def api_remaining(timeout=60):
     return dict(value)
 
 
-def remaining_or_none():
+def remaining_or_none(timeout=60):
     """Return the quota, or None when it cannot be read.
 
     A caller that only skips optional reads uses this: a quota it cannot
     read is not a reason to stop the work, and a read that matters still
-    fails on its own when GitHub refuses it."""
+    fails on its own when GitHub refuses it. The timeout is the caller's,
+    so a probe inside a deadline cannot outlast it."""
     try:
-        return api_remaining()
+        return api_remaining(timeout=timeout)
     except ApiBudgetExhausted:
         return None
 
@@ -566,9 +602,22 @@ def run(argv, timeout=60, stdin=None, limit=None):
         return subprocess.CompletedProcess(argv, 0, hit, "")
     if stdin is None and conditional(argv):
         return _conditional_run(argv, timeout)
-    result = _launch()(argv, input=stdin, capture_output=True, text=True,
+    # A paginated read whose output is formatted cannot be counted from the
+    # body: `--jq '.[].name'` prints plain names. Ask for the headers too,
+    # count the status lines, and hand the caller the body it expects.
+    count_headers = (stdin is None and "--paginate" in argv
+                     and "--include" not in argv and resource(argv) == CORE
+                     and filtered(argv))
+    run_argv = argv + ["--include"] if count_headers else argv
+    result = _launch()(run_argv, input=stdin, capture_output=True, text=True,
                        timeout=timeout)
-    record(argv, requests(argv, result.stdout))
+    body = result.stdout
+    if count_headers:
+        body = strip_headers(result.stdout)
+        count = max(1, status_lines(result.stdout))
+    else:
+        count = requests(argv, result.stdout)
+    record(argv, count)
     if result.returncode == 0:
-        store(argv, result.stdout)
-    return result
+        store(argv, body)
+    return subprocess.CompletedProcess(argv, result.returncode, body, result.stderr)
