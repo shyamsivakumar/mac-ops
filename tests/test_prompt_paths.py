@@ -965,6 +965,41 @@ class MergeBaseGuardTest(unittest.TestCase):
         self.assertGreater(calls.index(views[1]), merge_at)
 
 
+class PromptDriftTest(unittest.TestCase):
+    """A head carrying prompt text the default branch lacks is not merged."""
+
+    def setUp(self):
+        import lane_driver
+        self.lane = lane_driver
+        self.saved = lane_driver.CFG
+        lane_driver.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+
+    def tearDown(self):
+        self.lane.CFG = self.saved
+
+    def drift(self, paths):
+        with patch.object(self.lane.prompt_paths, "tree_diff", return_value=paths):
+            return self.lane.prompt_drift("shyamsivakumar/mac-ops", "feature", "a" * 40)
+
+    def test_a_head_with_prompt_text_the_default_lacks_drifts(self):
+        self.assertEqual(self.drift(["a.py", "skills/x/SKILL.md"]),
+                         ["skills/x/SKILL.md"])
+
+    def test_a_code_only_head_does_not_drift(self):
+        self.assertEqual(self.drift(["a.py", "coordinator/bin/ticket"]), [])
+
+    def test_an_unreadable_diff_is_not_clear(self):
+        self.assertIsNone(self.drift(None))
+
+    def test_the_item_names_the_drifted_files(self):
+        item = self.lane.prompt_drift_item("shyamsivakumar/mac-ops", 544, "a" * 40,
+                                           "feature", ["skills/x/SKILL.md"])
+        self.assertEqual(item["id"], "prompt-drift-MO-544")
+        self.assertEqual(item["kind"], "action")
+        self.assertIn("skills/x/SKILL.md", item["why"])
+        self.assertIn("feature", item["title"])
+
+
 class BaseScopeTest(unittest.TestCase):
     """The classification reads the pull request's own base and nothing else."""
 
