@@ -2119,6 +2119,11 @@ def alarm_mute():
             exact(action, "unchecked")
             exact(published, ["unchecked"])
             exact(damaged.read_text(), "{ not json")
+            # The command says the state cannot be read, and it does not
+            # write over the damaged file either.
+            exact(alarms.main(["status"]), 3)
+            exact(alarms.main(["ack", "factory-watchdog", cause]), 3)
+            exact(damaged.read_text(), "{ not json")
 
     # A state file that cannot be read is not an empty state: the alarm
     # is published as unchecked, and the state that could not be read is
