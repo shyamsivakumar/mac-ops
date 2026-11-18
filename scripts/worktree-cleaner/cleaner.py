@@ -2361,6 +2361,12 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                 except OSError:
                                     info = None
                                 matched = info is not None and (not expected_identity or f"{info.st_dev}:{info.st_ino}" == expected_identity)
+                                # The identity of the copy that is moved, taken
+                                # before the move, so the moved copy can be
+                                # told apart from something else.
+                                aside_identity: tuple[int, int] | None = None
+                                if info is not None:
+                                    aside_identity = (info.st_dev, info.st_ino)
                                 moved_to: Path | None = None
                                 if matched:
                                     # The moved worktree keeps every file and
@@ -2376,10 +2382,22 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                         tree_gone = True
                                     except OSError:
                                         tree_gone = False
-                                    try:
-                                        recorded_recovery = _record_recovery(state_root, storage / aside)
-                                    except Exception:
-                                        recorded_recovery = False
+                                    recorded_recovery = False
+                                    if tree_gone:
+                                        # The copy that arrived has to be the
+                                        # one that was checked.
+                                        try:
+                                            arrived = os.lstat(storage / aside)
+                                        except OSError:
+                                            arrived = None
+                                        if arrived is None or aside_identity is None or (arrived.st_dev, arrived.st_ino) != aside_identity:
+                                            tree_gone = False
+                                            moved_to = None
+                                        else:
+                                            try:
+                                                recorded_recovery = _record_recovery(state_root, storage / aside)
+                                            except Exception:
+                                                recorded_recovery = False
                                     if tree_gone and not recorded_recovery:
                                         # The recovery is not in the manifest, so it
                                         # would never be swept. The checkout
