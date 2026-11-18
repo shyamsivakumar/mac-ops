@@ -9,9 +9,10 @@
 // @ts-nocheck
 const [guardPath, eventsPath] = process.argv.slice(2);
 const guard = await import(guardPath);
-const events: Array<{ label: string; cwd: string; event: unknown }> = JSON.parse(
+const events: Array<{ label: string; cwd: string; event: unknown; env?: Record<string, string> }> = JSON.parse(
   await Bun.file(eventsPath).text(),
 );
+const baseEnv = { ...process.env };
 
 let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
 const pi = {
@@ -27,6 +28,10 @@ if (!handler) {
 
 const results = [];
 for (const item of events) {
+  // The role is read from the environment the agent was launched with, so
+  // each case gets its own environment, not one carved into the command.
+  for (const key of Object.keys(process.env)) if (!(key in baseEnv)) delete process.env[key];
+  Object.assign(process.env, baseEnv, item.env || {});
   const decision = await handler(item.event, { cwd: item.cwd, mode: "print" });
   results.push({ label: item.label, decision: decision ?? null });
 }
