@@ -208,14 +208,15 @@ def main():
              if line[3:].strip() != args.proof]
 
     def run(command, cwd=ROOT, timeout=300):
-        return subprocess.run(command, cwd=cwd, env=env, check=True, timeout=timeout)
+        actual = [sys.executable if part == "python3" else part for part in command]
+        return subprocess.run(actual, cwd=cwd, env=env, check=True, timeout=timeout)
 
-    lane = [sys.executable, "scripts/mac_ops_fast_check.py", "--lane-selection"]
+    lane = ["python3", "scripts/mac_ops_fast_check.py", "--lane-selection"]
     proof.check("lane selection", shlex.join(lane), lambda: run(lane, timeout=120))
-    selftest = [sys.executable, "coordinator/overnight/overnight", "selftest"]
+    selftest = ["python3", "coordinator/overnight/overnight", "selftest"]
     proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=120))
     for name in changed_python:
-        command = [sys.executable, "-c",
+        command = ["python3", "-c",
                    "import ast,sys;[ast.parse(open(f,'rb').read(),f) for f in sys.argv[1:]]", name]
         proof.check(f"python syntax: {name}", shlex.join(command),
                     lambda command=command: run(command, timeout=120))
@@ -239,11 +240,11 @@ def main():
 
     proof.check("TLC heavy queue model",
                 "java tlc2.TLC -workers 1 -config HeavyQueue.cfg HeavyQueue.tla", tlc)
-    heavy = [sys.executable, "heavy.py", "--help"]
+    heavy = ["python3", "heavy.py", "--help"]
     proof.check("heavy help", shlex.join(heavy), lambda: run(heavy, timeout=120))
     for name in tests:
         module = name[:-3].replace("/", ".")
-        command = [sys.executable, "-m", "unittest", module]
+        command = ["python3", "-m", "unittest", module]
         proof.check(f"tests: {module}", shlex.join(command),
                     lambda command=command: run(command, timeout=300))
     proof.write(head, bool(dirty))
