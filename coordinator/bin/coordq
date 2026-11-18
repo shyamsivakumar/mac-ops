@@ -1368,8 +1368,11 @@ def cmd_gatekeep(a):
                     current = ran_reviewer(thread, state["reviewer"])
                     # The block is recorded before this head's own backoff and
                     # before it gives up, so a reviewer that is out of credits
-                    # is not handed another head during the wait.
-                    block_failed_reviewer(current, data, a.dry_run)
+                    # is not handed another head during the wait. A block that
+                    # is already recorded stays as it was, so reading the same
+                    # dead gate again does not extend it.
+                    if not is_blocked(current):
+                        block_failed_reviewer(current, data, a.dry_run)
                     if retries > GATE_RETRY_LIMIT:
                         print(f"gave up {key} after {state['retries']} retries without a verdict",
                               flush=True)
@@ -1634,12 +1637,6 @@ def cmd_gate(a):
         # kept, because the reviewer that could not run has not changed.
         if key in heads and not state["givenUp"]:
             die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
-    if starting_reviewer() is None:
-        # An explicit gate waits while every reviewer is blocked. Queued now it
-        # would start on a reviewer the queue recorded as unable, and the gate
-        # would spend the head's retries on one that cannot run.
-        die(f"refused: every gate reviewer is blocked, so {repo}#{number} waits "
-            "until one of them is free")
     login_run = subprocess.run(["gh", "api", "user", "--jq", ".login"],
                                capture_output=True, text=True, timeout=40)
     if login_run.returncode:
@@ -1660,6 +1657,17 @@ def cmd_gate(a):
         state = gate_state(heads.get(key))
         if key in heads and not state["givenUp"]:
             die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
+        # The reviewer is chosen before this lock, so another run can block it
+        # meanwhile. An explicit gate waits while every reviewer is blocked,
+        # and refuses a reviewer that was blocked after it was chosen: queued
+        # now, the gate would spend the head's retries on one the queue just
+        # recorded as unable.
+        if starting_reviewer() is None:
+            die(f"refused: every gate reviewer is blocked, so {repo}#{number} waits "
+                "until one of them is free")
+        if is_blocked(args["modelSelection"]):
+            die(f"refused: gate reviewer {identity(args['modelSelection'])} is blocked, "
+                f"so {repo}#{number} waits until a gate reviewer is free")
         item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
                 "title": args["title"], "priority": 5000, "builderModels": models}
         queue["next"] += 1
