@@ -184,7 +184,7 @@ class NonAstraGateTest(RetryLimitBase):
         # still moves down the chain.
         self.assertEqual(self.read_queue()["gatedHeads"][self.key],
                          {"id": 4, "retries": 0, "at": None, "givenUp": True,
-                          "reviewer": None})
+                          "reviewer": None, "moved": False})
 
 
 class BackoffTest(RetryLimitBase):
@@ -407,6 +407,26 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertIn("regating o/r#7", out)
         self.assertEqual(self.gate_items()[0]["args"]["modelSelection"],
                          coordq.model_list.entries("review")[1]["selection"])
+
+    def test_a_head_is_not_given_up_after_a_move_was_taken_back(self):
+        chosen = coordq.save
+
+        def save_then_block(queue):
+            chosen(queue)
+            self.block(coordq.model_list.entries("review")[1]["selection"])
+
+        coordq.save = save_then_block
+        self.addCleanup(setattr, coordq, "save", chosen)
+        self.write_queue(heads=self.head())
+        self.run_gatekeep()
+        self.assertEqual(self.gate_items(), [])
+        # The move was taken back, so the head did not move: the next run
+        # decides again instead of giving the head up.
+        coordq.save = chosen
+        self.clear_block()
+        out, _ = self.run_gatekeep()
+        self.assertNotIn("gave up ", out)
+        self.assertEqual(len(self.gate_items()), 1)
 
     def test_a_first_gate_whose_reviewer_is_blocked_is_rechosen(self):
         chosen = coordq.reviewer_model
