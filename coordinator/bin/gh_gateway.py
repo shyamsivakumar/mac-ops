@@ -111,7 +111,17 @@ GRAPHQL_GROUPS = ("pr", "issue", "project", "label", "org")
 # method can be read without mistaking a value for the endpoint.
 VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "--raw-field", "--input", "-q", "--jq", "-t", "--template",
-               "--cache", "--hostname")
+               "--cache", "--hostname", "-R", "--repo", "--search", "--json",
+               "--limit", "--state", "--label", "--author", "--assignee",
+               "--reviewer", "--base", "--head", "--sort", "--order",
+               "--owner", "--milestone", "--branch", "--workflow", "--event",
+               # The short read-option aliases: a value that starts with
+               # `-R` must not be read as a repository selector.
+               "-S", "-L", "-s", "-l", "-A", "-a", "-B", "-b", "-e", "-m",
+               # Value options named in `gh run list --help` and its
+               # neighbours, so their values are never read as selectors.
+               "--commit", "--created", "--status", "--event", "--user",
+               "--app", "--workflow", "--job", "--attempt")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 # The flags this code understands. A cluster it does not know, such as
 # `-iXPOST`, may hide a method or a body, so such a command is never cached.
@@ -581,24 +591,162 @@ def _token_id():
     return hashlib.sha256("\0".join(tokens).encode()).hexdigest()[:16]
 
 
+def looks_like_repo(value):
+    """True when a word has the shape of `OWNER/REPO` or `HOST/OWNER/REPO`."""
+    text = str(value or "")
+    if not text or text.startswith("-"):
+        return False
+    parts = text.split("/")
+    return 2 <= len(parts) <= 3 and all(part.strip() for part in parts)
+
+
+LONG_VALUE_FLAGS = tuple(flag for flag in VALUE_FLAGS if flag.startswith("--"))
+# Short options take a value unless the command says otherwise. `gh` is not
+# consistent across subcommands: `-a` is `--all` for `run list` but a
+# value for `pr list`, and `-w` is `--web` for `pr list` but a workflow name
+# for `run list`. The overrides below are the ones that differ.
+SHORT_BOOLEAN = {
+    # `-a`, `-d` and `-w` are boolean for list commands generally; the
+    # per-command entries below record where that is not true.
+    ("run", "list"): {"-a"},
+    ("pr", "list"): {"-w", "-d"},
+    ("issue", "list"): set(),
+}
+SHORT_VALUE = {
+    # `-b` is `--branch string` for `run list`, not a boolean.
+    ("run", "list"): {"-w", "-b"},
+    ("pr", "list"): {"-a", "-A", "-H"},
+}
+
+
+def command_of(argv):
+    """Return the (group, verb) a `gh` command names, such as ("run", "list").
+
+    The group is the first word that is a `gh` group, so a selector before
+    the subcommand (`gh -R o/r run list`) does not become the group."""
+    words = [str(word) for word in (argv or [])[1:]]
+    group_at = next((index for index, word in enumerate(words)
+                     if word in GROUPS), None)
+    if group_at is None:
+        return "", ""
+    group = words[group_at]
+    tail = [word for word in words[group_at + 1:]]
+    verb = next((word for word in tail if not word.startswith("-")), "")
+    return group, verb
+
+
+def parse_options(argv):
+    """Return (options, positionals) for one command, each option once.
+
+    Every option is read with the arity of its own subcommand, so a value is
+    never mistaken for a flag and a flag is never mistaken for a value."""
+    words = [str(word) for word in (argv or [])[1:]]
+    group, verb = command_of(argv)
+    key = (group, verb)
+    if key in SHORT_BOOLEAN:
+        booleans = SHORT_BOOLEAN[key]
+    elif verb == "list":
+        # A list command's `-a`/`-d`/`-w` are flags, not values: `-a` is
+        # `--all` for `workflow list` just as it is for `run list`.
+        booleans = {"-a", "-d", "-w"}
+    else:
+        booleans = set()
+    values = SHORT_VALUE.get(key, set())
+    options, positionals, ordered = {}, [], []
+    index = 0
+    while index < len(words):
+        word = words[index]
+        following = words[index + 1] if index + 1 < len(words) else ""
+        if word.startswith("--"):
+            name, sep, inline = word.partition("=")
+            if sep:
+                options[name] = inline
+                ordered.append((name, inline))
+                index += 1
+                continue
+            if name in LONG_VALUE_FLAGS:
+                options[name] = following
+                ordered.append((name, following))
+                index += 2
+                continue
+            options[name] = True
+            ordered.append((name, True))
+            index += 1
+            continue
+        if word in booleans:
+            options[word] = True
+            ordered.append((word, True))
+            index += 1
+            continue
+        if word in values or (word in VALUE_FLAGS and word not in booleans):
+            options[word] = following
+            ordered.append((word, following))
+            index += 2
+            continue
+        if word.startswith("-") and len(word) > 2:
+            # A cluster of short options: `-dRhost/o/r` is `-d` (a flag)
+            # followed by `-R` with the attached value `host/o/r`.
+            rest = word[1:]
+            while rest and not rest.startswith("-"):
+                short = "-" + rest[0]
+                if short in booleans:
+                    options[short] = True
+                    ordered.append((short, True))
+                    rest = rest[1:]
+                    continue
+                # The value form: `-RHOST/OWNER/REPO`, `-R=HOST/OWNER/REPO`,
+                # `-Sfoo`. A leading `=` is part of the syntax.
+                attached = rest[1:].lstrip("=")
+                options[short] = attached
+                ordered.append((short, attached))
+                rest = ""
+                break
+            index += 1
+            continue
+        if word.startswith("-"):
+            options[word] = True
+            ordered.append((word, True))
+            index += 1
+            continue
+        positionals.append(word)
+        index += 1
+    return options, positionals, ordered
+
+
+def looks_like_repo(value):
+    """True when a word has the shape of `OWNER/REPO` or `HOST/OWNER/REPO`."""
+    text = str(value or "")
+    if not text or text.startswith("-"):
+        return False
+    parts = text.split("/")
+    return 2 <= len(parts) <= 3 and all(part.strip() for part in parts)
+
+
 def argv_host(argv):
     """Return the host a command targets, or "" when it names none.
 
-    Two forms name a host: `--hostname HOST`, and a repository selector with
-    a host in it, `-R HOST/OWNER/REPO` (or `GH_REPO`). Both decide which
-    host's quota and account apply."""
-    words = [str(word) for word in (argv or [])[1:]]
-    for index, word in enumerate(words):
-        if word == "--hostname" and index + 1 < len(words):
-            return words[index + 1]
-        if word.startswith("--hostname="):
-            return word.split("=", 1)[1]
+    Only two things name a host: `--hostname`, and a repository selector
+    (`-R`, `--repo` or `GH_REPO`) whose value has a host in it. The command
+    is parsed once, with its own subcommand's option arity, so a value that
+    looks like a flag or like a repository is never read as one."""
+    _options, _positionals, ordered = parse_options(argv)
+    # `gh` uses the last selector given, whichever alias it is, so the host
+    # is taken from the last one in argument order.
+    host = ""
+    explicit = False
+    for name, value in ordered:
+        if name == "--hostname" and isinstance(value, str) and value:
+            host = value
+            explicit = True
+        elif name in ("-R", "--repo") and isinstance(value, str) and looks_like_repo(value):
+            explicit = True
+            parts = value.split("/")
+            # A two-part selector names no host, and it still overrides
+            # `GH_REPO`, so the answer is "" rather than the environment's.
+            host = parts[0] if len(parts) == 3 and parts[0] else ""
+    if explicit:
+        return host
     selector = os.environ.get("GH_REPO") or ""
-    for index, word in enumerate(words):
-        if word in ("-R", "--repo") and index + 1 < len(words):
-            selector = words[index + 1]
-        elif word.startswith("--repo="):
-            selector = word.split("=", 1)[1]
     parts = selector.split("/")
     if len(parts) == 3 and parts[0]:
         return parts[0]
