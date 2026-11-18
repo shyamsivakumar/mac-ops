@@ -28,6 +28,16 @@ ARCHIVE_ROOT = Path.home() / ".local/state/archive/worktrees"
 
 SKIP_DIRS = {".git", "node_modules", "vendor", "Pods", ".venv", "venv", "__pycache__", "DerivedData"}
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
+
+# Agent bootstrap files: the files an agent bootstrap leaves behind in a
+# worktree. They are never the user's work, so they do not make a worktree
+# dirty. Anything else in the tree is real work and keeps the worktree.
+BOOTSTRAP_PREFIXES = (".specstory/",)
+BOOTSTRAP_FILES = (".agents/legacy-instructions.md",)
+AGENTS_FILE = "AGENTS.md"
+
+# Ascend repositories are never touched by the cleaner.
+ASCEND_NAMES = ("ascend", "ascend-mcp", "slash-eureka")
 GITHUB_ORIGIN_RE = re.compile(r"^(?:https://(?:[^@/\s]+@)?|ssh://git@|git@)github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
 WORKERS = 8
 
@@ -61,6 +71,11 @@ def inside(path: Path, root: Path) -> bool:
         return False
 
 
+def ascend_repo(root: Path, repo_slug: str | None = None) -> bool:
+    identities = {part.casefold() for part in root.parts} | ({part.casefold() for part in repo_slug.split("/")} if repo_slug else set())
+    return any(name in ASCEND_NAMES or name.startswith("ascend") for name in identities)
+
+
 def srw_repo(root: Path, repo_slug: str | None = None) -> bool:
     identities = {part.casefold() for part in root.parts} | ({part.casefold() for part in repo_slug.split("/")} if repo_slug else set())
     return "srw" in identities or any(part.startswith("srw-") for part in identities) or any("strategy-replay-workbench" in part for part in identities)
@@ -70,6 +85,8 @@ def excluded_repo(root: Path, repo_slug: str | None = None) -> bool:
     parts = {part.casefold() for part in root.parts}
     remote_parts = {part.casefold() for part in repo_slug.split("/")} if repo_slug else set()
     if srw_repo(root, repo_slug):
+        return True
+    if ascend_repo(root, repo_slug):
         return True
     if "slash-eureka" in parts and ("dbt" in parts or "omni" in parts or root.name.casefold() == "slash-eureka"):
         return True
@@ -135,6 +152,112 @@ def worktrees(repo: Path) -> list[dict[str, Any]]:
 def status_for(path: Path) -> tuple[bool, str]:
     output = git(path, "status", "--porcelain=v1", "--untracked-files=all")
     return bool(output.strip()), output.strip()
+
+
+_rules_corpus: set[str] | None = None
+
+
+def rules_corpus() -> set[str]:
+    """Every line of the standing agent rules, from every known copy."""
+    global _rules_corpus
+    if _rules_corpus is None:
+        root = Path(__file__).resolve().parents[2]
+        sources = [
+            root / "coordinator/config/AGENT-RULES.md",
+            root / "runtime/pi/AGENTS.md",
+            root / "runtime/omp/AGENTS.md",
+            Path.home() / ".pi/agent/AGENTS.md",
+            Path.home() / ".codex/AGENTS.md",
+            Path.home() / ".omp/agent/AGENTS.md",
+        ]
+        lines: set[str] = set()
+        for source in sources:
+            try:
+                text = source.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                line = line.strip()
+                if line:
+                    lines.add(line)
+        _rules_corpus = lines
+    return _rules_corpus
+
+
+def bootstrap_path(name: str) -> bool:
+    if name in BOOTSTRAP_FILES:
+        return True
+    return any(name.startswith(prefix) for prefix in BOOTSTRAP_PREFIXES)
+
+
+def agents_only_rules(path: Path, *, untracked: bool) -> bool:
+    """True when AGENTS.md holds nothing but the standing agent rules block."""
+    corpus = rules_corpus()
+    if not corpus:
+        return False
+    if untracked:
+        try:
+            text = (path / AGENTS_FILE).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        added = [line.strip() for line in text.splitlines() if line.strip()]
+        return bool(added) and all(line in corpus for line in added)
+    try:
+        diff = git(path, "diff", "HEAD", "--", AGENTS_FILE)
+    except SafetyError:
+        return False
+    added: list[str] = []
+    removed: list[str] = []
+    for line in diff.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            added.append(line[1:].strip())
+        elif line.startswith("-"):
+            removed.append(line[1:].strip())
+    if any(line for line in removed):
+        return False
+    if not any(line for line in added):
+        return False
+    return all(line in corpus for line in added if line)
+
+
+def classify_changes(path: Path, status: str) -> tuple[list[str], list[str]]:
+    """Split porcelain status into bootstrap files and real work."""
+    bootstrap: list[str] = []
+    real: list[str] = []
+    for line in status.splitlines():
+        if not line.strip():
+            continue
+        code, _, name = line.partition(" ")
+        name = name.strip()
+        if " -> " in name:
+            name = name.split(" -> ", 1)[1]
+        name = name.strip().strip('"')
+        if name == AGENTS_FILE:
+            only_rules = agents_only_rules(path, untracked=code.strip() == "??")
+            (bootstrap if only_rules else real).append(name)
+            continue
+        (bootstrap if bootstrap_path(name) else real).append(name)
+    return bootstrap, real
+
+
+def removal_force_flags(path: Path, status: str) -> list[str]:
+    """Git flags needed to remove a worktree whose only changes are bootstrap files."""
+    bootstrap, real = classify_changes(path, status)
+    if real or not bootstrap:
+        return []
+    untracked = any(line.startswith("??") for line in status.splitlines() if line.strip())
+    return ["--force", "--force"] if untracked else ["--force"]
+
+
+def on_default_branch(repo_root: Path, head: str) -> bool:
+    """True when the head commit is already on the remote default branch."""
+    for ref in ("refs/remotes/origin/main", "refs/remotes/origin/master"):
+        result = run(["git", "-C", str(repo_root), "merge-base", "--is-ancestor", head, ref])
+        if result.returncode == 0:
+            return True
+    return False
 
 
 def detached_idle_seconds(path: Path) -> int | None:
@@ -411,6 +534,18 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
+def published_on_default_branch(result: dict[str, Any], repo_root: Path) -> bool:
+    """True when every commit of the worktree is already on the remote default branch."""
+    head = str(result.get("head") or "")
+    if not SHA_RE.fullmatch(head):
+        return False
+    if result.get("unpushed") != 0:
+        return False
+    if result.get("remote_commit_present") is not True:
+        return False
+    return on_default_branch(repo_root, head)
+
+
 def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False, refresh_cwds: bool = True) -> dict[str, Any]:
     path = Path(record["path"])
     result: dict[str, Any] = {
@@ -445,11 +580,13 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
             root = Path(git(path, "rev-parse", "--show-toplevel").strip())
             if canonical(root) != canonical(path):
                 reasons.append("worktree_root_mismatch")
-            dirty, status = status_for(path)
-            result["dirty"] = dirty
-            result["uncommitted"] = len(status.splitlines())
+            _, status = status_for(path)
+            bootstrap_changes, real_changes = classify_changes(path, status)
+            result["bootstrap_changes"] = bootstrap_changes
+            result["dirty"] = bool(real_changes)
+            result["uncommitted"] = len(real_changes)
             result["unpushed"] = unpushed_commits(path)
-            if dirty:
+            if real_changes:
                 reasons.append("worktree_dirty")
         except SafetyError:
             reasons.append("worktree_status_unknown")
@@ -467,13 +604,17 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         except SafetyError:
             idle = None
         result["detached_idle_seconds"] = idle
-        if idle is None or idle < 24 * 60 * 60:
-            reasons.append("detached_not_proven_24h_old")
+        if not published_on_default_branch(result, repo_root):
+            if idle is None or idle < 24 * 60 * 60:
+                reasons.append("detached_not_proven_24h_old")
     elif not result["main_checkout"]:
         ok, why, pr_url = verify_pr(github, repo_slug, record.get("branch"), str(record.get("head") or ""), refresh=refresh)
         result["pull_request"] = pr_url
         if not ok and why:
-            reasons.append(why)
+            if why == "github_pr_not_closed_for_head" and published_on_default_branch(result, repo_root):
+                result["published_on_default_branch"] = True
+            else:
+                reasons.append(why)
     result["reasons"] = sorted(set(reasons))
     result["eligible"] = not result["reasons"]
     result["prunable"] = prunable(result, github)
@@ -489,8 +630,10 @@ def excluded_row(repo_root: Path, record: dict[str, Any], reason: str, t3_state:
     }
     if not row["gone"]:
         try:
-            row["dirty"], status = status_for(path)
-            row["uncommitted"] = len(status.splitlines())
+            _, status = status_for(path)
+            _bootstrap, real = classify_changes(path, status)
+            row["dirty"] = bool(real)
+            row["uncommitted"] = len(real)
         except SafetyError:
             pass
     return row
@@ -506,7 +649,7 @@ def inventory(code_root: Path, github: GitHub, t3_state: T3State) -> tuple[list[
             repo_slug = github.repo(repo_root)
             if excluded_repo(repo_root, repo_slug):
                 excluded += 1
-                reason = "SRW repository" if srw_repo(repo_root, repo_slug) else "Slash dbt or omni repository"
+                reason = "SRW repository" if srw_repo(repo_root, repo_slug) else "Ascend repository" if ascend_repo(repo_root, repo_slug) else "Slash dbt or omni repository"
                 excluded_futures.extend(pool.submit(excluded_row, repo_root, record, reason, t3_state) for record in worktrees(repo_root) if canonical(record["path"]) != canonical(repo_root))
                 continue
             records = worktrees(repo_root)
@@ -592,7 +735,9 @@ def append_removal(state_root: Path, row: dict[str, Any], event: str, extra: dic
         "removed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "repo": row["repo"], "path": row["path"], "branch": row["branch"],
         "head": row["head"], "pull_request": row["pull_request"],
-        "reason": "clean, remote commit verified, no live T3 thread, and closed PR or detached idle for 24 hours",
+        "reason": "clean, remote commit verified, no live T3 thread, and merged or closed PR or commits already on the remote default branch",
+        "bootstrap_changes": row.get("bootstrap_changes", []),
+        "published_on_default_branch": bool(row.get("published_on_default_branch")),
         **(extra or {}),
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
@@ -657,11 +802,13 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 try:
                     latest_head = git(Path(candidate["path"]), "rev-parse", "HEAD").strip()
-                    latest_dirty, _ = status_for(Path(candidate["path"]))
+                    _dirty, latest_status = status_for(Path(candidate["path"]))
+                    _bootstrap, latest_real = classify_changes(Path(candidate["path"]), latest_status)
                 except SafetyError:
                     latest_head = ""
-                    latest_dirty = True
-                if latest_head.lower() != str(candidate["head"]).lower() or latest_dirty:
+                    latest_status = ""
+                    latest_real = ["worktree_status_unknown"]
+                if latest_head.lower() != str(candidate["head"]).lower() or latest_real:
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_changed_before_remove"]
                     continue
@@ -679,11 +826,13 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 try:
                     latest_head = git(Path(candidate["path"]), "rev-parse", "HEAD").strip()
-                    latest_dirty, _ = status_for(Path(candidate["path"]))
+                    _dirty, latest_status = status_for(Path(candidate["path"]))
+                    _bootstrap, latest_real = classify_changes(Path(candidate["path"]), latest_status)
                 except SafetyError:
                     latest_head = ""
-                    latest_dirty = True
-                if latest_head.lower() != str(candidate["head"]).lower() or latest_dirty:
+                    latest_status = ""
+                    latest_real = ["worktree_status_unknown"]
+                if latest_head.lower() != str(candidate["head"]).lower() or latest_real:
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_changed_before_remove"]
                     append_removal(state_root, candidate, "removal_blocked")
@@ -694,7 +843,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["process_cwd_inside"]
                     continue
                 try:
-                    result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
+                    result = run(["git", "-C", str(repo_root), "worktree", "remove", *removal_force_flags(Path(candidate["path"]), latest_status), candidate["path"]], timeout=300)
                 except SafetyError:
                     append_removal(state_root, candidate, "removal_outcome_unknown")
                     candidate["eligible"] = False
@@ -709,6 +858,12 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 candidate["eligible"] = False
                 candidate["removed"] = True
                 removed += 1
+        if apply and removed:
+            for repo_root in sorted({str(row["repo"]) for row in rows if row.get("removed")}):
+                try:
+                    run(["git", "-C", repo_root, "worktree", "prune"], timeout=300)
+                except SafetyError:
+                    continue
         for row in rows:
             row["category"] = categorize(row)
         pruned = 0
