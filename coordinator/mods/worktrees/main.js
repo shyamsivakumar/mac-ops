@@ -10,6 +10,8 @@ const FRESH_MS = 1200000;
 const POLL_MS = 2000;
 const PORT_POLL_MS = 5000;
 const HANG_MS = 660000;
+const hangMs = (status) => HANG_MS + (status.limit ?? 0) * 1000;
+const OLD_SECONDS = 3 * 86400;
 
 const REASONS = {
   t3_thread_unfinished: "A T3 thread is still using it",
@@ -32,6 +34,15 @@ const REASONS = {
   not_needs_a_look: "No longer needs a look. Use Clean for safe worktrees",
   archive_target_exists: "The archive already has a folder with this name",
   archive_on_another_filesystem: "The archive is on another disk, so it can't be moved safely",
+  delete_target_exists: "A saved file with this name already exists",
+  delete_save_unverified: "The saved file could not be verified, so nothing was removed",
+  delete_remove_failed: "Git could not remove the folder",
+  worktree_remove_outcome_unknown: "Git did not finish removing the folder, check it",
+  worktree_changed_before_remove: "The worktree changed while its work was being saved, so nothing was removed",
+  save_too_large: "The work to save is over 200 MB, so nothing was removed",
+  nested_repository_inside: "Contains another Git repository, so it can't be saved safely",
+  submodules_inside: "Contains submodules, so it can't be saved safely",
+  hidden_tracked_changes: "Has tracked files hidden from Git status, so it can't be saved safely",
 };
 
 const GROUPS = [
@@ -146,12 +157,15 @@ export default class Worktrees extends View {
     this.scanning = false;
     this.cleaning = false;
     this.archiving = false;
+    this.deleting = false;
     this.error = null;
     this.result = null;
     this.archiveResult = null;
+    this.deleteResult = null;
     this.selected = new Set();
     this.armed = null;
     this.armedArchive = null;
+    this.armedDelete = null;
     this.queued = null;
     this.pressedAt = 0;
     this.polling = false;
@@ -171,7 +185,7 @@ export default class Worktrees extends View {
       const status = await read("status.json");
       this.finished = status?.state === "done" ? status.finished * 1000 : 0;
       cx.notify();
-      if (status?.state === "running" && Date.now() - status.at * 1000 < HANG_MS) {
+      if (status?.state === "running" && Date.now() - status.at * 1000 < hangMs(status)) {
         this.scanning = true;
         cx.notify();
       } else if (Date.now() - this.finished > FRESH_MS) this.start("scan", cx);
@@ -195,12 +209,14 @@ export default class Worktrees extends View {
           this.scanning = false;
           this.cleaning = false;
           this.archiving = false;
-          this.error = `Another scan is running. Wait for it to finish, then press ${mode === "clean" ? "Clean" : "Archive"} again.`;
+          this.deleting = false;
+          this.error = `Another scan is running. Wait for it to finish, then press ${mode === "clean" ? "Clean" : mode === "delete" ? "Delete" : "Archive"} again.`;
         }
       } catch (error) {
         this.scanning = false;
         this.cleaning = false;
         this.archiving = false;
+        this.deleting = false;
         this.error = error.message;
       }
       cx.notify();
@@ -214,15 +230,16 @@ export default class Worktrees extends View {
       try {
         const status = await read("status.json");
         if (status?.state === "running" || (status && status.at < Math.floor(this.pressedAt / 1000))) {
-          if (Date.now() - Math.max(status.at * 1000, this.pressedAt) > HANG_MS) throw new Error("The scan took too long");
+          if (Date.now() - Math.max(status.at * 1000, this.pressedAt) > hangMs(status)) throw new Error("The scan took too long");
         } else if (status?.state === "done" || status?.state === "failed") {
           this.data = await read("last.json");
           if (this.data && !this.data.categories) {
             this.data = null;
             throw new Error("cleaner out of date");
           }
-          if (this.archiving) {
-            this.archiveResult = await read("archive.json");
+          if (this.archiving || this.deleting) {
+            if (this.archiving) this.archiveResult = await read("archive.json");
+            else this.deleteResult = await read("delete.json");
             this.selected = new Set();
           }
           this.dropStaleSelection();
@@ -232,6 +249,7 @@ export default class Worktrees extends View {
           this.scanning = false;
           this.cleaning = false;
           this.archiving = false;
+          this.deleting = false;
           const queued = this.queued;
           this.queued = null;
           if (queued) this.launch(queued, cx);
@@ -241,6 +259,7 @@ export default class Worktrees extends View {
         this.scanning = false;
         this.cleaning = false;
         this.archiving = false;
+        this.deleting = false;
         this.error = error.message;
       } finally {
         this.polling = false;
@@ -318,7 +337,7 @@ export default class Worktrees extends View {
 
   press(cx) {
     const n = this.cleanable();
-    if (!this.live() || this.cleaning || this.archiving) return;
+    if (!this.live() || this.cleaning || this.archiving || this.deleting) return;
     if (this.queued) {
       if (this.queued.mode === "clean") this.queued = null;
       cx.notify();
@@ -337,9 +356,11 @@ export default class Worktrees extends View {
     if (mode === "clean") {
       this.shown = this.cleanable();
       this.cleaning = true;
-    } else this.archiving = true;
+    } else if (mode === "delete") this.deleting = true;
+    else this.archiving = true;
     this.result = null;
     this.archiveResult = null;
+    this.deleteResult = null;
     this.start(mode, cx, paths);
   }
 
@@ -350,6 +371,8 @@ export default class Worktrees extends View {
   dropStaleSelection() {
     const live = new Set(this.archivable().map((r) => r.path));
     this.selected = new Set([...this.selected].filter((p) => live.has(p)));
+    this.armedArchive = null;
+    this.armedDelete = null;
   }
 
   chosen() {
@@ -360,25 +383,35 @@ export default class Worktrees extends View {
     const all = paths.every((p) => this.selected.has(p));
     for (const p of paths) all ? this.selected.delete(p) : this.selected.add(p);
     this.armedArchive = null;
+    this.armedDelete = null;
     cx.notify();
   }
 
-  pressArchive(cx) {
+  selectOlder(cx) {
+    this.selected = new Set(this.archivable().filter((r) => r.age_seconds >= OLD_SECONDS).map((r) => r.path));
+    this.armedArchive = null;
+    this.armedDelete = null;
+    cx.notify();
+  }
+
+  pressMove(mode, field, cx) {
     const chosen = this.chosen();
-    if (!this.live() || this.cleaning || this.archiving) return;
+    if (!this.live() || this.cleaning || this.archiving || this.deleting) return;
     if (this.queued) {
-      if (this.queued.mode === "archive") this.queued = null;
+      if (this.queued.mode === mode) this.queued = null;
       cx.notify();
       return;
     }
-    if (!chosen.length || !this.confirmed("armedArchive", cx)) return;
+    if (!chosen.length) return;
+    this[field === "armedArchive" ? "armedDelete" : "armedArchive"] = null;
+    if (!this.confirmed(field, cx)) return;
     const paths = chosen.map((r) => r.path);
     if (this.scanning) {
-      this.queued = { mode: "archive", paths };
+      this.queued = { mode, paths };
       cx.notify();
       return;
     }
-    this.launch({ mode: "archive", paths }, cx);
+    this.launch({ mode, paths }, cx);
   }
 
   openFolder(row) {
@@ -474,14 +507,18 @@ export default class Worktrees extends View {
     const n = this.cleanable();
     const armed = this.armed !== null;
     const label = this.cleaning ? "Cleaning…" : this.queued?.mode === "clean" ? "Clean after scan" : armed ? `Press again to remove ${n}` : n ? `Clean ${n} safe` : "Nothing safe to clean";
-    const idle = !this.scanning && !this.cleaning && !this.archiving;
+    const idle = !this.scanning && !this.cleaning && !this.archiving && !this.deleting;
     const look = this.archivable();
     const chosen = this.chosen().length;
     const armedArchive = this.armedArchive !== null;
-    const running = this.cleaning || this.archiving;
+    const armedDelete = this.armedDelete !== null;
+    const running = this.cleaning || this.archiving || this.deleting;
     const archiveLabel = this.archiving ? "Archiving…" : this.queued?.mode === "archive" ? `Archive ${this.queued.paths.length} after scan` : armedArchive ? `Press again to archive ${chosen}` : chosen ? `Archive ${chosen}` : "Archive";
+    const deleteLabel = this.deleting ? "Deleting…" : this.queued?.mode === "delete" ? `Delete ${this.queued.paths.length} after scan` : armedDelete ? `Press again to delete ${chosen}` : chosen ? `Delete ${chosen}` : "Delete";
     const archived = this.archiveResult?.archived ?? [];
     const refused = this.archiveResult?.refused ?? [];
+    const deleted = this.deleteResult?.deleted ?? [];
+    const deleteRefused = this.deleteResult?.refused ?? [];
     const result = this.result?.rows?.filter((r) => r.category === "removed") ?? [];
     return v_flex().id("wt-root").size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => this.key(e, cx))
@@ -489,7 +526,7 @@ export default class Worktrees extends View {
       .child(h_flex().px(14).py(10).gap(10).items_center().flex_none().border_b(1).border_color(t.border)
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Worktrees"))
         .child(div().flex_1().text_size(12).text_color(this.error ? t.blocked : t.muted)
-          .child(this.error ? `Couldn't scan: ${this.error}` : this.scanning ? (this.cleaning ? "Cleaning, then rescanning…" : this.archiving ? "Archiving, then rescanning…" : this.queued ? `Scanning, then ${this.queued.mode === "clean" ? "cleaning" : "archiving"}…` : "Scanning…") : this.finished ? `Last scan ${clock(this.finished)}` : ""))
+          .child(this.error ? `Couldn't scan: ${this.error}` : this.scanning ? (this.cleaning ? "Cleaning, then rescanning…" : this.archiving ? "Archiving, then rescanning…" : this.deleting ? "Deleting, then rescanning…" : this.queued ? `Scanning, then ${{ clean: "cleaning", archive: "archiving", delete: "deleting" }[this.queued.mode]}…` : "Scanning…") : this.finished ? `Last scan ${clock(this.finished)}` : ""))
         .child(this.small(t, "wt-rescan", this.scanning ? "Scanning…" : "Rescan", (cx) => idle && this.live() && this.start("scan", cx)))
         .child(this.small(t, "wt-close", "Close", () => closeOverlay(this.overlay))))
       .when(Boolean(c), (el) => el.child(h_flex().gap(10).p(14).flex_none()
@@ -502,21 +539,31 @@ export default class Worktrees extends View {
         .when(this.result.removed + this.result.pruned !== this.shown, (el) => el.child(div().text_size(12).text_color(t.working).child(`${this.shown} were shown as safe. ${this.result.removed + this.result.pruned} were still safe when Clean ran; the rest were skipped.`)))
         .children(result.map((r) => div().text_size(12).text_color(t.muted).child(`${base(r.repo)}  ·  ${rowName(r)}`)))))
       .when(Boolean(this.archiveResult), (el) => el.child(v_flex().mx(14).mb(10).p(10).gap(2).flex_none().rounded(6).bg(t.raised).border_1().border_color(t.border)
-        .child(div().text_size(13).font_medium().text_color(archived.length ? t.done : t.working).child(`Archived ${archived.length} to ${this.archiveResult.archive_dir.replace(home(), "~")}`))
+        .child(div().text_size(13).font_medium().text_color(archived.length ? t.done : t.working).child(`Archived ${archived.length} to ${(this.archiveResult.archive_dir ?? "").replace(home(), "~")}`))
         .children(archived.map((r) => div().text_size(12).text_color(t.muted).child(`${base(r.repo)}  ·  ${rowName(r)}`)))
         .children(refused.map((r) => div().text_size(12).text_color(t.working).child(`Skipped ${r.repo ? `${base(r.repo)}  ·  ` : ""}${base(r.path)}: ${r.reasons.map((x) => REASONS[x] ?? x.replaceAll("_", " ")).join(". ")}`)))))
+      .when(Boolean(this.deleteResult), (el) => el.child(v_flex().mx(14).mb(10).p(10).gap(2).flex_none().rounded(6).bg(t.raised).border_1().border_color(t.border)
+        .child(div().text_size(13).font_medium().text_color(deleted.length ? t.done : t.working).child(deleted.length ? `Deleted ${deleted.length}, work saved to ${(this.deleteResult.archive_dir ?? "").replace(home(), "~")}` : "Deleted 0"))
+        .children(deleted.map((r) => div().text_size(12).text_color(t.muted).child(`${base(r.repo)}  ·  ${rowName(r)}`)))
+        .children(deleteRefused.map((r) => div().text_size(12).text_color(t.working).child(`Skipped ${r.repo ? `${base(r.repo)}  ·  ` : ""}${base(r.path)}: ${r.reasons.map((x) => REASONS[x] ?? x.replaceAll("_", " ")).join(". ")}`)))))
       .when(look.length > 0, (el) => el.child(h_flex().id("wt-pick-all").px(14).py(6).gap(10).items_center().flex_none().border_t(1).border_color(t.border)
         .child(this.checkbox(t, "pick-all", chosen === look.length, (cx) => this.toggle(look.map((r) => r.path), cx)))
-        .child(div().flex_1().text_size(12).text_color(t.muted).child(`Select all in Needs a look (${look.length})`))))
+        .child(div().flex_1().text_size(12).text_color(t.muted).child(`Select all in Needs a look (${look.length})`))
+        .child(this.small(t, "pick-older", "Select created over 3 days ago", (cx) => this.selectOlder(cx)))))
       .child(v_flex().id("wt-list").flex_1().min_h(0).overflow_y_scroll().children(this.body(t)).children(this.excluded(t)))
       .child(h_flex().px(14).py(10).gap(12).items_center().flex_none().border_t(1).border_color(t.border)
         .child(v_flex().flex_1().min_w(0).gap(4)
-          .child(div().text_size(12).line_height("17px").text_color(t.muted).child("Clean removes worktrees that pass every check. Archive moves the folder to ~/.local/state/archive, keeps the branch and pins the commit. Nothing is deleted.")))
+          .child(div().text_size(12).line_height("17px").text_color(t.muted).child("Clean removes worktrees that pass every check. Archive moves the folder to ~/.local/state/archive, keeps the branch and pins the commit. Delete removes the folder and keeps the commit and uncommitted work in a small saved file.")))
         .child(h_flex().id("wt-archive").h(30).px(14).flex_none().items_center().rounded(6)
           .bg(armedArchive ? t.blocked : t.solid).text_color(armedArchive ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
           .opacity((chosen || this.queued?.mode === "archive") && !running ? 1 : 0.45).cursor_pointer()
-          .on_click((e, cx) => e.click_count > 1 || this.pressArchive(cx))
+          .on_click((e, cx) => e.click_count > 1 || this.pressMove("archive", "armedArchive", cx))
           .child(archiveLabel))
+        .child(h_flex().id("wt-delete").h(30).px(14).flex_none().items_center().rounded(6)
+          .bg(armedDelete ? t.blocked : t.solid).text_color(armedDelete ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
+          .opacity((chosen || this.queued?.mode === "delete") && !running ? 1 : 0.45).cursor_pointer()
+          .on_click((e, cx) => e.click_count > 1 || this.pressMove("delete", "armedDelete", cx))
+          .child(deleteLabel))
         .child(h_flex().id("wt-clean").h(30).px(14).flex_none().items_center().rounded(6)
           .bg(armed ? t.blocked : t.solid).text_color(armed ? t.background : t.solid_foreground).text_size(12.5).font_semibold()
           .opacity(n && !running ? 1 : 0.45).cursor_pointer()
