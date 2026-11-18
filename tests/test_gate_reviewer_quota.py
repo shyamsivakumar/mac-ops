@@ -1,10 +1,26 @@
+import os
 import runpy
+import tempfile
 import unittest
 
 C = runpy.run_path('coordinator/bin/coordq')
 
 
 class ReviewerQuotaTests(unittest.TestCase):
+    def setUp(self):
+        # The reviewer selection reads the blocked state beside the queue, so
+        # each case gets its own directory: a block one case records cannot
+        # change the next, and neither can reach the live queue.
+        self.saved_dir = os.environ.get("COORDQ_DIR")
+        os.environ["COORDQ_DIR"] = tempfile.mkdtemp(prefix="coordq-reviewer-quota-")
+        self.addCleanup(self.restore_dir)
+
+    def restore_dir(self):
+        if self.saved_dir is None:
+            os.environ.pop("COORDQ_DIR", None)
+        else:
+            os.environ["COORDQ_DIR"] = self.saved_dir
+
     def test_vendor_routing(self):
         for builder, expected in [('claude', 'ASTRA_MODEL'), ('gpt-6.1-sol', 'ASTRA_MODEL'), ('minimax/m3', 'ASTRA_MODEL'), ('deepseek/flash', 'ASTRA_MODEL'), ('glm/5', 'ASTRA_MODEL')]:
             self.assertEqual(C['reviewer_model']([builder]), C[expected])
