@@ -46,7 +46,7 @@ UNITS = {"second": 1.0, "seconds": 1.0, "sec": 1.0, "secs": 1.0, "s": 1.0,
 
 # An absolute reset: a date and a time of day, or a time of day alone.
 DATETIME = re.compile(
-    r"\b(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)(Z|[+-]\d{2}:?\d{2})?\b")
+    r"\b(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:?\d{2})?\b")
 TIME_ONLY = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?)\b")
 # The words that make a time a reset rather than any time in a message.
 RESET_WORD = re.compile(r"reset|retry|available|till|until|back\s+off", re.IGNORECASE)
@@ -285,8 +285,11 @@ def zone_of(text, start=0):
 
 
 def _epoch(date_text, time_text, zone):
+    clock, _, fraction = time_text.partition(".")
+    if fraction:
+        clock = f"{clock}.{fraction[:6].ljust(6, '0')}"
     try:
-        moment = datetime.fromisoformat(f"{date_text}T{time_text}")
+        moment = datetime.fromisoformat(f"{date_text}T{clock}")
     except ValueError:
         return None
     return moment.replace(tzinfo=zone or timezone.utc).timestamp()
@@ -342,9 +345,9 @@ def record_block(selection, reason, failed=None, now=None, by="provider_block"):
     named, or to an hour after the failure when it named none. A window
     that has already closed blocks nobody and is not written.
 
-    A failure read late never shortens a block a newer failure earned: the
-    record that is already there keeps its end, and the provider stays out
-    of the routing until that end, not until the older reset."""
+    A failure read late never replaces a newer failure's record. A newer
+    failure always replaces an older one, even when its reset is sooner:
+    the provider's latest word on when it comes back is the one that holds."""
     name = identity(selection)
     if not name:
         return None
@@ -362,9 +365,6 @@ def record_block(selection, reason, failed=None, now=None, by="provider_block"):
         if current is not None:
             current_failed = failure_time_of(current)
             if current_failed is not None and current_failed > since:
-                return current
-            current_until = until_of(current)
-            if current_until is not None and current_until > until:
                 return current
         state[name] = record
         write(state)
