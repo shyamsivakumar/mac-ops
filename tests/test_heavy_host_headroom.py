@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -67,6 +68,20 @@ class HostHeadroomTests(unittest.TestCase):
         os.chmod(path, 0o666)
         self.assertEqual(self.floor_for(path, M1), DEFAULT)
 
+    def test_a_pipe_keeps_the_default_floor_without_blocking(self):
+        pipe = Path(self.directory.name) / "pipe.json"
+        os.mkfifo(pipe)
+        found = {}
+
+        def look_up():
+            found["floor"] = self.floor_for(pipe, M1)
+
+        worker = threading.Thread(target=look_up, daemon=True)
+        worker.start()
+        worker.join(timeout=5)
+        self.assertFalse(worker.is_alive(), "the floor lookup blocked on a pipe")
+        self.assertEqual(found.get("floor"), DEFAULT)
+
     def test_a_deeply_nested_file_keeps_the_default_floor(self):
         nested = "[" * 2000 + "]" * 2000
         self.assertLess(len(nested), 4096)
@@ -91,6 +106,15 @@ class HostHeadroomTests(unittest.TestCase):
         path = Path(board_governor.__file__).parent / board_governor.DEFAULTS.name
         cfg = board_governor.config(path)
         self.assertEqual(cfg[board_governor.HOST_HEADROOM_KEY][M1], M1_HEADROOM)
+
+    def test_the_governor_config_rejects_a_fractional_headroom(self):
+        path = Path(board_governor.__file__).parent / board_governor.DEFAULTS.name
+        values = json.loads(path.read_text())
+        values[board_governor.HOST_HEADROOM_KEY] = {M1: float(M1_HEADROOM)}
+        broken = Path(self.directory.name) / "governor.json"
+        broken.write_text(json.dumps(values))
+        with self.assertRaises(ValueError):
+            board_governor.config(broken)
 
 
 class HeadroomFloorTests(unittest.TestCase):

@@ -300,14 +300,17 @@ def host_config_path() -> Path:
 def read_installed_config(path: Path) -> Optional[Dict[str, Any]]:
     """Return the installed configuration, or None when it cannot be trusted.
 
-    The file is opened without following a final symlink and the opened
-    descriptor is checked, so a file swapped between the check and the read
-    cannot replace the settings. A file that is too large, malformed, or
-    nested deeply enough to exhaust the parser is not usable.
+    The file is opened without following a final symlink and without waiting
+    for a writer, and the opened descriptor is checked, so a file swapped
+    between the check and the read cannot replace the settings and a pipe
+    cannot block the lookup. A file that is too large, malformed, or nested
+    deeply enough to exhaust the parser is not usable.
     """
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     fd = None
     try:
         fd = os.open(str(path), flags)

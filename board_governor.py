@@ -137,6 +137,8 @@ def config(path):
     for name, headroom in hosts.items():
         if not isinstance(name, str) or not name:
             raise ValueError("min_headroom_bytes_by_host names a host")
+        if isinstance(headroom, bool) or not isinstance(headroom, int):
+            raise ValueError("min_headroom_bytes must be an integer")
         number(headroom, "min_headroom_bytes", 1, MAX_HOST_HEADROOM_BYTES)
     return values
 
