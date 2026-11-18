@@ -365,13 +365,34 @@ def _head_entry(repo: Path, name: str) -> tuple[str, str, bytes] | None:
     return parts[0], parts[2], data
 
 
-def _set_index_to_head(repo: Path, name: str, entry: tuple[str, str, bytes] | None) -> None:
-    """Point the index entry of a path back at HEAD, or drop it when HEAD has none."""
+def _set_index_to_head(repo: Path, name: str, entry: tuple[str, str, bytes] | None) -> bool:
+    """Point the index entry of a path back at HEAD, or drop it when HEAD has none.
+
+    `--add` is needed because a staged addition has no entry, and so has the
+    source of a rename, which git already took out of the index.
+    """
     if entry is None:
-        run(["git", "-C", str(repo), "update-index", "--force-remove", "--", name])
-        return
-    mode, sha, _data = entry
-    run(["git", "-C", str(repo), "update-index", "--cacheinfo", f"{mode},{sha},{name}"])
+        argv = ["git", "-C", str(repo), "update-index", "--force-remove", "--", name]
+    else:
+        mode, sha, _data = entry
+        argv = ["git", "-C", str(repo), "update-index", "--add", "--cacheinfo", f"{mode},{sha},{name}"]
+    return run(argv).returncode == 0
+
+
+def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool:
+    """Recreate a path from its committed bytes without replacing anything.
+
+    The create is exclusive, so a file that appeared in the meantime is left
+    alone and the worktree is kept.
+    """
+    mode = int(entry[0], 8) & 0o777
+    try:
+        descriptor = os.open(repo / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+    except OSError:
+        return False
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(entry[2])
+    return True
 
 
 def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None) -> bool:
@@ -385,9 +406,15 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
     try:
         expected = file_path.read_bytes()
     except OSError:
-        return False
-    if digest is not None and hashlib.sha256(expected).hexdigest() != digest:
-        # The file changed after the scan, so the worktree is kept.
+        # A delete or a rename has already taken the file away, so there is no
+        # edit to preserve and the committed bytes are restored, or nothing
+        # stays when HEAD has none. A path that came back is kept.
+        if entry is None:
+            return True
+        return _restore_entry(repo, name, entry)
+    if digest is None or hashlib.sha256(expected).hexdigest() != digest:
+        # Either the bytes are not the ones the scan verified or the file
+        # changed after the scan, so its contents are kept as real work.
         return False
     moved = trash / f"{name.replace('/', '_')}.{os.getpid()}"
     try:
@@ -411,18 +438,13 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
         except OSError:
             return False
         return True
-    mode = int(entry[0], 8) & 0o777
-    try:
-        descriptor = os.open(file_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
-    except OSError:
+    if not _restore_entry(repo, name, entry):
         # The file came back: someone saved it, so the worktree is kept.
         try:
             moved.unlink()
         except OSError:
             pass
         return False
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(entry[2])
     try:
         moved.unlink()
     except OSError:
@@ -436,8 +458,10 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
     Only the bootstrap files are touched, and only the ones the scan already
     verified. Every other change stays, so an unforced `git worktree remove`
     refuses to delete a worktree that holds anything else, and a file saved
-    after the scan is never removed. When a file cannot be cleared without
-    losing an edit that landed in between, the worktree is kept.
+    after the scan is never removed. A path the scan did not hash is kept when
+    it still exists, because its bytes were never verified. When a file cannot
+    be cleared without losing an edit that landed in between, the worktree is
+    kept.
     """
     cleared: list[str] = []
     for code, name, original in records:
@@ -449,8 +473,10 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
                 return None
             if not _clear_bootstrap_file(path, trash, original, entry, (digests or {}).get(original)):
                 return None
-            _set_index_to_head(path, original, entry)
-            _set_index_to_head(path, name, None)
+            if not _set_index_to_head(path, original, entry):
+                return None
+            if not _set_index_to_head(path, name, None):
+                return None
             if not _clear_bootstrap_file(path, trash, name, None, (digests or {}).get(name)):
                 return None
             cleared.append(name)
@@ -463,7 +489,8 @@ def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None
         entry = _head_entry(path, name)
         if not _clear_bootstrap_file(path, trash, name, entry, (digests or {}).get(name)):
             return None
-        _set_index_to_head(path, name, entry)
+        if not _set_index_to_head(path, name, entry):
+            return None
         cleared.append(name)
     return cleared
 

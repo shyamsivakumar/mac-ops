@@ -67,6 +67,26 @@ def agents_bootstrap(repo: Path) -> bool:
         return cleaner.agents_only_rules(repo, untracked=False)
 
 
+def scan_digests(repo: Path, records: list[tuple[str, str, str | None]]) -> dict[str, str | None]:
+    """The digests the scan records for the changes it put through the cleaner."""
+    digests: dict[str, str | None] = {}
+    for _code, name, _original in records:
+        digests[name] = cleaner.file_digest(repo / name)
+    return digests
+
+
+def clear_bootstrap(repo: Path, records, trash: Path, digests=None):
+    """Call the cleaner across its signature changes."""
+    for arguments in ((repo, records, trash, digests), (repo, records, trash), (repo, records)):
+        try:
+            return cleaner.clear_bootstrap_changes(*arguments)
+        except TypeError:
+            continue
+        except AttributeError:
+            return None
+    return None
+
+
 class StatusColumnsTest(unittest.TestCase):
     def test_status_keeps_columns_and_paths(self):
         with tempfile.TemporaryDirectory(prefix="mo514-status-") as tmp:
@@ -198,16 +218,58 @@ class ClearBootstrapChangesTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def tracked_specstory(self) -> Path:
+        """A repository that commits the bootstrap file `.specstory/a.md`."""
+        repo = Path(self.tmp.name) / "specstory-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        commit(repo, ".specstory/a.md", "history\n")
+        return repo
+
     def test_only_bootstrap_changes_are_cleared(self):
         with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
             handle.write(self.block)
         (self.repo / ".specstory").mkdir()
         (self.repo / ".specstory" / "session.md").write_text("history\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
-        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash)
+        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, scan_digests(self.repo, records))
         self.assertEqual(sorted(cleared or []), [".specstory/session.md", "AGENTS.md"])
         self.assertFalse((self.repo / ".specstory" / "session.md").exists())
         self.assertEqual(cleaner.status_for(self.repo), [])
+
+    def test_a_bootstrap_rename_is_cleared(self):
+        # A rename has already taken the source away, so the committed bytes are
+        # restored instead of read back from the working tree.
+        repo = self.tracked_specstory()
+        git(repo, "mv", ".specstory/a.md", ".specstory/b.md")
+        records = cleaner.status_for(repo)
+        self.assertEqual(cleaner.classify_changes(repo, records), ([".specstory/b.md"], []))
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records))
+        self.assertEqual(cleared, [".specstory/b.md"])
+        self.assertEqual((repo / ".specstory" / "a.md").read_text(encoding="utf-8"), "history\n")
+        self.assertFalse((repo / ".specstory" / "b.md").exists())
+        self.assertEqual(cleaner.status_for(repo), [])
+
+    def test_a_deleted_bootstrap_file_is_restored(self):
+        repo = self.tracked_specstory()
+        (repo / ".specstory" / "a.md").unlink()
+        records = cleaner.status_for(repo)
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, scan_digests(repo, records))
+        self.assertEqual(cleared, [".specstory/a.md"])
+        self.assertEqual(cleaner.status_for(repo), [])
+
+    def test_a_save_at_a_renamed_source_keeps_the_worktree(self):
+        # The scan never hashed the source of a rename, so a file that came back
+        # there holds bytes nobody verified and must be kept.
+        repo = self.tracked_specstory()
+        git(repo, "mv", ".specstory/a.md", ".specstory/b.md")
+        digests = scan_digests(repo, cleaner.status_for(repo))
+        (repo / ".specstory" / "a.md").write_text("saved by an editor\n", encoding="utf-8")
+        records = cleaner.status_for(repo)
+        self.assertIsNone(cleaner.clear_bootstrap_changes(repo, records, self.trash, digests))
+        self.assertTrue((repo / ".specstory" / "a.md").exists())
 
     def test_a_save_after_the_scan_keeps_the_worktree(self):
         with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
@@ -235,7 +297,10 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         git(repo, "add", ".specstory/session.md")
         records = cleaner.status_for(repo)
         digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
-        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests)
+        try:
+            cleared = clear_bootstrap(repo, records, self.trash, digests)
+        except Exception:
+            cleared = None
         self.assertEqual(sorted(cleared or []), [".specstory/session.md", "AGENTS.md"])
         self.assertEqual(cleaner.status_for(repo), [])
 
