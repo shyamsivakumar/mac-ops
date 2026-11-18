@@ -898,6 +898,25 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         os.symlink(str(elsewhere), repo)
         self.assertIsNone(cleaner._open_parent_fd(repo, Path(".")))
 
+    def test_a_refused_cleanup_leaves_an_index_of_another_client(self):
+        # Another git client may use a file next to the index. A cleanup that
+        # refuses must not remove it.
+        repo = Path(self.tmp.name) / "index-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        commit(repo, "a.txt", "a\n")
+        index = Path(git(repo, "rev-parse", "--git-path", "index").strip())
+        if not index.is_absolute():
+            index = repo / index
+        other = index.with_name(index.name + ".cleaner")
+        other.write_text("staged work of another client\n", encoding="utf-8")
+        # The digest does not match, so the cleanup refuses.
+        self.assertFalse(cleaner._reset_index_to_head(repo, "0" * 64))
+        self.assertTrue(other.exists(), "the file of another client must stay")
+        self.assertEqual(other.read_text(encoding="utf-8"), "staged work of another client\n")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

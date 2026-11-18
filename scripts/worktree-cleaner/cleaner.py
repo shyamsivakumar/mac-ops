@@ -773,7 +773,15 @@ def _reset_index_to_head(repo: Path, index_before: str | None) -> bool:
     if not index_path.is_absolute():
         index_path = repo / index_path
     index_path = Path(os.path.abspath(index_path))
-    copy = index_path.with_name(index_path.name + ".cleaner")
+    # The temporary index has a name of its own, so the cleanup can only
+    # remove the file it created and never a file another git client uses.
+    descriptor, spare = tempfile.mkstemp(dir=index_path.parent, prefix=index_path.name + ".cleaner-", suffix=".tmp")
+    os.close(descriptor)
+    copy = Path(spare)
+    try:
+        copy.unlink()
+    except OSError:
+        pass
     lock = index_path.with_name(index_path.name + ".lock")
     try:
         if index_before is None:
