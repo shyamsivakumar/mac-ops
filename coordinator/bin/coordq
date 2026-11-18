@@ -631,6 +631,7 @@ def drain():
                 for unused in keys[index:]:
                     queue["reserved"].pop(unused, None)
                     queue["reservedThreads"].pop(unused, None)
+                item["pre"] = item.get("pre", [])[index:]
                 if item.get("actionKey"):
                     set_action_key_state(queue, item["actionKey"], "queued")
                 save(queue)
@@ -642,6 +643,7 @@ def drain():
                 for unused in keys[index:]:
                     queue["reserved"].pop(unused, None)
                     queue["reservedThreads"].pop(unused, None)
+                item["pre"] = item.get("pre", [])[index:]
                 save(queue)
                 break
             if step["tool"] == "t3_thread_launch":
