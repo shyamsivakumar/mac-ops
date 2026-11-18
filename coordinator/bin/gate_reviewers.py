@@ -62,9 +62,9 @@ RESET = re.compile(r"(?:resets?|try again|retry|available|back)\s+(?:in|after)\s
                    r"(\d+(?:\.\d+)?)\s*(second|minute|hour)s?", re.IGNORECASE)
 UNITS = {"second": 1.0, "minute": 60.0, "hour": 3600.0}
 
-# The moment a failed run failed, read in this order: the time it completed,
-# a run record that was updated without one, and its start.
-FAILED_AT_FIELDS = ("completedAt", "updatedAt", "startedAt")
+# The moment a failed run failed: the time it completed, else the time its
+# record was last updated. A start time never says when a run failed.
+FAILED_AT_FIELDS = ("completedAt", "updatedAt")
 
 
 def identity(selection):
@@ -247,13 +247,14 @@ def parse_time(value):
 def failed_at(value):
     """When the failed run a value names failed, or None when it does not say.
 
-    The run's own record is read before the thread's, so the time and the
-    error come from the same run whenever the run is there."""
+    A completion time is read before an update time, and the run's record
+    before the thread's. A start time is never read: a run that began at 10:00
+    and failed at 10:40 says nothing about 10:40 through its start."""
     if not isinstance(value, dict):
         return None
     thread = value.get("thread") if isinstance(value.get("thread"), dict) else {}
-    for source in (failure_of(value) or {}, thread):
-        for field in FAILED_AT_FIELDS:
+    for field in FAILED_AT_FIELDS:
+        for source in (failure_of(value) or {}, thread):
             seconds = parse_time(source.get(field))
             if seconds is not None:
                 return seconds
