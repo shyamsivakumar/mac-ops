@@ -296,8 +296,9 @@ def conditional(argv):
     if not words or words[0] != "api":
         return False
     # A caller that asked for the headers gets them: the conditional path
-    # splits the response and would hand back only the body.
-    if "--include" in words:
+    # splits the response and would hand back only the body. `-i` is the
+    # short form of `--include`.
+    if "--include" in words or "-i" in words:
         return False
     return not any(word in ("--paginate", "--slurp", "-X", "--method") for word in words)
 
@@ -532,7 +533,8 @@ def prepare(argv):
     response headers as well, and the status lines give the page count
     before formatting. A caller that runs its own subprocess uses this and
     `settle`, so every caller counts pages the same way."""
-    needs = (_gh(argv) and "--paginate" in argv and "--include" not in argv
+    has_include = "--include" in argv or "-i" in argv
+    needs = (_gh(argv) and "--paginate" in argv and not has_include
              and resource(argv) == CORE and filtered(argv))
     return (list(argv) + ["--include"] if needs else list(argv)), needs
 
@@ -542,10 +544,11 @@ def settle(argv, stdout, headers_counted):
     stdout = stdout or ""
     if headers_counted:
         return strip_headers(stdout), max(1, status_lines(stdout))
-    if (("--include" in argv) and ("--paginate" in argv)
-            and resource(argv) == CORE and filtered(argv)):
+    has_include = "--include" in argv or "-i" in argv
+    if has_include and "--paginate" in argv and resource(argv) == CORE:
         # The caller asked for the headers itself: count the pages from
-        # them and leave its output exactly as gh wrote it.
+        # them and leave its output exactly as gh wrote it. This holds
+        # whether or not an output filter formatted the bodies.
         return stdout, max(1, status_lines(stdout))
     return stdout, requests(argv, stdout)
 
