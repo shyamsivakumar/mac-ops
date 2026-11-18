@@ -308,6 +308,36 @@ run(["gh", "api", "-H", f"Authorization: token {secret}", "repos/a/b/labels?per_
 logged = (scratch / "usage.jsonl").read_text()
 check("the usage log holds no credential", secret not in logged and "Authorization" not in logged)
 
+# The report reads the rotated log too, so a rotation during the measured
+# hour does not look like a quiet hour.
+report_log = scratch / "report.jsonl"
+now = time.time()
+(report_log.with_suffix(".jsonl.1")).write_text(json.dumps(
+    {"ts": now - 60, "caller": "rotated", "resource": "core", "verb": "list"}) + "\n")
+report_log.write_text(
+    json.dumps({"ts": now - 30, "caller": "active", "resource": "core", "verb": "list"}) + "\n" +
+    json.dumps({"ts": now - 20, "caller": "active", "resource": "core", "verb": "list"}) + "\n")
+report = subprocess.run(
+    [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"),
+     "--log", str(report_log), "--hours", "1"], capture_output=True, text=True, env=env)
+check("the report counts the rotated log too",
+      "rotated" in report.stdout and "core total" in report.stdout and " 3 " in report.stdout,
+      report.stdout.strip().splitlines()[-3:] if report.stdout else report.stderr.strip()[-80:])
+
+# A required read is not optional polling: without a floor it still runs
+# when the quota is under the shared floor.
+low_env = {**env, "COORDINATOR_GH_FLOOR": "5000"}
+code = f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+result = gh_gateway.run(["gh", "api", "repos/a/b/pulls/7"], timeout=20)
+print("RAN", result.returncode, bool(result.stdout))
+"""
+required = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=low_env)
+check("a required read runs below the floor", "RAN 0 True" in required.stdout,
+      required.stdout.strip()[:40] or required.stderr.strip()[-80:])
+
 # A caller that asks for the headers gets them back untouched, in both
 # spellings, and is never handled conditionally.
 set_mode("200")
