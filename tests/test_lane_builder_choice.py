@@ -21,7 +21,7 @@ import unittest
 from contextlib import redirect_stdout
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERNIGHT = ROOT / "coordinator" / "overnight"
@@ -310,6 +310,76 @@ class CompletedGate(unittest.TestCase):
         self.assertNotIn("threadId", launches[0])
         self.assertTrue(second.startswith("#20: needs-you"), second)
         self.assertIn("regate", first)
+
+
+class UnstickBuilders(unittest.TestCase):
+    """Every unstuck ticket runs on the builder it resolves to.
+
+    Two tickets that name different builders never share one thread, so
+    the unstick groups the tickets by the builder they resolve to.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.previous = os.environ.get("COORDQ_DIR")
+        os.environ["COORDQ_DIR"] = self.scratch.name
+
+        def restore():
+            if self.previous is None:
+                os.environ.pop("COORDQ_DIR", None)
+            else:
+                os.environ["COORDQ_DIR"] = self.previous
+        self.addCleanup(restore)
+        self.lane = load_lane()
+        self.lane.DRY = False
+        self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
+
+    def unstick(self, labels, passes=1):
+        """Replay the unstick path over the given tickets and their labels."""
+        lane = self.lane
+        issues = [{"number": number, "labels": [{"name": f"builder:{label}"}]}
+                  for number, label in labels.items()]
+        snapshot = {"tickets": [], "repos": {REPO: {"prs": [], "issues": issues}}}
+        launches = []
+
+        def files(path, *args, **kwargs):
+            if str(path).endswith("providers-blocked.json"):
+                return mock_open(read_data='{"blocked": {}}')()
+            if str(path).endswith("models.json"):
+                return mock_open(read_data=MODELS.read_text())()
+            if path == lane.RECEIPTS:
+                return mock_open(read_data="{}")()
+            return mock_open(read_data="unstick {list} in {repo}")()
+
+        def run(cmd, timeout=150):
+            launches.append(json.loads(cmd[2]))
+            return "fixture-receipt"
+
+        ledger = {}
+        with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
+             patch.object(lane, "SNAPSHOT", snapshot), \
+             patch.object(lane, "run", run), \
+             patch("builtins.open", files), redirect_stdout(io.StringIO()):
+            for _ in range(passes):
+                lane.unstick(REPO, ledger)
+        return launches, ledger
+
+    def test_two_tickets_with_different_builders_get_their_own(self):
+        launches, ledger = self.unstick({11: "glm", 12: "minimax"}, passes=2)
+        self.assertEqual(len(launches), 2)
+        self.assertEqual([launch["modelSelection"] for launch in launches], [GLM, MINIMAX])
+        self.assertIn("#11", launches[0]["message"])
+        self.assertIn("#12", launches[1]["message"])
+        self.assertNotIn("#12", launches[0]["message"])
+        self.assertNotIn("#11", launches[1]["message"])
+
+    def test_two_tickets_with_the_same_builder_share_a_batch(self):
+        launches, ledger = self.unstick({11: "glm", 12: "glm"}, passes=1)
+        self.assertEqual(len(launches), 1)
+        self.assertEqual(launches[0]["modelSelection"], GLM)
+        self.assertIn("#11", launches[0]["message"])
+        self.assertIn("#12", launches[0]["message"])
 
 
 if __name__ == "__main__":

@@ -939,13 +939,22 @@ def unstick(repo, ledger, excl=frozenset()):
     orphans = [n for n in orphans if not marked(f"unstick:{repo}#{n}")]
     if not orphans:
         return "nothing ready"
-    batch = orphans[:7]
+    # Every ticket runs on the builder it resolves to, so a batch holds
+    # only the tickets that resolve to the same builder. Two tickets that
+    # name different builders never share one thread.
+    groups = {}
+    for n in orphans:
+        entry = builder_for(repo, n)
+        if entry is None:
+            continue
+        groups.setdefault(model_list.identity(entry["selection"]), (entry, []))[1].append(n)
+    if not groups:
+        return "unstick waits, every builder is blocked"
+    unsticker, tickets = groups[next(iter(groups))]
+    batch = tickets[:7]
     if DRY:
         return f"DRY unstick {batch}"
     lst = ", ".join(f"#{n}" for n in batch)
-    unsticker = builder_for(repo, next((n for n in batch if builder_label(repo, n)), None))
-    if unsticker is None:
-        return "unstick waits, every builder is blocked"
     msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
     args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "taskType": "chore", "modelSelection": unsticker["selection"],
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
