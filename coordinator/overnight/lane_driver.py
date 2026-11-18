@@ -302,8 +302,13 @@ HOLD_LABEL = "stage:hold"
 
 
 def on_delivered_stage(labels):
-    """Say whether a ticket already carries exactly the delivered stage."""
-    stages = [label.get("name") or "" for label in labels]
+    """Say whether a ticket already carries exactly the delivered stage.
+
+    The names are compared in lower case, the way `ticket move_stage`
+    compares them, so a label written `Stage:Started` counts as delivered
+    and does not send the ticket through a pointless label write.
+    """
+    stages = {(label.get("name") or "").lower() for label in labels}
     return sorted(name for name in stages
                   if name.startswith(STAGE_LABEL) and name != HOLD_LABEL) == [DELIVERED_STAGE]
 

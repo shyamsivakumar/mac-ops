@@ -336,8 +336,12 @@ def move_stage(repo, number, stage):
     target = f"{STAGE_PREFIX}{stage}"
     labels = gh_json(["issue", "view", str(number), "-R", repo, "--json", "labels"])
     before = stage_labels([label["name"] for label in labels["labels"]])
-    remove = [name for name in before if name != target]
-    add = [] if target in before else [target]
+    # Label names are compared case-insensitively, the way GitHub matches them
+    # and the way `stage_labels` recognizes the family. A ticket whose label is
+    # written `Stage:Started` already holds the target stage, so it is not
+    # written at all instead of being asked to drop and add the same label.
+    remove = [name for name in before if name.lower() != target]
+    add = [] if any(name.lower() == target for name in before) else [target]
     if not add and not remove:
         return False
     if add:

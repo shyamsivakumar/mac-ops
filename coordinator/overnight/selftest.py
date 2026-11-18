@@ -353,6 +353,10 @@ def gate_pipeline():
         # that sees the builder's open pull request, before the gate.
         ("stage-less", repo, "PASS", "VERDICT: PASS", {},
          ["deliver", "merge", "provides", "ff"], []),
+        # The stage label is compared without regard to case, so a ticket that
+        # already holds the delivered stage is not delivered again.
+        ("case-delivered", repo, "PASS", "VERDICT: PASS", {},
+         ["merge", "provides", "ff"], [{"name": "Stage:Started"}]),
     ]
     for name, target, verdict, reply, ledger, expected, labels in cases:
         actions = []

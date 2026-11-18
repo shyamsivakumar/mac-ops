@@ -235,6 +235,15 @@ class DeliverTest(unittest.TestCase):
         deliver(github)
         self.assertEqual(github.stages(), ["stage:started"])
 
+    def test_deliver_does_not_churn_a_stage_label_written_in_another_case(self):
+        # GitHub matches label names without regard to case, and a ticket that
+        # already holds the delivered stage must not be asked to drop and add
+        # the same one label (mac-ops #533).
+        github = FakeGitHub(["Stage:Started", "type:standard"], pulls=[20])
+        deliver(github)
+        self.assertEqual(github.edits, [])
+        self.assertEqual(github.labels, ["Stage:Started", "type:standard"])
+
     def test_deliver_does_not_churn_an_unchanged_ticket(self):
         github = FakeGitHub(["stage:started", "type:standard"], pulls=[20])
         deliver(github)
