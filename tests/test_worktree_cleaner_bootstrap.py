@@ -1110,6 +1110,35 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
         self.assertFalse(recovery.exists(), "the copy has to go")
 
+    def test_the_sweep_keeps_a_copy_when_the_open_files_are_unknown(self):
+        # When the open files cannot be read, the copy is kept: the sweep never
+        # removes a copy it cannot show to be safe.
+        base = Path(self.tmp.name)
+        state = base / "state"
+        state.mkdir()
+        recovery = base / "elsewhere" / "recovered"
+        recovery.mkdir(parents=True)
+        (recovery / "saved.txt").write_text("saved\n", encoding="utf-8")
+        older = time.time() - 48 * 60 * 60
+        os.utime(recovery / "saved.txt", (older, older))
+        os.utime(recovery, (older, older))
+        cleaner._record_recovery(state, recovery)
+        manifest = state / "recovery.json"
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+        for entry in entries:
+            entry["recovered_at"] = older
+        manifest.write_text(json.dumps(entries), encoding="utf-8")
+        original_run = cleaner.run
+
+        def failing_lsof(argv, **kwargs):
+            if argv and argv[0] == "lsof":
+                raise cleaner.SafetyError("lsof_unavailable")
+            return original_run(argv, **kwargs)
+
+        with mock.patch.object(cleaner, "run", failing_lsof):
+            cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
+        self.assertTrue(recovery.exists(), "a copy has to be kept when the open files are unknown")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
