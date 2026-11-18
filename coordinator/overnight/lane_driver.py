@@ -491,8 +491,8 @@ def builder_label(repo, issue):
     if issue is None:
         return None
     for ticket in SNAPSHOT.get("tickets") or []:
-        if ticket.get("repo") == repo and str(ticket.get("number")) == str(issue):
-            return ticket.get("builder") or None
+        if ticket.get("repo") == repo and str(ticket.get("number")) == str(issue) and ticket.get("builder"):
+            return ticket["builder"]
     for record in (SNAPSHOT.get("repos", {}).get(repo) or {}).get("issues") or []:
         if str(record.get("number")) != str(issue):
             continue

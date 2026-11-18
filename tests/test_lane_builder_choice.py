@@ -67,7 +67,7 @@ class BuilderChoice(unittest.TestCase):
         path = Path(self.scratch.name) / "providers-blocked.json"
         path.write_text(json.dumps({"blocked": {identity: {"reason": "usage limit"} for identity in identities}}))
 
-    def launch(self, thread, issue=None, builder_label=None, pr=True, root_workspace=False):
+    def launch(self, thread, issue=None, builder_label=None, pr=True, root_workspace=False, tickets=None):
         """Replay one send and return the dispatch payload, or None."""
         calls = []
 
@@ -75,7 +75,7 @@ class BuilderChoice(unittest.TestCase):
             calls.append(cmd)
             return "#1 p0 started"
 
-        snapshot = {"tickets": [], "repos": {REPO: {"prs": [], "issues": [
+        snapshot = {"tickets": tickets or [], "repos": {REPO: {"prs": [], "issues": [
             {"number": 10, "labels": ([{"name": f"builder:{builder_label}"}] if builder_label else [])}]}}}
         with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
              patch.object(self.lane, "t3", lambda tool, args: {"thread": thread}), \
@@ -108,6 +108,11 @@ class BuilderChoice(unittest.TestCase):
 
     def test_the_ticket_builder_label_comes_first(self):
         out, payload = self.launch(self.thread(SOL), issue=10, builder_label="glm")
+        self.assertEqual(payload["modelSelection"], GLM)
+
+    def test_a_ticket_record_without_a_builder_still_reads_the_issue_label(self):
+        record = {"repo": REPO, "number": 10, "stage": "started"}
+        out, payload = self.launch(self.thread(SOL), issue=10, builder_label="glm", tickets=[record])
         self.assertEqual(payload["modelSelection"], GLM)
 
     def test_a_thread_on_another_builder_takes_no_send(self):
