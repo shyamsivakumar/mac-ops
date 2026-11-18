@@ -121,7 +121,11 @@ VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                # Value options named in `gh run list --help` and its
                # neighbours, so their values are never read as selectors.
                "--commit", "--created", "--status", "--event", "--user",
-               "--app", "--workflow", "--job", "--attempt")
+               "--app", "--workflow", "--job", "--attempt",
+               # Text options whose value can look like anything, including a
+               # repository selector.
+               "--body", "--body-file", "--title", "--subject", "--notes",
+               "--message", "--reason", "--comment", "--description")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 # The flags this code understands. A cluster it does not know, such as
 # `-iXPOST`, may hide a method or a body, so such a command is never cached.
@@ -620,6 +624,8 @@ SHORT_BOOLEAN = {
     # `gh issue create`: `-e` opens the editor and `-w` the browser; neither
     # takes a value there either.
     ("issue", "create"): {"-e", "-w"},
+    # `gh pr checkout`: `-f` is `--force`.
+    ("pr", "checkout"): {"-f"},
 }
 SHORT_VALUE = {
     # `-b` is `--branch string` for `run list`, not a boolean.
