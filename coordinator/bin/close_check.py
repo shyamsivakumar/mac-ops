@@ -55,10 +55,6 @@ SKIPPED = "skipped"
 # touches. No string ties a test to a change: a pull request can write the
 # same string into an unrelated test and into a file it changed, and that
 # proves nothing.
-# A distinctive literal is a long quoted value with punctuation in it: a
-# model id, a path, a constant name. It is what two files share when one
-# pins what the other sets.
-DISTINCTIVE = re.compile(r"[\"']([^\"'\\\n]{10,})[\"']")
 
 
 # A ticket states its scope in prose, and it can exclude as well as permit.

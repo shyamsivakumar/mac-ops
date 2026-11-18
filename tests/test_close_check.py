@@ -192,6 +192,24 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("tests/test_alarm_panel.py", item["detail"])
 
+    def test_a_copied_value_in_an_allowed_file_authorizes_no_test(self):
+        """The gate's counterexample, verbatim.
+
+        The ticket names `close_check.py` and allows its existing tests to
+        change. The change adds `UNUSED = "alarm-panel-value"` to the
+        allowed file, and an unrelated test carries that string. The test
+        is still out of scope: a string is not a relationship, whether the
+        change introduced it or not.
+        """
+        check = close_check()
+        ticket = ("The change is in close_check.py. Existing tests that pin it may change "
+                  "only as far as this needs.")
+        item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
+                                         "tests/test_alarm_panel.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("tests/test_alarm_panel.py", item["detail"])
+        self.assertNotIn("pass", item["status"])
+
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
         item = check.item_scope("The change is in lane_driver.py.",
