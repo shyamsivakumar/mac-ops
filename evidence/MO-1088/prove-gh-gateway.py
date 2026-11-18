@@ -192,6 +192,28 @@ labeled = rows()[rows_before:]
 check("an api read is logged as core",
       labeled and all(row["resource"] == "core" for row in labeled),
       f"resources={[row['resource'] for row in labeled]}")
+rows_before = len(rows())
+run(["gh", "api", "search/issues?q=repo:a/b+is:issue"])
+searched_api = rows()[rows_before:]
+check("an api search endpoint is logged as search",
+      searched_api and all(row["resource"] == "search" for row in searched_api),
+      f"resources={[row['resource'] for row in searched_api]}")
+rows_before = len(rows())
+run(["gh", "run", "list", "-R", "a/b", "--limit", "5"])
+runs = rows()[rows_before:]
+check("a REST command is logged as core",
+      runs and all(row["resource"] == "core" for row in runs),
+      f"resources={[row['resource'] for row in runs]}")
+
+dispatch = ["gh", "api", "-X", "POST", "repos/a/b/dispatches?ref=main"]
+before = calls_made()
+run(dispatch)
+run(dispatch)
+check("a write with a query string is never cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+check("a write is not conditional",
+      not any("dispatches" in line and "If-None-Match" in line
+              for line in calls.read_text().splitlines()))
 
 check("the usage log names the caller per call", all(row["caller"] == "proof" for row in rows()))
 
