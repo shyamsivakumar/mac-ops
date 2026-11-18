@@ -7,6 +7,7 @@ _BIN_DIR = str(Path(__file__).resolve().parent)
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 
+from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
 
 
@@ -31,7 +32,11 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
                     "`git merge --ff-only origin/main` there; when no worktree has main checked out, run `git fetch origin main:main`. "
                     "Report `git rev-parse main origin/main` (one hash twice) or the exact refusal. Fast-forward no other repository.")
     close = (" Ascend repo: do not close the issue." if ascend else
-             f" Only when that merge produced a merge commit, verify every Provides claim from the ticket on that merge commit and report the commit SHA, evidence and result for each claim. If any Provides claim is false, missing or unverified, close nothing and report the refusal. Only after every Provides claim passes on the merge commit, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
+             f" Only when that merge produced a merge commit, verify every Provides claim from the ticket on that merge commit and report the commit SHA, evidence and result for each claim. If any Provides claim is false, missing or unverified, close nothing and report the refusal. "
+             f"Before the close, run the close checklist: `python3 coordinator/bin/close_check.py --repo {repo} --pr {number}"
+             + (f" --issue {issue}" if issue is not None else "") + "` (the coordinator's mac-ops checkout holds it). "
+             "If it ends `RESULT: FAIL`, send the work back to the builder with the failing item it names, close nothing, and report the refusal. "
+             f"Only after every Provides claim passes on the merge commit and the checklist passes, close the ticket: run `gh issue close {issue} -R {repo} --comment \"VERDICT: PASS. Merged via #{number} (<merge commit sha>).\"` with <merge commit sha> the merge commit you reported, or read it with `gh pr view {number} -R {repo} --json mergeCommit --jq .mergeCommit.oid` when the merge output did not give it. On VERDICT: FAIL, or when the merge did not happen, close nothing.")
     if issue is None:
         close = " No ticket is associated with this PR; close no issue."
     check = (f"Confirm srw/agent-check success on {head} using gh api repos/{repo}/commits/{head}/statuses."
@@ -49,6 +54,7 @@ Read the {source} and diff only: `git fetch origin && git diff origin/{base}...{
 Re-read prior gate findings and say whether each is resolved.
 Tag findings critical, major, minor with file:line. Runtime changes outside the task, unrelated test weakening, circular proof and workflow files are major; secrets are critical.
 {GATE_BAR}
+{ANSWER_FORMAT}
 Reconfirm the PR head is {head}; otherwise CHECK: FAIL. End `CHECK: PASS {head}` or `CHECK: FAIL {head}`, then exactly `VERDICT: PASS` or `VERDICT: FAIL`.
 {manual_gate_ending() if manual_merge(settings) else merge + fast_forward + close + " Never call emp. Never print secrets."}"""
     if not fast_forward_main and not manual_merge(settings):
