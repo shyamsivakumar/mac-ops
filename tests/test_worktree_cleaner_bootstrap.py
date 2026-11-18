@@ -688,6 +688,22 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertEqual(os.readlink(link), "../third.md")
         self.assertIsNone(cleared)
 
+    def test_a_mode_change_after_the_scan_keeps_the_worktree(self):
+        # The file becomes executable after the scan. The bytes still match,
+        # so the mode has to be compared as well, and the worktree has to be
+        # kept with that change in it.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        records = cleaner.status_for(self.repo)
+        digests = {name: cleaner.file_digest(self.repo / name) for code, name, original in records if original is None}
+        signatures = {name: cleaner._working_signature(self.repo / name) for code, name, original in records if original is None}
+        index_before = cleaner.index_digest(self.repo)
+        os.chmod(self.repo / "AGENTS.md", 0o755)
+        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, digests, index_before, signatures)
+        self.assertIsNone(cleared)
+        self.assertTrue(os.access(self.repo / "AGENTS.md", os.X_OK), "the mode change has to survive")
+        self.assertNotEqual(cleaner.status_for(self.repo), [])
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

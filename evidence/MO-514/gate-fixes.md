@@ -39,6 +39,7 @@ the test that fails without the fix.
 | 31 | a detached worktree that qualified through default branch ancestry recorded no eligibility reason and a false ancestry flag | the detached branch records the rule and the ancestry flag when it qualifies that way | `verification/worktree-cleaner/check_bootstrap.py` (the `detached-main` worktree) |
 | 32 | 24 hours of inactivity let a detached worktree with bootstrap edits be removed, even when its head was published only on an open feature branch | a detached worktree is removed only with verified default branch ancestry or a closed or merged pull request that carries its head; inactivity alone never authorises it | `verification/worktree-cleaner/check_bootstrap.py` (the `detached-master` worktree) |
 | 33 | the recovery file name flattened the whole relative path, so a long nested path made `mkstemp` fail and left an eligible worktree on disk | the recovery files use a short fixed prefix and `mkstemp` supplies the uniqueness | `...::ClearBootstrapChangesTest::test_the_cleanup_does_not_leak_descriptors` |
+| 34 | the cleanup verified only the bytes of a file, so a mode change made after the validation still matched and the committed mode was restored over it | the type and the executable bit of the file are recorded at the scan and compared before the move and again on the moved file, so a mode change keeps the worktree | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_a_mode_change_after_the_scan_keeps_the_worktree` |
 
 ## How the fixes are proved
 
