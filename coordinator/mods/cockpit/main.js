@@ -1615,10 +1615,23 @@ export default class Board extends View {
     if (this.dec) setShared("cockpit.acted", Date.now());
     for (const c of threads) this.settled.set(c.key, c.at);
     const label = summary ?? (threads.length === 1 ? `Settled ${threads[0].task || threads[0].title}` : `Settled ${threads.length} threads`);
-    const undo = () => threads.forEach((c) => this.settled.delete(c.key));
+    const undo = (failed = threads) => failed.forEach((c) => this.settled.delete(c.key));
     this.attempt(label, async () => {
-      for (const c of threads) await settle(c.key);
-      return { note: "", level: "success" };
+      const failures = [];
+      for (const c of threads) {
+        try {
+          await settle(c.key);
+        } catch (error) {
+          failures.push({ thread: c, message: error.message });
+        }
+      }
+      if (!failures.length) return { note: "", level: "success" };
+      if (failures.length === threads.length) throw new Error(failures[0].message);
+      undo(failures.map((f) => f.thread));
+      const running = failures.filter((f) => /still running/.test(f.message)).length;
+      const other = failures.find((f) => !/still running/.test(f.message));
+      const note = [running && `${running} still running`, other && `${failures.length - running} failed: ${other.message}`].filter(Boolean).join(". ");
+      return { label: `Settled ${threads.length - failures.length} of ${threads.length}`, note, level: "error" };
     }, cx, undo);
     cx.notify();
   }
