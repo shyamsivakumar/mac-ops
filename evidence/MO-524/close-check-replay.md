@@ -62,8 +62,10 @@ The work goes back to its builder and the ticket stays open.
   background, and a file named in the context section is a reference, not a
   permission. A ticket that declares no scope names no file, so its scope cannot be
   judged and the close is refused.
-- A heading under a section cannot lift the exclusion of the section it sits in: a
-  "### Scope" inside "## Out of scope" leaves the files beneath it excluded. A heading
+- A heading under a section cannot lift the exclusion of the section it sits in, and
+  neither can an inline marker: a "### Scope" inside "## Out of scope" and an
+  "- In: legacy/config.py" bullet under the same heading both leave the files beneath
+  them excluded. A heading
   under a section belongs to that section, so it keeps the section's intent: a
   file under "### Protected files" inside "## Out of scope" stays excluded, and a
   sibling heading restores the intent of the section around it rather than dropping
@@ -96,3 +98,7 @@ The work goes back to its builder and the ticket stays open.
 
 The cost note item is skipped in all three: MO-1068 (#504) is report only and its report
 (evidence/MO-1068/cost-report.md) does not exist yet.
+
+A run in which the files of a pull request cannot be read fails the scope item rather
+than reading as the end of the diff, so the checklist refuses the close while the
+GitHub API is out of reach rather than judging half a diff.
