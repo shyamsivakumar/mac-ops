@@ -2,30 +2,30 @@
 
 The worktree cleaner on this Mac, at the head of PR #545.
 
-- executed commit: `141d95db9a8bee845bf983414da2519d6df3291d`
+- executed commit: `7aee3514e6b65ae0625fe0f04196dea624c91bf6`
 - command: `python3 scripts/worktree-cleaner/cleaner.py --dry-run --no-report`
 
 ## Dry run
 
 - repositories scanned: 71
 - worktrees scanned: 238
-- categories: safe 0, needs a look 113, in use or protected 54
-- eligible (would be removed): 0
+- categories: safe 1, needs a look 112, in use or protected 54
+- eligible (would be removed): 1
 - excluded repositories: 32
-- held: 238
+- held: 237
 
 Reasons per worktree, in aggregate:
 
 | reason | worktrees |
 | --- | --- |
-| detached_not_proven_24h_old | 16 |
+| detached_not_published | 15 |
 | github_pr_not_closed_for_head | 52 |
 | github_pr_open | 14 |
 | main_checkout | 71 |
 | process_cwd_inside | 7 |
 | remote_commit_unverified | 21 |
 | t3_thread_unfinished | 39 |
-| worktree_dirty | 79 |
+| worktree_dirty | 78 |
 | worktree_missing_or_prunable | 10 |
 | worktree_outside_scope | 84 |
 | worktree_status_unknown | 1 |
@@ -44,24 +44,24 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/.t3/worktrees/CineJar/t3-6ada78dc-e92e6da145a19275` | t3/accessible-error-retry-button | 77b5b848487c | github_pr_not_closed_for_head, remote_commit_unverified |
 | `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-59697cc6-2313540acd254d38` | t3/value-diff-impact-plan | 45ec9f04a10e | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-817e6343-d86ebae2e6f871ab` | t3/single-agent-fix-benchmark | 45ec9f04a10e | worktree_dirty |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-cas-conflict-A` | detached | c01aa05c5484 | detached_not_proven_24h_old, worktree_missing_or_prunable |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-cas-conflict-B-fix` | detached | c01aa05c5484 | detached_not_proven_24h_old, worktree_missing_or_prunable |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-cas-conflict-B-invest` | detached | c01aa05c5484 | detached_not_proven_24h_old, worktree_missing_or_prunable |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-heartbeat-recovery-A` | detached | 3ea2fe3a4e99 | detached_not_proven_24h_old, worktree_missing_or_prunable |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-heartbeat-recovery-B-fix` | detached | 3ea2fe3a4e99 | detached_not_proven_24h_old, worktree_missing_or_prunable |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-heartbeat-recovery-B-invest` | detached | 3ea2fe3a4e99 | detached_not_proven_24h_old, worktree_missing_or_prunable |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f3-recovery-fence-A` | detached | 8ff0ec226371 | detached_not_proven_24h_old, worktree_missing_or_prunable |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f3-recovery-fence-B-fix` | detached | 8ff0ec226371 | detached_not_proven_24h_old, worktree_missing_or_prunable |
-| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f3-recovery-fence-B-invest` | detached | 8ff0ec226371 | detached_not_proven_24h_old, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-cas-conflict-A` | detached | c01aa05c5484 | detached_not_published, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-cas-conflict-B-fix` | detached | c01aa05c5484 | detached_not_published, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-cas-conflict-B-invest` | detached | c01aa05c5484 | detached_not_published, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-heartbeat-recovery-A` | detached | 3ea2fe3a4e99 | detached_not_published, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-heartbeat-recovery-B-fix` | detached | 3ea2fe3a4e99 | detached_not_published, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f2-heartbeat-recovery-B-invest` | detached | 3ea2fe3a4e99 | detached_not_published, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f3-recovery-fence-A` | detached | 8ff0ec226371 | detached_not_published, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f3-recovery-fence-B-fix` | detached | 8ff0ec226371 | detached_not_published, worktree_missing_or_prunable |
+| `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-be78b59e-21cfcf58d384d21f/evals/fix-bench/state/runs/f3-recovery-fence-B-invest` | detached | 8ff0ec226371 | detached_not_published, worktree_missing_or_prunable |
 | `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-bfcb773a-ae87f52b04435d87` | t3/workflow-crash-investigation | 45ec9f04a10e | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-crn-18-moved` | t3/crn-18-moved | 45ec9f04a10e | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/cairn/t3-crn-19-moved` | t3/crn-19-moved | 45ec9f04a10e | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/catalogue/t3-7ecf0b27-68ce9011a4aa60bc` | t3/m4-device-evidence-4 | 118839b60162 | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/catalogue/t3-7f8bd63e-d45ae621bc94803e` | t3/wardrobe-import-pilot-evidence | 5e6137524a7d | github_pr_not_closed_for_head, remote_commit_unverified |
 | `/Users/shyamsivakumar/.t3/worktrees/catalogue/t3-a1e4baf0-952b4c4d4d11f512` | t3/m4-device-evidence-3 | 118839b60162 | worktree_dirty |
-| `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-183d70ea-e8dc1b09f1a23b41` | detached | ee144cdce816 | detached_not_proven_24h_old |
+| `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-183d70ea-e8dc1b09f1a23b41` | detached | ee144cdce816 | eligible |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-1bd9b9e6-95c92394691f3ea2` | t3/invite-redemption-audit-slice | 10bad28f38ba | github_pr_not_closed_for_head |
-| `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-6cc00be6-418aeee9357c5436` | detached | 0743cd55c35f | detached_not_proven_24h_old |
+| `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-6cc00be6-418aeee9357c5436` | detached | 0743cd55c35f | detached_not_published |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-a248118e-806b5489338cca83` | t3/fix-pr-builder-check-line | 74c4d8977b33 | t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-con-102-dry-run-25642a6bcda8ce92` | t3/con-102-dry-run | 0743cd55c35f | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/concerning/t3-con-102-grants-331bb1e4deb7fd9e` | t3/con-102-grants | 9f58ce770167 | github_pr_not_closed_for_head |
@@ -111,13 +111,13 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/.t3/worktrees/fantasy-football-toolkit/t3-f3dd13ed-5681fe3323a05780` | t3/dynasty-parity-triage | 2ea2948765ea | github_pr_not_closed_for_head, remote_commit_unverified |
 | `/Users/shyamsivakumar/.t3/worktrees/fantasy-football-toolkit/t3-fda94c61-4f3e8d8bcec6a599` | t3/football-news-source-contracts | 0322ba5506f5 | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-49d25966-69bf5241e76e386b` | docs/pencil-paper-mcp-20261116 | bd0ae1399a44 | github_pr_not_closed_for_head, t3_thread_unfinished |
-| `/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-5843bb0b-ebd4df4f2753c9a2` | detached | 21118d94f331 | detached_not_proven_24h_old |
+| `/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-5843bb0b-ebd4df4f2753c9a2` | detached | 21118d94f331 | detached_not_published |
 | `/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-8dea0117-b2cf0945edd0e418` | fix/launchd-bootstrap-loaded-check | 3cb9045719c9 | github_pr_not_closed_for_head, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/llmwiki/t3-91122478-c58df0f5c4bd7ad9` | t3/explain-refactoring-design-debt-pages | b3e42f8a69ad | github_pr_open, t3_thread_unfinished, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-0b52757a-92a5e3a85418e130` | t3/traces-trial-findings | 99b14ecd94f8 | github_pr_not_closed_for_head, remote_commit_unverified |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-190b68f0-118b49042f0f6e1c` | t3/overnight-pr-state-actions | 88217fd4b647 | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-22350cfe-02533d768be081e9` | t3/mo245-shift-health | ac247e18ec78 | t3_thread_unfinished |
-| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-2767e585-3aaf4aae17942d16` | t3/worktree-cleaner-auto-archive | 141d95db9a8b | github_pr_open, process_cwd_inside, remote_commit_unverified, t3_thread_unfinished |
+| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-2767e585-3aaf4aae17942d16` | t3/worktree-cleaner-auto-archive | 7aee3514e6b6 | github_pr_open, process_cwd_inside, remote_commit_unverified, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-3893369a-fd3a15a73c0995bb` | t3/astra-reviewer-chain-openai-api | 68479d7b94c4 | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-3893415e-a05be649c7b45064` | t3/overnight-stall-sweep-alert | a224366c8255 | github_pr_not_closed_for_head, remote_commit_unverified |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-3b3f29fb-d559100edfc2f01a` | t3/lane-queue-dedupe-reservations | e5bf969d0332 | t3_thread_unfinished |
@@ -139,13 +139,13 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-af05d4d4-92a8fafc3dde265b` | t3/prompt-question-quick-answers | 9dabf45d5749 | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-b0403464-2d79187186b26f5f` | t3/coordinator-tick-call-timeouts | 5547e96601ad | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-d0fd643e-c890630b5592eb54` | t3/gate-main-fast-forward | b5db52b67228 | github_pr_not_closed_for_head, remote_commit_unverified |
-| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-d3c05f6b-0816e79cd3256c91` | t3/prompt-pr-no-auto-merge | 002d76011b84 | github_pr_open, process_cwd_inside, t3_thread_unfinished |
+| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-d3c05f6b-0816e79cd3256c91` | t3/prompt-pr-no-auto-merge | c1b5f2b0c8c7 | github_pr_open, process_cwd_inside, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-d55e849b-7ac34c278c502d06` | mo-1060-finish | ce79295f57ec | t3_thread_unfinished, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-e05fc9b2-bbe83cb200cb4954` | t3/atomic-ticket-stage-labels | 61a6355e4f5b | github_pr_not_closed_for_head, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-ed0cc1ab-dd469dc6a2dc50a9` | t3/heavy-admit-ios-builds-16gb | bbfca75ef74c | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1072-heavy-headro-7047753fa31e514d` | t3/mo-1072-heavy-headroom | 8cc4e7b565ec | t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1081-ds-c2a8b679bfa1cfe2` | t3/mo-1081-ds | ab1678b3e6de | github_pr_not_closed_for_head, t3_thread_unfinished |
-| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1082-builder-fall-f25933ab4a05df56` | t3/mo-1082-builder-fallback | 01625c3c9b5d | github_pr_open, process_cwd_inside, t3_thread_unfinished, worktree_dirty |
+| `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1082-builder-fall-f25933ab4a05df56` | t3/mo-1082-builder-fallback | ecab2d2c5011 | github_pr_open, process_cwd_inside, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1083-ds-f14d3e93d7c4c72c` | t3/mo-1083-ds | a07ebdb9792d | github_pr_open, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-1084-ds-e622750ab7149819` | t3/mo-1084-ds | 607c9120c611 | github_pr_open, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/mac-ops/t3-mo-185-cockpit-t3-efa57bdfd7448ec4` | t3/mo-185-cockpit-t3 | 9423ca179385 | worktree_dirty |
@@ -162,7 +162,7 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/.t3/worktrees/recoup/t3-02c2b9b9-1f524b3a48903c86` | t3/privacy-deletion-instructions-match-settings | 53bedbe2567b | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/.t3/worktrees/recoup/t3-1373d7af-0f2d184c1a55345c` | t3/route-release-checks-heavy | 963a4d37fb95 | github_pr_not_closed_for_head, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/recoup/t3-22272ce0-19625a477e824c28` | t3/rcp-22-repeated-reauth-notice | 8df596263154 | github_pr_not_closed_for_head, remote_commit_unverified, t3_thread_unfinished |
-| `/Users/shyamsivakumar/.t3/worktrees/recoup/t3-2c10b1cd-dbb7b86338b6a474` | detached | 54a9965e7753 | detached_not_proven_24h_old |
+| `/Users/shyamsivakumar/.t3/worktrees/recoup/t3-2c10b1cd-dbb7b86338b6a474` | detached | 54a9965e7753 | detached_not_published |
 | `/Users/shyamsivakumar/.t3/worktrees/recoup/t3-64e705db-3a51f68531d2c1c8` | t3/rcp-25-mock-simulator-smoke-receipt | dc7fd1badd37 | github_pr_not_closed_for_head, remote_commit_unverified |
 | `/Users/shyamsivakumar/.t3/worktrees/recoup/t3-71069245-6b3af1357a961ea9` | t3/route-release-checks-through-heavy-1 | e709a34f10bd | github_pr_not_closed_for_head, remote_commit_unverified, t3_thread_unfinished |
 | `/Users/shyamsivakumar/.t3/worktrees/recoup/t3-971a7756-f47be557103e5a2c` | t3/route-release-checks-through-heavy | 963a4d37fb95 | github_pr_not_closed_for_head, t3_thread_unfinished |
@@ -180,12 +180,12 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/.t3/worktrees/tunerise/amp-tnr-24` | amp/tnr-24 | 44de6a69bd53 | github_pr_open, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/tunerise/amp-tnr-25` | amp/tnr-25 | 1ff34d75f249 | github_pr_open, remote_commit_unverified, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/tunerise/amp-tnr-26` | amp/tnr-26 | 7ef21ce6c16c | github_pr_open, t3_thread_unfinished |
-| `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-19a4b3ae-9c56076728b57709` | detached | 44de6a69bd53 | detached_not_proven_24h_old |
+| `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-19a4b3ae-9c56076728b57709` | detached | 44de6a69bd53 | detached_not_published |
 | `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-1f15de68-4bdf01be92c40066` | t3/reject-blank-unsupported-source-addresses | 0a2adc79b37e | worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-4723d9c0-9045c0b25989667f` | t3/tnr-23-report-file-import-errors | 9da30d88a381 | github_pr_not_closed_for_head, remote_commit_unverified, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-6312c1bc-9beaf0a06abaa888` | t3/show-playback-failure-retry | f250fc704e13 | github_pr_not_closed_for_head, worktree_dirty |
 | `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-8a08a700-d6734fd95741a5a6` | t3/show-failed-playback-retry | 0a2adc79b37e | worktree_dirty |
-| `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-907ce842-64eed77d4d94211a` | detached | e7b8cd6d3fcc | detached_not_proven_24h_old |
+| `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-907ce842-64eed77d4d94211a` | detached | e7b8cd6d3fcc | detached_not_published |
 | `/Users/shyamsivakumar/.t3/worktrees/tunerise/t3-f4bdd273-f8a5501f45404698` | t3/report-file-import-errors | a091d4f28e2b | github_pr_not_closed_for_head, remote_commit_unverified, t3_thread_unfinished, worktree_dirty |
 | `/Users/shyamsivakumar/Code/.worktrees/ffbt-412` | pr412-check | 6bd621da31f9 | github_pr_not_closed_for_head |
 | `/Users/shyamsivakumar/Code/.worktrees/mac-ops/herdr-act-log` | herdr/act-log | c73c38c722a4 | github_pr_not_closed_for_head |
@@ -196,12 +196,11 @@ Every worktree that was scanned, with the reason it is held:
 | `/Users/shyamsivakumar/Code/mac-ops/.claude/worktrees/hub-last-error` | work/hub-last-error-2026-11-06 | 8a008c8c6b44 | worktree_dirty |
 | `/Users/shyamsivakumar/Code/mac-ops/.claude/worktrees/port-base` | work/port-base-reaches-shell-2026-11-06 | 23999cde393a | worktree_dirty |
 | `/Users/shyamsivakumar/Code/mac-ops/.empryo/tmp/tabs/5ac2e513-9d4e-4390-a112-aa517d650f56/mo181` | detached | 37bdada62bd3 | worktree_outside_scope |
-| `/private/tmp/fb-c1` | detached | c01aa05c5484 | detached_not_proven_24h_old, worktree_missing_or_prunable, worktree_status_unknown |
+| `/private/tmp/fb-c1` | detached | c01aa05c5484 | detached_not_published, worktree_missing_or_prunable, worktree_status_unknown |
 | `/private/tmp/mo1022-fix` | mo1022-fix | 9695d522c417 | github_pr_not_closed_for_head |
 | `/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/cinejar-pre-push.LMrabY` | detached | 77b5b848487c | worktree_outside_scope |
 | `/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/manifestfix` | fix/ffbt-32-build-integrity-manifest | 974857c581fb | worktree_outside_scope |
 | `/private/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/tnr26-rebase` | detached | e7b8cd6d3fcc | worktree_outside_scope |
-
 ## Real run
 
 `python3 scripts/worktree-cleaner/cleaner.py --apply --no-report`
