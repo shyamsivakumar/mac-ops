@@ -401,7 +401,40 @@ def move_stage(repo, number, stage):
         except GhError:
             pass
         raise StageMoveError(e, restored)
+    refuse_parking_added_during_move(repo, number, target, before)
     return True
+
+
+def refuse_parking_added_during_move(repo, number, target, before):
+    """Refuse a move that finished on a ticket Shyam parked after the first read.
+
+    The update adds the target stage whatever the labels are by then, so a
+    ticket parked on `stage:backlog` in between carries both stages. The
+    parking stays and the stage this move added comes off. A hold is not a
+    stage, so a held ticket is put back on the stage it started with and
+    keeps the hold. Either way the caller is refused, so no lane treats the
+    ticket as moved.
+    """
+    try:
+        names = [label["name"] for label in
+                 gh_json(["issue", "view", str(number), "-R", repo, "--json", "labels"])["labels"]]
+        parking = parked_label(names)
+        if not parking:
+            return
+        current = stage_labels(names)
+        if parking == HOLD_LABEL:
+            add_back = [name for name in before if name not in current]
+            drop = [name for name in current if name not in before]
+        else:
+            add_back = []
+            drop = [name for name in current if name.lower() != parking]
+        if add_back or drop:
+            edit_labels(repo, number, add_back, drop)
+    except GhError as e:
+        raise Refuse(f"the stage was moved to {target}, but the labels could not be "
+                     f"checked or repaired afterwards ({e.kind}): {e}; check the ticket") from e
+    raise Refuse(f"parked ({parking}) while the stage moved; the parking is kept "
+                 "and the stage this move added is taken off")
 
 
 def key_problems(rcfg, title):
@@ -1475,7 +1508,7 @@ def cmd_start(a):
     try:
         move_stage(repo, n, STARTED_STAGE)
     except Refuse as e:
-        die(f"started, but the ticket was {e} before the stage label moved, so it keeps the stage it had")
+        die(f"started, but the stage label did not move: {e}")
     except GhError as e:
         if isinstance(e, StageMoveError) and not e.restored:
             die(f"started, but the stage label could not be moved to {STAGE_PREFIX}{STARTED_STAGE} "
