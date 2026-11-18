@@ -283,6 +283,9 @@ class CallerTests(StoreCase):
         # The replay of the gate finding: a probe dispatch that fails must
         # keep probing the provider it names. Moving it would spend another
         # builder on the probe and leave the blocked one unmeasured.
+        # It is dispatched once and then retires: the health store's
+        # deadline, not a retry storm, decides the next probe (MO-1082:
+        # one small probe at most hourly).
         module = self.coordq()
         self.queued(module, [{"id": 1, "tool": "t3_thread_launch", "priority": 0,
                               "title": "Builder probe glm-5.3",
@@ -298,12 +301,13 @@ class CallerTests(StoreCase):
         with patch.object(module, "active_thread_ids", lambda: set()), \
                 patch.object(module, "call", failing):
             module.drain()
-        self.assertEqual(len(calls), module.MAX_ATTEMPTS)
+        self.assertEqual(len(calls), 1)
         for tool, args in calls:
             self.assertEqual(tool, "t3_thread_launch")
             self.assertEqual(args["modelSelection"], GLM)
             self.assertEqual(args["clientRequestId"], "builder-probe:glm:1")
         self.assertEqual([item["id"] for item in module.load()["failed"]], [1])
+        self.assertEqual(module.load()["items"], [])
         self.assertEqual(provider_health.load(), {})
 
     def test_a_failed_build_dispatch_moves_to_the_next_builder(self):
