@@ -112,18 +112,25 @@ def queue_dir():
 
 
 @contextlib.contextmanager
-def blocked_lock():
+def blocked_lock(blocking=True):
     """The lock on the provider block store.
 
     A caller holds it while it reads the blocked set and acts on the
     answer, so a block recorded in between cannot slip past the decision.
+    A caller that already holds the queue lock passes `blocking=False`,
+    because gatekeep takes this lock before the queue lock: the lock is then
+    yielded as False when someone else holds it, and the caller waits.
     """
     directory = queue_dir()
     os.makedirs(directory, exist_ok=True)
     handle = open(os.path.join(directory, BLOCKED_LOCK_FILE), "w")
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        yield True
     finally:
         handle.close()
 

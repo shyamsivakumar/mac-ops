@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import tempfile
 import time
 import types
@@ -471,6 +472,76 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertIsNotNone(coordq.blocked_launch({"args": {"modelSelection": second}}))
         first = coordq.model_list.entries("review")[0]["selection"]
         self.assertIsNone(coordq.blocked_launch({"args": {"modelSelection": first}}))
+
+    def drain_with(self, items, heads, before_launch=None):
+        self.write_queue(heads=heads, items=items)
+        with open(os.path.join(QUEUE_DIR, "config.json"), "w") as f:
+            json.dump({"cap": 5}, f)
+        launches = []
+        saved = {name: getattr(coordq, name) for name in ("live", "active_thread_ids", "call")}
+        self.addCleanup(lambda: [setattr(coordq, name, value) for name, value in saved.items()])
+
+        def live():
+            if before_launch:
+                before_launch()
+            return 0
+
+        coordq.live = live
+        coordq.active_thread_ids = lambda: set()
+        coordq.call = lambda tool, args, rules=None: (
+            launches.append(args) if tool == "t3_thread_launch" else None,
+            (0, json.dumps({"thread": {"threadId": "t-1"}})))[1]
+        coordq.drain()
+        return launches
+
+    def gate_item(self, selection):
+        return {"id": 4, "tool": "t3_thread_launch", "title": "gate", "priority": 5000,
+                "head": self.key, "args": {"modelSelection": selection, "clientRequestId": self.key,
+                                           "message": "review", "taskType": "review"}}
+
+    def test_a_queued_builder_on_a_blocked_model_is_not_dropped(self):
+        builder = coordq.model_list.entries("build")[0]["selection"]
+        self.block(builder)
+        item = {"id": 4, "tool": "t3_thread_launch", "title": "build", "priority": 1,
+                "actionKey": "action:o/r#9:abc",
+                "args": {"modelSelection": builder, "taskType": "worker", "message": "build"}}
+        launches = self.drain_with([item], {})
+        self.assertEqual(len(launches), 1)
+
+    def test_a_gate_blocked_after_it_was_admitted_is_not_launched(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        launches = self.drain_with([self.gate_item(second)], {self.key: {"id": 4, "moved": True}},
+                                   before_launch=lambda: self.block(second))
+        queue = self.read_queue()
+        self.assertEqual(launches, [])
+        self.assertEqual(queue["items"], [])
+        self.assertNotIn(self.key, queue["gatedHeads"])
+
+    def test_an_interrupted_write_with_a_late_block_is_refused_at_launch(self):
+        chosen = coordq.save
+        second = coordq.model_list.entries("review")[1]["selection"]
+
+        def save_then_block_then_interrupt(queue):
+            chosen(queue)
+            if queue["items"]:
+                self.block(second)
+                raise KeyboardInterrupt
+
+        coordq.save = save_then_block_then_interrupt
+        coordq.subprocess.TimeoutExpired = subprocess.TimeoutExpired
+        self.write_queue(heads=self.head())
+        try:
+            self.run_gatekeep()
+        except KeyboardInterrupt:
+            pass
+        coordq.save = chosen
+        self.assertEqual(len(self.gate_items()), 1)
+        launches = self.drain_with(self.read_queue()["items"], self.read_queue()["gatedHeads"])
+        queue = self.read_queue()
+        self.assertEqual(launches, [])
+        self.assertEqual(queue["items"], [])
+        self.assertNotIn(self.key, queue["gatedHeads"])
+        self.assertNotIn(self.key, queue.get("gateReviewers", {}))
 
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
