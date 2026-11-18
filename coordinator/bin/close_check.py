@@ -307,7 +307,10 @@ def proof_rows(text):
     separator and header are not checks, and the header is recognized
     once as the whole header row. A later row whose first cell reads
     "check" is a check like any other, so a recorded failure cannot hide
-    behind a name that reads like the header.
+    behind a name that reads like the header. The separator is recognized
+    as the whole row too: a row that only its first cell marks as a
+    separator is a check with a malformed name, and a malformed row is a
+    row that blocks the close.
     """
     rows = []
     header_seen = False
@@ -316,15 +319,15 @@ def proof_rows(text):
         if not line.startswith("|"):
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        name = cells[0] if cells else ""
-        if not name or set(name) <= set("-: "):
+        if cells and all(cell and set(cell) <= set("-: ") for cell in cells):
             continue
+        name = cells[0] if cells else ""
         if (not header_seen and len(cells) > 1 and name.lower() == "check"
                 and cells[1].lower() == "command"):
             header_seen = True
             continue
         result = cells[2].lower() if len(cells) > 2 else ""
-        rows.append((name, result))
+        rows.append((name or "(unnamed row)", result))
     return rows
 
 

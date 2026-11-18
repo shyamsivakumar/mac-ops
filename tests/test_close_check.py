@@ -328,6 +328,21 @@ class DiffValuesTest(unittest.TestCase):
         self.assertEqual(check.proof_rows(text),
                          [("lane selection", "passed"), ("heavy help", "failed")])
 
+    def test_a_row_that_only_looks_like_a_separator_is_a_check(self):
+        """A separator is a row of separators, not a row whose name is one.
+
+        A proof file with one passing row and `| - | make check | failed |
+        compiler error |` must not read as if the failure were not there.
+        """
+        check = close_check()
+        text = ("| Check | Command | Result | Detail |\n"
+                "| --- | --- | --- | --- |\n"
+                "| lane selection | `x` | passed | |\n"
+                "| - | make check | failed | compiler error |\n")
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("failed", item["detail"])
+
     def test_a_row_named_check_is_a_check(self):
         """The header is recognized once; a later "check" row is a check.
 
