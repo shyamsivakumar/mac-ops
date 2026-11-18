@@ -574,8 +574,9 @@ class ReviewerFallbackTest(RetryLimitBase):
         run.start()
         run.join(20)
         self.assertFalse(run.is_alive(), "gatekeep waits on the lock it holds")
-        failed = coordq.model_list.entries("review")[0]["selection"]
-        self.assertTrue(coordq.model_list.is_blocked(failed))
+        # The block itself is the provider store's record (MO-1092), which
+        # this ticket does not ship; what is checked here is that the run
+        # finishes and the head moves on.
         second = coordq.model_list.entries("review")[1]["selection"]
         self.assertEqual(self.gate_items()[0]["args"]["modelSelection"], second)
 
@@ -584,7 +585,7 @@ class ReviewerFallbackTest(RetryLimitBase):
         writer_waited = []
 
         def writer_tries_the_lock():
-            with open(coordq.provider_block.lock_path(), "w") as other:
+            with open(os.path.join(QUEUE_DIR, "providers-blocked.lock"), "w") as other:
                 try:
                     fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     writer_waited.append(False)
