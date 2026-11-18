@@ -75,6 +75,9 @@ the test that fails without the fix.
 | 73 | the registration was removed by pathname after its inode was checked, so a replacement registration could be deleted | the registration is removed through **its own descriptor**, so a registration that replaced it is never touched | `verification/worktree-cleaner/check_bootstrap.py` |
 | 74 | the rename could move a replacement worktree out of its live path, and a failed restore left it displaced | there is **no rename**: the worktree is emptied through the descriptor of the verified directory, so nothing is ever moved | `verification/worktree-cleaner/check_bootstrap.py` |
 | 75 | a failed `rmdir` or a failed registration prune still logged `removed` | `removed` is logged only when the checkout **and** the registration are both gone; otherwise the removal is reported as incomplete, with the reason | `verification/worktree-cleaner/check_bootstrap.py` |
+| 76 | only the root of the worktree was stamped before the status check, so a file written in a subdirectory afterwards was stamped after the write and deleted | the **whole tree** is stamped before the status check, so a file written afterwards has a stamp that no longer matches and is kept | `verification/worktree-cleaner/check_bootstrap.py` |
+| 77 | when files survived the deletion the registration was emptied anyway, taking its index and `HEAD` with it | when files survive, the checkout keeps its `.git` pointer and the registration is kept with it | `verification/worktree-cleaner/check_bootstrap.py` |
+| 78 | the final `rmdir` of the registration resolved the pathname and could remove an empty replacement | the registration is only removed when it still carries the identity that was verified | `verification/worktree-cleaner/check_bootstrap.py` |
 
 ## How the fixes are proved
 

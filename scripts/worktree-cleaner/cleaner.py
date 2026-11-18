@@ -549,7 +549,34 @@ def _snapshot_directory(fd: int) -> dict[str, tuple[int, int, int, int]]:
     return snapshot
 
 
-def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]]) -> int:
+def _snapshot_all(fd: int, prefix: str = "") -> dict[str, dict[str, tuple[int, int, int, int]]]:
+    """The stamp of every entry of every directory below an open directory.
+
+    The whole tree is stamped before the status check, so a file that is
+    written afterwards has a stamp that no longer matches and is kept.
+    """
+    result: dict[str, dict[str, tuple[int, int, int, int]]] = {}
+    entries = _snapshot_directory(fd)
+    result[prefix] = entries
+    for entry in entries:
+        try:
+            info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            continue
+        try:
+            child = os.open(entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError:
+            continue
+        try:
+            result.update(_snapshot_all(child, prefix + entry + "/"))
+        finally:
+            os.close(child)
+    return result
+
+
+def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapshots: dict[str, dict[str, tuple[int, int, int, int]]] | None = None, prefix: str = "") -> int:
     """Remove the entries of a directory that have not changed since the
     snapshot, through the descriptor of the directory.
 
@@ -558,7 +585,8 @@ def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]]) -> int
     entries that were kept is returned.
     """
     kept = 0
-    for entry, stamp in snapshot.items():
+    entries = snapshots.get(prefix, snapshot) if snapshots is not None else snapshot
+    for entry, stamp in entries.items():
         try:
             info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
         except OSError:
@@ -573,7 +601,7 @@ def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]]) -> int
                 kept += 1
                 continue
             try:
-                kept += _remove_tree(child, _snapshot_directory(child))
+                kept += _remove_tree(child, {}, snapshots, prefix + entry + "/")
             finally:
                 os.close(child)
             try:
@@ -1824,7 +1852,12 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 # The snapshot comes before the status check, so a file that is
                 # saved after the check is not in it and is never removed.
-                snapshot = _snapshot_directory(directory)
+                snapshot = _snapshot_all(directory)
+                pointer = ""
+                try:
+                    pointer = (Path(candidate["path"]) / ".git").read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    pointer = ""
                 try:
                     pending = status_for(Path(candidate["path"]))
                 except SafetyError:
@@ -1845,7 +1878,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_changed_before_remove"]
                     continue
-                kept = _remove_tree(directory, snapshot)
+                kept = _remove_tree(directory, {}, snapshot)
                 os.close(directory)
                 tree_gone = False
                 try:
@@ -1857,18 +1890,39 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 # registration that replaced it in the meantime is not
                 # touched.
                 registration_gone = False
-                try:
-                    admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                except OSError:
-                    admin = None
-                if admin is not None:
+                if kept:
+                    # Files survived the deletion, so the checkout is still
+                    # there and keeps its pointer, and the registration is
+                    # kept with it.
+                    if pointer:
+                        try:
+                            (Path(candidate["path"]) / ".git").write_text(pointer, encoding="utf-8")
+                        except OSError:
+                            pass
+                    try:
+                        admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    except OSError:
+                        admin = None
+                    if admin is not None:
+                        os.close(admin)
+                    registration_gone = False
+                else:
+                    try:
+                        admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    except OSError:
+                        admin = None
+                if kept == 0 and admin is not None:
                     try:
                         info = os.fstat(admin)
                         if (info.st_dev, info.st_ino) == registration_identity:
-                            _remove_tree(admin, _snapshot_directory(admin))
+                            _remove_tree(admin, {}, _snapshot_all(admin))
                             try:
-                                os.rmdir(registration)
-                                registration_gone = True
+                                current = os.stat(registration)
+                                if (current.st_dev, current.st_ino) == registration_identity:
+                                    os.rmdir(registration)
+                                    registration_gone = True
+                                else:
+                                    registration_gone = False
                             except OSError:
                                 registration_gone = False
                     finally:
