@@ -919,6 +919,13 @@ def unstick(repo, ledger, excl=frozenset()):
     receipts = json.load(open(RECEIPTS))
     failures_before = ledger.get("_item_failures", 0)
     held = set()
+
+    def fresh(record):
+        """Whether a ledger record is still within its cooldown."""
+        return (isinstance(record, list) and bool(record)
+                and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+                     - __import__("datetime").datetime.fromisoformat(record[0])).total_seconds() < 1800)
+
     for n in orphans:
         with item_boundary(repo, n, ledger):
             prefix = f"ticket:{repo}#{n}:a"
@@ -926,17 +933,25 @@ def unstick(repo, ledger, excl=frozenset()):
                         if k.startswith(prefix) and k[len(prefix):].isdigit()), default=None)
             if not best:
                 continue
+            if fresh(ledger.get(f"relaunch:{repo}#{n}")):
+                # The ticket was started again recently, so it is being
+                # worked: it is neither started again nor unstuck.
+                held.add(n)
+                continue
             v = ledger.get(f"cont:{best[1]}")
-            if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
-                if len(v) > 2 and v[2]:
-                    held.add(n)
+            if fresh(v):
+                # The continuation is fresh, so the ticket is being worked:
+                # whether the send was held on a live thread or handed to a
+                # fresh builder, the ticket stays out of the batch, so no
+                # builder is given the same ticket twice.
+                held.add(n)
                 continue
             thread = t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread")
             if not thread or root_workspace(thread):
                 if DRY:
                     return f"DRY start #{n}"
                 out = run(["ticket", "start", f"{repo}#{n}"], timeout=200)
-                ledger[f"relaunch:{repo}#{n}"] = out
+                ledger[f"relaunch:{repo}#{n}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
                 print(f"SEND REROUTE {best[1]}: {out}")
                 return f"start #{n}: {out}"
             if DRY:
@@ -966,7 +981,8 @@ def unstick(repo, ledger, excl=frozenset()):
         if isinstance(v, list) and (now - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
             return True
         return False
-    orphans = [n for n in orphans if not marked(f"unstick:{repo}#{n}") and n not in held]
+    orphans = [n for n in orphans if not marked(f"unstick:{repo}#{n}")
+               and n not in held and not marked(f"relaunch:{repo}#{n}")]
     if not orphans:
         return "nothing ready"
     # Every ticket runs on the builder it resolves to, so a batch holds

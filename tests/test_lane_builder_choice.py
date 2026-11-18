@@ -462,6 +462,8 @@ class HeldContinue(unittest.TestCase):
             return mock_open(read_data="continue the ticket {issue}")()
 
         def run(cmd, timeout=150):
+            if cmd[:2] == ["ticket", "start"]:
+                return "started"
             queued.append(json.loads(cmd[2]))
             return "fixture-receipt"
 
@@ -469,8 +471,8 @@ class HeldContinue(unittest.TestCase):
             if tool == "t3_thread_read":
                 for thread in threads.values():
                     if thread["threadId"] == args["threadId"]:
-                        return {"thread": thread}
-                raise AssertionError(f"unexpected thread {args['threadId']}")
+                        return {"thread": None if thread.get("gone") else thread}
+                return {"thread": None}
             raise AssertionError(f"unexpected T3 call {tool}")
 
         ledger = {} if ledger is None else ledger
@@ -494,6 +496,11 @@ class HeldContinue(unittest.TestCase):
         return {"threadId": name, "status": "completed",
                 "providerInstanceId": MINIMAX["instanceId"], "model": MINIMAX["model"],
                 "worktreePath": "/fixture/worktree", "pullRequests": []}
+
+    def idle_legacy(self, name):
+        """A thread that is idle on a model the lane does not build with."""
+        return {"threadId": name, "status": "completed", "providerInstanceId": "codex",
+                "model": "gpt-6.1-sol", "worktreePath": "/fixture/worktree", "pullRequests": []}
 
     def test_a_held_send_lets_the_next_ticket_take_the_pass(self):
         result, queued, ledger = self.unstick({11: self.live_legacy("thread-11"),
@@ -537,6 +544,26 @@ class HeldContinue(unittest.TestCase):
         self.assertEqual(len(queued), 1)
         self.assertEqual(queued[0]["threadId"], "thread-11")
         self.assertTrue(result.startswith("continue #11:"), result)
+
+
+    def test_a_queued_handoff_keeps_the_ticket_out_of_the_next_batch(self):
+        # The idle legacy thread is rerouted: a fresh builder thread is
+        # queued for the ticket. On the next pass the ticket must stay out
+        # of the batch, so the new builder does not get the ticket twice.
+        result, queued, ledger = self.unstick({11: self.idle_legacy("thread-11")}, passes=2)
+        self.assertEqual(len(queued), 1)
+        self.assertNotIn("threadId", queued[0])
+        self.assertEqual(queued[0]["modelSelection"], MINIMAX)
+        self.assertEqual(result, "nothing ready")
+        self.assertIn("cont:thread-11", ledger)
+
+    def test_a_relaunch_keeps_the_ticket_out_of_the_next_batch(self):
+        # The thread is gone, so the ticket is started again. On the next
+        # pass the ticket must stay out of the batch.
+        result, queued, ledger = self.unstick({11: {"threadId": "thread-11", "gone": True}}, passes=2)
+        self.assertEqual(queued, [])
+        self.assertEqual(result, "nothing ready")
+        self.assertIn(f"relaunch:{REPO}#11", ledger)
 
 
 if __name__ == "__main__":
