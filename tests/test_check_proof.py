@@ -2,6 +2,7 @@
 import importlib.util
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 import subprocess
 import sys
 import tempfile
@@ -24,28 +25,58 @@ class ProofFileTest(unittest.TestCase):
         proof_file = load(BIN / "proof_file.py", "proof_file")
         self.assertEqual(proof_file.path_for("MO", 501),
                          "evidence/MO-501/check-proof.md")
-        self.assertIsNone(proof_file.path_for("MO", None))
-        self.assertIsNone(proof_file.path_for(None, 501))
+        self.assertEqual(proof_file.path_for("MO", None),
+                         "evidence/check-proof.md")
+        self.assertEqual(proof_file.path_for(None, 501),
+                         "evidence/check-proof.md")
 
     def test_section_carries_the_file_to_the_gate(self):
         proof_file = load(BIN / "proof_file.py", "proof_file")
         text = "| Check | Result |\n| --- | --- |\n| syntax | passed |"
-        section = proof_file.section(text, "evidence/MO-501/check-proof.md")
+        section = proof_file.section(proof_file.FOUND, text, "evidence/MO-501/check-proof.md")
         self.assertIn("evidence/MO-501/check-proof.md", section)
         self.assertIn("passed", section)
 
     def test_section_says_when_there_is_no_proof_file(self):
         proof_file = load(BIN / "proof_file.py", "proof_file")
-        section = proof_file.section(None, "evidence/MO-501/check-proof.md")
+        section = proof_file.section(proof_file.MISSING, None, "evidence/MO-501/check-proof.md")
         self.assertIn("carries none", section)
         self.assertIn("does not block", section)
+
+    def test_a_failed_read_is_not_a_missing_file(self):
+        proof_file = load(BIN / "proof_file.py", "proof_file")
+        section = proof_file.section(proof_file.UNREADABLE, "the read timed out",
+                                     "evidence/MO-501/check-proof.md")
+        self.assertIn("could not be read", section)
+        self.assertNotIn("carries none", section)
+
+    def test_fetch_reports_a_missing_file_and_a_failed_read_apart(self):
+        proof_file = load(BIN / "proof_file.py", "proof_file")
+
+        class Run:
+            def __init__(self, returncode, stdout="", stderr=""):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        cases = [
+            (Run(1, stderr="gh: Not Found (HTTP 404)"), proof_file.MISSING),
+            (Run(1, stderr="gh: could not connect"), proof_file.UNREADABLE),
+            (Run(0, stdout="not json"), proof_file.UNREADABLE),
+            (Run(0, stdout='{"content": ""}'), proof_file.MISSING),
+        ]
+        for run, expected in cases:
+            with patch.object(subprocess, "run", return_value=run):
+                state, _ = proof_file.fetch("a/b", "evidence/MO-501/check-proof.md", "a" * 40)
+            self.assertEqual(state, expected)
 
     def test_gate_brief_reads_the_proof_file(self):
         gate_policy = load(BIN / "gate_policy.py", "gate_policy")
         settings = {"key": "MO"}
         brief = gate_policy.build_gate_brief(settings, "shyamsivakumar/mac-ops", 501, 12,
                                              "a" * 40, False, proof="| syntax | passed |",
-                                             proof_path="evidence/MO-501/check-proof.md")
+                                             proof_path="evidence/MO-501/check-proof.md",
+                                             proof_state="found")
         self.assertIn("evidence/MO-501/check-proof.md", brief)
         self.assertIn("| syntax | passed |", brief)
         self.assertIn(f"Builder check: PASS {'a' * 40}", brief)
@@ -54,8 +85,17 @@ class ProofFileTest(unittest.TestCase):
         gate_policy = load(BIN / "gate_policy.py", "gate_policy")
         brief = gate_policy.build_gate_brief({"key": "MO"}, "shyamsivakumar/mac-ops", 501, 12,
                                              "a" * 40, False, proof=None,
-                                             proof_path="evidence/MO-501/check-proof.md")
+                                             proof_path="evidence/MO-501/check-proof.md",
+                                             proof_state="missing")
         self.assertIn("carries none", brief)
+
+    def test_gate_brief_names_a_failed_read(self):
+        gate_policy = load(BIN / "gate_policy.py", "gate_policy")
+        brief = gate_policy.build_gate_brief({"key": "MO"}, "shyamsivakumar/mac-ops", 501, 12,
+                                             "a" * 40, False, proof=None,
+                                             proof_path="evidence/MO-501/check-proof.md",
+                                             proof_state="unreadable")
+        self.assertIn("could not be read", brief)
 
 
 class CheckProofTest(unittest.TestCase):

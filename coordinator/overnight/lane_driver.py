@@ -447,6 +447,24 @@ def park(repo, number, issue, head, reply, ledger):
     return f"#{number}: parked, re-cut {out}"
 
 
+MAC_OPS_REPO = "shyamsivakumar/mac-ops"
+SRW_REPO = "shyamsivakumar/strategy-replay-workbench"
+
+
+def check_step(repo, proof_path):
+    """The step a builder takes to put a passing check on its head.
+
+    Only mac-ops writes a proof file, so only mac-ops is told to commit
+    one. The other repositories publish their own check.
+    """
+    if repo == MAC_OPS_REPO:
+        return (f"run the repo check (`python3 scripts/mac_ops_fast_check.py --proof {proof_path}`), "
+                f"commit the proof file `{proof_path}` it writes")
+    if repo == SRW_REPO:
+        return "rely on srw/agent-check (do not run scripts/check.sh)"
+    return "run the repo's full local check"
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -481,9 +499,8 @@ def act_on_pr(repo, number, ledger):
         why = "it conflicts with main" if pr.get("mergeable") == "CONFLICTING" else f"it has no passing check on head {head}"
         if not builder:
             return f"skip #{number}: {why}, no builder thread"
-        msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, run the repo check "
-               f"(mac-ops: `python3 scripts/mac_ops_fast_check.py --proof {proof_path}`; SRW: rely on srw/agent-check, do not run scripts/check.sh), "
-               f"commit the proof file `{proof_path}` it writes, push, set "
+        msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
+               f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
         return f"#{number} fix-check: " + send(builder, msg, f"{CFG[repo]['key']}#{number} check", ledger, f"check:{repo}#{number}:{head}", pr_number=number)
     verdict, gate, reply = gate_verdict(repo, number, head)
@@ -512,8 +529,8 @@ def act_on_pr(repo, number, ledger):
     if verdict == "FAIL":
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
-        msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, run the repo check "
-               f"(mac-ops: `python3 scripts/mac_ops_fast_check.py --proof {proof_path}`), commit the proof file `{proof_path}` it writes, push, set "
+        msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, "
+               f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the new head. 20 minutes at most.\n\n"
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, f"{CFG[repo]['key']}#{number} gate findings", ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
