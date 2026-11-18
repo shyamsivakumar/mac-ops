@@ -80,6 +80,8 @@ def main() -> int:
         paths = {name: trees / name for name in shas}
         for name, path in paths.items():
             git(repo, "worktree", "add", str(path), name)
+        detached = trees / "detached-main"
+        git(repo, "worktree", "add", "--detach", str(detached), shas["onmain"])
         # The bootstrap edits an agent bootstrap leaves in a worktree.
         for name in ("bootstrap", "real"):
             path = paths[name]
@@ -164,7 +166,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         args = [sys.executable, str(SCRIPT), "--code-root", str(code), "--state-root", str(base / "state")]
         dry = json.loads(command(args + ["--dry-run"], env=env))
         by_name = {Path(row["path"]).name: row for row in dry["rows"]}
-        assert dry["eligible"] == 2, dry["categories"]
+        assert dry["eligible"] == 3, dry["categories"]
         assert by_name["bootstrap"]["eligible"] is True, by_name["bootstrap"]["reasons"]
         assert by_name["bootstrap"]["dirty"] is False, by_name["bootstrap"]
         assert sorted(by_name["bootstrap"]["bootstrap_changes"]) == [".agents/legacy-instructions.md", ".specstory/history/session.md", ".specstory/new.md", "AGENTS.md"], by_name["bootstrap"]
@@ -182,12 +184,16 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert by_name["onmain"]["eligible"] is True, by_name["onmain"]["reasons"]
         assert by_name["onmain"]["published_on_default_branch"] is True, by_name["onmain"]
         assert by_name["offmain"]["eligible"] is False, by_name["offmain"]["reasons"]
+        detached_row = next(row for row in dry["rows"] if Path(row["path"]).name == "detached-main")
+        assert detached_row["eligible"] is True, detached_row["reasons"]
+        assert detached_row["published_on_default_branch"] is True, detached_row
+        assert detached_row["eligible_reason"] == "commits_on_the_default_branch", detached_row
         assert dry["excluded_repositories"] == 1, dry["excluded_repositories"]
         assert any(Path(row["path"]).resolve() == ascend_tree.resolve() and row["reason"] == "Ascend repository" for row in dry["excluded_rows"]), dry["excluded_rows"]
 
         applied = json.loads(command(args + ["--apply"], env=env))
-        assert applied["removed"] == 2, applied["categories"]
-        assert not paths["bootstrap"].exists() and not paths["onmain"].exists(), applied
+        assert applied["removed"] == 3, applied["categories"]
+        assert not paths["bootstrap"].exists() and not paths["onmain"].exists() and not detached.exists(), applied
         assert paths["real"].exists() and paths["offmain"].exists(), applied
         assert paths["partial"].exists() and paths["renamed"].exists(), applied
         assert paths["shifted"].exists() and paths["marker"].exists(), applied
@@ -196,12 +202,16 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         log = (base / "worktree-cleaner.log").read_text(encoding="utf-8")
         entries = [json.loads(line) for line in log.splitlines()]
         removed = [entry for entry in entries if entry["event"] == "removed"]
-        assert len(removed) == 2, removed
+        assert len(removed) == 3, removed
         for entry in removed:
-            assert entry["repo"] and entry["path"] and entry["branch"] and entry["head"], entry
+            assert entry["repo"] and entry["path"] and entry["head"], entry
+            assert entry["branch"] or entry["published_on_default_branch"], entry
             assert entry.get("eligible_reason"), entry
         assert any(entry["path"].endswith("bootstrap") for entry in removed), removed
         assert any(entry["path"].endswith("onmain") for entry in removed), removed
+        detached_entry = next(entry for entry in removed if entry["path"].endswith("detached-main"))
+        assert detached_entry["eligible_reason"] == "commits_on_the_default_branch", detached_entry
+        assert detached_entry["published_on_default_branch"] is True, detached_entry
         assert git(repo, "show-ref", "--verify", "refs/heads/bootstrap")
         assert git(repo, "show-ref", "--verify", "refs/heads/real")
         print(json.dumps({"ok": True, "removed": applied["removed"], "bootstrap_only_removed": True, "real_work_kept": True, "ascend_untouched": True}))
