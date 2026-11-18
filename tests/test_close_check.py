@@ -220,7 +220,8 @@ class ScopeTest(unittest.TestCase):
         entries = [{"filename": "src/new.py", "previous_filename": "legacy/old.py"},
                    {"filename": "src/other.py"}]
         with patch.object(check, "gh_json", return_value=entries):
-            changed, scope = check.fetch_files("a/b", 12)
+            changed, scope, error = check.fetch_files("a/b", 12)
+        self.assertEqual(error, "")
         self.assertEqual(changed, ["src/new.py", "src/other.py"])
         self.assertEqual(scope, ["src/new.py", "legacy/old.py", "src/other.py"])
 
@@ -230,10 +231,26 @@ class ScopeTest(unittest.TestCase):
         first = [{"filename": f"src/file{index}.py"} for index in range(100)]
         second = [{"filename": "src/last.py"}]
         with patch.object(check, "gh_json", side_effect=[first, second]) as reader:
-            changed, scope = check.fetch_files("a/b", 12)
+            changed, scope, error = check.fetch_files("a/b", 12)
+        self.assertEqual(error, "")
         self.assertEqual(len(changed), 101)
         self.assertIn("src/last.py", scope)
         self.assertEqual(reader.call_count, 2)
+
+    def test_a_page_that_cannot_be_read_fails_the_scope(self):
+        """The diff is not known when its pages are not read to the end.
+
+        A page that times out must not read as the end of the diff, or a
+        file on the page that was not read would never be judged.
+        """
+        check = close_check()
+        first = [{"filename": f"src/file{index}.py"} for index in range(100)]
+        with patch.object(check, "gh_json", side_effect=[first, RuntimeError("the read timed out")]):
+            changed, scope, error = check.fetch_files("a/b", 12)
+        self.assertNotEqual(error, "")
+        item = check.item_scope("In: src/", scope, "evidence/MO-524", error)
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("not read to the end", item["detail"])
 
     def test_a_rename_is_judged_on_both_paths(self):
         """A rename cannot carry an out-of-scope file into scope.
