@@ -24,7 +24,7 @@ mode_file = scratch / "mode"
 mode_file.write_text("200")
 (fake / "gh").write_text(f"""#!/usr/bin/env python3
 import json, os, sys
-args = sys.argv[1:]
+args = [("--paginate" if word == "--paginate=true" else word) for word in sys.argv[1:]]
 base = {str(scratch)!r}
 with open(os.path.join(base, "calls.log"), "a") as log:
     log.write(" ".join(args) + "\\n")
@@ -465,6 +465,16 @@ run(files_read)
 run(files_read)
 check("a pull's files list is cached once", calls_made() - before == 1,
       f"calls={calls_made() - before}")
+
+# `--paginate=true` is the same flag: it must not take the conditional
+# path, which would add `--include` and leave headers in the caller's JSON.
+set_mode("200")
+rows_before = len(rows())
+equals_form = run(["gh", "api", "--paginate=true", "repos/a/b/tags?page=1"])
+check("--paginate=true is not handled conditionally",
+      "HTTP/" not in equals_form.stdout, repr(equals_form.stdout[:40]))
+check("--paginate=true counts its pages", len(rows()) - rows_before == 3,
+      f"rows={len(rows()) - rows_before}")
 
 # One page of ten numbers is one call, not ten pages.
 set_mode("numbers")

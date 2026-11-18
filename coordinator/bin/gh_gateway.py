@@ -254,7 +254,9 @@ def resource(argv):
         return SEARCH
     if words[0] == "api":
         path = endpoint(argv).lstrip("/")
-        if path.startswith("search/") or "/search/" in path:
+        # Only the leading endpoint decides: `repos/acme/search/issues` is a
+        # core read of a repository named search.
+        if path.split("/", 1)[0] == SEARCH:
             return SEARCH
         if path == "graphql" or "graphql" in words:
             return GRAPHQL
@@ -264,6 +266,27 @@ def resource(argv):
     if words[0] in GRAPHQL_GROUPS:
         return GRAPHQL
     return "other"
+
+
+def has_flag(argv, name, short=None):
+    """True when a boolean flag is set, whatever spelling `gh` accepted.
+
+    `--paginate` and `--paginate=true` are the same flag, and a caller may
+    use either; `=false` is not set."""
+    for word in [str(token) for token in (argv or [])[1:]]:
+        if word == name or word == name + "=true":
+            return True
+        if short and word == short:
+            return True
+    return False
+
+
+def paginated(argv):
+    return has_flag(argv, "--paginate")
+
+
+def include_requested(argv):
+    return has_flag(argv, "--include", "-i")
 
 
 def cacheable(argv):
@@ -279,7 +302,7 @@ def cacheable(argv):
     if has_body(argv):
         # A body means a write, and a write is never served from a cache.
         return False
-    host, account, checkout, repo_override, token_id = context()
+    host, account, checkout, repo_override, token_id = context(argv)
     if not account:
         # The account is unknown, so one entry could answer another
         # account's read. Skip the cache rather than guess.
@@ -317,9 +340,11 @@ def conditional(argv):
     # A caller that asked for the headers gets them: the conditional path
     # splits the response and would hand back only the body. `-i` is the
     # short form of `--include`.
-    if "--include" in words or "-i" in words:
+    if include_requested(argv):
         return False
-    return not any(word in ("--paginate", "--slurp", "-X", "--method") for word in words)
+    if paginated(argv) or has_flag(argv, "--slurp"):
+        return False
+    return not any(word in ("-X", "--method") for word in words)
 
 
 def _etag_path(argv):
@@ -456,14 +481,27 @@ def _token_id():
     return hashlib.sha256("\0".join(tokens).encode()).hexdigest()[:16]
 
 
-def context():
-    """Return (host, identity, checkout, repo_override, token_id) for this call.
+def argv_host(argv):
+    """Return the host an `--hostname` flag names, or "" when it names none."""
+    words = [str(word) for word in (argv or [])[1:]]
+    for index, word in enumerate(words):
+        if word == "--hostname" and index + 1 < len(words):
+            return words[index + 1]
+        if word.startswith("--hostname="):
+            return word.split("=", 1)[1]
+    return ""
+
+
+def context(argv=None):
+    """Return (host, identity, checkout, repo_override, token_id) for a call.
 
     `gh pr list` resolves its repository from the working directory and its
     account from a credential variable or gh's hosts file, so two identical
-    commands under different overrides are different reads. A credential is
-    kept as a fingerprint of every variable that is set, never as a value."""
-    host = os.environ.get("GH_HOST") or "github.com"
+    commands under different overrides are different reads. A command that
+    names a host with `--hostname` is answered by that host's account, not
+    the default one. A credential is kept as a fingerprint of every
+    variable that is set, never as a value."""
+    host = argv_host(argv) or os.environ.get("GH_HOST") or "github.com"
     account = os.environ.get("COORDINATOR_GH_ACCOUNT") or _hosts_account(host)
     repo_override = os.environ.get("GH_REPO") or ""
     return host, account, os.getcwd(), repo_override, _token_id()
@@ -561,9 +599,9 @@ def requests(argv, stdout):
     """
     if not _gh(argv):
         return 0
-    if "--paginate" not in argv or resource(argv) != "core":
+    if not paginated(argv) or resource(argv) != CORE:
         return 1
-    if "--slurp" in argv:
+    if has_flag(argv, "--slurp"):
         # gh writes the pages as one JSON array here, so the pages are its
         # elements and not one value.
         try:
@@ -607,8 +645,8 @@ def settle(argv, stdout, headers_counted):
         return strip_headers(stdout), max(1, status_lines(stdout))
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
-    if "--paginate" in argv and resource(argv) == CORE:
-        has_include = "--include" in argv or "-i" in argv
+    if paginated(argv) and resource(argv) == CORE:
+        has_include = include_requested(argv)
         if filtered(argv):
             # The bodies are the caller's text, so neither a status line in
             # them nor a number on each line is a page. One invocation, one
@@ -621,7 +659,7 @@ def settle(argv, stdout, headers_counted):
     # twice, and a second pagination would spend quota to learn a count.
     # A formatted read is measured as the one invocation it is, and the row
     # says its page count is unknown rather than guessing.
-    if filtered(argv) and "--paginate" in argv and resource(argv) == CORE:
+    if filtered(argv) and paginated(argv) and resource(argv) == CORE:
         # The formatted output is not a page list: one page of ten issues
         # with `--jq '.[].number'` prints ten numbers, and the JSON reader
         # would call those ten pages. One invocation, one row.
@@ -635,7 +673,7 @@ def pages_unknown(argv):
     A formatted paginated read prints the caller's text, so neither the
     body nor a replay can tell how many pages it took. The row says so
     instead of pretending to a number."""
-    return bool(_gh(argv) and "--paginate" in argv
+    return bool(_gh(argv) and paginated(argv)
                 and resource(argv) == CORE and filtered(argv))
 
 
