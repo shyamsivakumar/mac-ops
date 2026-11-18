@@ -87,5 +87,13 @@ dispatcher already holds the queue lock, so it takes the block store lock
 without waiting and leaves the item queued for the next run when a writer
 holds it. Queued builders are never refused for a blocked model.
 
+The lock order is the block store lock, then the queue lock. Gatekeep takes
+them in that order, and the dispatcher only try-locks the block store lock
+while it holds the queue lock. This branch ships no writer of the store, so
+nothing here waits on the block store lock under the queue lock. A writer of
+the store that is called from the dispatcher or from gatekeep must run
+outside the queue lock, or it deadlocks against a gatekeep run that holds the
+block store lock and waits for the queue lock.
+
 A loaded LaunchAgent runs after login. Reboot survival requires a real reboot
 and has not been demonstrated by plist validation or local checks.
