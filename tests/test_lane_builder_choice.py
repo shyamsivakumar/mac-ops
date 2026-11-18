@@ -19,6 +19,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import mock_open, patch
@@ -567,6 +568,37 @@ class HeldContinue(unittest.TestCase):
                          {"type": "existing_worktree", "worktreePath": "/fixture/worktree"})
         self.assertEqual(queued[0]["modelSelection"], MINIMAX)
         self.assertIn("cont:thread-11", ledger)
+        self.assertEqual(result, "nothing ready")
+
+    def test_a_legacy_skip_record_is_retried(self):
+        # The old lane recorded a cooldown even when the send queued
+        # nothing. Such a record is not a cooldown: the ticket is tried
+        # again instead of waiting for the record to expire.
+        stamp = datetime.now(timezone.utc).isoformat()
+        ledger = {"cont:thread-11": [stamp, "skip continue:shyamsivakumar/mac-ops#11:thread-11: "
+                                                    "no verified PR branch for relaunch"]}
+        result, queued, ledger = self.unstick({11: self.idle_builder("thread-11")}, ledger=ledger)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["threadId"], "thread-11")
+        self.assertTrue(result.startswith("continue #11:"), result)
+
+    def test_a_legacy_success_record_keeps_the_cooldown(self):
+        # A record that names a receipt is a cooldown: the ticket is being
+        # worked, so it is neither continued again nor unstuck.
+        stamp = datetime.now(timezone.utc).isoformat()
+        ledger = {"cont:thread-11": [stamp, "#1 p0 started"]}
+        result, queued, ledger = self.unstick({11: self.idle_builder("thread-11")}, ledger=ledger)
+        self.assertEqual(queued, [])
+        self.assertEqual(result, "nothing ready")
+
+    def test_a_legacy_hold_record_keeps_the_cooldown(self):
+        # A record that names a live hold is a cooldown too.
+        stamp = datetime.now(timezone.utc).isoformat()
+        ledger = {"cont:thread-11": [stamp, "skip continue:shyamsivakumar/mac-ops#11:thread-11: "
+                                                    "thread is running on codex:gpt-6.1-sol; "
+                                                    "held until it is idle"]}
+        result, queued, ledger = self.unstick({11: self.idle_builder("thread-11")}, ledger=ledger)
+        self.assertEqual(queued, [])
         self.assertEqual(result, "nothing ready")
 
     def test_a_handoff_that_queued_nothing_records_no_cooldown(self):
