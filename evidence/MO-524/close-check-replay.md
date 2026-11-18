@@ -1,17 +1,25 @@
 # Close checklist replay (MO-1077)
 
 Three merged pull requests, run through the close checklist with
-`python3 scripts/close_check_replay.py --pr 540 --pr 541 --pr 492` on 2026-11-18, with the
+`python3 scripts/close_check_replay.py --pr 467 --pr 468 --pr 541` on 2026-11-18, with the
 tickets that own them. The replay reads the merged tree from the local checkout, so it reads
 no file contents through the GitHub API; the pull request and ticket metadata still
 comes from `gh`.
 
-close check: shyamsivakumar/mac-ops#540 (merge cbb186979c84)
-scope: fail - the ticket names no file in this repository, so the scope cannot be judged: the ticket has to name the files it changes
-proof file: pass - evidence/check-proof.md is present
-checks: pass - every one of the 4 checks the proof file lists passed
+close check: shyamsivakumar/mac-ops#467 (merge ad8b7543b3e5)
+scope: pass - every changed file is inside the ticket's stated scope
+proof file: fail - the pull request carries no proof file at evidence/MO-466/check-proof.md
+checks: skipped - there is no proof file to read
 cost note: skipped - the MO-1068 cost report (evidence/MO-1068/cost-report.md) does not exist yet
-RESULT: FAIL shyamsivakumar/mac-ops#540
+RESULT: FAIL shyamsivakumar/mac-ops#466
+The work goes back to its builder and the ticket stays open.
+
+close check: shyamsivakumar/mac-ops#468 (merge f489dfa94720)
+scope: fail - outside the ticket's stated scope: coordinator/overnight/README.md
+proof file: fail - the pull request carries no proof file at evidence/MO-466/check-proof.md
+checks: skipped - there is no proof file to read
+cost note: skipped - the MO-1068 cost report (evidence/MO-1068/cost-report.md) does not exist yet
+RESULT: FAIL shyamsivakumar/mac-ops#466
 The work goes back to its builder and the ticket stays open.
 
 close check: shyamsivakumar/mac-ops#541 (merge ce79295f57ec)
@@ -22,34 +30,27 @@ cost note: skipped - the MO-1068 cost report (evidence/MO-1068/cost-report.md) d
 RESULT: FAIL shyamsivakumar/mac-ops#541
 The work goes back to its builder and the ticket stays open.
 
-close check: shyamsivakumar/mac-ops#492 (merge 13c79aedc6fa)
-scope: fail - the ticket names no file in this repository, so the scope cannot be judged: the ticket has to name the files it changes
-proof file: fail - the pull request carries no proof file at evidence/MO-491/check-proof.md
-checks: skipped - there is no proof file to read
-cost note: skipped - the MO-1068 cost report (evidence/MO-1068/cost-report.md) does not exist yet
-RESULT: FAIL shyamsivakumar/mac-ops#491
-The work goes back to its builder and the ticket stays open.
-
 ## What each case shows
 
-- #540 has a proof file whose four checks all passed, but its ticket declares its scope
-  in prose, so the scope cannot be judged and the close is refused: the work goes back
-  to its builder and the ticket stays open.
-- #541 has the same unjudgeable scope, and its proof file is an earlier run's proof: the
-  file is on the base branch and the pull request does not change it. The work goes
-  back to its builder and the ticket stays open.
-- #492 has the same unjudgeable scope and carries no proof file at all at
-  evidence/MO-491/check-proof.md, so the work goes back to its builder and the
+- #467 is inside its stated scope: the ticket declares
+  `coordinator/bin/hourly_selftest.py` and every changed file is inside that scope. It
+  carries no proof file at evidence/MO-466/check-proof.md, so the work goes back to its
+  builder and the ticket stays open.
+- #468 reaches outside that same declared scope: the diff touches
+  coordinator/overnight/README.md, which the ticket's declaration does not name. The
+  scope item fails and names the file, and the ticket stays open.
+- #541 has a proof file that is an earlier run's proof: the file is on the base
+  branch and the pull request does not change it. Its ticket declares its scope in prose,
+  so the scope cannot be judged either. The work goes back to its builder and the
   ticket stays open.
 - **The passing case.** No merged pull request in this repository passes the tightened rule,
   and the replay says so rather than dressing it up. A ticket is judged by its
-  declaration, and the mac-ops template declares its scope in prose, so the ticket names
-  no file and the scope cannot be judged: the close is refused. The only pull requests
-  that carry a proof file are #498 and #529 (MO-496), #510 (MO-501), #519 (MO-517), #528
-  (MO-521), #534 (MO-530), #535 (MO-533), #536 (MO-532), #537 (MO-531), #540, #541 and
-  #499 (MO-497), and every one of them fails the scope item. The passing path is
-  proven by `tests/test_close_check.py`: a checklist with no blocking item closes the
-  ticket and reports `RESULT: PASS`.
+  declaration, and the mac-ops template declares its scope in prose, so most tickets
+  name no file and the scope cannot be judged: the close is refused. The pull
+  requests that do declare files, #465 (MO-464), #467 and #468 (MO-466), #490 (MO-489),
+  #492 (MO-491) and #529 (MO-496), all fail on the proof file or the scope. The
+  passing path is proven by `tests/test_close_check.py`: a checklist with no blocking
+  item closes the ticket and reports `RESULT: PASS`.
 
 ## The rules the checklist reads
 
@@ -61,6 +62,9 @@ The work goes back to its builder and the ticket stays open.
   background, and a file named in the context section is a reference, not a
   permission. A ticket that declares no scope names no file, so its scope cannot be
   judged and the close is refused.
+- A heading under a section belongs to that section, so it keeps the section's intent: a
+  file under "### Protected files" inside "## Out of scope" stays excluded. Only a
+  heading of the same level or higher ends the section.
 - A declared directory bounds the scope: every changed path under it is inside the
   boundary, and every changed path outside it is not.
 - An exclusion is not a permission. The words after an "out" marker, the list
