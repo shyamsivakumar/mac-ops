@@ -71,7 +71,8 @@ When the current CPU reading is missing, the board critical check also uses
 the last finite CPU reading for up to `max_sample_age_seconds`. The existing
 critical load fallback remains active while the current CPU reading is missing.
 A sample the governor cannot read holds the capacity it already published
-(`min(current, ceiling)`), and the tick exception path republishes
+(`min(current, floor, ceiling)`, so the published capacity never rises on a
+sample the governor could not read), and the tick exception path republishes
 `min(prior_capacity, 2)`, so a telemetry error does not write zero slots and
 the next good sample restores the slots.
 Smoothed CPU busy of at least 80% is a board warning. Above the floor, the controller raises by one

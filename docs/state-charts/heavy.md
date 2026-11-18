@@ -22,7 +22,7 @@ Before submitting deploy gates after installation, drain all queued supervisors 
 
 The slot limit is the minimum of fresh controller `heavy_slots`, physical CPU cores, and whole 6 GiB units of physical memory, so a 16 GiB host keeps the same two job limit as before. The controller contract must have an integer `heavy_slots`, a current Unix `updated_at`, and the current kernel `boot_id`. Missing, malformed, stale, or cross-boot capacity holds admission. The project lock is acquired after the global reservation, and the supervisor refreshes the registry heartbeat while waiting for it.
 
-A sample the governor cannot read holds the capacity it already published (`min(current, ceiling)`), and the tick exception path republishes `min(prior_capacity, 2)`, so a telemetry error does not write zero slots and the next good sample restores the slots. The load-average stand-in for a missing CPU reading still applies to the capacity decision, the running-workload pause and the critical curtailment.
+A sample the governor cannot read holds the capacity it already published (`min(current, floor, ceiling)`, so the published capacity never rises on a sample the governor could not read), and the tick exception path republishes `min(prior_capacity, 2)`, so a telemetry error does not write zero slots and the next good sample restores the slots. The load-average stand-in for a missing CPU reading still applies to the capacity decision, the running-workload pause and the critical curtailment.
 
 ## Headroom a job needs
 

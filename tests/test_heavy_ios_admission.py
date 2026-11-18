@@ -811,6 +811,12 @@ class BuildIdentityTests(unittest.TestCase):
             "xcodebuild",
         )
         self.assertEqual(
+            heavy.effective_executable(
+                ["/usr/bin/env", "-S", "CI=1 xcodebuild build"]
+            ),
+            "xcodebuild",
+        )
+        self.assertEqual(
             heavy.effective_executable(["/bin/echo", "xcodebuild"]),
             "echo",
         )
@@ -873,6 +879,7 @@ class BuildIdentityTests(unittest.TestCase):
             ["/usr/bin/env", "-u", "CI", "xcodebuild"],
             ["/usr/bin/env", "CI=1", "xcodebuild"],
             ["/usr/bin/env", "-S", "xcodebuild build"],
+            ["/usr/bin/env", "-S", "CI=1 xcodebuild build"],
             ["/usr/bin/env", "xcodebuild"],
         ):
             with self.subTest(argv=argv):
