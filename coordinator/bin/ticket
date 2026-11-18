@@ -381,11 +381,13 @@ def move_stage(repo, number, stage):
                          gh_json(["issue", "view", str(number), "-R", repo,
                                   "--json", "labels"])["labels"]]
             # The labels are read again here, after the update failed, and a
-            # ticket Shyam parked in between is parked now: putting the
-            # earlier stage back would take the parking off, so it keeps the
-            # labels it has.
+            # ticket Shyam parked on `stage:backlog` in between is parked now:
+            # putting the earlier stage back would take the parking off, so it
+            # keeps the labels it has. A hold is not a stage, so a held ticket
+            # has lost its stage too: the repair puts the stage back and
+            # leaves the hold on.
             parking = parked_label(names_now)
-            if parking:
+            if parking and parking != HOLD_LABEL:
                 raise Refuse(f"parked ({parking}); only Shyam clears it")
             current = stage_labels(names_now)
             add_back = [name for name in before if name not in current]
