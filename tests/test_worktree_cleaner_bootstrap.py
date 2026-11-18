@@ -10,6 +10,7 @@ Each test here is one of the cases the gate reported:
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from unittest import mock
 from pathlib import Path
@@ -1072,9 +1073,16 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         (recovery / "saved.txt").write_text("saved by an editor\n", encoding="utf-8")
         cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
         self.assertTrue(recovery.exists(), "a recovery copy that changed has to be kept")
-        # Nothing in it changed for the retention, so it goes.
+        # Nothing in it changed for the retention, so it goes. The retention
+        # starts when the copy was recovered, so the recorded time is what
+        # expires now.
         os.utime(recovery / "saved.txt", (older, older))
         os.utime(recovery, (older, older))
+        manifest = state / "recovery.json"
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+        for entry in entries:
+            entry["recovered_at"] = older
+        manifest.write_text(json.dumps(entries), encoding="utf-8")
         cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
         self.assertFalse(recovery.exists(), "a copy that did not change has to go")
 
