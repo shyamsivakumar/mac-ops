@@ -2,7 +2,9 @@
 
 A gate that ends without a verdict moves down this chain once. A reviewer that
 fails with a blocking provider error is blocked for every head until its
-window ends, and a new gate starts on the next reviewer meanwhile."""
+window ends, and a new gate starts on the next reviewer meanwhile. The block
+is one small file beside the queue, replaced whole rather than edited in
+place, and its two callers write it while they hold the queue lock."""
 import json
 import os
 import re
