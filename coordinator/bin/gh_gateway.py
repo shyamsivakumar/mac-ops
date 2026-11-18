@@ -112,12 +112,36 @@ BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 OUTPUT_FILTER_FLAGS = ("-q", "--jq", "-t", "--template")
 
 
+def tokens(argv):
+    """Return (flag, value) for the command's own words.
+
+    A value can look exactly like a flag: `--template '-XGET'` carries the
+    text `-XGET`, which is not a method. Pairing each value flag with its
+    value is what tells a flag from its value."""
+    words = [str(word) for word in (argv or [])[1:]]
+    paired, index = [], 0
+    while index < len(words):
+        word = words[index]
+        if word in VALUE_FLAGS and index + 1 < len(words):
+            paired.append((word, words[index + 1]))
+            index += 2
+            continue
+        paired.append((word, None))
+        index += 1
+    return paired
+
+
+def significant(argv):
+    """Return the command's own words, without the values of value flags."""
+    return [word for word, _value in tokens(argv)]
+
+
 def has_body(argv):
     """True when the command carries a request body, so it is a write.
 
     `gh` accepts the value attached (`--raw-field=name=value`, `-fname=value`)
     or as the next word; both are the same POST, and neither may be cached."""
-    for word in [str(token) for token in argv[1:]]:
+    for word in significant(argv):
         if word in BODY_FLAGS:
             return True
         if word.startswith("--field=") or word.startswith("--raw-field=") or word.startswith("--input="):
@@ -222,17 +246,16 @@ def method(argv):
 
     `gh api` reads unless a method is named or a field is given; a field
     without a method is a POST, and `-X GET` overrides a field."""
-    words = [str(word) for word in argv[1:]]
     # `gh` uses the last method flag, so a repeated flag is read the same
     # way here. Reading only the first would call `-X GET -X POST` a read.
     named = None
-    for index, word in enumerate(words):
+    for word, value in tokens(argv):
         if word.startswith("--method="):
             named = word.split("=", 1)[1]
         elif word.startswith("-X") and len(word) > 2:
             named = word[2:].lstrip("=")
         elif word in ("-X", "--method"):
-            named = words[index + 1] if index + 1 < len(words) else ""
+            named = value if value is not None else ""
     if named is not None:
         return named.strip().upper()
     if has_body(argv):
@@ -542,7 +565,7 @@ def store(argv, stdout):
 
 def filtered(argv):
     """True when the command formats its output, so pages are not JSON."""
-    for word in [str(token) for token in argv[1:]]:
+    for word in significant(argv):
         if word in OUTPUT_FILTER_FLAGS:
             return True
         if word.startswith(("--jq=", "--template=", "-q=")):
