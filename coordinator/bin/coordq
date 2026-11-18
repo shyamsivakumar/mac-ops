@@ -512,7 +512,7 @@ def drain():
                 else:
                     item["attempts"] = MAX_ATTEMPTS
             elif probe_request(request_id):
-                provider_health.note_probe_failure(item["args"].get("modelSelection"), out)
+                provider_health.note_probe_failure(item["args"].get("modelSelection"), out, request_id=request_id)
                 item["attempts"] = MAX_ATTEMPTS
             elif builders.is_builder((item.get("builderContinuation") or item["args"].get("builderContinuation") or item["args"]).get("modelSelection")) and not probe_request(request_id):
                 continuation = item.get("builderContinuation") or item["args"].get("builderContinuation")
