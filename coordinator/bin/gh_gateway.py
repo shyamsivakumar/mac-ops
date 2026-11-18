@@ -114,7 +114,10 @@ VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "--cache", "--hostname", "-R", "--repo", "--search", "--json",
                "--limit", "--state", "--label", "--author", "--assignee",
                "--reviewer", "--base", "--head", "--sort", "--order",
-               "--owner", "--milestone", "--branch", "--workflow", "--event")
+               "--owner", "--milestone", "--branch", "--workflow", "--event",
+               # The short read-option aliases: a value that starts with
+               # `-R` must not be read as a repository selector.
+               "-S", "-L", "-s", "-l", "-A", "-a", "-B", "-b", "-e", "-m")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 # The flags this code understands. A cluster it does not know, such as
 # `-iXPOST`, may hide a method or a body, so such a command is never cached.

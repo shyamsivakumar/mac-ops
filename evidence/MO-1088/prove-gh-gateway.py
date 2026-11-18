@@ -885,10 +885,14 @@ print("ATTACHED", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r"]
 print("VALUE", repr(gh_gateway.argv_host(["gh", "pr", "list", "--search", "-Release"])))
 print("BOTH", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r",
                                    "--search", "-Release"]))
+print("SHORT", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r",
+                                    "-S", "-Release"]))
+print("SHORTONLY", repr(gh_gateway.argv_host(["gh", "pr", "list", "-S", "-Release"])))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
-                  "ATTACHED", "ent.example", "VALUE", "''", "BOTH", "ent.example"],
+                  "ATTACHED", "ent.example", "VALUE", "''", "BOTH", "ent.example",
+                  "SHORT", "ent.example", "SHORTONLY", "''"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.
