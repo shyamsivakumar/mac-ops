@@ -65,7 +65,8 @@ The work goes back to its builder and the ticket stays open.
 - A heading under a section cannot lift the exclusion of the section it sits in, and
   neither can an inline marker: a "### Scope" inside "## Out of scope" and an
   "- In: legacy/config.py" bullet under the same heading both leave the files beneath
-  them excluded. A heading
+  them excluded. An exclusion written inline holds under a heading beneath it too, so
+  "Out of scope:" inside a scope section keeps excluding what follows. A heading
   under a section belongs to that section, so it keeps the section's intent: a
   file under "### Protected files" inside "## Out of scope" stays excluded, and a
   sibling heading restores the intent of the section around it rather than dropping
