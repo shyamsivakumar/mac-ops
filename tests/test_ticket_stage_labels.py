@@ -61,11 +61,14 @@ class FakeGitHub:
     update removes the labels it was told to remove before it reports that
     the new one could not be added, so a failing update leaves the ticket
     stage-less. One failing update is the failure the helper has to repair,
-    and two are the failure it cannot.
+    and two are the failure it cannot. `fails_before_change` is the other
+    shape of a failure: the update is refused before it touches a label, so
+    the ticket keeps the stage it started with.
     """
 
-    def __init__(self, labels, pulls=(), failing_edits=0):
+    def __init__(self, labels, pulls=(), failing_edits=0, fails_before_change=False):
         self.labels = list(labels)
+        self.fails_before_change = fails_before_change
         # The repository's label set is apart from the issue's labels, so a
         # created label does not land on the issue by itself.
         self.repo_labels = set(labels)
@@ -118,6 +121,10 @@ class FakeGitHub:
 
     def edit(self, cmd, args):
         self.edits.append(args)
+        if self.failing_edits and self.fails_before_change:
+            self.failing_edits -= 1
+            return subprocess.CompletedProcess(cmd, 1, "",
+                                               "could not add label: 'stage:started' not found")
         for name in self.option(args, "--remove-label"):
             if name in self.labels:
                 self.labels.remove(name)
@@ -196,6 +203,19 @@ class StartTest(unittest.TestCase):
         self.assertIn("may now carry no stage label", errors.getvalue())
         self.assertNotIn("keeps stage:todo", errors.getvalue())
         self.assertEqual(github.stages(), [])
+
+    def test_start_reports_the_old_stage_kept_when_the_failed_add_changed_nothing(self):
+        github = FakeGitHub(["stage:todo", "type:standard", "priority:1"], failing_edits=1,
+                            fails_before_change=True)
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as caught:
+                start(github)
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("keeps stage:todo", errors.getvalue())
+        self.assertNotIn("may now carry no stage label", errors.getvalue())
+        # Nothing was lost, so the repair writes no labels of its own.
+        self.assertEqual(github.stages(), ["stage:todo"])
+        self.assertEqual(len(github.edits), 1)
 
     def test_start_does_not_write_an_unchanged_stage(self):
         github = FakeGitHub(["stage:started", "type:standard", "priority:1"])

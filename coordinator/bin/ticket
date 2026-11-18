@@ -354,9 +354,13 @@ def move_stage(repo, number, stage):
             current = stage_labels([label["name"] for label in
                                     gh_json(["issue", "view", str(number), "-R", repo,
                                              "--json", "labels"])["labels"]])
-            edit_labels(repo, number,
-                        [name for name in before if name not in current],
-                        [name for name in current if name not in before])
+            add_back = [name for name in before if name not in current]
+            drop = [name for name in current if name not in before]
+            # A failure that changed nothing leaves the labels as they were,
+            # and an update with no labels to add or remove would itself fail,
+            # so the ticket is only written when there is something to repair.
+            if add_back or drop:
+                edit_labels(repo, number, add_back, drop)
             restored = True
         except GhError:
             pass
