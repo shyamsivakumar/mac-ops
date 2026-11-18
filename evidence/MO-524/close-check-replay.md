@@ -67,7 +67,10 @@ The work goes back to its builder and the ticket stays open.
   sibling heading restores the intent of the section around it rather than dropping
   it. Only a heading of the same level or higher ends a section.
 - A declared directory bounds the scope: every changed path under it is inside the
-  boundary, and every changed path outside it is not.
+  boundary, and every changed path outside it is not. A top-level directory is a
+  declaration too, so "In: src/" bounds every path under src/.
+- A rename is judged on both of its paths, the file it came from and the file it is
+  now, so a rename cannot carry an out-of-scope file into an in-scope name.
 - An exclusion is not a permission. The words after an "out" marker, the list
   entries under it and the rest of its section are exclusions, so a change to one of
   them fails the scope item, and an excluded name never widens the scope.
