@@ -154,13 +154,14 @@ def status_for(path: Path) -> tuple[bool, str]:
     return bool(output.strip()), output.strip()
 
 
-_rules_corpus: set[str] | None = None
+_rules_blocks: list[list[str]] | None = None
 
 
-def rules_corpus() -> set[str]:
-    """Every line of the standing agent rules, from every known copy."""
-    global _rules_corpus
-    if _rules_corpus is None:
+def rules_blocks() -> list[list[str]]:
+    """The exact standing rule blocks an agent bootstrap writes, one per source."""
+    global _rules_blocks
+    if _rules_blocks is None:
+        blocks: list[list[str]] = []
         root = Path(__file__).resolve().parents[2]
         sources = [
             root / "coordinator/config/AGENT-RULES.md",
@@ -170,18 +171,16 @@ def rules_corpus() -> set[str]:
             Path.home() / ".codex/AGENTS.md",
             Path.home() / ".omp/agent/AGENTS.md",
         ]
-        lines: set[str] = set()
         for source in sources:
             try:
                 text = source.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            for line in text.splitlines():
-                line = line.strip()
-                if line:
-                    lines.add(line)
-        _rules_corpus = lines
-    return _rules_corpus
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            if lines:
+                blocks.append(lines)
+        _rules_blocks = blocks
+    return _rules_blocks
 
 
 def bootstrap_path(name: str) -> bool:
@@ -191,9 +190,13 @@ def bootstrap_path(name: str) -> bool:
 
 
 def agents_only_rules(path: Path, *, untracked: bool) -> bool:
-    """True when AGENTS.md holds nothing but the standing agent rules block."""
-    corpus = rules_corpus()
-    if not corpus:
+    """True when AGENTS.md gained exactly the standing agent rules block.
+
+    The block must match a known rules file line for line, in order. A part
+    of the block, or a single rule added by hand, is real work.
+    """
+    blocks = rules_blocks()
+    if not blocks:
         return False
     if untracked:
         try:
@@ -201,25 +204,31 @@ def agents_only_rules(path: Path, *, untracked: bool) -> bool:
         except OSError:
             return False
         added = [line.strip() for line in text.splitlines() if line.strip()]
-        return bool(added) and all(line in corpus for line in added)
-    try:
-        diff = git(path, "diff", "HEAD", "--", AGENTS_FILE)
-    except SafetyError:
+        removed: list[str] = []
+    else:
+        try:
+            diff = git(path, "diff", "HEAD", "--", AGENTS_FILE)
+        except SafetyError:
+            return False
+        added: list[str] = []
+        removed = []
+        for line in diff.splitlines():
+            if line.startswith("+++") or line.startswith("---"):
+                continue
+            if line.startswith("+"):
+                added.append(line[1:].strip())
+            elif line.startswith("-"):
+                removed.append(line[1:].strip())
+    if any(removed):
         return False
-    added: list[str] = []
-    removed: list[str] = []
-    for line in diff.splitlines():
-        if line.startswith("+++") or line.startswith("---"):
-            continue
-        if line.startswith("+"):
-            added.append(line[1:].strip())
-        elif line.startswith("-"):
-            removed.append(line[1:].strip())
-    if any(line for line in removed):
+    if not added:
         return False
-    if not any(line for line in added):
-        return False
-    return all(line in corpus for line in added if line)
+    for block in blocks:
+        if added == block:
+            return True
+        if len(added) == len(block) + 1 and added[0].startswith("#") and added[1:] == block:
+            return True
+    return False
 
 
 def classify_changes(path: Path, status: str) -> tuple[list[str], list[str]]:
@@ -229,11 +238,18 @@ def classify_changes(path: Path, status: str) -> tuple[list[str], list[str]]:
     for line in status.splitlines():
         if not line.strip():
             continue
-        code, _, name = line.partition(" ")
-        name = name.strip()
+        code = line[:2]
+        name = line[3:].strip() if len(line) > 3 else ""
         if " -> " in name:
-            name = name.split(" -> ", 1)[1]
-        name = name.strip().strip('"')
+            source, _, destination = name.partition(" -> ")
+            source = source.strip().strip('"')
+            destination = destination.strip().strip('"')
+            if bootstrap_path(source) and bootstrap_path(destination):
+                bootstrap.append(destination)
+            else:
+                real.append(f"{source} -> {destination}")
+            continue
+        name = name.strip('"')
         if name == AGENTS_FILE:
             only_rules = agents_only_rules(path, untracked=code.strip() == "??")
             (bootstrap if only_rules else real).append(name)
