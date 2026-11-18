@@ -1483,33 +1483,42 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
     return False, "github_pr_not_closed_for_head", None
 
 
-def _open_paths() -> set[str]:
-    """The paths that processes hold open."""
+def _open_paths() -> set[str] | None:
+    """The paths that processes hold open, or None when that is not known."""
     try:
         result = run(["lsof", "-Fn"], timeout=120)
     except SafetyError:
-        return set()
+        return None
+    if result.returncode != 0:
+        return None
     return {line[1:] for line in result.stdout.splitlines() if line.startswith("n")}
 
 
 def _remove_recovery_copy(path: Path, older_than: float) -> bool:
     """Remove a recovery copy file by file.
 
-    A file that a process holds open is never removed, so a save an editor
-    makes through its own descriptor keeps its entry. Every other file is
-    checked again immediately before it is removed, and a link is removed as
-    a link, never followed into its target.
+    The open files are read as late as possible, and a copy is kept when
+    they cannot be read: the sweep never removes a copy it cannot show to
+    be safe. A file that a process holds open is never removed, so a save an
+    editor makes through its own descriptor keeps its entry, and a link is
+    removed as a link and never followed into its target.
     """
-    held = _open_paths()
-    for root, dirs, files in os.walk(path, topdown=False):
+    for root, _dirs, files in os.walk(path, topdown=False):
         for name in files:
             entry = os.path.join(root, name)
-            if os.path.realpath(entry) in held:
-                return False
             try:
                 if os.lstat(entry).st_mtime > older_than:
                     return False
             except OSError:
+                return False
+    held = _open_paths()
+    if held is None:
+        # The open files are not known, so the copy is kept.
+        return False
+    for root, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            entry = os.path.join(root, name)
+            if os.path.realpath(entry) in held:
                 return False
             try:
                 os.unlink(entry)
@@ -1537,7 +1546,7 @@ def _newest_change(path: Path) -> float | None:
     for root, dirs, files in os.walk(path):
         for name in list(dirs) + list(files):
             try:
-                stamp = os.stat(os.path.join(root, name)).st_mtime
+                stamp = os.lstat(os.path.join(root, name)).st_mtime
             except OSError:
                 continue
             newest = stamp if newest is None else max(newest, stamp)
