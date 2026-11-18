@@ -149,10 +149,12 @@ for index in range(8):
     seed2.verified[f"{REPO}@{str(index) * 40}"] = time.time()
 seed2.save_cache()
 
+# One shared object, as scan() uses: every worker updates the same map.
+shared = cleaner.GitHub(cache_path)
+
 def fail_one(index):
-    worker = cleaner.GitHub(cache_path)
     try:
-        worker.commit_present(REPO, str(index) * 40, refresh=True)
+        shared.commit_present(REPO, str(index) * 40, refresh=True)
     except cleaner.SafetyError:
         pass
 
