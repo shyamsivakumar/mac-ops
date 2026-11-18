@@ -602,6 +602,8 @@ LONG_VALUE_FLAGS = tuple(flag for flag in VALUE_FLAGS if flag.startswith("--"))
 # value for `pr list`, and `-w` is `--web` for `pr list` but a workflow name
 # for `run list`. The overrides below are the ones that differ.
 SHORT_BOOLEAN = {
+    # `-a`, `-d` and `-w` are boolean for list commands generally; the
+    # per-command entries below record where that is not true.
     ("run", "list"): {"-a"},
     ("pr", "list"): {"-w", "-d"},
     ("issue", "list"): set(),
@@ -630,7 +632,14 @@ def parse_options(argv):
     words = [str(word) for word in (argv or [])[1:]]
     group, verb = command_of(argv)
     key = (group, verb)
-    booleans = SHORT_BOOLEAN.get(key, set())
+    if key in SHORT_BOOLEAN:
+        booleans = SHORT_BOOLEAN[key]
+    elif verb == "list":
+        # A list command's `-a`/`-d`/`-w` are flags, not values: `-a` is
+        # `--all` for `workflow list` just as it is for `run list`.
+        booleans = {"-a", "-d", "-w"}
+    else:
+        booleans = set()
     values = SHORT_VALUE.get(key, set())
     options, positionals, ordered = {}, [], []
     index = 0

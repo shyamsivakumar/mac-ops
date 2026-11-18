@@ -912,6 +912,8 @@ print("LASTREPO", gh_gateway.argv_host(
     ["gh", "pr", "list", "--repo", "first.example/o/r", "-R", "second.example/o/r"]))
 print("LASTSHORT", gh_gateway.argv_host(
     ["gh", "pr", "list", "-R", "second.example/o/r", "--repo", "first.example/o/r"]))
+print("WORKFLOWALL", gh_gateway.argv_host(
+    ["gh", "workflow", "list", "-a", "-R", "ent.example/o/r"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
@@ -922,7 +924,8 @@ check("a host in -R is the effective host",
                   "HOSTNAMELAST", "h.example", "REPOFLAG", "ent.example",
                   "REPOEQ", "ent.example", "SHORTSELECTOR", "actual.example",
                   "SEARCHHOST", "actual.example", "RUNBRANCH", "actual.example",
-                  "LASTREPO", "second.example", "LASTSHORT", "first.example"],
+                  "LASTREPO", "second.example", "LASTSHORT", "first.example",
+                  "WORKFLOWALL", "ent.example"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.
