@@ -756,6 +756,31 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertIsNone(cleared)
         self.assertFalse((self.repo / "AGENTS.md").exists(), "the deletion has to survive")
 
+    def test_a_restore_refuses_an_occupied_path(self):
+        # The path is taken by an editor between the check and the restore, so
+        # the restore has to refuse it and keep the recovery copy.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        records = cleaner.status_for(self.repo)
+        digests = {name: cleaner.file_digest(self.repo / name) for code, name, _original in records}
+        signatures = {name: cleaner._working_signature(self.repo / name) for code, name, _original in records}
+        index_before = cleaner.index_digest(self.repo)
+        original_replace = os.replace
+
+        def replace_and_take(source, destination, *args, **kwargs):
+            result = original_replace(source, destination, *args, **kwargs)
+            if str(destination).startswith("moved"):
+                # The editor takes the path back while the file is moved.
+                (self.repo / "AGENTS.md").write_text("saved by an editor\n", encoding="utf-8")
+            return result
+
+        with mock.patch.object(cleaner.os, "replace", replace_and_take):
+            cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, digests, index_before, signatures)
+        self.assertIsNone(cleared)
+        self.assertEqual((self.repo / "AGENTS.md").read_text(encoding="utf-8"), "saved by an editor\n")
+        kept = [item.read_bytes() for item in self.trash.iterdir() if item.is_file()]
+        self.assertTrue(any(b"AGENTS.md" in item or b"standing rules" in item for item in kept), "the recovery copy has to be kept")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

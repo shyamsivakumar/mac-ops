@@ -562,25 +562,41 @@ def _restore_link(repo: Path, relative: Path, target: bytes) -> bool:
 def _restore_moved(relative: Path, moved: Path, source: int, trash: Path) -> bool:
     """Put a moved file back at its own path, but only when that path is free.
 
-    The move is relative to the descriptors, so a parent that turned into a
-    link cannot redirect it, and a file that came back keeps its own copy.
+    The create is exclusive, so a path that became occupied keeps the file
+    that is there, and the copy that was moved aside is kept in the recovery
+    storage. The mode of the moved file is kept as well.
     """
-    try:
-        os.stat(relative.name, dir_fd=source, follow_symlinks=False)
+    data = _file_bytes(moved)
+    if data is None:
         return False
+    try:
+        mode = moved.stat().st_mode & 0o777
+    except OSError:
+        mode = 0o644
+    if moved.is_symlink():
+        target = data.decode("utf-8", "surrogateescape")
+        try:
+            os.symlink(target, relative.name, dir_fd=source)
+        except OSError:
+            # The path is occupied, so the copy that is there stays and the
+            # moved file stays in the recovery storage.
+            return False
+    else:
+        try:
+            descriptor = os.open(relative.name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode, dir_fd=source)
+        except OSError:
+            return False
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(data)
+            os.chmod(relative.name, mode, dir_fd=source)
+        except OSError:
+            return False
+    try:
+        moved.unlink()
     except OSError:
         pass
-    try:
-        storage = os.open(trash, os.O_RDONLY | os.O_DIRECTORY)
-    except OSError:
-        return False
-    try:
-        os.replace(moved.name, relative.name, src_dir_fd=storage, dst_dir_fd=source)
-        return True
-    except OSError:
-        return False
-    finally:
-        os.close(storage)
+    return True
 
 
 def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None, signature: tuple[str, bool] | None = None) -> bool:
