@@ -1812,27 +1812,26 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_directory_unavailable"]
                     continue
                 try:
-                    opened = os.fstat(directory)
-                    identity = f"{opened.st_dev}:{opened.st_ino}"
+                    info = os.fstat(directory)
+                    identity = f"{info.st_dev}:{info.st_ino}"
                 except OSError:
                     identity = ""
-                finally:
-                    os.close(directory)
                 if expected_identity and identity != expected_identity:
+                    os.close(directory)
                     append_removal(state_root, candidate, "removal_blocked")
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_replaced_before_remove"]
                     continue
-                # The worktree is moved aside rather than deleted. The rename
-                # is atomic, so a file that was saved after the last status
-                # check goes with it and is never lost, and nothing in a
-                # worktree that took the place in the meantime is touched.
+                # The snapshot comes before the status check, so a file that is
+                # saved after the check is not in it and is never removed.
+                snapshot = _snapshot_directory(directory)
                 try:
                     pending = status_for(Path(candidate["path"]))
                 except SafetyError:
                     pending = None
                 if pending is None:
                     # A failed inspection blocks the removal.
+                    os.close(directory)
                     append_removal(state_root, candidate, "removal_blocked")
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_status_unknown"]
@@ -1841,79 +1840,51 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     # The same refusal git makes for a dirty worktree: a file
                     # that was saved after the last status check is real work
                     # and is never removed.
+                    os.close(directory)
                     append_removal(state_root, candidate, "removal_blocked")
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_changed_before_remove"]
                     continue
-                moved_tree = _aside_path(Path(candidate["path"]))
-                if moved_tree is None:
-                    append_removal(state_root, candidate, "removal_failed")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_not_moved_aside"]
-                    continue
+                kept = _remove_tree(directory, snapshot)
+                os.close(directory)
+                tree_gone = False
                 try:
-                    os.rename(candidate["path"], moved_tree)
-                except OSError as exc:
-                    append_removal(state_root, candidate, "removal_failed")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_not_moved_aside"]
-                    prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": False, "error": str(exc)})
-                    continue
-                # The tree that was moved aside has to be the one that was
-                # verified. If it is not, it is put back where it was and the
-                # removal is refused.
-                try:
-                    aside = os.open(moved_tree, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    os.rmdir(candidate["path"])
+                    tree_gone = True
                 except OSError:
-                    aside = None
-                if aside is None:
-                    append_removal(state_root, candidate, "removal_failed")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_not_moved_aside"]
-                    continue
+                    tree_gone = False
+                # The registration is removed through its own descriptor, so a
+                # registration that replaced it in the meantime is not
+                # touched.
+                registration_gone = False
                 try:
-                    info = os.fstat(aside)
-                    aside_identity = f"{info.st_dev}:{info.st_ino}"
+                    admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                 except OSError:
-                    aside_identity = ""
-                if expected_identity and aside_identity != expected_identity:
-                    os.close(aside)
+                    admin = None
+                if admin is not None:
                     try:
-                        os.rename(moved_tree, candidate["path"])
-                    except OSError:
-                        pass
-                    append_removal(state_root, candidate, "removal_blocked")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_replaced_before_remove"]
-                    continue
-                try:
-                    kept = _remove_tree(aside, _snapshot_directory(aside))
-                finally:
-                    os.close(aside)
-                try:
-                    os.rmdir(moved_tree)
-                except OSError:
-                    kept += 1
-                candidate["moved_aside_to"] = str(moved_tree)
-                candidate["kept_entries"] = kept
-                if kept == 0:
-                    # The tree is gone, so its registration is pruned. It is
-                    # the registration the worktree owned, and its identity
-                    # was checked before the removal.
-                    try:
-                        info = os.stat(registration)
+                        info = os.fstat(admin)
                         if (info.st_dev, info.st_ino) == registration_identity:
-                            shutil.rmtree(registration)
-                        else:
-                            candidate["registration_pruned"] = False
-                    except OSError:
-                        candidate["registration_pruned"] = False
-                prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": True, "error": None, "moved_aside_to": str(moved_tree), "kept_entries": kept})
-                left = Path(candidate["path"])
-                if left.exists() and root_identity(left) == expected_identity:
-                    append_removal(state_root, candidate, "removal_failed")
+                            _remove_tree(admin, _snapshot_directory(admin))
+                            try:
+                                os.rmdir(registration)
+                                registration_gone = True
+                            except OSError:
+                                registration_gone = False
+                    finally:
+                        os.close(admin)
+                candidate["kept_entries"] = kept
+                prune_results.append({
+                    "repo": str(repo_root), "worktree": candidate["path"],
+                    "ok": tree_gone and registration_gone,
+                    "error": None if tree_gone and registration_gone else "the checkout or the registration is still there",
+                    "kept_entries": kept,
+                })
+                if not (tree_gone and registration_gone):
+                    # The removal is reported as what it was.
+                    append_removal(state_root, candidate, "removal_incomplete")
                     candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_remove_failed"]
+                    candidate["reasons"] = ["worktree_not_fully_removed"]
                     continue
                 append_removal(state_root, candidate, "removed")
                 candidate["eligible"] = False
