@@ -111,22 +111,14 @@ def queue_dir():
 
 
 @contextlib.contextmanager
-def blocked_lock(blocking=True):
+def blocked_lock():
     """The lock on the provider block store, held while a caller reads the
-    blocked set and acts on the answer. It is yielded as False when
-    `blocking=False` and someone else holds it."""
+    blocked set and acts on the answer."""
     directory = queue_dir()
     os.makedirs(directory, exist_ok=True)
-    handle = open(os.path.join(directory, BLOCKED_LOCK_FILE), "w")
-    try:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        except BlockingIOError:
-            yield False
-            return
-        yield True
-    finally:
-        handle.close()
+    with open(os.path.join(directory, BLOCKED_LOCK_FILE), "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
 
 
 def blocked_identities():
