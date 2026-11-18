@@ -2403,11 +2403,8 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 try:
                     registered = (registration / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
-                    registration_info = os.stat(registration)
-                    registration_identity = (registration_info.st_dev, registration_info.st_ino)
                 except OSError:
                     registered = ""
-                    registration_identity = (0, 0)
                 if registered.startswith("ref: "):
                     try:
                         registered = git(repo_root, "rev-parse", registered[len("ref: "):]).strip()
@@ -2451,14 +2448,6 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["eligible"] = False
                         candidate["reasons"] = ["worktree_replaced_before_remove"]
                         continue
-                    # The snapshot comes before the status check, so a file that is
-                    # saved after the check is not in it and is never removed.
-                    snapshot = _snapshot_all(directory)
-                    pointer = ""
-                    try:
-                        pointer = (Path(candidate["path"]) / ".git").read_text(encoding="utf-8", errors="replace")
-                    except OSError:
-                        pointer = ""
                     # The index is locked for the whole of the removal, so a
                     # staged edit cannot slip in after the check and be lost
                     # with the registration.
@@ -2504,163 +2493,34 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         ignored = any(code.strip() == "!!" for code, _name, _original in pending)
                         candidate["reasons"] = ["worktree_has_ignored_files" if ignored else "worktree_changed_before_remove"]
                         continue
-                    storage_path = _trash_for(state_root / "cleanup-trash", Path(candidate["path"]))
                     kept = 0
-                    # What is left in the directory decides whether the checkout
-                    # survives, not the count of entries the loop handled: a file
-                    # that was created after the snapshot is not in the loop at all.
-                    remaining = _snapshot_directory(directory)
-                    survived = bool(remaining)
+                    # Git removes the worktree and its registration. It refuses a
+                    # worktree that is dirty, locked or changed under the check, so a lock
+                    # taken after the check keeps the checkout. The index lock stays held
+                    # until the removal is done.
                     tree_gone = False
-                    if True:
-                        # The directory that is removed has to be the one that
-                        # was verified. It is renamed aside first, so the
-                        # directory that is removed belongs to this call and a
-                        # replacement that took the path is put back.
-                        try:
-                            parent = os.open(Path(candidate["path"]).parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                        except OSError:
-                            parent = None
-                        if parent is None:
-                            tree_gone = False
-                        else:
-                            aside = f".cleaner-removed-{os.getpid()}-{os.urandom(6).hex()}"
-                            if not _rename_exclusive(Path(candidate["path"]), Path(candidate["path"]).parent / aside):
-                                tree_gone = False
-                            else:
-                                try:
-                                    info = os.stat(os.path.basename(aside), dir_fd=parent, follow_symlinks=False)
-                                except OSError:
-                                    info = None
-                                matched = info is not None and (not expected_identity or f"{info.st_dev}:{info.st_ino}" == expected_identity)
-                                # The identity of the copy that is moved, taken
-                                # before the move, so the moved copy can be
-                                # told apart from something else.
-                                aside_identity: tuple[int, int] | None = None
-                                if info is not None:
-                                    aside_identity = (info.st_dev, info.st_ino)
-                                moved_to: Path | None = None
-                                if matched:
-                                    # The moved worktree keeps every file and
-                                    # every name, so a save through an open
-                                    # descriptor survives. It waits in the
-                                    # recovery storage until that storage is
-                                    # swept, and the space comes back then.
-                                    storage = _trash_for(state_root / "cleanup-trash", Path(candidate["path"]))
-                                    try:
-                                        storage.mkdir(mode=0o700, parents=True, exist_ok=True)
-                                        os.rename(Path(candidate["path"]).parent / aside, storage / aside)
-                                        moved_to = storage / aside
-                                        tree_gone = True
-                                    except OSError:
-                                        tree_gone = False
-                                    recorded_recovery = False
-                                    if tree_gone:
-                                        # The copy that arrived has to be the
-                                        # one that was checked.
-                                        try:
-                                            arrived = os.lstat(storage / aside)
-                                        except OSError:
-                                            arrived = None
-                                        if arrived is None or aside_identity is None or (arrived.st_dev, arrived.st_ino) != aside_identity:
-                                            tree_gone = False
-                                            moved_to = None
-                                        elif _worktree_is_locked(registration):
-                                            # The owner locked the worktree
-                                            # while it was being moved, so it
-                                            # goes back where it was.
-                                            tree_gone = False
-                                        elif not _tree_matches(storage / aside, snapshot):
-                                            # The tree changed after it was
-                                            # stamped, so it holds real work and
-                                            # it goes back where it was.
-                                            tree_gone = False
-                                        else:
-                                            try:
-                                                recorded_recovery = _record_recovery(state_root, storage / aside, aside_identity)
-                                            except Exception:
-                                                recorded_recovery = False
-                                    if tree_gone and not recorded_recovery:
-                                        # The recovery is not in the manifest, so it
-                                        # would never be swept. The checkout
-                                        # stays in the storage and the removal
-                                        # is reported as incomplete.
-                                        tree_gone = False
-                                if not tree_gone:
-                                    # The copy is moved back from where it is
-                                    # now, with a rename that refuses an
-                                    # occupied path, so a save at that path is
-                                    # never replaced and the copy is kept
-                                    # whole.
-                                    source = moved_to or (Path(candidate["path"]).parent / aside)
-                                    if not _rename_exclusive(source, Path(candidate["path"])):
-                                        candidate["checkout_conflict"] = True
-                            os.close(parent)
-                    # The registration is removed through its own descriptor, so a
-                    # registration that replaced it in the meantime is not
-                    # touched.
                     registration_gone = False
-                    if not tree_gone:
-                        # Files survived the deletion, so the checkout is still
-                        # there and keeps its pointer, and the registration is
-                        # kept with it.
-                        if pointer:
-                            # The pointer is restored exclusively, through the
-                            # descriptor of the directory that was verified, so
-                            # a checkout that took the place keeps the
-                            # pointer it has.
-                            try:
-                                descriptor = os.open(".git", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644, dir_fd=directory)
-                            except OSError:
-                                candidate["pointer_conflict"] = True
-                            else:
-                                with os.fdopen(descriptor, "w") as handle:
-                                    handle.write(pointer)
-                        try:
-                            admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                        except OSError:
-                            admin = None
-                        if admin is not None:
-                            os.close(admin)
-                        registration_gone = False
+                    try:
+                        git(repo_root, "worktree", "remove", str(candidate["path"]))
+                    except (SafetyError, OSError):
+                        tree_gone = False
                     else:
-                        try:
-                            admin = os.open(registration, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                        except OSError:
-                            admin = None
-                    if tree_gone and admin is not None:
-                        try:
-                            admin_parent = os.open(registration.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                        except OSError:
-                            admin_parent = None
-                        try:
-                            info = os.fstat(admin)
-                            if admin_parent is not None and (info.st_dev, info.st_ino) == registration_identity:
-                                _remove_tree(admin, {}, _snapshot_all(admin))
-                                # The registration is renamed aside before it is
-                                # removed, so the directory that is removed is one
-                                # this call owns.
-                                aside = f".cleaner-registration-{os.getpid()}-{os.urandom(6).hex()}"
-                                if not _rename_exclusive(Path(registration), Path(registration).parent / aside):
-                                    registration_gone = False
-                                else:
-                                    try:
-                                        info = os.stat(os.path.basename(aside), dir_fd=admin_parent, follow_symlinks=False)
-                                        if (info.st_dev, info.st_ino) == registration_identity:
-                                            os.rmdir(aside, dir_fd=admin_parent)
-                                            registration_gone = True
-                                        else:
-                                            # The registration is put back only
-                                            # when its path is free, and the
-                                            # aside copy is kept whole.
-                                            if not _rename_exclusive(Path(registration).parent / aside, Path(registration)):
-                                                registration_gone = False
-                                    except OSError:
-                                        registration_gone = False
-                        finally:
-                            os.close(admin)
-                            if admin_parent is not None:
-                                os.close(admin_parent)
+                        tree_gone = True
+                        registration_gone = True
+                        # Git prints the preview of the prune on stderr. The prune is run
+                        # only when it would drop nothing, so the registration that is the
+                        # last reference to a commit that was never published stays.
+                        preview = run(["git", "-C", str(repo_root), "worktree", "prune", "--dry-run", "--verbose"])
+                        pending = (preview.stdout + preview.stderr).strip()
+                        if preview.returncode != 0 and not pending:
+                            pending = "the preview of the prune failed"
+                        if not pending:
+                            try:
+                                git(repo_root, "worktree", "prune")
+                            except (SafetyError, OSError):
+                                pass
+                        else:
+                            candidate["prune_skipped"] = pending
                     candidate["kept_entries"] = kept
                     prune_results.append({
                         "repo": str(repo_root), "worktree": candidate["path"],
