@@ -417,13 +417,6 @@ def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool
     relative = Path(name)
     if relative.is_absolute() or ".." in relative.parts:
         return False
-    if entry[0] == "120000":
-        target = entry[2].decode("utf-8", "surrogateescape")
-        try:
-            os.symlink(target, repo / relative)
-        except OSError:
-            return False
-        return True
     parent = (repo / relative).parent
     try:
         parent.relative_to(repo)
@@ -433,6 +426,13 @@ def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool
         parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         return False
+    if entry[0] == "120000":
+        target = entry[2].decode("utf-8", "surrogateescape")
+        try:
+            os.symlink(target, repo / relative)
+        except OSError:
+            return False
+        return True
     return _exclusive_write(repo / relative, entry[2], int(entry[0], 8) & 0o777)
 
 
