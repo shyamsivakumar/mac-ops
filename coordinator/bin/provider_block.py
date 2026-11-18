@@ -58,6 +58,25 @@ NAMED_ZONE = re.compile(r"\b([A-Za-z]+(?:/[A-Za-z_]+)+)\b")
 # record was last updated. A start time never says when a run failed.
 FAILED_AT_FIELDS = ("completedAt", "updatedAt")
 
+# The provider's own refusal. The code is compared whole, so a code is
+# evidence and a number inside a message is not: `worker 14031 exited` holds
+# the digits of 403 and is no refusal.
+BLOCK_MARKERS = (
+    "no credits", "credit balance", "out of credits", "insufficient_quota",
+    "insufficient quota", "exceeded your current quota", "usage limit",
+    "spend limit", "rate limit", "too many requests", "invalid api key",
+    "quota exhausted", "quota exceeded", "payment required",
+)
+BLOCK_CODES = frozenset((
+    "401", "402", "403", "429", "insufficient_quota", "rate_limit_exceeded",
+    "quota_exceeded", "usage_limit", "spend_limit", "invalid_api_key",
+    "authentication_error", "permission_error", "unauthorized", "forbidden",
+))
+STATUS = re.compile(
+    r"\b(?:http|status(?:\s+code)?)\s*[:=]?\s*(?:401|402|403|429)\b"
+    r"|\b(?:401|402|403|429)\s+(?:unauthorized|forbidden|too many requests|payment required)\b",
+    re.IGNORECASE)
+
 
 def identity(selection):
     """The name of one provider: the instance and the last segment of the model.
@@ -146,19 +165,79 @@ def stamp(seconds):
     return datetime.fromtimestamp(float(seconds), timezone.utc).isoformat()
 
 
-def failed_at(run):
-    """When the failed run a record names failed, or None when it does not say.
+def run_records(value):
+    """The records that may say when the run failed, the run's record first."""
+    if not isinstance(value, dict):
+        return []
+    thread = value.get("thread") if isinstance(value.get("thread"), dict) else {}
+    runs = value.get("recentRuns") or []
+    failure = next((run for run in runs
+                    if run.get("runId") == thread.get("latestRunId")), None)
+    return [record for record in (failure, thread, value) if isinstance(record, dict)]
 
-    A completion time is read before an update time, and a start time is
-    never read: a run that began at 10:00 and failed at 10:40 says nothing
-    about 10:40 through its start."""
-    if not isinstance(run, dict):
+
+def failed_at(value):
+    """When the failed run a value names failed, or None when it does not say.
+
+    A completion time is read before an update time, and the run's record
+    is read before the thread's. A start time is never read: a run that
+    began at 10:00 and failed at 10:40 says nothing about 10:40 through
+    its start."""
+    if not isinstance(value, dict):
         return None
     for field in FAILED_AT_FIELDS:
-        seconds = parse_time(run.get(field))
-        if seconds is not None:
-            return seconds
+        for source in run_records(value):
+            seconds = parse_time(source.get(field))
+            if seconds is not None:
+                return seconds
     return None
+
+
+def failure_of(value):
+    """The failed run a value names, or None when it names no failure.
+
+    A thread snapshot names its latest run, and that run is the failure
+    when it failed. A plain string is a failure itself."""
+    if isinstance(value, str):
+        return {"error": value}
+    if not isinstance(value, dict):
+        return None
+    if "thread" in value:
+        thread = value.get("thread") or {}
+        runs = value.get("recentRuns") or []
+        failure = next((run for run in runs
+                        if run.get("runId") == thread.get("latestRunId")), thread)
+        if failure.get("status") not in ("failed", "interrupted"):
+            return None
+        return failure
+    if value.get("status") in ("failed", "interrupted"):
+        return value
+    return None
+
+
+def error_of(value):
+    """The provider's error code and message of a failed run, as text."""
+    failure = failure_of(value)
+    error = failure.get("error") if failure else None
+    if isinstance(error, dict):
+        return str(error.get("code") or ""), str(error.get("message") or "")
+    return "", error if isinstance(error, str) else ""
+
+
+def provider_refusal(code, message):
+    """Whether a failed run's error is the provider refusing to run.
+
+    A refusal names the provider's own error code, or an HTTP status in the
+    message, or one of the provider's billing and limit phrases. A
+    substring is no evidence: `worker 14031 exited` holds the digits of 403
+    and a local `disk quota exceeded` holds the word quota, and neither
+    says anything about the provider."""
+    if code.strip().lower() in BLOCK_CODES:
+        return True
+    if STATUS.search(message):
+        return True
+    lowered = message.lower()
+    return any(marker in lowered for marker in BLOCK_MARKERS)
 
 
 def zone_of(text, start=0):
@@ -229,7 +308,9 @@ def reset_at(message, failed=None):
     match = RELATIVE.search(message)
     if match:
         seconds = float(match.group(1)) * UNITS.get(match.group(2).lower(), 0.0)
-        if seconds > 0:
+        # A reset of zero is a reset: the provider says it is free now, and
+        # a block that waited an hour would hold it past what it promised.
+        if seconds >= 0:
             return base + seconds
     return _absolute(message, base)
 
@@ -239,7 +320,11 @@ def record_block(selection, reason, failed=None, now=None, by="provider_block"):
 
     The block runs from the moment the run failed to the reset the provider
     named, or to an hour after the failure when it named none. A window
-    that has already closed blocks nobody and is not written."""
+    that has already closed blocks nobody and is not written.
+
+    A failure read late never shortens a block a newer failure earned: the
+    record that is already there keeps its end, and the provider stays out
+    of the routing until that end, not until the older reset."""
     name = identity(selection)
     if not name:
         return None
@@ -253,9 +338,39 @@ def record_block(selection, reason, failed=None, now=None, by="provider_block"):
     record = {"reason": reason, "since": stamp(since), "until": stamp(until), "by": by}
     with locked():
         state = read()
+        current = state.get(name)
+        if current is not None:
+            current_failed = failure_time_of(current)
+            if current_failed is not None and current_failed > since:
+                return current
+            current_until = until_of(current)
+            if current_until is not None and current_until > until:
+                return current
         state[name] = record
         write(state)
     return record
+
+
+def failure_time_of(record):
+    """The moment the failure a record was written for failed, or None."""
+    if not isinstance(record, dict):
+        return None
+    return parse_time(record.get("since"))
+
+
+def block_run(selection, value, now=None, by="provider_block"):
+    """Block the provider a failed run names, and return the record written.
+
+    The block starts when the run failed, not when the failure was read,
+    and ends at the reset the error names. A failure that is not the
+    provider refusing writes nothing."""
+    failure = failure_of(value)
+    if not failure:
+        return None
+    code, message = error_of(value)
+    if not provider_refusal(code, message):
+        return None
+    return record_block(selection, message, failed=failed_at(value), now=now, by=by)
 
 
 def until_of(record):
