@@ -332,12 +332,13 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         digests = {"AGENTS.md": cleaner.file_digest(self.repo / "AGENTS.md")}
         original_replace = os.replace
 
-        def replace_and_save(source, destination):
-            result = original_replace(source, destination)
-            if str(source).endswith("AGENTS.md") and str(destination).startswith(str(self.trash)):
+        def replace_and_save(source, destination, *args, **kwargs):
+            result = original_replace(source, destination, *args, **kwargs)
+            if ".moved" in str(destination):
                 # The editor wrote through its open handle into the moved
                 # file and recreated the path with its own copy.
-                with open(destination, "a", encoding="utf-8") as handle:
+                moved = self.trash / str(destination)
+                with moved.open("a", encoding="utf-8") as handle:
                     handle.write("saved by an editor\n")
                 with (self.repo / "AGENTS.md").open("w", encoding="utf-8") as handle:
                     handle.write("saved by an editor\n")
@@ -359,22 +360,17 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         target = self.repo / "AGENTS.md"
         digests = {"AGENTS.md": cleaner.file_digest(target)}
         original_replace = os.replace
-        real_exists = Path.exists
 
-        def replace_and_save(source, destination):
-            result = original_replace(source, destination)
-            if Path(source) == target and str(destination).startswith(str(self.trash)):
-                with open(destination, "a", encoding="utf-8") as handle:
+        def replace_and_save(source, destination, *args, **kwargs):
+            result = original_replace(source, destination, *args, **kwargs)
+            if ".moved" in str(destination):
+                moved = self.trash / str(destination)
+                with moved.open("a", encoding="utf-8") as handle:
                     handle.write("write-through bytes\n")
                 target.write_text("saved by an editor\n", encoding="utf-8")
             return result
 
-        def exists(path):
-            if Path(path) == target:
-                return False
-            return real_exists(path)
-
-        with mock.patch.object(cleaner.os, "replace", replace_and_save), mock.patch.object(Path, "exists", exists):
+        with mock.patch.object(cleaner.os, "replace", replace_and_save):
             cleared = clear_bootstrap(self.repo, cleaner.status_for(self.repo), self.trash, digests)
         self.assertIsNone(cleared)
         self.assertEqual(target.read_text(encoding="utf-8"), "saved by an editor\n")
@@ -410,10 +406,11 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             digests = {"AGENTS.md": cleaner.file_digest(repo / "AGENTS.md")}
             original_replace = os.replace
 
-            def replace_and_save(source, destination, index=index):
-                result = original_replace(source, destination)
-                if str(source).endswith("AGENTS.md") and str(destination).startswith(str(self.trash)):
-                    with open(destination, "a", encoding="utf-8") as handle:
+            def replace_and_save(source, destination, *args, index=index, **kwargs):
+                result = original_replace(source, destination, *args, **kwargs)
+                if ".moved" in str(destination):
+                    moved = self.trash / str(destination)
+                    with moved.open("a", encoding="utf-8") as handle:
                         handle.write(f"saved by an editor {index}\n")
                     with (repo / "AGENTS.md").open("w", encoding="utf-8") as handle:
                         handle.write(f"saved by an editor {index}\n")
@@ -589,13 +586,50 @@ class ClearBootstrapChangesTest(unittest.TestCase):
             descriptor = original_open(repo_arg, relative)
             if descriptor is not None and not swapped:
                 swapped.append(True)
-                (repo / ".specstory").rmdir()
+                os.rename(repo / ".specstory", repo / ".specstory-real")
                 os.symlink(str(outside), repo / ".specstory")
             return descriptor
 
         with mock.patch.object(cleaner, "_open_parent_fd", open_then_swap):
             clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
         self.assertFalse((outside / "notes").exists(), "nothing may be written outside the worktree")
+
+    def test_a_link_that_appears_before_the_move_cannot_take_an_outside_file(self):
+        # The directory turns into a link after the parent was opened. The
+        # move is relative to the descriptor, so the file that is moved is the
+        # one inside the worktree, never the one outside.
+        repo = Path(self.tmp.name) / "move-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        (repo / ".specstory" / "notes").write_text("history\n", encoding="utf-8")
+        git(repo, "add", ".specstory/notes")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "notes"], check=True, capture_output=True)
+        (repo / ".specstory" / "notes").write_text("edited\n", encoding="utf-8")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        outside = Path(self.tmp.name) / "outside-move"
+        outside.mkdir()
+        (outside / "notes").write_text("outside\n", encoding="utf-8")
+        original_open = cleaner._open_parent_fd
+        swapped = []
+
+        def open_then_swap(repo_arg, relative):
+            descriptor = original_open(repo_arg, relative)
+            if descriptor is not None and not swapped:
+                swapped.append(True)
+                os.rename(repo / ".specstory", repo / ".specstory-real")
+                os.symlink(str(outside), repo / ".specstory")
+            return descriptor
+
+        with mock.patch.object(cleaner, "_open_parent_fd", open_then_swap):
+            clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
+        self.assertEqual((outside / "notes").read_text(encoding="utf-8"), "outside\n")
+        for item in self.trash.iterdir():
+            if item.is_file():
+                self.assertNotIn(b"outside\n", item.read_bytes())
 
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
@@ -632,8 +666,8 @@ class DefaultBranchTest(unittest.TestCase):
 
     def test_ancestry_is_decided_by_github(self):
         github = cleaner.GitHub()
-        github.default_branch = lambda repo: "main"
-        github.contains = lambda repo, base, head: head == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        github.default_branch = lambda repo, **_kwargs: "main"
+        github.contains = lambda repo, base, head, **_kwargs: head == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         row = {"head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "unpushed": 0, "remote_commit_present": True}
         self.assertTrue(cleaner.published_on_default_branch(row, github, "fixture/repo"))
         stale = {"head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "unpushed": 0, "remote_commit_present": True}
@@ -641,8 +675,8 @@ class DefaultBranchTest(unittest.TestCase):
 
     def test_unverified_default_branch_grants_nothing(self):
         github = cleaner.GitHub()
-        github.default_branch = lambda repo: None
-        github.contains = lambda repo, base, head: True
+        github.default_branch = lambda repo, **_kwargs: None
+        github.contains = lambda repo, base, head, **_kwargs: True
         row = {"head": self.master_head, "unpushed": 0, "remote_commit_present": True}
         self.assertFalse(cleaner.published_on_default_branch(row, github, "fixture/repo"))
 
@@ -660,7 +694,7 @@ class DefaultBranchTest(unittest.TestCase):
         self.assertFalse(cleaner.valid_branch_name("trailing/"))
         self.assertFalse(cleaner.valid_branch_name("name.lock"))
         github = cleaner.GitHub()
-        github.default_branch = lambda repo: "release/main"
+        github.default_branch = lambda repo, **_kwargs: "release/main"
         self.assertEqual(github.default_branch("fixture/repo"), "release/main")
 
 
