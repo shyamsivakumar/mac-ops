@@ -1625,9 +1625,17 @@ def _volume_trash(path: Path) -> Path | None:
         if path == home or home in path.parents:
             trash = home / ".Trash"
         else:
+            # The volume root is where the device of a directory differs
+            # from the device of its parent, so an ordinary directory that
+            # happens to hold a .Trashes folder is never taken for a volume.
             mount = path
-            while mount.parent != mount and not (mount / ".Trashes").is_dir():
-                mount = mount.parent
+            while True:
+                parent = mount.parent
+                if parent == mount:
+                    return None
+                if os.stat(mount).st_dev != os.stat(parent).st_dev:
+                    break
+                mount = parent
             trash = mount / ".Trashes" / str(os.getuid())
     except OSError:
         return None
@@ -1643,16 +1651,6 @@ def _trash_destination(path: Path) -> Path | None:
     if trash is None:
         return None
     return trash / f"worktree-cleaner-{path.name}-{int(time.time())}"
-
-
-def _move_to_system_trash(path: Path) -> bool:
-    """Move a copy into the trash of its volume, the way the system does it."""
-    script = f'tell application "Finder" to delete POSIX file "{path}"'
-    try:
-        result = run(["osascript", "-e", script], timeout=120)
-    except SafetyError:
-        return False
-    return result.returncode == 0
 
 
 def _remove_recovery_copy(path: Path, older_than: float) -> bool:
@@ -1718,11 +1716,9 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
                 pass
             return False
         return True
-    if not _move_to_system_trash(path):
-        # The copy stays in the recovery storage: it cannot be shown to be
-        # safe to move.
-        return False
-    return True
+    # There is no trash to move the copy to, so it stays where it is: a move
+    # that cannot be checked is not made.
+    return False
 
 
 def _newest_change(path: Path) -> float | None:
