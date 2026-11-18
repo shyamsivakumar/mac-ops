@@ -4,10 +4,21 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 
 import alarms
 import stall
+
+# The builders and their blocked state live with the coordinator tools, so
+# one provider health store serves the queue, the ticket tool and this
+# driver (MO-1082). Installed, both folders are ~/.local/bin.
+BIN_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
+if BIN_DIR not in sys.path:
+    sys.path.insert(0, BIN_DIR)
+
+import builders  # noqa: E402
+import provider_health  # noqa: E402
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
@@ -426,6 +437,12 @@ def branch_on_origin(repo, branch):
     return bool(listing.strip())
 
 
+def builder_of(thread):
+    """The builder selection of a thread, or None when it runs no builder."""
+    selection = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+    return selection if builders.is_builder(selection) else None
+
+
 def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False):
     """Send work to a thread, or start a fresh one when it cannot take it.
 
@@ -433,6 +450,10 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     thread that works in a shared checkout of a repository never takes
     it, and the work starts a fresh worktree instead. That is the
     fix-check path's rule; the other paths keep their own routing.
+
+    A thread whose builder is blocked never takes a send: a provider that
+    ran out cannot run the work, so the work starts a fresh thread on the
+    next builder in the same worktree instead (MO-1082).
     """
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
@@ -452,6 +473,12 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
+    thread_builder = builder_of(thread)
+    if sendable and thread_builder and provider_health.blocked(thread_builder):
+        # The thread's builder ran out. Its send would start on an
+        # exhausted provider, so the work moves to the next builder.
+        sendable = False
+        reroute = "builder blocked"
     if sendable and worktree_only and root_workspace(thread):
         # Pull request work in a shared checkout of the repository moves
         # the branch everyone installs from, so it starts a fresh
@@ -466,13 +493,21 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if pr is None:
-            return f"skip {lkey}: no verified PR branch for relaunch"
-        if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
-            return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
-        workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
+        model = builders.choose_builder(thread_builder)
+        if model is None:
+            return f"skip {lkey}: every builder is blocked, waiting for a probe"
+        path = thread.get("worktreePath") if reroute == "builder blocked" else None
+        if path:
+            # The work stays in its own worktree; only the builder moves.
+            workspace = {"type": "existing_worktree", "worktreePath": path}
+        else:
+            if pr is None:
+                return f"skip {lkey}: no verified PR branch for relaunch"
+            if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
+                return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
+            workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         args = {"projectId": CFG[repo]["projectId"], "title": title,
-                "modelSelection": SOL, "runtimeMode": "full-access",
+                "modelSelection": model, "runtimeMode": "full-access",
                 "workspaceStrategy": workspace, "message": message}
         options = ["--priority", str(priority)]
     if DRY:
@@ -1333,7 +1368,8 @@ def recover_dead_runs(ledger):
                     settle_dead_run(thread_id)
                 continue
             failure = reply.lower()
-            limit_failure = any(term in failure for term in ("rate limit", "spend limit", "quota", "individual spend"))
+            block_reason = provider_health.block_reason(reply)
+            limit_failure = bool(block_reason) or any(term in failure for term in ("rate limit", "spend limit", "quota", "individual spend"))
             day = time.strftime("%Y-%m-%d")
             count_key = f"dead-relaunch:{day}:{work_key}"
             count = int(ledger.get(count_key, 0))
@@ -1343,6 +1379,20 @@ def recover_dead_runs(ledger):
                     settle_dead_run(thread_id)
                 continue
             model = dead_run_model(full_thread, limit_failure)
+            if block_reason:
+                # The run ended because its provider ran out. That builder
+                # cannot run the continue either, so it is blocked for every
+                # build and send and the work moves to the next builder.
+                current = builder_of(full_thread)
+                if current:
+                    line = builders.blocked_builder(
+                        current, block_reason, reset_at=provider_health.reset_time(reply))
+                    if line:
+                        print(line)
+                model = builders.choose_builder(current)
+                if model is None:
+                    print(f"DEAD {thread_id}: waiting, every builder is blocked")
+                    continue
             if count >= 2:
                 print(f"DEAD {thread_id}: coordinator needed, daily relaunch limit reached")
                 continue
@@ -1378,11 +1428,66 @@ def recover_dead_runs(ledger):
                 settle_dead_run(thread_id)
 
 
+PROBE_MESSAGE = ("Coordinator: provider probe. Reply with the single word OK and stop. "
+                 "Change no file, start no work and open no pull request.")
+
+
+def probe_blocked_builders(ledger):
+    """Probe the blocked builders that are due, and free the ones that answer.
+
+    One tiny run per builder, at most once an hour or at the reset the
+    provider named. A probe that answers unblocks the builder for new
+    builds and sends; a probe that fails keeps it blocked until its next
+    deadline. Both are logged once.
+    """
+    if not provider_health.load():
+        return
+    receipts = stall_receipts()
+    for member in builders.BUILDERS:
+        ident = builders.identity(member)
+        record = provider_health.record(member)
+        if not record:
+            continue
+        request_id = record.get("probeRequestId")
+        if request_id:
+            thread_id = receipts.get(request_id)
+            thread = (t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread")
+                      if thread_id else None) or {}
+            status = thread.get("status")
+            if status == "completed" and last_reply(thread_id).strip():
+                line = builders.recovered_builder(member, request_id)
+                if line:
+                    print(line)
+                continue
+            if status in {"failed", "interrupted", "cancelled", "rolled_back"}:
+                reason = provider_health.block_reason(last_reply(thread_id)) or "the probe did not answer"
+                provider_health.note_probe_failure(member, reason, request_id=request_id)
+                print(f"builder probe {ident}: still blocked ({reason})")
+            continue
+        if not provider_health.probe_due(member):
+            continue
+        repo = MAC_OPS_REPO
+        if DRY:
+            print(f"DRY builder probe {ident}")
+            continue
+        key = f"builder-probe:{ident}:{int(time.time())}"
+        args = {"projectId": CFG[repo]["projectId"], "title": f"Builder probe {member['model']}",
+                "modelSelection": member, "runtimeMode": "full-access",
+                "workspaceStrategy": {"type": "root"}, "clientRequestId": key,
+                "message": PROBE_MESSAGE}
+        out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).strip()
+        if not out:
+            raise RuntimeError(f"Empty builder probe receipt for {ident}")
+        provider_health.note_probe(member, key)
+        print(f"builder probe {ident}: started")
+
+
 def run_pass(ledger):
     global SNAPSHOT, STALL_STATE
     ledger.pop("_item_failures", None)
     watchdog()
     drift_ff(ledger)
+    probe_blocked_builders(ledger)
     SNAPSHOT = board_snapshot(ledger)
     if not isinstance(STALL_STATE, dict):
         STALL_STATE = {}
