@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +30,9 @@ with open(os.path.join(base, "calls.log"), "a") as log:
     log.write(" ".join(args) + "\\n")
 mode = open(os.path.join(base, "mode")).read().strip()
 if "rate_limit" in args:
+    if mode == "slow":
+        import time as _time
+        _time.sleep(5)
     print(json.dumps({{"resources": {{"core": {{"remaining": 4000}},
                                      "graphql": {{"remaining": 4000}}}}}}))
 elif "auth" in args:
@@ -84,6 +88,17 @@ sys.stdout.write(result.stdout)
 """
     return subprocess.run([sys.executable, "-c", code], capture_output=True,
                           text=True, env={**env, **(extra_env or {})}, cwd=cwd)
+
+
+def run_quota(timeout):
+    """Read the quota through the helper with a bounded timeout."""
+    code = f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+print(gh_gateway.remaining_or_none(timeout={timeout!r}))
+"""
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
 
 
 def calls_made():
@@ -191,6 +206,27 @@ viewed = rows()[rows_before:]
 check("a GraphQL command is not logged as core",
       viewed and all(row["resource"] == "graphql" for row in viewed),
       f"resources={[row['resource'] for row in viewed]}")
+# A fallback credential variable changes the identity too.
+fallback_read = ["gh", "pr", "list", "-R", "a/b", "--state", "open", "--json", "number"]
+before = calls_made()
+run(fallback_read, extra_env={"GITHUB_TOKEN": "one"})
+run(fallback_read, extra_env={"GITHUB_TOKEN": "one"})
+check("a GITHUB_TOKEN identity is cached once", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
+before = calls_made()
+run(fallback_read, extra_env={"GITHUB_TOKEN": "two"})
+check("a second GITHUB_TOKEN is a second read", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
+
+# The quota probe is bounded by the caller's deadline, not by its own 60 s.
+set_mode("slow")
+started = time.time()
+probe = run_quota(1)
+elapsed = time.time() - started
+check("a stalled quota probe cannot outlast the caller", probe.stdout.strip() == "None" and elapsed < 4,
+      f"stdout={probe.stdout.strip()} elapsed={elapsed:.1f}s")
+set_mode("200")
+
 rows_before = len(rows())
 run(["gh", "api", "repos/a/b/labels?per_page=100"])
 labeled = rows()[rows_before:]

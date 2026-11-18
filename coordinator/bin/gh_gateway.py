@@ -374,26 +374,35 @@ def _hosts_account(host):
     return ""
 
 
-def _token_id(token):
-    """Return a short fingerprint of a token, never the token itself."""
-    if not token:
-        return ""
+# Every variable `gh` accepts a credential from. A fingerprint covers all
+# of them, so switching a fallback token changes the cache key too.
+TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN",
+              "GITHUB_ENTERPRISE_TOKEN")
+
+
+def _token_id():
+    """Return a short fingerprint of the credentials in the environment.
+
+    The value is never kept, only a hash of every credential variable that
+    is set, so any change of identity changes the key."""
     import hashlib
-    return hashlib.sha256(token.encode()).hexdigest()[:16]
+    tokens = [os.environ.get(name) or "" for name in TOKEN_VARS]
+    if not any(tokens):
+        return ""
+    return hashlib.sha256("\0".join(tokens).encode()).hexdigest()[:16]
 
 
 def context():
     """Return (host, identity, checkout, repo_override, token_id) for this call.
 
     `gh pr list` resolves its repository from the working directory and its
-    account from `GH_TOKEN` or gh's hosts file, so two identical commands
-    under different overrides are different reads. The token is kept as a
-    fingerprint, never as the value."""
+    account from a credential variable or gh's hosts file, so two identical
+    commands under different overrides are different reads. A credential is
+    kept as a fingerprint of every variable that is set, never as a value."""
     host = os.environ.get("GH_HOST") or "github.com"
     account = os.environ.get("COORDINATOR_GH_ACCOUNT") or _hosts_account(host)
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GH_ENTERPRISE_TOKEN") or ""
     repo_override = os.environ.get("GH_REPO") or ""
-    return host, account, os.getcwd(), repo_override, _token_id(token)
+    return host, account, os.getcwd(), repo_override, _token_id()
 
 
 def _key(argv):
@@ -511,14 +520,15 @@ def api_remaining(timeout=60):
     return dict(value)
 
 
-def remaining_or_none():
+def remaining_or_none(timeout=60):
     """Return the quota, or None when it cannot be read.
 
     A caller that only skips optional reads uses this: a quota it cannot
     read is not a reason to stop the work, and a read that matters still
-    fails on its own when GitHub refuses it."""
+    fails on its own when GitHub refuses it. The timeout is the caller's,
+    so a probe inside a deadline cannot outlast it."""
     try:
-        return api_remaining()
+        return api_remaining(timeout=timeout)
     except ApiBudgetExhausted:
         return None
 
