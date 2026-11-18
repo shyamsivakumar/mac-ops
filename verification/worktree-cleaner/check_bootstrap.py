@@ -106,6 +106,15 @@ def main() -> int:
         with (paths["locked"] / "AGENTS.md").open("a", encoding="utf-8") as handle:
             handle.write(rules_block())
         git(repo, "worktree", "lock", str(paths["locked"]))
+        # A worktree whose edit the index hides from the status. The edit
+        # is not reported, so only the index itself can keep the worktree.
+        shas["hidden"] = commit(repo, "hidden.txt", "hidden\n")
+        git(repo, "branch", "hidden", shas["hidden"])
+        git(repo, "push", "origin", "main")
+        paths["hidden"] = trees / "hidden"
+        git(repo, "worktree", "add", str(paths["hidden"]), "hidden")
+        (paths["hidden"] / "hidden.txt").write_text("an unpublished edit\n", encoding="utf-8")
+        git(paths["hidden"], "update-index", "--assume-unchanged", "hidden.txt")
         detached = trees / "detached-main"
         git(repo, "worktree", "add", "--detach", str(detached), shas["onmain"])
         # A detached worktree whose head is only on master: old, but not
@@ -241,6 +250,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         applied = json.loads(command(args + ["--apply"], env=env))
         assert applied["removed"] == 3, applied["categories"]
         assert paths["locked"].exists(), "a worktree its owner locked has to stay"
+        assert paths["hidden"].exists(), "a worktree whose edit the index hides has to stay"
         assert "locked" in git(repo, "worktree", "list", "--porcelain"), "the registration of a locked worktree has to stay"
         assert not paths["bootstrap"].exists() and not paths["onmain"].exists() and not detached.exists(), applied
         assert paths["real"].exists() and paths["offmain"].exists(), applied
