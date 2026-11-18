@@ -1088,20 +1088,31 @@ def cmd_drop(a):
 
 
 def cmd_status(a):
-    queue = load()
-    if queue.get("reserved"):
-        # A reservation outlives its launch when nothing reconciles it, so the
-        # read reconciles before it reports: a slot a finished launch no
-        # longer needs never shows as held.
-        try:
-            reconcile_reservations(queue, active_thread_ids())
-        except (RuntimeError, ValueError, KeyError, TypeError, OSError) as e:
-            log(f"status left the reservations alone: {e}")
-        queue = load()
+    # A reservation outlives its launch when nothing reconciles it, so the read
+    # reconciles before it reports: a slot a finished launch no longer needs
+    # never shows as held. The thread list is read before the writer lock is
+    # taken, because a t3 call under the lock would hold every start for its
+    # length.
+    live_ids = active_thread_ids() if load().get("reserved") else None
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
-    print(json.dumps({"cap": cap(), "live": live(), "reserved": queue.get("reserved", {}), "queued": len(queue["items"]), "failed": queue.get("failed", []), "stuck": stuck, "tickAlarm": tick_alarm()}))
+    threads = live()
+    # A start can enqueue between a read and a write, and saving an older
+    # snapshot would drop the item it just queued. So the queue is read,
+    # reconciled and written under the same lock the start takes.
+    with Lock(True):
+        queue = load()
+        if live_ids is not None:
+            try:
+                reconcile_reservations(queue, live_ids)
+            except (RuntimeError, ValueError, KeyError, TypeError, OSError) as e:
+                log(f"status left the reservations alone: {e}")
+            queue = load()
+        report = {"cap": cap(), "live": threads, "reserved": queue.get("reserved", {}),
+                  "queued": len(queue["items"]), "failed": queue.get("failed", []),
+                  "stuck": stuck, "tickAlarm": tick_alarm()}
+    print(json.dumps(report))
 
 
 

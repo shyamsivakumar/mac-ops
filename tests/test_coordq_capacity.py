@@ -108,6 +108,45 @@ class CapacityTests(unittest.TestCase):
             self.q.drain()
         self.assertNotIn("stale", self.q.load()["reserved"])
 
+    def test_status_reconciles_under_the_writer_lock_the_start_takes(self):
+        # A start can enqueue between a read and a write, so a write of an
+        # older snapshot would drop the item it just queued. The read, the
+        # reconciliation and the write all happen under the writer lock.
+        self.q.save({"next": 2, "items": [],
+                     "reserved": {"7": self.q.time.time()},
+                     "reservedThreads": {"7": "launch:mcp:launch:one"}})
+        real_lock, real_save, held, saves, reads = (self.q.Lock, self.q.save, [], [], [])
+
+        class Recording(real_lock):
+            def __enter__(self):
+                held.append("enter")
+                return super().__enter__()
+
+            def __exit__(self, *exc):
+                held.append("exit")
+                return super().__exit__(*exc)
+
+        def save(queue):
+            saves.append(list(held))
+            return real_save(queue)
+
+        def live_ids():
+            reads.append(list(held))
+            return set()
+
+        with patch.object(self.q, "Lock", Recording), patch.object(self.q, "save", side_effect=save), \
+                patch.object(self.q, "active_thread_ids", side_effect=live_ids), \
+                patch.object(self.q, "thread_status", return_value="completed"), \
+                patch.object(self.q, "load_counts", return_value={}), \
+                redirect_stdout(io.StringIO()) as out:
+            self.q.cmd_status(None)
+        # The released reservation was written while the lock was held.
+        self.assertEqual(saves, [["enter"]])
+        # The thread list was read before the lock, so a t3 call never blocks
+        # a start.
+        self.assertEqual(reads, [[]])
+        self.assertEqual(json.loads(out.getvalue())["reserved"], {})
+
     def test_status_reconciles_a_reservation_its_launch_no_longer_needs(self):
         # The reported reserved set is what the queue holds now, so a read
         # does not show a slot that no thread uses.
