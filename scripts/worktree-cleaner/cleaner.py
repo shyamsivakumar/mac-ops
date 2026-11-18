@@ -176,14 +176,14 @@ def status_for(path: Path) -> list[tuple[str, str, str | None]]:
     return records
 
 
-_rules_blocks: list[list[str]] | None = None
+_rules_blocks: list[bytes] | None = None
 
 
-def rules_blocks() -> list[list[str]]:
+def rules_blocks() -> list[bytes]:
     """The exact standing rule blocks an agent bootstrap writes, one per source."""
     global _rules_blocks
     if _rules_blocks is None:
-        blocks: list[list[str]] = []
+        blocks: list[bytes] = []
         root = Path(__file__).resolve().parents[2]
         sources = [
             root / "coordinator/config/AGENT-RULES.md",
@@ -195,11 +195,11 @@ def rules_blocks() -> list[list[str]]:
         ]
         for source in sources:
             try:
-                text = source.read_text(encoding="utf-8", errors="replace")
+                data = source.read_bytes()
             except OSError:
                 continue
-            if text.strip():
-                blocks.append(text)
+            if data.strip():
+                blocks.append(data)
         _rules_blocks = blocks
     return _rules_blocks
 
@@ -210,16 +210,36 @@ def bootstrap_path(name: str) -> bool:
     return any(name.startswith(prefix) for prefix in BOOTSTRAP_PREFIXES)
 
 
-def _permitted_agents_text(text: str, head: str, block: str) -> bool:
-    """The only contents an AGENTS.md may hold after the bootstrap: the
-    committed file, or the committed file plus exactly the rules block."""
-    if text == head:
-        return True
-    if text == head + block:
-        return True
-    if text == head.rstrip("\n") + "\n" + block:
-        return True
-    return False
+def git_bytes(root: Path, *args: str, timeout: int = 30) -> bytes:
+    """Run git and return the raw bytes, with no newline translation."""
+    try:
+        result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SafetyError(f"command_unavailable:{Path(args[0]).name}") from exc
+    if result.returncode != 0:
+        raise SafetyError(f"git_{args[0].replace('-', '_')}_failed")
+    return result.stdout
+
+
+def valid_branch_name(name: str) -> bool:
+    """True for a name git accepts as a branch name."""
+    if not name or name.startswith("/") or name.endswith("/") or name.endswith(".lock"):
+        return False
+    if ".." in name or "//" in name or name.startswith("-") or name.endswith("."):
+        return False
+    if any(character in name for character in " ~^:?*[\\"):
+        return False
+    return all(32 < ord(character) < 127 for character in name)
+
+
+def _permitted_agents_bytes(content: bytes, committed: bytes, block: bytes) -> bool:
+    """The only bytes an AGENTS.md may hold after the bootstrap: the committed
+    file, or the committed file with exactly the rules block appended.
+
+    The comparison is on bytes: the committed prefix must stay byte for byte
+    intact, and a line ending change cannot hide behind a translation.
+    """
+    return content == committed or content == committed + block
 
 
 def _kind_and_executable(meta: str) -> tuple[str, bool]:
@@ -256,7 +276,7 @@ def _working_signature(path: Path) -> tuple[str, bool] | None:
     return "other", False
 
 
-def agents_only_rules(path: Path, *, untracked: bool) -> bool:
+def agents_only_rules(path: Path) -> bool:
     """True when AGENTS.md holds the committed file plus exactly the rules block.
 
     The file contents are compared, not a diff, so nothing can hide behind a
@@ -269,7 +289,7 @@ def agents_only_rules(path: Path, *, untracked: bool) -> bool:
     if not blocks:
         return False
     try:
-        current = (path / AGENTS_FILE).read_text(encoding="utf-8", errors="replace")
+        current = (path / AGENTS_FILE).read_bytes()
     except OSError:
         return False
     working = _working_signature(path / AGENTS_FILE)
@@ -281,30 +301,30 @@ def agents_only_rules(path: Path, *, untracked: bool) -> bool:
         return False
     if committed is None and staged is not None and staged != working:
         return False
-    head: str | None = None
+    head: bytes | None = None
     try:
-        head = git(path, "show", f"HEAD:{AGENTS_FILE}")
+        head = git_bytes(path, "show", f"HEAD:{AGENTS_FILE}")
     except SafetyError:
         head = None
-    staged: str | None = None
+    staged_bytes: bytes | None = None
     try:
-        staged = git(path, "show", f":{AGENTS_FILE}")
+        staged_bytes = git_bytes(path, "show", f":{AGENTS_FILE}")
     except SafetyError:
-        staged = None
+        staged_bytes = None
     for block in blocks:
         if head is None:
-            if staged is None:
+            if staged_bytes is None:
                 if current == block:
                     return True
                 continue
-            if staged == block and current == block:
+            if staged_bytes == block and current == block:
                 return True
             continue
-        if staged is None:
+        if staged_bytes is None:
             continue
-        if not _permitted_agents_text(staged, head, block):
+        if not _permitted_agents_bytes(staged_bytes, head, block):
             continue
-        if not _permitted_agents_text(current, head, block):
+        if not _permitted_agents_bytes(current, head, block):
             continue
         return True
     return False
@@ -322,7 +342,7 @@ def classify_changes(path: Path, records: list[tuple[str, str, str | None]]) -> 
                 real.append(f"{original} -> {name}")
             continue
         if name == AGENTS_FILE:
-            only_rules = agents_only_rules(path, untracked=code.strip() == "??")
+            only_rules = agents_only_rules(path)
             (bootstrap if only_rules else real).append(name)
             continue
         (bootstrap if bootstrap_path(name) else real).append(name)
@@ -572,7 +592,7 @@ class GitHub:
         except SafetyError:
             result = None
         name = result.stdout.strip() if result and result.returncode == 0 else ""
-        if not name or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        if not valid_branch_name(name):
             name = ""
         self.default_branches[repo] = name or None
         return self.default_branches[repo]
