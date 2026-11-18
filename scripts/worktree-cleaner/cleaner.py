@@ -559,6 +559,30 @@ def _restore_link(repo: Path, relative: Path, target: bytes) -> bool:
         os.close(parent)
 
 
+def _restore_moved(relative: Path, moved: Path, source: int, trash: Path) -> bool:
+    """Put a moved file back at its own path, but only when that path is free.
+
+    The move is relative to the descriptors, so a parent that turned into a
+    link cannot redirect it, and a file that came back keeps its own copy.
+    """
+    try:
+        os.stat(relative.name, dir_fd=source, follow_symlinks=False)
+        return False
+    except OSError:
+        pass
+    try:
+        storage = os.open(trash, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return False
+    try:
+        os.replace(moved.name, relative.name, src_dir_fd=storage, dst_dir_fd=source)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(storage)
+
+
 def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None, signature: tuple[str, bool] | None = None) -> bool:
     """Clear one verified bootstrap file without losing an intervening edit.
 
@@ -607,8 +631,10 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
             os.close(storage)
         if signature is not None and _working_signature(moved) != signature:
             # The file changed its type or its executable bit while it was
-            # being cleared, so the worktree is kept with that change in it.
-            _keep_moved(trash, moved, name)
+            # being cleared. It goes back to its own path when that path is
+            # free, so the change stays in the worktree instead of the file
+            # disappearing from it.
+            _restore_moved(relative, moved, source, trash)
             return False
         after = _file_bytes(moved)
         if after != expected:
