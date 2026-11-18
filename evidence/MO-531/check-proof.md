@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `8deeb6d44b9d326bfbdd934cde2aeb61bdc82c40`
+Checked commit: `f9e7b0e25eb4958009ad5ed94b0ae628b4dfb7d6`
 Working tree clean when the checks ran: no
 
 | Check | Command | Result | Detail |
@@ -13,15 +13,9 @@ Working tree clean when the checks ran: no
 | python syntax: coordinator/overnight/lane_driver.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/lane_driver.py` | not run | an earlier check failed |
 | python syntax: coordinator/overnight/selftest.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/selftest.py` | not run | an earlier check failed |
 | python syntax: tests/test_builder_fallback.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_builder_fallback.py` | not run | an earlier check failed |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-g8kikzan -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-g8kikzan/states -config HeavyQueue.cfg HeavyQueue.tla` | not run | an earlier check failed |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-98qve6wm -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-98qve6wm/states -config HeavyQueue.cfg HeavyQueue.tla` | not run | an earlier check failed |
 | heavy help | `python3 heavy.py --help` | not run | an earlier check failed |
 | tests: tests.test_builder_fallback | `python3 -m unittest tests.test_builder_fallback` | not run | an earlier check failed |
 
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
 so every check after it is `not run`.
-
-Device, handset and live-service cases were waived per brief.
-
-Focused check: `timeout 300 python3 -m unittest tests.test_builder_fallback`: failed, 22 passed and one Sol passthrough expectation failed. Full check fails start-routing passthrough expectation. Existing tests preserved.
-
-Repair: failed probe persistence now also respects DRY. Diff comment and deslop review found no added comments or cleanup needed.
