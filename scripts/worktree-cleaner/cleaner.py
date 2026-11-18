@@ -765,6 +765,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 append_removal(state_root, row, "pruned")
                 row["category"] = "removed"
                 pruned += 1
+        # The refresh above reads GitHub again, and a failed refresh evicts
+        # the cached verification of that commit. Save once more inside the
+        # lock, so a later scan cannot reload a positive the refresh just
+        # disproved.
+        github.save_cache()
         summary = {
             "mode": "apply" if apply else "dry-run",
             "repositories_scanned": len({row["repo"] for row in rows}),
