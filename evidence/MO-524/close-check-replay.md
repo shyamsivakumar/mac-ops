@@ -1,8 +1,11 @@
 # Close checklist replay (MO-1077)
 
-Three recent merged pull requests, run through the close checklist with
-`python3 scripts/close_check_replay.py --pr 528 --pr 429 --pr 519` on 2026-11-18, with the
-tickets that own them.
+Three recent merged pull requests, run through the close checklist on 2026-11-18 with the
+tickets that own them. The checklist's own code answered all four items; the pull request's
+files, proof file and file texts were read from the local merge commits, because the `gh` REST
+quota was exhausted by another replay while this ran. Re-running
+`python3 scripts/close_check_replay.py --pr 528 --pr 429 --pr 519` answers the same four items
+once the quota is back.
 
 close check: shyamsivakumar/mac-ops#528 (merge 62676880acac)
 scope: pass - every changed file is inside the ticket's stated scope
@@ -46,13 +49,17 @@ a pull request cannot widen the scope of the ticket that asked for the change.
 
 A name the ticket excludes is not a permission. The words after an "out" marker, and
 the words of a sentence that forbids a change, name what the ticket excludes, so a
-change to one of them fails the scope item.
+change to one of them fails the scope item. An exclusion holds to the end of its
+section: a Markdown list under an `Out of scope:` heading stays excluded, line by line,
+and the next heading, or an "in" marker, states permission again.
 
 A ticket clause about its existing tests keeps its restriction. The clause lets a
 test change when the test pins what the change pins, that is when the test and a
-changed source file share a distinctive value, or when the test is the test of a
-changed source file by name. A shared prefix is not a relationship:
-`tests/test_close_window.py` is not the test of `close_check.py`.
+changed source file share a distinctive value the change itself sets, or when the test
+is the test of a changed source file by name. A shared prefix is not a relationship:
+`tests/test_close_window.py` is not the test of `close_check.py`. A literal the source
+file already carried is not a value the change set, so copying it into a test ties
+nothing: the values come from the added lines of the pull request's own diff.
 
 A test ties to a source file only. Evidence is not a source, so a pull request
 cannot add an evidence file that carries the name of its own test, and it cannot
