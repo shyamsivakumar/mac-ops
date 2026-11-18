@@ -142,6 +142,31 @@ class MessageDedupeTests(unittest.TestCase):
         self.assertIn("already started as coordq #1", err)
         self.assertEqual(self.q.load()["items"], [])
 
+    def test_a_launch_whose_slot_is_still_reserved_is_not_queued_again(self):
+        # The finding: a launch learns its thread only after the call, so its
+        # started record can exist before the thread list shows it. While the
+        # queue holds the reservation for that launch, a second pass must not
+        # queue the same launch again.
+        request = "fix:o/r#544:aaa"
+        self.q.save({"next": 2, "items": [],
+                     "started": [{"id": 1, "title": TITLE, "target": request,
+                                  "thread": "mcp:launch:new", "actionKey": "",
+                                  "at": self.q.time.time()}],
+                     "reserved": {"1": self.q.time.time()},
+                     "reservedThreads": {"1": "launch:mcp:launch:new"}})
+        args = argparse.Namespace(
+            args=json.dumps({"projectId": "fixture", "title": TITLE, "message": "fix",
+                             "modelSelection": {"instanceId": "codex", "model": "gpt-6.1-sol"},
+                             "clientRequestId": request}),
+            title=None, priority=800, tool="t3_thread_launch", action_key=None)
+        with patch.object(self.q, "active_thread_ids", return_value=set()), \
+                patch.object(self.q, "read_rules", return_value="rules"), \
+                redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as refused:
+                self.q.cmd_start(args)
+        self.assertEqual(refused.exception.code, 1)
+        self.assertEqual(self.q.load()["items"], [])
+
     def test_a_started_message_whose_thread_stopped_goes_out(self):
         # The builder finished the work, so the message it took is spent and
         # the next pass may queue it again.

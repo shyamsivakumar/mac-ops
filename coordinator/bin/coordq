@@ -369,6 +369,11 @@ def duplicate_message(queue, title, target, key="", live_ids=None, started_befor
             # Recorded after the list was read, so the list cannot say whether
             # its thread is live, and it is the message just taken.
             return "started", record.get("id")
+        if str(record.get("id")) in (queue.get("reserved") or {}):
+            # The queue still holds this launch's slot: a launch learns its
+            # thread only after the call, so a record whose thread the list
+            # does not show yet is an unfinished launch, not a spent message.
+            return "started", record.get("id")
         if record.get("thread") in live_ids:
             return "started", record.get("id")
     return None
