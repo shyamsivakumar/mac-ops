@@ -761,7 +761,9 @@ def settle(argv, stdout, headers_counted, failed=False):
                 max(1, pages + _failed_request(argv, failed, pages, True, stdout)))
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
-    if paginated(argv) and resource(argv) == CORE:
+    if paginated(argv):
+        # The rule follows the output shape, not the quota bucket: a filtered
+        # search read prints the caller's text just as a core read does.
         has_include = include_requested(argv)
         if filtered(argv):
             # A filtered body is the caller's text. It cannot be counted by
@@ -781,7 +783,7 @@ def settle(argv, stdout, headers_counted, failed=False):
     # A formatted read is measured as the one invocation it is, and the row
     # says its page count is unknown rather than guessing.
     pages = requests(argv, stdout, floor=False)
-    if filtered(argv) and paginated(argv) and resource(argv) == CORE:
+    if filtered(argv) and paginated(argv):
         # The formatted output is not a page list: one page of ten issues
         # with `--jq '.[].number'` prints ten numbers, and the JSON reader
         # would call those ten pages. One invocation, one row.
