@@ -422,7 +422,8 @@ def move_stage(repo, number, stage):
                 raise Refuse(f"parked ({parking}); only Shyam clears it")
             current = stage_labels(names_now)
             add_back = [name for name in before if name not in current]
-            drop = [name for name in current if name not in before]
+            drop = ([name for name in current if name not in before]
+                    if before or parking != HOLD_LABEL else [])
             # A failure that changed nothing leaves the labels as they were,
             # and an update with no labels to add or remove would itself fail,
             # so the ticket is only written when there is something to repair.
@@ -443,7 +444,9 @@ def refuse_parking_added_during_move(repo, number, target, before):
     ticket parked on `stage:backlog` in between carries both stages. The
     parking stays and the stage this move added comes off. A hold is not a
     stage, so a held ticket is put back on the stage it started with and
-    keeps the hold. Either way the caller is refused, so no lane treats the
+    keeps the hold. A held ticket that started with no stage keeps the stage
+    this move added beside the hold, so it is never left with only the hold.
+    Either way the caller is refused, so no lane treats the
     ticket as moved.
     """
     try:
@@ -455,7 +458,7 @@ def refuse_parking_added_during_move(repo, number, target, before):
         current = stage_labels(names)
         if parking == HOLD_LABEL:
             add_back = [name for name in before if name not in current]
-            drop = [name for name in current if name not in before]
+            drop = [name for name in current if name not in before] if before else []
         else:
             add_back = []
             drop = [name for name in current if name.lower() != parking]
