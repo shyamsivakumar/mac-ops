@@ -132,11 +132,10 @@ def gate_state(value):
 
     gatedHeads maps a head to its queue item, and to the record
     `{id, retries, at, givenUp, reviewer, moved}` once a gate for the head
-    has died without a verdict. The reviewer is the one the gate was
-    launched on, and `moved` says the head already moved down the chain.
-    `moved` is None for a record written before it, and the caller then
-    reads it from the head's `gateReviewers` history. A value written before
-    the record is the bare queue item id, which is a head with no retry behind it.
+    has died without a verdict. `reviewer` is the reviewer the gate was
+    launched on, and `moved` says the head already moved down the chain
+    (`None` for a record written before it, which the caller reads from the
+    head's `gateReviewers` history).
     """
     if isinstance(value, dict):
         retries = value.get("retries")
@@ -210,10 +209,7 @@ def is_gate_model(selection):
 
 
 def is_gate_item(item):
-    """Whether a queued item is a gate launch: its task type is `review`.
-
-    An item queued before task types were kept is classified by the list
-    that names its model, as the dispatcher classifies it."""
+    """Whether a queued item is a gate launch: its task type is `review`."""
     args = queued_launch_args("t3_thread_launch", item.get("args") or {})
     return args.get("taskType") == "review"
 
@@ -236,8 +232,7 @@ def refuse_blocked_gate(queue, item, reason):
     """Take a gate item whose reviewer is blocked out of the queue.
 
     The head keeps its record and the reviewers it already tried: only the
-    refused reviewer never ran, so only its attempt is undone. A head is
-    never a new head again, so a reviewer that already ran is not run twice.
+    refused reviewer never ran, so only its attempt is undone.
     """
     release_action_key(queue, item)
     head = item.get("head") or str((item.get("args") or {}).get("clientRequestId") or "")
@@ -1525,9 +1520,7 @@ def selection_of(identity):
 
 
 def fallback_reviewer(queue, key, current, models=()):
-    """The next reviewer of a head that died without a verdict: the next
-    entry of the review list that is not blocked and not tried for this
-    head. The blocked set is read fresh."""
+    """The next reviewer of a head that died without a verdict."""
     listed = [model_list.identity(e["selection"]) for e in model_list.entries("review")]
     if model_list.identity(current) not in listed:
         return None
@@ -1711,14 +1704,14 @@ def cmd_gatekeep(a):
                     continue
                 state = gate_state(heads.get(key))
                 if state["moved"] is None:
-                    # A record written before `moved` moved the head when the
-                    # older code recorded a fallback reviewer for it.
+                    # A record written before `moved`: the older code moved
+                    # the head when it recorded a fallback reviewer for it.
                     state["moved"] = bool((queue.get("gateReviewers") or {}).get(key))
                 retries = 0
                 retried = False
                 if key not in heads and model_list.is_blocked(args["modelSelection"]):
                     # The first reviewer was chosen before the locks were
-                    # taken, so it is checked again here and chosen again.
+                    # taken, so it is checked again and chosen again.
                     allowed = model_list.reviewers(event.get("builderModels", []))
                     if not allowed:
                         print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
@@ -1767,7 +1760,8 @@ def cmd_gatekeep(a):
                                "model": thread.get("model")}
                     if not current.get("instanceId") or not current.get("model"):
                         # A gate that died before it recorded a reviewer ran
-                        # on the reviewer the queue launched it on.
+                        # on the reviewer the queue launched it on, so the
+                        # head moves down instead of giving up.
                         launched = selection_of(state.get("reviewer"))
                         if launched is not None:
                             current = launched
@@ -1788,9 +1782,8 @@ def cmd_gatekeep(a):
                           flush=True)
                     continue
                 if model_list.is_blocked(args["modelSelection"]):
-                    # Checked before the item is written, so a gatekeep that
-                    # is interrupted after the write never leaves a blocked
-                    # reviewer queued. Nothing was saved, so the head stays.
+                    # Checked before the item is written, so an interrupted
+                    # gatekeep never leaves a blocked reviewer queued.
                     print(f"waiting {event['pr']}: {args['modelSelection']['instanceId']} "
                           f"{args['modelSelection']['model']} is blocked", flush=True)
                     continue
