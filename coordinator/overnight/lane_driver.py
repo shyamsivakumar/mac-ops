@@ -17,6 +17,10 @@ RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DECISIONS_PATH = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
 DRY = False
 SNAPSHOT = {}
+# Where each lane repository is checked out. The path is the shared root
+# of the repository: work there moves the branch everyone installs from.
+PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
+         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
 API_FLOOR = 500
 BOARD_REFRESH_PASSES = 5
 # The stall events of the last pass: an item that was reported as stalled
@@ -373,6 +377,44 @@ def pr_action_skip(repo, number):
     return pr, None
 
 
+def repo_root(repo):
+    """Return the shared checkout of a repository, or none when unknown."""
+    folder = PATHS.get(repo)
+    return "/Users/shyamsivakumar/Code/" + folder if folder else None
+
+
+def root_workspace(thread, repo):
+    """Say whether a thread works in the shared root of its repository.
+
+    A thread without a worktree works in the project root, and a worktree
+    that is the repository root is the shared checkout itself. Pull
+    request work in either place moves the branch everyone installs from,
+    so it never belongs there.
+    """
+    path = thread.get("worktreePath")
+    if not path:
+        return True
+    root = repo_root(repo)
+    return bool(root) and os.path.realpath(path) == os.path.realpath(root)
+
+
+def branch_on_origin(repo, branch):
+    """Say whether a branch is on origin, so a worktree can start there.
+
+    A worktree that cannot start at its base ref would fall back to the
+    shared root of the repository, so a branch that is not on origin is
+    not a safe base for pull request work.
+    """
+    root = repo_root(repo)
+    if not root or not os.path.isdir(root):
+        return False
+    try:
+        listing = run(["git", "-C", root, "ls-remote", "--heads", "origin", branch], timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    return bool(listing.strip())
+
+
 def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None):
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
@@ -391,6 +433,13 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     sendable = (thread.get("status") in {"completed", "interrupted", "failed", "running", "waiting", "queued", "starting", "preparing"}
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
+    reroute = "unreachable"
+    if sendable and pr_number is not None and root_workspace(thread, repo):
+        # Pull request work in the shared root of the repository moves the
+        # branch everyone installs from, so it starts a fresh worktree
+        # instead of the thread that works there.
+        sendable = False
+        reroute = "root workspace"
     if sendable:
         workspace = None
         args = {"threadId": thread_id, "message": message}
@@ -401,6 +450,8 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
             raise ValueError(f"No repository for {lkey}")
         if pr is None:
             return f"skip {lkey}: no verified PR branch for relaunch"
+        if not branch_on_origin(repo, pr["headRefName"]):
+            return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
         workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         args = {"projectId": CFG[repo]["projectId"], "title": title,
                 "modelSelection": SOL, "runtimeMode": "full-access",
@@ -415,7 +466,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     ledger[lkey] = out
     if not sendable:
         print(f"SEND REROUTE {thread_id}: {out}")
-        return f"fresh ({thread_id} unreachable): {out}"
+        return f"fresh ({thread_id} {reroute}): {out}"
     return out
 
 
@@ -553,10 +604,6 @@ def act_on_pr(repo, number, ledger):
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
-
-
-PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
-         "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
 
 
 def fast_forward_main(repo):
