@@ -9,8 +9,10 @@ the reviewer reads the record of the checks instead of one claimed line.
 import argparse
 import ast
 import importlib.util
+from collections import Counter
 from importlib.machinery import SourceFileLoader
 from unittest.mock import patch
+import json
 import os
 from pathlib import Path
 import shlex
@@ -30,6 +32,114 @@ SUFFIXLESS_PYTHON = (
 )
 
 DEFAULT_PROOF = "evidence/check-proof.md"
+
+# Ruff runs through uvx at a pinned version, so the check never installs an
+# unpinned tool. Only the pyflakes and bugbear rule sets are on.
+RUFF_VERSION = "0.14.0"
+RUFF_RULES = "F,B"
+RUFF_BASELINE = "scripts/ruff-baseline.txt"
+
+
+class NotRun(Exception):
+    """A check that could not run: recorded as `not run`, not as a failure."""
+
+
+def ruff_command(*extra):
+    """The pinned Ruff command for this repository."""
+    return ["uvx", f"ruff@{RUFF_VERSION}", "check", "--select", RUFF_RULES,
+            "--output-format", "json", *extra]
+
+
+def ruff_counts():
+    """Run the pinned Ruff over the repository and count its findings.
+
+    Raises NotRun when Ruff cannot be reached, so the proof file records
+    `not run` instead of a pass the run did not earn.
+    """
+    if shutil.which("uvx") is None:
+        raise NotRun("uvx is not installed")
+    probe = subprocess.run(["uvx", f"ruff@{RUFF_VERSION}", "--version"], cwd=ROOT,
+                           capture_output=True, text=True, timeout=300)
+    if probe.returncode != 0:
+        raise NotRun(f"ruff {RUFF_VERSION} is not available through uvx")
+    command = ruff_command(".")
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=300)
+    if result.returncode not in (0, 1):
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise RuntimeError(f"ruff exited {result.returncode}: {detail[0] if detail else 'no output'}")
+    return ruff_findings(json.loads(result.stdout or "[]"))
+
+
+def ruff_findings(payload):
+    """Count the findings of a Ruff JSON run by path, rule and message."""
+    counts = Counter()
+    for item in payload:
+        path = Path(item["filename"])
+        try:
+            name = str(path.relative_to(ROOT))
+        except ValueError:
+            name = str(path)
+        counts[(name, item["code"], item["message"])] += 1
+    return counts
+
+
+def read_baseline(path=None):
+    """Read the baseline file: finding key to how many of it are known."""
+    path = Path(path or ROOT / RUFF_BASELINE)
+    baseline = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        count, name, code, message = line.split(" ", 3)
+        baseline[(name, code, message)] = int(count)
+    return baseline
+
+
+def write_baseline(counts, path=None):
+    """Write the baseline file: one line per finding, with its count."""
+    path = Path(path or ROOT / RUFF_BASELINE)
+    lines = [
+        "# Ruff baseline for mac-ops.",
+        "#",
+        "# The findings Ruff reports today, so the check fails only on findings",
+        "# that are not in this file. Rule sets: F and B.",
+        f"# Ruff version: {RUFF_VERSION}.",
+        "# Regenerate with: python3 scripts/mac_ops_fast_check.py --write-ruff-baseline",
+        "#",
+        "# Format: <count> <path> <rule> <message>",
+        "",
+    ]
+    for (name, code, message), count in sorted(counts.items()):
+        lines.append(f"{count} {name} {code} {message}")
+    path.write_text("\n".join(lines) + "\n")
+
+
+def new_findings(counts, baseline):
+    """The findings the baseline does not have, and how many are new."""
+    extra = []
+    for key, count in sorted(counts.items()):
+        if count > baseline.get(key, 0):
+            extra.append((key, count - baseline.get(key, 0)))
+    return extra
+
+
+def check_ruff():
+    """Compare the Ruff run against the baseline.
+
+    A finding the baseline does not have fails the check. A tool that is not
+    there is recorded as `not run` instead.
+    """
+    counts = ruff_counts()
+    baseline = read_baseline()
+    extra = new_findings(counts, baseline)
+    for (name, code, message), count in extra:
+        print(f"fast-check: new ruff finding: {name} {code} {message} (x{count})", flush=True)
+    if extra:
+        name, code, message = extra[0][0]
+        raise RuntimeError(
+            f"{len(extra)} Ruff findings are not in the baseline; first: {name} {code} {message}")
+    return f"{sum(counts.values())} findings, all in the baseline"
 
 
 def git(*args):
@@ -78,17 +188,21 @@ class Proof:
             self.rows.append((name, command, "not run", "an earlier check failed"))
             return False
         try:
-            action()
+            outcome = action()
         except subprocess.TimeoutExpired:
             self.failed = True
             self.rows.append((name, command, "failed", "the command timed out"))
+            return False
+        except NotRun as exc:
+            self.rows.append((name, command, "not run", str(exc)))
             return False
         except Exception as exc:
             self.failed = True
             detail = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
             self.rows.append((name, command, "failed", detail))
             return False
-        self.rows.append((name, command, "passed", ""))
+        detail = outcome if isinstance(outcome, str) else ""
+        self.rows.append((name, command, "passed", detail))
         return True
 
     def write(self, head, dirty):
@@ -108,7 +222,8 @@ class Proof:
         lines += [
             "",
             "A result is `passed`, `failed` or `not run`. A failed check stopped the run,",
-            "so every check after it is `not run`.",
+            "so every check after it is `not run`. A tool that is not on this machine",
+            "is recorded as `not run`, never as a pass.",
             "",
         ]
         path = ROOT / self.path
@@ -169,7 +284,13 @@ def main():
     parser.add_argument("--lane-selection", action="store_true")
     parser.add_argument("--proof", default=DEFAULT_PROOF,
                         help="the proof file this run writes")
+    parser.add_argument("--write-ruff-baseline", action="store_true",
+                        help="write the Ruff baseline file and stop")
     args = parser.parse_args()
+    if args.write_ruff_baseline:
+        write_baseline(ruff_counts())
+        print(f"fast-check: wrote {RUFF_BASELINE}", flush=True)
+        return
     if args.lane_selection:
         check_lane_selection()
         return
@@ -222,6 +343,9 @@ def main():
         command = ["/bin/sh", "-n", name]
         proof.check(f"shell syntax: {name}", shlex.join(command),
                     lambda command=command: run(command, timeout=120))
+
+    ruff = ruff_command(".")
+    proof.check(f"ruff {RUFF_RULES}", shlex.join(ruff), check_ruff)
 
     scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
     model_dir = ROOT / "formal" / "heavy-queue"

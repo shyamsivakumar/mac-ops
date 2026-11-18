@@ -145,6 +145,46 @@ class CheckProofTest(unittest.TestCase):
         self.assertTrue(proof.failed)
         self.assertEqual([row[2] for row in proof.rows], ["failed", "not run"])
 
+    def test_a_missing_tool_is_recorded_as_not_run(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        proof = check.Proof("evidence/MO-501/check-proof.md")
+
+        def missing():
+            raise check.NotRun("uvx is not installed")
+
+        proof.check("ruff F,B", "uvx ruff@0.14.0 check", missing)
+        self.assertFalse(proof.failed)
+        self.assertEqual([row[2] for row in proof.rows], ["not run"])
+        self.assertIn("uvx is not installed", proof.rows[0][3])
+
+    def test_the_ruff_command_pins_the_version_and_the_rule_sets(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        command = check.ruff_command(".")
+        self.assertEqual(command[:2], ["uvx", f"ruff@{check.RUFF_VERSION}"])
+        self.assertEqual(check.RUFF_RULES, "F,B")
+        self.assertIn("--select", command)
+        self.assertIn("F,B", command)
+        self.assertEqual(command[-1], ".")
+
+    def test_a_finding_outside_the_baseline_fails_and_one_inside_it_does_not(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        baseline = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 2}
+        known = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 2}
+        self.assertEqual(check.new_findings(known, baseline), [])
+        current = dict(known)
+        current[("b.py", "F841", "Local variable `y` is assigned to but never used")] = 1
+        extra = check.new_findings(current, baseline)
+        self.assertEqual(len(extra), 1)
+        self.assertEqual(extra[0][1], 1)
+
+    def test_the_baseline_file_round_trips(self):
+        check = load(ROOT / "scripts" / "mac_ops_fast_check.py", "mac_ops_fast_check")
+        counts = {("a.py", "F841", "Local variable `x` is assigned to but never used"): 2}
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "ruff-baseline.txt"
+            check.write_baseline(counts, path)
+            self.assertEqual(check.read_baseline(path), counts)
+
     def test_the_check_keeps_the_original_deadlines(self):
         """The proof file must not let a slower run pass the check."""
         source = (ROOT / "scripts" / "mac_ops_fast_check.py").read_text()
