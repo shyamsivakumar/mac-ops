@@ -357,6 +357,11 @@ def gate_pipeline():
         # already holds the delivered stage is not delivered again.
         ("case-delivered", repo, "PASS", "VERDICT: PASS", {},
          ["merge", "provides", "ff"], [{"name": "Stage:Started"}]),
+        # A parked ticket is never moved, whichever spelling its label was
+        # created with. `Stage:Backlog` is a different GitHub label from
+        # `stage:backlog`, so the guard compares names in lower case.
+        ("case-backlog", repo, "PASS", "VERDICT: PASS", {}, [], [{"name": "Stage:Backlog"}]),
+        ("case-hold", repo, "PASS", "VERDICT: PASS", {}, [], [{"name": "Stage:Hold"}]),
     ]
     for name, target, verdict, reply, ledger, expected, labels in cases:
         actions = []
