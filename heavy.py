@@ -64,7 +64,8 @@ TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
 SIMULATOR_DESTINATION_MARKER = "platform=iOS Simulator"
 SIMULATOR_RUNTIME_MARKER = "SimulatorRuntime"
-ENV_OPTIONS_WITH_OPERAND = ("-u", "-C", "-S", "--unset", "--chdir", "--split-string")
+ENV_OPTIONS_WITH_OPERAND = ("-u", "-C", "--unset", "--chdir")
+ENV_SPLIT_OPTION = ("-S", "--split-string")
 SIMULATOR_MEMORY_CREDIT_FRACTION = 0.125
 
 
@@ -442,6 +443,14 @@ def effective_executable(argv: Sequence[str]) -> Optional[str]:
     index = 1
     while index < len(argv):
         argument = str(argv[index])
+        if argument in ENV_SPLIT_OPTION:
+            # env splits the operand into words and runs the first one.
+            if index + 1 >= len(argv):
+                return None
+            words = str(argv[index + 1]).split()
+            if not words:
+                return None
+            return os.path.basename(words[0])
         if argument in ENV_OPTIONS_WITH_OPERAND:
             index += 2
             continue
