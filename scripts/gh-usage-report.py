@@ -56,7 +56,24 @@ def main():
     # read, and both get the same cutoff; dropping the rotation would make
     # a rotation during the hour look like a quiet hour.
     sources = [args.log, args.log + ".1"]
-    rows = [row for source in sources for row in read(source) if row["ts"] >= since]
+    # The two files are read under the writer's rotation lock. Without it a
+    # rotation between the reads counts the old active file twice and
+    # misses the new one.
+    rows = []
+    lock_path = args.log + ".lock"
+    try:
+        import fcntl
+        handle = open(lock_path, "a")
+    except (ImportError, OSError):
+        handle = None
+    try:
+        if handle is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        rows = [row for source in sources for row in read(source) if row["ts"] >= since]
+    finally:
+        if handle is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
     if not rows:
         print(f"no GitHub calls recorded in the last {args.hours:g}h at {args.log}")
         return 0

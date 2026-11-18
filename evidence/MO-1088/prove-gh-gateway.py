@@ -167,6 +167,14 @@ check("a formatted paginated read logs one row per page", len(rows()) - rows_bef
 check("a formatted paginated read returns only its bodies",
       formatted.stdout.split() == ["name1", "name2", "name3"]
       and "HTTP/" not in formatted.stdout, repr(formatted.stdout[:40]))
+
+# The short filter flag also takes its value attached, as `-q.[].name`.
+rows_before = len(rows())
+attached = run(["gh", "api", "--paginate", "-q.[].name", "repos/a/b/tags"])
+check("an attached -q filter logs one row per page", len(rows()) - rows_before == 3,
+      f"rows={len(rows()) - rows_before}")
+check("an attached -q filter returns only its bodies",
+      attached.stdout.split() == ["name1", "name2", "name3"], repr(attached.stdout[:40]))
 rows_before = len(rows())
 run(["gh", "api", "--paginate", "repos/a/b/timeline?per_page=100"])
 check("an un-slurped paginated read logs one row per page", len(rows()) - rows_before == 3,
@@ -328,9 +336,21 @@ now = time.time()
 report_log.write_text(
     json.dumps({"ts": now - 30, "caller": "active", "resource": "core", "verb": "list"}) + "\n" +
     json.dumps({"ts": now - 20, "caller": "active", "resource": "core", "verb": "list"}) + "\n")
-report = subprocess.run(
+# The report reads both files under the writer's lock, so a rotation cannot
+# land between the two reads.
+import fcntl
+lock = open(str(report_log) + ".lock", "a")
+fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+held = subprocess.Popen(
     [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"),
-     "--log", str(report_log), "--hours", "1"], capture_output=True, text=True, env=env)
+     "--log", str(report_log), "--hours", "1"],
+    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+time.sleep(1.0)
+blocked = held.poll() is None
+fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+lock.close()
+report = subprocess.CompletedProcess([], 0, *held.communicate(timeout=30))
+check("the report waits for the rotation lock", blocked, "the report ran while the lock was held")
 check("the report counts the rotated log too",
       "rotated" in report.stdout and "core total" in report.stdout and " 3 " in report.stdout,
       report.stdout.strip().splitlines()[-3:] if report.stdout else report.stderr.strip()[-80:])
