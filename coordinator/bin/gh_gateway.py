@@ -693,22 +693,18 @@ def settle(argv, stdout, headers_counted, failed=False):
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
         has_include = include_requested(argv)
+        if filtered(argv):
+            # A filter formats the bodies, so any header-shaped text in them
+            # is the caller's data: this is decided before any block count.
+            if has_include:
+                return stdout, 1 + _failed_request(argv, failed, 1)
+            pages = counted_pages(argv, method(argv))
+            return stdout, max(1, pages * 2) + _failed_request(argv, failed, pages)
         if has_include:
-            # The caller asked for the headers, so the response blocks are
-            # there to count even when a filter formatted the bodies. The
-            # text is returned unchanged; only the count reads the blocks.
-            pages = status_lines(stdout)
-            return stdout, max(1, pages) + _failed_request(argv, failed, pages)
-        if has_include and not filtered(argv):
             # Unfiltered pages are JSON, so a header block is a real one.
             pages = status_lines(stdout)
             return stdout, max(1, pages) + _failed_request(argv, failed, pages)
-        if filtered(argv):
-            # Without the headers a formatted body cannot be counted: a
-            # number on each line is not a page. One invocation, one row,
-            # page count unknown.
-            pages = requests(argv, stdout, floor=False)
-            return stdout, 1 + _failed_request(argv, failed, pages)
+
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
     # A formatted read is measured as the one invocation it is, and the row
@@ -720,6 +716,46 @@ def settle(argv, stdout, headers_counted, failed=False):
         # would call those ten pages. One invocation, one row.
         return stdout, 1 + _failed_request(argv, failed, pages)
     return stdout, max(1, pages + _failed_request(argv, failed, pages))
+
+
+def without_filter(argv):
+    """Return the command with its output filter removed."""
+    kept, skip = [], False
+    for word in argv:
+        if skip:
+            skip = False
+            continue
+        if word in ("-q", "--jq", "-t", "--template"):
+            skip = True
+            continue
+        if word.startswith(("--jq=", "--template=", "-q=")):
+            continue
+        if len(word) > 2 and word.startswith(("-q", "-t")):
+            continue
+        kept.append(word)
+    return kept
+
+
+def counted_pages(argv, http_method, timeout=60):
+    """Return the page count of a read, from one unfiltered read of it.
+
+    Only a verified GET is counted this way: replaying a write to learn a
+    count would send it twice. The unfiltered read is a second pagination,
+    which `settle` charges."""
+    if http_method != "GET" or not _gh(argv):
+        return 1
+    counting = without_filter(argv) + ["--slurp"]
+    try:
+        result = _launch()(counting, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return 1
+    if getattr(result, "returncode", 1) != 0:
+        return 1
+    try:
+        pages = json.loads(getattr(result, "stdout", "") or "[]")
+    except ValueError:
+        return 1
+    return max(1, len(pages)) if isinstance(pages, list) else 1
 
 
 def _failed_request(argv, failed, pages):

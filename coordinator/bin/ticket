@@ -163,7 +163,7 @@ def classify(stderr):
     return "error"
 
 
-def gh(args, stdin=None, fresh=False):
+def gh(args, stdin=None, fresh=False, optional=False):
     """Run one GitHub command through the shared helper.
 
     The helper counts the call for the usage report, serves a repeated
@@ -174,7 +174,10 @@ def gh(args, stdin=None, fresh=False):
     refreshes that entry."""
     try:
         result = gh_gateway.run(["gh"] + args, timeout=GH_TIMEOUT, stdin=stdin,
-                                fresh=fresh)
+                                fresh=fresh,
+                                limit=gh_gateway.floor() if optional else None)
+    except gh_gateway.ApiBudgetExhausted as exc:
+        raise GhError("budget", f"the shared floor stopped this optional read: {exc}")
     except subprocess.TimeoutExpired:
         raise GhError("offline", f"gh {' '.join(args[:2])} timed out after {GH_TIMEOUT}s")
     if result.returncode != 0:
@@ -182,8 +185,8 @@ def gh(args, stdin=None, fresh=False):
     return result.stdout
 
 
-def gh_json(args, fresh=False):
-    return json.loads(gh(args, fresh=fresh))
+def gh_json(args, fresh=False, optional=False):
+    return json.loads(gh(args, fresh=fresh, optional=optional))
 
 
 def t3_call(tool, args):
@@ -331,11 +334,17 @@ def search_owner(owner, stage):
         limit = min(limit * 2, 1000)
 
 
-def fetch_list(cfg, fresh=False):
+def fetch_list(cfg, fresh=False, optional=True):
+    """Read every board list.
+
+    A board refresh is optional work: it takes the shared floor, so below it
+    the caller keeps its stale cache instead of spending the last calls. A
+    required read passes `optional=False`."""
     seen = {}
     for repo in cfg["repos"]:
         pages = gh_json(["api", "--paginate", "--slurp",
-                         f"repos/{repo}/issues?state=open&per_page=100"], fresh=fresh)
+                         f"repos/{repo}/issues?state=open&per_page=100"],
+                        fresh=fresh, optional=optional)
         if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
             raise GhError("invalid_response", f"invalid open issue pages for {repo}")
         for page in pages:
