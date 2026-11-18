@@ -1677,14 +1677,12 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 candidate["eligible"] = False
                 candidate["removed"] = True
                 removed += 1
+        # A repository wide prune is not run: it would drop the registration
+        # of a worktree whose directory is gone, and that registration can be
+        # the only reference to a commit that was never published. A stale
+        # registration is removed through the per worktree path below, which
+        # verifies the commit first.
         prune_results: list[dict[str, Any]] = []
-        if apply and removed:
-            for repo_root in sorted({str(row["repo"]) for row in rows if row.get("removed")}):
-                try:
-                    result = run(["git", "-C", repo_root, "worktree", "prune"], timeout=300)
-                    prune_results.append({"repo": repo_root, "ok": result.returncode == 0, "error": None if result.returncode == 0 else result.stderr.strip()[:400]})
-                except SafetyError as exc:
-                    prune_results.append({"repo": repo_root, "ok": False, "error": str(exc)})
         for row in rows:
             row["category"] = categorize(row)
         pruned = 0
@@ -1709,7 +1707,9 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                 if not final["prunable"] or current.get("head") != row.get("head"):
                     continue
                 append_removal(state_root, row, "prune_attempted")
-                if run(["git", "-C", str(repo_root), "worktree", "remove", row["path"]]).returncode != 0:
+                result = run(["git", "-C", str(repo_root), "worktree", "remove", row["path"]])
+                prune_results.append({"repo": str(repo_root), "worktree": row["path"], "ok": result.returncode == 0, "error": None if result.returncode == 0 else result.stderr.strip()[:400]})
+                if result.returncode != 0:
                     append_removal(state_root, row, "prune_failed")
                     continue
                 append_removal(state_root, row, "pruned")
