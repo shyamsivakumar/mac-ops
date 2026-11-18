@@ -1,8 +1,8 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `56703ddc0601593975cc33ae46bc88e3f0c72b26`
-Working tree clean when the checks ran: no
+Checked commit: `29c4eb7fd0975144932ce9856f77267b69c0bb39`
+Working tree clean when the checks ran: yes
 
 | Check | Command | Result | Detail |
 | --- | --- | --- | --- |
@@ -13,19 +13,17 @@ Working tree clean when the checks ran: no
 | python syntax: coordinator/overnight/lane_driver.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/lane_driver.py` | passed |  |
 | python syntax: coordinator/overnight/selftest.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/selftest.py` | passed |  |
 | python syntax: tests/test_builder_fallback.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_builder_fallback.py` | passed |  |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-17up72tu -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-17up72tu/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-dp6b6ce8 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-dp6b6ce8/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_builder_fallback | `python3 -m unittest tests.test_builder_fallback` | passed |  |
 
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
 so every check after it is `not run`.
 
-Ordinary dead-run recovery now selects an allowed builder when the saved model is outside the builder list. Provider blocking is recorded only when a block reason exists.
-
 Device, handset and live-service testing: waived by Shyam on 2026-11-14; not run.
 
-One in-session MiniMax M3 High review attempt failed before execution with HTTP 401 invalid stored credentials. No reviewer verdict claimed. Coordinator Astra gate remains required.
+The checked code commit contains the diagnostics-only recovery fix. The subsequent receipt commit changes only this evidence file.
 
-Diff comment review removed stale narration. Bounded deslop review found no further in-scope cleanup.
+One in-session MiniMax M3 High review failed before execution: HTTP 401, stored credentials rejected. No verdict claimed. Coordinator Astra gate remains required.
 
-Left for later: prior full discovery reported 12 failures across 538 tests. The repository-selected check passed; full discovery was not rerun.
+Diff comment review: no comments added. Bounded deslop review: no further cleanup needed.
