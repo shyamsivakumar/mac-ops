@@ -597,7 +597,8 @@ def drain():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
         item = ready[0]
-        steps = item.get("pre", []) + [{"tool": item["tool"], "args": queued_launch_args(item["tool"], item["args"])}]
+        steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
+                 for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
         rules = None
         if any(step["tool"] == "t3_thread_launch" and wants_rules(step["args"]) for step in steps):
             try:
@@ -621,7 +622,16 @@ def drain():
         for index, (key, step) in enumerate(zip(keys, steps)):
             try:
                 code, out = call(step["tool"], step["args"], rules)
-            except (OSError, subprocess.SubprocessError) as e:
+            except model_list.ModelsError as e:
+                for unused in keys[index:]:
+                    queue["reserved"].pop(unused, None)
+                    queue["reservedThreads"].pop(unused, None)
+                if item.get("actionKey"):
+                    set_action_key_state(queue, item["actionKey"], "queued")
+                save(queue)
+                log(f"#{item['id']} not started, the model files cannot be read: {e}")
+                return
+            except (OSError, subprocess.SubprocessError, ValueError) as e:
                 code, out = 1, str(e)
             if code != 0:
                 for unused in keys[index:]:

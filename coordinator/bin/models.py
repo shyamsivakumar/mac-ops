@@ -21,7 +21,7 @@ BLOCKED_FILE = "providers-blocked.json"
 VENDOR_PREFIXES = (("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"), ("o4", "openai"))
 
 
-class ModelsError(Exception):
+class ModelsError(ValueError):
     pass
 
 
@@ -59,9 +59,16 @@ def validate(data):
     return data
 
 
+def read_json(file_path):
+    with open(file_path) as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as e:
+            raise ModelsError(f"{file_path} is not valid JSON: {e}") from e
+
+
 def load():
-    with open(path()) as f:
-        return validate(json.load(f))
+    return validate(read_json(path()))
 
 
 def entries(list_name):
@@ -87,8 +94,7 @@ def same_selection(a, b):
 def blocked_identities():
     queue = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
     try:
-        with open(os.path.join(queue, BLOCKED_FILE)) as f:
-            data = json.load(f)
+        data = read_json(os.path.join(queue, BLOCKED_FILE))
     except FileNotFoundError:
         return set()
     blocked = data.get("blocked") if isinstance(data, dict) else None
