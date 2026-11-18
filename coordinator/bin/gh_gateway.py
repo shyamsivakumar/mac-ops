@@ -632,7 +632,7 @@ def parse_options(argv):
     key = (group, verb)
     booleans = SHORT_BOOLEAN.get(key, set())
     values = SHORT_VALUE.get(key, set())
-    options, positionals = {}, []
+    options, positionals, ordered = {}, [], []
     index = 0
     while index < len(words):
         word = words[index]
@@ -641,40 +641,48 @@ def parse_options(argv):
             name, sep, inline = word.partition("=")
             if sep:
                 options[name] = inline
+                ordered.append((name, inline))
                 index += 1
                 continue
             if name in LONG_VALUE_FLAGS:
                 options[name] = following
+                ordered.append((name, following))
                 index += 2
                 continue
             options[name] = True
+            ordered.append((name, True))
             index += 1
             continue
         if word in booleans:
             options[word] = True
+            ordered.append((word, True))
             index += 1
             continue
         if word in values or (word in VALUE_FLAGS and word not in booleans):
             options[word] = following
+            ordered.append((word, following))
             index += 2
             continue
         if word.startswith("-") and len(word) > 2:
             short = word[:2]
             if short in booleans:
                 options[short] = True
+                ordered.append((short, True))
                 index += 1
                 continue
             # The attached form: `-RHOST/OWNER/REPO`, `-Sfoo`.
             options[short] = word[2:]
+            ordered.append((short, word[2:]))
             index += 1
             continue
         if word.startswith("-"):
             options[word] = True
+            ordered.append((word, True))
             index += 1
             continue
         positionals.append(word)
         index += 1
-    return options, positionals
+    return options, positionals, ordered
 
 
 def looks_like_repo(value):
@@ -693,17 +701,22 @@ def argv_host(argv):
     (`-R`, `--repo` or `GH_REPO`) whose value has a host in it. The command
     is parsed once, with its own subcommand's option arity, so a value that
     looks like a flag or like a repository is never read as one."""
-    options, _positionals = parse_options(argv)
-    hostname = options.get("--hostname")
-    if isinstance(hostname, str) and hostname:
-        return hostname
-    selector = ""
-    for name in ("-R", "--repo"):
-        value = options.get(name)
-        if isinstance(value, str) and looks_like_repo(value):
-            selector = value
-    if not selector:
-        selector = os.environ.get("GH_REPO") or ""
+    _options, _positionals, ordered = parse_options(argv)
+    # `gh` uses the last selector given, whichever alias it is, so the host
+    # is taken from the last one in argument order.
+    host = ""
+    for name, value in ordered:
+        if name == "--hostname" and isinstance(value, str) and value:
+            host = value
+        elif name in ("-R", "--repo") and isinstance(value, str) and looks_like_repo(value):
+            parts = value.split("/")
+            if len(parts) == 3 and parts[0]:
+                host = parts[0]
+            elif len(parts) == 2:
+                host = ""
+    if host:
+        return host
+    selector = os.environ.get("GH_REPO") or ""
     parts = selector.split("/")
     if len(parts) == 3 and parts[0]:
         return parts[0]
