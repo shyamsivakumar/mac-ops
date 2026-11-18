@@ -549,6 +549,28 @@ def _snapshot_directory(fd: int) -> dict[str, tuple[int, int, int, int]]:
     return snapshot
 
 
+def _restore_directory(source: Path, destination: Path) -> bool:
+    """Put a directory back at its path, but only when that path is free.
+
+    The destination is reserved with an exclusive create, so a directory that
+    took the path in the meantime is preserved, and the copy that was moved
+    aside stays where it is.
+    """
+    try:
+        os.mkdir(destination)
+    except OSError:
+        return False
+    try:
+        for entry in sorted(os.listdir(source)):
+            if os.path.exists(destination / entry):
+                continue
+            os.rename(source / entry, destination / entry)
+        os.rmdir(source)
+    except OSError:
+        return False
+    return True
+
+
 def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> int:
     """Unlink a file only when it is the one that was stamped.
 
@@ -1974,9 +1996,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                     except OSError:
                                         taken = None
                                     if taken is None:
-                                        try:
-                                            os.rename(aside, candidate["path"], src_dir_fd=parent, dst_dir_fd=parent)
-                                        except OSError:
+                                        # The path is reserved exclusively and
+                                        # the copy is moved into it, so a
+                                        # directory that took the path in the
+                                        # meantime is never replaced.
+                                        if not _restore_directory(Path(aside), Path(candidate["path"])):
                                             candidate["checkout_conflict"] = True
                                     else:
                                         candidate["checkout_conflict"] = True
@@ -2038,7 +2062,9 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                             os.rmdir(aside, dir_fd=admin_parent)
                                             registration_gone = True
                                         else:
-                                            os.rename(aside, registration, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
+                                            # The registration is put back only
+                                            # when its path is free.
+                                            _restore_directory(Path(aside), Path(registration))
                                             registration_gone = False
                                     except OSError:
                                         registration_gone = False
