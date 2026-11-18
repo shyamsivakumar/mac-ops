@@ -39,6 +39,12 @@ is blocked, the caller waits and says so.
   builder of the list, a blocked provider, the shared root of a repository -
   takes no send: the work starts a fresh thread on the chosen builder
   instead, in the same worktree when the thread has one.
+- The lane driver's dead-run recovery names a builder as out only when the
+  provider's own failure message says so, and only when that failure
+  belongs to the run that stopped: an earlier run's quota error is not the
+  stopped run's, and an assistant reply - a progress note, a gate report
+  that ended without a verdict - is the thread talking, so it never marks
+  the builder as failed. The relaunch can then run on that builder again.
 - `install_coordinator.py` regenerates the `ROUTES` table of
   `~/.pi/agent/extensions/task-router.ts` from the pi-prefixed entries of the
   build list, so pi cannot drift from the file.
