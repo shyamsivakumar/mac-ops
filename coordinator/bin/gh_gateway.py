@@ -693,16 +693,18 @@ def settle(argv, stdout, headers_counted, failed=False):
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
         has_include = include_requested(argv)
-        if filtered(argv):
-            # The bodies are the caller's text, so neither a status line in
-            # them nor a number on each line is a page. One invocation, one
-            # row, page count unknown.
-            pages = requests(argv, stdout, floor=False)
-            return stdout, 1 + _failed_request(argv, failed, pages)
         if has_include:
-            # Unfiltered pages are JSON, so a header block is a real one.
+            # The caller asked for the headers, so the response blocks are
+            # there to count even when a filter formatted the bodies. The
+            # text is returned unchanged; only the count reads the blocks.
             pages = status_lines(stdout)
             return stdout, max(1, pages) + _failed_request(argv, failed, pages)
+        if filtered(argv):
+            # Without the headers a formatted body cannot be counted: a
+            # number on each line is not a page. One invocation, one row,
+            # page count unknown.
+            pages = requests(argv, stdout, floor=False)
+            return stdout, 1 + _failed_request(argv, failed, pages)
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
     # A formatted read is measured as the one invocation it is, and the row
