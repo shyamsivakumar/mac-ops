@@ -1747,6 +1747,65 @@ def _recovery_manifest(state_root: Path) -> Path:
     return state_root / "recovery.json"
 
 
+def _registration_belongs_to(
+    registration: Path, repo_root: Path, worktree: Path
+) -> bool:
+    """The registration belongs to this repository and names this checkout.
+
+    Two worktrees can share a commit, so the commit the registration points
+    at does not prove that the registration is this worktree's. The
+    registration has to live in the worktree area of this repository, and
+    its back pointer has to name the checkout of this candidate.
+    """
+    try:
+        common = Path(git(repo_root, "rev-parse", "--git-common-dir").strip())
+    except (SafetyError, OSError):
+        return False
+    if not common.is_absolute():
+        common = repo_root / common
+    try:
+        if registration.parent.resolve() != (common.resolve() / "worktrees"):
+            return False
+    except OSError:
+        return False
+    try:
+        text = (registration / "gitdir").read_text(
+            encoding="utf-8", errors="replace"
+        ).strip()
+    except OSError:
+        return False
+    if not text:
+        return False
+    # The back pointer of a registration holds the path of the checkout it
+    # belongs to.
+    pointer = Path(text)
+    if not pointer.is_absolute():
+        pointer = registration / pointer
+    try:
+        return pointer.resolve() == (worktree / ".git").resolve()
+    except OSError:
+        return False
+
+
+def _tree_matches(
+    path: Path, snapshot: dict[str, dict[str, tuple[int, int, int, int]]]
+) -> bool:
+    """The tree at a path is the tree that was stamped.
+
+    A file that was written after the stamp makes the tree different, and
+    the difference is what keeps the checkout where it is.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    try:
+        current = _snapshot_all(descriptor)
+    finally:
+        os.close(descriptor)
+    return current == snapshot
+
+
 def _claim_index_lock(worktree: Path) -> Path | None:
     """Claim the lock of the index of a worktree.
 
@@ -2289,6 +2348,16 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_registration_unknown"]
                     append_removal(state_root, candidate, "removal_blocked")
                     continue
+                # The registration has to belong to this repository and name
+                # this checkout, so another worktree's registration is never
+                # emptied, even when the two worktrees share a commit.
+                if not _registration_belongs_to(
+                    registration, repo_root, Path(candidate["path"])
+                ):
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_registration_mismatch"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
                 try:
                     registered = (registration / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
                     registration_info = os.stat(registration)
@@ -2443,6 +2512,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                         if arrived is None or aside_identity is None or (arrived.st_dev, arrived.st_ino) != aside_identity:
                                             tree_gone = False
                                             moved_to = None
+                                        elif not _tree_matches(storage / aside, snapshot):
+                                            # The tree changed after it was
+                                            # stamped, so it holds real work and
+                                            # it goes back where it was.
+                                            tree_gone = False
                                         else:
                                             try:
                                                 recorded_recovery = _record_recovery(state_root, storage / aside, aside_identity)
