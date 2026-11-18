@@ -134,6 +134,7 @@ export default class Board extends View {
     this.ticketError = "";
     this.peeked = new Set();
     this.merging = false;
+    this.choosing = false;
     this.outdated = false;
     this.born = 0;
     this.staleTimer = null;
@@ -1429,6 +1430,7 @@ export default class Board extends View {
     if (this.outdated) return d.primary.id === "merge" || d.primary.id === "wait" ? this.recheck(cx) : closeOverlay(this.overlay);
     if (d.primary.id === "wait") return;
     if (d.primary.id === "answer") return this.openReply(entry, cx);
+    if (d.primary.id.startsWith("choice:")) return this.choose(entry, d.primary.id, cx);
     if (viaEnter && this.armed) return;
     if (d.primary.id === "merge") return this.approve(entry, cx);
     if (this.guard(true)) return;
@@ -1479,6 +1481,7 @@ export default class Board extends View {
     if (id === "open") this.openEntry(cur.entry, cx);
     else if (id === "reply") this.openReply(cur.entry, cx);
     else if (id === "note") this.openReply(cur.entry, cx, NOTE_LABEL);
+    else if (id.startsWith("choice:")) this.choose(cur.entry, id, cx);
     else if (id === "edit") exec("open", [cur.entry.group.issue.url]);
     else if (id === "abandon") this.openReply(cur.entry, cx, ABANDON_LABEL);
     else if (id === "settle") {
@@ -1564,6 +1567,23 @@ export default class Board extends View {
       this.noteAct(target, card ? "sendback" : "reply", Date.now(), eligible);
       if (card) this.finishReview(card, "Sent back");
       return sent;
+    }, cx);
+  }
+
+  choose(entry, id, cx) {
+    const thread = this.threadOf(entry);
+    const text = thread.choices?.options[Number(id.slice("choice:".length))];
+    if (!text || this.choosing || this.outdated || this.guard(true)) return;
+    const eligible = this.seen[entry.group.key]?.col === "needs";
+    this.choosing = true;
+    this.attempt(`Sent to ${thread.task || thread.title}`, async () => {
+      try {
+        const sent = await sendReply(thread.key, text);
+        this.noteAct(entry.group, "reply", Date.now(), eligible);
+        return sent;
+      } finally {
+        this.choosing = false;
+      }
     }, cx);
   }
 
