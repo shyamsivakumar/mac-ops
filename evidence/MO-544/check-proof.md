@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `3e9e93e7c61aad82635f9808fab6c9c11ba1ff90`
+Checked commit: `511e1ad73a172c3a42975115279e21ed584857fb`
 Working tree clean when the checks ran: yes
 
 | Check | Command | Result | Detail |
@@ -13,7 +13,7 @@ Working tree clean when the checks ran: yes
 | python syntax: tests/test_coordq_capacity.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_coordq_capacity.py` | passed |  |
 | python syntax: tests/test_coordq_message_dedupe.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_coordq_message_dedupe.py` | passed |  |
 | python syntax: tests/test_lane_duplicate_suppression.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_lane_duplicate_suppression.py` | passed |  |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-t9fzfjxp -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-t9fzfjxp/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-weqxadoy -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-weqxadoy/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_coordq_capacity | `python3 -m unittest tests.test_coordq_capacity` | passed |  |
 | tests: tests.test_coordq_message_dedupe | `python3 -m unittest tests.test_coordq_message_dedupe` | passed |  |
