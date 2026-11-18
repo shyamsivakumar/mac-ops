@@ -1383,12 +1383,17 @@ the rest of the shift's commands), and it is a file with a shebang, so the
 panel runs it as a command.
 
 A state file that is not there is an empty state: the shift measures the
-alarms again from that tick on. A state file that cannot be read is not an
-empty state. Reading it as empty would let the next alarm overwrite every
-acknowledgement it holds, and the alarms that were answered would come back
-before their four hours are over. So the read failure is raised, and the
-alarm is published as unchecked without writing over the state that could
-not be read.
+alarms again from that tick on. A state file that cannot be read, or that
+holds damaged text, is not an empty state. Reading it as empty would let
+the next alarm overwrite it with its own key, and the acknowledgements it
+still holds would be lost, so the answered alarms would come back before
+their four hours are over. So the read failure is raised, and the alarm is
+published as unchecked without writing over the state that could not be
+read.
+
+The healthy branch cleans the board whether the mute state was written or
+not: a state that could not be read or locked must not leave a stale alarm
+on the board, so the board is cleaned under the board lock either way.
 
 The state is written with a merge: a tick reads the state, the panel records
 an acknowledgement and writes the file, and the tick writes its older
