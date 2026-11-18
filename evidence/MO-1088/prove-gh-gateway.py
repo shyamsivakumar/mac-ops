@@ -701,7 +701,7 @@ sys.path.insert(0, {str(BIN)!r})
 import gh_gateway
 seen = {{}}
 
-def slow_probe(timeout=60):
+def slow_probe(timeout=60, host=None):
     time.sleep(1.0)
     return {{"core": 4000, "graphql": 4000}}
 
@@ -792,6 +792,34 @@ for argv in (["gh", "pr", "list", "--web"], ["gh", "pr", "list", "--web=true"],
 """], capture_output=True, text=True, env=env).stdout.split()
 check("--web is never cached in any spelling",
       web == ["WEB", "False"] * 4, str(web))
+
+# An optional read reserves quota for the host it targets, not the default.
+host_quota = subprocess.run([sys.executable, "-c", f"""
+import json, os, sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+seen = {{}}
+
+class R:
+    returncode = 0
+    stderr = ""
+    def __init__(self, remaining):
+        self.stdout = json.dumps({{"resources": {{"core": {{"remaining": remaining}},
+                                                 "graphql": {{"remaining": remaining}}}}}})
+
+def fake(argv, **kwargs):
+    seen["argv"] = list(argv)
+    return R(100 if "other.example" in argv else 3000)
+
+gh_gateway.set_runner(lambda: fake)
+os.environ["COORDINATOR_GH_ACCOUNT"] = "proof"
+print("PROBE", gh_gateway.api_remaining(host="other.example")["core"])
+print("ARGV", "other.example" in seen["argv"])
+print("DEFAULT", gh_gateway.api_remaining()["core"])
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("the quota probe targets the requested host", host_quota[:2] == ["PROBE", "100"], str(host_quota))
+check("the probe passes the host to gh", host_quota[2:4] == ["ARGV", "True"], str(host_quota))
+check("the default host is probed separately", host_quota[4:6] == ["DEFAULT", "3000"], str(host_quota))
 
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
