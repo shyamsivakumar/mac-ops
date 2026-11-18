@@ -225,8 +225,14 @@ def archive_model_lists(home: Path) -> list[Path]:
     sections = {k: config[k] for k in OLD_LIST_SECTIONS if k in config}
     moved = []
     if sections:
-        atomic_write(archive / ARCHIVED_LISTS_FILE, (json.dumps(sections, indent=2) + "\n").encode(), 0o644)
-        moved.append(archive / ARCHIVED_LISTS_FILE)
+        copy = (json.dumps(sections, indent=2) + "\n").encode()
+        target = archive / ARCHIVED_LISTS_FILE
+        existing = read_regular(target)
+        if existing is not None and existing[0] != copy:
+            target = archive / f"tickets.json.models-and-types.{time.strftime('%Y%m%d-%H%M%S')}.json"
+        if existing is None or existing[0] != copy:
+            atomic_write(target, copy, 0o644)
+            moved.append(target)
     for path in old_list_files(home):
         target = archive / path.name
         if target.exists():

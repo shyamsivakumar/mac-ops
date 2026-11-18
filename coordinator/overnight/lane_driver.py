@@ -477,7 +477,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
     thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    if sendable and model_list.identity(thread_model) != model_list.identity(fixer["selection"]):
+    if sendable and not model_list.same_selection(thread_model, fixer["selection"]):
         if thread.get("status") not in {"completed", "interrupted", "failed"}:
             return (f"skip {lkey}: thread is {thread.get('status')} on "
                     f"{model_list.identity(thread_model) or 'an unknown model'}, "

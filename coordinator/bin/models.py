@@ -78,6 +78,12 @@ def identity(selection):
     return f"{instance}:{model}" if instance and model else ""
 
 
+def same_selection(a, b):
+    """Whether two selections name the same provider and the exact same model string."""
+    return (isinstance(a, dict) and isinstance(b, dict) and bool(a.get("instanceId")) and bool(a.get("model"))
+            and a.get("instanceId") == b.get("instanceId") and a.get("model") == b.get("model"))
+
+
 def blocked_identities():
     queue = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
     try:
