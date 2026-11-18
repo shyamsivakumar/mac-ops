@@ -328,8 +328,10 @@ def safe_fallback_workspace(continuation):
     if not isinstance(workspace, dict):
         return False
     if workspace.get("type") == "worktree":
-        return bool(workspace.get("baseRef"))
-    if workspace.get("type") != "existing_worktree" or not workspace.get("worktreePath"):
+        return (workspace.get("startFromOrigin") is True
+                and isinstance(workspace.get("baseRef"), str)
+                and workspace["baseRef"].startswith("origin/"))
+    if workspace.get("type") != "existing_worktree" or not isinstance(workspace.get("worktreePath"), str):
         return False
     path = workspace["worktreePath"]
     try:
@@ -369,11 +371,12 @@ def drain():
                     model = builders.choose_builder(selection)
                     if model is None:
                         continue
-                    if model != selection:
+                    if not builders.same_builder(selection, model["instanceId"], model["model"]):
                         if continuation:
                             if not safe_fallback_workspace(continuation):
                                 continue
                             args = dict(continuation)
+                            args["clientRequestId"] = f"continuation:{item['id']}:{model['model']}"
                             item["args"] = args
                             item["tool"] = "t3_thread_launch"
                             item.pop("builderContinuation", None)
@@ -508,6 +511,9 @@ def drain():
                     log(f"gate retry {key}: {model['model']}")
                 else:
                     item["attempts"] = MAX_ATTEMPTS
+            elif probe_request(request_id):
+                provider_health.note_probe_failure(item["args"].get("modelSelection"), out)
+                item["attempts"] = MAX_ATTEMPTS
             elif builders.is_builder((item.get("builderContinuation") or item["args"].get("builderContinuation") or item["args"]).get("modelSelection")) and not probe_request(request_id):
                 continuation = item.get("builderContinuation") or item["args"].get("builderContinuation")
                 model = failed_builder((continuation or item["args"])["modelSelection"], out)
