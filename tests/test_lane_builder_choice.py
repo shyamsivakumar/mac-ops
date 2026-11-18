@@ -457,7 +457,7 @@ class UnstickBuilders(unittest.TestCase):
         self.lane.DRY = False
         self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
 
-    def unstick(self, labels, passes=1):
+    def unstick(self, labels, passes=1, root_branch="main"):
         """Replay the unstick path over the given tickets and their labels."""
         lane = self.lane
         issues = [{"number": number, "labels": [{"name": f"builder:{label}"}]}
@@ -475,6 +475,8 @@ class UnstickBuilders(unittest.TestCase):
             return mock_open(read_data="unstick {list} in {repo}")()
 
         def run(cmd, timeout=150):
+            if cmd[:1] == ["git"]:
+                return root_branch
             launches.append(json.loads(cmd[2]))
             return "fixture-receipt"
 
@@ -502,6 +504,14 @@ class UnstickBuilders(unittest.TestCase):
         self.assertEqual(launches[0]["modelSelection"], GLM)
         self.assertIn("#11", launches[0]["message"])
         self.assertIn("#12", launches[0]["message"])
+
+    def test_a_project_root_on_a_herdr_branch_takes_no_unstick(self):
+        # The unstick thread works in the project root, so a root on a
+        # herdr branch is Shyam's to merge and takes no launch.
+        for branch in ("herdr/gh-trim", "HEAD", ""):
+            launches, ledger = self.unstick({11: "glm"}, root_branch=branch)
+            self.assertEqual(launches, [], branch)
+            self.assertEqual(ledger, {}, branch)
 
 
 class HeldContinue(unittest.TestCase):
