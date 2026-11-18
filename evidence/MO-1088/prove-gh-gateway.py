@@ -457,6 +457,25 @@ run(fresh_read)
 check("a fresh read refreshes the cache for the next reader", calls_made() - before == 0,
       f"calls={calls_made() - before}")
 
+# A `--hostname` read is keyed by that host: an unknown host has no account,
+# so it is never cached and cannot answer another account's read.
+host_read = ["gh", "api", "--hostname", "enterprise.example",
+             "repos/a/b/issues?state=open"]
+before = calls_made()
+run(host_read)
+run(host_read)
+check("an unknown --hostname host is not cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+check("the --hostname host is in the key",
+      subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+one = gh_gateway._key(["gh", "api", "--hostname", "one.example", "repos/a/b/issues?state=open"])
+two = gh_gateway._key(["gh", "api", "--hostname", "two.example", "repos/a/b/issues?state=open"])
+print("DIFFER", one != two)
+"""], capture_output=True, text=True, env=env).stdout.strip() == "DIFFER True")
+
 # A pull's files collection is a list named by the ticket, so it is cached.
 rows_before = len(rows())
 files_read = ["gh", "api", "repos/a/b/pulls/7/files?per_page=100"]
