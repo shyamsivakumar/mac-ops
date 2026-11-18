@@ -1024,6 +1024,20 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertEqual(len(kept), 6, kept)
         self.assertEqual(len(set(kept)), 6, kept)
 
+    def test_a_directory_restore_keeps_both_copies(self):
+        # A directory that took the path is preserved and the copy that was
+        # moved aside is kept.
+        base = Path(self.tmp.name)
+        source = base / "aside"
+        source.mkdir()
+        (source / "kept.md").write_text("kept\n", encoding="utf-8")
+        destination = base / "path"
+        destination.mkdir()
+        (destination / "other.md").write_text("other\n", encoding="utf-8")
+        self.assertFalse(cleaner._restore_directory(source, destination))
+        self.assertTrue((destination / "other.md").exists())
+        self.assertTrue((source / "kept.md").exists())
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
