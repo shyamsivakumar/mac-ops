@@ -63,7 +63,10 @@ The work goes back to its builder and the ticket stays open.
   pass the scope item.
 - A proof row that carries no result blocks the close. An incomplete row is never
   dropped: a row that names a check and a command but omits its result fails the
-  item, so a passing check that was never written cannot read as passed.
+  item, so a passing check that was never written cannot read as passed. The
+  table's header is recognized once, as the whole header row, so a later row whose
+  first cell reads "check" is a check like any other and a recorded failure cannot
+  hide behind it.
 
 The cost note item is skipped in both: MO-1068 (#504) is report only and its report
 (evidence/MO-1068/cost-report.md) does not exist yet.
