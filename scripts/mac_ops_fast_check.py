@@ -45,9 +45,15 @@ class NotRun(Exception):
 
 
 def ruff_command(*extra):
-    """The pinned Ruff command for this repository."""
+    """The pinned Ruff command for this repository.
+
+    The overnight runner and the other commands are Python without a `.py`
+    suffix, so the `.` scan leaves them out. They are named here, so a typo
+    in a runner is a finding like any other.
+    """
+    runners = [name for name in SUFFIXLESS_PYTHON if (ROOT / name).is_file()]
     return ["uvx", f"ruff@{RUFF_VERSION}", "check", "--select", RUFF_RULES,
-            "--output-format", "json", *extra]
+            "--output-format", "json", ".", *runners, *extra]
 
 
 def ruff_counts():
@@ -62,7 +68,7 @@ def ruff_counts():
                            capture_output=True, text=True, timeout=300)
     if probe.returncode != 0:
         raise NotRun(f"ruff {RUFF_VERSION} is not available through uvx")
-    command = ruff_command(".")
+    command = ruff_command()
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=300)
     if result.returncode not in (0, 1):
         detail = (result.stderr or result.stdout).strip().splitlines()
@@ -74,24 +80,34 @@ def ruff_findings(payload):
     """Count the findings of a Ruff JSON run by path, rule and message."""
     counts = Counter()
     for item in payload:
-        path = Path(item["filename"])
-        try:
-            name = str(path.relative_to(ROOT))
-        except ValueError:
-            name = str(path)
+        name = repo_path(item["filename"])
         counts[(name, item["code"], item["message"])] += 1
     return counts
 
 
+def repo_path(name):
+    """The repository-relative path of a file Ruff reported."""
+    path = Path(name)
+    if path.is_absolute():
+        try:
+            return str(path.relative_to(ROOT))
+        except ValueError:
+            return str(path)
+    return str(path)
+
+
 def read_baseline(path=None):
-    """Read the baseline file: finding key to how many of it are known."""
+    """Read the baseline file: finding key to how many of it are known.
+
+    The fields are separated by a tab, so a path or a message with a space
+    in it still round trips.
+    """
     path = Path(path or ROOT / RUFF_BASELINE)
     baseline = {}
     for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+        if not line.strip() or line.startswith("#"):
             continue
-        count, name, code, message = line.split(" ", 3)
+        count, name, code, message = line.split("\t")
         baseline[(name, code, message)] = int(count)
     return baseline
 
@@ -107,11 +123,11 @@ def write_baseline(counts, path=None):
         f"# Ruff version: {RUFF_VERSION}.",
         "# Regenerate with: python3 scripts/mac_ops_fast_check.py --write-ruff-baseline",
         "#",
-        "# Format: <count> <path> <rule> <message>",
+        "# Format: <count>\\t<path>\\t<rule>\\t<message>",
         "",
     ]
     for (name, code, message), count in sorted(counts.items()):
-        lines.append(f"{count} {name} {code} {message}")
+        lines.append(f"{count}\t{name}\t{code}\t{message}")
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -181,6 +197,7 @@ class Proof:
         self.path = path
         self.rows = []
         self.failed = False
+        self.incomplete = False
 
     def check(self, name, command, action):
         """Run one check and record what happened to it."""
@@ -194,6 +211,7 @@ class Proof:
             self.rows.append((name, command, "failed", "the command timed out"))
             return False
         except NotRun as exc:
+            self.incomplete = True
             self.rows.append((name, command, "not run", str(exc)))
             return False
         except Exception as exc:
@@ -207,12 +225,14 @@ class Proof:
 
     def write(self, head, dirty):
         """Write the proof file of this run."""
+        result = "failed" if self.failed else "incomplete" if self.incomplete else "passed"
         lines = [
             "# Check proof",
             "",
             "Command: `python3 scripts/mac_ops_fast_check.py`",
             f"Checked commit: `{head}`",
             f"Working tree clean when the checks ran: {'no' if dirty else 'yes'}",
+            f"Run result: {result}",
             "",
             "| Check | Command | Result | Detail |",
             "| --- | --- | --- | --- |",
@@ -223,7 +243,8 @@ class Proof:
             "",
             "A result is `passed`, `failed` or `not run`. A failed check stopped the run,",
             "so every check after it is `not run`. A tool that is not on this machine",
-            "is recorded as `not run`, never as a pass.",
+            "is recorded as `not run` too, and leaves the run incomplete: the run is",
+            "then not a pass.",
             "",
         ]
         path = ROOT / self.path
@@ -344,7 +365,7 @@ def main():
         proof.check(f"shell syntax: {name}", shlex.join(command),
                     lambda command=command: run(command, timeout=120))
 
-    ruff = ruff_command(".")
+    ruff = ruff_command()
     proof.check(f"ruff {RUFF_RULES}", shlex.join(ruff), check_ruff)
 
     scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
@@ -372,6 +393,10 @@ def main():
     proof.write(head, bool(dirty))
     if proof.failed:
         print(f"fast-check: failed; the proof file is {args.proof}", flush=True)
+        sys.exit(1)
+    if proof.incomplete:
+        print(f"fast-check: incomplete; a check did not run and the proof file is {args.proof}",
+              flush=True)
         sys.exit(1)
     print("fast-check: passed; selected checks are not the full suite", flush=True)
 
