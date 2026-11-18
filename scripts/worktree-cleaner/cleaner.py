@@ -1603,24 +1603,42 @@ def _collect_recovery(descriptor: int, prefix: str, files: list[tuple[int, str, 
     return True
 
 
-def _remove_recovery_copy(path: Path, older_than: float) -> bool:
-    """Remove a recovery copy file by file.
+# Where a copy that may go is put. The system trash keeps every name of the
+# copy, so a file an editor opens after the copy was moved still has a name
+# and a save through its descriptor is never lost. The tests point this at a
+# directory of their own.
+_TRASH: Path | None = None
 
-    The whole copy is decided before anything is removed: it is kept when a
-    file is newer than the retention, when a file is held open by a process,
-    or when the open files cannot be read. Every removal then goes through
-    the descriptor of the directory the file was listed in.
+
+def _trash_destination(name: str) -> Path | None:
+    """A place in the trash for a copy that may go."""
+    trash = _TRASH or (Path.home() / "Trash")
+    try:
+        trash.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return trash / f"worktree-cleaner-{name}-{int(time.time())}"
+
+
+def _remove_recovery_copy(path: Path, older_than: float) -> bool:
+    """Give a recovery copy back, keeping every file and every name.
+
+    The copy is decided as a whole before it is moved: it is kept when a file
+    is newer than the retention, when a file is held open by a process, or
+    when the open files cannot be read. It is then moved into the trash in
+    one step, so no file is unlinked and a save an editor makes through its
+    own descriptor keeps its name.
     """
     held = _open_paths()
     if held is None:
         # The open files are not known, so the copy is kept.
         return False
+    files: list[tuple[int, str, str]] = []
+    directories: list[tuple[int, str, int, str]] = []
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
         return False
-    files: list[tuple[int, str, str]] = []
-    directories: list[tuple[int, str, int, str]] = []
     try:
         if not _collect_recovery(descriptor, str(path), files, directories):
             return False
@@ -1633,20 +1651,6 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
                     return False
             except OSError:
                 return False
-        for parent, name, _entry in files:
-            try:
-                # A file that appeared while the copy was emptied is newer
-                # than the retention and is kept.
-                if os.lstat(name, dir_fd=parent).st_mtime > older_than:
-                    continue
-                os.unlink(name, dir_fd=parent)
-            except OSError:
-                return False
-        for parent, name, _child, _entry in reversed(directories):
-            try:
-                os.rmdir(name, dir_fd=parent)
-            except OSError:
-                pass
     finally:
         for _parent, _name, child, _entry in directories:
             try:
@@ -1654,8 +1658,13 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
             except OSError:
                 pass
         os.close(descriptor)
+    target = _trash_destination(path.name)
+    if target is None:
+        return False
     try:
-        os.rmdir(path)
+        # One move, every name kept: nothing is unlinked, so a file an
+        # editor opens after this point still has a name.
+        os.rename(path, target)
     except OSError:
         return False
     return True
