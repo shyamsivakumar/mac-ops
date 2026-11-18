@@ -1571,52 +1571,89 @@ def _open_paths() -> set[str] | None:
     return {line[1:] for line in result.stdout.splitlines() if line.startswith("n")}
 
 
+def _collect_recovery(descriptor: int, prefix: str, files: list[tuple[int, str, str]], directories: list[tuple[int, str, int, str]]) -> bool:
+    """List the contents of a recovery copy, keeping the directories open.
+
+    Every entry is listed through the descriptor of the directory it is in, so
+    a directory that was replaced by a link in the meantime cannot redirect
+    the listing or the removal that follows it.
+    """
+    try:
+        entries = sorted(os.listdir(descriptor))
+    except OSError:
+        return False
+    for name in entries:
+        entry = os.path.join(prefix, name)
+        try:
+            info = os.lstat(name, dir_fd=descriptor)
+        except OSError:
+            return False
+        if stat.S_ISDIR(info.st_mode):
+            try:
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except OSError:
+                # A link to a directory is a link, not a directory.
+                files.append((descriptor, name, entry))
+                continue
+            directories.append((descriptor, name, child, entry))
+            if not _collect_recovery(child, entry, files, directories):
+                return False
+            continue
+        files.append((descriptor, name, entry))
+    return True
+
+
 def _remove_recovery_copy(path: Path, older_than: float) -> bool:
     """Remove a recovery copy file by file.
 
-    Everything is checked before anything is removed: the copy is kept when a
+    The whole copy is decided before anything is removed: it is kept when a
     file is newer than the retention, when a file is held open by a process,
-    or when the open files cannot be read. A file that appears while the copy
-    is being emptied is newer than the retention and is kept.
+    or when the open files cannot be read. Every removal then goes through
+    the descriptor of the directory the file was listed in.
     """
-    files: list[str] = []
-    directories: list[str] = []
-    for root, dirs, names in os.walk(path, topdown=False):
-        for name in names:
-            files.append(os.path.join(root, name))
-        for name in dirs:
-            directories.append(os.path.join(root, name))
-    for entry in files:
-        try:
-            if os.lstat(entry).st_mtime > older_than:
-                return False
-        except OSError:
-            return False
     held = _open_paths()
     if held is None:
         # The open files are not known, so the copy is kept.
         return False
-    for entry in files:
-        if os.path.realpath(entry) in held:
-            # A file that a process holds open keeps the whole copy.
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    files: list[tuple[int, str, str]] = []
+    directories: list[tuple[int, str, int, str]] = []
+    try:
+        if not _collect_recovery(descriptor, str(path), files, directories):
             return False
-    for entry in files:
-        try:
-            # A file that appeared while the copy was emptied is newer than
-            # the retention and is kept.
-            if os.lstat(entry).st_mtime > older_than:
-                continue
-            os.unlink(entry)
-        except OSError:
-            return False
-    for entry in directories:
-        try:
-            if os.path.islink(entry):
-                os.unlink(entry)
-                continue
-            os.rmdir(entry)
-        except OSError:
-            return False
+        for parent, name, entry in files:
+            if os.path.realpath(entry) in held:
+                # A file that a process holds open keeps the whole copy.
+                return False
+            try:
+                if os.lstat(name, dir_fd=parent).st_mtime > older_than:
+                    return False
+            except OSError:
+                return False
+        for parent, name, _entry in files:
+            try:
+                # A file that appeared while the copy was emptied is newer
+                # than the retention and is kept.
+                if os.lstat(name, dir_fd=parent).st_mtime > older_than:
+                    continue
+                os.unlink(name, dir_fd=parent)
+            except OSError:
+                return False
+        for parent, name, _child, _entry in reversed(directories):
+            try:
+                os.rmdir(name, dir_fd=parent)
+            except OSError:
+                pass
+    finally:
+        for _parent, _name, child, _entry in directories:
+            try:
+                os.close(child)
+            except OSError:
+                pass
+        os.close(descriptor)
     try:
         os.rmdir(path)
     except OSError:
