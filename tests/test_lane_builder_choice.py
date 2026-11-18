@@ -31,6 +31,8 @@ HEAD = "a" * 40
 MINIMAX = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 GLM = {"instanceId": "glm", "model": "zai/glm-5.3"}
 SOL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+ALL_BUILDERS = ("minimax:MiniMax-M3.1-Flash", "glm:glm-5.3", "pi:deepseek-flash",
+                 "cursor:default", "codex:gpt-6.1-terra")
 
 
 def load_lane():
@@ -440,7 +442,7 @@ class HeldContinue(unittest.TestCase):
         self.lane.DRY = False
         self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
 
-    def unstick(self, threads, passes=1):
+    def unstick(self, threads, passes=1, blocked=(), ledger=None):
         """Replay the unstick path over the given tickets and their threads."""
         lane = self.lane
         issues = [{"number": number, "labels": []} for number in sorted(threads)]
@@ -451,7 +453,8 @@ class HeldContinue(unittest.TestCase):
 
         def files(path, *args, **kwargs):
             if str(path).endswith("providers-blocked.json"):
-                return mock_open(read_data='{"blocked": {}}')()
+                store = {"blocked": {identity: {"reason": "usage limit"} for identity in blocked}}
+                return mock_open(read_data=json.dumps(store))()
             if str(path).endswith("models.json"):
                 return mock_open(read_data=MODELS.read_text())()
             if path == lane.RECEIPTS:
@@ -470,7 +473,7 @@ class HeldContinue(unittest.TestCase):
                 raise AssertionError(f"unexpected thread {args['threadId']}")
             raise AssertionError(f"unexpected T3 call {tool}")
 
-        ledger = {}
+        ledger = {} if ledger is None else ledger
         result = ""
         with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
              patch.object(lane, "SNAPSHOT", snapshot), \
@@ -520,6 +523,20 @@ class HeldContinue(unittest.TestCase):
         self.assertEqual(queued, [])
         self.assertEqual(result, "nothing ready")
         self.assertIn("cont:thread-11", ledger)
+
+    def test_a_ticket_with_every_builder_blocked_stays_eligible(self):
+        # Every builder is blocked, so the work is not queued. That is not
+        # a hold: no cooldown is recorded, so the ticket is still eligible
+        # as soon as a builder is free.
+        result, queued, ledger = self.unstick({11: self.idle_builder("thread-11")},
+                                               blocked=ALL_BUILDERS)
+        self.assertEqual(queued, [])
+        self.assertNotIn("cont:thread-11", ledger)
+        # The next pass, with a builder free, continues the ticket.
+        result, queued, ledger = self.unstick({11: self.idle_builder("thread-11")}, ledger=ledger)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["threadId"], "thread-11")
+        self.assertTrue(result.startswith("continue #11:"), result)
 
 
 if __name__ == "__main__":
