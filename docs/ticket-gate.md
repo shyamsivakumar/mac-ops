@@ -46,6 +46,25 @@ mergeCommit` gives. On a failed verdict, or when the merge did not happen,
 the brief closes nothing. An Ascend repository stops at the verdict and
 closes nothing either.
 
+## Prompt, skill and playbook changes
+
+A prompt change never auto-merges (Shyam, 2026-11-17). Before the brief is
+built, `ticket gate` reads the paths the pull request changed and compares
+them with the list in `coordinator/bin/prompt_paths.py`: `AGENT-RULES.md`,
+`gate_bar.py`, `gate_policy.py`, `playbook.md`, `code-reviewer.md`, any
+`SKILL.md`, and anything under a `skills/` or `prompts/` directory.
+
+When one path matches, the brief's heading says `review only`, the merge
+order becomes `do not merge ... Shyam merges a passing one himself`, the
+fast-forward is left out, and the brief closes no issue. A pull request that
+only changes code keeps the merge order. A file list GitHub cannot give is
+not a prompt change, so a failed read never blocks the merge of ordinary
+code.
+
+The lane driver reads the same list before it merges a passing pull request:
+on a prompt change it merges nothing and writes one item to the decisions
+board asking Shyam to merge it.
+
 ## What it refuses
 
 - The pull request is not open, or is a draft.

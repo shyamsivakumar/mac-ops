@@ -10,6 +10,7 @@ if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 
 from gate_bar import GATE_BAR
+import prompt_paths
 from tick_health import tick_alarm
 
 DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
@@ -1146,6 +1147,20 @@ def failed_gate_reviewer(queue, key, current, failure):
     return None
 
 
+def gate_prompt_change(repo, number):
+    """True when the pull request changed prompt, skill or playbook text.
+
+    A list GitHub cannot give is not a prompt change, so a failed read never
+    blocks the merge of ordinary code.
+    """
+    try:
+        files = gh_json(f"repos/{repo}/pulls/{number}/files?per_page=100")
+    except (RuntimeError, ValueError):
+        return False
+    return prompt_paths.prompt_change(
+        [entry.get("filename") or "" for entry in files if isinstance(entry, dict)])
+
+
 def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None):
     """The launch arguments of the gate for one pull request.
 
@@ -1155,7 +1170,8 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     key = f"gate:{repo}#{number}:{head}"
     from gate_policy import build_gate_brief
     message = build_gate_brief(settings, repo, issue, number, head, publisher,
-                               proof=proof, proof_path=proof_path, proof_state=proof_state)
+                               proof=proof, proof_path=proof_path, proof_state=proof_state,
+                               prompt=gate_prompt_change(repo, number))
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
             "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}

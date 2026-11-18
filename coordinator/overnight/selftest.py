@@ -330,18 +330,20 @@ def gate_pipeline():
     head = "a" * 40
     failures = []
     cases = [
-        ("checked-head", repo, "absent", "", {}, ["astra"]),
-        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"]),
-        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"]),
-        ("no-verdict", repo, "none", "interrupted", {}, ["astra"]),
+        ("checked-head", repo, "absent", "", {}, ["astra"], None),
+        ("pass", repo, "PASS", "VERDICT: PASS", {}, ["merge", "provides", "ff"], "coordinator/bin/ticket"),
+        ("prompt-pass", repo, "PASS", "VERDICT: PASS", {}, ["decisions"],
+         "coordinator/config/AGENT-RULES.md"),
+        ("fail", repo, "FAIL", "finding\nVERDICT: FAIL", {}, ["builder"], "coordinator/bin/ticket"),
+        ("no-verdict", repo, "none", "interrupted", {}, ["astra"], None),
         ("second-no-verdict", repo, "none", "interrupted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, []),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, [], None),
         ("quota", repo, "none", "Astra quota exhausted",
-         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"]),
-        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, []),
-        ("ascend", "ascend/fixture", "absent", "", {}, []),
+         {f"gate:{repo}#20:{head}": "first", f"regate:{repo}#20:{head}": "retry"}, ["opus"], None),
+        ("manual", "digitized/Concerning", "PASS", "VERDICT: PASS", {}, [], None),
+        ("ascend", "ascend/fixture", "absent", "", {}, [], None),
     ]
-    for name, target, verdict, reply, ledger, expected in cases:
+    for name, target, verdict, reply, ledger, expected, changed in cases:
         actions = []
         pr = dict(number=20, state="OPEN", headRefOid=head,
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
@@ -350,6 +352,11 @@ def gate_pipeline():
         def command(cmd, timeout=150):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
+            if cmd[:2] == ["gh", "api"]:
+                # The changed-file list of the pull request: the case decides
+                # whether it carries one prompt path or only code.
+                exact(cmd[3], "repos/%s/pulls/20/files?per_page=100" % target)
+                return json.dumps([{"filename": changed}] if changed else [])
             if cmd == [lane.COORDQ, "list"]:
                 return ""
             if cmd[:2] == ["ticket", "gate"]:
@@ -394,10 +401,20 @@ def gate_pipeline():
                 return {"items": [{"type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
+        def decision(item):
+            # The board write is the one live file this eval must not touch.
+            exact(item["id"], "prompt-merge-FIX-20")
+            exact(item["group"], "Coordinator")
+            exact(item["kind"], "action")
+            exact(item.get("options"), None)
+            actions.append("decisions")
+            return "wrote"
+
         try:
             with patch.object(lane, "CFG", {target: dict(key="FIX", projectId="fixture")}), \
                  patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
                  patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                 patch.object(lane, "publish_decision", decision), \
                  patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
                  patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
                  patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")):
