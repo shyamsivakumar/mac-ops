@@ -10,7 +10,7 @@ prints the count per caller per hour, so the measurement in
     python3 scripts/gh-usage-report.py --hours 24 --log /path/to/gh-usage.jsonl
 
 A cached answer and a 304 are not GitHub calls, so they are not in the log
-and not in the count. Each row names the quota it spends: `core` for
+and not in the count. Each row names the caller, the verb and the quota: `core` for
 `gh api`, `search` for `gh search`, `graphql` for the commands GitHub
 answers over GraphQL. Only the `core` rows count against the 5000 an hour
 the ticket is about.

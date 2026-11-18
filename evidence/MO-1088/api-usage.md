@@ -72,7 +72,8 @@ for the lane driver, coordq, the overnight shift and the ticket tool.
    and fails on its own if GitHub refuses it.
 4. **Measurement.** Every GitHub request is one line in
    `~/Library/Logs/coordinator/gh-usage.jsonl`, with the caller, the
-   command and the quota it spends (`core`, `search` or `graphql`).
+   verb and the quota it spends (`core`, `search` or `graphql`). No
+   argument is written: a `-H` header can carry a token.
    The quota is read from the endpoint or the command, not from the first
    word: `gh api search/issues` is the search bucket, `gh run list` is a
    core call on the Actions REST API, and `gh pr list` is GraphQL. A

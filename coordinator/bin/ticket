@@ -4,12 +4,16 @@ from datetime import datetime, timezone
 
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
+import gh_gateway
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
 COORDQ = os.environ.get("TICKET_COORDQ", "coordq")
 QUEUE_DIR = os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 CACHE_DIR = os.environ.get("TICKET_CACHE", os.path.expanduser("~/.cache/tickets"))
-CACHE_TTL = 60
+# The board cache outlives the minute a board poller waits, so a poller
+# that reads the board every minute is served by the cache for most of its
+# reads. A caller that needs the list now asks for it with `--fresh`.
+CACHE_TTL = float(os.environ.get("TICKET_CACHE_TTL", "240"))
 GH_TIMEOUT = 40
 CALL_TIMEOUT = 30
 COORDQ_TIMEOUT = 120
@@ -160,8 +164,13 @@ def classify(stderr):
 
 
 def gh(args, stdin=None):
+    """Run one GitHub command through the shared helper.
+
+    The helper counts the call for the usage report, serves a repeated
+    list read from its cache, and makes a single-page read conditional so
+    GitHub answers 304 and does not charge the core quota for it."""
     try:
-        result = run(["gh"] + args, GH_TIMEOUT, stdin)
+        result = gh_gateway.run(["gh"] + args, timeout=GH_TIMEOUT, stdin=stdin)
     except subprocess.TimeoutExpired:
         raise GhError("offline", f"gh {' '.join(args[:2])} timed out after {GH_TIMEOUT}s")
     if result.returncode != 0:
