@@ -329,6 +329,29 @@ def tree_entries():
           and prompt_paths.prompt_scan(paths) == prompt_paths.HOLD, command)
 
 
+def truncated_tree_walk():
+    """A truncated repository tree is walked by subtree, not deferred."""
+    command = "python3 evidence/MO-543/proof.py"
+
+    def fetch(endpoint):
+        if "/compare/" in endpoint:
+            return {"merge_base_commit": {"sha": "base"}}
+        if endpoint.endswith("/git/trees/head?recursive=1"):
+            return {"truncated": True,
+                    "tree": [{"type": "tree", "path": "skills", "sha": "sub"}]}
+        if endpoint.endswith("/git/trees/sub"):
+            return {"tree": [{"type": "blob", "path": "x/SKILL.md",
+                              "mode": "100644", "sha": "9"}]}
+        if endpoint.endswith("/git/trees/base?recursive=1"):
+            return {"tree": [{"type": "blob", "path": "a.py", "mode": "100644", "sha": "1"}]}
+        raise AssertionError(endpoint)
+
+    paths = prompt_paths.tree_diff(fetch, "o/r", "main", "head")
+    grant("trees: a truncated repository tree is walked by subtree",
+          paths == ["a.py", "skills/x/SKILL.md"]
+          and prompt_paths.prompt_scan(paths) == prompt_paths.HOLD, command)
+
+
 def tree_fallback():
     """A 3,001-file PR never fits the file list, so the trees classify it."""
     coordq = load(BIN / "coordq", "proof_coordq_trees")
@@ -428,6 +451,7 @@ def main():
     ticket_file_read()
     timeout_and_unnamed()
     tree_entries()
+    truncated_tree_walk()
     tree_fallback()
     lane_truncation()
     board_reconcile()

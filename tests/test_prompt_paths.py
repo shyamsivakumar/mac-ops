@@ -151,18 +151,39 @@ class PromptPathTest(unittest.TestCase):
             prompt_paths.tree_diff(fetch, "o/r", "main", "head")), prompt_paths.HOLD)
 
     def test_a_tree_entry_without_a_path_is_no_diff(self):
-        self.assertIsNone(prompt_paths.tree_paths(
-            {"tree": [{"type": "blob", "sha": "1"}]}))
+        self.assertIsNone(prompt_paths.tree_entries({"tree": [{"type": "blob", "sha": "1"}]}))
 
-    def test_a_truncated_tree_is_no_diff(self):
+    def test_a_truncated_tree_is_walked_by_subtree(self):
+        """A listing GitHub cuts short names its subtrees; they are read."""
         def fetch(endpoint):
             if "/compare/" in endpoint:
                 return [{"merge_base_commit": {"sha": "base"}}]
-            return {"truncated": True, "tree": []}
+            if endpoint.endswith("/git/trees/head?recursive=1"):
+                return {"truncated": True,
+                        "tree": [{"type": "tree", "path": "skills", "sha": "sub"}]}
+            if endpoint.endswith("/git/trees/sub"):
+                return {"tree": [{"type": "blob", "path": "x/SKILL.md",
+                                  "mode": "100644", "sha": "9"}]}
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "mode": "100644", "sha": "1"}]}
+            raise AssertionError(endpoint)
 
-        self.assertIsNone(prompt_paths.tree_diff(fetch, "o/r", "main", "head"))
+        paths = prompt_paths.tree_diff(fetch, "o/r", "main", "head")
+        self.assertEqual(paths, ["a.py", "skills/x/SKILL.md"])
+        self.assertEqual(prompt_paths.prompt_scan(paths), prompt_paths.HOLD)
+
+    def test_a_walk_that_runs_out_of_requests_is_no_diff(self):
+        def fetch(endpoint):
+            if "/compare/" in endpoint:
+                return {"merge_base_commit": {"sha": "base"}}
+            if endpoint.endswith("?recursive=1"):
+                return {"truncated": True,
+                        "tree": [{"type": "tree", "path": "skills", "sha": "sub"}]}
+            raise AssertionError(endpoint)
+
+        self.assertIsNone(prompt_paths.tree_paths(fetch, "o/r", "head", requests=[0]))
         self.assertIsNone(prompt_paths.changed_paths(None, {}))
-        self.assertIsNone(prompt_paths.tree_paths([{"sha": "x"}]))
+        self.assertIsNone(prompt_paths.tree_entries([{"sha": "x"}]))
         self.assertEqual(prompt_paths.one_object([{"a": 1}]), {"a": 1})
         self.assertIsNone(prompt_paths.one_object([]))
 
