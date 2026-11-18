@@ -2333,6 +2333,38 @@ def alarm_mute():
                 output = pass_once(now + dt.timedelta(hours=4, minutes=40))
             exact("could not be published" in output, True)
 
+            # A board that cannot be read is said out loud too: the alarm
+            # is nowhere, and the tick says so.
+            board.unlink()
+            output = pass_once(now + dt.timedelta(hours=4, minutes=41))
+            exact("could not be published" in output, True)
+            board.write_text(json.dumps({"items": []}))
+
+            # The board is read while the state lock is held, so the two
+            # writers cannot read it stale and lose each other's item.
+            import fcntl
+            import os as _os
+            held = []
+
+            def watched_open(path, *args, **kwargs):
+                if str(path) == str(board):
+                    other = _os.open(str(Path(str(mute) + ".lock")),
+                                     _os.O_RDWR | _os.O_CREAT, 0o600)
+                    try:
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held.append(False)
+                        fcntl.flock(other, fcntl.LOCK_UN)
+                    except OSError:
+                        held.append(True)
+                    finally:
+                        _os.close(other)
+                return open(path, *args, **kwargs)
+
+            codes["code"] = 1
+            with patch.object(lane, "open", create=True, side_effect=watched_open):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=42))
+            exact(held, [True])
+
 
 
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
