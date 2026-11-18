@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, contextlib, fcntl, json, os, re, signal, subprocess, sys, time
+import argparse, fcntl, json, os, re, signal, subprocess, sys, time
 from pathlib import Path
 
 # The modules below live next to this script. A caller that loads this file
@@ -206,63 +206,6 @@ def queued_launch_args(tool, args):
 
 def is_gate_model(selection):
     return model_list.find(selection, ("review",)) is not None
-
-
-def is_gate_item(item):
-    """Whether a queued item is a gate launch: its task type is `review`."""
-    args = queued_launch_args("t3_thread_launch", item.get("args") or {})
-    return args.get("taskType") == "review"
-
-
-def blocked_launch(item):
-    """Why an item cannot be launched, or None.
-
-    A gate item whose reviewer was blocked after it was queued is not
-    launched: the provider cannot run it. Only a gate item is refused; a
-    builder is never held back here, even on a model the review list also
-    names.
-    """
-    selection = (item.get("args") or {}).get("modelSelection")
-    if selection and is_gate_item(item) and model_list.is_blocked(selection):
-        return f"{model_list.identity(selection)} is blocked"
-    return None
-
-
-def put_receipt(head, thread_id):
-    receipts_path = path("dispatch-receipts.json")
-    receipts = load_receipts()
-    receipts[head] = thread_id
-    with open(receipts_path + ".tmp", "w") as f:
-        json.dump(receipts, f)
-    os.replace(receipts_path + ".tmp", receipts_path)
-
-
-def refuse_blocked_gate(queue, item, reason):
-    """Take a gate item whose reviewer is blocked out of the queue.
-
-    The refused reviewer never ran, so its attempt is undone. A fallback
-    item carries the head record and receipt it replaced, and both come
-    back, so the head is retried on an eligible reviewer. A first launch has
-    nothing to restore, so its head is released and gated again.
-    """
-    release_action_key(queue, item)
-    heads = queue.setdefault("gatedHeads", {})
-    head = item.get("head") or next(
-        (key for key, value in heads.items() if gate_state(value)["id"] == item.get("id")), "")
-    identity = model_list.identity((item.get("args") or {}).get("modelSelection") or {})
-    tried = (queue.get("gateReviewers") or {}).get(head)
-    if tried and identity in tried:
-        tried.remove(identity)
-        if not tried:
-            del queue["gateReviewers"][head]
-    restore = item.get("restore")
-    if head and restore:
-        heads[head] = restore["record"]
-        if restore.get("receipt"):
-            put_receipt(head, restore["receipt"])
-    else:
-        heads.pop(head, None)
-    log(f"REFUSED #{item['id']}: {reason}")
 
 
 def tool_refusal(tool):
@@ -639,12 +582,7 @@ def drain():
                 continue
             tool = undispatchable_tool(item)
             if tool is None:
-                reason = blocked_launch(item)
-                if reason is None:
-                    dispatchable.append(item)
-                    continue
-                dropped.add(item["id"])
-                refuse_blocked_gate(queue, item, reason)
+                dispatchable.append(item)
                 continue
             dropped.add(item["id"])
             release_action_key(queue, item)
@@ -691,19 +629,6 @@ def drain():
         if n + len(queue["reserved"]) + len(steps) > cap():
             log(f"waiting for {len(steps)} slots for #{item['id']}")
             return
-        stack = contextlib.ExitStack()
-        held = stack.enter_context(model_list.blocked_lock(blocking=False)) if is_gate_item(item) else True
-        if not held:
-            log(f"#{item['id']} waits, the provider block store is being written")
-            stack.close()
-            return
-        reason = blocked_launch(item)
-        if reason is not None:
-            queue["items"] = [i for i in queue["items"] if i["id"] != item["id"]]
-            refuse_blocked_gate(queue, item, reason)
-            save(queue)
-            stack.close()
-            continue
         for key, step in zip(keys, steps):
             queue["reserved"][key] = time.time()
             if step["tool"] == "t3_thread_send":
@@ -743,7 +668,6 @@ def drain():
                 except (ValueError, TypeError, AttributeError):
                     log(f"reservation #{key} retained: launch reply has no thread ID")
             save(queue)
-        stack.close()
         request_id = item["args"].get("clientRequestId")
         if code == 0 and request_id and item["tool"] == "t3_thread_launch":
             try:
@@ -1805,10 +1729,8 @@ def cmd_gatekeep(a):
                           f"{args['modelSelection']['model']} is blocked", flush=True)
                     continue
                 item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
-                        "title": args["title"], "priority": 5000, "head": key,
+                        "title": args["title"], "priority": 5000,
                         "builderModels": event.get("builderModels", [])}
-                if retried:
-                    item["restore"] = {"record": state, "receipt": receipts.get(key)}
                 queue["next"] += 1
                 queue["items"].append(item)
                 heads[key] = {"id": item["id"], "retries": retries,
