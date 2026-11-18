@@ -1755,10 +1755,15 @@ def _read_recovery_manifest(state_root: Path) -> list[dict[str, Any]] | None:
     it holds, and the copies it names would never be swept again.
     """
     try:
-        text = _recovery_manifest(state_root).read_text(encoding="utf-8")
+        raw = _recovery_manifest(state_root).read_bytes()
     except FileNotFoundError:
         return []
     except OSError:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # The manifest is not text, so it cannot be read and it is left alone.
         return None
     try:
         entries = json.loads(text)
@@ -1782,10 +1787,11 @@ def _record_recovery(state_root: Path, path: Path) -> bool:
     kept = [entry for entry in entries if entry.get("path") != str(path)]
     try:
         info = os.stat(path)
-        identity = {"device": info.st_dev, "inode": info.st_ino}
     except OSError:
-        identity = {}
-    kept.append({"path": str(path), "recovered_at": time.time(), **identity})
+        # Without the identity of the copy it cannot be told apart from a
+        # replacement later, so it is not recorded.
+        return False
+    kept.append({"path": str(path), "recovered_at": time.time(), "device": info.st_dev, "inode": info.st_ino})
     try:
         atomic_write(manifest, json.dumps(kept, indent=1, sort_keys=True) + "\n")
     except OSError:
@@ -1822,9 +1828,12 @@ def _sweep_recovery(state_root: Path, older_than: float) -> None:
             keep.append(entry)
             continue
         recorded = entry.get("device"), entry.get("inode")
-        identity = None
-        if isinstance(recorded[0], int) and isinstance(recorded[1], int):
-            identity = (recorded[0], recorded[1])
+        if not (isinstance(recorded[0], int) and isinstance(recorded[1], int)):
+            # The identity of the copy was not recorded, so it cannot be told
+            # apart from a replacement and it is kept.
+            keep.append(entry)
+            continue
+        identity = (recorded[0], recorded[1])
         if _remove_recovery_copy(path, older_than, identity):
             continue
         keep.append(entry)
@@ -2367,7 +2376,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                         tree_gone = True
                                     except OSError:
                                         tree_gone = False
-                                    if tree_gone and not _record_recovery(state_root, storage / aside):
+                                    try:
+                                        recorded_recovery = _record_recovery(state_root, storage / aside)
+                                    except Exception:
+                                        recorded_recovery = False
+                                    if tree_gone and not recorded_recovery:
                                         # The recovery is not in the manifest, so it
                                         # would never be swept. The checkout
                                         # stays in the storage and the removal
