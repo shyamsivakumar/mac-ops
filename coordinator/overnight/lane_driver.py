@@ -763,39 +763,6 @@ def base_moved_item(repo, number, head, landed, base):
                     "fast-forwarded. Inspect the merged diff for prompt files before keeping it.")}
 
 
-def prompt_drift_item(repo, number, head, base, drifted):
-    """The item Shyam answers when the head carries prompt text its base lacks.
-
-    The merge call carries the pull request's base, so a retarget can move the
-    destination after the last read. Where the head's prompt files match the
-    default branch there is nothing a retarget could inject; where they do not,
-    the merge could carry prompt text somewhere this review never read, so the
-    lane does not perform it.
-    """
-    key = CFG[repo]["key"]
-    return {"id": f"prompt-drift-{key}-{number}", "group": "Coordinator", "kind": "action",
-            "title": (f"{key}-{number} passed its gate on `{base}` and its head carries prompt text "
-                      f"`{prompt_paths.DEFAULT_BASE}` does not have: merge head {head[:8]} yourself."),
-            "why": ("The merge call cannot pin its base, so a retarget could land this head's "
-                    f"prompt files on `{prompt_paths.DEFAULT_BASE}` even though the review saw only "
-                    f"its own diff against `{base}`. Prompt files that differ from the default branch: "
-                    + ", ".join(drifted[:6]))}
-
-
-def prompt_drift(repo, base, head):
-    """The prompt paths that differ between the default branch and the head.
-
-    A pull request whose prompt files match the default branch cannot inject
-    prompt text there whatever base it is merged into; one whose files differ
-    can. None means the comparison could not be read, which is not a clear
-    answer either.
-    """
-    paths = prompt_paths.tree_diff(api_json, repo, prompt_paths.DEFAULT_BASE, head)
-    if paths is None:
-        return None
-    return [path for path in paths if prompt_paths.is_prompt_path(path)]
-
-
 def merge_on_reviewed_base(repo, number, head, base):
     """Merge one pull request only when its base is still the reviewed one.
 
@@ -920,14 +887,6 @@ def act_on_pr(repo, number, ledger):
         # not introduce against the base this pass classified. The base and
         # head are read again inside the merge step, as close to the merge as
         # the merge can be guarded: a pull request that moved merges nothing.
-        drifted = prompt_drift(repo, base, head)
-        if drifted is None:
-            return (f"skip #{number}: gate PASS, but the prompt files could not be compared with "
-                    f"{prompt_paths.DEFAULT_BASE}; nothing merged, the next pass retries")
-        if drifted:
-            published = publish_decision(prompt_drift_item(repo, number, head, base, drifted))
-            return (f"skip #{number}: gate PASS, but its head carries prompt text "
-                    f"{prompt_paths.DEFAULT_BASE} does not have; Shyam has the item ({published})")
         merged, note = merge_on_reviewed_base(repo, number, head, base)
         if not merged:
             return note

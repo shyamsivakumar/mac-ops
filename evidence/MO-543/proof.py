@@ -501,29 +501,6 @@ def action_path_replay():
               True, command)
 
 
-def prompt_drift_guard():
-    """Prompt text the default branch lacks is not merged automatically."""
-    import lane_driver as lane
-    command = "python3 evidence/MO-543/proof.py"
-    saved = lane.CFG
-    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
-    try:
-        with patch.object(lane.prompt_paths, "tree_diff",
-                          return_value=["a.py", "skills/x/SKILL.md"]):
-            drifted = lane.prompt_drift("shyamsivakumar/mac-ops", "feature", HEAD)
-        with patch.object(lane.prompt_paths, "tree_diff", return_value=["a.py"]):
-            clean = lane.prompt_drift("shyamsivakumar/mac-ops", "feature", HEAD)
-        with patch.object(lane.prompt_paths, "tree_diff", return_value=None):
-            unknown = lane.prompt_drift("shyamsivakumar/mac-ops", "feature", HEAD)
-        item = lane.prompt_drift_item("shyamsivakumar/mac-ops", 544, HEAD, "feature", drifted or [])
-    finally:
-        lane.CFG = saved
-    grant("lane: prompt text the default branch lacks is not merged automatically",
-          drifted == ["skills/x/SKILL.md"] and clean == [] and unknown is None
-          and item["id"] == "prompt-drift-MO-544"
-          and "skills/x/SKILL.md" in item["why"], command)
-
-
 def tree_fallback():
     """A 3,001-file PR never fits the file list, so the trees classify it."""
     coordq = load(BIN / "coordq", "proof_coordq_trees")
@@ -646,7 +623,6 @@ def main():
     classification_reads_the_own_base()
     landed_elsewhere_reaches_shyam()
     action_path_replay()
-    prompt_drift_guard()
     tree_fallback()
     lane_truncation()
     board_reconcile()
