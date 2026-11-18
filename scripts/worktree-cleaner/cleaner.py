@@ -694,6 +694,12 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
             # storage.
             os.replace(relative.name, moved.name, src_dir_fd=source, dst_dir_fd=storage)
         except OSError:
+            # The placeholder of a move that did not happen is removed, so a
+            # retry does not leave another one behind.
+            try:
+                moved.unlink()
+            except OSError:
+                pass
             return False
         finally:
             os.close(storage)
@@ -1174,8 +1180,6 @@ def published_on_default_branch(result: dict[str, Any], github: GitHub, repo_slu
     head = str(result.get("head") or "")
     if not SHA_RE.fullmatch(head):
         return False
-    if result.get("unpushed") != 0:
-        return False
     if result.get("remote_commit_present") is not True:
         return False
     if not repo_slug:
@@ -1214,6 +1218,23 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
             continue
         return True, None, f"https://github.com/{repo_slug}/pull/{row.get('number')}"
     return False, "github_pr_not_closed_for_head", None
+
+
+def _trash_for(state_trash: Path, worktree: Path) -> Path:
+    """The recovery storage to use for a worktree.
+
+    It has to be on the same filesystem as the worktree, so that moving a
+    file into it is a rename and not a copy across two volumes.
+    """
+    try:
+        if state_trash.is_dir() and os.stat(state_trash).st_dev == os.stat(worktree).st_dev:
+            return state_trash
+    except OSError:
+        pass
+    try:
+        return Path(tempfile.mkdtemp(prefix=".worktree-cleaner-", dir=worktree.parent))
+    except OSError:
+        return state_trash
 
 
 def _claim_head_lock(path: Path) -> Path | None:
@@ -1567,6 +1588,8 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     trash.mkdir(mode=0o700, parents=True, exist_ok=True)
                 except OSError:
                     trash = None
+                if trash is not None:
+                    trash = _trash_for(trash, Path(candidate["path"]))
                 try:
                     cleared = clear_bootstrap_changes(Path(candidate["path"]), latest_records, trash, candidate.get("bootstrap_digests"), candidate.get("index_digest"), candidate.get("bootstrap_signatures")) if trash else None
                 except (SafetyError, OSError):
