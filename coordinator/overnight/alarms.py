@@ -219,6 +219,118 @@ def drop_lock(handle):
         pass
 
 
+def board_update(target, alarm_id, action, item=None, attempts=5):
+    """Write one alarm onto the board, serialized or by compare-and-swap.
+
+    The board lock is taken first, and the board is read, changed and
+    replaced while it is held. A board lock that cannot be taken does not
+    suppress the alarm: the write falls back to a compare-and-swap, which
+    re-reads the board and only replaces it when nobody else wrote in
+    between, so two publishers still cannot erase one another's alarm.
+    A publication that cannot be made safe after a few tries says so.
+
+    `action` is "raise" to put the item on the board and "remove" to take
+    it off. Return "wrote" or "failed"."""
+    path = Path(target)
+    handle = take_lock(str(path) + ".lock")
+    try:
+        if handle is not None:
+            return "wrote" if write_alarm(path, alarm_id, action, item) else "failed"
+    finally:
+        if handle is not None:
+            drop_lock(handle)
+    # The board lock could not be taken. The alarm is still published: a
+    # publisher that stops here would hide a real failure from Shyam for
+    # as long as the lock file cannot be opened.
+    for _ in range(attempts):
+        result = swap_alarm(path, alarm_id, action, item)
+        if result != "retry":
+            return result
+    return "failed"
+
+
+def read_board(path):
+    """Return (the board's bytes, the board) or (bytes, None)."""
+    try:
+        before = path.read_bytes()
+    except FileNotFoundError:
+        return b"", None
+    try:
+        board = json.loads(before)
+    except ValueError:
+        return before, None
+    if not isinstance(board, dict) or not isinstance(board.get("items"), list):
+        return before, None
+    return before, board
+
+
+def change_board(board, alarm_id, action, item):
+    """Return the board with the one alarm set, and True when it changed."""
+    kept = [
+        entry
+        for entry in board["items"]
+        if not (isinstance(entry, dict) and entry.get("id") == alarm_id)
+    ]
+    if action == "raise" and item is not None:
+        kept.append(item)
+    changed = kept != board["items"]
+    board["items"] = kept
+    board["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return board, changed
+
+
+def write_alarm(path, alarm_id, action, item):
+    """Read, change and replace the board under the caller's lock."""
+    _, board = read_board(path)
+    if board is None:
+        return False
+    board, _ = change_board(board, alarm_id, action, item)
+    return write_board(path, board)
+
+
+def swap_alarm(path, alarm_id, action, item):
+    """Publish one alarm by compare-and-swap.
+
+    The board is read, changed, and replaced only when nobody wrote it
+    since the read. The result is read back, so a write that another
+    publisher replaced is not counted as delivered. Return "wrote",
+    "retry" or "failed"."""
+    before, board = read_board(path)
+    if board is None:
+        return "failed"
+    board, _ = change_board(board, alarm_id, action, item)
+    try:
+        if path.read_bytes() != before:
+            # Another publisher wrote the board since the read, so this
+            # write would erase its alarm. Try again on the new board.
+            return "retry"
+        if not write_board(path, board):
+            return "failed"
+        _, after = read_board(path)
+        if after is None:
+            return "failed"
+        present = [
+            entry for entry in after["items"]
+            if isinstance(entry, dict) and entry.get("id") == alarm_id
+        ]
+        if action == "raise" and not present:
+            return "retry"
+        return "wrote"
+    except OSError:
+        return "failed"
+
+
+def write_board(path, board):
+    """Replace the board from a temporary file of this writer's own."""
+    temporary = Path(f"{path}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(board, indent=1))
+        os.replace(temporary, path)
+    except OSError:
+        return False
+    return True
+
+
 @contextlib.contextmanager
 def board_locked(path):
     """Hold the board lock while the board is read, changed and replaced.
