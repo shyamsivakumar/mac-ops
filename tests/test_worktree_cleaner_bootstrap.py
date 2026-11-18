@@ -1086,6 +1086,30 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
         self.assertFalse(recovery.exists(), "a copy that did not change has to go")
 
+    def test_the_sweep_removes_links_without_following_them(self):
+        # A link to a directory and a dangling link must not stop the sweep.
+        base = Path(self.tmp.name)
+        state = base / "state"
+        state.mkdir()
+        recovery = base / "elsewhere" / "recovered"
+        (recovery / "sub").mkdir(parents=True)
+        (recovery / "sub" / "file.txt").write_text("content\n", encoding="utf-8")
+        os.symlink("sub", recovery / "link-to-dir")
+        os.symlink("missing.txt", recovery / "dangling")
+        older = time.time() - 48 * 60 * 60
+        for entry in (recovery / "sub" / "file.txt", recovery / "link-to-dir", recovery / "dangling"):
+            os.utime(entry, (older, older), follow_symlinks=False)
+        os.utime(recovery / "sub", (older, older))
+        os.utime(recovery, (older, older))
+        cleaner._record_recovery(state, recovery)
+        manifest = state / "recovery.json"
+        entries = json.loads(manifest.read_text(encoding="utf-8"))
+        for entry in entries:
+            entry["recovered_at"] = time.time() - 48 * 60 * 60
+        manifest.write_text(json.dumps(entries), encoding="utf-8")
+        cleaner._sweep_recovery(state, time.time() - 24 * 60 * 60)
+        self.assertFalse(recovery.exists(), "the copy has to go")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

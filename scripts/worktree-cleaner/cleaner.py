@@ -1483,27 +1483,45 @@ def verify_pr_for_head(github: GitHub, repo_slug: str | None, repo_root: Path, h
     return False, "github_pr_not_closed_for_head", None
 
 
+def _open_paths() -> set[str]:
+    """The paths that processes hold open."""
+    try:
+        result = run(["lsof", "-Fn"], timeout=120)
+    except SafetyError:
+        return set()
+    return {line[1:] for line in result.stdout.splitlines() if line.startswith("n")}
+
+
 def _remove_recovery_copy(path: Path, older_than: float) -> bool:
     """Remove a recovery copy file by file.
 
-    Every file is checked again immediately before it is removed, so a file
-    that an editor saved keeps its entry, and the copy is only removed when
-    nothing in it changed.
+    A file that a process holds open is never removed, so a save an editor
+    makes through its own descriptor keeps its entry. Every other file is
+    checked again immediately before it is removed, and a link is removed as
+    a link, never followed into its target.
     """
+    held = _open_paths()
     for root, dirs, files in os.walk(path, topdown=False):
         for name in files:
             entry = os.path.join(root, name)
+            if os.path.realpath(entry) in held:
+                return False
             try:
-                # The file is checked again right before it is removed, so a
-                # file an editor saved keeps its entry.
-                if os.stat(entry).st_mtime > older_than:
+                if os.lstat(entry).st_mtime > older_than:
                     return False
+            except OSError:
+                return False
+            try:
                 os.unlink(entry)
             except OSError:
                 return False
         for name in dirs:
+            entry = os.path.join(root, name)
             try:
-                os.rmdir(os.path.join(root, name))
+                if os.path.islink(entry):
+                    os.unlink(entry)
+                    continue
+                os.rmdir(entry)
             except OSError:
                 return False
     try:
