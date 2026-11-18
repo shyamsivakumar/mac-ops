@@ -221,14 +221,16 @@ def dead_run_recovery():
     repo = "shyamsivakumar/mac-ops"
     dead = {"threadId": "fixture-dead", "title": "review #7", "settled": False}
     thread = {**dead, "providerInstanceId": "claudeAgent", "model": "claude-opus-5-5",
-              "worktreePath": "/tmp/fixture-worktree", "pullRequests": []}
+              "worktreePath": "/tmp/fixture-worktree", "pullRequests": [],
+              "latestRunId": "run-1"}
     launches, settled = [], []
 
     def t3(tool, args):
         if tool == "t3_thread_list":
             return {"threads": [dead]} if args.get("statuses") == ["failed", "interrupted"] else {"threads": []}
         if tool == "t3_thread_read" and args.get("view") == "messages":
-            return {"items": [{"type": "provider_error", "text": "provider individual spend limit"}]}
+            return {"items": [{"type": "provider_error", "runId": "run-1",
+                               "text": "provider individual spend limit"}]}
         if tool == "t3_thread_read":
             return {"thread": thread}
         if tool == "t3_thread_organize":
