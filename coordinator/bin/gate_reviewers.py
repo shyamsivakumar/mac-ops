@@ -108,9 +108,12 @@ def release_expired(now=None, directory=None):
 def block_reviewer(selection, value, now=None, directory=None):
     """Block the reviewer a failed gate run names, and return when it ends.
 
-    Returns None for a failure that is not a blocking provider error, and for
-    a reviewer already blocked later than this failure says, so a caller logs
-    one line per block.
+    Returns the end only when this failure starts the block, so a caller
+    logs one line per block. A distinct failure of a reviewer that is
+    already blocked extends its block to the later window it names, and a
+    failure that names an earlier window leaves the block alone; both
+    return None. A failure that is not a blocking provider error returns
+    None and writes nothing.
     """
     now = time.time() if now is None else now
     until = blocking_until(value, now)
