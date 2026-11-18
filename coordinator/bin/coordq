@@ -312,6 +312,17 @@ def undispatchable_tool(item):
     return None
 
 
+def probe_request(request_id):
+    """Whether a dispatch is a builder probe.
+
+    A probe measures the provider it names, so the queue never moves one
+    off that provider: not at dispatch, and not when the dispatch fails.
+    A failed probe that rerouted would leave the blocked provider
+    unmeasured and spend another provider's capacity on the probe.
+    """
+    return str(request_id or "").startswith("builder-probe:")
+
+
 def drain():
     statuses = {}
     while True:
@@ -330,7 +341,7 @@ def drain():
                 args = item["args"]
                 selection = args.get("modelSelection")
                 request_id = args.get("clientRequestId", "")
-                if builders.is_builder(selection) and not request_id.startswith("builder-probe:"):
+                if builders.is_builder(selection) and not probe_request(request_id):
                     model = builders.choose_builder(selection)
                     if model is None:
                         continue
@@ -459,7 +470,7 @@ def drain():
                     log(f"gate retry {key}: {model['model']}")
                 else:
                     item["attempts"] = MAX_ATTEMPTS
-            elif builders.is_builder(item["args"].get("modelSelection")):
+            elif builders.is_builder(item["args"].get("modelSelection")) and not probe_request(request_id):
                 model = failed_builder(item["args"]["modelSelection"], out)
                 if model:
                     item["args"]["modelSelection"] = model

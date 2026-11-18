@@ -7,12 +7,14 @@ build starts on the next builder in the list, and one small probe an hour
 frees the builder once it answers.
 """
 
+import json
 import os
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "coordinator" / "bin"))
@@ -171,6 +173,26 @@ class LaneDriverTests(StoreCase):
         self.assertNotIn("threadId", payload)
         self.assertIn("fresh", out)
 
+    def test_a_legacy_sol_thread_moves_the_build_to_a_builder(self):
+        module = self.module()
+        sol = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+        with patch.object(module, "root_workspace", lambda thread: False):
+            out, calls = self.send_with(module, self.thread(sol))
+        self.assertEqual(len(calls), 1)
+        payload = json.loads(calls[0][2])
+        self.assertEqual(payload["modelSelection"], GLM)
+        self.assertEqual(payload["workspaceStrategy"], {"type": "existing_worktree", "worktreePath": "/tmp/wt"})
+        self.assertNotIn("threadId", payload)
+        self.assertIn("fresh", out)
+
+    def test_a_legacy_sol_thread_in_a_shared_checkout_starts_no_build(self):
+        module = self.module()
+        sol = {"instanceId": "codex", "model": "gpt-6.1-sol"}
+        with patch.object(module, "root_workspace", lambda thread: True):
+            out, calls = self.send_with(module, self.thread(sol))
+        self.assertEqual(calls, [])
+        self.assertIn("no verified PR branch for relaunch", out)
+
     def test_an_unblocked_builders_thread_takes_the_send(self):
         module = self.module()
         out, calls = self.send_with(module, self.thread(GLM))
@@ -247,6 +269,65 @@ class CallerTests(StoreCase):
     def coordq(self):
         from importlib.machinery import SourceFileLoader
         return SourceFileLoader("coordq_under_test", str(ROOT / "coordinator/bin/coordq")).load_module()
+
+    def queued(self, module, items):
+        """A queue of items to dispatch in this case's scratch directory."""
+        module.DIR = self.scratch.name
+        module.live = lambda: 0
+        module.cap = lambda: 6
+        module.save({"next": 10, "items": items})
+
+    def test_a_failed_probe_dispatch_never_moves_to_another_builder(self):
+        # The replay of the gate finding: a probe dispatch that fails must
+        # keep probing the provider it names. Moving it would spend another
+        # builder on the probe and leave the blocked one unmeasured.
+        module = self.coordq()
+        self.queued(module, [{"id": 1, "tool": "t3_thread_launch", "priority": 0,
+                              "title": "Builder probe glm-5.3",
+                              "args": {"projectId": "p", "title": "Builder probe",
+                                       "modelSelection": dict(GLM),
+                                       "clientRequestId": "builder-probe:glm:1"}}])
+        calls = []
+
+        def failing(tool, args, rules=None):
+            calls.append((tool, dict(args)))
+            return 1, "429 code 1308 usage limit: the 5-hour limit is reached, resets in 2 hours"
+
+        with patch.object(module, "active_thread_ids", lambda: set()), \
+                patch.object(module, "call", failing):
+            module.drain()
+        self.assertEqual(len(calls), module.MAX_ATTEMPTS)
+        for tool, args in calls:
+            self.assertEqual(tool, "t3_thread_launch")
+            self.assertEqual(args["modelSelection"], GLM)
+            self.assertEqual(args["clientRequestId"], "builder-probe:glm:1")
+        self.assertEqual([item["id"] for item in module.load()["failed"]], [1])
+        self.assertEqual(provider_health.load(), {})
+
+    def test_a_failed_build_dispatch_moves_to_the_next_builder(self):
+        # The same failure on a build is still a reroute: the guard covers
+        # probes only.
+        module = self.coordq()
+        self.queued(module, [{"id": 2, "tool": "t3_thread_launch", "priority": 0,
+                              "title": "ticket",
+                              "args": {"projectId": "p", "title": "ticket",
+                                       "modelSelection": dict(GLM), "clientRequestId": "build:2"}}])
+        launches = []
+
+        def dispatch(tool, args, rules=None):
+            if tool != "t3_thread_launch":
+                return 0, json.dumps({"thread": {"status": "completed"}})
+            launches.append(dict(args))
+            if len(launches) == 1:
+                return 1, "429 code 1308 usage limit"
+            return 0, json.dumps({"thread": {"threadId": "t-retry"}})
+
+        with patch.object(module, "active_thread_ids", lambda: set()), \
+                patch.object(module, "call", dispatch):
+            module.drain()
+        self.assertEqual(launches[0]["modelSelection"], GLM)
+        self.assertEqual(launches[1]["modelSelection"], MINIMAX)
+        self.assertTrue(provider_health.blocked(GLM))
 
     def ticket(self):
         from importlib.machinery import SourceFileLoader
