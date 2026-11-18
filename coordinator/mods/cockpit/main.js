@@ -1692,7 +1692,7 @@ export default class Board extends View {
   }
 
   async mergeOne(g, shown) {
-    const eligible = eligibleByKey.get(g.key);
+    const eligible = this.seen[g.key]?.col === "needs";
     const name = g.task || g.title;
     let problem;
     try {
