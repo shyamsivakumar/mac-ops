@@ -171,12 +171,20 @@ def with_model(args):
     return resolved, None
 
 
+LEGACY_ROUTE_TASK_TYPES = {f"task/{name}": name for name in ("standard", "ui", "research", "rca", "chore")}
+
+
 def queued_launch_args(tool, args):
     """A launch queued before taskType was required carries none, so the list that names its model classifies it.
 
-    A model no list names stays unclassified and is refused at dispatch."""
+    A router route the old task table stored becomes its task type and resolves through the current build
+    list. A model no list names stays unclassified and is refused at dispatch."""
     if tool != "t3_thread_launch" or "taskType" in args or not args.get("modelSelection"):
         return args
+    selection = args["modelSelection"]
+    if selection.get("instanceId") == "router" and selection.get("model") in LEGACY_ROUTE_TASK_TYPES:
+        return {**{k: v for k, v in args.items() if k != "modelSelection"},
+                "taskType": LEGACY_ROUTE_TASK_TYPES[selection["model"]]}
     for list_name, task_type in (("review", "review"), ("build", "worker"), ("fix", "fix")):
         if model_list.find(args["modelSelection"], (list_name,)):
             return {**args, "taskType": task_type}
