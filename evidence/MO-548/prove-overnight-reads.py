@@ -104,12 +104,20 @@ deadline = time.monotonic() + 30
 
 # 1. A failed read is returned as a failure twice: the first failure is not
 #    stored, so the second read goes to GitHub again.
+before_fail_rows = len(rows())
 before = calls_made()
 code_one, out_one = overnight.run_read(argv, 10, deadline)
 code_two, out_two = overnight.run_read(argv, 10, deadline)
 check("a failed read is not cached", calls_made() - before == 2,
       f"calls={calls_made() - before}")
 check("both reads report the failure", code_one != 0 and code_two != 0, f"{code_one}/{code_two}")
+
+# A paginated read that fails part way counts the request that failed.
+partial_calls = calls_made()
+code_partial, _out = overnight.run_read(argv, 10, deadline)
+check("a failed pagination still reports a failure", code_partial != 0)
+check("a failed pagination counts its failed request",
+      len(rows()) - before_fail_rows == 3, f"rows={len(rows()) - before_fail_rows}")
 
 # 2. A paginated success logs one row per page.
 mode_file.write_text("ok")
