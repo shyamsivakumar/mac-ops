@@ -1402,7 +1402,14 @@ starts, not when it is sent. An answer that was never bound to a cause is
 dropped rather than sent for the alarm that is there now, and so is an
 answer whose alarm was replaced in between. A reply the popup restores
 keeps the cause it belongs to, and text saved without a cause is not
-restored at all: it cannot be bound to the alarm on the board now. When the alarm is replaced between the answer
+restored at all: it cannot be bound to the alarm on the board now.
+
+The rules that bind an answer live in `coordinator/mods/coordinator/answers.js`,
+a module with no imports, so the panel uses it and a probe can run it.
+`tests/test_alarm_panel.py` runs that module for real: a legacy draft
+reopened against a replaced alarm sends nothing and acknowledges nothing,
+a bound draft for another cause is dropped, and a bound draft for the alarm
+on the board is sent and acknowledged. When the alarm is replaced between the answer
 and the send, the answer is dropped and Shyam is told, because sending it
 would answer the alarm that is there now, and he never answered that one.
 
