@@ -3,37 +3,44 @@ from unittest.mock import patch
 from tests.test_gatekeep_backstop_reviewer import load_coordq
 
 
+def review_selection(q, entry_id):
+    return next(e["selection"] for e in q.model_list.entries("review") if e["id"] == entry_id)
+
+
 class ReviewerVendorSplitTest(unittest.TestCase):
     def test_vendor_split(self):
         q = load_coordq()
-        for model, expected in [('claude-sonnet-5', q.ASTRA_MODEL),
-                                ('gpt-6.1-sol', q.ASTRA_MODEL),
-                                ('o4-mini', q.ASTRA_MODEL),
-                                ('openai-codex/o3', q.ASTRA_MODEL),
-                                ('gpt-6.1-terra', q.ASTRA_MODEL),
-                                ('gpt-5.6-luna', q.ASTRA_MODEL),
-                                ('minimax/MiniMax-M3', q.ASTRA_MODEL),
-                                ('deepseek-v4', q.ASTRA_MODEL),
-                                ('glm-5', q.ASTRA_MODEL),
-                                ('cursor', q.ASTRA_MODEL),
-                                ('unknown', q.ASTRA_MODEL)]:
+        astra = review_selection(q, "astra-api")
+        opus = review_selection(q, "opus-api")
+        for model, expected in [('claude-sonnet-5', astra),
+                                ('gpt-6.1-sol', opus),
+                                ('o4-mini', opus),
+                                ('openai-codex/o3', opus),
+                                ('gpt-6.1-terra', opus),
+                                ('gpt-5.6-luna', opus),
+                                ('minimax/MiniMax-M3', astra),
+                                ('deepseek-v4', astra),
+                                ('glm-5', astra),
+                                ('cursor', astra),
+                                ('unknown', astra)]:
             with self.subTest(model=model):
                 self.assertEqual(q.reviewer_model([model]), expected)
                 with patch.object(q, "builder_models", return_value=[model]):
-                    self.assertEqual(q.backstop_model({}, []), expected)
+                    self.assertEqual(q.backstop_model({}, []), astra)
 
     def test_unknown_routes(self):
         q = load_coordq()
-        for route, expected in [(['claude-sonnet-5'], q.ASTRA_MODEL),
-                                (['claude-sonnet-5', 'gpt-6.1-terra'], q.ASTRA_MODEL),
-                                (['openai/gpt-6.1-sol'], q.ASTRA_MODEL),
-                                (['minimax/MiniMax-M3'], q.ASTRA_MODEL)]:
+        astra = review_selection(q, "astra-api")
+        for route in (['claude-sonnet-5'],
+                      ['claude-sonnet-5', 'gpt-6.1-terra'],
+                      ['openai/gpt-6.1-sol'],
+                      ['minimax/MiniMax-M3']):
             with self.subTest(route=route), patch.object(q, 'builder_models', return_value=[]), patch.object(q, 'router_chain', return_value=route):
-                self.assertEqual(q.backstop_model({'providerInstanceId': 'router', 'model': 'task/test'}, []), expected)
+                self.assertEqual(q.backstop_model({'providerInstanceId': 'router', 'model': 'task/test'}, []), astra)
 
     def test_unknown_builder_fallback(self):
         q = load_coordq()
-        self.assertEqual(q.backstop_model({}, []), q.ASTRA_MODEL)
+        self.assertEqual(q.backstop_model({}, []), review_selection(q, "astra-api"))
 
     def test_head_refusal(self):
         q = load_coordq()
