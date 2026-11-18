@@ -62,6 +62,9 @@ Reply with plain text.
    one line, then 2 to 4 options as lines `1. <option>`, `2. <option>`
    and so on, and end with the line
    `(Recommended: <option text word for word>)`.
+10. When a question is for Shyam, start it with 'Shyam,' so the board
+    routes it to Needs you; otherwise the question goes to the
+    coordinator.
 
 ## Attribution for the smell cards
 
