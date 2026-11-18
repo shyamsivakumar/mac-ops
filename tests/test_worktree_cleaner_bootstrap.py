@@ -851,6 +851,28 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(url, "https://github.com/owner/repo/pull/7")
 
+    def test_the_live_github_answer_decides_about_ancestry(self):
+        # The local repository may not have fetched, so the local count of
+        # unpushed commits can be positive while GitHub already has the head
+        # on the default branch.
+        github = cleaner.GitHub()
+        head = "a" * 40
+        github.default_branch = lambda repo, **_kwargs: "main"
+        github.contains = lambda repo, base, sha, **_kwargs: True
+        row = {"head": head, "unpushed": 3, "remote_commit_present": True}
+        self.assertTrue(cleaner.published_on_default_branch(row, github, "owner/repo"))
+
+    def test_the_recovery_storage_is_on_the_same_filesystem(self):
+        # The recovery storage has to be on the filesystem of the worktree,
+        # so that moving a file into it is a rename.
+        base = Path(self.tmp.name)
+        state = base / "state"
+        state.mkdir()
+        worktree = base / "worktree"
+        worktree.mkdir()
+        trash = cleaner._trash_for(state, worktree)
+        self.assertEqual(os.stat(trash).st_dev, os.stat(worktree).st_dev)
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
