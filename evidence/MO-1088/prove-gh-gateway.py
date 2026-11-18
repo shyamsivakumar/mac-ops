@@ -526,8 +526,8 @@ set_mode("bodyhttp")
 rows_before = len(rows())
 filtered_include = run(["gh", "api", "--include", "--paginate", "--jq", ".[].body",
                         "repos/a/b/bodies"])
-check("a filtered header-carrying read logs one row per page",
-      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a filtered header-carrying read is one unknown invocation",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 check("a filtered header-carrying read keeps its text",
       filtered_include.stdout.count("HTTP/1.1 200 OK") == 3,
       repr(filtered_include.stdout[:40]))
@@ -609,8 +609,8 @@ set_mode("200")
 set_mode("bodyhttp")
 rows_before = len(rows())
 run(["gh", "api", "--include", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
-check("a filtered caller-header read counts its real blocks, not body text",
-      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a filtered caller-header read is one unknown invocation",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 set_mode("200")
 
 # A formatted read is never replayed: one invocation, and its row says the
@@ -681,8 +681,8 @@ check("a caller-requested header read is not conditional",
 # counted from those headers, and its output keeps them.
 rows_before = len(rows())
 included_pages = run(["gh", "api", "--include", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
-check("a filtered caller-include read logs one row per page",
-      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a filtered caller-include read is one unknown invocation",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 check("a filtered caller-include read is not marked unknown",
       all(row.get("pages") != "unknown" for row in rows()[rows_before:]),
       str(rows()[rows_before:]))

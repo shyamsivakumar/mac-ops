@@ -692,21 +692,17 @@ def settle(argv, stdout, headers_counted, failed=False):
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
+        if filtered(argv):
+            # Decided before any block count: the bodies are the caller's
+            # text, and a body can print a status line and a rate-limit
+            # header. This holds whether or not the caller asked for
+            # headers, so the count is unknown and the text is unchanged.
+            return stdout, 1
         if include_requested(argv):
-            # The caller asked for the headers, so each page starts with a
-            # real response block even when the bodies are formatted. Only a
-            # block carrying a GitHub header counts, so body text is not a
-            # page. A first request that failed printed no block: one request.
+            # Unfiltered pages are JSON, so each page starts with a real
+            # response block and the blocks are the page count.
             pages = status_lines(stdout)
             return stdout, max(1, pages) + _failed_request(argv, failed, pages)
-        if filtered(argv):
-            # A filtered body is the caller's text. It cannot be counted by
-            # parsing (the text may print anything) and it is not counted by
-            # a replay (that spends quota, can double-charge, and would send
-            # a write twice if the method were ever misread). So the read is
-            # one invocation with an unknown page count, and the report
-            # labels the totals it feeds as lower bounds.
-            return stdout, 1
 
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
