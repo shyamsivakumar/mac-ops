@@ -158,19 +158,46 @@ def token_matches_any(token, tokens):
     return False
 
 
-def in_scope(path, tokens, changed=()):
+def evidence_dir(proof_path):
+    """The ticket's own evidence directory, read from its proof file path.
+
+    The proof file of a ticket sits in `evidence/<KEY>-<issue>/`, so that
+    directory holds the evidence of this ticket and nothing else. A pull
+    request with no ticket has no such directory: its proof file sits at
+    the default path, so that one file is all the evidence it can add.
+    """
+    if not proof_path or proof_path == proof_file.DEFAULT_PROOF:
+        return ""
+    return os.path.dirname(proof_path.rstrip("/"))
+
+
+def in_evidence(path, evidence=""):
+    """Is this file evidence of this ticket?
+
+    Evidence travels with the change, but only the ticket's own evidence
+    directory travels. A pull request scoped to one file can neither add
+    nor overwrite another ticket's evidence and still pass the scope
+    item.
+    """
+    directory = (evidence or "").rstrip("/")
+    if not directory.startswith("evidence/"):
+        return False
+    return path.startswith(directory + "/")
+
+
+def in_scope(path, tokens, changed=(), evidence=""):
     """Is one changed file inside the ticket's stated scope?
 
     A file is in scope when the ticket names it, names a directory that
     holds it, or names a glob that matches it. Evidence travels with the
-    change, so a file under `evidence/` is in scope. A test is in scope
-    only when it tests a file the change touches: a test of something
-    else is not part of this change, not even when the ticket says its
-    existing tests may change.
+    change, so a file under the ticket's own evidence directory is in
+    scope. A test is in scope only when it tests a file the change
+    touches: a test of something else is not part of this change, not
+    even when the ticket says its existing tests may change.
     """
     base = os.path.basename(path)
-    if path.startswith("evidence/"):
-        return True, f"{path} is evidence that travels with the change"
+    if in_evidence(path, evidence):
+        return True, f"{path} is the ticket's evidence and travels with the change"
     for token in tokens:
         if token_matches(path, token):
             return True, f"{path} is named by {token}"
@@ -227,14 +254,15 @@ def names_a_file(tokens):
     return False
 
 
-def item_scope(body, files):
+def item_scope(body, files, evidence=""):
     """Item 1: the diff stays inside the ticket's stated scope.
 
     The ticket is the only authority for the scope. A pull request cannot
     widen the scope of the ticket that asked for the change, so nothing in
     the pull request body is read here. When the ticket names no file in
     this repository the scope cannot be judged, and an unjudged scope
-    authorizes no close: the item fails.
+    authorizes no close: the item fails. The evidence that travels is the
+    evidence of this ticket, never another ticket's.
     """
     permission, exclusion = scope_texts(body)
     excluded = exclusion_tokens(exclusion)
@@ -249,7 +277,7 @@ def item_scope(body, files):
                            "judged: the ticket has to name the files it changes")}
     outside = []
     for path in files:
-        ok, _ = in_scope(path, tokens, files)
+        ok, _ = in_scope(path, tokens, files, evidence)
         if not ok:
             outside.append(path)
     if outside:
@@ -271,21 +299,26 @@ def item_proof(state, path):
 
 
 def proof_rows(text):
-    """Every check the proof file lists, with the result it recorded."""
+    """Every check the proof file lists, with the result it recorded.
+
+    A row that stops short of its result cell is still a check the file
+    lists, and it carries no result: the empty result is what makes it
+    fail the item, so the row is never dropped. Only the table's own
+    separator and header are not checks.
+    """
     rows = []
     for line in (text or "").splitlines():
         line = line.strip()
         if not line.startswith("|"):
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if len(cells) < 3:
-            continue
         name = cells[0]
         if not name or set(name) <= set("-: "):
             continue
         if name.lower() == "check":
             continue
-        rows.append((name, cells[2].lower()))
+        result = cells[2].lower() if len(cells) > 2 else ""
+        rows.append((name, result))
     return rows
 
 
@@ -298,7 +331,8 @@ def item_checks(state, text):
     if not rows:
         return {"item": "checks", "status": FAIL, "required": True,
                 "detail": "the proof file lists no check"}
-    failed = [f"{name} ({result})" for name, result in rows if result != "passed"]
+    failed = [f"{name} ({result or 'no result recorded'})"
+              for name, result in rows if result != "passed"]
     if failed:
         return {"item": "checks", "status": FAIL, "required": True,
                 "detail": "the proof file lists a check that is not passed: " + ", ".join(failed)}
@@ -331,7 +365,7 @@ def item_cost(body, report_state, detail=""):
 def checklist(body, pr_body, files, proof_state, proof_text, proof_path, report_state, report_detail=""):
     """The four items, in the order the checklist reads them."""
     return [
-        item_scope(body, files),
+        item_scope(body, files, evidence_dir(proof_path)),
         item_proof(proof_state, proof_path),
         item_checks(proof_state, proof_text),
         item_cost(pr_body, report_state, report_detail),

@@ -56,8 +56,37 @@ class ScopeTest(unittest.TestCase):
 
     def test_evidence_travels_with_the_change(self):
         check = close_check()
-        ok, _ = check.in_scope("evidence/MO-1077/check-proof.md", set())
+        ok, _ = check.in_scope("evidence/MO-1077/check-proof.md", set(),
+                               evidence="evidence/MO-1077")
         self.assertTrue(ok)
+
+    def test_another_tickets_evidence_is_out_of_scope(self):
+        """A pull request adds evidence of its own ticket only.
+
+        A change scoped to one file cannot rewrite another ticket's proof
+        file and still pass the scope item, so the automatic allowance is
+        the ticket's own evidence directory and nothing wider.
+        """
+        check = close_check()
+        ok, _ = check.in_scope("evidence/MO-521/check-proof.md", set(),
+                               evidence="evidence/MO-524")
+        self.assertFalse(ok)
+        ok, _ = check.in_scope("evidence/MO-524/check-proof.md", set(),
+                               evidence="evidence/MO-524")
+        self.assertTrue(ok)
+
+    def test_a_ticket_that_names_no_evidence_authorizes_no_evidence_directory(self):
+        """With no ticket there is no evidence directory.
+
+        A pull request with no ticket has its proof file at the default
+        path, so `evidence/` as a whole is never the ticket's own.
+        """
+        check = close_check()
+        self.assertEqual(check.evidence_dir("evidence/check-proof.md"), "")
+        self.assertEqual(check.evidence_dir("evidence/MO-524/check-proof.md"),
+                         "evidence/MO-524")
+        ok, _ = check.in_scope("evidence/MO-521/check-proof.md", set(), evidence="")
+        self.assertFalse(ok)
 
     def test_a_test_of_a_changed_file_is_in_scope(self):
         check = close_check()
@@ -247,6 +276,26 @@ class ScopeTest(unittest.TestCase):
         self.assertNotIn("lane_driver.py, ", scope["detail"])
         self.assertEqual([item["item"] for item in check.blocking(items)], ["scope"])
 
+    def test_a_checklist_reads_the_proof_path_for_the_evidence_it_allows(self):
+        """The checklist lets through the evidence of its own ticket only.
+
+        The same pull request with the same diff fails the scope item when
+        the diff rewrites the proof file of another ticket.
+        """
+        check = close_check()
+        proof = ("| Check | Command | Result |\n| --- | --- | --- |\n"
+                 "| lane selection | `x` | passed |")
+        own = check.checklist("The change is in close_check.py.", "",
+                              ["coordinator/bin/close_check.py",
+                               "evidence/MO-1077/check-proof.md"], "found", proof,
+                              "evidence/MO-1077/check-proof.md", "absent")
+        self.assertEqual([item["item"] for item in check.blocking(own)], [])
+        other = check.checklist("The change is in close_check.py.", "",
+                                ["coordinator/bin/close_check.py",
+                                 "evidence/MO-521/check-proof.md"], "found", proof,
+                                "evidence/MO-1077/check-proof.md", "absent")
+        self.assertEqual([item["item"] for item in check.blocking(other)], ["scope"])
+
     def test_a_home_path_is_not_a_path_in_this_repository(self):
         check = close_check()
         body = "Source: ~/Code/inbox/2026-11-17-ideas.md, requested by Shyam."
@@ -278,6 +327,28 @@ class DiffValuesTest(unittest.TestCase):
                 "| heavy help | `python3 y` | failed | boom |\n")
         self.assertEqual(check.proof_rows(text),
                          [("lane selection", "passed"), ("heavy help", "failed")])
+
+    def test_a_check_row_that_omits_its_result_is_carried(self):
+        """An incomplete row is a check, not a line to drop."""
+        check = close_check()
+        text = ("| Check | Command | Result | Detail |\n"
+                "| --- | --- | --- | --- |\n"
+                "| lane selection | `python3 x` | passed |  |\n"
+                "| heavy help | `python3 y` |\n")
+        self.assertEqual(check.proof_rows(text),
+                         [("lane selection", "passed"), ("heavy help", "")])
+        item = check.item_checks("found", text)
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("heavy help", item["detail"])
+        self.assertIn("no result recorded", item["detail"])
+
+    def test_an_empty_result_cell_blocks_the_item(self):
+        check = close_check()
+        item = check.item_checks("found", "| Check | Command | Result |\n| --- | --- | --- |\n"
+                                            "| lane selection | `x` | passed |\n"
+                                            "| heavy help | `y` |  |")
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("heavy help", item["detail"])
 
     def test_a_missing_proof_file_fails_the_item(self):
         check = close_check()
