@@ -20,7 +20,7 @@
       "force-push in any form is denied"
     ],
     [
-      "\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b[^;&|]*(?:^|[\\s:])(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w.-])",
+      "\\bgit(?:\\s+(?:-C\\s+(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|-c\\s+\\S+|--[\\w-]+(?:=\\S+)?))*\\s+push\\b[^;&|]*(?:^|[\\s:])(?:HEAD:)?(?:refs/heads/)?(?:main|master)(?![\\w./-])",
       "pushing to main or master is denied; push a task branch instead"
     ]
   ],
