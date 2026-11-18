@@ -953,6 +953,34 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertIn("release%231", url)
         self.assertNotIn("release#1", url)
 
+    def test_a_replaced_worktree_directory_is_refused(self):
+        # Another real directory takes the place of the worktree. The identity
+        # the scan saw is not the one at the path now, so nothing in the
+        # replacement may be touched.
+        repo = Path(self.tmp.name) / "swapped-worktree"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        (repo / ".specstory" / "notes.md").write_text("history\n", encoding="utf-8")
+        git(repo, "add", ".specstory/notes.md")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "notes"], check=True, capture_output=True)
+        (repo / ".specstory" / "notes.md").write_text("edited\n", encoding="utf-8")
+        identity = cleaner.root_identity(repo)
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, _original in records}
+        signatures = {name: cleaner._working_signature(repo / name) for code, name, _original in records}
+        # The same file, in another directory that now carries the name.
+        replacement = Path(self.tmp.name) / "replacement"
+        (replacement / ".specstory").mkdir(parents=True)
+        (replacement / ".specstory" / "notes.md").write_text("edited\n", encoding="utf-8")
+        os.rename(repo, repo.with_name("swapped-worktree-moved"))
+        os.rename(replacement, repo)
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests, cleaner.index_digest(repo), signatures, scan_deleted(records), identity)
+        self.assertIsNone(cleared)
+        self.assertTrue((repo / ".specstory" / "notes.md").exists(), "the replacement directory must not be touched")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
