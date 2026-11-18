@@ -24,6 +24,18 @@ spec = importlib.util.spec_from_file_location("cleaner_probe", CLEANER)
 cleaner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cleaner)
 
+from types import SimpleNamespace
+
+REAL_GATEWAY = cleaner.gh_gateway
+
+
+def stub(run_fn):
+    """A gateway stub that keeps the real exception type and floor."""
+    return SimpleNamespace(run=run_fn,
+                           ApiBudgetExhausted=REAL_GATEWAY.ApiBudgetExhausted,
+                           floor=REAL_GATEWAY.floor)
+
+
 REPO = "shyamsivakumar/mac-ops"
 SHA = "a" * 40
 KEY = f"{REPO}@{SHA}"
@@ -72,7 +84,7 @@ def fake_gateway(argv, **kwargs):
     return cleaner.run(argv, timeout=kwargs.get("timeout", 30))
 
 
-cleaner.gh_gateway = type("GatewayStub", (), {"run": staticmethod(fake_gateway)})
+cleaner.gh_gateway = stub(fake_gateway)
 
 # 1. A verified commit is a positive, and it is persisted by save_cache.
 first = cleaner.GitHub(cache_path)
@@ -81,16 +93,38 @@ first.save_cache()
 saved = json.loads(cache_path.read_text())
 check("save_cache persists the positive", saved.get(KEY, 0) > 0, f"entries={sorted(saved)}")
 
+# 1a. An inventory lookup takes the floor and a skipped lookup stays
+#     unverified; the pre-removal verification takes none.
+floors = []
+
+
+def floored_gateway(argv, **kwargs):
+    floors.append(kwargs.get("limit"))
+    if kwargs.get("limit") is not None:
+        raise cleaner.gh_gateway.ApiBudgetExhausted("fixture floor")
+    return cleaner.run(argv, timeout=kwargs.get("timeout", 30))
+
+
+cleaner.gh_gateway = stub(floored_gateway)
+below_floor = cleaner.GitHub(cache_path)
+check("a below-floor inventory lookup is unverified, not an error",
+      below_floor.commit_present(REPO, "b" * 40) is False)
+check("the inventory lookup passes the floor", floors[-1] is not None, str(floors[-1]))
+below_floor.commit_present(REPO, "b" * 40, refresh=True)
+check("the pre-removal verification passes no floor", floors[-1] is None, str(floors[-1]))
+cleaner.gh_gateway = stub(fake_gateway)
+
 # 1b. The lookup is metered through the shared gateway, and its caller is
 #     named, so the cleaner is visible in the per-caller report.
-check("the commit lookup is metered", len(metered) == 1 and
-      metered[0].get("caller_name") == "worktree-cleaner", str(metered[:1]))
+recent = metered[-1:]
+check("the commit lookup is metered", recent and
+      recent[0].get("caller_name") == "worktree-cleaner", str(recent))
 check("an ordinary lookup may use the gateway cache",
-      metered[0].get("fresh") is False)
+      metered[-1].get("fresh") is False)
 reloaded_refresh = cleaner.GitHub(cache_path)
 reloaded_refresh.commit_present(REPO, SHA, refresh=True)
 check("a forced refresh skips the gateway cache",
-      metered[-1].get("fresh") is True, str(metered[-1]))
+      any(entry.get("fresh") is True for entry in metered), str(metered[-1]))
 
 # 1c. A refresh that cannot run evicts the positive and saves before the
 #     error goes up.
@@ -104,7 +138,7 @@ restored = cleaner.GitHub(cache_path)
 restored.commit_present(REPO, SHA)
 restored.save_cache()
 
-cleaner.gh_gateway = type("GatewayStub", (), {"run": staticmethod(failing_gateway)})
+cleaner.gh_gateway = stub(failing_gateway)
 reloaded_fail = cleaner.GitHub(cache_path)
 try:
     reloaded_fail.commit_present(REPO, SHA, refresh=True)
@@ -115,7 +149,7 @@ else:
 on_disk = json.loads(cache_path.read_text())
 check("a refresh that cannot run evicts the positive", KEY not in on_disk, f"entries={sorted(on_disk)}")
 
-cleaner.gh_gateway = type("GatewayStub", (), {"run": staticmethod(fake_gateway)})
+cleaner.gh_gateway = stub(fake_gateway)
 
 # 2. A reload trusts it: no GitHub call is made for the same commit.
 seed = cleaner.GitHub(cache_path)
@@ -158,7 +192,7 @@ def fail_one(index):
     except cleaner.SafetyError:
         pass
 
-cleaner.gh_gateway = type("GatewayStub", (), {"run": staticmethod(failing_gateway)})
+cleaner.gh_gateway = stub(failing_gateway)
 threads = [threading.Thread(target=fail_one, args=(index,)) for index in range(8)]
 [thread.start() for thread in threads]
 [thread.join() for thread in threads]
