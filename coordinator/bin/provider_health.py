@@ -212,13 +212,14 @@ def note_probe_failure(selection, text, now=None, request_id=None):
         if not record_at:
             return None
         probe_request = record_at.get("probeRequestId")
-        if request_id is not None and probe_request is not None and request_id != probe_request:
+        if request_id is not None and request_id != probe_request:
             return record_at
         now = time.time() if now is None else now
         reset_at = reset_time(text, now)
         record_at["probeAt"] = next_probe_at(now, reset_at)
         record_at["resetAt"] = reset_at
         record_at["probeFailedAt"] = now
+        record_at.pop("probeRequestId", None)
         save(state)
     return record_at
 
