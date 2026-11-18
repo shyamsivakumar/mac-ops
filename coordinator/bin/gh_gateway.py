@@ -694,12 +694,13 @@ def settle(argv, stdout, headers_counted, failed=False):
     if paginated(argv) and resource(argv) == CORE:
         has_include = include_requested(argv)
         if filtered(argv):
-            # A filter formats the bodies, so any header-shaped text in them
-            # is the caller's data: this is decided before any block count.
-            if has_include:
-                return stdout, 1 + _failed_request(argv, failed, 1)
-            pages = counted_pages(argv, method(argv))
-            return stdout, max(1, pages * 2) + _failed_request(argv, failed, pages)
+            # A filtered body is the caller's text. It cannot be counted by
+            # parsing (the text may print anything) and it is not counted by
+            # a replay (that spends quota, can double-charge, and would send
+            # a write twice if the method were ever misread). So the read is
+            # one invocation with an unknown page count, and the report
+            # labels the totals it feeds as lower bounds.
+            return stdout, 1
         if has_include:
             # Unfiltered pages are JSON, so a header block is a real one.
             pages = status_lines(stdout)
@@ -716,46 +717,6 @@ def settle(argv, stdout, headers_counted, failed=False):
         # would call those ten pages. One invocation, one row.
         return stdout, 1 + _failed_request(argv, failed, pages)
     return stdout, max(1, pages + _failed_request(argv, failed, pages))
-
-
-def without_filter(argv):
-    """Return the command with its output filter removed."""
-    kept, skip = [], False
-    for word in argv:
-        if skip:
-            skip = False
-            continue
-        if word in ("-q", "--jq", "-t", "--template"):
-            skip = True
-            continue
-        if word.startswith(("--jq=", "--template=", "-q=")):
-            continue
-        if len(word) > 2 and word.startswith(("-q", "-t")):
-            continue
-        kept.append(word)
-    return kept
-
-
-def counted_pages(argv, http_method, timeout=60):
-    """Return the page count of a read, from one unfiltered read of it.
-
-    Only a verified GET is counted this way: replaying a write to learn a
-    count would send it twice. The unfiltered read is a second pagination,
-    which `settle` charges."""
-    if http_method != "GET" or not _gh(argv):
-        return 1
-    counting = without_filter(argv) + ["--slurp"]
-    try:
-        result = _launch()(counting, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
-        return 1
-    if getattr(result, "returncode", 1) != 0:
-        return 1
-    try:
-        pages = json.loads(getattr(result, "stdout", "") or "[]")
-    except ValueError:
-        return 1
-    return max(1, len(pages)) if isinstance(pages, list) else 1
 
 
 def _failed_request(argv, failed, pages):
