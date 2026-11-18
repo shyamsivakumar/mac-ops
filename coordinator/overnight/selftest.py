@@ -2303,6 +2303,37 @@ def alarm_mute():
             exact(items[0]["id"], "factory-watchdog")
             exact("the alarm key could not be written" in output, True)
 
+            # A quiet tick writes nothing, so a write that fails cannot
+            # turn a muted alarm into a published one.
+            codes["code"] = 1
+            with patch.object(alarms, "write_state", return_value=False):
+                output = pass_once(now + dt.timedelta(minutes=30))
+            items = [i for i in json.loads(board.read_text())["items"]
+                     if i["id"] == "factory-watchdog"]
+            exact(items, [])
+            exact("WATCHDOG quiet" in output, True)
+
+            # A new cause raises its own alarm, so the board holds the
+            # watchdog's item.
+            codes["code"] = 78
+            output = pass_once(now + dt.timedelta(minutes=33))
+            ids = [i["id"] for i in json.loads(board.read_text())["items"]]
+            exact("factory-watchdog" in ids, True)
+            # The board is read under the lock, so the two writers do not
+            # lose each other's item: the stall writer adds its item and
+            # the watchdog's item stays.
+            target, action = rule.alert("no board progress for 3 ticks", None, board)
+            ids = [i["id"] for i in json.loads(board.read_text())["items"]]
+            exact("factory-watchdog" in ids, True)
+            exact("factory-overnight-stall" in ids, True)
+
+            # A board that cannot be written is said out loud: the alarm
+            # is nowhere, and the tick says so.
+            with patch.object(lane.json, "dump", side_effect=OSError("read-only")):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=40))
+            exact("could not be published" in output, True)
+
+
 
 EVALS = {"send-integrity": send_integrity, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 

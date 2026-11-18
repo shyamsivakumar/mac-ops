@@ -231,26 +231,28 @@ def alert(reason, cause=None, path=None):
     Return the path it wrote and what it did: "wrote", "quiet" or
     "failed"."""
     target = Path(path or BOARD_FILE)
-    try:
-        with open(target) as handle:
-            decisions = json.load(handle)
-    except (OSError, ValueError):
-        return "", "failed"
-    if not isinstance(decisions, dict):
-        return "", "failed"
-    items = decisions.get("items")
-    if not isinstance(items, list):
-        return "", "failed"
-    kept = [
-        item
-        for item in items
-        if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
-    ]
+
     def publish(action):
-        """Write the board with the alarm, or without it.
+        """Read the board, change it, and write it, under the lock.
 
         This runs while the mute state is locked, so an answer that lands
-        now cannot slip between the decision and the alarm on the board."""
+        now cannot slip between the decision and the alarm on the board,
+        and the board is read now, not before the lock."""
+        try:
+            with open(target) as handle:
+                decisions = json.load(handle)
+        except (OSError, ValueError):
+            return "failed"
+        if not isinstance(decisions, dict):
+            return "failed"
+        items = decisions.get("items")
+        if not isinstance(items, list):
+            return "failed"
+        kept = [
+            item
+            for item in items
+            if not (isinstance(item, dict) and item.get("id") == ALERT_ID)
+        ]
         if action in ("raise", "unchecked"):
             kept.append(
                 {
@@ -262,19 +264,21 @@ def alert(reason, cause=None, path=None):
                     "why": reason,
                 }
             )
+        decisions["items"] = kept
+        decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not write_board(target, decisions):
+            return "failed"
         if action == "unchecked":
             # The key could not be written, so the answer to this alarm
             # cannot be recorded. The alarm is published anyway: a
             # storage failure must not hide a real failure from Shyam.
             print("stall: the alarm key could not be written; the answer to this alarm cannot be recorded")
-        decisions["items"] = kept
-        decisions["updated"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        if not write_board(target, decisions):
-            return "failed"
         return None
 
     # The decision and the publication happen under the state lock, so an
-    # answer that lands between them cannot be missed.
+    # answer that lands between them cannot be missed, and the board is
+    # read, changed and written while another writer cannot read it
+    # stale.
     action = alarms.decide_and_publish(ALERT_ID, cause or reason, publish)
     if action == "quiet":
         return "", "quiet"

@@ -1391,11 +1391,17 @@ writer replaces the file from a temporary file of its own. A lock that cannot
 be taken is not a lock: the write fails rather than going on unlocked.
 
 The decision and the publication happen under that lock as well. A tick
-takes the lock, reads the state, decides, writes the state and publishes
-the alarm, all before it lets go: an answer that lands in between cannot be
-missed, and the alarm on the board is exactly what the decision said. The
-panel's answer waits for the lock, so it is either in the state the tick
-read, or it comes after the tick published and applies from the next tick.
+takes the lock, reads the state, decides, writes the state, reads the board,
+changes it and writes it back, all before it lets go: an answer that lands in
+between cannot be missed, and the alarm on the board is exactly what the
+decision said. The panel's answer waits for the lock, so it is either in the
+state the tick read, or it comes after the tick published and applies from
+the next tick. The board is read inside the lock too, so the watchdog and
+the stall writer cannot read it stale and lose each other's item.
+
+A quiet tick changes nothing, so it writes nothing: a write that fails on a
+quiet tick cannot turn a muted alarm into a published one. A board that
+cannot be written is said out loud, because the alarm is then nowhere.
 
 An alarm on the board always has a key. The key is written before the alarm
 is published, so the answer Shyam gives it has something to acknowledge. A
