@@ -352,8 +352,12 @@ def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
     Host names are matched without regard to case, so a configured
     ``Shyams-MacBook-Pro.local`` still names the ``shyams-macbook-pro.local``
     host. Two configured names that differ only by case are ambiguous, so
-    neither of them is used and that host keeps the default floor. A missing,
-    unreadable, malformed, or unlisted host keeps the default floor.
+    neither of them is used and that host keeps the default floor. A short
+    name is only matched against a short name: the first label of a qualified
+    name is used when the configured name has no dot or the observed hostname
+    has no dot, so a qualified name never lowers the floor of a different
+    qualified host. A missing, unreadable, malformed, or unlisted host keeps
+    the default floor.
     """
     path = host_config_path() if config_path is None else Path(config_path)
     value = read_installed_config(path)
@@ -362,6 +366,12 @@ def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
     hosts = value.get(HOST_HEADROOM_KEY)
     if not isinstance(hosts, dict):
         return MIN_HEADROOM_BYTES
+    try:
+        hostname = socket.gethostname().strip().lower()
+    except OSError:
+        return MIN_HEADROOM_BYTES
+    short_hostname = hostname.split(".")[0]
+    host_is_short = "." not in hostname
     exact: Dict[str, Any] = {}
     short: Dict[str, Any] = {}
 
@@ -376,12 +386,9 @@ def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
             continue
         key = name.strip().lower()
         record(exact, key, headroom)
-        record(short, key.split(".")[0], headroom)
-    try:
-        hostname = socket.gethostname().strip().lower()
-    except OSError:
-        return MIN_HEADROOM_BYTES
-    candidates = (hostname, hostname.split(".")[0])
+        if "." not in key or host_is_short:
+            record(short, key.split(".")[0], headroom)
+    candidates = (hostname, short_hostname)
     for mapping in (exact, short):
         for candidate in candidates:
             headroom = mapping.get(candidate)
