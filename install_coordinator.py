@@ -62,7 +62,9 @@ SHARED_BLOCKS = """const SHARED_BLOCKS_PATH = join(process.env.COORDQ_DIR ?? joi
 
 function sharedBlocked(): Set<string> {
 	if (!existsSync(SHARED_BLOCKS_PATH)) return new Set();
-	return new Set(Object.keys(JSON.parse(readFileSync(SHARED_BLOCKS_PATH, "utf8")).blocked ?? {}));
+	const blocked = JSON.parse(readFileSync(SHARED_BLOCKS_PATH, "utf8")).blocked;
+	if (typeof blocked !== "object" || blocked === null || Array.isArray(blocked)) throw new Error(`${SHARED_BLOCKS_PATH} must hold a blocked object`);
+	return new Set(Object.keys(blocked));
 }
 """
 SHARED_CHECK = (
