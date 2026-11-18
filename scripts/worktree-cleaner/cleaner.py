@@ -232,20 +232,24 @@ class T3State:
     MAX_PAGES = 1000
     worktree_cache: dict[str, tuple[str, str | None]] = {}
 
-    SNAPSHOT_ATTEMPTS = 3
-    SNAPSHOT_PAUSE_SECONDS = 0.5
+    SNAPSHOT_ATTEMPTS = 5
+    SNAPSHOT_PAUSE_SECONDS = 1
 
     def __init__(self):
         for attempt in range(self.SNAPSHOT_ATTEMPTS):
-            self._read_threads()
-            first_safety = self._safety_view()
-            first_pages = self.page_count
-            self._read_threads()
-            if self._safety_view() == first_safety:
-                self.page_count += first_pages
-                return
+            try:
+                self._read_threads()
+                first_safety = self._safety_view()
+                first_pages = self.page_count
+                self._read_threads()
+                if self._safety_view() == first_safety:
+                    self.page_count += first_pages
+                    return
+            except SafetyError as exc:
+                if str(exc) != "t3_list_changed":
+                    raise
             if attempt + 1 < self.SNAPSHOT_ATTEMPTS:
-                time.sleep(self.SNAPSHOT_PAUSE_SECONDS)
+                time.sleep(self.SNAPSHOT_PAUSE_SECONDS * 2**attempt)
         raise SafetyError("t3_list_changed")
 
     def _safety_view(self) -> frozenset[tuple[str, str | None]]:

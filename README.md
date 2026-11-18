@@ -89,6 +89,13 @@ the selected files and tests without running them. Dynamic imports and code
 without an associated test need separate review. This repository does not
 currently configure a Python linter or type checker.
 
+The check writes a proof file, `evidence/check-proof.md` by default and
+`evidence/<KEY>-<issue>/check-proof.md` with `--proof`. The file lists every
+check the run made, the command that ran it, and whether the check passed,
+failed or did not run. A failed check stops the run, so the checks after it are
+`not run`. Commit the proof file with the change: the gate brief reads it, so
+the reviewer sees which checks ran and which did not, not one claimed line.
+
 CI uses agent checks only; there are no GitHub Actions or Woodpecker workflows.
 
 ## Use heavy
