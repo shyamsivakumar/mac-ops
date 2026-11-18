@@ -1747,6 +1747,40 @@ def _recovery_manifest(state_root: Path) -> Path:
     return state_root / "recovery.json"
 
 
+def _claim_index_lock(worktree: Path) -> Path | None:
+    """Claim the lock of the index of a worktree.
+
+    A staged edit has to take that lock, so holding it from the final
+    check through the removal of the registration keeps the index from
+    changing under the removal. The lock is released when the work is
+    done.
+    """
+    try:
+        listed = git(worktree, "rev-parse", "--git-path", "index").strip()
+    except (SafetyError, OSError):
+        return None
+    index = Path(listed)
+    if not index.is_absolute():
+        index = worktree / index
+    lock = index.with_name(index.name + ".lock")
+    try:
+        descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        return None
+    os.close(descriptor)
+    return lock
+
+
+def _release_index_lock(lock: Path | None) -> None:
+    """Release a claimed index lock."""
+    if lock is None:
+        return
+    try:
+        os.unlink(lock)
+    except OSError:
+        pass
+
+
 def _read_recovery_manifest(state_root: Path) -> list[dict[str, Any]] | None:
     """The recovery records, or None when the manifest cannot be read.
 
@@ -2313,12 +2347,23 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         pointer = (Path(candidate["path"]) / ".git").read_text(encoding="utf-8", errors="replace")
                     except OSError:
                         pointer = ""
+                    # The index is locked for the whole of the removal, so a
+                    # staged edit cannot slip in after the check and be lost
+                    # with the registration.
+                    index_lock = _claim_index_lock(Path(candidate["path"]))
+                    if index_lock is None:
+                        os.close(directory)
+                        append_removal(state_root, candidate, "removal_blocked")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_index_locked"]
+                        continue
                     try:
                         pending = status_for(Path(candidate["path"]), include_ignored=True)
                     except SafetyError:
                         pending = None
                     if pending is None:
                         # A failed inspection blocks the removal.
+                        _release_index_lock(index_lock)
                         os.close(directory)
                         append_removal(state_root, candidate, "removal_blocked")
                         candidate["eligible"] = False
@@ -2330,6 +2375,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         # and is never removed. An ignored file is local work
                         # too, and the status without the ignored entries would
                         # not show it.
+                        _release_index_lock(index_lock)
                         os.close(directory)
                         append_removal(state_root, candidate, "removal_blocked")
                         candidate["eligible"] = False
@@ -2490,6 +2536,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         "error": None if tree_gone and registration_gone else "the checkout or the registration is still there",
                         "kept_entries": kept,
                     })
+                    _release_index_lock(index_lock)
                     os.close(directory)
                     if not (tree_gone and registration_gone):
                         # The removal is reported as what it was.
