@@ -246,6 +246,15 @@ def dead_run_recovery():
     # through the router: it does not pass the route through.
     exact(lane.dead_run_model({"providerInstanceId": "router", "model": "subscriptions/gpt-6.2-astra",
                                "title": "MO-10"}), lane.GLM)
+    # A mismatched pair is not a permitted selection either: a router
+    # provider with a bare GLM model name falls to the canonical GLM
+    # selection, because coordq would refuse router/zai-glm-5.3.
+    exact(lane.dead_run_model({"providerInstanceId": "router", "model": "zai/glm-5.3",
+                               "title": "MO-11"}), lane.GLM)
+    # And the kept pairs are exactly the canonical ones.
+    exact(lane.dead_run_model({"providerInstanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash",
+                               "title": "MO-12"}),
+          {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"})
     dead_run_no_receipt()
 
 

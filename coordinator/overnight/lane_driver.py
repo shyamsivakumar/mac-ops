@@ -446,10 +446,16 @@ GLM = {"instanceId": "glm", "model": "zai/glm-5.3"}
 # continues only when its model is the route itself, never some other
 # model spelled through the router provider.
 CONTINUABLE_BUILDER_MODELS = {"zai/glm-5.3", "minimax/MiniMax-M3.1-Flash", "deepseek/deepseek-flash"}
-# The models a build may START on: GLM 5.3 or MiniMax only. DeepSeek is
-# reached solely as a fallback inside a task/* route, never a direct
-# start (Shyam 2026-11-17: "build with glm 5.3 or minimax first").
-STARTABLE_BUILDER_MODELS = {"zai/glm-5.3", "minimax/MiniMax-M3.1-Flash"}
+# The selections a build may START on, as provider/model pairs: GLM 5.3 or
+# MiniMax on their own instances, plus a task/* route on the router (the
+# MiniMax-first pi route; DeepSeek is reached only as a fallback inside a
+# route, never a direct start). A pair is kept only whole — a router
+# provider with a bare model name is not a permitted selection (Shyam
+# 2026-11-17: "build with glm 5.3 or minimax first").
+STARTABLE_BUILDER_SELECTIONS = (
+    {"instanceId": "glm", "model": "zai/glm-5.3"},
+    {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
+)
 
 
 def allowed_builder(thread):
@@ -986,9 +992,11 @@ def dead_run_model(thread):
     Only ticket builder threads reach this — the receipt filter a few
     lines up keeps every key that is not a `ticket:` start receipt out —
     so nothing here may pick a reviewer, whatever the title says: a
-    task/* router route passes through, a startable builder (GLM 5.3 or
-    MiniMax) is kept, and anything else (DeepSeek outside its route, Sol,
-    Terra, Luna, Opus, any OpenAI model, unknown) falls to GLM
+    task/* router route passes through, a startable selection is kept
+    only as the whole provider/model pair coordq itself would accept, and
+    anything else (a mismatched pair like a router provider with a bare
+    model name, DeepSeek outside its route, Sol, Terra, Luna, Opus, any
+    OpenAI model, unknown) falls to the canonical GLM selection
     (Shyam 2026-11-17). Dead gates are retried by act_on_pr's regate on
     the reviewer chain, not here, so build work can never land on the
     reviewer or the gate queue.
@@ -997,8 +1005,9 @@ def dead_run_model(thread):
     model = thread.get("model") or ""
     if provider == "router" and model.startswith("task/"):
         return {"instanceId": provider, "model": model}
-    if model in STARTABLE_BUILDER_MODELS:
-        return {"instanceId": provider or "codex", "model": model}
+    selection = {"instanceId": provider, "model": model}
+    if selection in STARTABLE_BUILDER_SELECTIONS:
+        return selection
     return GLM
 
 
