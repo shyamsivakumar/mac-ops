@@ -116,7 +116,7 @@ class ReplayTests(unittest.TestCase):
 
     def title(self, head=HEAD, action="gate findings"):
         """The title the lane gives one head's message for one pull request."""
-        return f"MO#20 {action} {head[:8]}"
+        return f"MO#20 {action} {head}"
 
     def test_two_passes_over_the_same_board_queue_one_findings_message(self):
         prs = [self.pr()]
@@ -137,6 +137,16 @@ class ReplayTests(unittest.TestCase):
         self.assertTrue(second.startswith("#20 fix: "), second)
         self.assertEqual(self.items(), [(self.title(HEAD), "t3_thread_send"),
                                         (self.title("b" * 40), "t3_thread_send")])
+
+    def test_two_heads_with_one_prefix_are_two_messages(self):
+        # The gate finding: a short head prefix can be shared, so the whole
+        # head is in the title. These two heads differ only in its last byte.
+        first, second = "a" * 8 + "1" * 32, "a" * 8 + "2" * 32
+        self.assertTrue(self.pass_once({}, [self.pr(head=first)])[0].startswith("#20 fix: "))
+        after, _ = self.pass_once({}, [self.pr(head=second)])
+        self.assertTrue(after.startswith("#20 fix: "), after)
+        self.assertEqual(self.items(), [(self.title(first), "t3_thread_send"),
+                                        (self.title(second), "t3_thread_send")])
 
     def test_a_message_whose_thread_finished_goes_out_again(self):
         # The builder work is done and its thread is not live, so the record
