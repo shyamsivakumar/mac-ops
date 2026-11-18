@@ -68,7 +68,8 @@ The work goes back to its builder and the ticket stays open.
   first cell reads "check" is a check like any other and a recorded failure cannot
   hide behind it. The separator is recognized as the whole row too: a row whose
   first cell only marks it as a separator is a check with a malformed name, and a
-  malformed row blocks the close.
+  malformed row blocks the close. A result written outside the table is a check
+  too, so "heavy help: failed" in the proof file blocks the close as well.
 
 The cost note item is skipped in both: MO-1068 (#504) is report only and its report
 (evidence/MO-1068/cost-report.md) does not exist yet.
