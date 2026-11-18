@@ -589,15 +589,15 @@ def requests(argv, stdout):
 def prepare(argv):
     """Return (command to run, headers_counted) for one read.
 
-    A paginated read whose output is formatted prints plain text, so its
-    pages cannot be counted from the body. Such a read asks for the
-    response headers as well, and the status lines give the page count
-    before formatting. A caller that runs its own subprocess uses this and
-    `settle`, so every caller counts pages the same way."""
-    has_include = "--include" in argv or "-i" in argv
-    needs = (_gh(argv) and "--paginate" in argv and not has_include
-             and resource(argv) == CORE and filtered(argv))
-    return (list(argv) + ["--include"] if needs else list(argv)), needs
+    The gateway never adds `--include` itself. A formatted paginated read
+    prints text the caller controls, and no amount of header-shaped text in
+    it can be told apart from a real response header, so counting from that
+    output would either miscount or delete the caller's own words. Such a
+    read is counted as the one request it starts with; the caller's output
+    is returned exactly as gh wrote it. A caller that asks for `--include`
+    itself still gets its headers counted, because then the output is what
+    it asked for."""
+    return list(argv), False
 
 
 def settle(argv, stdout, headers_counted):
@@ -605,6 +605,8 @@ def settle(argv, stdout, headers_counted):
     stdout = stdout or ""
     if headers_counted:
         return strip_headers(stdout), max(1, status_lines(stdout))
+    # Unreachable today: the gateway never adds the header flag. Kept so a
+    # caller that adds it itself is handled by the branch below.
     has_include = "--include" in argv or "-i" in argv
     if has_include and "--paginate" in argv and resource(argv) == CORE:
         # The caller asked for the headers itself: count the pages from
