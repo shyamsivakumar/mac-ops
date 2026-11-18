@@ -147,6 +147,62 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(reads, [[]])
         self.assertEqual(json.loads(out.getvalue())["reserved"], {})
 
+    def test_a_reservation_taken_after_the_thread_read_is_left_alone(self):
+        # The finding: the thread list says T is live, T finishes, and a new
+        # send reserves T before the writer lock is taken. That reservation is
+        # not the one the list was read for, so it keeps its slot and the cap
+        # cannot be crossed.
+        now = self.q.time.time()
+        queue = {"next": 2, "items": [],
+                 "reserved": {"new": now},
+                 "reservedThreads": {"new": "mcp:launch:t"}}
+        with patch.object(self.q, "save"):
+            self.q.reconcile_reservations(queue, {"mcp:launch:t"}, {}, snapshot={})
+        self.assertIn("new", queue["reserved"])
+
+    def test_a_reservation_the_snapshot_holds_is_still_released(self):
+        now = self.q.time.time()
+        queue = {"next": 2, "items": [],
+                 "reserved": {"7": now},
+                 "reservedThreads": {"7": "mcp:launch:t"}}
+        snapshot = {"7": {"at": now, "thread": "mcp:launch:t"}}
+        with patch.object(self.q, "save"):
+            self.q.reconcile_reservations(queue, {"mcp:launch:t"}, {}, snapshot)
+        self.assertEqual(queue["reserved"], {})
+
+    def test_status_reads_launch_statuses_before_taking_the_writer_lock(self):
+        # The second finding: a status lookup under the lock would block every
+        # queue writer for its length.
+        self.q.save({"next": 2, "items": [],
+                     "reserved": {"7": self.q.time.time()},
+                     "reservedThreads": {"7": "launch:mcp:launch:one"}})
+        real_lock, held, lookups = self.q.Lock, [], []
+
+        class Recording(real_lock):
+            def __enter__(self):
+                held.append("enter")
+                return super().__enter__()
+
+            def __exit__(self, *exc):
+                held.append("exit")
+                return super().__exit__(*exc)
+
+        def status(thread):
+            lookups.append(list(held))
+            return "completed"
+
+        with patch.object(self.q, "Lock", Recording), \
+                patch.object(self.q, "active_thread_ids", return_value=set()), \
+                patch.object(self.q, "thread_status", side_effect=status), \
+                patch.object(self.q, "load_counts", return_value={}), \
+                redirect_stdout(io.StringIO()) as out:
+            self.q.cmd_status(None)
+        # The lookup happened with no lock held, and its answer released the
+        # slot inside the lock.
+        self.assertEqual(lookups, [[]])
+        self.assertEqual(json.loads(out.getvalue())["reserved"], {})
+        self.assertEqual(self.q.load()["reserved"], {})
+
     def test_status_reconciles_a_reservation_its_launch_no_longer_needs(self):
         # The reported reserved set is what the queue holds now, so a read
         # does not show a slot that no thread uses.
