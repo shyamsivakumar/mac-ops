@@ -474,6 +474,14 @@ class ReviewerFallbackTest(RetryLimitBase):
         # The item stays queued and is launched when the provider is free.
         self.assertEqual(len(self.gate_items()), 1)
 
+    def test_an_ordinary_review_on_a_blocked_model_is_not_held_back(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        self.block(second)
+        item = {"id": 4, "tool": "t3_thread_launch", "title": "review", "priority": 1,
+                "args": {"modelSelection": second, "taskType": "review",
+                         "clientRequestId": "review:o/r#9", "message": "review"}}
+        self.assertEqual(len(self.drain_once([item])), 1)
+
     def test_a_queued_builder_on_a_blocked_model_is_not_held_back(self):
         builder = coordq.model_list.entries("build")[0]["selection"]
         self.block(builder)
