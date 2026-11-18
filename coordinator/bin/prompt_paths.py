@@ -130,7 +130,7 @@ def one_object(value):
     return None
 
 
-def tree_paths(tree):
+def tree_entries(tree, prefix=""):
     """Every non-directory path of one tree response mapped to its entry, or None.
 
     A blob is a file and a `commit` entry is a submodule: both can carry
@@ -156,7 +156,66 @@ def tree_paths(tree):
             # An entry GitHub gave no path for is a tree that cannot be read
             # completely, so it decides nothing.
             return None
-        paths[path] = (entry.get("type"), entry.get("mode"), entry.get("sha"))
+        paths[prefix + path] = (entry.get("type"), entry.get("mode"), entry.get("sha"))
+    return paths
+
+
+# A recursive tree listing stops at 100,000 entries or 7 MB, so a big
+# repository arrives truncated. Its subtrees are then read one by one, and
+# this bounds that walk: a bound reached is unknown, never clear.
+TREE_REQUESTS = 400
+
+
+def tree_paths(fetch, repo, ref, requests=None):
+    """Every non-directory path of one commit's tree, or None.
+
+    `fetch(endpoint)` is a reader's own `gh api` read. The recursive listing
+    is the cheap read; a truncated one names the subtrees it did not walk, so
+    each is read in turn, which is how a repository too big for one listing
+    still yields its paths instead of blocking the pull request for ever.
+    """
+    budget = [TREE_REQUESTS] if requests is None else requests
+    budget[0] -= 1
+    if budget[0] < 0:
+        return None
+    root = fetch(f"repos/{repo}/git/trees/{ref}?recursive=1")
+    complete = tree_entries(root)
+    if complete is not None:
+        return complete
+    tree = one_object(root)
+    if not isinstance(tree, dict) or not tree.get("truncated"):
+        return None
+    paths = {}
+    listed = tree.get("tree")
+    if not isinstance(listed, list):
+        return None
+    stack = [(entry.get("sha"), f"{entry.get('path')}/")
+             for entry in listed if isinstance(entry, dict) and entry.get("type") == "tree"]
+    if not stack:
+        return None
+    while stack:
+        sha, prefix = stack.pop()
+        if not isinstance(sha, str) or not sha:
+            return None
+        budget[0] -= 1
+        if budget[0] < 0:
+            return None
+        directory = one_object(fetch(f"repos/{repo}/git/trees/{sha}"))
+        if not isinstance(directory, dict) or directory.get("truncated"):
+            return None
+        entries = directory.get("tree")
+        if not isinstance(entries, list):
+            return None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return None
+            path = entry.get("path")
+            if not isinstance(path, str) or not path:
+                return None
+            if entry.get("type") == "tree":
+                stack.append((entry.get("sha"), prefix + path + "/"))
+                continue
+            paths[prefix + path] = (entry.get("type"), entry.get("mode"), entry.get("sha"))
     return paths
 
 
@@ -186,6 +245,6 @@ def tree_diff(fetch, repo, base, head):
     merge_base = ((compare or {}).get("merge_base_commit") or {}).get("sha")
     if not isinstance(merge_base, str) or not merge_base:
         return None
-    before = tree_paths(fetch(f"repos/{repo}/git/trees/{merge_base}?recursive=1"))
-    after = tree_paths(fetch(f"repos/{repo}/git/trees/{head}?recursive=1"))
+    before = tree_paths(fetch, repo, merge_base)
+    after = tree_paths(fetch, repo, head)
     return changed_paths(before, after)
