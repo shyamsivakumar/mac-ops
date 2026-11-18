@@ -97,6 +97,15 @@ def main() -> int:
         paths = {name: trees / name for name in shas}
         for name, path in paths.items():
             git(repo, "worktree", "add", str(path), name)
+        # A worktree its owner locked is never removed.
+        shas["locked"] = commit(repo, "locked.txt", "locked\n")
+        git(repo, "branch", "locked", shas["locked"])
+        git(repo, "push", "origin", "main")
+        paths["locked"] = trees / "locked"
+        git(repo, "worktree", "add", str(paths["locked"]), "locked")
+        with (paths["locked"] / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(rules_block())
+        git(repo, "worktree", "lock", str(paths["locked"]))
         detached = trees / "detached-main"
         git(repo, "worktree", "add", "--detach", str(detached), shas["onmain"])
         # A detached worktree whose head is only on master: old, but not
@@ -231,6 +240,8 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
 
         applied = json.loads(command(args + ["--apply"], env=env))
         assert applied["removed"] == 3, applied["categories"]
+        assert paths["locked"].exists(), "a worktree its owner locked has to stay"
+        assert "locked" in git(repo, "worktree", "list", "--porcelain"), "the registration of a locked worktree has to stay"
         assert not paths["bootstrap"].exists() and not paths["onmain"].exists() and not detached.exists(), applied
         assert paths["real"].exists() and paths["offmain"].exists(), applied
         assert paths["partial"].exists() and paths["renamed"].exists(), applied
