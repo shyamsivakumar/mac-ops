@@ -94,6 +94,41 @@ class SimulatorOwnerTests(unittest.TestCase):
         for pid, signum in killed:
             self.assertIn(signum, (heavy.signal.SIGTERM, heavy.signal.SIGKILL))
 
+    def test_a_device_that_starts_booting_while_the_sweep_runs_is_left_alone(self):
+        rows = [launchd_row(10, DEVICE_A), app_row(11, 10)]
+        killed = []
+        readings = [{}, {DEVICE_A: "runtime-a"}]
+
+        def booted_reader():
+            return readings.pop(0) if readings else {DEVICE_A: "runtime-a"}
+
+        result = heavy.stop_orphan_simulator_processes(
+            booted_reader=booted_reader,
+            rows_reader=lambda: rows,
+            kill=lambda pid, signum: killed.append((pid, signum)),
+            sleep=lambda seconds: None,
+            clock=lambda: 0.0,
+            identity_reader=lambda pid: (os.getuid(), "1.000000"),
+            executable_reader=executables(rows),
+        )
+        self.assertEqual(result["stopped"], 0)
+        self.assertEqual(killed, [])
+
+    def test_a_process_that_only_names_a_device_path_is_not_touched(self):
+        rows = [launchd_row(10, DEVICE_B), tail_row(30, 1, DEVICE_B)]
+        killed = []
+        result = heavy.stop_orphan_simulator_processes(
+            booted_reader=lambda: {},
+            rows_reader=lambda: rows,
+            kill=lambda pid, signum: killed.append((pid, signum)),
+            sleep=lambda seconds: None,
+            clock=lambda: 0.0,
+            identity_reader=lambda pid: (os.getuid(), "1.000000"),
+            executable_reader=executables(rows),
+        )
+        self.assertEqual(result["stopped"], 1)
+        self.assertEqual({pid for pid, _ in killed}, {10})
+
     def test_orphan_sweep_leaves_a_booted_device_alone(self):
         rows = [launchd_row(10, DEVICE_A), app_row(11, 10)]
         killed = []
@@ -132,7 +167,7 @@ class SimulatorOwnerTests(unittest.TestCase):
     def test_a_device_that_boots_during_the_term_wait_is_not_sent_sigkill(self):
         rows = [launchd_row(10, DEVICE_A), app_row(11, 10)]
         killed = []
-        readings = [{}, {}, {DEVICE_A: "runtime-a"}]
+        readings = [{}, {}, {}, {DEVICE_A: "runtime-a"}]
         ticks = [0.0]
 
         def booted_reader():
