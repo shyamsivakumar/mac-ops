@@ -597,10 +597,15 @@ def drain():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
         item = ready[0]
-        steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
-                 for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
+        try:
+            steps = [{"tool": step["tool"], "args": queued_launch_args(step["tool"], step["args"])}
+                     for step in item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]]
+            needs_rules = any(step["tool"] == "t3_thread_launch" and wants_rules(step["args"]) for step in steps)
+        except model_list.ModelsError as e:
+            log(f"#{item['id']} not started, the model files cannot be read: {e}")
+            return
         rules = None
-        if any(step["tool"] == "t3_thread_launch" and wants_rules(step["args"]) for step in steps):
+        if needs_rules:
             try:
                 rules = read_rules()
             except RuntimeError as e:

@@ -60,15 +60,23 @@ def validate(data):
 
 
 def read_json(file_path):
-    with open(file_path) as f:
-        try:
+    """The parsed file. A missing file raises FileNotFoundError; any other failure to read it is a ModelsError."""
+    try:
+        with open(file_path) as f:
             return json.load(f)
-        except json.JSONDecodeError as e:
-            raise ModelsError(f"{file_path} is not valid JSON: {e}") from e
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise ModelsError(f"{file_path} cannot be read: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ModelsError(f"{file_path} is not valid JSON: {e}") from e
 
 
 def load():
-    return validate(read_json(path()))
+    try:
+        return validate(read_json(path()))
+    except FileNotFoundError as e:
+        raise ModelsError(f"{path()} does not exist") from e
 
 
 def entries(list_name):
