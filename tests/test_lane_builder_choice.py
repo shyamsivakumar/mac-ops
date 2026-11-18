@@ -173,6 +173,14 @@ class BuilderChoice(unittest.TestCase):
         self.assertEqual(payload["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
+    def test_a_detached_worktree_takes_no_send(self):
+        # A detached head names no branch, so the worktree is not
+        # confirmed as a destination and takes no send.
+        out, payload = self.launch(self.thread(MINIMAX), branch="HEAD")
+        self.assertNotIn("threadId", payload)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
     def test_a_failed_branch_read_bars_the_worktree(self):
         # The git call itself times out, so the destination is not confirmed.
         def run(cmd, timeout=150):
@@ -308,6 +316,11 @@ class DeadRunChoice(unittest.TestCase):
 
     def test_a_dead_run_in_a_worktree_with_an_unreadable_branch_is_never_relaunched(self):
         self.assertIsNone(self.relaunch(MINIMAX, [], branch=""))
+
+    def test_a_dead_run_in_a_detached_worktree_is_never_relaunched(self):
+        # A detached head names no branch, so the destination is not
+        # confirmed and no builder starts there.
+        self.assertIsNone(self.relaunch(MINIMAX, [], branch="HEAD"))
 
     def test_a_provider_failure_names_the_builder_as_out(self):
         messages = [{"type": "provider_error", "runId": "run-1", "text": "429 rate limit reached"}]
