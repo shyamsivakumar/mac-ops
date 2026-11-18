@@ -21,13 +21,17 @@ except ImportError:  # pragma: no cover - Python without zoneinfo
     ZoneInfo = None
 
 # A provider that says when it comes back in relative words: "your plan
-# resets in 30 minutes", "retry after 3600s".
+# resets in 30 minutes", "retry after 3600s", "resets in 1 hour 30 minutes".
+_UNIT = r"(?:seconds?|minutes?|hours?|secs?|mins?|hrs?|h|m|s)"
+_AMOUNT = rf"\d+(?:\.\d+)?\s*{_UNIT}\b"
 RELATIVE = re.compile(
-    r"(?:resets?|try again|retry|available|back)\s+(?:in|after)\s+"
-    r"(\d+(?:\.\d+)?)\s*(seconds?|minutes?|hours?|secs?|mins?|hrs?|s)\b", re.IGNORECASE)
+    rf"(?:resets?|try again|retry|available|back)\s+(?:in|after)\s+"
+    rf"((?:{_AMOUNT}(?:\s*,?\s*(?:and\s+)?)?)+)", re.IGNORECASE)
+AMOUNT = re.compile(rf"(\d+(?:\.\d+)?)\s*({_UNIT})\b", re.IGNORECASE)
 UNITS = {"second": 1.0, "seconds": 1.0, "sec": 1.0, "secs": 1.0, "s": 1.0,
          "minute": 60.0, "minutes": 60.0, "min": 60.0, "mins": 60.0,
-         "hour": 3600.0, "hours": 3600.0, "hr": 3600.0, "hrs": 3600.0}
+         "hour": 3600.0, "hours": 3600.0, "hr": 3600.0, "hrs": 3600.0,
+         "m": 60.0, "h": 3600.0}
 # The last moment the store can write: a reset past the end of the calendar
 # is no reset, and any reset before it is honoured however far off it is.
 MAX_EPOCH = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp()
@@ -121,7 +125,8 @@ def reset_at(message, failed=None):
     base = time.time() if failed is None else float(failed)
     match = RELATIVE.search(message)
     if match:
-        seconds = float(match.group(1)) * UNITS.get(match.group(2).lower(), 0.0)
+        seconds = sum(float(number) * UNITS[unit.lower()]
+                      for number, unit in AMOUNT.findall(match.group(1)))
         # A reset of zero is a reset: the provider says it is free now, and
         # a block that waited an hour would hold it past what it promised.
         if seconds >= 0 and base + seconds <= MAX_EPOCH:
