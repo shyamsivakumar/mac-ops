@@ -793,6 +793,31 @@ reinstall:
 python3 install_coordinator.py
 ```
 
+## Prompt changes wait for Shyam (Refs #543)
+
+A prompt, skill or playbook change never auto-merges (Shyam, 2026-11-17).
+The gate merged such a pull request anyway (mac-ops #542), so the paths are
+now checked instead of remembered. One list lives in
+`coordinator/bin/prompt_paths.py` and two places read it:
+
+- `ticket gate` builds the brief with the no-merge sentence in place of the
+  merge order. The brief says do not merge and close nothing, and names the
+  change as prompt text.
+- The lane driver checks the same list before it merges a passing pull
+  request. On a prompt change it merges nothing and writes one item to
+  `~/Code/coordinator/decisions.json` (`kind: action`, id
+  `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The item is keyed by
+  id, so a second pass replaces it instead of adding a second one.
+
+A file list GitHub cannot give is not a prompt change: the hold is only ever
+added to a pull request whose paths are known, so a failed read never blocks
+a merge of ordinary code.
+
+The replay is the registered `gate-pipeline` eval
+(`python3 coordinator/overnight/overnight selftest`): its `prompt-pass` case
+requires one decisions item and no merge, provides or fast-forward, and the
+negative control with the path list switched off must fail.
+
 ## Lane execution ownership (Refs #363)
 
 `overnight shift` runs the imported lane driver under its existing lock,

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
+import prompt_paths
 
 T3MCP = os.environ.get("TICKET_T3MCP", "t3mcp")
 COORDQ = os.environ.get("TICKET_COORDQ", "coordq")
@@ -1348,7 +1349,7 @@ def parse_pr_ref(ref):
 
 def fetch_pull(repo, number):
     return gh_json(["pr", "view", str(number), "-R", repo, "--json",
-                    "number,state,isDraft,title,body,headRefOid,baseRefName,url"])
+                    "number,state,isDraft,title,body,headRefOid,baseRefName,url,changedFiles"])
 
 
 def refs_issue(repo, body):
@@ -1501,12 +1502,22 @@ def ascend_repo(repo, rcfg):
             or any(marker in repo for marker in ASCEND_MARKERS))
 
 
-def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None):
+def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None, prompt=False):
     """The brief the gate thread receives, with every value filled in."""
     from gate_policy import build_gate_brief
     return build_gate_brief(rcfg, repo, issue_number, pr, head, publisher, base,
                             fast_forward_main=False, ascend_override=ascend,
-                            proof=proof, proof_path=proof_path, proof_state=proof_state)
+                            proof=proof, proof_path=proof_path, proof_state=proof_state,
+                            prompt=prompt)
+
+
+def prompt_pull(repo, number, changed_files=None):
+    """True when the pull request changed prompt, skill or playbook text.
+
+    An unreadable file list is not a prompt change: the hold is only ever
+    added to a pull request whose paths are known.
+    """
+    return prompt_paths.prompt_change(pull_files(repo, number, changed_files))
 
 
 def with_gate_lock(repo, pr):
@@ -1546,7 +1557,8 @@ def cmd_gate(a):
         proof_path = proof_file.path_for(rcfg.get("key"), issue_number)
         proof_state, proof = proof_file.fetch(repo, proof_path, head)
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
-                           proof=proof, proof_path=proof_path, proof_state=proof_state)
+                           proof=proof, proof_path=proof_path, proof_state=proof_state,
+                           prompt=prompt_pull(repo, number, pull.get("changedFiles")))
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},

@@ -4,10 +4,20 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 
 import alarms
 import stall
+
+# The prompt paths live in the coordinator's bin directory beside the gate
+# brief, and the lane reads the same list the brief does (Refs #543). In the
+# checkout that directory is a sibling of the overnight folder; installed,
+# both files sit in the same bin directory.
+_BIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "bin")
+if _BIN_DIR not in sys.path:
+    sys.path.insert(0, _BIN_DIR)
+import prompt_paths
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
@@ -534,6 +544,36 @@ def check_step(repo, proof_path):
     return "run the repo's full local check"
 
 
+def pr_paths(repo, number):
+    """The paths a pull request changed, or None when GitHub cannot say."""
+    output = run(["gh", "api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
+    entries = json.loads(output or "[]")
+    if not isinstance(entries, list):
+        raise ValueError(f"invalid changed-file list for {repo}#{number}")
+    return [entry.get("filename") or "" for entry in entries if isinstance(entry, dict)]
+
+
+def prompt_pull(repo, number):
+    """True when the pull request changed prompt, skill or playbook text."""
+    return prompt_paths.prompt_change(pr_paths(repo, number))
+
+
+def publish_decision(item):
+    """Put one item on Shyam's decisions board, under the board's lock."""
+    return alarms.board_update(DECISIONS_PATH, item["id"], "raise", item)
+
+
+def prompt_merge_item(repo, number, head):
+    """The one item Shyam answers to merge a prompt pull request that passed."""
+    key = CFG[repo]["key"]
+    return {"id": f"prompt-merge-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} passed its gate in {repo}. It changes prompt, skill or playbook "
+                      f"text, so it waits for you: merge it or close it."),
+            "why": (f"Prompt text never auto-merges (your rule), so the lane stopped at the verdict on "
+                    f"head {head[:8]} and merged nothing. Merge with "
+                    f"`gh pr merge {number} -R {repo} --squash --match-head-commit {head}`.")}
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -576,6 +616,13 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
+        prompt = prompt_pull(repo, number)
+        if prompt:
+            # A prompt, skill or playbook change never auto-merges (Shyam):
+            # the lane stops at the verdict and asks him once.
+            if publish_decision(prompt_merge_item(repo, number, head)) != "wrote":
+                return f"#{number}: prompt change, the decisions item could not be written"
+            return f"skip #{number}: gate PASS, prompt change, Shyam merges"
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
         if DRY:
