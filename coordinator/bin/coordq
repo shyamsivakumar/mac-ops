@@ -561,6 +561,12 @@ def cmd_start(a):
                 read_rules()
             except RuntimeError as e:
                 die(f"refused: {e}")
+        if task_type:
+            # The queue keeps the declaration. Dispatch validates every
+            # item again with with_model, so a review stays a review all
+            # the way to the front of the queue; with_model strips the
+            # marker only from the payload sent to T3 (Shyam 2026-11-17).
+            args["taskType"] = task_type
     with Lock(True):
         queue = load()
         key = (getattr(a, "action_key", None) or "").strip()
@@ -966,11 +972,10 @@ def cmd_create(a):
     args = json.loads(a.args)
     if args.get("message"):
         die("refused: create is for idle threads, this has a message. Use coordq start.")
-    args, refusal = with_model(args)
-    if refusal:
-        die(refusal)
     if "projectId" not in args and not args.get("workspaceStrategy"):
         args["scratch"] = True
+    # call() runs the single with_model validation with the taskType marker
+    # still present, then strips it from the payload sent to T3.
     code, out = call("t3_thread_launch", args)
     print(out)
     sys.exit(code)

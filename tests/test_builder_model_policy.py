@@ -7,10 +7,17 @@ cursor) for launches that do not declare taskType review, and ticket
 refuses a builder:* label that is not on the config's permit list. Both
 CLIs are scripts without a .py suffix, so they are loaded by path.
 """
+import argparse
 import importlib.util
+import io
 import json
+import os
+import stat
+import subprocess
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -129,6 +136,59 @@ class TicketBuilderPermit(unittest.TestCase):
                     cfg, {"type": ticket_type, "builder": None, "reviewer": None})
                 self.assertIn(builder, cfg["builderAliases"])
                 self.assertNotEqual(cfg["models"][builder]["vendor"], "openai")
+
+
+class DispatchRoundTrip(unittest.TestCase):
+    """A queued review survives dispatch: the marker stays in the queue and
+    is stripped only from the payload sent to T3 (mac-ops #497)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.q = load("coordq_dispatch_check", ROOT / "coordinator" / "bin" / "coordq")
+        self.q.DIR = self.tmp.name
+        self.q.cap = lambda: 6
+        # The queue is full, so the started item stays queued and readable.
+        self.q.live = lambda: 6
+        self.q.save({"next": 1, "items": []})
+        stub = Path(self.tmp.name) / "t3mcp-stub"
+        stub.write_text("#!/usr/bin/env python3\n"
+                        "import os, sys\n"
+                        "with open(os.environ['STUB_LOG'], 'a') as f:\n"
+                        "    f.write(sys.stdin.read() + '\\n')\n"
+                        "print('{\"ok\": true}')\n")
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        self.q.T3MCP = str(stub)
+        self.log = Path(self.tmp.name) / "calls.log"
+        os.environ["STUB_LOG"] = str(self.log)
+
+    def test_a_queued_review_dispatches_and_strips_the_marker(self):
+        payload = json.dumps({"taskType": "review", "message": "review the diff",
+                              "modelSelection": dict(coordq.REVIEWER_CHAIN[0]),
+                              "runtimeMode": "full-access"})
+        args = argparse.Namespace(args=payload, title=None, priority=400,
+                                  tool="t3_thread_launch", action_key=None)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            self.q.cmd_start(args)
+        self.assertEqual(out.getvalue().strip(), "queued #1", err.getvalue())
+        queued = self.q.load()["items"][0]["args"]
+        # The declaration survives in the queue: a review stays a review.
+        self.assertEqual(queued["taskType"], "review")
+        # Dispatch validates the queued item and strips the marker for T3.
+        code, result = self.q.call("t3_thread_launch", queued)
+        self.assertEqual(code, 0, result)
+        sent = json.loads(self.log.read_text().strip().splitlines()[-1])
+        self.assertNotIn("taskType", sent)
+        self.assertEqual(sent["modelSelection"], coordq.REVIEWER_CHAIN[0])
+
+    def test_the_same_payload_without_the_marker_is_refused_at_dispatch(self):
+        stripped = {"message": "review the diff",
+                    "modelSelection": dict(coordq.REVIEWER_CHAIN[0]),
+                    "runtimeMode": "full-access"}
+        code, result = self.q.call("t3_thread_launch", stripped)
+        self.assertEqual(code, 1)
+        self.assertIn("builds run only on GLM 5.3", result)
 
 
 if __name__ == "__main__":
