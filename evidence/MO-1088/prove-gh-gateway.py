@@ -38,6 +38,12 @@ if "rate_limit" in args:
 elif "auth" in args:
     print("github.com")
     print("  Token: sekrit-auth-token")
+elif "--include" in args and "--paginate" in args:
+    for name in ("name1", "name2", "name3"):
+        print("HTTP/2.0 200 OK")
+        print("content-type: application/json")
+        print()
+        print(name)
 elif "--include" in args:
     if mode == "304":
         print("HTTP/2.0 304 Not Modified")
@@ -140,6 +146,16 @@ check("a repeated list read runs once", calls_made() - before == 1,
 check("the cached read returns the same body", first.stdout == second.stdout)
 check("a slurped paginated read logs one row per page", len(rows()) - rows_before == 3,
       f"rows={len(rows()) - rows_before}")
+
+# A formatted, paginated read prints plain text, so the page count comes from
+# the response headers and the caller still gets only its own output.
+rows_before = len(rows())
+formatted = run(["gh", "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
+check("a formatted paginated read logs one row per page", len(rows()) - rows_before == 3,
+      f"rows={len(rows()) - rows_before}")
+check("a formatted paginated read returns only its bodies",
+      formatted.stdout.split() == ["name1", "name2", "name3"]
+      and "HTTP/" not in formatted.stdout, repr(formatted.stdout[:40]))
 rows_before = len(rows())
 run(["gh", "api", "--paginate", "repos/a/b/timeline?per_page=100"])
 check("an un-slurped paginated read logs one row per page", len(rows()) - rows_before == 3,
@@ -299,6 +315,13 @@ before = calls_made()
 run(["gh", "api", "--method=POST", "repos/a/b/dispatches?ref=main"])
 run(["gh", "api", "--method=POST", "repos/a/b/dispatches?ref=main"])
 check("a --method=POST write is never cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+
+# gh uses the last method flag, so a repeated flag is a write here too.
+before = calls_made()
+run(["gh", "api", "-X", "GET", "-X", "POST", "repos/a/b/dispatches?ref=main"])
+run(["gh", "api", "-X", "GET", "-X", "POST", "repos/a/b/dispatches?ref=main"])
+check("a repeated method flag ending in POST is never cached", calls_made() - before == 2,
       f"calls={calls_made() - before}")
 
 # The same command in two checkouts is two reads: the cache key names the

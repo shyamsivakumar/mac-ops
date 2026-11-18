@@ -90,6 +90,9 @@ VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "--raw-field", "--input", "-q", "--jq", "-t", "--template",
                "--cache")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
+# The flags that format the output. With one of these, a page is not a JSON
+# value any more, so the page count has to come from the response headers.
+OUTPUT_FILTER_FLAGS = ("-q", "--jq", "-t", "--template")
 
 
 def has_body(argv):
@@ -203,14 +206,18 @@ def method(argv):
     `gh api` reads unless a method is named or a field is given; a field
     without a method is a POST, and `-X GET` overrides a field."""
     words = [str(word) for word in argv[1:]]
+    # `gh` uses the last method flag, so a repeated flag is read the same
+    # way here. Reading only the first would call `-X GET -X POST` a read.
+    named = None
     for index, word in enumerate(words):
-        # `--method=POST` and `-XPOST` are the same method as `-X POST`.
         if word.startswith("--method="):
-            return word.split("=", 1)[1].strip().upper()
-        if word.startswith("-X") and len(word) > 2:
-            return word[2:].lstrip("=").strip().upper()
-        if word in ("-X", "--method"):
-            return words[index + 1].strip().upper() if index + 1 < len(words) else ""
+            named = word.split("=", 1)[1]
+        elif word.startswith("-X") and len(word) > 2:
+            named = word[2:].lstrip("=")
+        elif word in ("-X", "--method"):
+            named = words[index + 1] if index + 1 < len(words) else ""
+    if named is not None:
+        return named.strip().upper()
     if has_body(argv):
         return "POST"
     return "GET"
@@ -440,6 +447,29 @@ def store(argv, stdout):
         return
 
 
+def filtered(argv):
+    """True when the command formats its output, so pages are not JSON."""
+    for word in [str(token) for token in argv[1:]]:
+        if word in OUTPUT_FILTER_FLAGS:
+            return True
+        if word.startswith(("--jq=", "--template=", "-q=")):
+            return True
+    return False
+
+
+def status_lines(text):
+    """Return how many response status lines an `--include` output holds.
+
+    One status line is one request, whatever the output formatting did to
+    the body, so this is the page count before formatting."""
+    return len(re.findall(r"(?m)^HTTP/[\d.]+\s+\d{3}", text or ""))
+
+
+def strip_headers(text):
+    """Remove every `--include` header block, keeping the formatted bodies."""
+    return re.sub(r"(?m)^HTTP/[\d.]+[^\n]*\n(?:[^\n:]+:[^\n]*\n)*\n", "", text or "")
+
+
 def requests(argv, stdout):
     """Return the number of GitHub requests one command made.
 
@@ -472,6 +502,27 @@ def requests(argv, stdout):
         while index < len(text) and text[index].isspace():
             index += 1
     return max(1, count)
+
+
+def prepare(argv):
+    """Return (command to run, headers_counted) for one read.
+
+    A paginated read whose output is formatted prints plain text, so its
+    pages cannot be counted from the body. Such a read asks for the
+    response headers as well, and the status lines give the page count
+    before formatting. A caller that runs its own subprocess uses this and
+    `settle`, so every caller counts pages the same way."""
+    needs = (_gh(argv) and "--paginate" in argv and "--include" not in argv
+             and resource(argv) == CORE and filtered(argv))
+    return (list(argv) + ["--include"] if needs else list(argv)), needs
+
+
+def settle(argv, stdout, headers_counted):
+    """Return (body, count) for one read that has already run."""
+    stdout = stdout or ""
+    if headers_counted:
+        return strip_headers(stdout), max(1, status_lines(stdout))
+    return stdout, requests(argv, stdout)
 
 
 def record(argv, count=1):
@@ -576,9 +627,15 @@ def run(argv, timeout=60, stdin=None, limit=None):
         return subprocess.CompletedProcess(argv, 0, hit, "")
     if stdin is None and conditional(argv):
         return _conditional_run(argv, timeout)
-    result = _launch()(argv, input=stdin, capture_output=True, text=True,
+    command, headers_counted = prepare(argv) if stdin is None else (list(argv), False)
+    result = _launch()(command, input=stdin, capture_output=True, text=True,
                        timeout=timeout)
-    record(argv, requests(argv, result.stdout))
+    # A caller's launcher need not be a real CompletedProcess, so every part
+    # is read with a default.
+    stdout = getattr(result, "stdout", "") or ""
+    body, count = settle(argv, stdout, headers_counted)
+    record(argv, count)
     if result.returncode == 0:
-        store(argv, result.stdout)
-    return result
+        store(argv, body)
+    return subprocess.CompletedProcess(argv, result.returncode, body,
+                                       getattr(result, "stderr", "") or "")

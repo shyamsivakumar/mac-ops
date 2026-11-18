@@ -40,7 +40,13 @@ if mode == "fail":
     sys.stderr.write("gh: HTTP 500\\n")
     sys.exit(1)
 pages = [[{{"number": 1}}], [{{"number": 2}}], [{{"number": 3}}]]
-if "--slurp" in args:
+if "--include" in args and "--paginate" in args:
+    for name in ("name1", "name2", "name3"):
+        print("HTTP/2.0 200 OK")
+        print("content-type: application/json")
+        print()
+        print(name)
+elif "--slurp" in args:
     print(json.dumps(pages))
 else:
     for page in pages:
@@ -108,11 +114,53 @@ check("a success is returned", code == 0)
 check("a paginated read logs one row per page", len(rows()) - before == 3,
       f"rows={len(rows()) - before}")
 
+# 2b. A write is never cached through this wrapper either, whichever way
+#     the body is written. Attached body flags imply POST.
+mode_file.write_text("ok")
+for flag in ("--field=name=value", "--raw-field=name=value", "-fname=value"):
+    write_argv = [str(fake), "api", flag, "repos/a/b/dispatches?ref=main"]
+    before = calls_made()
+    overnight.run_read(write_argv, 10, deadline)
+    overnight.run_read(write_argv, 10, deadline)
+    check(f"a write with {flag} is never cached", calls_made() - before == 2,
+          f"calls={calls_made() - before}")
+
+# 2c. A formatted paginated read counts its pages from the headers, and the
+#     caller still gets only its own output.
+formatted = [str(fake), "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags"]
+before = len(rows())
+code, out = overnight.run_read(formatted, 10, deadline)
+check("a formatted paginated read is returned", code == 0)
+check("a formatted paginated read logs one row per page", len(rows()) - before == 3,
+      f"rows={len(rows()) - before}")
+check("a formatted paginated read returns only its bodies",
+      out.split() == ["name1", "name2", "name3"] and "HTTP/" not in out, repr(out[:40]))
+
 # 3. A succeeded read is cached: the next identical read makes no call.
 before = calls_made()
 overnight.run_read(argv, 10, deadline)
 check("a succeeded read is cached", calls_made() - before == 0,
       f"calls={calls_made() - before}")
+
+# 4. The board command refuses below the API floor instead of returning a
+#    success with an empty stdout the tick would parse as an empty board.
+import contextlib
+import io
+from types import SimpleNamespace
+
+original_probe = overnight.gh_gateway.remaining_or_none
+overnight.gh_gateway.remaining_or_none = lambda timeout=60: {"core": 10, "graphql": 10}
+out, err = io.StringIO(), io.StringIO()
+try:
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = overnight.cmd_board(SimpleNamespace(deadline=30, root=None))
+finally:
+    overnight.gh_gateway.remaining_or_none = original_probe
+check("the board refuses below the floor", code != 0, f"exit={code}")
+check("the refusal names the floor", "REFUSED" in err.getvalue() and "floor" in err.getvalue(),
+      err.getvalue().strip()[:80])
+check("the refusal prints no board", out.getvalue().strip() == "",
+      repr(out.getvalue()[:40]))
 
 print("PROOF", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
