@@ -704,6 +704,40 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue(os.access(self.repo / "AGENTS.md", os.X_OK), "the mode change has to survive")
         self.assertNotEqual(cleaner.status_for(self.repo), [])
 
+    def test_a_mode_change_on_a_rename_destination_keeps_the_worktree(self):
+        # The destination of a staged rename becomes executable after the
+        # scan. The bytes still match, so the mode has to be compared too.
+        repo = Path(self.tmp.name) / "rename-mode-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        (repo / ".specstory" / "a.md").write_text("history\n", encoding="utf-8")
+        git(repo, "add", ".specstory/a.md")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "history"], check=True, capture_output=True)
+        git(repo, "mv", ".specstory/a.md", ".specstory/b.md")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        signatures = {name: cleaner._working_signature(repo / name) for code, name, original in records if original is None}
+        os.chmod(repo / ".specstory" / "b.md", 0o755)
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests, cleaner.index_digest(repo), signatures)
+        self.assertIsNone(cleared)
+        self.assertTrue(os.access(repo / ".specstory" / "b.md", os.X_OK), "the mode change has to survive")
+
+    def test_a_deletion_after_the_scan_keeps_the_worktree(self):
+        # The file is deleted after the scan, so the deletion is kept and the
+        # committed copy is not restored over it.
+        with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(self.block)
+        records = cleaner.status_for(self.repo)
+        digests = {name: cleaner.file_digest(self.repo / name) for code, name, original in records if original is None}
+        signatures = {name: cleaner._working_signature(self.repo / name) for code, name, original in records if original is None}
+        (self.repo / "AGENTS.md").unlink()
+        cleared = cleaner.clear_bootstrap_changes(self.repo, records, self.trash, digests, cleaner.index_digest(self.repo), signatures)
+        self.assertIsNone(cleared)
+        self.assertFalse((self.repo / "AGENTS.md").exists(), "the deletion has to survive")
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
