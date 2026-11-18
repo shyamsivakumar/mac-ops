@@ -62,7 +62,6 @@ Reply with plain text.
    one line, then 2 to 4 options as lines `1. <option>`, `2. <option>`
    and so on, and end with the line
    `(Recommended: <option text word for word>)`.
-   This wording is the one in `coordinator/bin/answer_format.py`.
 
 ## Attribution for the smell cards
 
