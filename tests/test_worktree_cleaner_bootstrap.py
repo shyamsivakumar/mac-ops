@@ -334,7 +334,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
 
         def replace_and_save(source, destination, *args, **kwargs):
             result = original_replace(source, destination, *args, **kwargs)
-            if ".moved" in str(destination):
+            if str(destination).startswith("moved"):
                 # The editor wrote through its open handle into the moved
                 # file and recreated the path with its own copy.
                 moved = self.trash / str(destination)
@@ -363,7 +363,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
 
         def replace_and_save(source, destination, *args, **kwargs):
             result = original_replace(source, destination, *args, **kwargs)
-            if ".moved" in str(destination):
+            if str(destination).startswith("moved"):
                 moved = self.trash / str(destination)
                 with moved.open("a", encoding="utf-8") as handle:
                     handle.write("write-through bytes\n")
@@ -408,7 +408,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
 
             def replace_and_save(source, destination, *args, index=index, **kwargs):
                 result = original_replace(source, destination, *args, **kwargs)
-                if ".moved" in str(destination):
+                if str(destination).startswith("moved"):
                     moved = self.trash / str(destination)
                     with moved.open("a", encoding="utf-8") as handle:
                         handle.write(f"saved by an editor {index}\n")
@@ -675,7 +675,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
 
         def replace_and_repoint(source, destination, *args, **kwargs):
             result = original_replace(source, destination, *args, **kwargs)
-            if ".moved" in str(destination):
+            if str(destination).startswith("moved"):
                 moved = self.trash / str(destination)
                 moved.unlink()
                 os.symlink("../third.md", moved)

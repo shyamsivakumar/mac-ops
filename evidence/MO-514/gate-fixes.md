@@ -37,6 +37,8 @@ the test that fails without the fix.
 | 29 | the recovery passed the bytes of a moved link to the exclusive write, so a link whose target changed was restored as a regular file holding the target name | a moved link is restored with an exclusive `os.symlink`, so the worktree keeps the right file type | `...::ClearBootstrapChangesTest::test_a_changed_link_target_is_restored_as_a_link` |
 | 30 | the removal log named one eligibility rule, so a detached worktree removed by the 24 hour rule was logged as if a pull request had authorised it | every removal records the rule that authorised it in `eligible_reason` | `verification/worktree-cleaner/check_bootstrap.py` |
 | 31 | a detached worktree that qualified through default branch ancestry recorded no eligibility reason and a false ancestry flag | the detached branch records the rule and the ancestry flag when it qualifies that way | `verification/worktree-cleaner/check_bootstrap.py` (the `detached-main` worktree) |
+| 32 | 24 hours of inactivity let a detached worktree with bootstrap edits be removed, even when its head was published only on an open feature branch | a detached worktree is removed only with verified default branch ancestry or a closed or merged pull request that carries its head; inactivity alone never authorises it | `verification/worktree-cleaner/check_bootstrap.py` (the `detached-master` worktree) |
+| 33 | the recovery file name flattened the whole relative path, so a long nested path made `mkstemp` fail and left an eligible worktree on disk | the recovery files use a short fixed prefix and `mkstemp` supplies the uniqueness | `...::ClearBootstrapChangesTest::test_the_cleanup_does_not_leak_descriptors` |
 
 ## How the fixes are proved
 

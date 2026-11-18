@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 import sys
 import tempfile
 
@@ -24,6 +25,21 @@ def command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | N
 
 def git(repo: Path, *args: str) -> str:
     return command(["git", "-C", str(repo), *args])
+
+
+def age_reflog(path: Path) -> None:
+    """Make the worktree look 25 hours old."""
+    gitfile = path / ".git"
+    admin = Path(gitfile.read_text(encoding="utf-8").strip().split("gitdir: ", 1)[1])
+    log = admin / "logs/HEAD"
+    lines = log.read_text(encoding="utf-8").splitlines()
+    aged = []
+    for line in lines:
+        prefix, separator, message = line.partition("\t")
+        fields = prefix.split()
+        fields[-2] = str(int(time.time()) - 25 * 60 * 60)
+        aged.append(" ".join(fields) + (separator + message if separator else ""))
+    log.write_text("\n".join(aged) + "\n", encoding="utf-8")
 
 
 def commit(repo: Path, name: str, content: str) -> str:
@@ -82,6 +98,11 @@ def main() -> int:
             git(repo, "worktree", "add", str(path), name)
         detached = trees / "detached-main"
         git(repo, "worktree", "add", "--detach", str(detached), shas["onmain"])
+        # A detached worktree whose head is only on master: old, but not
+        # published on the default branch, so it has to stay.
+        unpublished_detached = trees / "detached-master"
+        git(repo, "worktree", "add", "--detach", str(unpublished_detached), shas["masteronly"])
+        age_reflog(unpublished_detached)
         # The bootstrap edits an agent bootstrap leaves in a worktree.
         for name in ("bootstrap", "real"):
             path = paths[name]
@@ -180,6 +201,10 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert by_name["marker"]["eligible"] is False and "worktree_dirty" in by_name["marker"]["reasons"], by_name["marker"]
         assert by_name["marker"]["bootstrap_changes"] == [], by_name["marker"]
         assert by_name["masteronly"]["eligible"] is False, by_name["masteronly"]
+        detached_master = next(row for row in dry["rows"] if Path(row["path"]).name == "detached-master")
+        assert detached_master["eligible"] is False, detached_master
+        assert "detached_not_published" in detached_master["reasons"], detached_master
+        assert detached_master["detached_idle_seconds"] is not None
         assert by_name["masteronly"].get("published_on_default_branch") is not True, by_name["masteronly"]
         assert by_name["onmain"]["eligible"] is True, by_name["onmain"]["reasons"]
         assert by_name["onmain"]["published_on_default_branch"] is True, by_name["onmain"]
@@ -197,6 +222,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert paths["real"].exists() and paths["offmain"].exists(), applied
         assert paths["partial"].exists() and paths["renamed"].exists(), applied
         assert paths["shifted"].exists() and paths["marker"].exists(), applied
+        assert unpublished_detached.exists(), "a detached worktree that is not published has to stay"
         assert paths["masteronly"].exists(), applied
         assert ascend_tree.exists(), "ascend worktree must stay"
         log = (base / "worktree-cleaner.log").read_text(encoding="utf-8")
