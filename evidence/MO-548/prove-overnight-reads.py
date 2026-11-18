@@ -36,6 +36,11 @@ base = {str(scratch)!r}
 with open(os.path.join(base, "calls.log"), "a") as log:
     log.write(" ".join(args) + "\\n")
 mode = open(os.path.join(base, "mode")).read().strip()
+if mode == "partial":
+    print('[{{"number": 1}}]')
+    print('[{{"number": 2}}]')
+    sys.stderr.write("gh: HTTP 502\\n")
+    sys.exit(1)
 if mode == "fail":
     sys.stderr.write("gh: HTTP 500\\n")
     sys.exit(1)
@@ -118,6 +123,15 @@ code_partial, _out = overnight.run_read(argv, 10, deadline)
 check("a failed pagination still reports a failure", code_partial != 0)
 check("a failed pagination counts its failed request",
       len(rows()) - before_fail_rows == 3, f"rows={len(rows()) - before_fail_rows}")
+
+# 1b. A read that fails part way counts the page that succeeded and the
+#     request that failed.
+mode_file.write_text("partial")
+before = len(rows())
+code_partial, _out = overnight.run_read(argv, 10, deadline)
+check("a partial pagination still reports a failure", code_partial != 0)
+check("a partial pagination counts every attempt", len(rows()) - before == 3,
+      f"rows={len(rows()) - before}")
 
 # 2. A paginated success logs one row per page.
 mode_file.write_text("ok")
