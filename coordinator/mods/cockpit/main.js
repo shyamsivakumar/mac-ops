@@ -856,7 +856,7 @@ export default class Board extends View {
     const since = Math.max(g.at, seen?.col === key ? seen.at : 0);
     if (key !== "needs" && key !== "stuck") return since;
     const [first] = g.needs;
-    if (first === "question") return g.primary.at;
+    if (first === "question" || first === "asked") return g.primary.at;
     if (first === "stalled") return g.stalledAt + STALL_AFTER;
     if (first === "unrouted") return g.trail.at;
     if (first === "ci") return g.info.gh.ciAt || since;
