@@ -937,6 +937,12 @@ print("MERGEREBASE", gh_gateway.argv_host(
 print("MERGEBODY", gh_gateway.argv_host(
     ["gh", "pr", "merge", "42", "-b", "-Rother.example/o/r", "-s",
      "-R", "ent.example/team/repo"]))
+print("REVIEWAPPROVE", gh_gateway.argv_host(
+    ["gh", "pr", "review", "42", "-a", "-R", "ent.example/team/repo"]))
+print("REVIEWCOMMENT", gh_gateway.argv_host(
+    ["gh", "pr", "review", "42", "-c", "-b", "ok", "-R", "ent.example/team/repo"]))
+print("REVIEWCHANGES", gh_gateway.argv_host(
+    ["gh", "pr", "review", "42", "-r", "-R", "ent.example/team/repo"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
@@ -953,7 +959,9 @@ check("a host in -R is the effective host",
                   "REPOEQSHORT", "ent.example", "CLUSTERNEXT", "ent.example",
                   "VERBAFTER", "actual.example", "CLUSTER", "ent.example",
                   "MERGESQUASH", "ent.example", "MERGEMETHOD", "ent.example",
-                  "MERGEREBASE", "ent.example", "MERGEBODY", "ent.example"],
+                  "MERGEREBASE", "ent.example", "MERGEBODY", "ent.example",
+                  "REVIEWAPPROVE", "ent.example", "REVIEWCOMMENT", "ent.example",
+                  "REVIEWCHANGES", "ent.example"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.

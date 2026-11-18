@@ -613,6 +613,8 @@ SHORT_BOOLEAN = {
     ("issue", "list"): set(),
     # `-s`, `-m` and `-r` choose the merge method and `-d` deletes the branch.
     ("pr", "merge"): {"-s", "-m", "-r", "-d"},
+    # `-a` approves, `-c` comments and `-r` requests changes.
+    ("pr", "review"): {"-a", "-c", "-r"},
 }
 SHORT_VALUE = {
     # `-b` is `--branch string` for `run list`, not a boolean.
