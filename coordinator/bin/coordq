@@ -604,6 +604,7 @@ def drain():
                         if continuation:
                             if not safe_fallback_workspace(continuation):
                                 continue
+                            item.setdefault("originRequestId", request_id)
                             args = dict(continuation)
                             args["clientRequestId"] = f"continuation:{item['id']}:{model['model']}"
                             item["args"] = args
