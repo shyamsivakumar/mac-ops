@@ -412,6 +412,13 @@ def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool
     return _exclusive_write(repo / name, entry[2], int(entry[0], 8) & 0o777)
 
 
+def _trash_path(trash: Path, prefix: str) -> Path:
+    """A unique path in the trash, so two candidates never share a name."""
+    descriptor, name = tempfile.mkstemp(dir=trash, prefix=prefix + ".", suffix=".cleaner")
+    os.close(descriptor)
+    return Path(name)
+
+
 def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None) -> bool:
     """Clear one verified bootstrap file without losing an intervening edit.
 
@@ -434,7 +441,7 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
         # Either the bytes are not the ones the scan verified or the file
         # changed after the scan, so its contents are kept as real work.
         return False
-    moved = trash / f"{name.replace('/', '_')}.{os.getpid()}"
+    moved = _trash_path(trash, f"{name.replace('/', '_')}.moved")
     try:
         os.replace(file_path, moved)
     except OSError:
@@ -492,13 +499,17 @@ def _reset_index_to_head(repo: Path, index_before: str | None) -> bool:
     index_path = Path(listed)
     if not index_path.is_absolute():
         index_path = repo / index_path
+    index_path = Path(os.path.abspath(index_path))
     copy = index_path.with_name(index_path.name + ".cleaner")
     lock = index_path.with_name(index_path.name + ".lock")
     try:
-        if index_before is not None:
-            current = index_digest(repo)
-            if current is None or current != index_before:
-                return False
+        if index_before is None:
+            # The scan could not read the index, so what is staged is unknown
+            # and the index is left alone.
+            return False
+        current = index_digest(repo)
+        if current is None or current != index_before:
+            return False
         result = run(["git", "-C", str(repo), "read-tree", "HEAD"], env={**os.environ, "GIT_INDEX_FILE": str(copy)})
         if result.returncode != 0 or not copy.exists():
             return False
@@ -509,10 +520,9 @@ def _reset_index_to_head(repo: Path, index_before: str | None) -> bool:
             return False
         os.close(descriptor)
         try:
-            if index_before is not None:
-                current = index_digest(repo)
-                if current is None or current != index_before:
-                    return False
+            current = index_digest(repo)
+            if current is None or current != index_before:
+                return False
             os.replace(copy, index_path)
             return True
         finally:
