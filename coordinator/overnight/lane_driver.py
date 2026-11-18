@@ -729,6 +729,32 @@ def prompt_pass(repo, number, head, prompt):
     return f"skip #{number}: gate PASS, prompt change, Shyam merges"
 
 
+def merge_on_reviewed_base(repo, number, head, base):
+    """Merge one pull request, and undo the merge if its base was not the reviewed one.
+
+    `--match-head-commit` pins the head only. A retarget leaves the head where
+    it is, so a merge can land against a base this review never classified,
+    even between the base read and the merge call. The base is read again
+    after the merge; a base that is not the reviewed one is put back by
+    reverting the merge in the same step, so a retarget ends unmerged.
+
+    Return (merged, note): merged means the pull request is merged against the
+    reviewed base; note is the line the pass prints.
+    """
+    run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+    current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                              "--json", "baseRefName"])) or {}
+    if current.get("baseRefName") == base:
+        return True, f"#{number}: merged {head}"
+    reverted = run(["gh", "api", "--method", "PUT",
+                    f"repos/{repo}/pulls/{number}/revert",
+                    "-f", f"body=The base moved from {base} to {current.get('baseRefName')} "
+                          "after this review, so the merge was reverted."])
+    return False, (f"skip #{number}: merged on head {head} but the base had moved from {base} "
+                  f"to {current.get('baseRefName')}; the merge was reverted ({reverted.strip()[:120]}), "
+                  "the next pass reviews the new base")
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -796,7 +822,9 @@ def act_on_pr(repo, number, ledger):
                     f"{(current or {}).get('baseRefName')}, merge deferred")
         if DRY:
             return f"DRY merge #{number} {head}"
-        run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+        merged, note = merge_on_reviewed_base(repo, number, head, base)
+        if not merged:
+            return note
         if issue:
             ref = f"{repo}#{issue}"
             output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
@@ -804,7 +832,7 @@ def act_on_pr(repo, number, ledger):
             if "is already closed" in output:
                 print(f"already-closed:{ref}: {output}")
         fast_forward_main(repo)
-        return f"#{number}: merged {head}"
+        return note
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
         if status in ("completed", "interrupted", "failed"):
