@@ -809,9 +809,12 @@ now checked instead of remembered. One list lives in
   `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The item is keyed by
   id, so a second pass replaces it instead of adding a second one.
 
-A file list GitHub cannot give is not a prompt change: the hold is only ever
-added to a pull request whose paths are known, so a failed read never blocks
-a merge of ordinary code. The list covers `AGENT-RULES.md`,
+A file list GitHub cannot give is not code: the read is retried, and a list
+still unknown defers the gate or the merge instead of guessing. A brief
+written without the list could order a merge of prompt text, so an unknown
+list never reads as clear. A renamed file counts under both names, so moving
+prompt text out of `prompts/` still holds the pull request. The list covers
+`AGENT-RULES.md`,
 `answer_format.py`, `gate_bar.py`, `gate_policy.py`, `playbook.md`,
 `code-reviewer.md`, any `SKILL.md`, and anything under a `skills/` or
 `prompts/` directory.

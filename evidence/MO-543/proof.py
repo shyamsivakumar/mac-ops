@@ -24,6 +24,8 @@ for folder in (BIN, OVERNIGHT):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 
+import prompt_paths  # noqa: E402
+
 HEAD = "b" * 40
 PROMPT_PATHS = ["coordinator/config/AGENT-RULES.md", "coordinator/bin/gate_bar.py"]
 CODE_PATHS = ["coordinator/bin/ticket", "docs/ticket-gate.md"]
@@ -131,15 +133,26 @@ def queue_briefs():
     for name, paths in (("prompt", PROMPT_PATHS), ("code", CODE_PATHS)):
         files = [{"filename": path} for path in paths]
         with patch.object(coordq, "gh_json", return_value=files):
-            flag = coordq.gate_prompt_change(repo, 544)
+            state = coordq.gate_prompt_state(repo, 544)
         briefs[name] = coordq.gate_args(settings, repo, 543, 544, HEAD, False, model,
-                                        prompt=flag)["message"]
+                                        prompt=state == prompt_paths.HOLD)["message"]
     grant("queue gatekeep brief: prompt PR gets the hold",
           "never auto-merges" in briefs["prompt"] and "gh pr merge" not in briefs["prompt"],
           command)
     grant("queue gatekeep brief: code-only PR keeps the merge order",
           "gh pr merge 544 -R shyamsivakumar/mac-ops --squash" in briefs["code"]
           and "never auto-merges" not in briefs["code"], command)
+    # A transient GitHub error must not read as clear: no brief is built, so
+    # no merge order can be written from a list the queue never saw.
+    with patch.object(coordq, "gh_json", side_effect=RuntimeError("transient")) as read:
+        unknown = coordq.gate_prompt_state(repo, 544)
+    grant("queue gatekeep: an unreadable file list is unknown, never clear",
+          unknown == prompt_paths.UNKNOWN and read.call_count > 1, command)
+    # A rename carries the name the file left, and that name can be a prompt.
+    renamed = [{"filename": "archive/reviewer.md", "previous_filename": "prompts/reviewer.md"}]
+    with patch.object(coordq, "gh_json", return_value=renamed):
+        state = coordq.gate_prompt_state(repo, 544)
+    grant("queue gatekeep: a renamed prompt file holds the PR", state == prompt_paths.HOLD, command)
 
 
 def ticket_file_read():
@@ -159,7 +172,16 @@ def ticket_file_read():
     # truncated read, and a truncated read is not a known list: no hold.
     with patch.object(ticket, "gh_json", return_value=payload[:1]):
         short = ticket.pull_files("shyamsivakumar/mac-ops", 544, 2)
-    grant("a truncated file read is none, so it adds no hold", short is None, command)
+    grant("a truncated file read is none, so the gate refuses it", short is None, command)
+    with patch.object(ticket, "pull_files", return_value=None):
+        try:
+            ticket.prompt_hold("shyamsivakumar/mac-ops", 544)
+        except ticket.Refuse:
+            refused = True
+        else:
+            refused = False
+    grant("the brief refuses an unknown file list instead of ordering a merge",
+          refused, command)
 
 
 def main():
