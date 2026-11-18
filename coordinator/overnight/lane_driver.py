@@ -618,7 +618,11 @@ def act_on_pr(repo, number, ledger):
             ledger[f"needs-you:{repo}#{number}:{head}"] = "gate reviewer chain exhausted"
             return f"#{number}: needs-you, gate reviewer chain exhausted"
     else:
-        model = first_reviewer(blocked_reviewers()) or ASTRA
+        model = first_reviewer(blocked_reviewers())
+        if model is None:
+            # Every reviewer is blocked for every head: the gate waits
+            # for one to recover instead of running on a blocked provider.
+            return f"#{number}: deferred, every gate reviewer is blocked"
     if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
         # No Opus escalation any more: a gate that ended without a verdict
         # twice waits for Shyam instead of running on another model

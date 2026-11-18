@@ -185,8 +185,15 @@ def with_model(args):
             return None, "refused: a launch needs a taskType or a modelSelection"
         if task_type == "review":
             # A new gate starts on the first reviewer that is not blocked
-            # for every head (Shyam 2026-11-17 18:15 PT).
-            resolved["modelSelection"] = first_reviewer(blocked_identities()) or ASTRA_MODEL
+            # for every head (Shyam 2026-11-17 18:15 PT). When every
+            # reviewer is blocked there is no reviewer to start on: the
+            # gate waits for one to recover instead of running on a
+            # provider that is known to be blocked.
+            selection = first_reviewer(blocked_identities())
+            if selection is None:
+                return None, ("refused: every gate reviewer is blocked for now, "
+                              "so the gate waits for a reviewer to recover")
+            resolved["modelSelection"] = selection
         else:
             resolved["modelSelection"] = TASK_MODELS[task_type]
     elif task_type == "review" and not is_gate_model(resolved["modelSelection"]):
@@ -1145,8 +1152,9 @@ def reviewer_model(models):
     """The reviewer a new gate starts on.
 
     A reviewer that is blocked for every head is skipped, so a new gate
-    starts on the next one in the chain until the blocked one recovers."""
-    return first_reviewer(blocked_identities()) or ASTRA_MODEL
+    starts on the next one in the chain until the blocked one recovers.
+    None means every reviewer is blocked, and the gate waits."""
+    return first_reviewer(blocked_identities())
 
 
 def quota_failure(value):
@@ -1290,10 +1298,19 @@ def gate_candidates(config):
                     # gated, on the backstop reviewer. The check below
                     # still decides whether the pull request is gated.
                     model = backstop_model(thread, runs)
+                if model is None:
+                    # Every reviewer is blocked for every head: the gate
+                    # waits for one to recover instead of running on a
+                    # provider that is known to be blocked.
                     if (repo, number) not in noted:
-                        print(f"backstop {repo}#{number}: executed model unavailable, reviewer "
-                              f"{model['instanceId']} {model['model']}", file=sys.stderr)
+                        print(f"defer {repo}#{number}: every gate reviewer is blocked",
+                              file=sys.stderr)
                         noted.add((repo, number))
+                    break
+                if not models and (repo, number) not in noted:
+                    print(f"backstop {repo}#{number}: executed model unavailable, reviewer "
+                          f"{model['instanceId']} {model['model']}", file=sys.stderr)
+                    noted.add((repo, number))
                 statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
                 checks = [x for x in statuses if x["context"] == "srw/agent-check"]
                 publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -1621,7 +1638,10 @@ def cmd_fix(a):
 
 
 def backstop_model(thread, runs):
-    return first_reviewer(blocked_identities()) or ASTRA_MODEL
+    """The reviewer a gate starts on when the builder model is unknown.
+
+    None means every reviewer is blocked, and the gate waits."""
+    return first_reviewer(blocked_identities())
 
 
 def check_names_head(body, head, publisher, checks):
@@ -1654,6 +1674,9 @@ def gate_request(repo, pr, settings, config, receipts, login):
             continue
         thread, runs = read_builder_thread(thread_id)
         model = backstop_model(thread, runs)
+        if model is None:
+            # Every reviewer is blocked: the gate waits for one to recover.
+            return None
         statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
         checks = [x for x in statuses if x["context"] == "srw/agent-check"]
         publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -1667,7 +1690,11 @@ def gate_request(repo, pr, settings, config, receipts, login):
     if not check_names_head(body, head, publisher, checks):
         return None
     key = f"gate:{repo}#{number}:{head}"
-    return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, [])), []
+    model = backstop_model({}, [])
+    if model is None:
+        # Every reviewer is blocked: the gate waits for one to recover.
+        return None
+    return key, gate_args(settings, repo, None, number, head, publisher, model), []
 
 
 def parse_ref(ref):
@@ -1701,6 +1728,9 @@ def cmd_gate(a):
         die(f"refused: {repo}#{number} is not open")
     if pr.get("draft"):
         die(f"refused: {repo}#{number} is a draft")
+    if first_reviewer(blocked_identities()) is None:
+        die("refused: every gate reviewer is blocked for now, so the gate "
+            "waits for a reviewer to recover")
     head = pr["head"]["sha"]
     key = f"gate:{repo}#{number}:{head}"
     with Lock(True):

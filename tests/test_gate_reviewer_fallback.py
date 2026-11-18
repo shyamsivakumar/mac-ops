@@ -169,6 +169,13 @@ class RecordedFailureTests(FallbackBase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["args"]["modelSelection"], CODEX_REVIEWER)
 
+    def test_no_gate_is_queued_when_every_reviewer_is_blocked(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits")
+        gate_reviewers.block_reviewer(CODEX_REVIEWER, "no credits")
+        self.run_gatekeep(RECORDED)
+        items = [i for i in self.read_queue()["items"] if i["tool"] == "t3_thread_launch"]
+        self.assertEqual(items, [])
+
 
 class ProviderErrorTests(unittest.TestCase):
     """The provider reasons that block a reviewer for every head."""
@@ -285,10 +292,31 @@ class NewGateStartTests(unittest.TestCase):
         self.assertIsNone(refusal)
         self.assertEqual(args["modelSelection"], CODEX_REVIEWER)
 
+    def test_a_gate_waits_when_every_reviewer_is_blocked(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits")
+        gate_reviewers.block_reviewer(CODEX_REVIEWER, "no credits")
+        args, refusal = coordq.with_model({"taskType": "review", "message": "review"})
+        self.assertIsNone(args)
+        self.assertIn("blocked", refusal)
+
+    def test_a_health_probe_names_its_reviewer_and_is_allowed(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits")
+        gate_reviewers.block_reviewer(CODEX_REVIEWER, "no credits")
+        args, refusal = coordq.with_model({"taskType": "review", "message": "probe",
+                                           "modelSelection": API_REVIEWER})
+        self.assertIsNone(refusal)
+        self.assertEqual(args["modelSelection"], API_REVIEWER)
+
     def test_the_ticket_gate_starts_on_the_next_reviewer(self):
         ticket = load_ticket()
         gate_reviewers.block_reviewer(API_REVIEWER, "no credits")
         self.assertEqual(ticket.gate_reviewer([]), CODEX_REVIEWER)
+
+    def test_the_ticket_gate_waits_when_every_reviewer_is_blocked(self):
+        ticket = load_ticket()
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits")
+        gate_reviewers.block_reviewer(CODEX_REVIEWER, "no credits")
+        self.assertIsNone(ticket.gate_reviewer([]))
 
 
 class BlockedReviewerTests(unittest.TestCase):
@@ -319,6 +347,25 @@ class BlockedReviewerTests(unittest.TestCase):
     def test_a_reset_time_is_read_from_the_error(self):
         self.assertIsNotNone(gate_reviewers.reset_time("usage limit reached, resets in 30 minutes"))
         self.assertIsNone(gate_reviewers.reset_time("usage limit reached"))
+
+    def test_a_reset_is_probed_at_the_reset_and_not_before(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=1000, reset_at=1060)
+        self.assertFalse(gate_reviewers.probe_due(API_REVIEWER, now=1059))
+        self.assertTrue(gate_reviewers.probe_due(API_REVIEWER, now=1060))
+
+    def test_a_failed_probe_does_not_probe_again_at_once(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=1000, reset_at=1060)
+        gate_reviewers.note_probe(API_REVIEWER, "probe-1", now=1060)
+        self.assertFalse(gate_reviewers.probe_due(API_REVIEWER, now=1061))
+        self.assertFalse(gate_reviewers.probe_due(API_REVIEWER, now=1060 + 3600 - 1))
+        self.assertTrue(gate_reviewers.probe_due(API_REVIEWER, now=1060 + 3600))
+
+    def test_a_probe_consumes_the_reset_it_ran_against(self):
+        gate_reviewers.block_reviewer(API_REVIEWER, "no credits", now=1000, reset_at=1060)
+        gate_reviewers.note_probe(API_REVIEWER, "probe-1", now=1060)
+        record = gate_reviewers.load_blocked()[gate_reviewers.identity(API_REVIEWER)]
+        self.assertIsNone(record["resetAt"])
+        self.assertEqual(record["probeRequestId"], "probe-1")
 
 
 if __name__ == "__main__":
