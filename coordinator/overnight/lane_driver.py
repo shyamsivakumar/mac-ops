@@ -1049,13 +1049,20 @@ def zero_merge(snapshot):
                 if cutoff <= stamp <= now:
                     recent = True
     path = DECISIONS_PATH
-    cause = "No merge in 60 minutes with open PRs"
+    # The key names the repos that have open pull requests and no merge:
+    # that is the cause. A stall on one repo and a stall on another are
+    # different causes, so answering the first does not silence the
+    # second. The title stays one title, for the board.
+    waiting = sorted(repo for repo, data in snapshot["repos"].items() if data["prs"])
+    title = "No merge in 60 minutes with open PRs"
+    cause = title + ": " + (", ".join(waiting) if waiting else "none")
     item = None
     if open_prs and not recent:
         item = {"id": "factory-zero-merge", "group": "Coordinator",
-                "kind": "action", "title": cause,
+                "kind": "action", "title": title,
                 "cause": alarms.cause_of(cause),
-                "why": "The coordinator must inspect blocked PRs and restore merge progress."}
+                "why": "The coordinator must inspect blocked PRs and restore merge progress: "
+                       + ", ".join(waiting)}
     # The alarm is muted for four hours once it is acknowledged, like the
     # watchdog's and the stall's (Refs #496): one place decides, and the
     # board is written under its lock.
