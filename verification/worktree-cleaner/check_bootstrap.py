@@ -33,11 +33,9 @@ def commit(repo: Path, name: str, content: str) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
-def rules_line() -> str:
-    for line in RULES.read_text(encoding="utf-8").splitlines():
-        if line.startswith("- "):
-            return line.strip()
-    raise RuntimeError("no standing rule line")
+def rules_block() -> str:
+    """The exact standing rules block an agent bootstrap writes."""
+    return RULES.read_text(encoding="utf-8")
 
 
 def main() -> int:
@@ -56,7 +54,7 @@ def main() -> int:
         commit(repo, "base.txt", "base\n")
         git(repo, "push", "-u", "origin", "main")
         shas: dict[str, str] = {}
-        for name in ("bootstrap", "real", "onmain", "offmain"):
+        for name in ("bootstrap", "real", "onmain", "offmain", "partial", "renamed"):
             sha = commit(repo, f"{name}.txt", name + "\n")
             shas[name] = sha
             git(repo, "branch", name, sha)
@@ -69,12 +67,17 @@ def main() -> int:
         for name in ("bootstrap", "real"):
             path = paths[name]
             with (path / "AGENTS.md").open("a", encoding="utf-8") as handle:
-                handle.write(rules_line() + "\n")
+                handle.write(rules_block())
             (path / ".specstory" / "history").mkdir(parents=True)
             (path / ".specstory" / "history" / "session.md").write_text("history\n", encoding="utf-8")
             (path / ".agents").mkdir(parents=True)
             (path / ".agents" / "legacy-instructions.md").write_text("legacy\n", encoding="utf-8")
         (paths["real"] / "real-work.txt").write_text("real work\n", encoding="utf-8")
+        # One rule added by hand is not the bootstrap block: real work.
+        (paths["partial"] / "AGENTS.md").write_text("- CI is agent checks only: no Woodpecker, no GitHub Actions.\n", encoding="utf-8")
+        # A rename of a real file into .specstory/ is real work.
+        (paths["renamed"] / ".specstory").mkdir(parents=True)
+        git(paths["renamed"], "mv", "renamed.txt", ".specstory/renamed.txt")
         # An Ascend repository is never touched.
         ascend = code / "ascend-mcp"
         command(["git", "init", "-b", "main", str(ascend)])
@@ -87,8 +90,8 @@ def main() -> int:
 
         fixture = base / "fixture.json"
         fixture.write_text(json.dumps({
-            "present": [shas[name] for name in ("bootstrap", "real", "onmain")] + [ascend_sha],
-            "prs": {"bootstrap": [{"number": 7, "state": "MERGED", "headRefName": "bootstrap", "headRefOid": shas["bootstrap"]}]},
+            "present": [shas[name] for name in ("bootstrap", "real", "onmain", "partial", "renamed")] + [ascend_sha],
+            "prs": {name: [{"number": 7, "state": "MERGED", "headRefName": name, "headRefOid": shas[name]}] for name in ("bootstrap", "partial", "renamed")},
         }))
         bin_dir = base / "bin"
         bin_dir.mkdir()
@@ -128,6 +131,10 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert by_name["bootstrap"]["dirty"] is False, by_name["bootstrap"]
         assert sorted(by_name["bootstrap"]["bootstrap_changes"]) == [".agents/legacy-instructions.md", ".specstory/history/session.md", "AGENTS.md"], by_name["bootstrap"]
         assert by_name["real"]["eligible"] is False and "worktree_dirty" in by_name["real"]["reasons"], by_name["real"]
+        assert by_name["partial"]["eligible"] is False and "worktree_dirty" in by_name["partial"]["reasons"], by_name["partial"]
+        assert by_name["partial"]["bootstrap_changes"] == [], by_name["partial"]
+        assert by_name["renamed"]["eligible"] is False and "worktree_dirty" in by_name["renamed"]["reasons"], by_name["renamed"]
+        assert by_name["renamed"]["bootstrap_changes"] == [], by_name["renamed"]
         assert by_name["onmain"]["eligible"] is True, by_name["onmain"]["reasons"]
         assert by_name["onmain"]["published_on_default_branch"] is True, by_name["onmain"]
         assert by_name["offmain"]["eligible"] is False, by_name["offmain"]["reasons"]
@@ -138,6 +145,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert applied["removed"] == 2, applied["categories"]
         assert not paths["bootstrap"].exists() and not paths["onmain"].exists(), applied
         assert paths["real"].exists() and paths["offmain"].exists(), applied
+        assert paths["partial"].exists() and paths["renamed"].exists(), applied
         assert ascend_tree.exists(), "ascend worktree must stay"
         log = (base / "worktree-cleaner.log").read_text(encoding="utf-8")
         entries = [json.loads(line) for line in log.splitlines()]
