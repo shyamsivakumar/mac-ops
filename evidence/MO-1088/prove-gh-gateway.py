@@ -45,6 +45,12 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != 
         print("x-ratelimit-resource: core")
         print()
         print(name)
+elif mode == "numbers" and "--paginate" in args and any(
+        arg in ("-q", "--jq", "-t", "--template") or arg.startswith(("-q", "-t"))
+        for arg in args):
+    # One page, ten numbers: the shape the gate reported.
+    for number in range(1, 11):
+        print(number)
 elif mode == "bodyhttp" and "--paginate" in args and any(
         arg in ("-q", "--jq", "-t", "--template") or arg.startswith(("-q", "-t"))
         for arg in args):
@@ -460,6 +466,25 @@ run(files_read)
 check("a pull's files list is cached once", calls_made() - before == 1,
       f"calls={calls_made() - before}")
 
+# One page of ten numbers is one call, not ten pages.
+set_mode("numbers")
+rows_before = len(rows())
+numeric = run(["gh", "api", "--paginate", "--jq", ".[].number", "repos/a/b/issues"])
+check("ten numbers from one page are one call", len(rows()) - rows_before == 1,
+      f"rows={len(rows()) - rows_before}")
+check("the numeric read keeps its ten values", len(numeric.stdout.split()) == 10,
+      f"values={len(numeric.stdout.split())}")
+set_mode("200")
+
+# A filtered read that carries the caller's headers is still the caller's
+# text: a body printing a status line and an x-ratelimit header is not a page.
+set_mode("bodyhttp")
+rows_before = len(rows())
+run(["gh", "api", "--include", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
+check("filtered caller-header text is not counted as pages",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
+set_mode("200")
+
 # A formatted read is never replayed: one invocation, and its row says the
 # page count is unknown. A write with a filter is not sent twice either.
 rows_before = len(rows())
@@ -528,8 +553,8 @@ check("a caller-requested header read is not conditional",
 # counted from those headers, and its output keeps them.
 rows_before = len(rows())
 included_pages = run(["gh", "api", "--include", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
-check("a caller-included paginated read logs one row per page",
-      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a filtered caller-include read is one invocation",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 check("a caller-included paginated read keeps its headers",
       included_pages.stdout.count("HTTP/") == 3 and "name1" in included_pages.stdout,
       repr(included_pages.stdout[:40]))

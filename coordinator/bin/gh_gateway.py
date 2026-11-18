@@ -607,16 +607,25 @@ def settle(argv, stdout, headers_counted):
         return strip_headers(stdout), max(1, status_lines(stdout))
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
-    has_include = "--include" in argv or "-i" in argv
-    if has_include and "--paginate" in argv and resource(argv) == CORE:
-        # The caller asked for the headers itself: count the pages from
-        # them and leave its output exactly as gh wrote it. This holds
-        # whether or not an output filter formatted the bodies.
-        return stdout, max(1, status_lines(stdout))
+    if "--paginate" in argv and resource(argv) == CORE:
+        has_include = "--include" in argv or "-i" in argv
+        if filtered(argv):
+            # The bodies are the caller's text, so neither a status line in
+            # them nor a number on each line is a page. One invocation, one
+            # row, page count unknown.
+            return stdout, 1
+        if has_include:
+            # Unfiltered pages are JSON, so a header block is a real one.
+            return stdout, max(1, status_lines(stdout))
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
     # A formatted read is measured as the one invocation it is, and the row
     # says its page count is unknown rather than guessing.
+    if filtered(argv) and "--paginate" in argv and resource(argv) == CORE:
+        # The formatted output is not a page list: one page of ten issues
+        # with `--jq '.[].number'` prints ten numbers, and the JSON reader
+        # would call those ten pages. One invocation, one row.
+        return stdout, 1
     return stdout, requests(argv, stdout)
 
 
