@@ -34,7 +34,7 @@ RESERVATION_TIMEOUT = float(os.environ.get("COORDQ_RESERVATION_TIMEOUT", "180"))
 import models as model_list
 
 BUILD_TASK_TYPES = ("standard", "large", "ui", "research", "rca", "chore", "worker", "risky", "design")
-TASK_TYPES = BUILD_TASK_TYPES + ("fix", "review")
+TASK_TYPES = BUILD_TASK_TYPES + ("fix", "review", "panel")
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
@@ -143,23 +143,23 @@ def gate_label(state):
 
 
 def task_list(task_type):
-    return {"fix": "fix", "review": "review"}.get(task_type, "build")
+    return {"fix": "fix", "review": "review", "panel": "panel"}.get(task_type, "build")
 
 
 def with_model(args):
     task_type = args.get("taskType")
-    if task_type and task_type not in TASK_TYPES:
-        return None, f"refused: unknown taskType {task_type!r}. Accepted taskTypes: {', '.join(sorted(TASK_TYPES))}"
+    if task_type not in TASK_TYPES:
+        return None, f"refused: a launch needs a taskType, got {task_type!r}. Accepted taskTypes: {', '.join(sorted(TASK_TYPES))}"
     resolved = dict(args)
     resolved.pop("taskType", None)
     if not resolved.get("modelSelection"):
-        if not task_type:
-            return None, "refused: a launch needs a taskType or a modelSelection"
+        if task_type == "panel":
+            return None, "refused: a panel launch names its model from the panel list"
         entry = model_list.first_available(task_list(task_type))
         if entry is None:
             return None, f"refused: every model for taskType {task_type!r} is blocked"
         resolved["modelSelection"] = entry["selection"]
-    elif task_type:
+    else:
         list_name = task_list(task_type)
         allowed = model_list.find(resolved["modelSelection"], (list_name,))
         if allowed is None:
@@ -1430,7 +1430,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     message = build_gate_brief(settings, repo, issue, number, head, publisher,
                                proof=proof, proof_path=proof_path, proof_state=proof_state)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
-            "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
+            "taskType": "review", "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
 
 

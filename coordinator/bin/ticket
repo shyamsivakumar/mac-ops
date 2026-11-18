@@ -1251,6 +1251,7 @@ def build_start(cfg, t, attempt, issue):
         "clientRequestId": request_id,
         "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}",
                               "startFromOrigin": True},
+        "taskType": t["type"],
         "modelSelection": t["builderSelection"],
     }
     title_rest = t["title"][len(t["key"]):].lstrip(" ·-:·").strip()
@@ -1567,7 +1568,7 @@ def cmd_gate(a):
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
                            proof=proof, proof_path=proof_path, proof_state=proof_state)
         gate_id = f"gate:{repo}#{number}:{head}"
-        payload = {"projectId": rcfg["projectId"], "title": title, "modelSelection": model,
+        payload = {"projectId": rcfg["projectId"], "title": title, "taskType": "review", "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
                    "clientRequestId": gate_id, "message": brief}
         command = [COORDQ, "start", json.dumps(payload), "--title", title, "--priority", str(GATE_PRIORITY)]
