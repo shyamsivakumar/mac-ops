@@ -684,6 +684,17 @@ run(["gh", "api", "--paginate", "--slurp", "search/issues?q=repo:a/b+is:issue"])
 check("a paginated search read counts its pages",
       len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
 
+# A filtered search read is one invocation too: ten numbers from one page
+# are not ten search requests.
+set_mode("numbers")
+rows_before = len(rows())
+run(["gh", "api", "--paginate", "--jq", ".[].number", "search/issues?q=repo:a/b"])
+check("a filtered search read is one invocation", len(rows()) - rows_before == 1,
+      f"rows={len(rows()) - rows_before}")
+check("a filtered search read is marked unknown",
+      rows()[rows_before].get("pages") == "unknown", str(rows()[rows_before]))
+set_mode("200")
+
 # A rotation inside the window discards earlier calls, so the totals are a
 # lower bound rather than an exact number.
 truncated_log = scratch / "truncated.jsonl"
