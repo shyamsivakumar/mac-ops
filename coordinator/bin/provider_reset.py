@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover - Python without zoneinfo
 
 # A provider that says when it comes back in relative words: "your plan
 # resets in 30 minutes", "retry after 3600s", "resets in 1 hour 30 minutes".
-_UNIT = r"(?:seconds?|minutes?|hours?|secs?|mins?|hrs?|h|m|s)"
+_UNIT = r"(?:seconds?|minutes?|hours?|days?|secs?|mins?|hrs?|d|h|m|s)"
 _AMOUNT = rf"\d+(?:\.\d+)?\s*{_UNIT}\b"
 RELATIVE = re.compile(
     rf"(?:resets?|try again|retry|available|back)\s+(?:in|after)\s+"
@@ -31,7 +31,8 @@ AMOUNT = re.compile(rf"(\d+(?:\.\d+)?)\s*({_UNIT})\b", re.IGNORECASE)
 UNITS = {"second": 1.0, "seconds": 1.0, "sec": 1.0, "secs": 1.0, "s": 1.0,
          "minute": 60.0, "minutes": 60.0, "min": 60.0, "mins": 60.0,
          "hour": 3600.0, "hours": 3600.0, "hr": 3600.0, "hrs": 3600.0,
-         "m": 60.0, "h": 3600.0}
+         "day": 86400.0, "days": 86400.0,
+         "m": 60.0, "h": 3600.0, "d": 86400.0}
 # The last moment the store can write: a reset past the end of the calendar
 # is no reset, and any reset before it is honoured however far off it is.
 MAX_EPOCH = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp()
@@ -44,7 +45,7 @@ TIME_ONLY = re.compile(r"\b(\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)")
 RESET_WORD = re.compile(r"reset|retry|available|till|until|back\s+off", re.IGNORECASE)
 # The zone a message states for its reset: "UTC", "+08:00", "Asia/Shanghai".
 OFFSET = re.compile(r"([+-])(\d{2}):?(\d{2})\b")
-NAMED_ZONE = re.compile(r"\b([A-Za-z]+(?:/[A-Za-z_]+)+)\b")
+NAMED_ZONE = re.compile(r"\b([A-Za-z]+(?:/[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*)+)\b")
 
 
 def zone_of(text, start=0):
