@@ -287,6 +287,13 @@ class ProviderBlockTests(unittest.TestCase):
         got = provider_reset.reset_at("429; resets at 14:00 America/Los_Angeles", base)
         self.assertEqual(got, moment("2026-11-01T22:00:00"))
 
+    def test_a_time_of_day_reset_on_the_repeated_autumn_hour_is_read_on_its_second_pass(self):
+        """01:15 PST is the second pass of 01:xx on November 1, so 'resets at
+        01:30' is 15 minutes away, not a day and a quarter."""
+        base = moment("2026-11-01T09:15:00")
+        got = provider_reset.reset_at("429; resets at 01:30 America/Los_Angeles", base)
+        self.assertEqual(got, moment("2026-11-01T09:30:00"))
+
     def test_a_newer_refusal_replaces_an_older_reset(self):
         """The provider's latest word on when it comes back is the one that
         holds: an 11:00 refusal that names noon replaces a 10:00 record
