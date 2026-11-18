@@ -866,8 +866,14 @@ def _capacity_decision(helper, sample, census, compressor, previous, current, bo
     valid = helper._sample_invalid_reason(sample, now_mono) is None
     critical = _critical_pressure(helper, sample)
     proposed = detail["target"]
-    target = (0 if critical else max(floor, proposed) if valid
-              else min(current, detail["ceiling"]))
+    physical = (state.get("machine") or [0, 0])[1]
+    if physical < helper.SMALL_HOST_MEMORY_BYTES:
+        # A small host recovers from zero slots on its next good sample.
+        held = min(max(current, floor), detail["ceiling"])
+    else:
+        # Every other host keeps the original cap on an unreadable sample.
+        held = min(current, floor, detail["ceiling"])
+    target = (0 if critical else max(floor, proposed) if valid else held)
     detail.update(floor=floor, critical=critical, adaptive_target=proposed, target=target)
     if critical:
         detail["reason"] = "critical_pressure"

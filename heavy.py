@@ -427,6 +427,25 @@ def required_headroom_bytes(
     return max(SMALL_HOST_HEADROOM_FLOOR_BYTES, scaled)
 
 
+def effective_executable(argv: Sequence[str]) -> Optional[str]:
+    """Return the executable a command actually runs.
+
+    A wrapper that runs its first argument, such as env, does not make that
+    argument a mention; the command still runs it.
+    """
+    if not argv:
+        return None
+    first = os.path.basename(str(argv[0]))
+    if first != "env":
+        return first
+    index = 1
+    while index < len(argv) and str(argv[index]).startswith("-"):
+        index += 1
+    if index >= len(argv):
+        return None
+    return os.path.basename(str(argv[index]))
+
+
 def xcodebuild_executable(value: str) -> bool:
     """Return whether a command's own executable is xcodebuild.
 
@@ -441,7 +460,7 @@ def simulator_destination_device(
     argv: Sequence[str],
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Return the simulator device and OS version a command targets."""
-    if not argv or not xcodebuild_executable(str(argv[0])):
+    if not argv or not xcodebuild_executable(effective_executable(argv) or ""):
         return None, None, None
     destinations: List[str] = []
     for index, arg in enumerate(argv):
@@ -451,11 +470,10 @@ def simulator_destination_device(
         elif text.startswith("-destination="):
             destinations.append(text.split("=", 1)[1])
     for value in destinations:
-        if SIMULATOR_DESTINATION_MARKER not in value:
-            continue
         device = None
         os_version = None
-        platform = "iOS"
+        platform = None
+        simulator = False
         for part in value.split(","):
             part = part.strip()
             if part.startswith("id="):
@@ -465,9 +483,17 @@ def simulator_destination_device(
             elif part.startswith("OS="):
                 os_version = part[3:].strip()
             elif part.startswith("platform="):
-                platform = part[9:].strip().split()[0]
-        if device:
-            return device, os_version, platform
+                platform = part[9:].strip()
+                simulator = platform.endswith("Simulator")
+        if not device:
+            continue
+        if platform is None:
+            # A destination that names only a device id is resolved against
+            # the booted simulators.
+            return device, os_version, None
+        if not simulator:
+            continue
+        return device, os_version, platform.split("Simulator")[0].strip()
     return None, None, None
 
 
@@ -530,7 +556,8 @@ def _booted_simulator_udid(
         if os_version and version != os_version:
             continue
         runtime_platform = _runtime_platform(str(runtime))
-        if runtime_platform and runtime_platform.lower() != platform.lower():
+        wanted = (platform or "iOS").lower()
+        if runtime_platform and runtime_platform.lower() != wanted:
             continue
         if not isinstance(rows, list):
             continue
