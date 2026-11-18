@@ -343,8 +343,10 @@ def move_stage(repo, number, stage):
     The old stage is removed and the new one added in one update, so the
     ticket never passes through a state with no stage label. A failed update
     puts back the stage labels the ticket started with, so a failure leaves
-    the ticket as it was. A ticket that already carries only the target
-    stage is not written at all. Return True when the ticket was written.
+    the ticket as it was; a ticket parked while the update failed is refused
+    instead, and keeps the labels it has. A ticket that already carries only
+    the target stage is not written at all. Return True when the ticket was
+    written.
     """
     target = f"{STAGE_PREFIX}{stage}"
     labels = gh_json(["issue", "view", str(number), "-R", repo, "--json", "labels"])
@@ -375,9 +377,17 @@ def move_stage(repo, number, stage):
         # is told so instead of reporting the stage it meant to keep.
         restored = False
         try:
-            current = stage_labels([label["name"] for label in
-                                    gh_json(["issue", "view", str(number), "-R", repo,
-                                             "--json", "labels"])["labels"]])
+            names_now = [label["name"] for label in
+                         gh_json(["issue", "view", str(number), "-R", repo,
+                                  "--json", "labels"])["labels"]]
+            # The labels are read again here, after the update failed, and a
+            # ticket Shyam parked in between is parked now: putting the
+            # earlier stage back would take the parking off, so it keeps the
+            # labels it has.
+            parking = parked_label(names_now)
+            if parking:
+                raise Refuse(f"parked ({parking}); only Shyam clears it")
+            current = stage_labels(names_now)
             add_back = [name for name in before if name not in current]
             drop = [name for name in current if name not in before]
             # A failure that changed nothing leaves the labels as they were,

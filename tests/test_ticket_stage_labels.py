@@ -63,12 +63,16 @@ class FakeGitHub:
     stage-less. One failing update is the failure the helper has to repair,
     and two are the failure it cannot. `fails_before_change` is the other
     shape of a failure: the update is refused before it touches a label, so
-    the ticket keeps the stage it started with.
+    the ticket keeps the stage it started with. `parks_on_failure` parks the
+    ticket once, after a failed update has taken the old stage off, the way
+    Shyam parks a ticket between a failed update and the repair read.
     """
 
-    def __init__(self, labels, pulls=(), failing_edits=0, fails_before_change=False):
+    def __init__(self, labels, pulls=(), failing_edits=0, fails_before_change=False,
+                 parks_on_failure=None):
         self.labels = list(labels)
         self.fails_before_change = fails_before_change
+        self.parks_on_failure = parks_on_failure
         # The repository's label set is apart from the issue's labels, so a
         # created label does not land on the issue by itself.
         self.repo_labels = set(labels)
@@ -130,6 +134,9 @@ class FakeGitHub:
                 self.labels.remove(name)
         if self.failing_edits:
             self.failing_edits -= 1
+            if self.parks_on_failure:
+                self.labels.append(self.parks_on_failure)
+                self.parks_on_failure = None
             return subprocess.CompletedProcess(cmd, 1, "",
                                                "could not add label: 'stage:started' not found")
         for name in self.option(args, "--add-label"):
@@ -233,6 +240,20 @@ class StartTest(unittest.TestCase):
         self.assertEqual(github.stages(), ["stage:backlog"])
         self.assertEqual(github.edits, [])
 
+    def test_start_keeps_parking_added_before_the_repair_read(self):
+        # The update fails after taking the old stage off, and Shyam parks the
+        # ticket before the helper reads the labels again to repair it, so the
+        # repair must not take that parking off (mac-ops #533).
+        github = FakeGitHub(["stage:todo", "type:standard", "priority:1"], failing_edits=1,
+                            parks_on_failure="stage:backlog")
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as caught:
+                start(github)
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("parked (stage:backlog)", errors.getvalue())
+        self.assertEqual(github.stages(), ["stage:backlog"])
+        self.assertEqual(len(github.edits), 1)
+
 
 class DeliverTest(unittest.TestCase):
     def test_deliver_gives_a_stageless_ticket_its_stage_back(self):
@@ -266,6 +287,21 @@ class DeliverTest(unittest.TestCase):
         self.assertIn("refused: parked (stage:backlog)", errors.getvalue())
         self.assertEqual(github.labels, ["Stage:Backlog", "type:standard"])
         self.assertEqual(github.edits, [])
+
+    def test_deliver_keeps_parking_added_before_the_repair_read(self):
+        # Delivery starts from `stage:todo`, the update fails after taking
+        # that stage off, and Shyam parks the ticket before the repair read.
+        # Putting `stage:todo` back would drop the parking, so the ticket
+        # keeps the labels it has (mac-ops #533).
+        github = FakeGitHub(["stage:todo", "type:standard"], pulls=[20], failing_edits=1,
+                            parks_on_failure="stage:backlog")
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            with self.assertRaises(SystemExit) as caught:
+                deliver(github)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("refused: parked (stage:backlog)", errors.getvalue())
+        self.assertEqual(github.stages(), ["stage:backlog"])
+        self.assertEqual(len(github.edits), 1)
 
     def test_deliver_does_not_churn_a_stage_label_written_in_another_case(self):
         # GitHub matches label names without regard to case, and a ticket that
