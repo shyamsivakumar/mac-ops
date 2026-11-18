@@ -577,14 +577,13 @@ def _rename_exclusive(source: Path, destination: Path) -> bool:
     return False
 
 
-def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int], store: int | None = None) -> int:
+def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> int:
     """Remove a file only when it is the one that was stamped.
 
     The file is renamed aside first, so the name that is removed belongs to
-    this call. The moved copy is kept in the recovery storage rather than
-    deleted, so a save that an editor makes through its own descriptor after
-    the move still has a home. A file that was replaced after the stamp is
-    put back.
+    this call. A file that was replaced after the stamp is put back and
+    kept; a file that cannot be moved aside is kept where it is and the
+    removal is reported as incomplete.
     """
     # The name the file is moved to is reserved exclusively, so it can never
     # be the name a preserved copy already has.
@@ -605,6 +604,8 @@ def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int], store
     try:
         os.rename(name, moved, src_dir_fd=fd, dst_dir_fd=fd)
     except OSError:
+        # The move failed, so the file is preserved where it is and the
+        # removal is reported as incomplete.
         try:
             os.unlink(moved, dir_fd=fd)
         except OSError:
@@ -615,15 +616,9 @@ def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int], store
     except OSError:
         info = None
     if info is not None and (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) == stamp:
-        if store is not None:
-            # The copy is kept in the recovery storage: an editor that saves
-            # through its descriptor after this point writes into the inode
-            # that is kept there.
-            try:
-                os.rename(moved, os.path.basename(moved), src_dir_fd=fd, dst_dir_fd=store)
-                return 0
-            except OSError:
-                pass
+        # The file is the one that was verified, so it is removed and the
+        # space is reclaimed. The ticket removes finished worktrees, it does
+        # not archive them.
         try:
             os.unlink(moved, dir_fd=fd)
             return 0
@@ -669,7 +664,7 @@ def _snapshot_all(fd: int, prefix: str = "") -> dict[str, dict[str, tuple[int, i
     return result
 
 
-def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapshots: dict[str, dict[str, tuple[int, int, int, int]]] | None = None, prefix: str = "", store: int | None = None) -> int:
+def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapshots: dict[str, dict[str, tuple[int, int, int, int]]] | None = None, prefix: str = "") -> int:
     """Remove the entries of a directory that have not changed since the
     snapshot, through the descriptor of the directory.
 
@@ -694,7 +689,7 @@ def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapsh
                 kept += 1
                 continue
             try:
-                kept += _remove_tree(child, {}, snapshots, prefix + entry + "/", store)
+                kept += _remove_tree(child, {}, snapshots, prefix + entry + "/")
             finally:
                 os.close(child)
             try:
@@ -702,7 +697,7 @@ def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]], snapsh
             except OSError:
                 kept += 1
             continue
-        kept += _unlink_verified(fd, entry, stamp, store)
+        kept += _unlink_verified(fd, entry, stamp)
     return kept
 
 
