@@ -11,6 +11,8 @@ one of its directories is a prompt directory. The match is by path, never by
 the words in the diff or the ticket.
 """
 
+import subprocess
+
 # File names, compared without case. The coordinator's agent rules, the bar,
 # the brief and the answer format the gate reads, the playbook, the reviewer
 # prompt and every skill file.
@@ -41,6 +43,53 @@ def is_prompt_path(path):
 # not give, and it never reads as CLEAR: a clear answer authorizes the merge
 # the gate brief orders for an ordinary pull request.
 HOLD, CLEAR, UNKNOWN = "hold", "clear", "unknown"
+
+# The branch a merge lands on when nothing retargets the pull request. A
+# retarget moves a pull request onto another base without moving its head, and
+# no head-only merge can refuse that, so the classification covers this branch
+# as well as the pull request's own base.
+DEFAULT_BASE = "main"
+
+
+def bases(base):
+    """The refs a classification has to cover, the default branch included.
+
+    A pull request against a feature branch can be retargeted onto the default
+    branch without moving its head, and the same head can then introduce
+    prompt text it did not introduce against the feature branch. Reading the
+    default branch too decides that retarget before the merge: the pull
+    request holds whether it is retargeted or not, so a merge that cannot pin
+    its base cannot carry prompt text onto the default branch.
+    """
+    if not base or base == DEFAULT_BASE:
+        return [DEFAULT_BASE]
+    return [base, DEFAULT_BASE]
+
+
+def scan_bases(fetch, repo, refs, head, attempts=2):
+    """HOLD, CLEAR or UNKNOWN over every base one head is classified against.
+
+    HOLD wins, because one base that shows prompt text stops the pull request.
+    UNKNOWN wins over CLEAR too: a base nobody could read is not the clear
+    answer that authorizes a merge, so only a set that reads clear on every
+    base is CLEAR.
+    """
+    answer = CLEAR
+    for base in refs:
+        state = UNKNOWN
+        for _ in range(max(1, attempts)):
+            try:
+                paths = tree_diff(fetch, repo, base, head)
+            except (RuntimeError, ValueError, subprocess.SubprocessError):
+                continue
+            if paths is not None:
+                state = prompt_scan(paths)
+                break
+        if state == UNKNOWN:
+            return UNKNOWN
+        if state == HOLD:
+            answer = HOLD
+    return answer
 
 
 def entry_paths(entry):

@@ -356,6 +356,10 @@ def gate_pipeline():
                 # The pre-merge guard: the base and head the review was taken
                 # against, read in one call immediately before the merge.
                 return json.dumps({"baseRefName": "main", "headRefOid": head})
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName"]:
+                # The post-merge guard: a merged pull request cannot be
+                # retargeted, so this base is the one the merge landed on.
+                return json.dumps({"baseRefName": "main"})
             if cmd[:2] == ["gh", "api"]:
                 # The changed paths of the pull request: the case decides
                 # whether they carry one prompt path or only code. The lane

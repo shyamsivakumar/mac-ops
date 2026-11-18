@@ -878,6 +878,88 @@ class MergeBaseGuardTest(unittest.TestCase):
         self.assertFalse(merged)
         self.assertEqual([c for c in calls if "revert" in " ".join(c)], [])
 
+    def test_a_retarget_after_the_merge_is_reported_not_merged(self):
+        """A base that moves in the merge call cannot be refused, so it is read again.
+
+        No `gh` call pins the base, so the pre-merge read covers only the
+        interval before it. A pull request that lands on another base is
+        reported as one, and the caller closes and fast-forwards nothing.
+        """
+        calls = []
+        base = {"now": "main"}
+
+        def command(cmd, timeout=150):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "pr", "merge"]:
+                base["now"] = "release/next"
+                return ""
+            if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
+                    "baseRefName" in str(part) for part in cmd):
+                return '{"baseRefName": "%s", "headRefOid": "%s"}' % (base["now"], "a" * 40)
+            return ""
+
+        with patch.object(self.lane, "run", command):
+            merged, note = self.lane.merge_on_reviewed_base(
+                "shyamsivakumar/mac-ops", 544, "a" * 40, "main")
+        self.assertFalse(merged)
+        self.assertIn("not the reviewed main", note)
+        self.assertEqual(len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]), 1)
+
+    def test_the_base_is_read_before_and_after_the_merge(self):
+        """One read guards the interval before the merge, one the merge itself."""
+        _merged, _note, calls = self.merge("main")
+        views = [c for c in calls if c[:2] == ["gh", "pr"] and "view" in c]
+        self.assertEqual(len(views), 2)
+        merge_at = next(i for i, c in enumerate(calls) if c[:3] == ["gh", "pr", "merge"])
+        self.assertLess(calls.index(views[0]), merge_at)
+        self.assertGreater(calls.index(views[1]), merge_at)
+
+
+class DefaultBaseTest(unittest.TestCase):
+    """The classification covers the default branch, so a retarget cannot hide text."""
+
+    def test_the_own_base_and_the_default_branch_are_both_classified(self):
+        self.assertEqual(prompt_paths.bases("feature"), ["feature", prompt_paths.DEFAULT_BASE])
+        self.assertEqual(prompt_paths.bases("main"), ["main"])
+        self.assertEqual(prompt_paths.bases(None), [prompt_paths.DEFAULT_BASE])
+
+    def test_a_prompt_change_against_main_holds_a_feature_base_pull_request(self):
+        import lane_driver
+
+        def fetch(endpoint):
+            if endpoint.endswith("/compare/feature...head"):
+                return {"merge_base_commit": {"sha": "feature-base"}}
+            if endpoint.endswith("/compare/main...head"):
+                return {"merge_base_commit": {"sha": "main-base"}}
+            if endpoint.endswith("/git/trees/feature-base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}
+            if endpoint.endswith("/git/trees/main-base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"},
+                                 {"type": "blob", "path": "skills/x/SKILL.md", "sha": "2"}]}
+            if endpoint.endswith("/git/trees/head?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "sha": "3"}]}
+            raise AssertionError(endpoint)
+
+        with patch.object(lane_driver, "api_json", fetch):
+            state = lane_driver.prompt_pull("o/r", 544, base="feature", head="head")
+        self.assertEqual(state, prompt_paths.HOLD)
+
+    def test_an_unreadable_default_branch_is_unknown_never_clear(self):
+        import lane_driver
+
+        def fetch(endpoint):
+            if endpoint.endswith("/compare/feature...head"):
+                return {"merge_base_commit": {"sha": "feature-base"}}
+            if endpoint.endswith("/git/trees/feature-base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}
+            if endpoint.endswith("/git/trees/head?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]}
+            raise RuntimeError("gh failed")
+
+        with patch.object(lane_driver, "api_json", fetch):
+            state = lane_driver.prompt_pull("o/r", 544, base="feature", head="head", attempts=1)
+        self.assertEqual(state, prompt_paths.UNKNOWN)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -628,14 +628,7 @@ def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts
     unreadable or short is UNKNOWN.
     """
     if base and head:
-        for _ in range(max(1, attempts)):
-            try:
-                paths = prompt_paths.tree_diff(api_json, repo, base, head)
-            except (RuntimeError, ValueError, subprocess.SubprocessError):
-                continue
-            if paths is not None:
-                return prompt_paths.prompt_scan(paths)
-        return prompt_paths.UNKNOWN
+        return prompt_paths.scan_bases(api_json, repo, prompt_paths.bases(base), head, attempts)
     try:
         count = changed_files if isinstance(changed_files, int) else pr_changed_count(repo, number)
     except (RuntimeError, ValueError, subprocess.SubprocessError):
@@ -757,12 +750,17 @@ def merge_on_reviewed_base(repo, number, head, base):
     """Merge one pull request only when its base is still the reviewed one.
 
     `--match-head-commit` pins the head, and nothing in the merge call pins
-    the base: a retarget leaves the head where it is. The merge therefore
-    cannot enforce the reviewed base, so a merge is only issued when the base
-    reads as the reviewed one immediately before it, and a base that has
-    moved merges nothing and waits for the next pass to review the new base.
-    Return (merged, note): merged means the merge was issued; note is the
-    line the pass prints.
+    the base: a retarget leaves the head where it is. Two things guard the
+    interval around the merge. The base and head are read once immediately
+    before it, and a pull request that moved merges nothing. The base is read
+    once more after it: a merge cannot pin its base, so a retarget that slipped
+    into that interval would otherwise be reported as a merge on the reviewed
+    base. A merge that landed on another base is reported as one that is not
+    the reviewed review's, and the caller closes nothing and fast-forwards
+    nothing, so the outcome Shyam reads is never "merged as reviewed" for a
+    base nobody reviewed.
+    Return (merged, note): merged means the merge was issued onto the reviewed
+    base; note is the line the pass prints.
     """
     current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
                               "--json", "baseRefName,headRefOid"])) or {}
@@ -771,6 +769,14 @@ def merge_on_reviewed_base(repo, number, head, base):
                        f"{current.get('baseRefName')}, head {head[:8]} -> "
                        f"{str(current.get('headRefOid'))[:8]}); nothing merged, the next pass reviews it")
     run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+    landed = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                             "--json", "baseRefName"])) or {}
+    if landed.get("baseRefName") != base:
+        # The pull request cannot be retargeted once it is merged, so the base
+        # it names now is the base the merge landed on.
+        return False, (f"critical #{number}: the merge landed on base "
+                       f"{landed.get('baseRefName')}, not the reviewed {base}; nothing closed, "
+                       f"nothing fast-forwarded, Shyam must read head {head}")
     return True, f"#{number}: merged {head}"
 def message_title(repo, number, action, head):
     """The title of one message about one head of one pull request.

@@ -1455,14 +1455,7 @@ def gate_prompt_state(repo, number, changed_files=None, base=None, head=None, at
     and a truncated or short one is UNKNOWN, never CLEAR.
     """
     if base and head:
-        for _ in range(max(1, attempts)):
-            try:
-                paths = prompt_paths.tree_diff(gh_json, repo, base, head)
-            except (RuntimeError, ValueError, subprocess.SubprocessError):
-                continue
-            if paths is not None:
-                return prompt_paths.prompt_scan(paths)
-        return prompt_paths.UNKNOWN
+        return prompt_paths.scan_bases(gh_json, repo, prompt_paths.bases(base), head, attempts)
     count = changed_files if isinstance(changed_files, int) else gate_changed_count(repo, number)
     for _ in range(max(1, attempts)):
         try:
