@@ -582,13 +582,26 @@ def _token_id():
 
 
 def argv_host(argv):
-    """Return the host an `--hostname` flag names, or "" when it names none."""
+    """Return the host a command targets, or "" when it names none.
+
+    Two forms name a host: `--hostname HOST`, and a repository selector with
+    a host in it, `-R HOST/OWNER/REPO` (or `GH_REPO`). Both decide which
+    host's quota and account apply."""
     words = [str(word) for word in (argv or [])[1:]]
     for index, word in enumerate(words):
         if word == "--hostname" and index + 1 < len(words):
             return words[index + 1]
         if word.startswith("--hostname="):
             return word.split("=", 1)[1]
+    selector = os.environ.get("GH_REPO") or ""
+    for index, word in enumerate(words):
+        if word in ("-R", "--repo") and index + 1 < len(words):
+            selector = words[index + 1]
+        elif word.startswith("--repo="):
+            selector = word.split("=", 1)[1]
+    parts = selector.split("/")
+    if len(parts) == 3 and parts[0]:
+        return parts[0]
     return ""
 
 
