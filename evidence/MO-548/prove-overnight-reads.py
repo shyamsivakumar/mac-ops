@@ -108,6 +108,17 @@ check("a success is returned", code == 0)
 check("a paginated read logs one row per page", len(rows()) - before == 3,
       f"rows={len(rows()) - before}")
 
+# 2b. A write is never cached through this wrapper either, whichever way
+#     the body is written. Attached body flags imply POST.
+mode_file.write_text("ok")
+for flag in ("--field=name=value", "--raw-field=name=value", "-fname=value"):
+    write_argv = [str(fake), "api", flag, "repos/a/b/dispatches?ref=main"]
+    before = calls_made()
+    overnight.run_read(write_argv, 10, deadline)
+    overnight.run_read(write_argv, 10, deadline)
+    check(f"a write with {flag} is never cached", calls_made() - before == 2,
+          f"calls={calls_made() - before}")
+
 # 3. A succeeded read is cached: the next identical read makes no call.
 before = calls_made()
 overnight.run_read(argv, 10, deadline)
