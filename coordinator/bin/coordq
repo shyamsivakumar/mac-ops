@@ -48,16 +48,16 @@ TASK_MODELS = {
     "review": ASTRA_MODEL,
 }
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
-# The selections a build may run on, and nothing else: GLM 5.3, MiniMax,
-# DeepSeek, or a task/* route on the router (the MiniMax-first pi route).
+# The selections a build may START on, and nothing else: GLM 5.3, MiniMax,
+# or a task/* route on the router (the MiniMax-first pi route; DeepSeek is
+# reached only as a fallback inside a route, never a direct start).
 # Every other selection — Sol, Terra, Luna, any OpenAI model in any
 # spelling (gpt-*, openai/*, subscriptions/*), the o-series, Opus, Sonnet,
-# cursor — is refused as a builder; reviews run on the gate chain only
-# (Shyam 2026-11-17: "build with glm 5.3 or minimax first").
+# cursor, a bare DeepSeek — is refused as a builder; reviews run on the
+# gate chain only (Shyam 2026-11-17: "build with glm 5.3 or minimax first").
 ALLOWED_BUILDER_SELECTIONS = (
     {"instanceId": "glm", "model": "zai/glm-5.3"},
     {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
-    {"instanceId": "pi", "model": "deepseek/deepseek-flash"},
 )
 RULES_PATH = os.environ.get("COORDQ_RULES", os.path.expanduser("~/.coordinator/AGENT-RULES.md"))
 RULES_SKIP_TITLE = re.compile(r"\b(?:review|critique)\b|\bmerge relay\b", re.IGNORECASE)
