@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `c2388fe2ba507325e0a94d55f9095298f34453df`
+Checked commit: `1074232bfbe16fbf42943ae3311128751c6aa289`
 Working tree clean when the checks ran: yes
 
 | Check | Command | Result | Detail |
@@ -10,7 +10,7 @@ Working tree clean when the checks ran: yes
 | overnight selftest | `python3 coordinator/overnight/overnight selftest` | passed |  |
 | python syntax: coordinator/bin/gh_gateway.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/bin/gh_gateway.py` | passed |  |
 | python syntax: evidence/MO-1088/prove-gh-gateway.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' evidence/MO-1088/prove-gh-gateway.py` | passed |  |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-z1ub4q63 -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-z1ub4q63/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-m5h4rnwa -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-m5h4rnwa/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
