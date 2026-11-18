@@ -93,6 +93,35 @@ class CapacityTests(unittest.TestCase):
             self.q.drain()
         self.assertEqual(self.q.load()["reserved"], {})
 
+    def test_a_timeout_three_minutes_old_releases_a_slot_nobody_uses(self):
+        # A launch whose thread never shows live still comes back: the slot
+        # it holds is not held for ten minutes.
+        self.queue_sends()
+        data = self.q.load()
+        data["items"] = data["items"][:1]
+        data["reserved"] = {"stale": self.q.time.time() - 181}
+        data["reservedThreads"] = {"stale": "mcp:launch:gone"}
+        self.q.save(data)
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="running"), patch.object(
+                self.q, "call", return_value=(0, "{}")):
+            self.q.drain()
+        self.assertNotIn("stale", self.q.load()["reserved"])
+
+    def test_status_reconciles_a_reservation_its_launch_no_longer_needs(self):
+        # The reported reserved set is what the queue holds now, so a read
+        # does not show a slot that no thread uses.
+        self.q.save({"next": 2, "items": [],
+                     "reserved": {"7": self.q.time.time()},
+                     "reservedThreads": {"7": "launch:mcp:launch:one"}})
+        out = io.StringIO()
+        with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
+                self.q, "thread_status", return_value="completed"), patch.object(
+                self.q, "load_counts", return_value={}), redirect_stdout(out):
+            self.q.cmd_status(None)
+        self.assertEqual(json.loads(out.getvalue())["reserved"], {})
+        self.assertEqual(self.q.load()["reserved"], {})
+
     def test_pre_steps_reserve_their_own_slots(self):
         self.queue_sends()
         data = self.q.load()
@@ -138,9 +167,10 @@ class CapacityTests(unittest.TestCase):
         self.assertIn("released reservation #7: thread mcp:launch:one is completed", log)
 
     def test_unfinished_thread_keeps_a_launch_slot_that_was_never_seen_live(self):
-        # Elapsed time alone must not free the slot: only a terminal status does.
+        # Elapsed time alone must not free the slot inside the timeout: only a
+        # terminal status does. The timeout is three minutes.
         self.q.save({"next": 2, "items": [],
-                     "reserved": {"7": self.q.time.time() - 300},
+                     "reserved": {"7": self.q.time.time() - 120},
                      "reservedThreads": {"7": "launch:mcp:launch:one"}})
         self.q.live = lambda: 0
         with patch.object(self.q, "active_thread_ids", return_value=set()), patch.object(
