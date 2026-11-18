@@ -160,18 +160,35 @@ def settle_dead_run(thread_id):
     return True
 
 
-def last_reply(thread_id, diagnostics_only=False):
+def current_run_id(items):
+    """The run the newest message belongs to, or an empty string.
+
+    A failure is attributed to an identified run and nothing else. The
+    newest message names the run it belongs to; when it names none it may
+    belong to the run that stopped, so no older run's tag may answer for
+    it. Reading backwards to the last tagged message picked that older run
+    and blocked a healthy builder with a limit the current run never hit.
+    """
+    return (items[-1].get("runId") or "") if items else ""
+
+
+def last_reply(thread_id, diagnostics_only=False, current_run=False):
     """The newest message of a thread, or the diagnostic of the run that stopped.
 
     A diagnostic names the run that produced it. An earlier run's 429 says
     nothing about the run that stopped now, so that run cannot take the
-    blame: only the newest run's messages name a block reason and its
-    reset. A thread whose messages name no run supplies no diagnostic,
-    because no reason is better than another run's.
+    blame: only the stopped run's messages name a block reason and its
+    reset, and only when that run is identified. A thread whose messages
+    name no run supplies no diagnostic, because no reason is better than
+    another run's.
+
+    `current_run` reads the same way for text that is not a diagnostic,
+    such as a reply that names a head: an earlier run's text is not this
+    run's answer either.
     """
     items = t3("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 80, "maxCharsPerItem": 12000}).get("items") or []
-    if diagnostics_only:
-        newest = next((i.get("runId") for i in reversed(items) if i.get("runId")), None)
+    if diagnostics_only or current_run:
+        newest = current_run_id(items)
         items = [i for i in items if newest and i.get("runId") == newest]
     msgs = [i.get("text") or i.get("message") or "" for i in items
             if i.get("type") in ({"error", "run_error", "provider_error"} if diagnostics_only
@@ -1432,7 +1449,7 @@ def recover_dead_runs(ledger):
             ticket = int(work_match.group(1))
             work_key = receipt_key.rsplit(":a", 1)[0]
             full_thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or thread
-            reply = last_reply(thread_id)
+            reply = last_reply(thread_id, current_run=True)
             moved = False
             if ticket:
                 issue = read_json(["gh", "issue", "view", str(ticket), "-R", repo, "--json", "state"])
@@ -1579,9 +1596,14 @@ def probe_blocked_builders(ledger):
                     print(line)
                 continue
             if status == "completed" or status in {"failed", "interrupted", "cancelled", "rolled_back"}:
-                reason = provider_health.block_reason(reply) or "the probe did not answer"
+                # Only the provider's own diagnostic schedules the retry. The
+                # assistant's answer is the probe's reply: a probe that wrote
+                # "resets in 5 hours" names no reset the provider supplied, so
+                # the next probe stays hourly (#531 hourly recovery).
+                diagnostics = last_reply(thread_id, diagnostics_only=True) if thread_id else ""
+                reason = provider_health.block_reason(diagnostics) or "the probe did not answer"
                 if not DRY:
-                    provider_health.note_probe_failure(member, reply, request_id=request_id)
+                    provider_health.note_probe_failure(member, diagnostics, request_id=request_id)
                 print(f"builder probe {ident}: still blocked ({reason})")
                 continue
             if not provider_health.probe_due(member):
@@ -1733,5 +1755,10 @@ def main():
         except ApiBudgetExhausted as exc:
             print(f"API USAGE unavailable: {exc}")
         if not DRY:
-            with open(LEDGER, "w") as handle:
+            # The ledger is the record of what the pass already did - a
+            # relaunch mark, a flagged thread. A half-written file loses
+            # every mark at once and the next pass repeats the work, so the
+            # write lands in one move or not at all.
+            with open(LEDGER + ".tmp", "w") as handle:
                 json.dump(ledger, handle, indent=1)
+            os.replace(LEDGER + ".tmp", LEDGER)
