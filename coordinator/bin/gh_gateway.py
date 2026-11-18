@@ -734,7 +734,7 @@ def settle(argv, stdout, headers_counted, failed=False):
     if headers_counted:
         pages = status_lines(stdout)
         return (strip_headers(stdout),
-                max(1, pages) + _failed_request(argv, failed, pages, True, stdout))
+                max(1, pages + _failed_request(argv, failed, pages, True, stdout)))
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
@@ -750,7 +750,7 @@ def settle(argv, stdout, headers_counted, failed=False):
         if has_include:
             # Unfiltered pages are JSON, so a header block is a real one.
             pages = status_lines(stdout)
-            return stdout, max(1, pages) + _failed_request(argv, failed, pages, True, stdout)
+            return stdout, max(1, pages + _failed_request(argv, failed, pages, True, stdout))
 
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
@@ -890,13 +890,13 @@ def require_budget(limit=None):
     return remaining
 
 
-def guard_floor(limit=None):
+def guard_floor(limit=None, timeout=60):
     """Raise only when the quota is known to be below the floor.
 
     A quota that cannot be read does not stop a read: the read fails on its
     own if GitHub refuses it, and a failed rate-limit read is not evidence
     that the quota is gone."""
-    remaining = remaining_or_none()
+    remaining = remaining_or_none(timeout=timeout)
     limit = floor() if limit is None else limit
     if remaining and min(remaining.values()) < limit:
         raise ApiBudgetExhausted(
@@ -918,12 +918,16 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
     refusal or a skip. A `fresh` read is never answered from the short-TTL
     cache, so a caller that must see what GitHub has now is never given an
     old list; its own answer refreshes the entry for everyone else."""
-    if limit is not None:
-        guard_floor(limit)
+    # A cache hit answers without reading the quota, so a stalled quota
+    # probe cannot delay a read that is already paid for.
     if not fresh:
         hit = cached(argv)
         if hit is not None:
             return subprocess.CompletedProcess(argv, 0, hit, "")
+    if limit is not None:
+        # The probe shares the caller's deadline instead of adding its own
+        # 60 seconds on top of the read.
+        guard_floor(limit, timeout=max(1, int(timeout) // 2))
     if stdin is None and conditional(argv):
         return _conditional_run(argv, timeout, caller_name)
     command, headers_counted = prepare(argv) if stdin is None else (list(argv), False)

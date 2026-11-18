@@ -45,8 +45,10 @@ def hour(ts):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--log", default=os.path.expanduser(
-        "~/Library/Logs/coordinator/gh-usage.jsonl"))
+    # The writer's own setting decides where the log is; `--log` overrides.
+    parser.add_argument("--log", default=os.environ.get(
+        "COORDINATOR_GH_USAGE_LOG",
+        os.path.expanduser("~/Library/Logs/coordinator/gh-usage.jsonl")))
     parser.add_argument("--hours", type=float, default=1.0,
                         help="how far back to report, in hours")
     args = parser.parse_args()
