@@ -537,7 +537,9 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     thread that fails any of those - a legacy Sol thread, another
     builder, a blocked provider, the shared checkout of the repository
     - never takes the work: a fresh thread on the chosen builder takes
-    it instead, in the same worktree when the thread has one.
+    it instead, in the same worktree when the thread has one. A thread
+    that is running is held until it is idle; a thread that is waiting
+    makes no progress, so it is rerouted like an idle one.
     """
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
@@ -560,7 +562,7 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
-    live = thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}
+    live = thread.get("status") in {"running", "queued", "starting", "preparing"}
     thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
     if model_list.is_blocked(thread_model):
         # The thread's provider ran out, so its send would start on an
