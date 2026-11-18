@@ -600,46 +600,6 @@ def prepare(argv):
     return list(argv), False
 
 
-def without_filter(argv):
-    """Return the command with its output filter removed."""
-    kept, skip = [], False
-    for word in argv:
-        if skip:
-            skip = False
-            continue
-        if word in ("-q", "--jq", "-t", "--template"):
-            skip = True
-            continue
-        if word.startswith(("--jq=", "--template=", "-q=")):
-            continue
-        if len(word) > 2 and word.startswith(("-q", "-t")):
-            continue
-        kept.append(word)
-    return kept
-
-
-def count_pages(argv, timeout=60):
-    """Return how many requests one paginated read makes.
-
-    A formatted read prints text, so its pages cannot be counted from the
-    body. The count comes from a second, unfiltered `--slurp` read of the
-    same endpoint: the pages are the elements of one JSON array, which no
-    caller's text can imitate. That read costs a second pagination, so a
-    caller only pays it when it asked for a filter."""
-    counting = without_filter(argv) + ["--slurp"]
-    try:
-        result = _launch()(counting, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
-        return 1
-    if result.returncode:
-        return 1
-    try:
-        pages = json.loads(getattr(result, "stdout", "") or "[]")
-    except ValueError:
-        return 1
-    return max(1, len(pages)) if isinstance(pages, list) else 1
-
-
 def settle(argv, stdout, headers_counted):
     """Return (body, count) for one read that has already run."""
     stdout = stdout or ""
@@ -653,13 +613,21 @@ def settle(argv, stdout, headers_counted):
         # them and leave its output exactly as gh wrote it. This holds
         # whether or not an output filter formatted the bodies.
         return stdout, max(1, status_lines(stdout))
-    if (filtered(argv) and "--paginate" in argv and resource(argv) == CORE):
-        # The output carries the caller's formatting and nothing else, so
-        # the pages are counted by a second read. That read is a second
-        # pagination, and both are charged: the row count is what GitHub
-        # was actually asked for.
-        return stdout, max(1, count_pages(argv)) * 2
+    # Nothing here ever re-runs the command. A replay could send a write
+    # twice, and a second pagination would spend quota to learn a count.
+    # A formatted read is measured as the one invocation it is, and the row
+    # says its page count is unknown rather than guessing.
     return stdout, requests(argv, stdout)
+
+
+def pages_unknown(argv):
+    """True when a read's page count cannot be known from its output.
+
+    A formatted paginated read prints the caller's text, so neither the
+    body nor a replay can tell how many pages it took. The row says so
+    instead of pretending to a number."""
+    return bool(_gh(argv) and "--paginate" in argv
+                and resource(argv) == CORE and filtered(argv))
 
 
 def record(argv, count=1):
@@ -674,8 +642,11 @@ def record(argv, count=1):
     # No argument is written: `gh api -H "Authorization: ..."` carries a
     # credential in one. The caller, the quota and the verb are enough for
     # the report and safe to keep.
-    line = json.dumps({"ts": round(time.time(), 3), "caller": caller(),
-                       "resource": resource(argv), "verb": verb(argv)})
+    row = {"ts": round(time.time(), 3), "caller": caller(),
+           "resource": resource(argv), "verb": verb(argv)}
+    if pages_unknown(argv):
+        row["pages"] = "unknown"
+    line = json.dumps(row)
     lines = (line + "\n") * count
     # The size check, the rotation and the append are one critical section
     # under a lock. Without it two callers can both see a full log: the

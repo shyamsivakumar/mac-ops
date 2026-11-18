@@ -136,7 +136,7 @@ formatted = [str(fake), "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags
 before = len(rows())
 code, out = overnight.run_read(formatted, 10, deadline)
 check("a formatted paginated read is returned", code == 0)
-check("a formatted paginated read counts both paginations", len(rows()) - before == 6,
+check("a formatted paginated read is one invocation", len(rows()) - before == 1,
       f"rows={len(rows()) - before}")
 check("a formatted paginated read returns only its bodies",
       out.split() == ["name1", "name2", "name3"] and "HTTP/" not in out, repr(out[:40]))
