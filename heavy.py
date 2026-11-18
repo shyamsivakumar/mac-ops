@@ -459,9 +459,16 @@ def effective_executable(argv: Sequence[str]) -> Optional[str]:
             continue
         words.append(argument)
         index += 1
-    for word in words:
-        if "=" in word:
-            # An assignment sets the environment; it is not the command.
+    # The expanded words are read with the same rules: an option, the
+    # operand of an option, and an assignment are not the command.
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word in ENV_OPTIONS_WITH_OPERAND:
+            index += 2
+            continue
+        if word.startswith("-") or "=" in word:
+            index += 1
             continue
         return os.path.basename(word)
     return None
