@@ -600,6 +600,46 @@ def prepare(argv):
     return list(argv), False
 
 
+def without_filter(argv):
+    """Return the command with its output filter removed."""
+    kept, skip = [], False
+    for word in argv:
+        if skip:
+            skip = False
+            continue
+        if word in ("-q", "--jq", "-t", "--template"):
+            skip = True
+            continue
+        if word.startswith(("--jq=", "--template=", "-q=")):
+            continue
+        if len(word) > 2 and word.startswith(("-q", "-t")):
+            continue
+        kept.append(word)
+    return kept
+
+
+def count_pages(argv, timeout=60):
+    """Return how many requests one paginated read makes.
+
+    A formatted read prints text, so its pages cannot be counted from the
+    body. The count comes from a second, unfiltered `--slurp` read of the
+    same endpoint: the pages are the elements of one JSON array, which no
+    caller's text can imitate. That read costs a second pagination, so a
+    caller only pays it when it asked for a filter."""
+    counting = without_filter(argv) + ["--slurp"]
+    try:
+        result = _launch()(counting, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return 1
+    if result.returncode:
+        return 1
+    try:
+        pages = json.loads(getattr(result, "stdout", "") or "[]")
+    except ValueError:
+        return 1
+    return max(1, len(pages)) if isinstance(pages, list) else 1
+
+
 def settle(argv, stdout, headers_counted):
     """Return (body, count) for one read that has already run."""
     stdout = stdout or ""
@@ -613,6 +653,12 @@ def settle(argv, stdout, headers_counted):
         # them and leave its output exactly as gh wrote it. This holds
         # whether or not an output filter formatted the bodies.
         return stdout, max(1, status_lines(stdout))
+    if (filtered(argv) and "--paginate" in argv and resource(argv) == CORE):
+        # The output carries the caller's formatting and nothing else, so
+        # the pages are counted by a second read. That read is a second
+        # pagination, and both are charged: the row count is what GitHub
+        # was actually asked for.
+        return stdout, max(1, count_pages(argv)) * 2
     return stdout, requests(argv, stdout)
 
 

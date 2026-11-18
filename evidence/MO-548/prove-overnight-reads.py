@@ -39,13 +39,13 @@ mode = open(os.path.join(base, "mode")).read().strip()
 if mode == "fail":
     sys.stderr.write("gh: HTTP 500\\n")
     sys.exit(1)
-if any(arg in ("-q", "--jq", "-t", "--template") or arg.startswith(("-q", "-t"))
-       for arg in args) and "--paginate" in args:
+pages = [[{{"number": 1}}], [{{"number": 2}}], [{{"number": 3}}]]
+if "--paginate" in args and any(
+        arg in ("-q", "--jq", "-t", "--template") or arg.startswith(("-q", "-t"))
+        for arg in args):
     for name in ("name1", "name2", "name3"):
         print(name)
-    sys.exit(0)
-pages = [[{{"number": 1}}], [{{"number": 2}}], [{{"number": 3}}]]
-if "--include" in args and "--paginate" in args:
+elif "--include" in args and "--paginate" in args:
     for name in ("name1", "name2", "name3"):
         print("HTTP/2.0 200 OK")
         print("content-type: application/json")
@@ -136,8 +136,8 @@ formatted = [str(fake), "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags
 before = len(rows())
 code, out = overnight.run_read(formatted, 10, deadline)
 check("a formatted paginated read is returned", code == 0)
-check("a formatted paginated read is counted as its first request",
-      len(rows()) - before == 1, f"rows={len(rows()) - before}")
+check("a formatted paginated read counts both paginations", len(rows()) - before == 6,
+      f"rows={len(rows()) - before}")
 check("a formatted paginated read returns only its bodies",
       out.split() == ["name1", "name2", "name3"] and "HTTP/" not in out, repr(out[:40]))
 
