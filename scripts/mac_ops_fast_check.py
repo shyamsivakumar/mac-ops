@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+"""The mac-ops check, and the proof file it writes.
+
+Every check this script runs is written to a proof file: the check, the
+command that ran it, and whether it passed, failed or did not run. The
+builder commits that file with the change and the gate brief reads it, so
+the reviewer reads the record of the checks instead of one claimed line.
+"""
 import argparse
 import ast
 import importlib.util
@@ -6,6 +13,7 @@ from importlib.machinery import SourceFileLoader
 from unittest.mock import patch
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -20,6 +28,8 @@ SUFFIXLESS_PYTHON = (
     "coordinator/bin/coord-watch",
     "coordinator/pi/bin/coord-tick",
 )
+
+DEFAULT_PROOF = "evidence/check-proof.md"
 
 
 def git(*args):
@@ -48,6 +58,62 @@ def module_name(path):
     if parts[-1] == "__init__":
         parts.pop()
     return ".".join(parts)
+
+
+class Proof:
+    """The record of the checks one run made.
+
+    The first check that fails stops the run, so every check after it is
+    recorded as `not run` rather than left out of the file.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.rows = []
+        self.failed = False
+
+    def check(self, name, command, action):
+        """Run one check and record what happened to it."""
+        if self.failed:
+            self.rows.append((name, command, "not run", "an earlier check failed"))
+            return False
+        try:
+            action()
+        except subprocess.TimeoutExpired:
+            self.failed = True
+            self.rows.append((name, command, "failed", "the command timed out"))
+            return False
+        except Exception as exc:
+            self.failed = True
+            detail = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+            self.rows.append((name, command, "failed", detail))
+            return False
+        self.rows.append((name, command, "passed", ""))
+        return True
+
+    def write(self, head, dirty):
+        """Write the proof file of this run."""
+        lines = [
+            "# Check proof",
+            "",
+            "Command: `python3 scripts/mac_ops_fast_check.py`",
+            f"Checked commit: `{head}`",
+            f"Working tree clean when the checks ran: {'no' if dirty else 'yes'}",
+            "",
+            "| Check | Command | Result | Detail |",
+            "| --- | --- | --- | --- |",
+        ]
+        for name, command, status, detail in self.rows:
+            lines.append(f"| {name} | `{command}` | {status} | {detail} |")
+        lines += [
+            "",
+            "A result is `passed`, `failed` or `not run`. A failed check stopped the run,",
+            "so every check after it is `not run`.",
+            "",
+        ]
+        path = ROOT / self.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines))
 
 
 def check_lane_selection():
@@ -100,7 +166,13 @@ def check_lane_selection():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", action="store_true")
+    parser.add_argument("--lane-selection", action="store_true")
+    parser.add_argument("--proof", default=DEFAULT_PROOF,
+                        help="the proof file this run writes")
     args = parser.parse_args()
+    if args.lane_selection:
+        check_lane_selection()
+        return
     base = git("merge-base", "origin/main", "HEAD").decode().strip()
     changes = set(os.fsdecode(p) for p in git("diff", "--name-only", "--no-renames", "-z", base).split(b"\0") if p)
     untracked = set(os.fsdecode(p) for p in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if p)
@@ -127,27 +199,56 @@ def main():
     print(f"fast-check: Python syntax={changed_python}; shell syntax={changed_shell}; tests={tests}", flush=True)
     if args.plan:
         return
-    check_lane_selection()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-    subprocess.run([sys.executable, "coordinator/overnight/overnight", "selftest"],
-                   cwd=ROOT, env=env, check=True, timeout=60)
+    proof = Proof(args.proof)
+    head = git("rev-parse", "HEAD").decode().strip()
+    dirty = [line for line in git("status", "--porcelain").decode().splitlines()
+             if line[3:].strip() != args.proof]
+
+    def run(command, cwd=ROOT, timeout=300):
+        actual = [sys.executable if part == "python3" else part for part in command]
+        return subprocess.run(actual, cwd=cwd, env=env, check=True, timeout=timeout)
+
+    lane = ["python3", "scripts/mac_ops_fast_check.py", "--lane-selection"]
+    proof.check("lane selection", shlex.join(lane), lambda: run(lane, timeout=120))
+    selftest = ["python3", "coordinator/overnight/overnight", "selftest"]
+    proof.check("overnight selftest", shlex.join(selftest), lambda: run(selftest, timeout=60))
     for name in changed_python:
-        ast.parse((ROOT / name).read_bytes(), filename=name)
+        command = ["python3", "-c",
+                   "import ast,sys;[ast.parse(open(f,'rb').read(),f) for f in sys.argv[1:]]", name]
+        proof.check(f"python syntax: {name}", shlex.join(command),
+                    lambda command=command: run(command, timeout=120))
     for name in changed_shell:
-        subprocess.run(["/bin/sh", "-n", name], cwd=ROOT, check=True)
+        command = ["/bin/sh", "-n", name]
+        proof.check(f"shell syntax: {name}", shlex.join(command),
+                    lambda command=command: run(command, timeout=120))
+
     scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
     model_dir = ROOT / "formal" / "heavy-queue"
-    for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
-        shutil.copyfile(model_dir / name, scratch / name)
     java = os.environ.get("MAC_OPS_JAVA_BIN", "/opt/homebrew/opt/openjdk@17/bin/java" if Path("/opt/homebrew/opt/openjdk@17/bin/java").is_file() else "java")
     jar = os.environ.get("MAC_OPS_TLA_JAR", str(Path.home() / "Code/llmwiki/runtime/tla/tla2tools.jar"))
-    subprocess.run([java, "-Xmx128m", f"-Djava.io.tmpdir={scratch}", "-cp", jar,
-                    "tlc2.TLC", "-workers", "1", "-noGenerateSpecTE",
-                    "-metadir", str(scratch / "states"), "-config", "HeavyQueue.cfg",
-                    "HeavyQueue.tla"], cwd=scratch, env=env, check=True, timeout=55)
-    subprocess.run([sys.executable, "heavy.py", "--help"], cwd=ROOT, env=env, check=True)
+    tlc_command = [java, "-Xmx128m", f"-Djava.io.tmpdir={scratch}", "-cp", jar,
+                   "tlc2.TLC", "-workers", "1", "-noGenerateSpecTE",
+                   "-metadir", str(scratch / "states"), "-config", "HeavyQueue.cfg",
+                   "HeavyQueue.tla"]
+
+    def tlc():
+        for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
+            shutil.copyfile(model_dir / name, scratch / name)
+        run(tlc_command, cwd=scratch, timeout=55)
+
+    proof.check("TLC heavy queue model", shlex.join(tlc_command), tlc)
+    heavy = ["python3", "heavy.py", "--help"]
+    proof.check("heavy help", shlex.join(heavy), lambda: run(heavy, timeout=120))
     for name in tests:
-        subprocess.run([sys.executable, "-m", "unittest", name[:-3].replace("/", ".")], cwd=ROOT, env=env, check=True)
+        module = name[:-3].replace("/", ".")
+        command = ["python3", "-m", "unittest", module]
+        proof.check(f"tests: {module}", shlex.join(command),
+                    lambda command=command: run(command, timeout=300))
+    proof.write(head, bool(dirty))
+    if proof.failed:
+        print(f"fast-check: failed; the proof file is {args.proof}", flush=True)
+        sys.exit(1)
     print("fast-check: passed; selected checks are not the full suite", flush=True)
 
 

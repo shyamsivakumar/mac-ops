@@ -1500,11 +1500,12 @@ def ascend_repo(repo, rcfg):
             or any(marker in repo for marker in ASCEND_MARKERS))
 
 
-def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend):
+def gate_brief(repo, rcfg, issue_number, pr, head, base, publisher, ascend, proof=None, proof_path=None, proof_state=None):
     """The brief the gate thread receives, with every value filled in."""
     from gate_policy import build_gate_brief
     return build_gate_brief(rcfg, repo, issue_number, pr, head, publisher, base,
-                            fast_forward_main=False, ascend_override=ascend)
+                            fast_forward_main=False, ascend_override=ascend,
+                            proof=proof, proof_path=proof_path, proof_state=proof_state)
 
 
 def with_gate_lock(repo, pr):
@@ -1519,6 +1520,7 @@ def with_gate_lock(repo, pr):
 
 
 def cmd_gate(a):
+    import proof_file
     cfg = load_config()
     repo, number = parse_pr_ref(a.ref)
     try:
@@ -1540,7 +1542,10 @@ def cmd_gate(a):
         ascend = ascend_repo(repo, rcfg)
         base = pull.get("baseRefName") or "main"
         title = f"{rcfg['key']}-{issue_number} review #{number} {head[:8]}"
-        brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend)
+        proof_path = proof_file.path_for(rcfg.get("key"), issue_number)
+        proof_state, proof = proof_file.fetch(repo, proof_path, head)
+        brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
+                           proof=proof, proof_path=proof_path, proof_state=proof_state)
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},

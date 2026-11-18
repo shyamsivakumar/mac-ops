@@ -29,9 +29,9 @@ const LOAD_STALE = 300000;
 const STUCK_AFTER = 25000;
 const COMPACT_BELOW = 700;
 const PROJECT_SHEET_WIDTH = 420;
-const COMPACT_ORDER = ["needs", "cifail", "ready", "review", "checks", "run", "done", "backlog", "dead"];
+const COMPACT_ORDER = ["needs", "stuck", "ready", "review", "checks", "run", "done", "backlog", "dead"];
 const MIN_COL = 136;
-const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", run: "Nothing working", checks: "No checks running", cifail: "No failing CI", review: "No reviews pending", ready: "No PRs ready to merge", done: "Nothing to settle", dead: "No dead runs" };
+const EMPTY = { backlog: "Backlog is empty", needs: "Nothing needs you", stuck: "Nothing stuck", run: "Nothing working", checks: "No checks running", review: "No reviews pending", ready: "No PRs ready to merge", done: "Nothing to settle", dead: "No dead runs" };
 const COLUMN_KEYS = COLUMNS.map((c) => c[0]);
 const DECIDE_GUARD = 800;
 const CONFIRM_GAP = 400;
@@ -70,7 +70,7 @@ const whenText = (ms) => {
 
 const conflicting = (g) => Boolean(g.info?.gh) && !g.info.gh.draft && g.info.gh.mergeable === "CONFLICTING";
 
-const REBASE_LANES = [...PR_LANES, "needs"];
+const REBASE_LANES = [...PR_LANES, "needs", "stuck"];
 
 const failedIn = (cols) => cols.needs.groups.filter((g) => g.kind === "fail" && !g.asleep);
 
@@ -617,7 +617,7 @@ export default class Board extends View {
     for (const [, key] of placed) cols[key].total += 1;
     if (!this.pop && !this.unsure()) this.trackColumns(placed, now);
     for (const [g, key] of placed) if (keep(g)) cols[key].groups.push(g);
-    cols.needs.groups = cols.needs.groups.map((g) => [this.enteredAt("needs", g), g]).sort((a, b) => a[0] - b[0]).map(([, g]) => g);
+    for (const key of ["needs", "stuck"]) cols[key].groups = cols[key].groups.map((g) => [this.enteredAt(key, g), g]).sort((a, b) => a[0] - b[0]).map(([, g]) => g);
     cols.backlog.groups.push(...queued.filter(keep));
     const reviewed = cols.done.groups.flatMap((g) => g.threads).filter((c) => c.review);
     const cb = {
@@ -695,7 +695,7 @@ export default class Board extends View {
         const author = g.issue ? null : this.taskThread(g);
         const origin = author && originOf(author);
         const session = variant !== "backlog" && g.kind !== "ask" && !g.issue;
-        const view = (extra) => ({ marked: this.marks.has(g.key), col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
+        const view = (extra) => ({ marked: this.marks.has(g.key), col: key, entered: this.enteredAt(key, g), origin, fell: author && fellBack(origin?.requested, runModelOf(author) || author.model), opening: this.opening, c, count: g.threads.length, expanded, mark: this.cursorMark(replying), narrow, colW: this.colW, now, variant, armed: this.armed, merged: g.info?.status === "merged", pr: g.info?.pr, gh: g.info?.gh, verdict: this.verdictFor(g), runModel: runModelOf(c), refusal: refusal?.text, blocked: Boolean(refusal?.planned), plan: this.asked.get(g.key)?.plan, since: g.runSince, asleep: g.asleep, sent: this.sentText(g, now), conflict: variant === "pr" && this.rebasable(g), needs: key === "needs" || key === "stuck" ? g.needs : null, stall: g.stalledAt, trail: g.trail, session: session && { thread: author, info: sessionOf(author) }, replyLabel: this.replyLabel, reviewed: g.threads.some((x) => x.review), ...extra });
         const entry = { key: gkey, col: key, group: g, thread: null };
         col.rows.push({ key: gkey, h: cardHeight(replying, hasReason(c, variant), Boolean(g.issue) || Boolean(g.needs?.length), session, g.trail), entry, el: () => card(t, entry, view({ selected, replying, canSettle: (key === "done" || key === DEAD) && g.threads.some((x) => x.kind === "done") }), this.input, cb) });
         if (!expanded) continue;
@@ -835,7 +835,7 @@ export default class Board extends View {
     if (key === "run") return g.runSince ?? g.primary.at;
     const seen = this.seen[g.key];
     const since = Math.max(g.at, seen?.col === key ? seen.at : 0);
-    if (key !== "needs") return since;
+    if (key !== "needs" && key !== "stuck") return since;
     const [first] = g.needs;
     if (first === "question") return g.primary.at;
     if (first === "stalled") return g.stalledAt + STALL_AFTER;
@@ -849,8 +849,8 @@ export default class Board extends View {
     if (!col.groups.length) return [...(key === "backlog" ? this.ticketNote(now) : []), [key === "backlog" && !this.backlogLoaded ? "loading" : "empty", "dim"]];
     const groups = col.groups;
     const seg = (n, text, tone) => (n ? [[`${n} ${text}`, tone]] : []);
-    const oldest = ["oldest " + ago(Math.min(...groups.map((g) => (key === "needs" ? this.enteredAt(key, g) : g.at))), now), "dim"];
-    if (key === "needs") {
+    const oldest = ["oldest " + ago(Math.min(...groups.map((g) => (key === "needs" || key === "stuck" ? this.enteredAt(key, g) : g.at))), now), "dim"];
+    if (key === "needs" || key === "stuck") {
       const asking = groups.filter((g) => g.needs.includes("question"));
       const count = (reason) => groups.filter((g) => g.needs.includes(reason)).length;
       return [...seg(asking.filter((g) => g.kind === "ask").length, "decisions", "blocked"), ...seg(asking.filter((g) => g.kind === "wait").length, "waiting", "blocked"), ...seg(asking.filter((g) => g.kind !== "ask" && g.kind !== "wait").length, "asked", "blocked"), ...seg(count("stalled"), "stalled", "blocked"), ...seg(count("unrouted"), "not sent back", "blocked"), ...seg(count("ci"), "CI failed", "blocked"), ...seg(count("changes"), "changes requested", "blocked"), ...seg(count("conflict"), "conflict", "blocked"), oldest];
@@ -867,7 +867,6 @@ export default class Board extends View {
       const conflicts = groups.filter(conflicting).length;
       const conflict = seg(conflicts, "conflict", "blocked");
       if (key === "checks") return [...seg(groups.length, "pending", "working"), ...conflict, oldest];
-      if (key === "cifail") return [...seg(groups.length, "failing", "blocked"), ...conflict, oldest];
       if (key === "ready") return [...seg(groups.length - conflicts, "ready", "done"), ...conflict, oldest];
       const draft = groups.filter((g) => g.info.gh?.draft).length;
       return [...seg(groups.length - draft, "waiting", "working"), ...seg(draft, "draft", "dim"), ...conflict, oldest];
@@ -990,7 +989,7 @@ export default class Board extends View {
 
   jump() {
     if (this.pop) return;
-    const order = ["needs", "cifail", "ready"]
+    const order = ["needs", "stuck", "ready"]
       .flatMap((key) => [...this.layout.cols[key].groups].sort((a, b) => (key === "needs" ? this.enteredAt(key, a) - this.enteredAt(key, b) : a.at - b.at)).map((g) => ({ col: key, key: this.rowKey(key, g) })));
     if (!order.length) return say("success", "Nothing needs you");
     const next = order[(order.findIndex((x) => x.key === this.cursor) + 1) % order.length];

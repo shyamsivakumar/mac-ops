@@ -693,6 +693,83 @@ class TestLocalBoardConfig(unittest.TestCase):
             self.assertNotIn("merge", settings, repo)
 
 
+class TestBuilderPromptRules(unittest.TestCase):
+    """The builder prompt is the installed agent rules file (mac-ops #506).
+
+    The coordinator prepends the installed rules to every ticket brief, so a
+    rule the builders need has to be in the file the installer writes."""
+
+    def test_the_installed_builder_prompt_carries_both_new_rules(self):
+        with temp_home() as td:
+            home = Path(td)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            prompt = (home / ".coordinator/AGENT-RULES.md").read_text()
+        self.assertIn("shared helper until the third repeat", prompt)
+        self.assertIn("tidy commit never changes behavior", prompt)
+
+    def test_the_repository_rules_are_the_source_of_the_installed_prompt(self):
+        source = (CHECKOUT / "coordinator/config/AGENT-RULES.md").read_text()
+        plan = {
+            target: source_path
+            for source_path, target, _mode in install_coordinator.plan(CHECKOUT, Path("/Users/example"))
+        }
+        self.assertEqual(
+            plan[Path("/Users/example/.coordinator/AGENT-RULES.md")],
+            CHECKOUT / "coordinator/config/AGENT-RULES.md",
+        )
+        self.assertIn("shared helper until the third repeat", source)
+        self.assertIn("tidy commit never changes behavior", source)
+
+
+class TestReviewerPromptSmellCards(unittest.TestCase):
+    """The reviewer prompt is the installed reviewer brief (mac-ops #503).
+
+    The five smell cards from refactor-eval-factory have to be in the
+    file the installer writes, and the MIT notice has to travel with
+    them."""
+
+    CARDS = (
+        "bloated test setup",
+        "dead code and leftovers",
+        "hardwired dependencies",
+        "implementation-coupled tests",
+        "toothless tests",
+    )
+
+    def test_the_installed_reviewer_prompt_lists_the_five_cards(self):
+        with temp_home() as td:
+            home = Path(td)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            prompt = (home / ".coordinator/agents/code-reviewer.md").read_text()
+        for card in self.CARDS:
+            self.assertIn(card, prompt.lower())
+
+    def test_the_installed_reviewer_prompt_carries_the_attribution(self):
+        with temp_home() as td:
+            home = Path(td)
+            with redirect_stdout(StringIO()):
+                install_coordinator.install(CHECKOUT, False, home)
+            prompt = (home / ".coordinator/agents/code-reviewer.md").read_text()
+        self.assertIn("refactor-eval-factory", prompt)
+        self.assertIn("MIT License", prompt)
+        self.assertIn("Copyright (c) 2026 Render Services, Inc.", prompt)
+
+    def test_the_repository_prompt_is_the_source_of_the_installed_one(self):
+        source = (CHECKOUT / "coordinator/config/agents/code-reviewer.md").read_text()
+        plan = {
+            target: source_path
+            for source_path, target, _mode in install_coordinator.plan(CHECKOUT, Path("/Users/example"))
+        }
+        self.assertEqual(
+            plan[Path("/Users/example/.coordinator/agents/code-reviewer.md")],
+            CHECKOUT / "coordinator/config/agents/code-reviewer.md",
+        )
+        for card in self.CARDS:
+            self.assertIn(card, source.lower())
+
+
 class TestMainSourcePin(unittest.TestCase):
     """The installer only accepts clean canonical main that matches origin/main."""
 

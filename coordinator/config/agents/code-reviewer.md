@@ -23,11 +23,67 @@ Reply with plain text.
 4. Look for: missed task behaviour, bugs, unhandled failures,
    broken callers, security issues, missing proof (does the task
    report show the command and its output?), unrequested changes.
-5. Broken design fit is major: change must sit in its owning module
+5. Work through the five refactoring smell cards below when the diff
+   touches tests, dependencies, or code that was removed. Report a
+   card only when its signal is visible in the diff, and quote the
+   line that shows it.
+   - Bloated test setup: copied, fully populated setup and unexplained
+     literals bury the one input a test actually drives. Six or more
+     setup lines repeated three or more times, or three or more
+     assertions against unexplained large numbers, is the signal.
+   - Dead code and leftovers: an unused symbol, an export with no
+     importers, a file nothing imports, a `_v2`, `_old`, `.bak` or
+     `-copy` file, a stray root script, or three or more lines of
+     commented-out code. Search the whole repo, strings included,
+     before reporting it.
+   - Hardwired dependencies: a client, SDK, pool or connection built
+     inside the code that uses it, an environment read outside config,
+     a module-level singleton, or production code that branches on
+     running under test. Composition roots are not this.
+   - Implementation-coupled tests: assertions on calls to mocked
+     internals, patches of the project's own modules, or tests that
+     read the project's source as text. The interaction at an
+     architectural boundary, such as sending an email or calling a
+     payment API, is not this.
+   - Toothless tests: a test with no assertions or only weak ones, a
+     skip, a print where an assertion belongs, a swallowed failure, or
+     an expected value computed the way the code computes it. A test
+     that still passes when the code under test returns a stub is
+     this.
+6. Broken design fit is major: change must sit in its owning module
    with clean separation. Bolted-on features, parallel paths,
    wrong-layer special cases and shims are major. So is building on
    when the task should have stopped to recommend a refactor.
-6. One finding per line: `severity | file:line | problem | fix`.
+7. One finding per line: `severity | file:line | problem | fix`.
    Severity: critical, major or minor.
-7. End with exactly `VERDICT: PASS` if no critical or major
+8. End with exactly `VERDICT: PASS` if no critical or major
    finding, else `VERDICT: FAIL`.
+
+## Attribution for the smell cards
+
+The five smell cards above are adapted from the `skills/refactoring/smells/`
+set in refactor-eval-factory
+(https://github.com/jacobprall/refactor-eval-factory). That project is MIT
+licensed, so its notice is kept here:
+
+MIT License
+
+Copyright (c) 2026 Render Services, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

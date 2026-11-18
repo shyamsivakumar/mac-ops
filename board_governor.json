@@ -14,5 +14,8 @@
   "disk_wait_ratio_threshold": 0.25,
   "board_response_seconds_threshold": 5.0,
   "agent_heavy_wait_pause": false,
-  "agent_restart": true
+  "agent_restart": true,
+  "min_headroom_bytes_by_host": {
+    "shyams-macbook-pro": 2147483648
+  }
 }
