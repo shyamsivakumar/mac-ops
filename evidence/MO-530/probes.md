@@ -48,9 +48,13 @@ all six pi instances and for Claude Code:
 - `bash cat` of an ssh-directory file refused; one `ls` of it allowed, and
   `ls ~/.ssh; cat ~/.ssh/id_ed25519` refused
 - force-push, force-push-with-lease refused
-- push to `main` and `master` refused, including on a second remote
+- push to `main` and `master` refused, including on a second remote, and
+  refused when `main` is the destination of a refspec (`feature:main`,
+  `:main`) even though the source is not a protected ref
 - a task branch whose name starts with a protected one (`main.fix`, `main/fix`)
-  allowed, because the rule compares the complete destination ref, not a prefix
+  allowed, because the rule compares the complete destination ref, not a prefix,
+  and `main:task-530` allowed because a protected source writing a task branch
+  is a task-branch push
 - `gh pr merge` refused with no pin, and refused with a pin when the caller is
   not a gate; a pin quoted inside another argument, including a pin and flag
   written inside a quoted multiword PR subject, is not a pin
@@ -59,7 +63,11 @@ all six pi instances and for Claude Code:
   launcher: `coordinator/overnight/lane_driver.py` sets `MAC_OPS_ROLE=gate` on
   the pinned merge it runs, and the overnight selftest asserts it. The T3
   thread-launch call has no environment field, so a launched agent thread
-  cannot be handed the role, and an agent-typed merge stays refused.
+  cannot be handed a role by the launch input. A dedicated provider instance
+  carrying the role is the right channel and T3 does read a new instance from
+  `~/.t3/userdata/settings.json` without a restart, but a second `claudeAgent`
+  instance reports `Provider executable is not installed` and cannot launch, so
+  an agent-typed merge stays refused until T3 can launch it.
 - task-branch push to a scratch remote allowed, and the scratch remote has no
   `main` branch
 

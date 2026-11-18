@@ -213,6 +213,10 @@ class ListTest(unittest.TestCase):
             "git push origin HEAD:main",
             "git push origin feature:main",
             "git push origin refs/heads/main",
+            # the protected ref is the destination of the refspec, so a delete
+            # refspec and a full ref destination are the same rule
+            "git push origin :main",
+            "git push origin feature:refs/heads/main",
         ):
             self.assertTrue(force.search(denied) or main.search(denied), denied)
         for allowed in (
@@ -229,6 +233,11 @@ class ListTest(unittest.TestCase):
             "git push origin refs/heads/main/fix",
             "git push --set-upstream origin t3/x",
             "git -C /tmp/repo push origin t3/deny-rules",
+            # a refspec's destination decides the rule: a protected source that
+            # writes a task branch is a task-branch push
+            "git push origin main:task-530",
+            "git push origin master:task-530",
+            "git push origin refs/heads/main:task-530",
         ):
             self.assertFalse(force.search(allowed), allowed)
             self.assertFalse(main.search(allowed), allowed)
@@ -330,6 +339,8 @@ class HookTest(unittest.TestCase):
             "git push origin HEAD:main",
             "git push repo2 feature:master",
             "git -C /tmp/r push elsewhere refs/heads/main",
+            "git push origin :main",
+            "git push origin feature:refs/heads/main",
         ):
             decision = self.decided(command)
             self.assertIsNotNone(decision, command)
@@ -349,6 +360,11 @@ class HookTest(unittest.TestCase):
             "git push origin refs/heads/main.fix",
             "git push origin refs/heads/main/fix",
             "git push origin feature/main.fix",
+            # the destination of each refspec is compared, not the source, so a
+            # task-branch push is not read as a push to its source's name
+            "git push origin main:task-530",
+            "git push origin master:task-530",
+            "git push origin refs/heads/main:task-530",
         ):
             self.assertIsNone(self.decided(command), command)
 
