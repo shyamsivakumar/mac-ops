@@ -1175,14 +1175,14 @@ def item_failure_summary(ledger):
 def dead_run_model(thread, limit_failure):
     """The build entry a dead run relaunches on, or None when every builder is blocked.
 
-    The thread's own builder goes first. A run that died on a usage limit
-    names that builder as out, so the relaunch skips it."""
-    own = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
-    entry = model_list.find(own, ("build",))
+    The configured build order decides, whatever the thread ran on. A run
+    that died on a usage limit names its own builder as out, so the
+    relaunch skips it."""
     blocked = model_list.blocked_identities()
     if limit_failure:
+        own = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
         blocked = blocked | {model_list.identity(own)}
-    chosen = model_list.first_available("build", entry["id"] if entry else None, blocked)
+    chosen = model_list.first_available("build", None, blocked)
     return chosen["selection"] if chosen else None
 
 
