@@ -1113,7 +1113,10 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         except SafetyError:
             idle = None
         result["detached_idle_seconds"] = idle
-        if not published_on_default_branch(result, github, repo_slug, refresh=refresh):
+        if published_on_default_branch(result, github, repo_slug, refresh=refresh):
+            result["published_on_default_branch"] = True
+            result["eligible_reason"] = "commits_on_the_default_branch"
+        else:
             if idle is None or idle < 24 * 60 * 60:
                 reasons.append("detached_not_proven_24h_old")
             else:

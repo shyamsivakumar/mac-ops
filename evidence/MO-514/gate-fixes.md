@@ -36,6 +36,7 @@ the test that fails without the fix.
 | 28 | the cleanup opened a directory descriptor for every bootstrap file and never closed it, so a large cleanup could exhaust the process | the descriptor is closed on every path out of the cleanup | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_the_cleanup_does_not_leak_descriptors` |
 | 29 | the recovery passed the bytes of a moved link to the exclusive write, so a link whose target changed was restored as a regular file holding the target name | a moved link is restored with an exclusive `os.symlink`, so the worktree keeps the right file type | `...::ClearBootstrapChangesTest::test_a_changed_link_target_is_restored_as_a_link` |
 | 30 | the removal log named one eligibility rule, so a detached worktree removed by the 24 hour rule was logged as if a pull request had authorised it | every removal records the rule that authorised it in `eligible_reason` | `verification/worktree-cleaner/check_bootstrap.py` |
+| 31 | a detached worktree that qualified through default branch ancestry recorded no eligibility reason and a false ancestry flag | the detached branch records the rule and the ancestry flag when it qualifies that way | `verification/worktree-cleaner/check_bootstrap.py` (the `detached-main` worktree) |
 
 ## How the fixes are proved
 
