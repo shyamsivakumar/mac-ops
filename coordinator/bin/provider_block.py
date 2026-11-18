@@ -19,8 +19,8 @@ import time
 
 from provider_refusal import error_of, failed_at, failure_of, provider_refusal
 from provider_reset import reset_at
-from provider_store import (failure_time_of, locked, read, stamp, until_of,
-                            write)
+from provider_store import (failure_time_of, locked, read, stamp, stamp_expiry,
+                            until_of, write)
 
 BLOCK_SECONDS = 3600.0
 
@@ -57,7 +57,8 @@ def record_block(selection, reason, failed=None, now=None, by="provider_block"):
     until = reset_at(reason, since)
     if until is None:
         until = since + BLOCK_SECONDS
-    record = {"reason": reason, "since": stamp(since), "until": stamp(until), "by": by}
+    record = {"reason": reason, "since": stamp(since), "until": stamp_expiry(until),
+              "by": by}
     with locked():
         state = read()
         current = state.get(name)
