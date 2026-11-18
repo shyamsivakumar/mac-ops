@@ -123,6 +123,7 @@ the test that fails without the fix.
 | 122 | the rollback restored the moved entry with a plain rename, which overwrote whatever had taken the path in the meantime | the rollback uses the **exclusive rename** the cleaner already has, so a path that is taken keeps both entries | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_the_sweep_catches_a_link_that_appears_after_the_check` |
 | 123 | a volume mounted under the home directory was given the home trash, and the cross device rename failed | the volume of a path is found by **the device it is on**, so the home trash is used only for the home volume and another volume gets its own trash | `...::test_the_sweep_moves_the_copy_and_keeps_its_names` |
 | 124 | the regression test for the moved entry started with a link, which `O_NOFOLLOW` rejects before the move, so it would still pass if the post move check regressed | the test now puts the link in place **after** the copy was checked, so the post move check is what decides | `...::test_the_sweep_catches_a_link_that_appears_after_the_check` |
+| 125 | a failed recovery manifest write left the checkout in the recovery storage while the rollback looked for it in the worktree's parent, so the original path was missing and the copy was in no manifest | the rollback restores the copy **from where it is now**, with the exclusive rename, so a failed manifest write cannot strand the checkout | `verification/worktree-cleaner/check_bootstrap.py` |
 
 ## How the fixes are proved
 
