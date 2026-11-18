@@ -981,6 +981,31 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertIsNone(cleared)
         self.assertTrue((repo / ".specstory" / "notes.md").exists(), "the replacement directory must not be touched")
 
+    def test_the_registration_of_a_worktree_is_its_own(self):
+        # Two worktrees can share a basename. Each one has to name its own
+        # registration, not the one git derived from the basename.
+        base = Path(self.tmp.name)
+        repo = base / "shared-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        commit(repo, "a.txt", "a\n")
+        first = base / "a" / "topic"
+        second = base / "b" / "topic"
+        first.parent.mkdir(parents=True)
+        second.parent.mkdir(parents=True)
+        git(repo, "worktree", "add", "--detach", str(first), git(repo, "rev-parse", "HEAD"))
+        git(repo, "worktree", "add", "--detach", str(second), git(repo, "rev-parse", "HEAD"))
+        first_admin = cleaner._worktree_registration(first)
+        second_admin = cleaner._worktree_registration(second)
+        self.assertIsNotNone(first_admin)
+        self.assertIsNotNone(second_admin)
+        self.assertNotEqual(first_admin, second_admin)
+        listed = git(repo, "worktree", "list", "--porcelain")
+        self.assertIn(str(first), listed)
+        self.assertIn(str(second), listed)
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
