@@ -1524,29 +1524,39 @@ def pull_changed_count(repo, number):
     return count if isinstance(count, int) else None
 
 
-def prompt_pull(repo, number, changed_files=None, attempts=2):
+def prompt_pull(repo, number, changed_files=None, base=None, head=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths the pull request changed.
 
     An unreadable or truncated list is retried, then UNKNOWN: `ticket gate`
     refuses rather than building a brief that could order a prompt merge. The
     changed-file count the completeness check needs is read from the pull
-    request itself when the caller does not already hold it.
+    request itself when the caller does not already hold it, and a list that
+    cannot be completed falls back to the merge base's and the head's trees,
+    so a big pull request of ordinary code still clears.
     """
     count = changed_files if isinstance(changed_files, int) else pull_changed_count(repo, number)
     for _ in range(max(1, attempts)):
         state = prompt_paths.prompt_scan(pull_files(repo, number, count))
         if state != prompt_paths.UNKNOWN:
             return state
+    if base and head:
+        try:
+            paths = prompt_paths.tree_diff(
+                lambda endpoint: gh_json(["api", endpoint]), repo, base, head)
+        except (GhError, ValueError):
+            paths = None
+        if paths is not None:
+            return prompt_paths.prompt_scan(paths)
     return prompt_paths.UNKNOWN
 
 
-def prompt_hold(repo, number, changed_files=None):
+def prompt_hold(repo, number, changed_files=None, base=None, head=None):
     """True when the gate brief must say the pull request never merges itself.
 
     A list GitHub could not give refuses the gate instead of reading as code:
     a brief built without it could order a merge of prompt text.
     """
-    state = prompt_pull(repo, number, changed_files)
+    state = prompt_pull(repo, number, changed_files, base, head)
     if state == prompt_paths.UNKNOWN:
         raise Refuse(f"the changed files of {repo}#{number} could not be read, so a brief "
                      "here could order a merge of prompt text; retry the gate")
@@ -1591,7 +1601,8 @@ def cmd_gate(a):
         proof_state, proof = proof_file.fetch(repo, proof_path, head)
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
                            proof=proof, proof_path=proof_path, proof_state=proof_state,
-                           prompt=prompt_hold(repo, number, pull.get("changedFiles")))
+                           prompt=prompt_hold(repo, number, pull.get("changedFiles"),
+                                              base, head))
         gate_id = f"gate:{repo}#{number}:{head}"
         payload = {"projectId": rcfg["projectId"], "title": title, "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},

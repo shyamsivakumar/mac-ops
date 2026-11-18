@@ -108,3 +108,67 @@ def prompt_scan(paths):
     if paths is None:
         return UNKNOWN
     return HOLD if prompt_change(paths) else CLEAR
+
+
+def one_object(value):
+    """The single object a reader's JSON helper returned, or None.
+
+    A reader may hand back the object itself or the one-row slurped list of
+    it, so both shapes read the same here.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        for row in value:
+            if isinstance(row, dict):
+                return row
+    return None
+
+
+def tree_paths(tree):
+    """Every blob path of one tree response mapped to its sha, or None.
+
+    A tree GitHub truncated is not a complete list of paths, so it is None:
+    the same rule the capped file list follows.
+    """
+    tree = one_object(tree)
+    if not isinstance(tree, dict) or tree.get("truncated"):
+        return None
+    entries = tree.get("tree")
+    if not isinstance(entries, list):
+        return None
+    paths = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("type") != "blob":
+            continue
+        path = entry.get("path")
+        if isinstance(path, str) and path:
+            paths[path] = entry.get("sha")
+    return paths
+
+
+def changed_paths(before, after):
+    """The paths whose presence or content differs between two commit trees."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return None
+    changed = {path for path, sha in after.items() if before.get(path) != sha}
+    changed.update(path for path in before if path not in after)
+    return sorted(changed)
+
+
+def tree_diff(fetch, repo, base, head):
+    """The complete changed paths of a pull request, or None.
+
+    `fetch(endpoint)` is a reader's own `gh api` read. The files endpoint
+    stops at 3,000 entries, so a bigger pull request's list is incomplete by
+    construction and can never be cleared; comparing the merge base's tree
+    with the head's tree gives every changed path instead, which is what the
+    hold decides on. None means the diff could not be read completely.
+    """
+    compare = one_object(fetch(f"repos/{repo}/compare/{base}...{head}"))
+    merge_base = ((compare or {}).get("merge_base_commit") or {}).get("sha")
+    if not isinstance(merge_base, str) or not merge_base:
+        return None
+    before = tree_paths(fetch(f"repos/{repo}/git/trees/{merge_base}?recursive=1"))
+    after = tree_paths(fetch(f"repos/{repo}/git/trees/{head}?recursive=1"))
+    return changed_paths(before, after)

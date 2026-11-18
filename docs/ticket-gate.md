@@ -64,7 +64,11 @@ GitHub cannot give, or one shorter than the pull request's own changed-file
 count (the files endpoint stops at 3,000), is unknown: the read is retried
 and then the gate refuses, because a brief built without the list could
 order a merge of prompt text. The count is read from the pull request itself
-when the caller holds none, and a count that cannot be read is unknown too.
+when the caller holds none. A list that can never be completed, because the
+pull request is bigger than the 3,000-entry cap, falls back to the complete
+diff: the merge base's tree and the head's tree are compared and every path
+that differs is read the same way, so a huge pull request of ordinary code
+still merges.
 
 A file list GitHub cannot give is not code: the read is retried, and a list
 still unknown defers the gate instead of building a brief. A brief written

@@ -287,6 +287,60 @@ def board_reconcile():
           settled == [("MERGED", "prompt-merge-MO-544")], command)
 
 
+def tree_fallback():
+    """A 3,001-file PR never fits the file list, so the trees classify it."""
+    coordq = load(BIN / "coordq", "proof_coordq_trees")
+    lane = load(OVERNIGHT / "lane_driver.py", "proof_lane_trees")
+    command = "python3 evidence/MO-543/proof.py"
+
+    def gh(endpoint):
+        if endpoint.endswith("/files?per_page=100"):
+            return [{"filename": "coordinator/bin/coordq"}]
+        if "/compare/" in endpoint:
+            return [{"merge_base_commit": {"sha": "base"}}]
+        if endpoint.endswith("/git/trees/base?recursive=1"):
+            return [{"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}]
+        if endpoint.endswith("/git/trees/head?recursive=1"):
+            return [{"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]}]
+        raise AssertionError(endpoint)
+
+    with patch.object(coordq, "gh_json", gh):
+        code = coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 3001, "main", "head")
+    grant("queue gatekeep: a 3,001-file code PR clears through the trees",
+          code == prompt_paths.CLEAR, command)
+
+    def gh_prompt(endpoint):
+        if endpoint.endswith("/files?per_page=100"):
+            return [{"filename": "coordinator/bin/coordq"}]
+        if "/compare/" in endpoint:
+            return [{"merge_base_commit": {"sha": "base"}}]
+        if endpoint.endswith("/git/trees/base?recursive=1"):
+            return [{"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}]
+        return [{"tree": [{"type": "blob", "path": "a.py", "sha": "2"},
+                          {"type": "blob", "path": "prompts/reviewer.md", "sha": "3"}]}]
+
+    with patch.object(coordq, "gh_json", gh_prompt):
+        prompt = coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 3001, "main", "head")
+    grant("queue gatekeep: a 3,001-file prompt PR still holds through the trees",
+          prompt == prompt_paths.HOLD, command)
+
+    def command_lane(cmd, timeout=150):
+        endpoint = cmd[-1]
+        if "/files?per_page=100" in endpoint:
+            return '[[{"filename": "coordinator/bin/ticket"}]]'
+        if "/compare/" in endpoint:
+            return '{"merge_base_commit": {"sha": "base"}}'
+        if endpoint.endswith("/git/trees/base?recursive=1"):
+            return '{"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}'
+        return '{"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]}'
+
+    with patch.object(lane, "run", command_lane), \
+            patch.object(lane, "pr_changed_count", return_value=3001):
+        state = lane.prompt_pull("shyamsivakumar/mac-ops", 544, base="main", head="head")
+    grant("lane: a 3,001-file code PR merges instead of deferring for ever",
+          state == prompt_paths.CLEAR, command)
+
+
 def ticket_file_read():
     """The real read `ticket gate` makes: the paths of the pull request."""
     ticket = load(BIN / "ticket", "proof_ticket_files")
@@ -330,6 +384,7 @@ def main():
     gate_briefs()
     queue_briefs()
     ticket_file_read()
+    tree_fallback()
     lane_truncation()
     board_reconcile()
     lane_replay()

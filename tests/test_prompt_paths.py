@@ -95,6 +95,35 @@ class PromptPathTest(unittest.TestCase):
         self.assertIsNone(prompt_paths.page_entries(None))
         self.assertIsNone(prompt_paths.page_entries("not a page list"))
 
+    def test_a_huge_code_pull_request_clears_from_its_trees(self):
+        """The files endpoint stops at 3,000, so the trees give the whole diff."""
+        def fetch(endpoint):
+            if "/compare/" in endpoint:
+                return {"merge_base_commit": {"sha": "base"}}
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "coordinator/bin/ticket", "sha": "1"}]}
+            if endpoint.endswith("/git/trees/head?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "coordinator/bin/ticket", "sha": "2"},
+                                 {"type": "blob", "path": "prompts/reviewer.md", "sha": "3"}]}
+            raise AssertionError(endpoint)
+
+        self.assertEqual(prompt_paths.tree_diff(fetch, "o/r", "main", "head"),
+                         ["coordinator/bin/ticket", "prompts/reviewer.md"])
+        self.assertEqual(prompt_paths.prompt_scan(
+            prompt_paths.tree_diff(fetch, "o/r", "main", "head")), prompt_paths.HOLD)
+
+    def test_a_truncated_tree_is_no_diff(self):
+        def fetch(endpoint):
+            if "/compare/" in endpoint:
+                return [{"merge_base_commit": {"sha": "base"}}]
+            return {"truncated": True, "tree": []}
+
+        self.assertIsNone(prompt_paths.tree_diff(fetch, "o/r", "main", "head"))
+        self.assertIsNone(prompt_paths.changed_paths(None, {}))
+        self.assertIsNone(prompt_paths.tree_paths([{"sha": "x"}]))
+        self.assertEqual(prompt_paths.one_object([{"a": 1}]), {"a": 1})
+        self.assertIsNone(prompt_paths.one_object([]))
+
     def test_a_skills_directory_at_the_top_counts(self):
         self.assertTrue(prompt_paths.is_prompt_path("skills/SKILL.md"))
         self.assertTrue(prompt_paths.is_prompt_path("prompts/x.md"))
@@ -175,6 +204,27 @@ class TicketGateTest(unittest.TestCase):
                              ["coordinator/bin/ticket", "prompts/reviewer.md"])
             self.assertIsNone(self.ticket.pull_files("shyamsivakumar/mac-ops", 544, 3))
 
+    def test_a_huge_prompt_pull_request_holds_through_the_trees(self):
+        """The list cannot be complete, so the merge base's trees decide."""
+
+        def gh(args):
+            endpoint = args[-1]
+            if endpoint.endswith("/files?per_page=100"):
+                return [{"filename": "coordinator/bin/ticket"}]
+            if "/compare/" in endpoint:
+                return {"merge_base_commit": {"sha": "base"}}
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}
+            if endpoint.endswith("/git/trees/head?recursive=1"):
+                return {"tree": [{"type": "blob", "path": "a.py", "sha": "2"},
+                                 {"type": "blob", "path": "skills/x/SKILL.md", "sha": "3"}]}
+            raise AssertionError(args)
+
+        with patch.object(self.ticket, "gh_json", gh), \
+                patch.object(self.ticket, "pull_changed_count", return_value=3001):
+            self.assertTrue(self.ticket.prompt_hold("shyamsivakumar/mac-ops", 544,
+                                                    base="main", head="head"))
+
     def test_the_brief_does_not_hold_code(self):
         with patch.object(self.ticket, "pull_files", return_value=["coordinator/bin/ticket"]):
             self.assertFalse(self.ticket.prompt_hold("shyamsivakumar/mac-ops", 544))
@@ -223,6 +273,27 @@ class CoordqGateTest(unittest.TestCase):
         with patch.object(self.coordq, "gh_json", gh):
             self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
                              prompt_paths.UNKNOWN)
+
+    def test_a_huge_code_pull_request_clears_through_the_trees(self):
+        """3,001 files never fit the list, so the trees decide it."""
+
+        def gh(endpoint):
+            if endpoint.endswith("/files?per_page=100"):
+                return [{"filename": "coordinator/bin/coordq"}]
+            if "/compare/" in endpoint:
+                return [{"merge_base_commit": {"sha": "base"}}]
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return [{"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}]
+            if endpoint.endswith("/git/trees/head?recursive=1"):
+                return [{"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]}]
+            if endpoint == "repos/shyamsivakumar/mac-ops/pulls/544":
+                return [{"changed_files": 3001}]
+            raise AssertionError(endpoint)
+
+        with patch.object(self.coordq, "gh_json", gh):
+            self.assertEqual(
+                self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, base="main", head="head"),
+                prompt_paths.CLEAR)
 
     def test_a_code_pull_request_without_a_list_count_is_clear(self):
         """The count read is a one-row list, and its count is used."""
@@ -458,6 +529,27 @@ class LanePassTest(unittest.TestCase):
                           return_value='[[{"filename": "coordinator/bin/ticket"}],'
                                        ' [{"filename": "docs/ticket-gate.md"}]]'):
             self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 2),
+                             prompt_paths.CLEAR)
+
+    def test_a_huge_code_pull_request_merges_through_the_trees(self):
+        """A 3,001-file PR of code must still merge, not defers for ever."""
+
+        def command(cmd, timeout=150):
+            endpoint = cmd[-1]
+            if "/files?per_page=100" in endpoint:
+                return '[[{"filename": "coordinator/bin/ticket"}]]'
+            if "/compare/" in endpoint:
+                return '{"merge_base_commit": {"sha": "base"}}'
+            if endpoint.endswith("/git/trees/base?recursive=1"):
+                return '{"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}'
+            if endpoint.endswith("/git/trees/head?recursive=1"):
+                return '{"tree": [{"type": "blob", "path": "a.py", "sha": "2"}]}'
+            raise AssertionError(cmd)
+
+        with patch.object(self.lane, "run", command), \
+                patch.object(self.lane, "pr_changed_count", return_value=3001):
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544,
+                                                   base="main", head="head"),
                              prompt_paths.CLEAR)
 
     def test_a_dry_run_writes_no_board_item(self):
