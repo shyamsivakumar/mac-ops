@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
 import install_coordinator
 import models
 import provider_block
+import provider_reset
 
 
 def load_coordq():
@@ -244,6 +245,14 @@ class ProviderBlockTests(unittest.TestCase):
                                     now=moment("2026-11-18T12:00:00"))
         self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T12:00:01")))
         self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
+
+    def test_a_next_day_reset_in_a_named_zone_keeps_the_local_day(self):
+        """A failure at 23:00 on October 31 with 'resets at 14:00
+        America/Los_Angeles' blocks until 14:00 PST on November 1. Adding a
+        day of seconds would give 13:00 PST: the clock changed."""
+        base = moment("2026-11-01T06:00:00")
+        got = provider_reset.reset_at("429; resets at 14:00 America/Los_Angeles", base)
+        self.assertEqual(got, moment("2026-11-01T22:00:00"))
 
     def test_a_newer_refusal_replaces_an_older_reset(self):
         """The provider's latest word on when it comes back is the one that
