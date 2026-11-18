@@ -28,6 +28,9 @@ RELATIVE = re.compile(
 UNITS = {"second": 1.0, "seconds": 1.0, "sec": 1.0, "secs": 1.0, "s": 1.0,
          "minute": 60.0, "minutes": 60.0, "min": 60.0, "mins": 60.0,
          "hour": 3600.0, "hours": 3600.0, "hr": 3600.0, "hrs": 3600.0}
+# A relative reset past a year is no reset a provider means, and a moment
+# past the end of the calendar cannot be written to the store.
+MAX_RESET_SECONDS = 366 * 24 * 3600.0
 
 # An absolute reset: a date and a time of day, or a time of day alone.
 DATETIME = re.compile(
@@ -48,7 +51,7 @@ def zone_of(text, start=0):
     past the reset it named."""
     window = text[start:start + 48]
     match = OFFSET.search(window)
-    if match:
+    if match and int(match.group(2)) < 24 and int(match.group(3)) < 60:
         hours, minutes = int(match.group(2)), int(match.group(3))
         offset = timedelta(hours=hours, minutes=minutes)
         return timezone(-offset if match.group(1) == "-" else offset)
@@ -115,6 +118,6 @@ def reset_at(message, failed=None):
         seconds = float(match.group(1)) * UNITS.get(match.group(2).lower(), 0.0)
         # A reset of zero is a reset: the provider says it is free now, and
         # a block that waited an hour would hold it past what it promised.
-        if seconds >= 0:
+        if 0 <= seconds <= MAX_RESET_SECONDS:
             return base + seconds
     return _absolute(message, base)
