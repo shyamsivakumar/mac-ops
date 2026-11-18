@@ -7,6 +7,7 @@ read then write from either one drops the block the other had just earned.
 """
 import fcntl
 import json
+import math
 import os
 import time
 from contextlib import contextmanager
@@ -88,8 +89,20 @@ def parse_time(value):
 
 
 def stamp(seconds):
-    """A moment as the ISO text the store writes."""
-    return datetime.fromtimestamp(float(seconds), timezone.utc).isoformat()
+    """A moment as the ISO text the store writes.
+
+    The text carries whole milliseconds, rounded up. The pi reader parses
+    the expiry with Date.parse, which reads milliseconds only, so a
+    sub-millisecond expiry would be read a fraction early there and held
+    here: the provider would be free in pi and blocked in Python. Rounding
+    up keeps the two readers on one instant and never frees the provider
+    before the reset it was given."""
+    millis = math.ceil(float(seconds) * 1000.0)
+    moment = datetime.fromtimestamp(millis // 1000, timezone.utc)
+    moment = moment.replace(microsecond=(millis % 1000) * 1000)
+    if moment.microsecond == 0:
+        return moment.isoformat()
+    return moment.isoformat(timespec="milliseconds")
 
 
 def failure_time_of(record):
