@@ -771,9 +771,12 @@ def cmd_start(a):
         args.setdefault("title", a.title)
     if tool == "t3_thread_launch":
         task_type = args.get("taskType")
+        requested = args
         args, refusal = with_model(args)
         if refusal:
             die(refusal)
+        if not requested.get("modelSelection"):
+            args = requested
         if wants_rules(args, task_type):
             try:
                 read_rules()
