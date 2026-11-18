@@ -14,7 +14,8 @@ each tool checks tools, and written into the scope files as prose.
 2. No reads or edits of secret files: `.env` files, `auth.json`, key and
    token files, `~/.ssh`.
 3. No force-push in any form, and no push to `main` or `master` on any
-   remote. Task-branch pushes stay allowed.
+   remote. Task-branch pushes stay allowed, including a task branch whose
+   name merely starts with a protected one (`main.fix`).
 4. No `gh pr merge` for a builder. Only a gate thread merges, and only with
    the pinned `--match-head-commit` head given as a merge argument.
 
@@ -38,8 +39,17 @@ both hold:
   branch name is not a pin, and the merge is refused.
 
 A gate thread therefore needs `MAC_OPS_ROLE=gate` in the environment it is
-launched with. Until the coordinator's launch path sets it, a gate's merge is
-refused: the check fails closed, never open.
+launched with, and the trusted launcher supplies it: the lane driver
+(`coordinator/overnight/lane_driver.py`) provisions the role on the pinned
+merge it runs itself, and that launcher is the process that performs the
+gate's merge. The role never comes from an agent's command text.
+
+An agent thread cannot be handed a role today: the T3 thread-launch call has
+no environment field, so `coordq` cannot set `MAC_OPS_ROLE` on a launched
+thread. A `gh pr merge` typed by any agent, gate included, is therefore
+refused, and the pinned merge happens on the launcher path above, which is
+where it already happens. That direction only tightens: no builder gains the
+merge, and no merge depends on wording.
 
 ## One source, installed into each enforcement point
 

@@ -94,10 +94,10 @@ ORDER = {
 }
 
 
-def run(cmd, timeout=150):
+def run(cmd, timeout=150, env=None):
     if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list")):
         require_api_budget()
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     output = (p.stdout + p.stderr).strip()
     refusal = ("--dry-run" in cmd and cmd[:2] == ["ticket", "start"]
                and p.returncode == 2 and output.startswith("refused: ")
@@ -518,6 +518,11 @@ def park(repo, number, issue, head, reply, ledger):
 
 MAC_OPS_REPO = "shyamsivakumar/mac-ops"
 SRW_REPO = "shyamsivakumar/strategy-replay-workbench"
+# The deny rules (mac-ops #530) allow a pinned merge only for the gate role.
+# The lane is the trusted gate launch path, so it provisions the role on the
+# merge it owns: the role is never read from the command text.
+GATE_ROLE_ENV = "MAC_OPS_ROLE"
+GATE_ROLE_VALUE = "gate"
 
 
 def check_step(repo, proof_path):
@@ -580,7 +585,12 @@ def act_on_pr(repo, number, ledger):
             return f"skip #{number}: gate PASS, manual merge"
         if DRY:
             return f"DRY merge #{number} {head}"
-        run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+        # The deny rules allow a pinned merge only for the gate role, so this
+        # launcher provisions that role on the merge it owns. It is the trusted
+        # gate launch path: the role comes from the launcher, never from the
+        # command, so a builder cannot claim it by typing.
+        run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head],
+            env={**os.environ, GATE_ROLE_ENV: GATE_ROLE_VALUE})
         if issue:
             ref = f"{repo}#{issue}"
             output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,

@@ -347,7 +347,7 @@ def gate_pipeline():
                   body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
         snapshot = {"repos": {target: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
 
-        def command(cmd, timeout=150):
+        def command(cmd, timeout=150, env=None):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd == [lane.COORDQ, "list"]:
@@ -359,6 +359,9 @@ def gate_pipeline():
                 return "closed"
             if cmd[:3] == ["gh", "pr", "merge"]:
                 exact(cmd[cmd.index("--match-head-commit") + 1], head)
+                # The launcher provisions the gate role on the merge it owns, so
+                # the deny rule allows it without reading the role from the command.
+                exact((env or {}).get(lane.GATE_ROLE_ENV), lane.GATE_ROLE_VALUE)
                 actions.append("merge")
                 return "merged"
             if cmd[0] == "git" and "worktree" in cmd:

@@ -49,10 +49,16 @@ all six pi instances and for Claude Code:
   `ls ~/.ssh; cat ~/.ssh/id_ed25519` refused
 - force-push, force-push-with-lease refused
 - push to `main` and `master` refused, including on a second remote
+- a task branch whose name starts with a protected one (`main.fix`) allowed,
+  because the rule compares the complete destination ref, not a prefix
 - `gh pr merge` refused with no pin, and refused with a pin when the caller is
   not a gate; a pin quoted inside another argument is not a pin
 - `gh pr merge ... --match-head-commit <head>` allowed only from the gate role
-  (dry run only; nothing was merged)
+  (dry run only; nothing was merged). The role is provisioned by the trusted
+  launcher: `coordinator/overnight/lane_driver.py` sets `MAC_OPS_ROLE=gate` on
+  the pinned merge it runs, and the overnight selftest asserts it. The T3
+  thread-launch call has no environment field, so a launched agent thread
+  cannot be handed the role, and an agent-typed merge stays refused.
 - task-branch push to a scratch remote allowed, and the scratch remote has no
   `main` branch
 
