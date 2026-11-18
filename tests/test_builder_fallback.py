@@ -331,6 +331,26 @@ class LaneDriverTests(StoreCase):
         with patch.object(module, "t3", lambda tool, args: {"items": items}):
             self.assertEqual(module.last_reply("t1", diagnostics_only=True), "")
 
+    def test_an_interrupted_reply_naming_authentication_blocks_nothing(self):
+        # The gate finding of round 6: the builder's own last reply was read as
+        # a diagnostic, so "I'm updating authentication tests" matched the
+        # authentication marker and blocked the builder for every new build.
+        # A progress reply is not a provider failure and names no block.
+        launched = self.dead_run_with([
+            {"runId": "run-a", "type": "user_message", "text": "Continue MO#531"},
+            {"runId": "run-a", "type": "assistant_message", "text": "I'm updating authentication tests"}])
+        self.assertEqual(provider_health.load(), {})
+        self.assertEqual(len(launched), 1)
+        self.assertEqual(launched[0]["modelSelection"], DEEPSEEK)
+
+    def test_only_a_provider_failure_message_supplies_the_diagnostic(self):
+        module = self.module()
+        items = [
+            {"runId": "run-a", "type": "assistant_message", "text": "I'm updating authentication tests"},
+            {"runId": "run-a", "type": "provider_error", "text": "401 invalid api key"}]
+        with patch.object(module, "t3", lambda tool, args: {"items": items}):
+            self.assertEqual(module.last_reply("t1", diagnostics_only=True), "401 invalid api key")
+
 
 class CallerTests(StoreCase):
     """Every caller falls back: the queue's dispatch and the ticket start."""
