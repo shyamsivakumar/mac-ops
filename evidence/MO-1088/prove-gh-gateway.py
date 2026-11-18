@@ -317,6 +317,13 @@ run(["gh", "api", "--method=POST", "repos/a/b/dispatches?ref=main"])
 check("a --method=POST write is never cached", calls_made() - before == 2,
       f"calls={calls_made() - before}")
 
+# gh uses the last method flag, so a repeated flag is a write here too.
+before = calls_made()
+run(["gh", "api", "-X", "GET", "-X", "POST", "repos/a/b/dispatches?ref=main"])
+run(["gh", "api", "-X", "GET", "-X", "POST", "repos/a/b/dispatches?ref=main"])
+check("a repeated method flag ending in POST is never cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+
 # The same command in two checkouts is two reads: the cache key names the
 # repository, the host and the account.
 one = Path(tempfile.mkdtemp(prefix="repo-one-"))

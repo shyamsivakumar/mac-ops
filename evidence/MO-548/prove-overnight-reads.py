@@ -40,7 +40,13 @@ if mode == "fail":
     sys.stderr.write("gh: HTTP 500\\n")
     sys.exit(1)
 pages = [[{{"number": 1}}], [{{"number": 2}}], [{{"number": 3}}]]
-if "--slurp" in args:
+if "--include" in args and "--paginate" in args:
+    for name in ("name1", "name2", "name3"):
+        print("HTTP/2.0 200 OK")
+        print("content-type: application/json")
+        print()
+        print(name)
+elif "--slurp" in args:
     print(json.dumps(pages))
 else:
     for page in pages:
@@ -118,6 +124,17 @@ for flag in ("--field=name=value", "--raw-field=name=value", "-fname=value"):
     overnight.run_read(write_argv, 10, deadline)
     check(f"a write with {flag} is never cached", calls_made() - before == 2,
           f"calls={calls_made() - before}")
+
+# 2c. A formatted paginated read counts its pages from the headers, and the
+#     caller still gets only its own output.
+formatted = [str(fake), "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags"]
+before = len(rows())
+code, out = overnight.run_read(formatted, 10, deadline)
+check("a formatted paginated read is returned", code == 0)
+check("a formatted paginated read logs one row per page", len(rows()) - before == 3,
+      f"rows={len(rows()) - before}")
+check("a formatted paginated read returns only its bodies",
+      out.split() == ["name1", "name2", "name3"] and "HTTP/" not in out, repr(out[:40]))
 
 # 3. A succeeded read is cached: the next identical read makes no call.
 before = calls_made()
