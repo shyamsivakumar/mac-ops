@@ -354,9 +354,11 @@ def gate_pipeline():
                 return json.dumps({"state": "OPEN", "mergedAt": None})
             if cmd[:2] == ["gh", "api"]:
                 # The changed-file list of the pull request: the case decides
-                # whether it carries one prompt path or only code.
-                exact(cmd[3], "repos/%s/pulls/20/files?per_page=100" % target)
-                return json.dumps([{"filename": changed}] if changed else [])
+                # whether it carries one prompt path or only code. The read is
+                # slurped, so its pages arrive as one array of arrays.
+                exact(cmd[3], "--slurp")
+                exact(cmd[4], "repos/%s/pulls/20/files?per_page=100" % target)
+                return json.dumps([[{"filename": changed}]] if changed else [[]])
             if cmd == [lane.COORDQ, "list"]:
                 return ""
             if cmd[:2] == ["ticket", "gate"]:
