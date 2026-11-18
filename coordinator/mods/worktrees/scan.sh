@@ -4,7 +4,7 @@ mode=${1:-scan}
 role=${2:-start}
 [ $# -gt 0 ] && shift
 [ $# -gt 0 ] && shift
-case "$mode" in scan | clean) ;; archive) [ $# -gt 0 ] || exit 2 ;; *) exit 2 ;; esac
+case "$mode" in scan | clean) ;; archive | delete) [ $# -gt 0 ] || exit 2 ;; *) exit 2 ;; esac
 for target in "$@"; do
   case "$target" in /*) ;; *) exit 2 ;; esac
 done
@@ -14,7 +14,10 @@ CLEANER_STATE=${WORKTREE_CLEANER_STATE:-$HOME/.local/state/mac-ops/worktree-clea
 SCAN_LIMIT=${WORKTREE_SCAN_LIMIT:-600}
 CLEAN_LIMIT=${WORKTREE_CLEAN_LIMIT:-1800}
 ARCHIVE_LIMIT=${WORKTREE_ARCHIVE_LIMIT:-600}
+DELETE_PER_ROW=${WORKTREE_DELETE_PER_ROW:-90}
 PYTHON=/usr/bin/python3
+run_limit=0
+[ "$mode" = delete ] && run_limit=$((DELETE_PER_ROW * $#))
 LOCK=$STATE/run.lock
 umask 077
 mkdir -p "$STATE"
@@ -38,7 +41,7 @@ lock_busy() {
 }
 
 status() {
-  printf '{"state":"%s","mode":"%s","at":%s,"finished":%s,"error":"%s"}\n' "$1" "$mode" "$started" "$2" "$3" > "$STATE/status.tmp"
+  printf '{"state":"%s","mode":"%s","at":%s,"finished":%s,"limit":%s,"error":"%s"}\n' "$1" "$mode" "$started" "$2" "$run_limit" "$3" > "$STATE/status.tmp"
   mv "$STATE/status.tmp" "$STATE/status.json"
 }
 
@@ -85,15 +88,18 @@ fi
 claim $$
 started=$(date +%s)
 [ "$mode" = archive ] && rm -f "$STATE/archive.json"
+[ "$mode" = delete ] && rm -f "$STATE/delete.json"
 failed=""
 needs="--no-report"
 [ "$mode" = clean ] && needs="--no-report --prune"
 [ "$mode" = archive ] && needs="--no-report --archive"
+[ "$mode" = delete ] && needs="--no-report --delete"
 for flag in $needs; do
   "$PYTHON" "$CLEANER" --help 2> /dev/null | grep -q -- "$flag" || failed="cleaner out of date: missing $flag"
 done
 if [ -z "$failed" ]; then
   [ "$mode" = archive ] && { step "--archive" archive "$ARCHIVE_LIMIT" "$@" || failed=$(reason); }
+  [ "$mode" = delete ] && { step "--delete" delete "$run_limit" "$@" || failed=$(reason); }
   if [ "$mode" = clean ] && step "--apply --prune --no-report" clean "$CLEAN_LIMIT"; then
     cp "$STATE/clean.json" "$STATE/last.tmp" && mv "$STATE/last.tmp" "$STATE/last.json" || failed="could not publish clean result"
   else
