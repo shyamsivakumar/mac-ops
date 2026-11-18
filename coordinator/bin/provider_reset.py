@@ -28,9 +28,9 @@ RELATIVE = re.compile(
 UNITS = {"second": 1.0, "seconds": 1.0, "sec": 1.0, "secs": 1.0, "s": 1.0,
          "minute": 60.0, "minutes": 60.0, "min": 60.0, "mins": 60.0,
          "hour": 3600.0, "hours": 3600.0, "hr": 3600.0, "hrs": 3600.0}
-# A relative reset past a year is no reset a provider means, and a moment
-# past the end of the calendar cannot be written to the store.
-MAX_RESET_SECONDS = 366 * 24 * 3600.0
+# The last moment the store can write: a reset past the end of the calendar
+# is no reset, and any reset before it is honoured however far off it is.
+MAX_EPOCH = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp()
 
 # An absolute reset: a date and a time of day, or a time of day alone.
 DATETIME = re.compile(
@@ -121,6 +121,9 @@ def reset_at(message, failed=None):
         seconds = float(match.group(1)) * UNITS.get(match.group(2).lower(), 0.0)
         # A reset of zero is a reset: the provider says it is free now, and
         # a block that waited an hour would hold it past what it promised.
-        if 0 <= seconds <= MAX_RESET_SECONDS:
+        if seconds >= 0 and base + seconds <= MAX_EPOCH:
             return base + seconds
-    return _absolute(message, base)
+    until = _absolute(message, base)
+    if until is not None and until > MAX_EPOCH:
+        return None
+    return until

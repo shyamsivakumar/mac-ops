@@ -235,6 +235,12 @@ class ProviderBlockTests(unittest.TestCase):
                                              failed, now=failed)
         self.assertEqual(record["until"], "2026-11-18T11:00:00+00:00")
 
+    def test_a_reset_more_than_a_year_away_that_a_clock_can_hold_is_kept(self):
+        failed = moment("2026-11-18T10:00:00")
+        record = provider_block.record_block(SELECTION, "429; retry after 8800 hours",
+                                             failed, now=failed)
+        self.assertEqual(record["until"], "2027-11-20T02:00:00+00:00")
+
     def test_a_newer_refusal_read_after_its_reset_clears_the_older_block(self):
         """A newer refusal whose reset has passed still replaces the older
         block, so the provider is not held until the older reset."""
