@@ -33,6 +33,12 @@ LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
 CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DECISIONS_PATH = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
+# The failed gate reviews one pull request gets before it goes to Shyam.
+# The convergence rule (Shyam, 2026-11-18): after 3 review rounds without
+# PASS the pull request is re-cut into smaller pull requests or brought to
+# Shyam, and it is not reviewed a 4th time as it is. So the 3rd failed
+# review raises one decisions item instead of a fix round.
+GATE_ROUND_CAP = 3
 DRY = False
 SNAPSHOT = {}
 # Where each lane repository is checked out. The path is the shared root
@@ -579,6 +585,82 @@ MAC_OPS_REPO = "shyamsivakumar/mac-ops"
 SRW_REPO = "shyamsivakumar/strategy-replay-workbench"
 
 
+def failed_reviews(repo, number, ledger):
+    """The failed gate reviews of one pull request, and the head of the last.
+
+    The count is per pull request, not per head: a pull request that
+    failed its gate, was fixed and failed again has had two reviews. The
+    head is kept with the count, so one failed review is never counted
+    twice when a later pass sees it again.
+    """
+    state = ledger.get(f"rounds:{repo}#{number}") or {}
+    return int(state.get("count", 0)), state.get("head")
+
+
+def record_failed_review(repo, number, head, ledger):
+    """Count the failed gate review in hand, and return the count."""
+    count, last = failed_reviews(repo, number, ledger)
+    if last == head:
+        return count
+    count += 1
+    ledger[f"rounds:{repo}#{number}"] = {"count": count, "head": head}
+    return count
+
+
+def gate_round_item(repo, number, head):
+    """The one decisions item a pull request with no review rounds left raises."""
+    return {
+        "id": f"lane-gate-rounds-{repo.replace('/', '-')}-{number}",
+        "group": "Coordinator",
+        "kind": "ask",
+        "title": (f"Shyam, PR #{number} in {repo} failed {GATE_ROUND_CAP} gate rounds without PASS. "
+                  "Re-cut it into smaller pull requests, or take it over yourself."),
+        "cause": f"{repo}#{number} head {head[:8]}: {GATE_ROUND_CAP} review rounds without PASS",
+        "why": ("The gate failed three review rounds without PASS, so the lane stopped sending fix "
+                "rounds: this pull request is not reviewed a 4th time as it is. It is re-cut into "
+                "smaller pull requests, or Shyam takes it over."),
+        "options": [
+            {"label": "Re-cut it into smaller pull requests",
+             "detail": "The coordinator re-cuts the remaining work into at most two ordered tickets.",
+             "recommended": True},
+            {"label": "Take it over",
+             "detail": "Shyam reads the pull request and the last gate report and decides what happens to it.",
+             "recommended": False},
+        ],
+    }
+
+
+def gate_round_decision(repo, number, head, ledger):
+    """Raise the one decisions item for a pull request that used its rounds.
+
+    The board holds one item per pull request: the item has a fixed id,
+    so a later pass over the same pull request finds it already raised
+    instead of raising a second one.
+    """
+    lkey = f"rounds-decision:{repo}#{number}"
+    if lkey in ledger:
+        return f"#{number}: no fix round, the decisions item is on the board"
+    item = gate_round_item(repo, number, head)
+    if DRY:
+        return f"DRY #{number}: no fix round, one decisions item"
+    if alarms.board_update(DECISIONS_PATH, item["id"], "raise", item) != "wrote":
+        return f"#{number}: the decisions item could not be published"
+    ledger[lkey] = item["id"]
+    return (f"#{number}: no fix round after {GATE_ROUND_CAP} failed reviews, "
+            "one decisions item is on the board")
+
+
+def clear_gate_round_decision(repo, number, ledger):
+    """Take the decisions item of a pull request off the board when it passes."""
+    lkey = f"rounds-decision:{repo}#{number}"
+    if lkey not in ledger:
+        return
+    item = gate_round_item(repo, number, "")
+    if not DRY and alarms.board_update(DECISIONS_PATH, item["id"], "remove") != "wrote":
+        return
+    ledger.pop(lkey, None)
+
+
 def check_step(repo, proof_path):
     """The step a builder takes to put a passing check on its head.
 
@@ -661,6 +743,7 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
+        clear_gate_round_decision(repo, number, ledger)
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
         if DRY:
@@ -684,6 +767,12 @@ def act_on_pr(repo, number, ledger):
         # still working them. A second copy is the padding the queue had.
         return f"skip #{number}: gate findings for this head are already with the builder ({status})"
     if verdict == "FAIL":
+        # The failed review in hand is one after the reviews the pull
+        # request already had. The convergence rule gives it three
+        # reviews: the first review and the two fix rounds it can answer.
+        reviews = record_failed_review(repo, number, head, ledger)
+        if reviews >= GATE_ROUND_CAP:
+            return gate_round_decision(repo, number, head, ledger)
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
         msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, "

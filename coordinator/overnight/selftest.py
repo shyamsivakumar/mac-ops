@@ -562,7 +562,8 @@ def no_parking(status="interrupted"):
         lane.act_on_pr(repo, 20, ledger)
         exact(actions, ["fix", "continue", "fix", "continue"])
         exact(sorted(ledger), sorted([f"fix:{repo}#20:{h}" for h in ["old1", "old2", head, "b" * 40]] +
-                                    [f"continue:{repo}#20:{h}" for h in [head, "b" * 40]]))
+                                    [f"continue:{repo}#20:{h}" for h in [head, "b" * 40]] +
+                                    [f"rounds:{repo}#20"]))
     try:
         exact(actions + ["park"], ["fix", "continue", "fix", "continue"])
     except AssertionError:
@@ -1477,6 +1478,68 @@ def consolidation_guard():
     message = json.loads(launches[0][2])["message"]
     exact("at most 2 ordered tickets" in message, True)
     exact("never create a third ticket" in message, True)
+
+
+def gate_round_cap():
+    """The convergence rule in the lane: three failed reviews, then one item.
+
+    The convergence rule (Shyam, 2026-11-18): after 3 review rounds
+    without PASS the pull request is re-cut or brought to Shyam, and it is
+    not reviewed a 4th time as it is. The first review of a pull request
+    is round 1, so the lane sends two fix rounds (the answers to rounds 1
+    and 2) and the third failed review raises one decisions item instead
+    of a third fix round.
+    """
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    heads = ["a" * 40, "b" * 40, "c" * 40, "d" * 40]
+    sent = []
+    with tempfile.TemporaryDirectory() as scratch:
+        board = Path(scratch) / "decisions.json"
+        board.write_text(json.dumps({"items": []}))
+
+        def command(cmd, timeout=150):
+            if cmd == ["gh", "pr", "view", "20", "-R", repo, "--json", "state,mergedAt"]:
+                return json.dumps({"state": "OPEN", "mergedAt": None})
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def threads(tool, args):
+            raise AssertionError(f"unexpected T3 tool: {tool}")
+
+        def send(thread_id, message, title, ledger, lkey, **kwargs):
+            sent.append(lkey)
+            # The real send records the message in the ledger, and the
+            # ledger is where the lane counts the fix rounds of a pull
+            # request.
+            ledger[lkey] = "sent"
+            return "sent"
+
+        ledger = {}
+        for head in heads:
+            pr = dict(number=20, state="OPEN", headRefOid=head,
+                      body=f"Refs #10\nBuilder check: PASS {head}", mergeable="MERGEABLE")
+            snapshot = {"repos": {repo: {"prs": [pr], "issues": [dict(number=10, labels=[])]}}}
+            with patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
+                 patch.object(lane, "SNAPSHOT", snapshot), patch.object(lane, "DRY", False), \
+                 patch.object(lane, "DECISIONS_PATH", str(board)), \
+                 patch.object(lane, "builder_thread", return_value=("10", "live-builder")), \
+                 patch.object(lane, "gate_verdict", return_value=("FAIL", {"threadId": "gate"}, "finding\nVERDICT: FAIL")), \
+                 patch.object(lane, "read_json", return_value=dict(number=20, state="OPEN", headRefName="builder/fixture", baseRefName="main")), \
+                 patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
+                 patch.object(lane, "send", send):
+                lane.act_on_pr(repo, 20, ledger)
+        # Two fix rounds: the answers to the first and the second review.
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        # The third failed review and the fourth raise one decisions item
+        # between them, and the board holds that one item.
+        items = json.loads(board.read_text())["items"]
+        exact(len(items), 1)
+        exact(items[0]["kind"], "ask")
+        exact(items[0]["title"].startswith("Shyam,"), True)
+        exact(len(items[0]["options"]), 2)
+        # The fix rounds of the pull request are its failed reviews before
+        # the one in hand.
+        exact(lane.failed_reviews(repo, 20, ledger), (4, heads[3]))
 
 
 def send_integrity():
@@ -2701,7 +2764,7 @@ def alarm_mute():
 
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():
