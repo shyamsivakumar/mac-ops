@@ -386,7 +386,10 @@ def gate_verdict(repo, number, head):
     for t in sorted(threads, key=lambda t: t.get("updatedAt") or "", reverse=True):
         if t.get("status") in ("running", "queued", "starting", "preparing"):
             return "running", t, ""
-        reply = last_reply(t["threadId"])
+        # The verdict is the stopped run's verdict. A gate that died without
+        # one wrote nothing, and an earlier run's PASS is not this run's
+        # answer: reusing it would ship a head its gate never read.
+        reply = last_reply(t["threadId"], current_run=True)
         if reply.endswith("VERDICT: PASS"):
             return "PASS", t, reply
         if reply.endswith("VERDICT: FAIL"):

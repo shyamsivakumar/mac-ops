@@ -406,7 +406,7 @@ def gate_pipeline():
             if tool == "t3_thread_read":
                 if args["threadId"] == "live-builder":
                     return {"thread": {"status": "running", "sendable": True, **builder_thread_fields()}}
-                return {"items": [{"type": "assistant_message", "text": reply}]}
+                return {"items": [{"runId": "run-gate", "type": "assistant_message", "text": reply}]}
             raise AssertionError(f"unexpected T3 tool: {tool}")
 
         try:
