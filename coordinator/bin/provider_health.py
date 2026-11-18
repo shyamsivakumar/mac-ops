@@ -232,7 +232,7 @@ def block_reason(text):
         return None
     low = text.lower()
     for code in ("1308", "2056"):
-        if re.search(r'(?:["\']?code["\']?\s*[:=]?\s*["\']?)' + code + r'\b', low):
+        if re.search(r'\b(?:error_?code|code)\b["\']?\s*[:=]?\s*["\']?' + code + r'\b', low):
             return code
     for marker in BLOCK_MARKERS:
         if marker in low:
