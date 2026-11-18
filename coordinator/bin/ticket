@@ -81,7 +81,7 @@ ATTRIBUTED = re.compile(
 QUOTE_WINDOW = 60
 # The review gate: the rules live in the coordinator CLAUDE.md sections
 # "Review gate" and "Ten minutes start to finish".
-from gate_reviewers import REVIEWER_CHAIN
+from gate_reviewers import REVIEWER_CHAIN, blocked_identities, first_reviewer
 
 GATE_ASTRA = REVIEWER_CHAIN[0]
 GATE_PRIORITY = 400
@@ -1455,7 +1455,11 @@ def builder_models(issue, login):
 
 
 def gate_reviewer(models, live=False):
-    return GATE_ASTRA
+    """The reviewer a new gate starts on.
+
+    A reviewer that is blocked for every head is skipped, so a new gate
+    starts on the next one until it recovers (Shyam 2026-11-17 18:15 PT)."""
+    return first_reviewer(blocked_identities()) or GATE_ASTRA
 
 
 def gate_live(title, gate_id):

@@ -1,10 +1,28 @@
+import os
 import runpy
+import tempfile
 import unittest
 
 C = runpy.run_path('coordinator/bin/coordq')
 
 
-class ReviewerQuotaTests(unittest.TestCase):
+class QuotaBase(unittest.TestCase):
+    def setUp(self):
+        # The blocked reviewers live in the queue directory. A proof must
+        # never read or write the live queue, so the directory is a
+        # temporary one for the length of the test.
+        self.saved = os.environ.get("COORDQ_DIR")
+        os.environ["COORDQ_DIR"] = tempfile.mkdtemp(prefix="coordq-quota-")
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        if self.saved is None:
+            os.environ.pop("COORDQ_DIR", None)
+        else:
+            os.environ["COORDQ_DIR"] = self.saved
+
+
+class ReviewerQuotaTests(QuotaBase):
     def test_vendor_routing(self):
         for builder, expected in [('claude', 'ASTRA_MODEL'), ('gpt-6.1-sol', 'ASTRA_MODEL'), ('minimax/m3', 'ASTRA_MODEL'), ('deepseek/flash', 'ASTRA_MODEL'), ('glm/5', 'ASTRA_MODEL')]:
             self.assertEqual(C['reviewer_model']([builder]), C[expected])

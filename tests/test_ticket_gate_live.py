@@ -4,6 +4,7 @@ The CLI is a script without a .py suffix, so it is loaded by path.
 """
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -50,9 +51,15 @@ class GateLiveTest(unittest.TestCase):
     def setUp(self):
         self.queue_dir = tempfile.mkdtemp(prefix="ticket-gate-live-")
         self.addCleanup(self._remove_queue)
+        # The blocked reviewers live in the queue directory. A proof must
+        # never read the live queue, so the directory is a temporary one
+        # for the length of the test.
         self.saved_queue_dir = ticket.QUEUE_DIR
         ticket.QUEUE_DIR = self.queue_dir
         self.addCleanup(lambda: setattr(ticket, "QUEUE_DIR", self.saved_queue_dir))
+        self.saved_env_queue_dir = os.environ.get("COORDQ_DIR")
+        os.environ["COORDQ_DIR"] = self.queue_dir
+        self.addCleanup(self._restore_env_queue_dir)
         self.saved_t3_call = ticket.t3_call
         self.addCleanup(lambda: setattr(ticket, "t3_call", self.saved_t3_call))
         self.calls = []
@@ -72,6 +79,12 @@ class GateLiveTest(unittest.TestCase):
             if path.exists():
                 path.unlink()
         Path(self.queue_dir).rmdir()
+
+    def _restore_env_queue_dir(self):
+        if self.saved_env_queue_dir is None:
+            os.environ.pop("COORDQ_DIR", None)
+        else:
+            os.environ["COORDQ_DIR"] = self.saved_env_queue_dir
 
     def write(self, name, payload):
         (Path(self.queue_dir) / name).write_text(json.dumps(payload))

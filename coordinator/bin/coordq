@@ -27,7 +27,11 @@ LAUNCH_RECORD = "launch:"
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 GLM_MODEL = {"instanceId": "glm", "model": "zai/glm-5.3"}
 DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
-from gate_reviewers import REVIEWER_CHAIN
+from gate_reviewers import (REVIEWER_CHAIN, block_reviewer, blocked_identities,
+                            chain_index, failed_reviewer, failure_text,
+                            first_reviewer, identity, load_blocked, next_reviewer,
+                            note_probe, probe_due, provider_block_reason,
+                            reset_time, selection_for, unblock_reviewer)
 
 # The gate reviewer: GPT-6.2 Astra only. The chain starts on the API
 # credits and falls back to the Codex subscription; when both are gone
@@ -100,7 +104,7 @@ STUCK_FILE = "gatekeep-stuck.txt"
 # on every run. A head is retried at most GATE_RETRY_LIMIT times, with
 # GATE_RETRY_BACKOFF seconds between retries after the first, and then given
 # up until its head changes.
-GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", "2"))
+GATE_RETRY_LIMIT = int(os.environ.get("COORDQ_GATE_RETRY_LIMIT", str(len(REVIEWER_CHAIN))))
 GATE_RETRY_BACKOFF = float(os.environ.get("COORDQ_GATE_RETRY_BACKOFF", "300"))
 # The board action keys. A board action for one head is one send, so the
 # key of that action belongs to one queue item. The map holds the key of
@@ -179,7 +183,12 @@ def with_model(args):
     if not resolved.get("modelSelection"):
         if not task_type:
             return None, "refused: a launch needs a taskType or a modelSelection"
-        resolved["modelSelection"] = TASK_MODELS[task_type]
+        if task_type == "review":
+            # A new gate starts on the first reviewer that is not blocked
+            # for every head (Shyam 2026-11-17 18:15 PT).
+            resolved["modelSelection"] = first_reviewer(blocked_identities()) or ASTRA_MODEL
+        else:
+            resolved["modelSelection"] = TASK_MODELS[task_type]
     elif task_type == "review" and not is_gate_model(resolved["modelSelection"]):
         return None, (f"refused: taskType 'review' runs on the gate model "
                       f"{ASTRA_MODEL} (GPT-6.2 Astra only), "
@@ -192,7 +201,7 @@ def with_model(args):
 
 
 def is_gate_model(selection):
-    return isinstance(selection, dict) and selection in REVIEWER_CHAIN
+    return chain_index(selection) >= 0
 
 
 def is_allowed_builder(selection):
@@ -1133,7 +1142,11 @@ def builder_models(thread, runs):
 
 
 def reviewer_model(models):
-    return ASTRA_MODEL
+    """The reviewer a new gate starts on.
+
+    A reviewer that is blocked for every head is skipped, so a new gate
+    starts on the next one in the chain until the blocked one recovers."""
+    return first_reviewer(blocked_identities()) or ASTRA_MODEL
 
 
 def quota_failure(value):
@@ -1166,18 +1179,41 @@ def quota_failure(value):
 
 
 def fallback_reviewer(queue, key, current, models=()):
-    if current not in REVIEWER_CHAIN:
+    """The next reviewer for a head, one step down the chain.
+
+    The head moves down the chain at most once per reviewer: the
+    reviewers already tried for the head are kept in the queue, and a
+    reviewer that is blocked for every head is skipped. None means the
+    chain is exhausted and the head waits."""
+    if chain_index(current) < 0:
         return None
     tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
-    for selection in REVIEWER_CHAIN[REVIEWER_CHAIN.index(current) + 1:]:
-        identity = f"{selection['instanceId']}:{selection['model']}"
-        if identity not in tried:
-            tried.append(identity)
-            return selection
-    return None
+    selection = next_reviewer(current, tried, blocked_identities())
+    if selection is None:
+        return None
+    name = identity(selection)
+    if name not in tried:
+        tried.append(name)
+    return selection
 
 
 def failed_gate_reviewer(queue, key, current, failure):
+    """The reviewer that takes over a gate that ended without a verdict.
+
+    A gate that ends without a verdict for any reason (failed, errored,
+    interrupted, timed out, no executed model, any provider error) moves
+    down the chain. A blocking provider reason blocks that reviewer for
+    every head, so every new gate starts on the next one until it
+    recovers."""
+    reason = provider_block_reason(failure)
+    if reason:
+        blocked = failed_reviewer(failure) or current
+        line = None
+        if chain_index(blocked) >= 0:
+            line = block_reviewer(blocked, reason, reset_at=reset_time(failure_text(failure)))
+        if line:
+            log(line)
+            print(line, flush=True)
     selection = fallback_reviewer(queue, key, current)
     if selection is not None:
         return selection
@@ -1288,9 +1324,85 @@ def executed_models(value):
     return []
 
 
+PROBE_MESSAGE = "Reply with the single word OK. This is a reviewer health probe."
+
+
+def probe_blocked_reviewers(config, dry_run=False):
+    """One tiny probe per blocked reviewer, at most once an hour.
+
+    A blocked reviewer is probed when its hour is up, or at the reset
+    time its error gave. The probe answers, the reviewer is unblocked and
+    every new gate may start on it again. Each block and each unblock is
+    logged once."""
+    blocked = load_blocked()
+    if not blocked:
+        return
+    project = next((settings.get("projectId") for settings in (config.get("repos") or {}).values()
+                    if settings.get("projectId")), None)
+    if not project:
+        return
+    receipts = load_receipts()
+    for name, record in list(blocked.items()):
+        selection = selection_for(name)
+        if selection is None:
+            continue
+        request_id = record.get("probeRequestId")
+        thread_id = receipts.get(request_id) if request_id else None
+        if thread_id:
+            code, out = call("t3_thread_read", {"threadId": thread_id, "maxCharsPerItem": 2000})
+            if code == 0:
+                try:
+                    data = json.loads(out)
+                except ValueError:
+                    data = {}
+                thread = data.get("thread") or {}
+                texts = [i.get("text") or "" for i in (data.get("items") or [])
+                         if i.get("type") == "assistant_message"]
+                if thread.get("status") == "completed" and any(t.strip() for t in texts):
+                    line = unblock_reviewer(selection)
+                    if line:
+                        log(line)
+                        print(line, flush=True)
+                    continue
+                if thread.get("status") in {"running", "queued", "starting", "preparing"}:
+                    continue
+        if not probe_due(selection):
+            continue
+        request_id = f"probe:{name}:{int(time.time())}"
+        if dry_run:
+            print(f"would probe reviewer {name}", flush=True)
+            continue
+        args = {"projectId": project, "title": f"reviewer probe {name}",
+                "modelSelection": selection, "taskType": "review", "runtimeMode": "full-access",
+                "workspaceStrategy": {"type": "root"}, "clientRequestId": request_id,
+                "message": PROBE_MESSAGE}
+        with Lock(True):
+            queue = load()
+            note_probe(selection, request_id)
+            item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
+                    "title": args["title"], "priority": 9000, "builderModels": []}
+            queue["next"] += 1
+            queue["items"].append(item)
+            save(queue)
+        print(f"probing reviewer {name}", flush=True)
+
+
+def gate_ended(status):
+    """Whether a gate thread's run ended.
+
+    Every status that is not a live one ends the run: a run that errored
+    or timed out is over, and its gate has no verdict, so the head falls
+    back to the next reviewer (Shyam 2026-11-17 18:10 PT). A missing
+    status is not an ending: the read was partial and the head waits."""
+    if not status:
+        return False
+    return status not in LIVE_STATUSES
+
+
 def cmd_gatekeep(a):
     with open(a.config) as f:
         config = json.load(f)
+    probe_blocked_reviewers(config, a.dry_run)
     try:
         counts = load_counts()
         seen = set()
@@ -1333,7 +1445,7 @@ def cmd_gatekeep(a):
                     texts = [i.get("text") or "" for i in (data.get("items") or [])
                              if i.get("type") == "assistant_message"]
                     report = texts[-1].rstrip() if texts else ""
-                    if thread.get("status") not in {"failed", "interrupted", "completed"}:
+                    if not gate_ended(thread.get("status")):
                         continue
                     if report.endswith(("VERDICT: PASS", "VERDICT: FAIL")):
                         continue
@@ -1347,8 +1459,8 @@ def cmd_gatekeep(a):
                         continue
                     if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
                         continue
-                    current = {"instanceId": thread.get("providerInstanceId"),
-                               "model": thread.get("model")}
+                    current = state.get("reviewer") or {"instanceId": thread.get("providerInstanceId"),
+                                                       "model": thread.get("model")}
                     model = failed_gate_reviewer(queue, key, current, data)
                     if model is None:
                         if not a.dry_run:
@@ -1377,7 +1489,12 @@ def cmd_gatekeep(a):
                 queue["next"] += 1
                 queue["items"].append(item)
                 heads[key] = {"id": item["id"], "retries": retries,
+                              "reviewer": args["modelSelection"],
                               "at": time.time() if retries else None, "givenUp": False}
+                tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
+                name = identity(args["modelSelection"])
+                if name not in tried:
+                    tried.append(name)
                 save(queue)
         write_counts(counts, seen, stuck, a.dry_run)
     except (RuntimeError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as e:
@@ -1504,7 +1621,7 @@ def cmd_fix(a):
 
 
 def backstop_model(thread, runs):
-    return ASTRA_MODEL
+    return first_reviewer(blocked_identities()) or ASTRA_MODEL
 
 
 def check_names_head(body, head, publisher, checks):
