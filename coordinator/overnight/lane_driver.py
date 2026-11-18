@@ -1,5 +1,4 @@
 from contextlib import contextmanager
-import datetime as dt
 import shlex
 import json
 import os
@@ -25,13 +24,6 @@ PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-wo
          "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
 API_FLOOR = 500
 BOARD_REFRESH_PASSES = 5
-# The window the board's activity is read over when the shift has no
-# earlier read to start from: three ticks of a three minute tick, so the
-# first read of a night sees the same window the later reads see.
-ACTIVITY_WINDOW = 900
-# The overlap of two consecutive windows, in seconds, so an event on the
-# boundary between two ticks is not lost.
-ACTIVITY_OVERLAP = 60
 # The stall events of the last pass: an item that was reported as stalled
 # and a board that stopped moving. The shift writes the records for them.
 STALL_EVENTS = []
@@ -302,88 +294,6 @@ def board_keys(snapshot):
             continue
         keys.add(f"{repo}#{number}")
     return keys
-
-
-def board_stages(snapshot):
-    """Return the stage of every ticket the board holds.
-
-    A ticket that changed stage is progress: the board moved, whatever
-    the shift did with the ticket afterwards."""
-    stages = {}
-    for ticket in snapshot.get("tickets") or []:
-        repo = ticket.get("repo") or ""
-        number = ticket.get("number")
-        if repo not in LANE_REPOS or not number:
-            continue
-        stages[f"{repo}#{number}"] = ticket.get("stage") or ""
-    return stages
-
-
-def activity_time(value):
-    """Return the time of one board event, or None when it cannot be read.
-
-    An event without a readable time is not evidence of progress, so it is
-    dropped: the shift keeps the rule it had rather than counting an
-    event it cannot place in time."""
-    try:
-        stamp = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=dt.timezone.utc)
-    return stamp
-
-
-def board_activity(state, since=None):
-    """Return the board's progress events since the last tick.
-
-    A merged pull request and a closed ticket are progress on the board:
-    the work landed, whatever else the shift did with it. The shift reads
-    them every tick, so a board that is working is never called stalled.
-
-    The window is the time since the last tick, with a minute of overlap
-    so an event on the boundary between two ticks is not lost. Every
-    event counts once: the shift remembers the events it has seen, so a
-    merge that stays in the window does not count again.
-
-    A read that fails returns no events: the shift keeps the rule it had,
-    so a real stall is still reported. The rule never claims progress it
-    could not read."""
-    now = time.time()
-    start = float(since or 0) or (now - ACTIVITY_WINDOW)
-    if start > now:
-        start = now - ACTIVITY_WINDOW
-    cutoff = dt.datetime.fromtimestamp(start - ACTIVITY_OVERLAP, dt.timezone.utc)
-    stamp = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
-    events = []
-    try:
-        for repo in LANE_REPOS:
-            merged = read_json(["gh", "pr", "list", "-R", repo, "--state", "merged",
-                                "--search", "merged:>=" + stamp, "--limit", "20",
-                                "--json", "number,mergedAt"])
-            for row in merged if isinstance(merged, list) else []:
-                if not isinstance(row, dict):
-                    continue
-                merged_at = activity_time(row.get("mergedAt"))
-                if merged_at is None or merged_at < cutoff:
-                    continue
-                events.append(f"merge:{repo}#{row.get('number')}")
-            closed = read_json(["gh", "issue", "list", "-R", repo, "--state", "closed",
-                                "--search", "closed:>=" + stamp, "--limit", "20",
-                                "--json", "number,closedAt"])
-            for row in closed if isinstance(closed, list) else []:
-                if not isinstance(row, dict):
-                    continue
-                closed_at = activity_time(row.get("closedAt"))
-                if closed_at is None or closed_at < cutoff:
-                    continue
-                events.append(f"close:{repo}#{row.get('number')}")
-    except ApiBudgetExhausted:
-        raise
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"BOARD ACTIVITY: unreadable ({exc}); the board counts no progress this tick")
-        return []
-    return events
 
 
 def builder_thread(repo, body):
@@ -1139,18 +1049,26 @@ def zero_merge(snapshot):
                 if cutoff <= stamp <= now:
                     recent = True
     path = DECISIONS_PATH
-    with open(path) as handle:
-        decisions = json.load(handle)
-    decisions["items"] = [item for item in decisions["items"]
-                          if item.get("id") != "factory-zero-merge"]
+    cause = "No merge in 60 minutes with open PRs"
+    item = None
     if open_prs and not recent:
-        decisions["items"].append({"id": "factory-zero-merge", "group": "Coordinator",
-            "kind": "action", "title": "No merge in 60 minutes with open PRs",
-            "why": "The coordinator must inspect blocked PRs and restore merge progress."})
-    decisions["updated"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    with open(path + ".tmp", "w") as handle:
-        json.dump(decisions, handle, indent=1)
-    os.replace(path + ".tmp", path)
+        item = {"id": "factory-zero-merge", "group": "Coordinator",
+                "kind": "action", "title": cause,
+                "cause": alarms.cause_of(cause),
+                "why": "The coordinator must inspect blocked PRs and restore merge progress."}
+    # The alarm is muted for four hours once it is acknowledged, like the
+    # watchdog's and the stall's (Refs #496): one place decides, and the
+    # board is written under its lock.
+    action = alarms.decide_and_publish(
+        "factory-zero-merge", cause or "",
+        lambda decided: None if alarms.board_update(
+            path, "factory-zero-merge",
+            "raise" if decided in ("raise", "unchecked") and item else "remove",
+            item) == "wrote" else "failed")
+    if action == "quiet":
+        print("ZERO-MERGE quiet: " + cause)
+    elif action == "raise" or action == "unchecked":
+        print("ZERO-MERGE " + cause)
 
 
 def item_failure_summary(ledger):
@@ -1477,10 +1395,6 @@ def run_pass(ledger):
     if not isinstance(STALL_STATE, dict):
         STALL_STATE = {}
     state = STALL_STATE
-    # The window of this tick starts where the last one started, so the
-    # board's activity is read over every tick and no tick is skipped.
-    window_start = float(state.get("tick_at") or 0)
-    state["tick_at"] = time.time()
     receipts = stall_receipts()
     markers = stall_markers(SNAPSHOT, receipts)
     swept = False
@@ -1496,15 +1410,9 @@ def run_pass(ledger):
         markers = stall_markers(SNAPSHOT, receipts)
         swept = True
     fresh = stall.arrived(state, board_keys(SNAPSHOT))
-    moved = any(
+    progressed = any(
         stall.moved(state, key, item["marker"]) for key, item in markers.items()
-    )
-    # The board moved when a ticket changed stage, when a pull request
-    # merged or when a ticket closed. Those are read every tick, so a
-    # board that is landing work is never called stalled.
-    changed = stall.staged(state, board_stages(SNAPSHOT))
-    events = stall.progress(state, board_activity(state, window_start))
-    progressed = moved or bool(fresh) or changed or bool(events)
+    ) or bool(fresh)
     board_event = stall.board(state, progressed, board_items(SNAPSHOT))
     for key, item in sorted(markers.items()):
         event = stall.observe(state, key, item["marker"])
