@@ -292,15 +292,27 @@ def message_identity(item):
             str(args.get("threadId") or args.get("clientRequestId") or ""))
 
 
-def prune_messages(queue):
-    """Drop the started-message records that are too old to be running.
+def prune_messages(queue, live_ids=None):
+    """Drop the started-message records that are no longer running.
+
+    A record whose thread is still live is kept however old it is: that
+    thread is working the message now, so the queue must keep refusing a
+    second copy of it (ticket #544 counts a running item). The age only
+    retires a record once its thread is gone. An unreadable thread list
+    (live_ids None) keeps every record, the same way duplicate_message
+    counts an unreadable list as a duplicate: a refused start costs one
+    attempt, and dropping the record costs a second thread on the work.
 
     Returns whether anything was dropped, so a caller saves only a change.
     """
-    kept = [record for record in queue.get("started") or []
+    started = queue.get("started") or []
+    now = time.time()
+    kept = [record for record in started
             if isinstance(record, dict)
-            and time.time() - float(record.get("at") or 0) < MESSAGE_TTL]
-    changed = len(kept) != len(queue.get("started") or [])
+            and (live_ids is None
+                 or record.get("thread") in live_ids
+                 or now - float(record.get("at") or 0) < MESSAGE_TTL)]
+    changed = len(kept) != len(started)
     queue["started"] = kept
     return changed
 
@@ -403,8 +415,6 @@ def drain():
     statuses = {}
     while True:
         queue = load()
-        if prune_messages(queue):
-            save(queue)
         dispatchable = []
         dropped = set()
         for item in queue["items"]:
@@ -435,6 +445,8 @@ def drain():
             log(f"{e}, nothing started")
             return
         reconcile_reservations(queue, active, statuses)
+        if prune_messages(queue, active):
+            save(queue)
         if not ready:
             return
         n = max(n, len(active))
@@ -637,10 +649,10 @@ def cmd_start(a):
                     f"{where}")
         item = {"id": queue["next"], "tool": tool, "args": args, "title": a.title or args.get("title") or args.get("threadId", ""), "priority": a.priority}
         title, target = message_identity(item)
-        if prune_messages(queue):
+        live = live_thread_ids() if queue.get("started") else None
+        if prune_messages(queue, live):
             save(queue)
-        duplicate = duplicate_message(queue, title, target, key,
-                                      live_thread_ids() if queue.get("started") else None)
+        duplicate = duplicate_message(queue, title, target, key, live)
         if duplicate:
             die(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "
                 f"already {duplicate[0]} as coordq #{duplicate[1]}")
