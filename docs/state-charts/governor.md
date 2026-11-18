@@ -32,7 +32,7 @@ The heavy floor is restored to `min(2, ceiling)` on a fresh, valid, noncritical 
 
 The critical classifier is kernel pressure level 4, memory use at least 95 percent, or smoothed CPU busy at least 95 percent. The controller smooths CPU busy as the mean of its last three samples. Smoothed CPU busy at least 80 percent is a board warning. Load average is logged. Load per core at least 2 is critical only when the CPU reading is missing. Heavy admission still waits on raw CPU busy at or above 95 percent. Once the capacity file write succeeds, a critical tick writes urgent pause requests for all running heavy jobs before it queries or changes the board limit. The controller does not claim that the operating system has paused a process yet. The strict publication-failure model shows why the one-tick request guarantee depends on that write succeeding.
 
-Each tick also reaps heavy jobs whose supervisor process is gone and stops simulator processes that belong to no booted device. A dead supervisor frees its slot on the next admission decision and logs one line. The simulator sweep runs at most every ten seconds so the tick stays short.
+Each tick also reaps heavy jobs whose supervisor process is gone and stops simulator processes that belong to no booted device. A dead supervisor frees its slot on the next admission decision and logs one line. The simulator sweep takes about 0.2 seconds on a Mac with three booted devices and runs on every tick.
 
 ## Queued heavy work and idle agents
 

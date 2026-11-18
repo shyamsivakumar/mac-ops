@@ -33,10 +33,34 @@ def app_row(pid, ppid):
     )
 
 
+def executables(rows):
+    """Return a reader that gives each row's executable the way libproc would."""
+    table = {}
+    for pid, _, command in rows:
+        if command.startswith("launchd_sim"):
+            table[pid] = "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/launchd_sim"
+        elif command.startswith("/"):
+            table[pid] = command
+        else:
+            table[pid] = "/usr/bin/" + command.split()[0]
+    return lambda pid: table.get(pid)
+
+
+def tail_row(pid, ppid, udid):
+    """Return a process row for a tail command that names a device log path."""
+    return (
+        pid,
+        ppid,
+        "tail -f /Users/test/Library/Developer/CoreSimulator/Devices/"
+        + udid
+        + "/data/Library/Logs/CoreSimulator/system.log",
+    )
+
+
 class SimulatorOwnerTests(unittest.TestCase):
     def test_launchd_and_application_processes_share_one_device(self):
         rows = [launchd_row(10, DEVICE_A), app_row(11, 10)]
-        owners = heavy.simulator_device_owners(rows)
+        owners = heavy.simulator_device_owners(rows, executables(rows))
         self.assertEqual(owners[10], DEVICE_A)
         self.assertEqual(owners[11], DEVICE_A)
 
@@ -61,6 +85,7 @@ class SimulatorOwnerTests(unittest.TestCase):
             sleep=lambda seconds: None,
             clock=clock,
             identity_reader=lambda pid: (os.getuid(), "1.000000"),
+            executable_reader=executables(rows),
         )
         self.assertEqual(result["stopped"], 2)
         self.assertEqual(result["devices"], [DEVICE_B])
@@ -79,14 +104,15 @@ class SimulatorOwnerTests(unittest.TestCase):
             sleep=lambda seconds: None,
             clock=lambda: 0.0,
             identity_reader=lambda pid: (os.getuid(), "1.000000"),
+            executable_reader=executables(rows),
         )
         self.assertEqual(result["stopped"], 0)
         self.assertEqual(killed, [])
 
-    def test_a_device_that_starts_booting_during_the_sweep_is_left_alone(self):
+    def test_a_device_that_starts_booting_after_the_first_read_is_left_alone(self):
         rows = [launchd_row(10, DEVICE_A), app_row(11, 10)]
         killed = []
-        readings = [{DEVICE_A: "runtime-a"}, {}]
+        readings = [{}, {DEVICE_A: "runtime-a"}]
 
         def booted_reader():
             return readings.pop(0) if readings else {DEVICE_A: "runtime-a"}
@@ -98,6 +124,91 @@ class SimulatorOwnerTests(unittest.TestCase):
             sleep=lambda seconds: None,
             clock=lambda: 0.0,
             identity_reader=lambda pid: (os.getuid(), "1.000000"),
+            executable_reader=executables(rows),
+        )
+        self.assertEqual(result["stopped"], 0)
+        self.assertEqual(killed, [])
+
+    def test_a_device_that_boots_during_the_term_wait_is_not_sent_sigkill(self):
+        rows = [launchd_row(10, DEVICE_A), app_row(11, 10)]
+        killed = []
+        readings = [{}, {}, {DEVICE_A: "runtime-a"}]
+        ticks = [0.0]
+
+        def booted_reader():
+            return readings.pop(0) if readings else {DEVICE_A: "runtime-a"}
+
+        def clock():
+            ticks[0] += 1.0
+            return ticks[0]
+
+        heavy.stop_orphan_simulator_processes(
+            booted_reader=booted_reader,
+            rows_reader=lambda: rows,
+            kill=lambda pid, signum: killed.append((pid, signum)),
+            sleep=lambda seconds: None,
+            clock=clock,
+            identity_reader=lambda pid: (os.getuid(), "1.000000"),
+            executable_reader=executables(rows),
+        )
+        self.assertTrue(killed)
+        self.assertEqual({signum for pid, signum in killed}, {heavy.signal.SIGTERM})
+
+    def test_a_process_that_only_names_a_device_path_is_not_a_simulator_process(self):
+        rows = [tail_row(30, 500, DEVICE_B)]
+        killed = []
+        owners = heavy.simulator_device_owners(rows, executables(rows))
+        self.assertEqual(owners, {})
+        result = heavy.stop_orphan_simulator_processes(
+            booted_reader=lambda: {},
+            rows_reader=lambda: rows,
+            kill=lambda pid, signum: killed.append((pid, signum)),
+            sleep=lambda seconds: None,
+            clock=lambda: 0.0,
+            identity_reader=lambda pid: (os.getuid(), "1.000000"),
+            executable_reader=executables(rows),
+        )
+        self.assertEqual(result["stopped"], 0)
+        self.assertEqual(killed, [])
+
+    def test_a_runtime_process_with_no_launchd_above_it_is_an_orphan(self):
+        rows = [app_row(40, 1), launchd_row(10, DEVICE_A), app_row(11, 10)]
+        killed = []
+        ticks = [0.0]
+
+        def clock():
+            ticks[0] += 1.0
+            return ticks[0]
+
+        result = heavy.stop_orphan_simulator_processes(
+            booted_reader=lambda: {DEVICE_A: "runtime-a"},
+            rows_reader=lambda: rows,
+            kill=lambda pid, signum: killed.append((pid, signum)),
+            sleep=lambda seconds: None,
+            clock=clock,
+            identity_reader=lambda pid: (os.getuid(), "1.000000"),
+            executable_reader=executables(rows),
+        )
+        self.assertEqual(result["stopped"], 1)
+        self.assertEqual({pid for pid, signum in killed}, {40})
+
+    def test_a_runtime_process_whose_parent_chain_is_unknown_is_left_alone(self):
+        rows = [app_row(40, 999)]
+        owners = heavy.simulator_device_owners(rows, executables(rows))
+        self.assertEqual(owners, {})
+
+    def test_a_process_that_started_after_the_listing_is_a_reused_pid(self):
+        rows = [launchd_row(10, DEVICE_B)]
+        killed = []
+        result = heavy.stop_orphan_simulator_processes(
+            booted_reader=lambda: {},
+            rows_reader=lambda: rows,
+            kill=lambda pid, signum: killed.append((pid, signum)),
+            sleep=lambda seconds: None,
+            clock=lambda: 0.0,
+            identity_reader=lambda pid: (os.getuid(), "5000.000000"),
+            executable_reader=executables(rows),
+            epoch_clock=lambda: 4000.0,
         )
         self.assertEqual(result["stopped"], 0)
         self.assertEqual(killed, [])
@@ -112,6 +223,7 @@ class SimulatorOwnerTests(unittest.TestCase):
             sleep=lambda seconds: None,
             clock=lambda: 0.0,
             identity_reader=lambda pid: None,
+            executable_reader=executables(rows),
         )
         self.assertEqual(result["stopped"], 0)
         self.assertEqual(killed, [])
@@ -226,6 +338,80 @@ class SimulatorShutdownTests(unittest.TestCase):
         )
         self.assertEqual(result, [])
         self.assertEqual(stopped, [])
+
+
+class SimulatorLockTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.mkdtemp(prefix="heavy-sim-lock-test-")
+        os.chmod(self.directory, 0o700)
+        self.registry = heavy.Registry(self.directory)
+        self.registry.ensure_protocol()
+        self.original_timeout = heavy.SIMULATOR_LOCK_TIMEOUT
+        heavy.SIMULATOR_LOCK_TIMEOUT = 0.2
+        self.addCleanup(setattr, heavy, "SIMULATOR_LOCK_TIMEOUT", self.original_timeout)
+
+    def test_a_simulator_job_without_a_snapshot_keeps_every_device_on(self):
+        rows = [launchd_row(10, DEVICE_A)]
+        stopped = []
+        record = {
+            "job_id": "7" * 32,
+            "task_id": "task",
+            "simulators": {"booted": [], "started_at": 1000.0},
+        }
+        other = {"job_id": "8" * 32, "state": "starting", "command_basename": "xcodebuild"}
+        result = heavy.shutdown_simulators_booted_by_job(
+            record,
+            other_records=[other],
+            booted_reader=lambda: {DEVICE_A: "runtime-a"},
+            rows_reader=lambda: rows,
+            epochs_reader=lambda table: {DEVICE_A: 1100.0},
+            shutdown=lambda udid: stopped.append(udid) or True,
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(stopped, [])
+
+    def test_cleanup_shuts_nothing_down_while_another_job_holds_the_simulator_lock(self):
+        record = {
+            "job_id": "9" * 32,
+            "task_id": "task",
+            "simulators": {"booted": [], "started_at": 1000.0},
+        }
+        shutdowns = []
+        original = heavy._simulator_shutdown
+        heavy._simulator_shutdown = lambda udid: shutdowns.append(udid) or True
+        self.addCleanup(setattr, heavy, "_simulator_shutdown", original)
+        with self.registry.lock(name=heavy.SIMULATOR_LOCK_NAME):
+            result = heavy._cleanup_job_simulators(self.registry, record)
+        self.assertEqual(result, [])
+        self.assertEqual(shutdowns, [])
+
+    def test_a_job_that_cannot_take_the_simulator_lock_records_no_snapshot(self):
+        job = {
+            "schema": 1,
+            "clock": "CLOCK_MONOTONIC",
+            "job_id": "a1" * 16,
+            "uid": os.getuid(),
+            "task_key": "manual:sim",
+            "task_id": "sim",
+            "command_basename": "xcodebuild",
+            "role": "ordinary",
+            "created_ns": 1,
+            "state": "starting",
+            "supervisor": {
+                "pid": os.getpid(),
+                "start": "1.000000",
+                "uid": os.getuid(),
+                "boot_id": "12345",
+                "task_key": "manual:sim",
+            },
+            "workload": None,
+        }
+        self.registry.create(job)
+        with self.registry.lock(name=heavy.SIMULATOR_LOCK_NAME):
+            heavy._attach_simulator_state(
+                self.registry, job["job_id"], "xcodebuild", ["xcodebuild"]
+            )
+        self.assertNotIn("simulators", self.registry._read_record(job["job_id"]))
 
 
 class DeadJobReapTests(unittest.TestCase):
