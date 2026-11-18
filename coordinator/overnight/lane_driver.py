@@ -1588,9 +1588,17 @@ def probe_blocked_builders(ledger):
                 "workspaceStrategy": {"type": "root"}, "clientRequestId": key,
                 "message": PROBE_MESSAGE}
         provider_health.note_probe(member, key)
-        out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).strip()
+        try:
+            out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).strip()
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+            provider_health.note_probe_failure(member, str(exc), request_id=key)
+            print(f"builder probe {ident}: dispatch failed ({exc})")
+            continue
         if not out:
-            raise RuntimeError(f"Empty builder probe receipt for {ident}")
+            provider_health.note_probe_failure(
+                member, "Empty builder probe receipt", request_id=key)
+            print(f"builder probe {ident}: dispatch failed (empty receipt)")
+            continue
         print(f"builder probe {ident}: started")
 
 
