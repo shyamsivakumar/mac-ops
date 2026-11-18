@@ -295,11 +295,18 @@ def message_identity(item):
     same work is the same message.
     """
     args = item.get("args") or {}
-    title = item.get("messageTitle")
-    if title is None:
+    target = str(args.get("threadId") or args.get("clientRequestId") or "")
+    if "messageTitle" in item:
+        title = item.get("messageTitle") or ""
+    else:
+        # An item written before the identity was kept. Its title is the
+        # caller's when the payload names it and when it is not the thread id
+        # the old code fell back to: an untitled send stored its thread id
+        # there, and that says nothing about what the caller meant.
         title = item.get("title") or ""
-    return (str(title),
-            str(args.get("threadId") or args.get("clientRequestId") or ""))
+        if title and title == target and args.get("title") != title:
+            title = ""
+    return (str(title), target)
 
 
 def prune_messages(queue, live_ids=None):
@@ -327,7 +334,7 @@ def prune_messages(queue, live_ids=None):
     return changed
 
 
-def duplicate_message(queue, title, target, key="", live_ids=None):
+def duplicate_message(queue, title, target, key="", live_ids=None, started_before=None):
     """The queued or running item that already carries this message, or None.
 
     A started message counts while the thread that took it is live: the
@@ -355,9 +362,27 @@ def duplicate_message(queue, title, target, key="", live_ids=None):
             continue
         if key and record.get("actionKey") and record["actionKey"] != key:
             continue
-        if live_ids is None or record.get("thread") in live_ids:
+        if live_ids is None:
+            # An unreadable thread list cannot say a thread stopped.
+            return "started", record.get("id")
+        if started_before is not None and (record.get("id"), record.get("at")) not in started_before:
+            # Recorded after the list was read, so the list cannot say whether
+            # its thread is live, and it is the message just taken.
+            return "started", record.get("id")
+        if record.get("thread") in live_ids:
             return "started", record.get("id")
     return None
+
+
+def started_snapshot(queue):
+    """The started-message records as they stood before the thread list read.
+
+    A record added since then names a message another start has just taken,
+    and the list cannot say whether its thread is live, so it counts as
+    running.
+    """
+    return {(record.get("id"), record.get("at"))
+            for record in queue.get("started") or [] if isinstance(record, dict)}
 
 
 def record_started(queue, item, thread):
@@ -706,6 +731,12 @@ def cmd_start(a):
                 read_rules()
             except RuntimeError as e:
                 die(f"refused: {e}")
+    # The thread list is read before the writer lock is taken: a slow t3 call
+    # under it would hold every other start for its length. The started-message
+    # records it speaks for are snapshotted first, because a record added since
+    # then cannot be judged by it.
+    started_before = started_snapshot(load())
+    live = live_thread_ids() if started_before else None
     with Lock(True):
         queue = load()
         key = (getattr(a, "action_key", None) or "").strip()
@@ -722,10 +753,10 @@ def cmd_start(a):
                 "title": explicit or args.get("threadId", ""), "messageTitle": explicit,
                 "priority": a.priority}
         title, target = message_identity(item)
-        live = live_thread_ids() if queue.get("started") else None
         if prune_messages(queue, live):
             save(queue)
-        duplicate = duplicate_message(queue, title, target, key, live)
+        duplicate = duplicate_message(queue, title, target, key, live,
+                                      started_before if started_before else None)
         if duplicate:
             die(f"refused: duplicate message {title!r} for {target or 'a new thread'}: "
                 f"already {duplicate[0]} as coordq #{duplicate[1]}")

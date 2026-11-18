@@ -73,6 +73,41 @@ class MessageDedupeTests(unittest.TestCase):
         self.assertEqual([i["title"] for i in items], [THREAD, THREAD])
         self.assertEqual([i["messageTitle"] for i in items], ["", ""])
 
+    def test_a_legacy_untitled_thread_id_title_is_not_an_identity(self):
+        # The finding: an item written before the identity was kept stored the
+        # thread id as its display title for an untitled send. That is not the
+        # caller's title, so a new message explicitly titled with the thread id
+        # is not a copy of it.
+        self.q.save({"next": 2, "items": [{"id": 1, "tool": "t3_thread_send",
+                                           "args": {"threadId": THREAD, "message": "old"},
+                                           "priority": 800, "title": THREAD}]})
+        code, err = self.start(title=THREAD)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.q.load()["items"]), 2)
+
+    def test_a_started_record_added_after_the_thread_read_counts_as_running(self):
+        # The list is read before the lock, so a record another start writes
+        # while it is being read is not covered by it: the message it names has
+        # just been taken, and this one is its copy.
+        self.q.save({"next": 2, "items": [], "started": [{"id": 0, "title": "older",
+                                                          "target": "other", "thread": "other",
+                                                          "actionKey": "",
+                                                          "at": self.q.time.time()}]})
+
+        def read_live():
+            queue = self.q.load()
+            queue["started"].append({"id": 1, "title": TITLE, "target": THREAD,
+                                     "thread": THREAD, "actionKey": "",
+                                     "at": self.q.time.time()})
+            self.q.save(queue)
+            return set()
+
+        with patch.object(self.q, "active_thread_ids", side_effect=read_live), \
+                patch.object(self.q, "thread_status", return_value="completed"):
+            code, err = self.start()
+        self.assertEqual(code, 1)
+        self.assertIn("refused: duplicate message", err)
+
     def test_a_queued_item_written_before_the_identity_was_kept_still_counts(self):
         # An item in the queue from the older code has no messageTitle; its
         # title was supplied by its caller, so it still suppresses a repeat.
