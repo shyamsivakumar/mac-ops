@@ -111,7 +111,10 @@ GRAPHQL_GROUPS = ("pr", "issue", "project", "label", "org")
 # method can be read without mistaking a value for the endpoint.
 VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "--raw-field", "--input", "-q", "--jq", "-t", "--template",
-               "--cache", "--hostname")
+               "--cache", "--hostname", "-R", "--repo", "--search", "--json",
+               "--limit", "--state", "--label", "--author", "--assignee",
+               "--reviewer", "--base", "--head", "--sort", "--order",
+               "--owner", "--milestone", "--branch", "--workflow", "--event")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 # The flags this code understands. A cluster it does not know, such as
 # `-iXPOST`, may hide a method or a body, so such a command is never cached.
@@ -584,22 +587,26 @@ def _token_id():
 def argv_host(argv):
     """Return the host a command targets, or "" when it names none.
 
-    Two forms name a host: `--hostname HOST`, and a repository selector with
-    a host in it, `-R HOST/OWNER/REPO` (or `GH_REPO`). Both decide which
-    host's quota and account apply."""
-    words = [str(word) for word in (argv or [])[1:]]
-    for index, word in enumerate(words):
-        if word == "--hostname" and index + 1 < len(words):
-            return words[index + 1]
-        if word.startswith("--hostname="):
-            return word.split("=", 1)[1]
+    Three forms name a host: `--hostname HOST`, a repository selector
+    `-R HOST/OWNER/REPO` (detached or attached, or `GH_REPO`), and nothing
+    else. Flags are paired with their values first, so a value that merely
+    starts with `-R`, such as `--search '-Release'`, is never mistaken for a
+    selector."""
     selector = os.environ.get("GH_REPO") or ""
-    for index, word in enumerate(words):
-        if word in ("-R", "--repo") and index + 1 < len(words):
-            selector = words[index + 1]
+    for word, value in tokens(argv):
+        if word in ("--hostname", "-H"):
+            if word == "-H":
+                continue
+            if value:
+                return value
+        elif word.startswith("--hostname="):
+            return word.split("=", 1)[1]
+        elif word in ("-R", "--repo"):
+            if value:
+                selector = value
         elif word.startswith("--repo="):
             selector = word.split("=", 1)[1]
-        elif word.startswith("-R") and len(word) > 2:
+        elif word.startswith("-R") and len(word) > 2 and value is None:
             # The attached form: `-RHOST/OWNER/REPO`.
             selector = word[2:]
     parts = selector.split("/")

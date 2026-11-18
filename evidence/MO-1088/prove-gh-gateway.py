@@ -882,10 +882,14 @@ print("R", gh_gateway.argv_host(["gh", "pr", "list", "-R", "ent.example/o/r"]))
 print("PLAIN", repr(gh_gateway.argv_host(["gh", "pr", "list", "-R", "o/r"])))
 print("HOSTNAME", gh_gateway.argv_host(["gh", "pr", "list", "--hostname", "h.example"]))
 print("ATTACHED", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r"]))
+print("VALUE", repr(gh_gateway.argv_host(["gh", "pr", "list", "--search", "-Release"])))
+print("BOTH", gh_gateway.argv_host(["gh", "pr", "list", "-Rent.example/o/r",
+                                   "--search", "-Release"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
-                  "ATTACHED", "ent.example"], str(selector))
+                  "ATTACHED", "ent.example", "VALUE", "''", "BOTH", "ent.example"],
+      str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.
 partial_log = scratch / "partial.jsonl"
