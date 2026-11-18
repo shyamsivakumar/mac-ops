@@ -555,10 +555,29 @@ def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> in
     The file is renamed aside first, so the name that is unlinked belongs to
     this call. A file that was replaced after the stamp is put back.
     """
-    moved = f".cleaner-unlink-{os.getpid()}-{abs(hash(name)) & 0xFFFF:x}"
+    # The name the file is moved to is reserved exclusively, so it can never
+    # be the name a preserved copy already has.
+    moved = ""
+    for attempt in range(64):
+        candidate = f".cleaner-unlink-{os.getpid()}-{os.urandom(6).hex()}"
+        try:
+            reserved = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600, dir_fd=fd)
+        except FileExistsError:
+            continue
+        except OSError:
+            return 1
+        os.close(reserved)
+        moved = candidate
+        break
+    if not moved:
+        return 1
     try:
         os.rename(name, moved, src_dir_fd=fd, dst_dir_fd=fd)
     except OSError:
+        try:
+            os.unlink(moved, dir_fd=fd)
+        except OSError:
+            pass
         return 1
     try:
         info = os.stat(moved, dir_fd=fd, follow_symlinks=False)
@@ -1929,7 +1948,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         if parent is None:
                             tree_gone = False
                         else:
-                            aside = f".cleaner-removed-{os.getpid()}-{abs(hash(candidate['path'])) & 0xFFFF:x}"
+                            aside = f".cleaner-removed-{os.getpid()}-{os.urandom(6).hex()}"
                             try:
                                 os.rename(candidate["path"], aside, src_dir_fd=parent, dst_dir_fd=parent)
                             except OSError:
@@ -1947,9 +1966,19 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                     except OSError:
                                         tree_gone = False
                                 if not tree_gone:
+                                    # The checkout is only put back when its
+                                    # path is free, so a directory that took
+                                    # the place in the meantime is preserved.
                                     try:
-                                        os.rename(aside, candidate["path"], src_dir_fd=parent, dst_dir_fd=parent)
+                                        taken = os.stat(candidate["path"], follow_symlinks=False)
                                     except OSError:
+                                        taken = None
+                                    if taken is None:
+                                        try:
+                                            os.rename(aside, candidate["path"], src_dir_fd=parent, dst_dir_fd=parent)
+                                        except OSError:
+                                            candidate["checkout_conflict"] = True
+                                    else:
                                         candidate["checkout_conflict"] = True
                             finally:
                                 os.close(parent)
@@ -1997,7 +2026,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                 # The registration is renamed aside before it is
                                 # removed, so the directory that is removed is one
                                 # this call owns.
-                                aside = f".cleaner-registration-{os.getpid()}-{abs(hash(registration)) & 0xFFFF:x}"
+                                aside = f".cleaner-registration-{os.getpid()}-{os.urandom(6).hex()}"
                                 try:
                                     os.rename(registration, aside, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
                                 except OSError:
