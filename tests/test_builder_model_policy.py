@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "coordinator" / "bin"))
+sys.path.insert(0, str(ROOT / "coordinator" / "overnight"))
 
 
 def load(name, path):
@@ -35,7 +36,12 @@ def load(name, path):
 
 coordq = load("coordq_policy_check", ROOT / "coordinator" / "bin" / "coordq")
 ticket = load("ticket_policy_check", ROOT / "coordinator" / "bin" / "ticket")
+lane = load("lane_policy_check", ROOT / "coordinator" / "overnight" / "lane_driver.py")
 CONFIG = json.loads((ROOT / "coordinator" / "config" / "tickets.json").read_text())
+
+# The pi task routes the ticket names (mac-ops #497, item 3). A router
+# builder may name one of these five and nothing else.
+NAMED_TASK_ROUTES = ("task/standard", "task/ui", "task/research", "task/rca", "task/chore")
 
 # The gate chain carries no taskType exemption: only a declared review may
 # name a gate model. The subscriptions/ spelling of a gate model (the form
@@ -54,13 +60,19 @@ NON_BUILDERS = (
     {"instanceId": "cursor", "model": "default"},
     {"instanceId": "codex", "model": "zai-coding/glm-5.3"},
     {"instanceId": "pi", "model": "deepseek/deepseek-flash"},
+    {"instanceId": "router", "model": "task/risky"},
 )
 
+# The five pi task routes the ticket names, and only those, are permitted
+# router builders. task/risky and every other route are refused.
 BUILDERS = (
     {"instanceId": "glm", "model": "zai/glm-5.3"},
     {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
     {"instanceId": "router", "model": "task/standard"},
-    {"instanceId": "router", "model": "task/risky"},
+    {"instanceId": "router", "model": "task/ui"},
+    {"instanceId": "router", "model": "task/research"},
+    {"instanceId": "router", "model": "task/rca"},
+    {"instanceId": "router", "model": "task/chore"},
 )
 
 
@@ -103,6 +115,26 @@ class CoordqBuilderPermit(unittest.TestCase):
         self.assertIsNone(resolved)
         self.assertIn("builds run only on GLM 5.3", refusal)
 
+    def test_only_the_five_named_pi_routes_are_permitted(self):
+        # The ticket names five pi routes (standard, ui, research, rca,
+        # chore). task/risky is not one of them: an explicit risky build
+        # must be refused rather than passed to an unconfigured route.
+        for route in ("task/standard", "task/ui", "task/research",
+                      "task/rca", "task/chore"):
+            with self.subTest(route=route):
+                resolved, refusal = coordq.with_model(
+                    {"taskType": "standard",
+                     "modelSelection": {"instanceId": "router", "model": route}})
+                self.assertIsNone(refusal)
+                self.assertEqual(resolved["modelSelection"]["model"], route)
+        for route in ("task/risky", "task/design", "task/large", "task/worker"):
+            with self.subTest(route=route):
+                resolved, refusal = coordq.with_model(
+                    {"taskType": "standard",
+                     "modelSelection": {"instanceId": "router", "model": route}})
+                self.assertIsNone(resolved)
+                self.assertIn("builds run only on GLM 5.3, MiniMax or a task/* route", refusal)
+
     def test_a_direct_deepseek_start_is_refused(self):
         # DeepSeek is a fallback inside a task/* route, never a start.
         resolved, refusal = coordq.with_model(
@@ -110,6 +142,50 @@ class CoordqBuilderPermit(unittest.TestCase):
              "modelSelection": {"instanceId": "pi", "model": "deepseek/deepseek-flash"}})
         self.assertIsNone(resolved)
         self.assertIn("builds run only on GLM 5.3", refusal)
+
+
+class TaskRouteAgreement(unittest.TestCase):
+    """coordq and the lane driver keep the same five routes.
+
+    The lane driver is a separate program from coordq, so the route list
+    is written twice; this test is the tie between them, and the tie to
+    the ticket.
+    """
+
+    def test_both_copies_are_the_five_named_routes(self):
+        self.assertEqual(tuple(coordq.TASK_ROUTES), NAMED_TASK_ROUTES)
+        self.assertEqual(tuple(lane.TASK_ROUTES), NAMED_TASK_ROUTES)
+
+    def test_a_route_outside_the_five_is_refused_everywhere(self):
+        # Fresh launch (coordq), fix-round continuation (lane) and dead
+        # run relaunch (lane) all refuse a route the ticket does not name.
+        for route in ("task/risky", "task/design", "task/large"):
+            with self.subTest(route=route):
+                resolved, refusal = coordq.with_model(
+                    {"taskType": "standard",
+                     "modelSelection": {"instanceId": "router", "model": route}})
+                self.assertIsNone(resolved)
+                self.assertIn("builds run only on GLM 5.3", refusal)
+                self.assertFalse(lane.allowed_builder(
+                    {"providerInstanceId": "router", "model": route}))
+                self.assertEqual(
+                    lane.dead_run_model(
+                        {"providerInstanceId": "router", "model": route}),
+                    lane.GLM)
+
+    def test_the_five_named_routes_are_permitted_everywhere(self):
+        for route in NAMED_TASK_ROUTES:
+            with self.subTest(route=route):
+                resolved, refusal = coordq.with_model(
+                    {"taskType": "standard",
+                     "modelSelection": {"instanceId": "router", "model": route}})
+                self.assertIsNone(refusal)
+                self.assertTrue(lane.allowed_builder(
+                    {"providerInstanceId": "router", "model": route}))
+                self.assertEqual(
+                    lane.dead_run_model(
+                        {"providerInstanceId": "router", "model": route}),
+                    {"instanceId": "router", "model": route})
 
 
 class TicketBuilderPermit(unittest.TestCase):

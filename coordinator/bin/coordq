@@ -49,12 +49,17 @@ TASK_MODELS = {
 }
 DISPATCHABLE_TOOLS = ["t3_thread_launch", "t3_thread_send"]
 # The selections a build may START on, and nothing else: GLM 5.3, MiniMax,
-# or a task/* route on the router (the MiniMax-first pi route; DeepSeek is
-# reached only as a fallback inside a route, never a direct start).
+# or one of the five named task routes on the router (the MiniMax-first pi
+# route; DeepSeek is reached only as a fallback inside a route, never a
+# direct start).
 # Every other selection — Sol, Terra, Luna, any OpenAI model in any
 # spelling (gpt-*, openai/*, subscriptions/*), the o-series, Opus, Sonnet,
 # cursor, a bare DeepSeek — is refused as a builder; reviews run on the
 # gate chain only (Shyam 2026-11-17: "build with glm 5.3 or minimax first").
+# The five pi task routes the ticket names (standard, ui, research, rca,
+# chore). A router launch may name only one of them; task/risky and every
+# other unconfigured route are refused as a builder (Shyam 2026-11-17).
+TASK_ROUTES = ("task/standard", "task/ui", "task/research", "task/rca", "task/chore")
 ALLOWED_BUILDER_SELECTIONS = (
     {"instanceId": "glm", "model": "zai/glm-5.3"},
     {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"},
@@ -180,7 +185,8 @@ def with_model(args):
                       f"{ASTRA_MODEL} (GPT-6.2 Astra only), "
                       f"but the payload names {resolved['modelSelection']!r}")
     elif task_type != "review" and not is_allowed_builder(resolved["modelSelection"]):
-        return None, (f"refused: builds run only on GLM 5.3, MiniMax or a task/* route, "
+        return None, (f"refused: builds run only on GLM 5.3, MiniMax or a task/* route "
+                      f"({', '.join(TASK_ROUTES)}), "
                       f"but the payload names {resolved['modelSelection']!r}; Shyam 2026-11-17")
     return resolved, None
 
@@ -200,7 +206,7 @@ def is_allowed_builder(selection):
     if selection in ALLOWED_BUILDER_SELECTIONS:
         return True
     return (selection.get("instanceId") == "router"
-            and str(selection.get("model") or "").startswith("task/"))
+            and selection.get("model") in TASK_ROUTES)
 
 
 def tool_refusal(tool):
