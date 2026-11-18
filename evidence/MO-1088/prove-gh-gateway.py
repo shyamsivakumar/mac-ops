@@ -640,6 +640,48 @@ report_env = subprocess.run(
 check("the report defaults to the writer's log path",
       "envrun" in report_env.stdout, report_env.stdout.strip()[:60] or report_env.stderr.strip()[-80:])
 
+# `--silent=true` is the same flag as `--silent`: no body, so the count of
+# a paginated read is unknown.
+silent_bool = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+argv = ["gh", "api", "--paginate", "--silent=true", "repos/a/b/issues?state=open"]
+print("FILTERED", gh_gateway.filtered(argv))
+print("UNKNOWN", gh_gateway.pages_unknown(argv))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("--silent=true is recognised as silent",
+      silent_bool == ["FILTERED", "True", "UNKNOWN", "True"], str(silent_bool))
+
+# The probe and the read share one deadline on a cache miss.
+deadline_check = subprocess.run([sys.executable, "-c", f"""
+import sys, time
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+seen = {{}}
+
+def slow_probe(timeout=60):
+    time.sleep(1.0)
+    return {{"core": 4000, "graphql": 4000}}
+
+def launcher(argv, **kwargs):
+    seen["timeout"] = kwargs.get("timeout")
+    class R:
+        returncode = 0
+        stdout = "[]"
+        stderr = ""
+    return R()
+
+gh_gateway.api_remaining = slow_probe
+gh_gateway.set_runner(lambda: launcher)
+gh_gateway.run(["gh", "api", "repos/a/b/collaborators?per_page=100"], timeout=6,
+               limit=gh_gateway.floor())
+print("TIMEOUT", seen.get("timeout"))
+"""], capture_output=True, text=True, env=env)
+words = deadline_check.stdout.split()
+check("the probe leaves the read less than its whole deadline",
+      words[:1] == ["TIMEOUT"] and int(words[1]) < 6, str(deadline_check.stdout.strip()[:40]))
+
 # A first-request failure under --include is one attempt, not two.
 first_fail = subprocess.run([sys.executable, "-c", f"""
 import sys

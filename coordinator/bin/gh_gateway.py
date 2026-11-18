@@ -621,6 +621,8 @@ def store(argv, stdout):
 
 def filtered(argv):
     """True when the command formats its output, so pages are not JSON."""
+    if has_flag(argv, "--silent") or has_flag(argv, "--verbose"):
+        return True
     for word in significant(argv):
         if word in OUTPUT_FILTER_FLAGS:
             return True
@@ -924,10 +926,12 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
         hit = cached(argv)
         if hit is not None:
             return subprocess.CompletedProcess(argv, 0, hit, "")
+    started = time.monotonic()
     if limit is not None:
-        # The probe shares the caller's deadline instead of adding its own
-        # 60 seconds on top of the read.
+        # The probe and the read share one deadline: the probe gets half of
+        # it, and the read gets whatever is left.
         guard_floor(limit, timeout=max(1, int(timeout) // 2))
+        timeout = max(1, int(timeout - (time.monotonic() - started)))
     if stdin is None and conditional(argv):
         return _conditional_run(argv, timeout, caller_name)
     command, headers_counted = prepare(argv) if stdin is None else (list(argv), False)
