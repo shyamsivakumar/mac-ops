@@ -522,6 +522,9 @@ class CoordqGateTest(unittest.TestCase):
         fake_subprocess = types.SimpleNamespace(run=lambda *a, **k: quiet,
                                                SubprocessError=subprocess.SubprocessError)
         with patch.object(coordq, "subprocess", fake_subprocess), \
+                patch.object(coordq.gh_gateway, "run", return_value=quiet), \
+                patch.object(coordq, "reviewer_model",
+                             return_value={"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra"}), \
                 patch.object(coordq, "gh_json", fake_gh), \
                 patch.object(coordq, "load_receipts", return_value={"req-1": "thread-1"}), \
                 patch.object(coordq, "read_builder_thread",
@@ -573,6 +576,9 @@ class CoordqGateTest(unittest.TestCase):
         fake_subprocess = types.SimpleNamespace(run=lambda *a, **k: quiet,
                                                SubprocessError=subprocess.SubprocessError)
         with patch.object(coordq, "subprocess", fake_subprocess), \
+                patch.object(coordq.gh_gateway, "run", return_value=quiet), \
+                patch.object(coordq, "reviewer_model",
+                             return_value={"providerInstanceId": "openai-api", "model": "openai/gpt-6.2-astra"}), \
                 patch.object(coordq, "gh_json", fake_gh), \
                 patch.object(coordq, "load_receipts", return_value={"req-1": "thread-1"}), \
                 patch.object(coordq, "read_builder_thread",

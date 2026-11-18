@@ -7,23 +7,32 @@ import re
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+for _dir in (Path(__file__).resolve().parent, Path(__file__).resolve().parent.parent / "bin"):
+    if (_dir / "models.py").is_file() and str(_dir) not in sys.path:
+        sys.path.insert(0, str(_dir))
 
 import alarms
+import models as model_list
 import stall
 
-# The prompt paths live in the coordinator's bin directory beside the gate
-# brief, and the lane reads the same list the brief does (Refs #543). In the
-# checkout that directory is a sibling of the overnight folder; installed,
-# both files sit in the same bin directory.
-_BIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "bin")
+# The GitHub call path and the prompt paths live next to the coordq and ticket
+# binaries: one cache, one floor and one usage log for every caller, and the
+# lane reads the same prompt list the gate brief does (Refs #543).
+_BIN_DIR = str(Path(__file__).resolve().parents[1] / "bin")
 if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
+import gh_gateway
 import prompt_paths
+
+# The lane driver loads inside the overnight command, so it names itself on
+# its own calls. A process-wide name would charge every later overnight call
+# to the lane driver and spoil the per-caller ranking.
+LANE_CALLER = "lane_driver"
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
-ASTRA = {"instanceId": "codex", "model": "gpt-6-astra"}
-OPUS = {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}
 CFG = {}
 RECEIPTS = "/Users/shyamsivakumar/Code/coordinator/queue/dispatch-receipts.json"
 DECISIONS_PATH = "/Users/shyamsivakumar/Code/coordinator/decisions.json"
@@ -33,7 +42,9 @@ SNAPSHOT = {}
 # of the repository: work there moves the branch everyone installs from.
 PATHS = {"shyamsivakumar/mac-ops": "mac-ops", "shyamsivakumar/strategy-replay-workbench": "strategy-replay-workbench",
          "shyamsivakumar/fantasy-football-toolkit": "fantasy-football-toolkit", "shyamsivakumar/catalouge": "catalogue"}
-API_FLOOR = 500
+# The calls left in reserve before an optional read is skipped. The lane
+# driver, gatekeep and the overnight shift share this one floor.
+API_FLOOR = gh_gateway.floor()
 BOARD_REFRESH_PASSES = 5
 # The stall events of the last pass: an item that was reported as stalled
 # and a board that stopped moving. The shift writes the records for them.
@@ -44,31 +55,30 @@ STALL_EVENTS = []
 STALL_STATE = {}
 
 
-class ApiBudgetExhausted(RuntimeError):
-    pass
+# The quota, its floor and its refusal are the shared helper's, so the
+# lane driver stops on the same number as every other caller.
+ApiBudgetExhausted = gh_gateway.ApiBudgetExhausted
 
 
 def api_remaining():
-    result = subprocess.run(["gh", "api", "rate_limit"], capture_output=True,
-                            text=True, timeout=60)
-    if result.returncode:
-        raise ApiBudgetExhausted("quota could not be read")
-    try:
-        resources = json.loads(result.stdout)["resources"]
-        return {name: int(resources[name]["remaining"]) for name in ("core", "graphql")}
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ApiBudgetExhausted("quota response is invalid") from exc
+    return gh_gateway.api_remaining()
 
 
 def require_api_budget():
+    """Stop an optional read below the shared floor.
+
+    The quota read is this module's `api_remaining`, so a caller that
+    already read the quota in this pass is not made to read it again."""
     remaining = api_remaining()
     if min(remaining.values()) < API_FLOOR:
-        raise ApiBudgetExhausted(f"optional reads stopped: remaining={remaining}, floor={API_FLOOR}")
+        raise ApiBudgetExhausted(
+            f"optional reads stopped: remaining={remaining}, floor={API_FLOOR}")
+    return remaining
 
 
 def read_json(cmd):
     require_api_budget()
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    result = gh_gateway.run(cmd, timeout=300, caller_name=LANE_CALLER)
     if result.returncode:
         raise RuntimeError(f"snapshot read failed: {cmd[:3]} (exit {result.returncode})")
     return json.loads(result.stdout)
@@ -108,7 +118,7 @@ ORDER = {
 def run(cmd, timeout=150):
     if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list")):
         require_api_budget()
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    p = gh_gateway.run(cmd, timeout=timeout, caller_name=LANE_CALLER)
     output = (p.stdout + p.stderr).strip()
     refusal = ("--dry-run" in cmd and cmd[:2] == ["ticket", "start"]
                and p.returncode == 2 and output.startswith("refused: ")
@@ -472,6 +482,9 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     if lkey in ledger:
         return f"already done {lkey}"
     thread = t3("t3_thread_read", {"threadId": thread_id, "limit": 1}).get("thread") or {}
+    fixer = model_list.first_available("fix")
+    if fixer is None:
+        return f"skip {lkey}: every fix model is blocked"
     for attached in thread.get("pullRequests") or []:
         if attached.get("repository") == repo and attached.get("number"):
             _, skip = pr_action_skip(repo, attached["number"])
@@ -481,6 +494,15 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
+    thread_model = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+    if not model_list.same_selection(thread_model, fixer["selection"]):
+        if thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}:
+            return (f"skip {lkey}: thread is {thread.get('status')} on "
+                    f"{model_list.identity(thread_model) or 'an unknown model'}, "
+                    f"not the first available fix model; held until it is idle")
+        if thread.get("status") in {"completed", "interrupted", "failed"}:
+            sendable = False
+            reroute = "model is not first available"
     if sendable and worktree_only and root_workspace(thread):
         # Pull request work in a shared checkout of the repository moves
         # the branch everyone installs from, so it starts a fresh
@@ -495,15 +517,18 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if pr is None:
-            return f"skip {lkey}: no verified PR branch for relaunch"
-        if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
-            return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
-        workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
+        if reroute == "model is not first available" and not root_workspace(thread):
+            workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
+        else:
+            if pr is None:
+                return f"skip {lkey}: no verified PR branch for relaunch"
+            if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
+                return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
+            workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
         args = {"projectId": CFG[repo]["projectId"], "title": title,
-                "modelSelection": SOL, "runtimeMode": "full-access",
+                "taskType": "fix", "modelSelection": fixer["selection"], "runtimeMode": "full-access",
                 "workspaceStrategy": workspace, "message": message,
                 "clientRequestId": lkey}
         options = ["--priority", str(priority)]
@@ -525,7 +550,6 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
     return out
 
 
-SOL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
               "shyamsivakumar/catalouge"]
 NEVER_START = {("shyamsivakumar/strategy-replay-workbench", 468)}
@@ -537,16 +561,19 @@ def park(repo, number, issue, head, reply, ledger):
         return f"#{number}: parked, re-cut on the way"
     if DRY:
         return f"DRY park #{number}"
+    recutter = model_list.first_available("build")
+    if recutter is None:
+        return f"#{number}: park waits, every builder is blocked"
     if issue:
         run(["gh", "issue", "edit", str(issue), "-R", repo, "--remove-label", "stage:todo", "--add-label", "stage:backlog"])
         run(["gh", "issue", "comment", str(issue), "-R", repo, "--body",
-             f"Parked by the lane (specs/lane.md section 6): PR #{number} failed its gate after two fix rounds (head {head[:8]}). Sol re-cuts it into smaller tickets."])
-    msg = (f"Type: design · gpt-6.1-sol (re-cut a parked ticket; coordinator specs/lane.md is at /Users/shyamsivakumar/Code/coordinator/specs/lane.md)\n\n"
+             f"Parked by the lane (specs/lane.md section 6): PR #{number} failed its gate after two fix rounds (head {head[:8]}). A builder re-cuts it into smaller tickets."])
+    msg = (f"Type: design · {recutter['id']} (re-cut a parked ticket; coordinator specs/lane.md is at /Users/shyamsivakumar/Code/coordinator/specs/lane.md)\n\n"
            f"Ticket {repo}#{issue} with PR #{number} failed its gate after two fix rounds. Read the issue, the PR diff (`gh pr diff {number} -R {repo}`) and the last gate report below. "
            "Re-cut the remaining work into at most 2 ordered tickets that each fit a 5-minute builder turn. Consolidate any further work into those tickets; never create a third ticket. Use the 12-section template in ~/.coordinator/tickets.json, "
            "with Requires/Provides lines, chained with --add-blocked-by, labels stage:todo,type:<type>,priority:<same>; reuse the PR branch as the base if most of it is right and say so in the first ticket. "
            f"Then comment on #{issue} with the new tickets and close it as not planned. Open every new ticket with `ticket open --repo {repo} --title \"<title>\" --body-file <file> --label stage:todo,type:<type>,priority:<n>`; the tool mints the key, so never type the key yourself and never use `gh issue create`. Device and live testing are waived. Start nothing, change no code, 10 minutes.\n\nLast gate report:\n" + reply[-5000:])
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "modelSelection": SOL,
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} re-cut #{issue} (PR #{number})", "taskType": "design", "modelSelection": recutter["selection"],
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "900"]).splitlines()[-1]
     ledger[lkey] = out
@@ -934,10 +961,13 @@ def act_on_pr(repo, number, ledger):
                + ("Device, handset and live-service testing is waived (Shyam 2026-11-14: \"no testing is needed lets just finish backlog building everything\"). Do not run device or live cases; state in the receipt that they were waived, not failed. Findings that only ask for device or live results are resolved by that statement.\n\n") + reply[-6000:])
         return f"#{number} fix: " + send(builder, msg, message_title(repo, number, "gate findings", head), ledger, f"fix:{repo}#{number}:{head}", pr_number=number)
     tag = "regate" if verdict == "none" else "gate"
-    model = ASTRA
+    reviewers = json.loads(run(["ticket", "gate", f"{repo}#{number}", "--print-model"]))
+    if not reviewers:
+        return f"#{number}: no gate reviewer is available"
+    model = reviewers[0]["selection"]
     if verdict == "none" and f"regate:{repo}#{number}:{head}" in ledger:
-        if "astra" in reply.lower() and "quota" in reply.lower() and "exhaust" in reply.lower():
-            tag, model = "opusgate", OPUS
+        if "quota" in reply.lower() and "exhaust" in reply.lower() and len(reviewers) > 1:
+            tag, model = "fallbackgate", reviewers[1]["selection"]
         else:
             ledger[f"needs-you:{repo}#{number}:{head}"] = "gate ended without verdict after retry"
             return f"#{number}: needs-you, gate ended without verdict after retry"
@@ -948,7 +978,7 @@ def act_on_pr(repo, number, ledger):
               f"Verify every ticket Provides fact on head {head}. Only if all hold, include the exact line "
               f"PROVIDES: PASS {head} before the final CHECK and VERDICT lines.")
     key = CFG[repo]["key"]
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "modelSelection": model,
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{key}-{issue} review #{number} {head[:8]} ({model['model']})", "taskType": "review", "modelSelection": model,
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "clientRequestId": f"{tag}:{repo}#{number}:{head}:lane",
             "message": brief}
     return f"#{number} {tag}: " + start(args, 5000, ledger, f"{tag}:{repo}#{number}:{head}")
@@ -1008,7 +1038,7 @@ def drift_ff(ledger):
                 "Report one line per repo: the two commit ids before, the single commit id after (or \"left alone, not fast-forwardable\").",
                 "Report the two commit ids before and the single commit id after (or \"left alone, not fast-forwardable\").")
             args = {"projectId": "f093cc9b-5332-48eb-a719-2187eb8cbabc", "title": f"Chore · level local main ({CFG[repo]['key']})",
-                    "modelSelection": {"instanceId": "router", "model": "task/chore"}, "runtimeMode": "full-access",
+                    "taskType": "chore", "runtimeMode": "full-access",
                     "workspaceStrategy": {"type": "root"}, "message": msg}
             out2 = run([COORDQ, "start", json.dumps(args), "--priority", "700"]).splitlines()[-1]
             ledger[lkey] = out2
@@ -1107,8 +1137,11 @@ def unstick(repo, ledger, excl=frozenset()):
     if DRY:
         return f"DRY unstick {batch}"
     lst = ", ".join(f"#{n}" for n in batch)
+    unsticker = model_list.first_available("build")
+    if unsticker is None:
+        return "unstick waits, every builder is blocked"
     msg = open("/Users/shyamsivakumar/Code/coordinator/loop/unstick-brief.md").read().replace("{repo}", repo).replace("{list}", lst)
-    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "modelSelection": SOL,
+    args = {"projectId": CFG[repo]["projectId"], "title": f"{CFG[repo]['key']} unstick {lst}"[:80], "taskType": "chore", "modelSelection": unsticker["selection"],
             "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"}, "message": msg}
     out = run([COORDQ, "start", json.dumps(args), "--priority", "950"]).splitlines()[-1]
     stamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
@@ -1423,16 +1456,17 @@ def item_failure_summary(ledger):
 
 
 def dead_run_model(thread, limit_failure):
-    provider = thread.get("providerInstanceId")
-    model = thread.get("model") or ""
-    title = (thread.get("title") or "").lower()
-    if not limit_failure or provider == "router":
-        return {"instanceId": provider or "codex", "model": model}
-    if model == "claude-opus-5-5":
-        return ASTRA if any(word in title for word in ("review", "test", "gate")) else SOL
-    if model in {"gpt-6.1-sol", "gpt-6-astra"}:
-        return {"instanceId": "codex", "model": "gpt-6.1-terra"}
-    return {"instanceId": provider or "codex", "model": model}
+    """The build entry a dead run relaunches on, or None when every builder is blocked.
+
+    The configured build order decides, whatever the thread ran on. A run
+    that died on a usage limit names its own builder as out, so the
+    relaunch skips it."""
+    blocked = model_list.blocked_identities()
+    if limit_failure:
+        own = {"instanceId": thread.get("providerInstanceId"), "model": thread.get("model")}
+        blocked = blocked | {model_list.identity(own)}
+    chosen = model_list.first_available("build", None, blocked)
+    return chosen["selection"] if chosen else None
 
 
 def dead_reference(repo, number):
@@ -1442,8 +1476,8 @@ def dead_reference(repo, number):
     does not stop the pass. A read that fails raises: a thread is never
     settled or flagged on a state the driver could not see."""
     require_api_budget()
-    result = subprocess.run(["gh", "api", f"repos/{repo}/issues/{number}"],
-                            capture_output=True, text=True, timeout=120)
+    result = gh_gateway.run(["gh", "api", f"repos/{repo}/issues/{number}"],
+                            timeout=120, caller_name=LANE_CALLER)
     if result.returncode:
         output = result.stdout + result.stderr
         if "HTTP 404" in output or "Not Found" in output:
@@ -1469,10 +1503,10 @@ def dead_ticket_prs(repo, number):
     with more than a page of pull requests has an open one the read did not
     return, so the caller cannot settle on it."""
     require_api_budget()
-    result = subprocess.run(["gh", "pr", "list", "-R", repo, "--state", "all",
+    result = gh_gateway.run(["gh", "pr", "list", "-R", repo, "--state", "all",
                              "--limit", str(DEAD_PR_PAGE), "--search", f"#{number} in:body",
-                             "--json", "number,state,mergedAt,body"],
-                            capture_output=True, text=True, timeout=120)
+                             "--json", "number,state,mergedAt,body"], timeout=120,
+                            fresh=True, caller_name=LANE_CALLER)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(
@@ -1489,10 +1523,10 @@ def dead_ticket_numbers(repo, token):
     issue number, so the issue is found by its key in the title. Closed
     issues count: finished work is what settles a thread."""
     require_api_budget()
-    result = subprocess.run(["gh", "issue", "list", "-R", repo, "--state", "all",
+    result = gh_gateway.run(["gh", "issue", "list", "-R", repo, "--state", "all",
                              "--limit", "10", "--search", f"{token} in:title",
-                             "--json", "number,title"],
-                            capture_output=True, text=True, timeout=120)
+                             "--json", "number,title"], timeout=120,
+                            fresh=True, caller_name=LANE_CALLER)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(f"{repo} {token}: {first[0] if first else result.returncode}")
@@ -1680,8 +1714,7 @@ def recover_dead_runs(ledger):
             if any(t.get("threadId") in newer_threads for t in live if isinstance(t, dict)):
                 moved = True
             if moved:
-                model = dead_run_model(full_thread, False)
-                print(f"DEAD {thread_id}: settle, work moved on (model {model['model']})")
+                print(f"DEAD {thread_id}: settle, work moved on")
                 if not DRY:
                     settle_dead_run(thread_id)
                 continue
@@ -1696,6 +1729,9 @@ def recover_dead_runs(ledger):
                     settle_dead_run(thread_id)
                 continue
             model = dead_run_model(full_thread, limit_failure)
+            if model is None:
+                print(f"DEAD {thread_id}: coordinator needed, every builder is blocked")
+                continue
             if count >= 2:
                 print(f"DEAD {thread_id}: coordinator needed, daily relaunch limit reached")
                 continue
@@ -1719,7 +1755,7 @@ def recover_dead_runs(ledger):
                                 if key.startswith(work_key + ":a")
                                 and (match := re.search(r":a(\d+)$", key))), default=0) + 1
             args = {"projectId": project_id, "clientRequestId": f"{work_key}:a{next_attempt}",
-                    "title": f"Continue {repo}#{ticket}: {title}", "modelSelection": model,
+                    "title": f"Continue {repo}#{ticket}: {title}", "taskType": "worker", "modelSelection": model,
                     "runtimeMode": "full-access", "workspaceStrategy": {"type": "existing_worktree", "worktreePath": path}, "message": message}
             print(f"DEAD {thread_id}: relaunch {model['model']}")
             if not DRY:
