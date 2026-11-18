@@ -1692,7 +1692,7 @@ export default class Board extends View {
   }
 
   async mergeOne(g, shown) {
-    const eligible = g && this.seen[g.key]?.col === "needs";
+    const eligible = eligibleByKey.get(g.key);
     const name = g.task || g.title;
     let problem;
     try {
@@ -1891,12 +1891,13 @@ export default class Board extends View {
     if (!deliver && !info) return say("error", "The Coordinator isn't running");
     const send = deliver ?? ((text) => hc(["send", info.address, text]));
     const fresh = pairs.filter(([g]) => !this.sentAs(g, verb));
+    const eligibleByKey = new Map(fresh.map(([g]) => [g.key, this.seen[g.key]?.col === "needs"]));
     const skipped = pairs.length - fresh.length ? `${pairs.length - fresh.length} skipped, already sent` : "";
     if (!fresh.length) return say("info", `${verb} skipped`, skipped);
     this.attempt(`${verb} sent`, async () => {
       const failed = [];
       for (const [g, text] of fresh) {
-        const eligible = g && this.seen[g.key]?.col === "needs";
+        const eligible = eligibleByKey.get(g.key);
         try {
           await send(text, g);
           this.sent.set(g.key, { action: verb, stamp: this.activity(g), at: Date.now() });
