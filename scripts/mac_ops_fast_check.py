@@ -73,7 +73,13 @@ def ruff_counts():
     if result.returncode not in (0, 1):
         detail = (result.stderr or result.stdout).strip().splitlines()
         raise RuntimeError(f"ruff exited {result.returncode}: {detail[0] if detail else 'no output'}")
-    return ruff_findings(json.loads(result.stdout or "[]"))
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"ruff exited {result.returncode} without a JSON report") from None
+    if result.returncode == 1 and not report:
+        raise RuntimeError("ruff exited 1 but reported no findings")
+    return ruff_findings(report)
 
 
 def ruff_findings(payload):
@@ -154,7 +160,8 @@ def check_ruff():
     if extra:
         name, code, message = extra[0][0]
         raise RuntimeError(
-            f"{len(extra)} Ruff findings are not in the baseline; first: {name} {code} {message}")
+            f"{sum(count for _, count in extra)} Ruff findings are not in the baseline; "
+            f"first: {name} {code} {message}")
     return f"{sum(counts.values())} findings, all in the baseline"
 
 

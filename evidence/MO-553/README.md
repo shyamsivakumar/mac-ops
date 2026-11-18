@@ -88,6 +88,38 @@ The run is not a pass for Ruff, and the proof file says so: the proof file
 carries `Run result: incomplete`, and the run exits 1. A lint that never ran
 must not read as a clean check.
 
+### An empty Ruff report is not a clean run
+
+Ruff exits 1 when it has findings, so exit 1 with no findings in the report
+means the report is missing or damaged. The check used to read an empty output
+as `[]` and record a pass with zero findings. It now requires a valid JSON
+report, and fails on exit 1 with no diagnostics.
+
+With a stand-in `uvx` that prints nothing and exits 1,
+`python3 scripts/mac_ops_fast_check.py --proof evidence/MO-553/demo-ruff-empty-report.md`
+exited 1, and the proof file records:
+
+```
+| ruff F,B | `uvx ruff@0.14.0 check ...` | failed | ruff exited 1 without a JSON report |
+```
+
+With a stand-in that prints `[]` and exits 1, the same run exits 1 with
+`failed | ruff exited 1 but reported no findings`.
+
+### The proof row counts findings, not distinct entries
+
+Three new F841 findings with the same path and message are one distinct entry
+with an excess of three. The row used to say `1 Ruff findings`; it now sums the
+excess counts. With three functions in a scratch file that each assign an
+unused `unused_variable`, `--proof evidence/MO-553/demo-ruff-excess-count.md`
+exited 1, and the proof file records:
+
+```
+| ruff F,B | `uvx ruff@0.14.0 check ...` | failed | 3 Ruff findings are not in the baseline; first: evidence/MO-553/scratch/proof_file_copy.py F841 Local variable `unused_variable` is assigned to but never used |
+```
+
+The scratch file was deleted after the run; it is not in the change.
+
 ## Left for later
 
 - Step 2: mypy, one module at a time, starting with `board_resources.py`.
