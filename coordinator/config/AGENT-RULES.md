@@ -13,5 +13,5 @@ These standing rules come first; the ticket brief that follows overrides them wh
 - Reference tickets as `Refs #<n>`, never `Fixes`, `Closes` or `Resolves`.
 - Builders and gates must not create follow-up issues. Put leftover work in the PR body under `Left for later`. Only the Coordinator or Sol may create issues for a re-cut, with at most two tickets per re-cut.
 - Open pull requests as READY, never as draft, unless the brief says draft.
-- In strategy-replay-workbench, do not run the heavy `scripts/check.sh` script; the Mac check publisher posts `srw/agent-check` on ready PRs. In other repos, run the repo's full local check and put `Builder check: PASS|FAIL <full sha>` in the PR body.
+- In strategy-replay-workbench, do not run the heavy `scripts/check.sh` script; the Mac check publisher posts `srw/agent-check` on ready PRs. In other repos, run the repo's full local check and put `Builder check: PASS|FAIL <full sha>` in the PR body. In mac-ops the check writes a proof file (`evidence/<KEY>-<issue>/check-proof.md`) that lists every check as passed, failed or not run with the command that ran it: commit that file with the change.
 - When you must ask Shyam, give a short summary plus a kpane diagram.
