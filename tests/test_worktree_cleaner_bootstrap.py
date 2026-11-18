@@ -883,6 +883,21 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         trash = cleaner._trash_for(state, worktree)
         self.assertEqual(os.stat(trash).st_dev, os.stat(worktree).st_dev)
 
+    def test_a_replaced_worktree_root_is_refused(self):
+        # The worktree directory is renamed and a link takes its place: the
+        # cleaner must not follow it into the other directory.
+        repo = Path(self.tmp.name) / "root-repo"
+        repo.mkdir()
+        (repo / ".specstory").mkdir()
+        (repo / ".specstory" / "notes.md").write_text("history\n", encoding="utf-8")
+        elsewhere = Path(self.tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / ".specstory").mkdir()
+        (elsewhere / ".specstory" / "notes.md").write_text("history\n", encoding="utf-8")
+        os.rename(repo, repo.with_name("root-repo-moved"))
+        os.symlink(str(elsewhere), repo)
+        self.assertIsNone(cleaner._open_parent_fd(repo, Path(".")))
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

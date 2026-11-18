@@ -518,8 +518,20 @@ def _open_parent_fd(repo: Path, relative: Path) -> int | None:
     if relative.is_absolute() or ".." in relative.parts:
         return None
     try:
-        current = os.open(repo, os.O_RDONLY | os.O_DIRECTORY)
+        # The root is opened without following a link, and it has to be the
+        # directory the scan looked at, so a worktree directory that was
+        # renamed and replaced by a link is refused.
+        current = os.open(repo, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
+        return None
+    try:
+        opened = os.fstat(current)
+        at_path = os.lstat(repo)
+    except OSError:
+        os.close(current)
+        return None
+    if not stat.S_ISDIR(at_path.st_mode) or (opened.st_dev, opened.st_ino) != (at_path.st_dev, at_path.st_ino):
+        os.close(current)
         return None
     for part in relative.parts:
         try:
