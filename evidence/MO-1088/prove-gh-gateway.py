@@ -590,6 +590,26 @@ run(combined)
 check("a combined short-flag write is never cached", calls_made() - before == 2,
       f"calls={calls_made() - before}")
 
+# Silent pagination prints no body, and an error block that printed its own
+# headers is already counted; one that did not is added once.
+script = (
+    "import sys\n"
+    f"sys.path.insert(0, {str(BIN)!r})\n"
+    "import gh_gateway as g\n"
+    "silent = ['gh', 'api', '--paginate', '--silent', 'repos/a/b/issues?state=open']\n"
+    "print('SILENT', g.pages_unknown(silent))\n"
+    "block = 'HTTP/2.0 502 Bad Gateway\\nx-ratelimit-resource: core\\n\\n'\n"
+    "text = 'HTTP/2.0 200 OK\\nx-ratelimit-resource: core\\n\\n[]\\n'\n"
+    "print('BLOCK', g._failed_request(silent, True, 2, True, block))\n"
+    "print('NOBLOCK', g._failed_request(silent, True, 2, True, text))\n"
+)
+unit = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env)
+print(unit.stderr.strip()[-200:]) if unit.returncode else None
+words = unit.stdout.split()
+check("silent pagination is unknown", words[:2] == ["SILENT", "True"], str(words))
+check("a printed error block is not counted twice", words[2:4] == ["BLOCK", "0"], str(words[2:4]))
+check("a missing error block is counted once", words[4:6] == ["NOBLOCK", "1"], str(words[4:6]))
+
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
 host_read = ["gh", "api", "--hostname", "enterprise.example",
