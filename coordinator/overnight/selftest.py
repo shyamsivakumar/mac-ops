@@ -1125,6 +1125,7 @@ def zero_merge():
     with patch.object(dt, "datetime", Clock), patch.object(lane, "read_json", side_effect=read), \
          patch("builtins.open", side_effect=opened), patch.object(lane.json, "dump", side_effect=saved), \
          patch.object(alarms, "MUTE_PATH", mute), \
+         patch.object(lane, "DECISIONS_PATH", str(Path(mute).parent / "decisions.json")), \
          patch.object(alarms, "read_board", side_effect=read_board), \
          patch.object(alarms, "write_board", side_effect=write_board), \
          patch.object(lane.os, "replace") as replace:
@@ -1157,15 +1158,27 @@ def zero_merge():
         # else was replaced for it.
         exact((f"{mute}.{os.getpid()}.tmp", mute) in replaced, True)
 
-        # The key names the waiting repos, so the alarm is a different
-        # cause on a different set of repos: the eval's own key proves it,
-        # and the mute itself is exercised by the alarm-mute eval.
+        # The changed cause reaches the board. The alarm for one waiting
+        # repo is answered, a second repo starts waiting, and the next
+        # pass must raise an alarm whose cause names both repos. A
+        # producer that kept using the first repo as its cause would fail
+        # here, and would have silenced the newly stalled repo.
         import alarms as mute_rules
-        exact(mute_rules.key_of("factory-zero-merge",
-                                "No merge in 60 minutes with open PRs: fixture/one") !=
-              mute_rules.key_of("factory-zero-merge",
-                                "No merge in 60 minutes with open PRs: fixture/one, fixture/two"),
-              True)
+        snapshot["repos"]["fixture/one"]["prs"] = [{"number": 1}]
+        snapshot["repos"]["fixture/two"]["prs"] = []
+        rows = []
+        lane.zero_merge(snapshot)
+        first = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        exact(len(first), 1)
+        exact(first[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one")
+        answers = mute_rules.load_state()
+        mute_rules.acknowledge(answers, mute_rules.key_of("factory-zero-merge", first[0]["cause"]))
+        mute_rules.save_state(answers)
+        snapshot["repos"]["fixture/two"]["prs"] = [{"number": 2}]
+        lane.zero_merge(snapshot)
+        raised = [i for i in state["items"] if i["id"] == "factory-zero-merge"]
+        exact(len(raised), 1)
+        exact(raised[0]["cause"], "No merge in 60 minutes with open PRs: fixture/one, fixture/two")
 
 
 def board_integrity():

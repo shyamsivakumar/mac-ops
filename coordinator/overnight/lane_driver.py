@@ -1072,9 +1072,13 @@ def zero_merge(snapshot):
             path, "factory-zero-merge",
             "raise" if decided in ("raise", "unchecked") and item else "remove",
             item) == "wrote" else "failed")
+    # A healthy tick has no alarm, so it says nothing about one: the log
+    # names an alarm only when there is an alarm to name.
+    if item is None:
+        return
     if action == "quiet":
         print("ZERO-MERGE quiet: " + cause)
-    elif action == "raise" or action == "unchecked":
+    elif action in ("raise", "unchecked"):
         print("ZERO-MERGE " + cause)
 
 
