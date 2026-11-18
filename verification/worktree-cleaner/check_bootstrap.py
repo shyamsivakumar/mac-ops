@@ -52,9 +52,16 @@ def main() -> int:
         git(repo, "config", "user.email", "fixture@example.test")
         git(repo, "remote", "add", "origin", str(remote))
         commit(repo, "base.txt", "base\n")
+        (repo / "AGENTS.md").write_text("# Fixture repository rules\n", encoding="utf-8")
+        git(repo, "add", "AGENTS.md")
+        command(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "agents"])
+        (repo / "x.specstory").mkdir(parents=True)
+        (repo / "x.specstory" / "notes").write_text("notes\n", encoding="utf-8")
+        git(repo, "add", "x.specstory/notes")
+        command(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "notes"])
         git(repo, "push", "-u", "origin", "main")
         shas: dict[str, str] = {}
-        for name in ("bootstrap", "real", "onmain", "offmain", "partial", "renamed"):
+        for name in ("bootstrap", "real", "onmain", "offmain", "partial", "renamed", "shifted", "marker"):
             sha = commit(repo, f"{name}.txt", name + "\n")
             shas[name] = sha
             git(repo, "branch", name, sha)
@@ -74,10 +81,19 @@ def main() -> int:
             (path / ".agents" / "legacy-instructions.md").write_text("legacy\n", encoding="utf-8")
         (paths["real"] / "real-work.txt").write_text("real work\n", encoding="utf-8")
         # One rule added by hand is not the bootstrap block: real work.
-        (paths["partial"] / "AGENTS.md").write_text("- CI is agent checks only: no Woodpecker, no GitHub Actions.\n", encoding="utf-8")
+        with (paths["partial"] / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write("- CI is agent checks only: no Woodpecker, no GitHub Actions.\n")
         # A rename of a real file into .specstory/ is real work.
         (paths["renamed"] / ".specstory").mkdir(parents=True)
         git(paths["renamed"], "mv", "renamed.txt", ".specstory/renamed.txt")
+        # A real file whose name starts like a bootstrap path is real work.
+        (paths["shifted"] / "x.specstory" / "notes").write_text("edited\n", encoding="utf-8")
+        # The rules block plus one genuine line is real work. The change is staged,
+        # so the status record keeps its columns and the file cannot hide behind
+        # a line that looks like a diff marker.
+        with (paths["marker"] / "AGENTS.md").open("a", encoding="utf-8") as handle:
+            handle.write(rules_block() + "++ genuine edit\n")
+        git(paths["marker"], "add", "AGENTS.md")
         # An Ascend repository is never touched.
         ascend = code / "ascend-mcp"
         command(["git", "init", "-b", "main", str(ascend)])
@@ -90,8 +106,8 @@ def main() -> int:
 
         fixture = base / "fixture.json"
         fixture.write_text(json.dumps({
-            "present": [shas[name] for name in ("bootstrap", "real", "onmain", "partial", "renamed")] + [ascend_sha],
-            "prs": {name: [{"number": 7, "state": "MERGED", "headRefName": name, "headRefOid": shas[name]}] for name in ("bootstrap", "partial", "renamed")},
+            "present": [shas[name] for name in ("bootstrap", "real", "onmain", "partial", "renamed", "shifted", "marker")] + [ascend_sha],
+            "prs": {name: [{"number": 7, "state": "MERGED", "headRefName": name, "headRefOid": shas[name]}] for name in ("bootstrap", "partial", "renamed", "shifted", "marker")},
         }))
         bin_dir = base / "bin"
         bin_dir.mkdir()
@@ -135,6 +151,10 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert by_name["partial"]["bootstrap_changes"] == [], by_name["partial"]
         assert by_name["renamed"]["eligible"] is False and "worktree_dirty" in by_name["renamed"]["reasons"], by_name["renamed"]
         assert by_name["renamed"]["bootstrap_changes"] == [], by_name["renamed"]
+        assert by_name["shifted"]["eligible"] is False and "worktree_dirty" in by_name["shifted"]["reasons"], by_name["shifted"]
+        assert by_name["shifted"]["bootstrap_changes"] == [], by_name["shifted"]
+        assert by_name["marker"]["eligible"] is False and "worktree_dirty" in by_name["marker"]["reasons"], by_name["marker"]
+        assert by_name["marker"]["bootstrap_changes"] == [], by_name["marker"]
         assert by_name["onmain"]["eligible"] is True, by_name["onmain"]["reasons"]
         assert by_name["onmain"]["published_on_default_branch"] is True, by_name["onmain"]
         assert by_name["offmain"]["eligible"] is False, by_name["offmain"]["reasons"]
@@ -146,6 +166,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert not paths["bootstrap"].exists() and not paths["onmain"].exists(), applied
         assert paths["real"].exists() and paths["offmain"].exists(), applied
         assert paths["partial"].exists() and paths["renamed"].exists(), applied
+        assert paths["shifted"].exists() and paths["marker"].exists(), applied
         assert ascend_tree.exists(), "ascend worktree must stay"
         log = (base / "worktree-cleaner.log").read_text(encoding="utf-8")
         entries = [json.loads(line) for line in log.splitlines()]
