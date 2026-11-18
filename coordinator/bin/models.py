@@ -68,8 +68,8 @@ def read_json(file_path):
         raise
     except OSError as e:
         raise ModelsError(f"{file_path} cannot be read: {e}") from e
-    except json.JSONDecodeError as e:
-        raise ModelsError(f"{file_path} is not valid JSON: {e}") from e
+    except ValueError as e:
+        raise ModelsError(f"{file_path} is not valid JSON text: {e}") from e
 
 
 def load():
