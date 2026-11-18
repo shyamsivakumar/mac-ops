@@ -1,0 +1,108 @@
+"""Per-host memory headroom tests cover the host floor and governor recovery."""
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+import board_governor
+import heavy
+
+
+M1 = "shyams-macbook-pro"
+M1_HEADROOM = 2 * heavy.GIB
+DEFAULT = 6 * heavy.GIB
+
+
+def sample(physical_gib, headroom_gib, captured=700.0):
+    return heavy.Sample(
+        pressure_level=1, cpu_busy_pct=10.0, memory_used_pct=50.0,
+        headroom_bytes=int(headroom_gib * heavy.GIB),
+        physical_bytes=int(physical_gib * heavy.GIB),
+        load_per_core=0.2, captured_monotonic=captured, free_percent=60.0,
+        swap_growth_bytes_per_second=0, swapout_bytes_per_second=0, physical_cores=10,
+    )
+
+
+class HostHeadroomTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+
+    def config(self, value):
+        path = Path(self.directory.name) / heavy.HOST_CONFIG_NAME
+        path.write_text(value if isinstance(value, str) else json.dumps(value))
+        return path
+
+    def floor_for(self, path, hostname):
+        with patch.object(heavy.socket, "gethostname", return_value=hostname):
+            return heavy.host_headroom_bytes(path)
+
+    def test_a_named_host_gets_its_own_floor(self):
+        path = self.config({"hosts": {M1: {"min_headroom_bytes": M1_HEADROOM}}})
+        self.assertEqual(self.floor_for(path, "Shyams-MacBook-Pro.local"), M1_HEADROOM)
+
+    def test_an_unlisted_host_keeps_the_default_floor(self):
+        path = self.config({"hosts": {M1: {"min_headroom_bytes": M1_HEADROOM}}})
+        self.assertEqual(self.floor_for(path, "Shyams-M4.local"), DEFAULT)
+
+    def test_a_missing_malformed_or_out_of_range_file_keeps_the_default_floor(self):
+        absent = Path(self.directory.name) / "absent.json"
+        self.assertEqual(heavy.host_headroom_bytes(absent), DEFAULT)
+        self.assertEqual(self.floor_for(self.config("{not json"), M1), DEFAULT)
+        path = self.config({"hosts": {M1: {"min_headroom_bytes": 0}}})
+        self.assertEqual(self.floor_for(path, M1), DEFAULT)
+
+    def test_the_shipped_config_lowers_only_the_macbook_pro(self):
+        value = json.loads((Path(heavy.__file__).parent / heavy.HOST_CONFIG_NAME).read_text())
+        self.assertEqual(value["hosts"][M1]["min_headroom_bytes"], M1_HEADROOM)
+        self.assertNotIn("shyams-m4", value["hosts"])
+        self.assertEqual(heavy.MIN_HEADROOM_BYTES, DEFAULT)
+
+
+class HeadroomFloorTests(unittest.TestCase):
+    def block(self, headroom, floor):
+        return heavy.memory_load_block_reason(
+            pressure=1, free_percent=60.0, swap_growth=0, swapout_rate=0,
+            headroom=headroom, physical=16 * heavy.GIB, min_headroom_bytes=floor,
+        )
+
+    def test_the_host_floor_admits_a_build_the_m1_cannot_fit_under_six_gibibytes(self):
+        self.assertIsNone(self.block(3 * heavy.GIB, M1_HEADROOM))
+
+    def test_the_default_floor_still_blocks_the_same_headroom(self):
+        self.assertEqual(self.block(3 * heavy.GIB, DEFAULT), "memory-headroom")
+
+    def test_the_slot_ceiling_is_unchanged(self):
+        registry = Mock()
+        registry.uid = 501
+        registry.directory = Path("/nonexistent-heavy-test")
+        with patch.object(heavy, "_read_capacity_config", return_value={"heavy_slots": 8}):
+            limit = heavy._effective_slot_limit(registry, sample(16, 5), now=700.0, boot_id="1")
+        self.assertEqual(limit, 2)
+
+
+class GovernorRecoveryTests(unittest.TestCase):
+    def decide(self, current, host_sample):
+        previous = {
+            "schema": 1, "boot_id": "1", "heavy_slots": current,
+            "healthy_since_monotonic": None, "last_sample_monotonic": 690.0,
+            "machine": [10, 16 * heavy.GIB], "compressor_bytes": 0,
+            "compressor_sampled_monotonic": 680.0,
+        }
+        census = {"active": 0, "registry_active": 0, "legacy_active": 0, "job_rss_bytes": []}
+        return board_governor._capacity_decision(
+            heavy, host_sample, census, {"compressor_bytes": 0, "sampled_monotonic": 0.0},
+            previous, current, "1", 700.0,
+        )
+
+    def test_the_governor_recovers_from_zero_on_its_next_sample(self):
+        published = []
+        for host_sample in (sample(16, 5, captured=600.0), sample(16, 5)):
+            state, detail = self.decide(published[-1] if published else 0, host_sample)
+            published.append(detail["target"])
+        self.assertEqual(published, [0, 2])
+
+
+if __name__ == "__main__":
+    unittest.main()

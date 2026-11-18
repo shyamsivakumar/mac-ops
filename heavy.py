@@ -14,6 +14,7 @@ import os
 import pwd
 import re
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -54,6 +55,8 @@ WATCHDOG_INTERVAL = 2.0
 WATCHDOG_STALE_SECONDS = 6.0
 REGISTRY_NAME = "heavy-jobs"
 CAPACITY_NAME = "capacity.json"
+HOST_CONFIG_NAME = "heavy_hosts.json"
+MAX_HOST_HEADROOM_BYTES = 64 * GIB
 LEGACY_MARKER_NAME = "legacy-registry.json"
 PROTOCOL_RECORD_ID = "0" * 32
 LEGACY_SLOTS = Path("/tmp/heavy-slots")
@@ -288,6 +291,51 @@ def sample_host(
     )
 
 
+def host_config_path() -> Path:
+    """Return the path of the per-host configuration file installed beside heavy."""
+    return Path(__file__).resolve().parent / HOST_CONFIG_NAME
+
+
+def host_headroom_bytes(config_path: Optional[Path] = None) -> int:
+    """Return the headroom floor this host needs, or the default 6 GiB floor.
+
+    The per-host file names hosts and the headroom each one needs. A missing,
+    unreadable, malformed, or unlisted host keeps the default floor.
+    """
+    path = host_config_path() if config_path is None else Path(config_path)
+    try:
+        info = path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o022
+        ):
+            return MIN_HEADROOM_BYTES
+        with path.open("rb") as handle:
+            raw = handle.read(4097)
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return MIN_HEADROOM_BYTES
+    hosts = value.get("hosts") if isinstance(value, dict) else None
+    if not isinstance(hosts, dict):
+        return MIN_HEADROOM_BYTES
+    try:
+        hostname = socket.gethostname().strip().lower()
+    except OSError:
+        return MIN_HEADROOM_BYTES
+    for name in (hostname, hostname.split(".")[0]):
+        entry = hosts.get(name)
+        if isinstance(entry, dict):
+            headroom = entry.get("min_headroom_bytes")
+            if (
+                not isinstance(headroom, bool)
+                and isinstance(headroom, int)
+                and 0 < headroom <= MAX_HOST_HEADROOM_BYTES
+            ):
+                return headroom
+    return MIN_HEADROOM_BYTES
+
+
 def admission_block_reason(
     sample: Sample,
     *,
@@ -361,6 +409,7 @@ def memory_load_block_reason(
     headroom,
     physical,
     headroom_fraction=HEADROOM_FRACTION,
+    min_headroom_bytes=None,
 ):
     """Return the reason memory blocks admission, or None."""
     if pressure == CRITICAL_PRESSURE_LEVEL:
@@ -382,7 +431,12 @@ def memory_load_block_reason(
         return "memory-pressure-warning-low-free"
     if not all(_finite_nonnegative(rate) for rate in rates):
         return "first swap sample; normal wait, a few seconds"
-    if headroom < max(MIN_HEADROOM_BYTES, int(physical * headroom_fraction)):
+    floor = (
+        host_headroom_bytes()
+        if min_headroom_bytes is None
+        else int(min_headroom_bytes)
+    )
+    if headroom < max(floor, int(physical * headroom_fraction)):
         return "memory-headroom"
     return None
 
@@ -3200,7 +3254,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             "Usage: heavy [--review|--deploy] <command...> | status | request-curtail\n"
             "Runs one supervised workload per HERDR_PROJECTS_ID under fresh controller capacity. Deploy jobs enter ahead of reviews; jobs waiting over 10 minutes enter in arrival order. At most one deploy runs at a time.\n"
-            "Admission requires stable swap, CPU and memory below 95%, and at least max(6 GiB, 15% RAM) headroom to start or resume (a running job pauses only below max(6 GiB, 12.5% RAM)); level 2 is allowed above 30% free memory, level 4 is blocked.\n"
+            "Admission requires stable swap, CPU and memory below 95%, and at least max(host headroom, 15% RAM) headroom to start or resume (a running job pauses only below max(host headroom, 12.5% RAM)); level 2 is allowed above 30% free memory, level 4 is blocked.\n"
             "Sustained host pressure or missing telemetry pauses the newest ordinary workload, resumes after 10 healthy seconds, and never resumes at zero controller capacity.\n"
             "status and request-curtail use JSON; request-curtail explicitly terminates the newest active job."
         )
