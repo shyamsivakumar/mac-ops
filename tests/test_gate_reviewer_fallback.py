@@ -468,6 +468,24 @@ class BlockedReviewerTests(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertIsNone(second)
 
+    def test_a_stale_success_cannot_clear_a_newer_block(self):
+        # Two processes can read the same successful probe receipt. The
+        # first clears the block; if a fresh provider error then blocks
+        # the reviewer again, the stale success of the old probe must not
+        # delete the new block — only the probe the record still names.
+        gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits", now=1000)
+        gate_reviewers.note_probe(CHAIN_HEAD, "probe:api:1", now=1000)
+        self.assertIsNotNone(
+            gate_reviewers.unblock_reviewer(CHAIN_HEAD, request_id="probe:api:1"))
+        gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits again", now=2000)
+        gate_reviewers.note_probe(CHAIN_HEAD, "probe:api:2", now=2000)
+        self.assertIsNone(
+            gate_reviewers.unblock_reviewer(CHAIN_HEAD, request_id="probe:api:1"))
+        self.assertIn(gate_reviewers.identity(CHAIN_HEAD), gate_reviewers.blocked_identities())
+        self.assertIsNotNone(
+            gate_reviewers.unblock_reviewer(CHAIN_HEAD, request_id="probe:api:2"))
+        self.assertNotIn(gate_reviewers.identity(CHAIN_HEAD), gate_reviewers.blocked_identities())
+
     def test_an_unblock_is_logged_once(self):
         gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits", now=1000)
         self.assertIsNotNone(gate_reviewers.unblock_reviewer(CHAIN_HEAD))

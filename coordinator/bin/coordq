@@ -1428,7 +1428,7 @@ def probe_blocked_reviewers(config, dry_run=False):
                 texts = [i.get("text") or "" for i in (data.get("items") or [])
                          if i.get("type") == "assistant_message"]
                 if thread.get("status") == "completed" and any(t.strip() for t in texts):
-                    line = unblock_reviewer(selection)
+                    line = unblock_reviewer(selection, request_id=request_id)
                     if line:
                         log(line)
                         print(line, flush=True)

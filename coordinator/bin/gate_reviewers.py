@@ -244,12 +244,20 @@ def block_reviewer(selection, reason, now=None, reset_at=None):
     return f"blocked reviewer {ident}: {reason}"
 
 
-def unblock_reviewer(selection):
-    """Unblock a reviewer. Returns the log line, or None."""
+def unblock_reviewer(selection, request_id=None):
+    """Unblock a reviewer. Returns the log line, or None.
+
+    A successful probe unblocks through its request id: when one is
+    given, the record must still name that probe, so a second process
+    reading the same old success cannot delete a block that a newer
+    provider error wrote after it."""
     ident = identity(selection)
     with BlockedLock():
         state = load_blocked()
-        if ident not in state:
+        record = state.get(ident)
+        if record is None:
+            return None
+        if request_id is not None and record.get("probeRequestId") != request_id:
             return None
         del state[ident]
         save_blocked(state)
