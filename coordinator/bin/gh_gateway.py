@@ -45,7 +45,27 @@ LIST_TTL = 120
 # A read that names its command may come from the cache, a read that names
 # one object may not. `view` and a `repos/.../pulls/<n>` path are the head
 # reads a merge decision uses.
-CACHEABLE_COMMANDS = ("list", "search", "status")
+# The reads the cache may serve, named one by one. A verb alone is not
+# enough: `gh auth status --show-token` is a `status` read that prints a
+# token, so it must never reach the disk cache. A command that is not in
+# this set is not cached, whatever its verb.
+READ_COMMANDS = (
+    ("pr", "list"),
+    ("issue", "list"),
+    ("label", "list"),
+    ("repo", "list"),
+    ("release", "list"),
+    ("run", "list"),
+    ("workflow", "list"),
+    ("cache", "list"),
+    ("gist", "list"),
+    ("project", "list"),
+    ("org", "list"),
+    ("search", "search"),
+)
+# A command that prints a credential is never cached, whatever its verb.
+CREDENTIAL_FLAGS = ("--show-token",)
+CACHEABLE_COMMANDS = tuple(verb for _group, verb in READ_COMMANDS)
 # The commands that take a subcommand, such as `gh pr list`. The verb is the
 # word after the group, not the first word, so `gh pr list` and `gh issue
 # list` are list reads and are cacheable like `gh label list`.
@@ -70,6 +90,21 @@ VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "--raw-field", "--input", "-q", "--jq", "-t", "--template",
                "--cache")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
+
+
+def has_body(argv):
+    """True when the command carries a request body, so it is a write.
+
+    `gh` accepts the value attached (`--raw-field=name=value`, `-fname=value`)
+    or as the next word; both are the same POST, and neither may be cached."""
+    for word in [str(token) for token in argv[1:]]:
+        if word in BODY_FLAGS:
+            return True
+        if word.startswith("--field=") or word.startswith("--raw-field=") or word.startswith("--input="):
+            return True
+        if len(word) > 2 and word.startswith(("-f", "-F")):
+            return True
+    return False
 CACHE_ON = "COORDINATOR_GH_CACHE"
 CACHE_DIR = Path(os.environ.get("COORDINATOR_GH_CACHE_DIR",
                                 os.path.expanduser("~/.cache/coordinator/gh")))
@@ -176,7 +211,7 @@ def method(argv):
             return word[2:].lstrip("=").strip().upper()
         if word in ("-X", "--method"):
             return words[index + 1].strip().upper() if index + 1 < len(words) else ""
-    if any(word in BODY_FLAGS for word in words):
+    if has_body(argv):
         return "POST"
     return "GET"
 
@@ -211,14 +246,21 @@ def cacheable(argv):
     """True when a repeated read of this command may be served from cache."""
     if not _gh(argv) or not cache_enabled():
         return False
-    if not context()[1]:
-        # The account is unknown, so one cache entry could answer another
-        # account's read. Skip the cache rather than guess.
-        return False
     words = [str(word) for word in argv[1:]]
     if not words:
         return False
-    if verb(argv) in CACHEABLE_COMMANDS:
+    if any(word in CREDENTIAL_FLAGS for word in argv[1:]):
+        # `gh auth status --show-token` prints a token: never written down.
+        return False
+    if has_body(argv):
+        # A body means a write, and a write is never served from a cache.
+        return False
+    host, account, checkout, repo_override, token_id = context()
+    if not account:
+        # The account is unknown, so one entry could answer another
+        # account's read. Skip the cache rather than guess.
+        return False
+    if (words[0], verb(argv)) in READ_COMMANDS:
         return True
     if words[0] != "api":
         return False
@@ -332,21 +374,32 @@ def _hosts_account(host):
     return ""
 
 
-def context():
-    """Return (host, account, repository) for this call.
+def _token_id(token):
+    """Return a short fingerprint of a token, never the token itself."""
+    if not token:
+        return ""
+    import hashlib
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
 
-    `gh pr list` resolves its repository from the working directory, so two
-    identical commands in two checkouts are two different reads. The host
-    and the account are part of the answer too."""
+
+def context():
+    """Return (host, identity, checkout, repo_override, token_id) for this call.
+
+    `gh pr list` resolves its repository from the working directory and its
+    account from `GH_TOKEN` or gh's hosts file, so two identical commands
+    under different overrides are different reads. The token is kept as a
+    fingerprint, never as the value."""
     host = os.environ.get("GH_HOST") or "github.com"
     account = os.environ.get("COORDINATOR_GH_ACCOUNT") or _hosts_account(host)
-    return host, account, os.getcwd()
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GH_ENTERPRISE_TOKEN") or ""
+    repo_override = os.environ.get("GH_REPO") or ""
+    return host, account, os.getcwd(), repo_override, _token_id(token)
 
 
 def _key(argv):
     import hashlib
-    host, account, repository = context()
-    parts = [host, account, repository] + [str(word) for word in argv]
+    host, account, checkout, repo_override, token_id = context()
+    parts = [host, account, checkout, repo_override, token_id] + [str(word) for word in argv]
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 

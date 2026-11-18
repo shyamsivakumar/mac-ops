@@ -31,6 +31,9 @@ mode = open(os.path.join(base, "mode")).read().strip()
 if "rate_limit" in args:
     print(json.dumps({{"resources": {{"core": {{"remaining": 4000}},
                                      "graphql": {{"remaining": 4000}}}}}}))
+elif "auth" in args:
+    print("github.com")
+    print("  Token: sekrit-auth-token")
 elif "--include" in args:
     if mode == "304":
         print("HTTP/2.0 304 Not Modified")
@@ -70,7 +73,7 @@ def check(name, condition, detail=""):
     print(f"{'PASS' if condition else 'FAIL'} {name}" + (f" ({detail})" if detail else ""))
 
 
-def run(argv, floor=None, cwd=None):
+def run(argv, floor=None, cwd=None, extra_env=None):
     """Run one read in its own process, so the in-process quota cache is fresh."""
     code = f"""
 import sys
@@ -80,7 +83,7 @@ result = gh_gateway.run({argv!r}, timeout=20, limit={floor!r})
 sys.stdout.write(result.stdout)
 """
     return subprocess.run([sys.executable, "-c", code], capture_output=True,
-                          text=True, env=env, cwd=cwd)
+                          text=True, env={**env, **(extra_env or {})}, cwd=cwd)
 
 
 def calls_made():
@@ -218,6 +221,34 @@ check("a write is not conditional",
               for line in calls.read_text().splitlines()))
 
 check("the usage log names the caller per call", all(row["caller"] == "proof" for row in rows()))
+
+# A credential-bearing read is never cached, so its output never reaches disk.
+auth = ["gh", "auth", "status", "--show-token"]
+before = calls_made()
+run(auth)
+run(auth)
+check("`gh auth status --show-token` is never cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+leaked = [path for path in cache.rglob("*") if path.is_file() and "sekrit-auth-token" in path.read_text(errors="ignore")]
+check("no cache file holds the token", not leaked, f"files={[str(p) for p in leaked]}")
+
+# `--raw-field=name=value` is a body, so the write is never cached.
+before = calls_made()
+run(["gh", "api", "--raw-field=name=value", "repos/a/b/dispatches?ref=main"])
+run(["gh", "api", "--raw-field=name=value", "repos/a/b/dispatches?ref=main"])
+check("an attached --raw-field write is never cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+
+# Two identities in one checkout are two reads, so one token cannot answer
+# another token's read.
+identity_read = ["gh", "pr", "list", "-R", "a/b", "--state", "open", "--json", "number"]
+before = calls_made()
+run(identity_read, extra_env={"GH_TOKEN": "one"})
+run(identity_read, extra_env={"GH_TOKEN": "one"})
+check("one identity is cached once", calls_made() - before == 1, f"calls={calls_made() - before}")
+before = calls_made()
+run(identity_read, extra_env={"GH_TOKEN": "two"})
+check("a second identity is a second read", calls_made() - before == 1, f"calls={calls_made() - before}")
 
 # A header can carry a credential, so no argument may be written down.
 secret = "sekrit-token-value"
