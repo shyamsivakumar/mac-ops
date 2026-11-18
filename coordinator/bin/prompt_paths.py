@@ -11,11 +11,12 @@ one of its directories is a prompt directory. The match is by path, never by
 the words in the diff or the ticket.
 """
 
-# File names, compared without case. The coordinator's agent rules, the bar
-# and the brief the gate reads, the playbook, the reviewer prompt and every
-# skill file.
+# File names, compared without case. The coordinator's agent rules, the bar,
+# the brief and the answer format the gate reads, the playbook, the reviewer
+# prompt and every skill file.
 PROMPT_FILE_NAMES = (
     "agent-rules.md",
+    "answer_format.py",
     "gate_bar.py",
     "gate_policy.py",
     "playbook.md",

@@ -811,7 +811,10 @@ now checked instead of remembered. One list lives in
 
 A file list GitHub cannot give is not a prompt change: the hold is only ever
 added to a pull request whose paths are known, so a failed read never blocks
-a merge of ordinary code.
+a merge of ordinary code. The list covers `AGENT-RULES.md`,
+`answer_format.py`, `gate_bar.py`, `gate_policy.py`, `playbook.md`,
+`code-reviewer.md`, any `SKILL.md`, and anything under a `skills/` or
+`prompts/` directory.
 
 The replay is the registered `gate-pipeline` eval
 (`python3 coordinator/overnight/overnight selftest`): its `prompt-pass` case

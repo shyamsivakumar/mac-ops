@@ -29,6 +29,7 @@ class PromptPathTest(unittest.TestCase):
     def test_the_prompt_paths_are_prompt_paths(self):
         for path in ("AGENT-RULES.md",
                      "coordinator/config/AGENT-RULES.md",
+                     "coordinator/bin/answer_format.py",
                      "coordinator/bin/gate_bar.py",
                      "coordinator/bin/gate_policy.py",
                      "coordinator/overnight/playbook.md",
@@ -143,7 +144,6 @@ class CoordqGateTest(unittest.TestCase):
     def test_a_failed_read_is_not_a_hold(self):
         with patch.object(self.coordq, "gh_json", side_effect=RuntimeError("boom")):
             self.assertFalse(self.coordq.gate_prompt_change("shyamsivakumar/mac-ops", 544))
-
     def test_the_queued_brief_says_do_not_merge(self):
         settings = {"key": "MO", "projectId": "fixture"}
         model = {"instanceId": "codex", "model": "gpt-6.2-astra"}

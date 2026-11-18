@@ -547,9 +547,12 @@ def check_step(repo, proof_path):
 def pr_paths(repo, number):
     """The paths a pull request changed, or None when GitHub cannot say."""
     output = run(["gh", "api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
-    entries = json.loads(output or "[]")
+    try:
+        entries = json.loads(output or "[]")
+    except ValueError:
+        return None
     if not isinstance(entries, list):
-        raise ValueError(f"invalid changed-file list for {repo}#{number}")
+        return None
     return [entry.get("filename") or "" for entry in entries if isinstance(entry, dict)]
 
 
@@ -574,6 +577,11 @@ def prompt_merge_item(repo, number, head):
                     f"`gh pr merge {number} -R {repo} --squash --match-head-commit {head}`.")}
 
 
+def withdraw_decision(item_id):
+    """Take one item off Shyam's board, once the pull request is settled."""
+    return alarms.board_update(DECISIONS_PATH, item_id, "remove", None)
+
+
 def act_on_pr(repo, number, ledger):
     if repo not in LANE_REPOS:
         return None
@@ -582,6 +590,11 @@ def act_on_pr(repo, number, ledger):
         return None
     current_pr, skip = pr_action_skip(repo, number)
     if skip:
+        if current_pr.get("state") != "OPEN" and not DRY:
+            # The pull request is settled, so its merge ask is answered by
+            # whoever settled it. Leaving the card would keep the board
+            # asking after the work is done.
+            withdraw_decision(f"prompt-merge-{CFG[repo]['key']}-{number}")
         return skip
     pr = {**pr, **current_pr}
     state = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
@@ -620,8 +633,10 @@ def act_on_pr(repo, number, ledger):
         if prompt:
             # A prompt, skill or playbook change never auto-merges (Shyam):
             # the lane stops at the verdict and asks him once.
+            if DRY:
+                return f"DRY hold #{number} {head}"
             if publish_decision(prompt_merge_item(repo, number, head)) != "wrote":
-                return f"#{number}: prompt change, the decisions item could not be written"
+                return f"skip #{number}: prompt change, the decisions item could not be written"
             return f"skip #{number}: gate PASS, prompt change, Shyam merges"
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
