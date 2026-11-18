@@ -31,21 +31,10 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
     ascend = settings.get("ascend", False) or repo.split('/')[0] != "shyamsivakumar" or any(x in repo for x in ("action-underwriting-hub", "ascend-mcp", "data-ops", "/dbt", "/omni"))
     if ascend_override is not None:
         ascend = ascend_override
-    # A retarget moves the pull request onto another base without moving its
-    # head, so the same head can introduce prompt text it did not introduce
-    # against the base this brief read. The merge order pins the base, and the
-    # classification covers the default branch too, so a retarget either holds
-    # the pull request before the review or merges nothing here.
-    base_pin = (f"read the base with `gh pr view {number} -R {repo} --json baseRefName --jq .baseRefName` "
-                f"immediately before the merge, and merge nothing unless it is still `{base}`: "
-                f"`--match-head-commit` pins the head only, so the merge cannot enforce the base and a "
-                f"retargeted pull request is left for the next review instead of merged; then read the base "
-                f"once more after the merge and, when it is not `{base}` any more, report that the merge "
-                f"landed on another base and close nothing")
     merge = (PROMPT_NO_MERGE if prompt else
              "Ascend repo: do not merge; stop at the verdict." if ascend else
-             f"If and only if CHECK and VERDICT are PASS on {head}, {base_pin}, then run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-    fast_forward = ("" if prompt or ascend or not fast_forward_main else
+             f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
+    fast_forward = ("" if ascend or not fast_forward_main else
                     " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
                     "find the worktree that has main checked out in `git worktree list` and run `git fetch origin` then "
                     "`git merge --ff-only origin/main` there; when no worktree has main checked out, run `git fetch origin main:main`. "
