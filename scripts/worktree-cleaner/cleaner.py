@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import ctypes
 import datetime as dt
 import fcntl
 import hashlib
@@ -549,23 +550,29 @@ def _snapshot_directory(fd: int) -> dict[str, tuple[int, int, int, int]]:
     return snapshot
 
 
-def _restore_directory(source: Path, destination: Path) -> bool:
-    """Put a directory back at its path, but only when that path is free.
+def _rename_exclusive(source: Path, destination: Path) -> bool:
+    """Rename a directory so that it cannot replace one that is there.
 
-    The destination is reserved with an exclusive create, so a directory that
-    took the path in the meantime is preserved, and the copy that was moved
-    aside stays where it is.
+    The rename is atomic and refuses an occupied destination, so a file that
+    is saved at the destination while the copy is moved back is never
+    replaced, and the copy that was moved aside is kept whole.
     """
     try:
-        os.mkdir(destination)
-    except OSError:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renamex_np = libc.renamex_np
+    except (OSError, AttributeError):
+        renamex_np = None
+    if renamex_np is not None:
+        rename_exclusive = 0x00000004
+        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex_np.restype = ctypes.c_int
+        if renamex_np(os.fsencode(str(source)), os.fsencode(str(destination)), rename_exclusive) == 0:
+            return True
+        return False
+    if os.path.exists(destination):
         return False
     try:
-        for entry in sorted(os.listdir(source)):
-            if os.path.exists(destination / entry):
-                continue
-            os.rename(source / entry, destination / entry)
-        os.rmdir(source)
+        os.rename(source, destination)
     except OSError:
         return False
     return True
@@ -1971,13 +1978,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                             tree_gone = False
                         else:
                             aside = f".cleaner-removed-{os.getpid()}-{os.urandom(6).hex()}"
-                            try:
-                                os.rename(candidate["path"], aside, src_dir_fd=parent, dst_dir_fd=parent)
-                            except OSError:
+                            if not _rename_exclusive(Path(candidate["path"]), Path(candidate["path"]).parent / aside):
                                 tree_gone = False
                             else:
                                 try:
-                                    info = os.stat(aside, dir_fd=parent, follow_symlinks=False)
+                                    info = os.stat(os.path.basename(aside), dir_fd=parent, follow_symlinks=False)
                                 except OSError:
                                     info = None
                                 matched = info is not None and (not expected_identity or f"{info.st_dev}:{info.st_ino}" == expected_identity)
@@ -1988,24 +1993,13 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                     except OSError:
                                         tree_gone = False
                                 if not tree_gone:
-                                    # The checkout is only put back when its
-                                    # path is free, so a directory that took
-                                    # the place in the meantime is preserved.
-                                    try:
-                                        taken = os.stat(candidate["path"], follow_symlinks=False)
-                                    except OSError:
-                                        taken = None
-                                    if taken is None:
-                                        # The path is reserved exclusively and
-                                        # the copy is moved into it, so a
-                                        # directory that took the path in the
-                                        # meantime is never replaced.
-                                        if not _restore_directory(Path(aside), Path(candidate["path"])):
-                                            candidate["checkout_conflict"] = True
-                                    else:
+                                    # The copy is moved back with a rename that
+                                    # refuses an occupied path, so a save at
+                                    # that path is never replaced and the
+                                    # aside copy is kept whole.
+                                    if not _rename_exclusive(Path(aside), Path(candidate["path"])):
                                         candidate["checkout_conflict"] = True
-                            finally:
-                                os.close(parent)
+                            os.close(parent)
                     # The registration is removed through its own descriptor, so a
                     # registration that replaced it in the meantime is not
                     # touched.
@@ -2051,21 +2045,20 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                 # removed, so the directory that is removed is one
                                 # this call owns.
                                 aside = f".cleaner-registration-{os.getpid()}-{os.urandom(6).hex()}"
-                                try:
-                                    os.rename(registration, aside, src_dir_fd=admin_parent, dst_dir_fd=admin_parent)
-                                except OSError:
+                                if not _rename_exclusive(Path(registration), Path(registration).parent / aside):
                                     registration_gone = False
                                 else:
                                     try:
-                                        info = os.stat(aside, dir_fd=admin_parent, follow_symlinks=False)
+                                        info = os.stat(os.path.basename(aside), dir_fd=admin_parent, follow_symlinks=False)
                                         if (info.st_dev, info.st_ino) == registration_identity:
                                             os.rmdir(aside, dir_fd=admin_parent)
                                             registration_gone = True
                                         else:
                                             # The registration is put back only
-                                            # when its path is free.
-                                            _restore_directory(Path(aside), Path(registration))
-                                            registration_gone = False
+                                            # when its path is free, and the
+                                            # aside copy is kept whole.
+                                            if not _rename_exclusive(Path(registration).parent / aside, Path(registration)):
+                                                registration_gone = False
                                     except OSError:
                                         registration_gone = False
                         finally:

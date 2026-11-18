@@ -1034,7 +1034,7 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         destination = base / "path"
         destination.mkdir()
         (destination / "other.md").write_text("other\n", encoding="utf-8")
-        self.assertFalse(cleaner._restore_directory(source, destination))
+        self.assertFalse(cleaner._rename_exclusive(source, destination))
         self.assertTrue((destination / "other.md").exists())
         self.assertTrue((source / "kept.md").exists())
 
