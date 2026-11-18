@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -37,6 +38,10 @@ import gh_gateway  # noqa: E402
 GITHUB_ORIGIN_RE = re.compile(r"^(?:https://(?:[^@/\s]+@)?|ssh://git@|git@)github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
 WORKERS = 8
 COMMIT_CACHE_TTL = 7 * 24 * 3600
+# The scan runs its refreshes in threads over one shared cache object. Each
+# writer takes this lock around its mutation and save, so two evictions
+# cannot race: a later snapshot never drops an earlier eviction.
+VERIFIED_LOCK = threading.Lock()
 
 
 class SafetyError(RuntimeError):
@@ -395,18 +400,40 @@ class GitHub:
             # no longer known good. Evict it and save before the error goes
             # up, or the next scan reloads it and calls the commit verified.
             self.commits[key] = False
-            self.verified.pop(cache_key, None)
-            self.save_cache()
+            with VERIFIED_LOCK:
+                # Read-modify-write under the lock: a stale snapshot would
+                # otherwise restore an entry another worker just evicted.
+                fresh = self._load_verified()
+                fresh.pop(cache_key, None)
+                self.verified = fresh
+                self.save_cache()
             raise SafetyError("command_unavailable:gh") from exc
         except SafetyError:
             self.commits[key] = False
-        if self.commits[key]:
-            self.verified[cache_key] = time.time()
-        else:
-            self.verified.pop(cache_key, None)
+        with VERIFIED_LOCK:
+            fresh = self._load_verified()
+            if self.commits[key]:
+                fresh[cache_key] = time.time()
+            else:
+                fresh.pop(cache_key, None)
+            self.verified = fresh
         return self.commits[key]
 
+    def _load_verified(self) -> dict[str, float]:
+        """Read the cache file as it is now, for a locked read-modify-write."""
+        if not self.cache_path:
+            return dict(self.verified)
+        try:
+            loaded = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(loaded, dict):
+            return {}
+        return {key: stamp for key, stamp in loaded.items()
+                if isinstance(stamp, (int, float))}
+
     def save_cache(self) -> None:
+        """Write the cache. Callers hold VERIFIED_LOCK around the mutation."""
         if not self.cache_path:
             return
         cutoff = time.time() - COMMIT_CACHE_TTL

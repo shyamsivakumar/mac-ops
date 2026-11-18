@@ -870,14 +870,14 @@ def record(argv, count=1, caller_name=None):
         return
 
 
-def quota_key():
+def quota_key(host=None):
     """Return the identity a quota sample belongs to, or "" if unknown.
 
     The token, the host, the gh configuration directory and the account the
     configuration selects can all change inside a long-lived process. A
     balance read for one identity must not set the floor for another, and an
     identity that cannot be established is never reused."""
-    host = os.environ.get("GH_HOST") or "github.com"
+    host = host or os.environ.get("GH_HOST") or "github.com"
     account = os.environ.get("COORDINATOR_GH_ACCOUNT") or _hosts_account(host)
     if not account:
         return ""
@@ -885,15 +885,19 @@ def quota_key():
     return "|".join([host, account, config, _token_id()])
 
 
-def api_remaining(timeout=60):
-    """Return the remaining core and graphql calls, or raise."""
+def api_remaining(timeout=60, host=None):
+    """Return the remaining core and graphql calls for one host, or raise."""
     now = time.time()
-    key = quota_key()
+    key = quota_key(host)
     entry = _REMAINING.get(key) if key else None
     if entry and entry["at"] and now - entry["at"] < _REMAINING_TTL:
         return dict(entry["value"])
     try:
-        result = _launch()(["gh", "api", "rate_limit"], capture_output=True,
+        probe = ["gh", "api", "rate_limit"]
+        if host:
+            # The reserve belongs to the host the request targets.
+            probe += ["--hostname", host]
+        result = _launch()(probe, capture_output=True,
                            text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ApiBudgetExhausted("quota could not be read") from exc
@@ -909,7 +913,7 @@ def api_remaining(timeout=60):
     return dict(value)
 
 
-def remaining_or_none(timeout=60):
+def remaining_or_none(timeout=60, host=None):
     """Return the quota, or None when it cannot be read.
 
     A caller that only skips optional reads uses this: a quota it cannot
@@ -917,7 +921,7 @@ def remaining_or_none(timeout=60):
     fails on its own when GitHub refuses it. The timeout is the caller's,
     so a probe inside a deadline cannot outlast it."""
     try:
-        return api_remaining(timeout=timeout)
+        return api_remaining(timeout=timeout, host=host)
     except ApiBudgetExhausted:
         return None
 
@@ -932,13 +936,13 @@ def require_budget(limit=None):
     return remaining
 
 
-def guard_floor(limit=None, timeout=60):
+def guard_floor(limit=None, timeout=60, host=None):
     """Raise only when the quota is known to be below the floor.
 
     A quota that cannot be read does not stop a read: the read fails on its
     own if GitHub refuses it, and a failed rate-limit read is not evidence
     that the quota is gone."""
-    remaining = remaining_or_none(timeout=timeout)
+    remaining = remaining_or_none(timeout=timeout, host=host)
     limit = floor() if limit is None else limit
     if remaining and min(remaining.values()) < limit:
         raise ApiBudgetExhausted(
@@ -970,7 +974,8 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
     if limit is not None:
         # The probe and the read share one deadline: the probe gets half of
         # it, and the read gets whatever is left.
-        guard_floor(limit, timeout=max(1, int(timeout) // 2))
+        guard_floor(limit, timeout=max(1, int(timeout) // 2),
+                    host=argv_host(argv) or None)
         timeout = max(1, int(timeout - (time.monotonic() - started)))
     if stdin is None and conditional(argv):
         return _conditional_run(argv, timeout, caller_name)
