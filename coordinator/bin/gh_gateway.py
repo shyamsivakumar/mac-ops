@@ -703,7 +703,10 @@ def requests(argv, stdout, floor=True):
     """
     if not _gh(argv):
         return 0
-    if not paginated(argv) or resource(argv) != CORE:
+    words = significant(argv)
+    if not paginated(argv) or not words or words[0] != "api":
+        # Only an api read prints pages we can count. A search read counts
+        # its pages the same way, whatever quota it spends.
         return 1 if floor else 0
     if has_flag(argv, "--slurp"):
         # gh writes the pages as one JSON array here, so the pages are its
@@ -820,8 +823,6 @@ def pages_unknown(argv):
     body nor a replay can tell how many pages it took. The row says so
     instead of pretending to a number."""
     if not _gh(argv):
-        return False
-    if resource(argv) != CORE:
         return False
     words = significant(argv)
     if words and words[0] != "api":

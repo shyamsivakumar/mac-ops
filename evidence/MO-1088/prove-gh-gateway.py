@@ -678,6 +678,12 @@ report_env = subprocess.run(
     [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"), "--hours", "1"],
     capture_output=True, text=True,
     env={**env, "COORDINATOR_GH_USAGE_LOG": str(env_log)})
+# A paginated search read counts its pages like any other api read.
+rows_before = len(rows())
+run(["gh", "api", "--paginate", "--slurp", "search/issues?q=repo:a/b+is:issue"])
+check("a paginated search read counts its pages",
+      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+
 # A rotation inside the window discards earlier calls, so the totals are a
 # lower bound rather than an exact number.
 truncated_log = scratch / "truncated.jsonl"
@@ -708,7 +714,9 @@ absent = subprocess.run(
     [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"),
      "--log", str(scratch / "never-written.jsonl"), "--hours", "1"],
     capture_output=True, text=True, env=env)
-check("an absent log is allowed", absent.returncode == 0, f"exit={absent.returncode}")
+check("an absent log is not a quiet hour",
+      absent.returncode != 0 and "INCOMPLETE" in (absent.stdout + absent.stderr),
+      f"exit={absent.returncode}")
 
 check("the report defaults to the writer's log path",
       "envrun" in report_env.stdout, report_env.stdout.strip()[:60] or report_env.stderr.strip()[-80:])
