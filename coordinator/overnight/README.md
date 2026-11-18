@@ -807,9 +807,11 @@ now checked instead of remembered. One list lives in
   request. On a prompt change it merges nothing and writes one item to
   `~/Code/coordinator/decisions.json` (`kind: action`, id
   `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The item is keyed by
-  id, so a second pass replaces it instead of adding a second one, and a
-  pass takes it down once the pull request leaves the open list, whether
-  Shyam merged it or closed it.
+  id, so a second pass replaces it instead of adding a second one. A pass
+  also takes the item down, but only once the pull request itself reports
+  `MERGED` or `CLOSED`: the open list a pass holds stops at 200 requests, so
+  an older open request can be missing from it without being settled, and a
+  state that cannot be read keeps the card until the next pass.
 
 A file list GitHub cannot give is not code: the read is retried, and a list
 still unknown defers the gate or the merge instead of guessing. A brief
@@ -818,7 +820,9 @@ list never reads as clear. A list shorter than the pull request's own
 changed-file count is unknown too, because GitHub's files endpoint stops at
 3,000 and the dropped entry can be the prompt file; when the caller holds no
 count, the pull request itself is read for it, and a count that cannot be
-read is unknown as well. A renamed file counts
+read is unknown as well. That read is paginated and slurped like the rest,
+so the single pull request is the only row of a list and the count is read
+from that row. A renamed file counts
 under both names, so moving prompt text out of `prompts/` still holds the
 pull request. The list covers
 `AGENT-RULES.md`,

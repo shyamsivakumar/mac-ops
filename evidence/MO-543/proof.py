@@ -12,6 +12,7 @@ import argparse
 import importlib.machinery
 import importlib.util
 import io
+import json
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -156,6 +157,8 @@ def queue_briefs():
     # GitHub stops the files endpoint at 3,000: a list shorter than the pull
     # request's own changed-file count may have dropped the one prompt file.
     short = [{"filename": "coordinator/bin/ticket"}]
+    code_files = [{"filename": "coordinator/bin/ticket"},
+                  {"filename": "docs/ticket-gate.md"}]
     with patch.object(coordq, "gh_json", return_value=short):
         truncated = coordq.gate_prompt_state(repo, 544, 3001)
         complete = coordq.gate_prompt_state(repo, 544, 1)
@@ -163,16 +166,26 @@ def queue_briefs():
           truncated == prompt_paths.UNKNOWN and complete == prompt_paths.CLEAR, command)
     # The count is not taken on trust from the list entry: when the caller has
     # none, the pull request itself gives it, and a count that cannot be read
-    # is unknown too. This is the path the earlier proof missed.
+    # is unknown too. The read is the real helper's own response, a slurped
+    # one-row list: reading that list as a dict lost the count and deferred
+    # every code-only PR.
     def gh(endpoint):
         if endpoint.endswith("/files?per_page=100"):
             return short
         if endpoint == f"repos/{repo}/pulls/544":
-            return {"changed_files": 3001}
+            return [{"number": 544, "changed_files": 3001}]
         raise AssertionError(endpoint)
 
     with patch.object(coordq, "gh_json", gh):
         fetched = coordq.gate_prompt_state(repo, 544)
+
+    def gh_code(endpoint):
+        if endpoint.endswith("/files?per_page=100"):
+            return code_files
+        return [{"number": 547, "changed_files": len(code_files)}]
+
+    with patch.object(coordq, "gh_json", gh_code):
+        code_only = coordq.gate_prompt_state(repo, 547)
 
     def gh_no_count(endpoint):
         if endpoint.endswith("/files?per_page=100"):
@@ -183,6 +196,8 @@ def queue_briefs():
         no_count = coordq.gate_prompt_state(repo, 544)
     grant("queue gatekeep: a missing or unreadable changed-file count is unknown too",
           fetched == prompt_paths.UNKNOWN and no_count == prompt_paths.UNKNOWN, command)
+    grant("queue gatekeep: a code-only PR with no list entry count still clears its gate",
+          code_only == prompt_paths.CLEAR, command)
 
 
 def lane_truncation():
@@ -215,25 +230,61 @@ def lane_truncation():
 
 
 def board_reconcile():
-    """A merge ask whose pull request left the open list is taken down."""
+    """A merge ask goes only when its pull request says it is settled."""
     import lane_driver as lane
     command = "python3 evidence/MO-543/proof.py"
     saved = lane.CFG
     lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+    SNAPSHOT_BACKUP = [lane.SNAPSHOT]
     board = {"items": [{"id": "prompt-merge-MO-544"}, {"id": "prompt-merge-MO-545"},
-                        {"id": "unrelated"}]}
-    # 544 is merged or closed between passes, so only 545 is still open.
+                        {"id": "prompt-merge-MO-546"}, {"id": "unrelated"}]}
+    # 544 is merged between passes, 545 is in the open list, and 546 is still
+    # open but fell outside the 200-row snapshot the lane holds.
     snapshot = {"repos": {"shyamsivakumar/mac-ops": {"prs": [{"number": 545}]}}}
+    states = {544: {"state": "MERGED", "mergedAt": "2026-11-18T00:00:00Z"},
+              546: {"state": "OPEN", "mergedAt": None}}
     taken = []
+
+    def read(cmd, timeout=150):
+        return json.dumps(states[int(cmd[3])])
+
     try:
-        with patch.object(lane.alarms, "read_board", return_value=(b"", board)), \
+        with patch.object(lane, "run", read), \
+                patch.object(lane.alarms, "read_board", return_value=(b"", board)), \
                 patch.object(lane, "withdraw_decision",
                              lambda item_id: (taken.append(item_id), "wrote")[1]):
             removed = lane.reconcile_prompt_items(snapshot)
+        # A state read that fails answers nothing, so the card stays.
+        unread = []
+        with patch.object(lane, "run", side_effect=RuntimeError("gh failed")), \
+                patch.object(lane.alarms, "read_board", return_value=(b"", board)), \
+                patch.object(lane, "withdraw_decision",
+                             lambda item_id: (unread.append(item_id), "wrote")[1]):
+            kept = lane.reconcile_prompt_items(snapshot)
+        # A per-PR skip withdraws only on a state that says settled.
+        settled = []
+        snapshot_open = {"repos": {"shyamsivakumar/mac-ops": {"prs": [{"number": 544, "state": "OPEN"}]}}}
+        try:
+            lane.SNAPSHOT = snapshot_open
+            for state in (None, "MERGED"):
+                view = {"number": 544, "state": state,
+                        "headRefName": "b", "baseRefName": "main"}
+                with patch.object(lane, "read_json", return_value=view), \
+                        patch.object(lane, "DRY", False), \
+                        patch.object(lane, "withdraw_decision",
+                                     lambda item_id: (settled.append((view["state"], item_id)),
+                                                      "wrote")[1]):
+                    lane.act_on_pr("shyamsivakumar/mac-ops", 544, {})
+        finally:
+            lane.SNAPSHOT = SNAPSHOT_BACKUP[0]
     finally:
         lane.CFG = saved
     grant("board: a merge ask for a settled prompt PR is taken down, an open one stays",
           taken == ["prompt-merge-MO-544"] and removed == 1, command)
+    grant("board: an open PR outside the capped snapshot and an unread state keep the card",
+          "prompt-merge-MO-546" not in taken and (kept, unread) == (0, []), command)
+    grant("board: a per-PR skip withdraws the merge ask only on a settled state",
+          settled == [("MERGED", "prompt-merge-MO-544")], command)
 
 
 def ticket_file_read():
