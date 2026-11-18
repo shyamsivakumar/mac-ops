@@ -2,6 +2,8 @@
 import argparse, fcntl, hashlib, json, os, re, shlex, subprocess, sys, time
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import models as model_list
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
 import gh_gateway
@@ -86,9 +88,6 @@ ATTRIBUTED = re.compile(
 QUOTE_WINDOW = 60
 # The review gate: the rules live in the coordinator CLAUDE.md sections
 # "Review gate" and "Ten minutes start to finish".
-from gate_reviewers import REVIEWER_CHAIN
-
-GATE_ASTRA = REVIEWER_CHAIN[0]
 GATE_PRIORITY = 400
 GATE_CHECK_CONTEXT = "srw/agent-check"
 GATE_PUBLISHER_REPO = "shyamsivakumar/strategy-replay-workbench"
@@ -140,12 +139,19 @@ def label_names(cfg):
         names.append(("priority", f"priority:{p}"))
     for t in cfg["labels"]["type"]:
         names.append(("type", f"type:{t}"))
-    for alias in cfg["models"]:
+    for alias in builder_ids():
         names.append(("builder", f"builder:{alias}"))
-    for alias, model in cfg["models"].items():
-        if not model.get("noGate"):
-            names.append(("reviewer", f"reviewer:{alias}"))
+    for alias in reviewer_ids():
+        names.append(("reviewer", f"reviewer:{alias}"))
     return names
+
+
+def builder_ids():
+    return [e["id"] for e in model_list.entries("build")]
+
+
+def reviewer_ids():
+    return [e["id"] for e in model_list.entries("review")]
 
 
 def run(cmd, timeout, stdin=None):
@@ -274,8 +280,8 @@ def label_problems(cfg, groups):
         HOLD_FAMILY: {HOLD_FAMILY},
         "priority": set(cfg["labels"]["priority"]),
         "type": set(cfg["labels"]["type"]),
-        "builder": set(cfg["models"]),
-        "reviewer": {a for a, m in cfg["models"].items() if not m.get("noGate")},
+        "builder": set(builder_ids()),
+        "reviewer": set(reviewer_ids()),
     }
     for family, values in groups.items():
         if len(values) > 1:
@@ -1012,16 +1018,19 @@ def text_blocker_reasons(cfg, repo, issue):
 
 
 def resolve_models(cfg, ticket):
-    builder = ticket["builder"] or cfg["types"].get(ticket["type"])
-    reviewer = ticket["reviewer"] or cfg["types"]["review"]
-    for role, alias in (("builder", builder), ("reviewer", reviewer)):
-        if alias not in cfg["models"]:
-            raise Refuse(f"unknown {role} alias {alias}")
-    if cfg["models"][reviewer].get("noGate"):
-        raise Refuse(f"reviewer {reviewer} cannot gate (noGate)")
-    if cfg["models"][builder]["vendor"] == cfg["models"][reviewer]["vendor"]:
-        raise Refuse(f"builder {builder} and reviewer {reviewer} are both vendor {cfg['models'][builder]['vendor']}")
-    return builder, reviewer
+    """The builder entry and the reviewer entry a ticket starts with.
+
+    A builder label puts that entry first in the build list. Blocked
+    providers are skipped. The reviewer is the first review entry of a
+    vendor other than the builder's."""
+    blocked = model_list.blocked_identities()
+    builder = model_list.first_available("build", ticket["builder"], blocked)
+    if builder is None:
+        raise Refuse("every builder is blocked")
+    reviewers = model_list.reviewers([builder["selection"]], ticket["reviewer"], blocked)
+    if not reviewers:
+        raise Refuse(f"every reviewer of a vendor other than {builder['vendor']} is blocked")
+    return builder, reviewers[0]
 
 
 def parse_ticket(cfg, repo, issue):
@@ -1103,8 +1112,8 @@ def validate_start(cfg, repo, issue, check_text=True):
         raise Refuse(f"unknown stage label {t['stage']}")
     if t["priority"] and t["priority"] not in cfg["labels"]["priority"]:
         raise Refuse(f"unknown priority label {t['priority']}")
-    for family in ("builder", "reviewer"):
-        if t[family] and t[family] not in cfg["models"]:
+    for family, valid in (("builder", builder_ids()), ("reviewer", reviewer_ids())):
+        if t[family] and t[family] not in valid:
             raise Refuse(f"unknown {family} alias {t[family]}")
     bad = {s: v for s, v in template_status(cfg, t["body"]).items() if v != "ok"}
     if bad:
@@ -1116,7 +1125,9 @@ def validate_start(cfg, repo, issue, check_text=True):
         raise Refuse("blocked by open " + ", ".join(f"{b['repo']}#{b['number']}" for b in open_blockers) + suffix)
     if reasons:
         raise Refuse("text blockers: " + "; ".join(reasons))
-    t["builderAlias"], t["reviewerAlias"] = resolve_models(cfg, t)
+    builder, reviewer = resolve_models(cfg, t)
+    t["builderAlias"], t["reviewerAlias"] = builder["id"], reviewer["id"]
+    t["builderSelection"] = builder["selection"]
     return t
 
 
@@ -1210,7 +1221,7 @@ def coordinator_decisions(issue):
 
 
 def brief_reviewer(cfg, t):
-    return t.get("reviewerAlias") or t.get("reviewer") or cfg["types"]["review"]
+    return t["reviewerAlias"]
 
 
 def fill_run_ids(body, request_id):
@@ -1265,7 +1276,8 @@ def build_start(cfg, t, attempt, issue):
         "clientRequestId": request_id,
         "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{default_branch(t['repo'])}",
                               "startFromOrigin": True},
-        "modelSelection": cfg["models"][t["builderAlias"]]["selection"],
+        "taskType": t["type"],
+        "modelSelection": t["builderSelection"],
     }
     title_rest = t["title"][len(t["key"]):].lstrip(" ·-:·").strip()
     title = f"{t['key']} · {title_rest}"
@@ -1468,8 +1480,12 @@ def builder_models(issue, login):
     return [], False
 
 
-def gate_reviewer(models, live=False):
-    return GATE_ASTRA
+def gate_reviewer(builder_models):
+    """The first unblocked review entry of a vendor other than the builder's."""
+    reviewers = model_list.reviewers(builder_models)
+    if not reviewers:
+        raise Refuse("every gate reviewer of a vendor other than the builder's is blocked")
+    return reviewers[0]
 
 
 def gate_live(title, gate_id):
@@ -1563,7 +1579,11 @@ def cmd_gate(a):
         issue = fetch_issue(repo, issue_number)
         check_ticket_key(repo, rcfg, issue["title"])
         models, live = builder_models(issue, authed_login())
-        model = gate_reviewer(models, live)
+        if a.print_model:
+            print(json.dumps(model_list.reviewers(models)))
+            return
+        reviewer = gate_reviewer(models)
+        model = reviewer["selection"]
         publisher = check_publisher(repo, head, rcfg)
         ascend = ascend_repo(repo, rcfg)
         base = pull.get("baseRefName") or "main"
@@ -1573,7 +1593,7 @@ def cmd_gate(a):
         brief = gate_brief(repo, rcfg, issue_number, number, head, base, publisher, ascend,
                            proof=proof, proof_path=proof_path, proof_state=proof_state)
         gate_id = f"gate:{repo}#{number}:{head}"
-        payload = {"projectId": rcfg["projectId"], "title": title, "modelSelection": model,
+        payload = {"projectId": rcfg["projectId"], "title": title, "taskType": "review", "modelSelection": model,
                    "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
                    "clientRequestId": gate_id, "message": brief}
         command = [COORDQ, "start", json.dumps(payload), "--title", title, "--priority", str(GATE_PRIORITY)]
@@ -1594,7 +1614,7 @@ def cmd_gate(a):
     if a.dry_run:
         print("checks passed")
         print(f"title: {title}")
-        print(f"reviewer: {model['model']}")
+        print(f"reviewer: {reviewer['id']} ({model['instanceId']} {model['model']})")
         print(f"builder model: {models[0] if models else ('unknown, builder is live' if live else 'unknown')}")
         print("command:\n" + shlex.join(command) + "\n")
         print("brief:\n" + brief)
@@ -1783,12 +1803,10 @@ def set_target(cfg, family, value):
     valid = {
         "stage": cfg["labels"]["stage"],
         "priority": cfg["labels"]["priority"],
-        "builder": list(cfg["models"]),
-        "reviewer": [a for a, m in cfg["models"].items() if not m.get("noGate")],
+        "builder": builder_ids(),
+        "reviewer": reviewer_ids(),
     }[family]
     if value not in valid:
-        if family == "reviewer" and cfg["models"].get(value, {}).get("noGate"):
-            raise Refuse(f"reviewer {value} cannot gate (noGate)")
         raise Refuse(f"unknown {family} {value!r}, expected one of: {', '.join(valid)}, none")
     return value
 
@@ -1806,15 +1824,11 @@ def cmd_set(a):
         names = [l["name"] for l in issue["labels"]]
         groups, _ = split_labels(cfg, names)
         pair = {f: targets[f] if f in targets else one(groups[f]) for f in ("builder", "reviewer")}
-        type_ = one(groups["type"])
-        if type_ and (pair["builder"] is None or pair["reviewer"] is None):
-            pair["builder"] = pair["builder"] or cfg["types"].get(type_)
-            pair["reviewer"] = pair["reviewer"] or cfg["types"]["review"]
         if pair["builder"] and pair["reviewer"]:
-            if cfg["models"][pair["reviewer"]].get("noGate"):
-                raise Refuse(f"reviewer {pair['reviewer']} cannot gate (noGate)")
-            if cfg["models"][pair["builder"]]["vendor"] == cfg["models"][pair["reviewer"]]["vendor"]:
-                raise Refuse(f"builder {pair['builder']} and reviewer {pair['reviewer']} are both vendor {cfg['models'][pair['builder']]['vendor']}")
+            builder_vendor = next(e["vendor"] for e in model_list.entries("build") if e["id"] == pair["builder"])
+            reviewer_vendor = next(e["vendor"] for e in model_list.entries("review") if e["id"] == pair["reviewer"])
+            if builder_vendor == reviewer_vendor:
+                raise Refuse(f"builder {pair['builder']} and reviewer {pair['reviewer']} are both vendor {builder_vendor}")
         add, remove = [], []
         for family, value in targets.items():
             remove += [f"{family}:{v}" for v in groups[family] if v != value]
@@ -1867,6 +1881,8 @@ def main():
                    help="print the gate this would queue, then stop without queueing")
     s.add_argument("--print-brief", action="store_true",
                    help="print the gate brief this pull request would get, then stop without queueing")
+    s.add_argument("--print-model", action="store_true",
+                   help="print the reviewers this pull request may use, in order, as JSON, then stop")
     s.set_defaults(fn=cmd_gate)
     s = sub.add_parser("close")
     s.add_argument("ref")

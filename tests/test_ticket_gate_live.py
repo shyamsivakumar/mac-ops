@@ -36,11 +36,10 @@ class GateLiveTest(unittest.TestCase):
 
     def test_gate_reviewer_matches_coordq_for_every_builder(self):
         from tests.test_gatekeep_backstop_reviewer import load_coordq
-        expected = load_coordq().ASTRA_MODEL
+        q = load_coordq()
         for models in (["claude-sonnet-5"], ["gpt-6.1-sol"], ["unknown"], []):
-            for live in (False, True):
-                with self.subTest(models=models, live=live):
-                    self.assertEqual(ticket.gate_reviewer(models, live), expected)
+            with self.subTest(models=models):
+                self.assertEqual(ticket.gate_reviewer(models)["selection"], q.reviewer_model(models))
 
     def setUp(self):
         self.queue_dir = tempfile.mkdtemp(prefix="ticket-gate-live-")
