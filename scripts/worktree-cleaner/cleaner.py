@@ -340,47 +340,130 @@ def classify_changes(path: Path, records: list[tuple[str, str, str | None]]) -> 
     return bootstrap, real
 
 
-def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None]]) -> list[str] | None:
+def file_digest(path: Path) -> str | None:
+    """The digest of the bytes of a file, or None when it cannot be read."""
+    try:
+        data = (path).read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(data).hexdigest()
+
+
+def _head_entry(repo: Path, name: str) -> tuple[str, str, bytes] | None:
+    """The mode, object and bytes of a path at HEAD, or None when it has none."""
+    listing = git(repo, "ls-tree", "HEAD", "--", name).strip()
+    if not listing:
+        return None
+    meta, _, listed = listing.partition("\t")
+    parts = meta.split()
+    if len(parts) < 3 or parts[1] != "blob":
+        return None
+    try:
+        data = git_bytes(repo, "show", f"HEAD:{name}")
+    except SafetyError:
+        return None
+    return parts[0], parts[2], data
+
+
+def _set_index_to_head(repo: Path, name: str, entry: tuple[str, str, bytes] | None) -> None:
+    """Point the index entry of a path back at HEAD, or drop it when HEAD has none."""
+    if entry is None:
+        run(["git", "-C", str(repo), "update-index", "--force-remove", "--", name])
+        return
+    mode, sha, _data = entry
+    run(["git", "-C", str(repo), "update-index", "--cacheinfo", f"{mode},{sha},{name}"])
+
+
+def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, str, bytes] | None, digest: str | None) -> bool:
+    """Clear one verified bootstrap file without losing an intervening edit.
+
+    The file is moved aside with an atomic rename, and the moved bytes are
+    compared with the bytes that were read before the move. A write that
+    landed in between is put back, and the worktree is kept.
+    """
+    file_path = repo / name
+    try:
+        expected = file_path.read_bytes()
+    except OSError:
+        return False
+    if digest is not None and hashlib.sha256(expected).hexdigest() != digest:
+        # The file changed after the scan, so the worktree is kept.
+        return False
+    moved = trash / f"{name.replace('/', '_')}.{os.getpid()}"
+    try:
+        os.replace(file_path, moved)
+    except OSError:
+        return False
+    try:
+        after = moved.read_bytes()
+    except OSError:
+        after = None
+    if after != expected:
+        # Someone wrote the file while it was being cleared: put it back.
+        try:
+            os.replace(moved, file_path)
+        except OSError:
+            pass
+        return False
+    if entry is None:
+        try:
+            moved.unlink()
+        except OSError:
+            return False
+        return True
+    mode = int(entry[0], 8) & 0o777
+    try:
+        descriptor = os.open(file_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+    except OSError:
+        # The file came back: someone saved it, so the worktree is kept.
+        try:
+            moved.unlink()
+        except OSError:
+            pass
+        return False
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(entry[2])
+    try:
+        moved.unlink()
+    except OSError:
+        pass
+    return True
+
+
+def clear_bootstrap_changes(path: Path, records: list[tuple[str, str, str | None]], trash: Path, digests: dict[str, str] | None = None) -> list[str] | None:
     """Clear the verified bootstrap changes of a worktree.
 
     Only the bootstrap files are touched, and only the ones the scan already
     verified. Every other change stays, so an unforced `git worktree remove`
     refuses to delete a worktree that holds anything else, and a file saved
-    after the scan is never removed.
+    after the scan is never removed. When a file cannot be cleared without
+    losing an edit that landed in between, the worktree is kept.
     """
     cleared: list[str] = []
     for code, name, original in records:
         if original is not None:
             if not (bootstrap_path(original) and bootstrap_path(name)):
                 return None
-            git(path, "checkout", "HEAD", "--", original)
-            try:
-                (path / name).unlink(missing_ok=True)
-            except OSError:
+            entry = _head_entry(path, original)
+            if entry is None:
+                return None
+            if not _clear_bootstrap_file(path, trash, original, entry, (digests or {}).get(original)):
+                return None
+            _set_index_to_head(path, original, entry)
+            _set_index_to_head(path, name, None)
+            if not _clear_bootstrap_file(path, trash, name, None, (digests or {}).get(name)):
                 return None
             cleared.append(name)
             continue
         if name == AGENTS_FILE:
             if not agents_only_rules(path):
                 return None
-            if code.strip() == "??":
-                try:
-                    (path / name).unlink(missing_ok=True)
-                except OSError:
-                    return None
-            else:
-                git(path, "checkout", "HEAD", "--", AGENTS_FILE)
-            cleared.append(name)
-            continue
-        if not bootstrap_path(name):
+        elif not bootstrap_path(name):
             return None
-        if code.strip() == "??":
-            try:
-                (path / name).unlink(missing_ok=True)
-            except OSError:
-                return None
-        else:
-            git(path, "checkout", "HEAD", "--", name)
+        entry = _head_entry(path, name)
+        if not _clear_bootstrap_file(path, trash, name, entry, (digests or {}).get(name)):
+            return None
+        _set_index_to_head(path, name, entry)
         cleared.append(name)
     return cleared
 
@@ -752,6 +835,7 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
             records = status_for(path)
             bootstrap_changes, real_changes = classify_changes(path, records)
             result["bootstrap_changes"] = bootstrap_changes
+            result["bootstrap_digests"] = {name: file_digest(path / name) for name in bootstrap_changes}
             result["dirty"] = bool(real_changes)
             result["uncommitted"] = len(real_changes)
             result["unpushed"] = unpushed_commits(path)
@@ -1011,8 +1095,13 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["eligible"] = False
                     candidate["reasons"] = ["process_cwd_inside"]
                     continue
+                trash = state_root / "cleanup-trash"
                 try:
-                    cleared = clear_bootstrap_changes(Path(candidate["path"]), latest_records)
+                    trash.mkdir(mode=0o700, parents=True, exist_ok=True)
+                except OSError:
+                    trash = None
+                try:
+                    cleared = clear_bootstrap_changes(Path(candidate["path"]), latest_records, trash, candidate.get("bootstrap_digests")) if trash else None
                 except (SafetyError, OSError):
                     cleared = None
                 if cleared is None:
