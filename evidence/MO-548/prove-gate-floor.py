@@ -64,10 +64,14 @@ coordq.read_builder_thread = lambda thread_id: ({"providerInstanceId": "minimax"
                                                [{"executedModel": "minimax/MiniMax-M3.1-Flash"}])
 coordq.builder_thread_for_issue = lambda repo, issue: "builder-1"
 calls.clear()
-found = coordq.gate_request("o/r", pr, settings, config, {}, "me", optional=False)
+found = coordq.gate_request("o/r", pr, settings, config, {}, "me", optional=False,
+                            fresh=True)
 check("an explicit gate asks for no floor",
       bool(calls) and all(call.get("limit") is None for call in calls),
       str([call.get("limit") for call in calls]))
+check("an explicit gate reads the status fresh",
+      all(call.get("fresh") is True for call in calls),
+      str([call.get("fresh") for call in calls]))
 check("the explicit gate still finds the request", found is not None)
 
 print("PROOF", "PASS" if ok else "FAIL")
