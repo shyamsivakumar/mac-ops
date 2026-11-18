@@ -4,12 +4,14 @@
 directory is a temporary one, so a proof never touches the live queue.
 """
 import argparse
+import fcntl
 import importlib.util
 import io
 import json
 import os
 import subprocess
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -473,7 +475,7 @@ class ReviewerFallbackTest(RetryLimitBase):
         first = coordq.model_list.entries("review")[0]["selection"]
         self.assertIsNone(coordq.blocked_launch({"args": {"modelSelection": first}}))
 
-    def drain_with(self, items, heads, before_launch=None):
+    def drain_with(self, items, heads, before_launch=None, on_launch=None):
         self.write_queue(heads=heads, items=items)
         with open(os.path.join(QUEUE_DIR, "config.json"), "w") as f:
             json.dump({"cap": 5}, f)
@@ -488,9 +490,14 @@ class ReviewerFallbackTest(RetryLimitBase):
 
         coordq.live = live
         coordq.active_thread_ids = lambda: set()
-        coordq.call = lambda tool, args, rules=None: (
-            launches.append(args) if tool == "t3_thread_launch" else None,
-            (0, json.dumps({"thread": {"threadId": "t-1"}})))[1]
+        def call(tool, args, rules=None):
+            if tool == "t3_thread_launch":
+                if on_launch:
+                    on_launch()
+                launches.append(args)
+            return 0, json.dumps({"thread": {"threadId": "t-1"}})
+
+        coordq.call = call
         coordq.drain()
         return launches
 
@@ -554,6 +561,50 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertIn("gave up " + self.key, out)
         self.assertNotIn("regating", out)
         self.assertEqual(len(self.gate_items()), 1)
+
+    def test_a_gate_failing_on_a_refusal_does_not_deadlock_gatekeep(self):
+        refused = {"thread": {"status": "failed", "latestRunId": "r1", **ASTRA_GATE},
+                   "items": [{"type": "user_message", "text": "review"}],
+                   "recentRuns": [{"runId": "r1", "status": "failed",
+                                   "error": {"code": "rate_limit_exceeded",
+                                             "message": "rate limit, retry after 7200s"}}]}
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(refused))
+        self.write_queue(heads=self.head())
+        run = threading.Thread(target=self.run_gatekeep, daemon=True)
+        run.start()
+        run.join(20)
+        self.assertFalse(run.is_alive(), "gatekeep waits on the lock it holds")
+        failed = coordq.model_list.entries("review")[0]["selection"]
+        self.assertTrue(coordq.model_list.is_blocked(failed))
+        second = coordq.model_list.entries("review")[1]["selection"]
+        self.assertEqual(self.gate_items()[0]["args"]["modelSelection"], second)
+
+    def test_the_block_lock_is_held_while_a_gate_launches(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        writer_waited = []
+
+        def writer_tries_the_lock():
+            with open(coordq.provider_block.lock_path(), "w") as other:
+                try:
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    writer_waited.append(False)
+                except BlockingIOError:
+                    writer_waited.append(True)
+
+        launches = self.drain_with([self.gate_item(second)], {self.key: {"id": 4, "moved": True}},
+                                   on_launch=writer_tries_the_lock)
+        self.assertEqual(len(launches), 1)
+        self.assertEqual(writer_waited, [True])
+
+    def test_a_worker_on_a_review_listed_model_is_not_refused(self):
+        second = coordq.model_list.entries("review")[1]["selection"]
+        self.block(second)
+        worker = {"id": 5, "tool": "t3_thread_launch", "title": "build", "priority": 1,
+                  "args": {"modelSelection": second, "taskType": "worker", "message": "build"}}
+        self.assertIsNone(coordq.blocked_launch(worker))
+        self.assertIsNotNone(coordq.blocked_launch(self.gate_item(second)))
+        launches = self.drain_with([worker], {})
+        self.assertEqual(len(launches), 1)
 
 
 if __name__ == "__main__":

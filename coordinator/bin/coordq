@@ -210,15 +210,25 @@ def is_gate_model(selection):
     return model_list.find(selection, ("review",)) is not None
 
 
+def is_gate_item(item):
+    """Whether a queued item is a gate launch: its task type is `review`.
+
+    An item queued before task types were kept is classified by the list
+    that names its model, as the dispatcher classifies it."""
+    args = queued_launch_args("t3_thread_launch", item.get("args") or {})
+    return args.get("taskType") == "review"
+
+
 def blocked_launch(item):
     """Why an item cannot be launched, or None.
 
     A gate item whose reviewer was blocked after it was queued is not
     launched: the provider cannot run it. Only a gate item is refused; a
-    builder is never held back here.
+    builder is never held back here, even on a model the review list also
+    names.
     """
     selection = (item.get("args") or {}).get("modelSelection")
-    if selection and is_gate_model(selection) and model_list.is_blocked(selection):
+    if selection and is_gate_item(item) and model_list.is_blocked(selection):
         return f"{model_list.identity(selection)} is blocked"
     return None
 
@@ -662,8 +672,7 @@ def drain():
         if n + len(queue["reserved"]) + len(steps) > cap():
             log(f"waiting for {len(steps)} slots for #{item['id']}")
             return
-        guard = model_list.blocked_lock(blocking=False) if is_gate_model(item["args"].get("modelSelection")) \
-            else contextlib.nullcontext(True)
+        guard = model_list.blocked_lock(blocking=False) if is_gate_item(item) else contextlib.nullcontext(True)
         with guard as held:
             if not held:
                 log(f"#{item['id']} waits, the provider block store is being written")
@@ -681,38 +690,38 @@ def drain():
             if item.get("actionKey"):
                 set_action_key_state(queue, item["actionKey"], "reserved")
             save(queue)
-        code, out = 0, ""
-        for index, (key, step) in enumerate(zip(keys, steps)):
-            try:
-                code, out = call(step["tool"], step["args"], rules)
-            except model_list.ModelsError as e:
-                for unused in keys[index:]:
-                    queue["reserved"].pop(unused, None)
-                    queue["reservedThreads"].pop(unused, None)
-                item["pre"] = item.get("pre", [])[index:]
-                if item.get("actionKey"):
-                    set_action_key_state(queue, item["actionKey"], "queued")
-                save(queue)
-                log(f"#{item['id']} not started, the model files cannot be read: {e}")
-                return
-            except (OSError, subprocess.SubprocessError, ValueError) as e:
-                code, out = 1, str(e)
-            if code != 0:
-                for unused in keys[index:]:
-                    queue["reserved"].pop(unused, None)
-                    queue["reservedThreads"].pop(unused, None)
-                item["pre"] = item.get("pre", [])[index:]
-                save(queue)
-                break
-            if step["tool"] == "t3_thread_launch":
+            code, out = 0, ""
+            for index, (key, step) in enumerate(zip(keys, steps)):
                 try:
-                    result = json.loads(out)
-                    thread = result.get("thread", result).get("threadId")
-                    if isinstance(thread, str) and thread:
-                        queue["reservedThreads"][key] = LAUNCH_RECORD + thread
-                except (ValueError, TypeError, AttributeError):
-                    log(f"reservation #{key} retained: launch reply has no thread ID")
-            save(queue)
+                    code, out = call(step["tool"], step["args"], rules)
+                except model_list.ModelsError as e:
+                    for unused in keys[index:]:
+                        queue["reserved"].pop(unused, None)
+                        queue["reservedThreads"].pop(unused, None)
+                    item["pre"] = item.get("pre", [])[index:]
+                    if item.get("actionKey"):
+                        set_action_key_state(queue, item["actionKey"], "queued")
+                    save(queue)
+                    log(f"#{item['id']} not started, the model files cannot be read: {e}")
+                    return
+                except (OSError, subprocess.SubprocessError, ValueError) as e:
+                    code, out = 1, str(e)
+                if code != 0:
+                    for unused in keys[index:]:
+                        queue["reserved"].pop(unused, None)
+                        queue["reservedThreads"].pop(unused, None)
+                    item["pre"] = item.get("pre", [])[index:]
+                    save(queue)
+                    break
+                if step["tool"] == "t3_thread_launch":
+                    try:
+                        result = json.loads(out)
+                        thread = result.get("thread", result).get("threadId")
+                        if isinstance(thread, str) and thread:
+                            queue["reservedThreads"][key] = LAUNCH_RECORD + thread
+                    except (ValueError, TypeError, AttributeError):
+                        log(f"reservation #{key} retained: launch reply has no thread ID")
+                save(queue)
         request_id = item["args"].get("clientRequestId")
         if code == 0 and request_id and item["tool"] == "t3_thread_launch":
             try:

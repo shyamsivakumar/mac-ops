@@ -13,8 +13,6 @@ A caller that reads the blocked set and then acts on it holds
 `blocked_lock()`, the lock the store's writer holds too.
 """
 
-import contextlib
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -108,7 +106,6 @@ def queue_dir():
     return os.environ.get("COORDQ_DIR", os.path.expanduser("~/Code/coordinator/queue"))
 
 
-@contextlib.contextmanager
 def blocked_lock(blocking=True):
     """The lock on the provider block store.
 
@@ -116,20 +113,10 @@ def blocked_lock(blocking=True):
     answer, so a block recorded in between cannot slip past the decision.
     A caller that already holds the queue lock passes `blocking=False`,
     because gatekeep takes this lock before the queue lock: the lock is then
-    yielded as False when someone else holds it, and the caller waits.
+    yielded as False when someone else holds it, and the caller waits. The
+    store's own writer called under this lock does not wait on it again.
     """
-    directory = provider_block.queue_dir()
-    os.makedirs(directory, exist_ok=True)
-    handle = open(provider_block.lock_path(), "w")
-    try:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        except BlockingIOError:
-            yield False
-            return
-        yield True
-    finally:
-        handle.close()
+    return provider_block.locked(blocking)
 
 
 def blocked_identities():
