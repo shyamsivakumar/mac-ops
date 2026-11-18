@@ -616,11 +616,18 @@ SHORT_VALUE = {
 
 
 def command_of(argv):
-    """Return the (group, verb) a `gh` command names, such as ("run", "list")."""
+    """Return the (group, verb) a `gh` command names, such as ("run", "list").
+
+    The group is the first word that is a `gh` group, so a selector before
+    the subcommand (`gh -R o/r run list`) does not become the group."""
     words = [str(word) for word in (argv or [])[1:]]
-    plain = [word for word in words if not word.startswith("-")]
-    group = plain[0] if plain else ""
-    verb = plain[1] if len(plain) > 1 else ""
+    group_at = next((index for index, word in enumerate(words)
+                     if word in GROUPS), None)
+    if group_at is None:
+        return "", ""
+    group = words[group_at]
+    tail = [word for word in words[group_at + 1:]]
+    verb = next((word for word in tail if not word.startswith("-")), "")
     return group, verb
 
 
