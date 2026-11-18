@@ -257,23 +257,16 @@ class GateBriefTest(unittest.TestCase):
 
     def test_code_only_keeps_the_merge_order(self):
         text = self.brief(prompt=False)
-        self.assertIn("gh pr merge 544 -R shyamsivakumar/mac-ops --squash", text)
+        self.assertIn("git push origin HEAD:refs/heads/main", text)
         self.assertNotIn("never auto-merges", text)
         self.assertIn("review and merge", text)
 
-    def test_the_merge_order_pins_the_base(self):
-        """A retarget moves the base without moving the head, so it is pinned."""
+    def test_the_merge_order_names_the_reviewed_base(self):
+        """The squash is pushed to the reviewed base by name."""
         text = self.brief(prompt=False)
-        self.assertIn("merge nothing unless it is still `main`", text)
-        self.assertLess(text.index("merge nothing unless it is still `main`"),
-                        text.index("gh pr merge"))
-
-    def test_the_merge_order_refuses_a_base_it_cannot_enforce(self):
-        """The merge cannot pin the base, so a moved base is not merged."""
-        text = self.brief(prompt=False)
-        self.assertIn("the merge cannot enforce the base", text)
-        self.assertIn("left for the next review instead of merged", text)
-        self.assertNotIn("revert that merge", text)
+        self.assertIn("git push origin HEAD:refs/heads/main", text)
+        self.assertIn("a retarget cannot move it", text)
+        self.assertNotIn("gh pr merge", text)
 
     def test_the_verdict_lines_are_the_same_either_way(self):
         for prompt in (True, False):
@@ -504,7 +497,7 @@ class CoordqGateTest(unittest.TestCase):
         self.assertNotIn("gh pr merge", args["message"])
         code = self.coordq.gate_args(settings, "shyamsivakumar/mac-ops", 543, 544,
                                      "a" * 40, False, model)
-        self.assertIn("gh pr merge 544 -R shyamsivakumar/mac-ops", code["message"])
+        self.assertIn("git push origin HEAD:refs/heads/main", code["message"])
 
     def gatekeep(self, changed):
         """The gate the queue's own gatekeeper would queue, for one file list."""
@@ -555,7 +548,7 @@ class CoordqGateTest(unittest.TestCase):
 
     def test_the_gatekeep_queues_a_mergeable_gate_for_code(self):
         message = self.gatekeep(["coordinator/bin/ticket"])
-        self.assertIn("gh pr merge 7 -R shyamsivakumar/fixture --squash", message)
+        self.assertIn("git push origin HEAD:refs/heads/main", message)
         self.assertNotIn("never auto-merges", message)
 
     def test_an_unreadable_file_list_defers_the_gate(self):
@@ -837,132 +830,61 @@ class BoardReconcileTest(unittest.TestCase):
             self.assertEqual(self.lane.reconcile_prompt_items(self.snapshot), 0)
 
 
-class LandedBaseTest(unittest.TestCase):
-    """A merge that landed on another base reaches Shyam as a board item."""
+class SquashMergeTest(unittest.TestCase):
+    """The lane squashes the reviewed head onto the reviewed base by name."""
 
     def setUp(self):
         import lane_driver
         self.lane = lane_driver
-        self.saved = lane_driver.CFG
-        lane_driver.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
-        self.addCleanup(lambda: setattr(lane_driver, "CFG", self.saved))
+        self.saved = lane_driver.PATHS
+        lane_driver.PATHS = {"shyamsivakumar/mac-ops": "mac-ops"}
 
-    def merge(self, landed):
-        published = []
+    def tearDown(self):
+        self.lane.PATHS = self.saved
 
-        def command(cmd, timeout=150):
-            if cmd[:2] == ["gh", "pr"] and "view" in cmd:
-                if any("headRefOid" in str(part) for part in cmd):
-                    return '{"baseRefName": "main", "headRefOid": "%s"}' % ("a" * 40)
-                return '{"baseRefName": "%s"}' % landed
-            return ""
-
-        with patch.object(self.lane, "run", command), \
-                patch.object(self.lane, "publish_decision",
-                             lambda item: (published.append(item), "wrote")[1]):
-            merged, note = self.lane.merge_on_reviewed_base(
-                "shyamsivakumar/mac-ops", 544, "a" * 40, "main")
-        return merged, note, published
-
-    def test_a_merge_that_landed_on_the_reviewed_base_stands(self):
-        merged, note, published = self.merge("main")
-        self.assertTrue(merged)
-        self.assertEqual(published, [])
-        self.assertEqual(note, "#544: merged " + "a" * 40)
-
-    def test_a_merge_that_landed_elsewhere_reaches_shyam(self):
-        merged, note, published = self.merge("release/next")
-        self.assertFalse(merged)
-        self.assertIn("critical", note)
-        self.assertEqual(len(published), 1)
-        self.assertEqual(published[0]["id"], "base-moved-MO-544")
-        self.assertEqual(published[0]["kind"], "action")
-        self.assertIn("release/next", published[0]["title"])
-
-
-class MergeBaseGuardTest(unittest.TestCase):
-    """A pull request is merged only when its base is still the reviewed one."""
-
-    def setUp(self):
-        import lane_driver
-        self.lane = lane_driver
-        self.saved = lane_driver.CFG
-        lane_driver.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
-        self.addCleanup(lambda: setattr(lane_driver, "CFG", self.saved))
-
-    def merge(self, base_after):
+    def merge(self, fail_on=None):
+        import subprocess as real_subprocess
         calls = []
 
         def command(cmd, timeout=150):
             calls.append(cmd)
-            if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
-                    "baseRefName" in str(part) for part in cmd):
-                return '{"baseRefName": "%s", "headRefOid": "%s"}' % (base_after, "a" * 40)
+            if fail_on and fail_on in " ".join(cmd):
+                raise real_subprocess.CalledProcessError(1, cmd, output="refused")
+            if "rev-parse" in cmd:
+                return "c" * 40
             return ""
 
         with patch.object(self.lane, "run", command):
-            merged, note = self.lane.merge_on_reviewed_base(
-                "shyamsivakumar/mac-ops", 544, "a" * 40, "main")
-        return merged, note, calls
+            merged, note, commit = self.lane.merge_on_reviewed_base(
+                "shyamsivakumar/mac-ops", 544, "a" * 40, "release")
+        return merged, note, commit, calls
 
-    def test_a_merge_on_the_reviewed_base_is_issued(self):
-        merged, note, calls = self.merge("main")
+    def test_the_merge_squashes_the_reviewed_head_onto_the_reviewed_base(self):
+        merged, note, commit, calls = self.merge()
         self.assertTrue(merged)
-        self.assertEqual(note, "#544: merged " + "a" * 40)
-        self.assertEqual(len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]), 1)
+        self.assertEqual(commit, "c" * 40)
+        self.assertIn("into release as cccccccc", note)
+        squashed = [c for c in calls if "merge" in c and "--squash" in c]
+        self.assertEqual(len(squashed), 1)
+        self.assertIn("a" * 40, squashed[0])
+        pushes = [c for c in calls if "push" in c]
+        self.assertEqual(len(pushes), 1)
+        self.assertIn("HEAD:refs/heads/release", pushes[0])
 
-    def test_a_moved_base_merges_nothing(self):
-        """The merge cannot enforce the base, so a moved base is refused."""
-        merged, note, calls = self.merge("release/next")
+    def test_no_call_reads_the_pull_requests_base(self):
+        _merged, _note, _commit, calls = self.merge()
+        self.assertFalse([c for c in calls if c[:2] == ["gh", "pr"]])
+
+    def test_a_refused_push_merges_nothing(self):
+        merged, note, commit, _calls = self.merge(fail_on="push")
         self.assertFalse(merged)
+        self.assertIsNone(commit)
         self.assertIn("nothing merged", note)
-        self.assertEqual([c for c in calls if c[:3] == ["gh", "pr", "merge"]], [])
 
-    def test_a_moved_base_reverts_nothing(self):
-        """No merge is issued, so there is nothing to take back."""
-        merged, _note, calls = self.merge("release/next")
-        self.assertFalse(merged)
-        self.assertEqual([c for c in calls if "revert" in " ".join(c)], [])
-
-    def test_a_retarget_after_the_merge_is_reported_not_merged(self):
-        """A base that moves in the merge call cannot be refused, so it is read again.
-
-        No `gh` call pins the base, so the pre-merge read covers only the
-        interval before it. A pull request that lands on another base is
-        reported as one, and the caller closes and fast-forwards nothing.
-        """
-        calls = []
-        base = {"now": "main"}
-
-        def command(cmd, timeout=150):
-            calls.append(cmd)
-            if cmd[:3] == ["gh", "pr", "merge"]:
-                base["now"] = "release/next"
-                return ""
-            if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
-                    "baseRefName" in str(part) for part in cmd):
-                return '{"baseRefName": "%s", "headRefOid": "%s"}' % (base["now"], "a" * 40)
-            return ""
-
-        published = []
-        with patch.object(self.lane, "run", command), \
-                patch.object(self.lane, "publish_decision",
-                             lambda item: (published.append(item), "wrote")[1]):
-            merged, note = self.lane.merge_on_reviewed_base(
-                "shyamsivakumar/mac-ops", 544, "a" * 40, "main")
-        self.assertFalse(merged)
-        self.assertIn("not the reviewed main", note)
-        self.assertEqual([item["id"] for item in published], ["base-moved-MO-544"])
-        self.assertEqual(len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]), 1)
-
-    def test_the_base_is_read_before_and_after_the_merge(self):
-        """One read guards the interval before the merge, one the merge itself."""
-        _merged, _note, calls = self.merge("main")
-        views = [c for c in calls if c[:2] == ["gh", "pr"] and "view" in c]
-        self.assertEqual(len(views), 2)
-        merge_at = next(i for i, c in enumerate(calls) if c[:3] == ["gh", "pr", "merge"])
-        self.assertLess(calls.index(views[0]), merge_at)
-        self.assertGreater(calls.index(views[1]), merge_at)
+    def test_the_throwaway_worktree_is_removed(self):
+        _merged, _note, _commit, calls = self.merge()
+        removals = [c for c in calls if "worktree" in c and "remove" in c]
+        self.assertEqual(len(removals), 1)
 
 
 class BaseScopeTest(unittest.TestCase):

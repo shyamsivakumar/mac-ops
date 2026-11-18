@@ -95,7 +95,7 @@ def gate_briefs():
           f"CHECK: PASS {HEAD}" in prompt and "VERDICT: PASS" in prompt,
           "python3 evidence/MO-543/proof.py")
     grant("gate brief: code-only PR keeps the merge order",
-          "gh pr merge 544 -R shyamsivakumar/mac-ops --squash" in code
+          "git push origin HEAD:refs/heads/main" in code
           and "never auto-merges" not in code, "python3 evidence/MO-543/proof.py")
     print("--- prompt PR brief tail ---")
     print("\n".join(prompt.strip().splitlines()[-2:]))
@@ -153,7 +153,7 @@ def queue_briefs():
           "never auto-merges" in briefs["prompt"] and "gh pr merge" not in briefs["prompt"],
           command)
     grant("queue gatekeep brief: code-only PR keeps the merge order",
-          "gh pr merge 544 -R shyamsivakumar/mac-ops --squash" in briefs["code"]
+          "git push origin HEAD:refs/heads/main" in briefs["code"]
           and "never auto-merges" not in briefs["code"], command)
     # A transient GitHub error must not read as clear: no brief is built, so
     # no merge order can be written from a list the queue never saw.
@@ -369,69 +369,6 @@ def truncated_tree_walk():
           and prompt_paths.prompt_scan(paths) == prompt_paths.HOLD, command)
 
 
-def moved_base_refuses_merge():
-    """A base the merge cannot enforce merges nothing, so nothing is reverted."""
-    import lane_driver as lane
-    command = "python3 evidence/MO-543/proof.py"
-    calls = []
-
-    def run_cmd(cmd, timeout=150):
-        calls.append(cmd)
-        if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
-                "baseRefName" in str(part) for part in cmd):
-            return '{"baseRefName": "release/next", "headRefOid": "%s"}' % HEAD
-        return ""
-
-    with patch.object(lane, "run", run_cmd):
-        merged, note = lane.merge_on_reviewed_base(
-            "shyamsivakumar/mac-ops", 544, HEAD, "main")
-    issued = [call for call in calls if call[:3] == ["gh", "pr", "merge"]]
-    reverted = [call for call in calls if "revert" in " ".join(call)]
-    grant("lane: a moved base is never merged, so nothing has to be reverted",
-          merged is False and "nothing merged" in note
-          and issued == [] and reverted == [], command)
-
-
-def retarget_after_the_merge_is_reported():
-    """A retarget that slips past the pre-merge read is not a reviewed merge.
-
-    No `gh` call can pin the base, so the base is read once more after the
-    merge. A merge that landed on another base is reported as one, and the
-    caller closes nothing and fast-forwards nothing.
-    """
-    import lane_driver as lane
-    command = "python3 evidence/MO-543/proof.py"
-    calls = []
-    state = {"base": "release/next", "slip": True}
-
-    def run_cmd(cmd, timeout=150):
-        calls.append(cmd)
-        if cmd[:3] == ["gh", "pr", "merge"]:
-            # The retarget lands in the interval the merge call cannot guard.
-            if state["slip"]:
-                state["base"] = "main"
-            return ""
-        if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
-                "baseRefName" in str(part) for part in cmd):
-            return json.dumps({"baseRefName": state["base"], "headRefOid": HEAD})
-        return ""
-
-    saved_cfg = lane.CFG
-    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
-    with patch.object(lane, "run", run_cmd), \
-            patch.object(lane, "publish_decision", lambda item: "wrote"):
-        merged, note = lane.merge_on_reviewed_base(
-            "shyamsivakumar/mac-ops", 544, HEAD, "release/next")
-        reported = "not the reviewed release/next" in note and merged is False
-        # The same merge with nothing slipping is the reviewed merge.
-        state["base"], state["slip"] = "release/next", False
-        again, ok_note = lane.merge_on_reviewed_base(
-            "shyamsivakumar/mac-ops", 544, HEAD, "release/next")
-    lane.CFG = saved_cfg
-    grant("lane: a retarget after the merge read is reported, never counted as merged",
-          reported and again is True and ok_note == f"#544: merged {HEAD}", command)
-
-
 def classification_reads_the_own_base():
     """A child pull request is not held for prompt text it inherited."""
     import lane_driver as lane
@@ -452,32 +389,50 @@ def classification_reads_the_own_base():
     grant("lane: an inherited prompt edit does not hold a code-only child pull request",
           state == prompt_paths.CLEAR, command)
 
-def landed_elsewhere_reaches_shyam():
-    """A merge that landed on another base becomes a board item, not a log line."""
+def squash_push_names_base_and_head():
+    """The squash is built from the reviewed head and pushed to the base name."""
+    import subprocess as real_subprocess
     import lane_driver as lane
     command = "python3 evidence/MO-543/proof.py"
-    published = []
-    saved = lane.CFG
-    lane.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+    saved = lane.PATHS
+    lane.PATHS = {"shyamsivakumar/mac-ops": "mac-ops"}
+    calls = []
 
     def run_cmd(cmd, timeout=150):
-        if cmd[:2] == ["gh", "pr"] and "view" in cmd:
-            if any("headRefOid" in str(part) for part in cmd):
-                return '{"baseRefName": "main", "headRefOid": "%s"}' % HEAD
-            return '{"baseRefName": "release/next"}'
+        calls.append(cmd)
+        if "rev-parse" in cmd:
+            return "c" * 40
         return ""
 
     try:
-        with patch.object(lane, "run", run_cmd), \
-                patch.object(lane, "publish_decision",
-                             lambda item: (published.append(item), "wrote")[1]):
-            merged, note = lane.merge_on_reviewed_base(
-                "shyamsivakumar/mac-ops", 544, HEAD, "main")
+        with patch.object(lane, "run", run_cmd):
+            merged, note, commit = lane.merge_on_reviewed_base(
+                "shyamsivakumar/mac-ops", 544, HEAD, "release")
     finally:
-        lane.CFG = saved
-    grant("lane: a merge that landed on another base reaches Shyam as a board item",
-          merged is False and "critical" in note
-          and [item["id"] for item in published] == ["base-moved-MO-544"], command)
+        lane.PATHS = saved
+    squashed = [c for c in calls if "merge" in c and "--squash" in c]
+    pushes = [c for c in calls if "push" in c]
+    grant("lane: the squash is built from the reviewed head and pushed to the base name",
+          merged is True and commit == "c" * 40
+          and len(squashed) == 1 and HEAD in squashed[0]
+          and len(pushes) == 1 and "HEAD:refs/heads/release" in pushes[0]
+          and [c for c in calls if c[:2] == ["gh", "pr"]] == [], command)
+
+    def refuse(cmd, timeout=150):
+        if "push" in cmd:
+            raise real_subprocess.CalledProcessError(1, cmd, output="refused")
+        return "c" * 40 if "rev-parse" in cmd else ""
+
+    saved = lane.PATHS
+    lane.PATHS = {"shyamsivakumar/mac-ops": "mac-ops"}
+    try:
+        with patch.object(lane, "run", refuse):
+            merged, note, commit = lane.merge_on_reviewed_base(
+                "shyamsivakumar/mac-ops", 544, HEAD, "release")
+    finally:
+        lane.PATHS = saved
+    grant("lane: a refused push merges nothing", merged is False and commit is None
+          and "nothing merged" in note, command)
 
 
 def tree_fallback():
@@ -597,10 +552,8 @@ def main():
     timeout_and_unnamed()
     tree_entries()
     truncated_tree_walk()
-    moved_base_refuses_merge()
-    retarget_after_the_merge_is_reported()
     classification_reads_the_own_base()
-    landed_elsewhere_reaches_shyam()
+    squash_push_names_base_and_head()
     tree_fallback()
     lane_truncation()
     board_reconcile()
