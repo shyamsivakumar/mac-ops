@@ -39,6 +39,7 @@ RESET_WORD = re.compile(r"reset|retry|available|till|until|back\s+off", re.IGNOR
 OFFSET = re.compile(r"([+-])(\d{2}):?(\d{2})\b")
 NAMED_ZONE = re.compile(r"\b([A-Za-z]+(?:/[A-Za-z_]+)+)\b")
 
+
 def zone_of(text, start=0):
     """The zone a message states for its reset, or None when it states none.
 
