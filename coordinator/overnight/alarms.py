@@ -128,15 +128,24 @@ def load_state():
     overwrite every acknowledgement it holds, and the alarms that were
     answered would come back before their four hours are over. The read
     failure is raised, and the caller publishes the alarm as unchecked
-    without writing over the state it could not read."""
+    without writing over the state it could not read.
+
+    A file that holds text that is not JSON is a file that cannot be
+    read, in the same way: the acknowledgements it still holds are
+    recoverable and must not be lost, so the failure is raised, the
+    alarm is published as unchecked, and the file is left as it is."""
     try:
         text = state_path().read_text()
     except FileNotFoundError:
         return {}
     try:
         data = json.loads(text)
-    except ValueError:
-        return {}
+    except ValueError as error:
+        # A damaged file is not an empty state: reading it as empty would
+        # let the next alarm overwrite it with its own key, and the
+        # acknowledgements the file still holds would be lost. The file
+        # is kept as it is, and the alarm is published as unchecked.
+        raise ValueError(f"the mute state is not readable: {error}") from error
     state = data.get(STATE_KEY) if isinstance(data, dict) else None
     return state if isinstance(state, dict) else {}
 
@@ -275,7 +284,7 @@ def save_state(state):
     try:
         with locked():
             return write_state(merge(load_state(), state))
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
@@ -398,7 +407,7 @@ def decide_and_publish(alarm_id, cause, publish):
             # A quiet tick changes nothing, so it writes nothing: a write
             # that fails must not turn a muted alarm into a published
             # one.
-        except OSError:
+        except (OSError, ValueError):
             action = "unchecked"
         try:
             return publish(action) or action
@@ -412,20 +421,29 @@ def forget_and_save(alarm_id, publish=None):
     """Mark an alarm as not true any more, write the state, and publish.
 
     The key keeps its acknowledgement, so an alarm that was answered
-    stays quiet for the rest of the four hours. `publish` runs under the
-    same lock, so the board is read, changed and written while another
-    writer cannot read it stale. Return True when the state went to the
-    file."""
+    stays quiet for the rest of the four hours. `publish` cleans the
+    board under the board lock, so the board is read, changed and
+    written while another writer cannot read it stale.
+
+    The board is cleaned whether the state was written or not: a mute
+    state that cannot be locked or read must not leave a stale alarm on
+    the board, and the board has its own lock, so it can be cleaned even
+    when the mute storage is broken. Return True when the state went to
+    the file."""
+    written = False
     try:
         with locked():
             state = load_state()
             gone(state, alarm_id)
             written = write_state(merge(load_state(), state))
-            if publish is not None:
-                publish()
-            return written
-    except OSError:
-        return False
+    except (OSError, ValueError):
+        written = False
+    if publish is not None:
+        # The board is cleaned whether the state was written or not: a
+        # mute state that could not be read or locked must not leave a
+        # stale alarm on the board.
+        publish()
+    return written
 
 
 def main(argv):
@@ -446,7 +464,13 @@ def main(argv):
         sys.stdout.write(USAGE)
         return 0
     if argv[:1] == ["status"]:
-        state = load_state()
+        try:
+            state = load_state()
+        except (OSError, ValueError) as error:
+            # The state cannot be read, so what is quiet cannot be said.
+            # The caller has to know that.
+            sys.stderr.write(f"alarms: the mute state could not be read: {error}\n")
+            return 3
         if not state:
             print("alarms: no alarm key is recorded")
             return 0
@@ -471,8 +495,8 @@ def main(argv):
                 # will raise again on the next tick. The caller has to say so.
                 sys.stderr.write("alarms: the mute state could not be written\n")
                 return 3
-    except OSError as error:
-        sys.stderr.write(f"alarms: the mute state could not be locked: {error}\n")
+    except (OSError, ValueError) as error:
+        sys.stderr.write(f"alarms: the mute state could not be read or locked: {error}\n")
         return 3
     print(f"alarms: {key} quiet for {MUTE_SECONDS // 3600} hours")
     return 0

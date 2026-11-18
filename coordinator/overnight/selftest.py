@@ -2106,6 +2106,20 @@ def alarm_mute():
                 exact(action, "failed")
             exact(board_file.exists(), False)
 
+    # A damaged state file is not an empty state either: the alarm is
+    # published as unchecked and the file is kept as it is, so the
+    # acknowledgements it still holds are not lost.
+    with tempfile.TemporaryDirectory() as scratch:
+        damaged = Path(scratch) / "mute-state.json"
+        damaged.write_text("{ not json")
+        with patch.object(alarms, "MUTE_PATH", str(damaged)):
+            published = []
+            action = alarms.decide_and_publish("factory-watchdog", cause,
+                                               lambda a: published.append(a))
+            exact(action, "unchecked")
+            exact(published, ["unchecked"])
+            exact(damaged.read_text(), "{ not json")
+
     # A state file that cannot be read is not an empty state: the alarm
     # is published as unchecked, and the state that could not be read is
     # not written over, so the acknowledgements it holds stay.
@@ -2409,6 +2423,29 @@ def alarm_mute():
             output = pass_once(now + dt.timedelta(hours=4, minutes=41))
             exact("could not be published" in output, True)
             board.write_text(json.dumps({"items": []}))
+
+            # The healthy branch cleans the board even when the mute
+            # state cannot be locked or read: a stale alarm must not
+            # stay on the board.
+            codes["code"] = 78
+            pass_once(now + dt.timedelta(hours=4, minutes=44))
+            ids = [i["id"] for i in json.loads(board.read_text())["items"]
+                   if i["id"] == "factory-watchdog"]
+            exact(ids, ["factory-watchdog"])
+            codes["code"] = 0
+            real_take_lock = alarms.take_lock
+
+            def mute_lock_only(path=None):
+                """Fail the mute lock, and leave the board lock alone."""
+                if path is None or str(path) == str(Path(str(mute) + ".lock")):
+                    return None
+                return real_take_lock(path)
+
+            with patch.object(alarms, "take_lock", side_effect=mute_lock_only):
+                output = pass_once(now + dt.timedelta(hours=4, minutes=45))
+            ids = [i["id"] for i in json.loads(board.read_text())["items"]
+                   if i["id"] == "factory-watchdog"]
+            exact(ids, [])
 
             # The board is read while the state lock is held, so the two
             # writers cannot read it stale and lose each other's item.
