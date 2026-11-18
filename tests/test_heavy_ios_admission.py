@@ -325,10 +325,18 @@ class GovernorRecoveryTests(unittest.TestCase):
         self.assertEqual(detail["target"], 2)
         self.assertEqual(state["heavy_slots"], 2)
 
-    def test_an_unreadable_sample_holds_the_capacity_it_has(self):
+    def test_an_unreadable_sample_never_raises_the_capacity(self):
         state, detail = self.decide(0, sample(16, 5, captured=600.0))
-        self.assertEqual(detail["target"], 2)
-        self.assertEqual(state["heavy_slots"], 2)
+        self.assertEqual(detail["target"], 0)
+        self.assertEqual(state["heavy_slots"], 0)
+
+    def test_the_sequence_from_zero_to_the_next_good_sample(self):
+        published = []
+        state, detail = self.decide(0, sample(16, 5, captured=600.0))
+        published.append(detail["target"])
+        state, detail = self.decide(detail["target"], sample(16, 5))
+        published.append(detail["target"])
+        self.assertEqual(published, [0, 2])
 
     def test_a_large_host_keeps_the_old_cap_on_an_unreadable_sample(self):
         state, detail = self.decide(4, sample(48, 30, captured=600.0))
@@ -772,3 +780,62 @@ class WrappedBuildCommandTests(unittest.TestCase):
                 )
         self.assertEqual(probed, [self.original])
         self.assertEqual(allowances, [100 * 1024])
+
+
+class BuildIdentityTests(unittest.TestCase):
+    """A wrapper that runs xcodebuild is the same build as xcodebuild."""
+
+    def test_a_wrapper_is_registered_under_the_executable_it_runs(self):
+        self.assertEqual(
+            heavy.effective_executable(["/usr/bin/env", "xcodebuild", "build"]),
+            "xcodebuild",
+        )
+        self.assertEqual(
+            heavy.effective_executable(["/usr/bin/env", "-i", "xcodebuild"]),
+            "xcodebuild",
+        )
+        self.assertEqual(
+            heavy.effective_executable(["/bin/echo", "xcodebuild"]),
+            "echo",
+        )
+
+    def test_a_wrapper_cannot_start_beside_a_direct_build(self):
+        registry = Mock()
+        registry.uid = 501
+        registry.directory = Path('/nonexistent-heavy-test')
+        registry.lock.side_effect = contextlib.nullcontext
+        active = [
+            {
+                'job_id': 'first', 'task_key': 'one', 'task_id': 'one',
+                'role': 'ordinary', 'command_basename': 'xcodebuild',
+                'state': 'running', 'created_ns': 1,
+                'supervisor': {'boot_id': 'boot'}, 'workload': {'pid': 100},
+            }
+        ]
+        registry.records.side_effect = lambda: list(active)
+        registry.remove_queue.side_effect = lambda qid: None
+        deps = heavy.SupervisorDeps(
+            monotonic_ns=lambda: 700_000_000_000, clock=lambda: 700,
+            wall_clock=lambda: 700, boot_reader=lambda: 'boot',
+            process_table_reader=lambda: {}, legacy_slots=lambda table: 0)
+        host = sample(16, 5)
+        with patch.object(heavy, '_legacy_draining', return_value=False), \
+                patch.object(heavy, '_prune_finished_locked'), \
+                patch.object(
+                    heavy,
+                    '_prune_queue_records_locked',
+                    return_value=[
+                        {
+                            'queue_id': 'two', 'task_key': 'two',
+                            'role': 'ordinary', 'created_ns': 1,
+                        }
+                    ],
+                ), \
+                patch.object(heavy, '_supervisor_identity', return_value={'pid': os.getpid()}), \
+                patch.object(heavy, '_identity_matches', return_value=True), \
+                patch.object(heavy, '_read_capacity_config', return_value={'heavy_slots': 2}), \
+                patch.object(heavy, 'simulator_memory_credit_bytes', return_value=2 * heavy.GIB):
+            job_id, reason = heavy._reserve_job(
+                registry, 'two', 'two', 'xcodebuild', host, deps, queue_id='two')
+        self.assertIsNone(job_id)
+        self.assertEqual(reason, 'xcodebuild-busy')

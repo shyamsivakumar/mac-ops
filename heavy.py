@@ -3341,7 +3341,7 @@ def _watchdog_main(job_id: str) -> int:
 def _project_build_args(
     argv: Sequence[str], cwd: str
 ) -> Tuple[List[str], Optional[str]]:
-    if not argv or not xcodebuild_executable(str(argv[0])):
+    if not argv or not xcodebuild_executable(effective_executable(argv) or ""):
         return list(argv), None
     project_path = None
     for index, arg in enumerate(argv):
@@ -3441,7 +3441,7 @@ def run_supervisor(
         task_id = task_id or inferred_id
     original = list(argv)
     command, project_key = _project_build_args(original, os.getcwd())
-    command_basename = os.path.basename(command[0])
+    command_basename = effective_executable(original) or os.path.basename(command[0])
     if xcodebuild_executable(command_basename) and role != "review":
         taskpolicy = "/usr/sbin/taskpolicy"
         if not os.path.isfile(taskpolicy) or not os.access(taskpolicy, os.X_OK):
