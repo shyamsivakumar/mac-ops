@@ -29,7 +29,7 @@ def close_check():
 class ScopeTest(unittest.TestCase):
     def test_the_ticket_names_its_files(self):
         check = close_check()
-        body = "The fix-check path in lane_driver.py skips herdr/* branches."
+        body = "In: the fix-check path in lane_driver.py skips herdr/* branches."
         tokens = check.scope_tokens(body)
         self.assertIn("lane_driver.py", tokens)
         self.assertIn("herdr/*", tokens)
@@ -109,7 +109,7 @@ class ScopeTest(unittest.TestCase):
         name that test for it to be in scope.
         """
         check = close_check()
-        ticket = ("The change is in close_check.py. Existing tests that pin it may change "
+        ticket = ("In: close_check.py. Existing tests that pin it may change "
                   "only as far as this needs.")
         item = check.item_scope(ticket, ["tests/test_alarm_panel.py"])
         self.assertEqual(item["status"], check.FAIL)
@@ -117,14 +117,14 @@ class ScopeTest(unittest.TestCase):
 
     def test_a_ticket_that_names_the_test_puts_it_in_scope(self):
         check = close_check()
-        item = check.item_scope("The change is in close_check.py and tests/test_alarm_panel.py.",
+        item = check.item_scope("In: close_check.py and tests/test_alarm_panel.py.",
                                 ["coordinator/bin/close_check.py", "tests/test_alarm_panel.py"])
         self.assertEqual(item["status"], check.PASS)
 
     def test_a_file_the_ticket_excludes_is_out_of_scope(self):
         """An exclusion is not permission."""
         check = close_check()
-        ticket = "Change `close_check.py`. Out of scope: `gate_policy.py`."
+        ticket = "In: `close_check.py`. Out of scope: `gate_policy.py`."
         item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
                                          "coordinator/bin/gate_policy.py"])
         self.assertEqual(item["status"], check.FAIL)
@@ -132,7 +132,7 @@ class ScopeTest(unittest.TestCase):
 
     def test_an_excluded_file_is_not_a_permission(self):
         check = close_check()
-        ticket = "Change `close_check.py`. Out of scope: `gate_policy.py`."
+        ticket = "In: `close_check.py`. Out of scope: `gate_policy.py`."
         self.assertEqual(check.scope_tokens(ticket), {"close_check.py"})
 
     def test_evidence_cannot_authorize_a_test_change(self):
@@ -220,7 +220,7 @@ class ScopeTest(unittest.TestCase):
         in scope.
         """
         check = close_check()
-        ticket = ("Only coordinator/config/AGENT-RULES.md. Add the missing decision: builders "
+        ticket = ("In: coordinator/config/AGENT-RULES.md. Add the missing decision: builders "
                   "and gates never file follow-up issues.")
         self.assertEqual(check.scope_tokens(ticket), {"coordinator/config/AGENT-RULES.md"})
 
@@ -241,7 +241,7 @@ class ScopeTest(unittest.TestCase):
         test of a file the change touches.
         """
         check = close_check()
-        ticket = ("The change is in close_check.py. Existing tests that pin it may change "
+        ticket = ("In: close_check.py. Existing tests that pin it may change "
                   "only as far as this needs.")
         item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
                                          "tests/test_alarm_panel.py"])
@@ -258,7 +258,7 @@ class ScopeTest(unittest.TestCase):
         change introduced it or not.
         """
         check = close_check()
-        ticket = ("The change is in close_check.py. Existing tests that pin it may change "
+        ticket = ("In: close_check.py. Existing tests that pin it may change "
                   "only as far as this needs.")
         item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
                                          "tests/test_alarm_panel.py"])
@@ -266,9 +266,31 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("tests/test_alarm_panel.py", item["detail"])
         self.assertNotIn("pass", item["status"])
 
+    def test_a_scope_heading_declares_the_scope(self):
+        """The gate's counterexample: the scope is declared by a heading.
+
+        A ticket that declares its scope under a heading is judged by
+        that section, so a file named in the context section is a
+        reference and not a permission.
+        """
+        check = close_check()
+        ticket = ("## Scope\nOnly src/parser.py.\n\n## Context\nsrc/legacy.py calls the parser.\n")
+        self.assertEqual(check.scope_tokens(ticket), {"src/parser.py"})
+        item = check.item_scope(ticket, ["src/parser.py", "src/legacy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("src/legacy.py", item["detail"])
+
+    def test_a_ticket_without_a_declaration_fails_closed(self):
+        """A ticket that declares no scope cannot be judged, so it fails."""
+        check = close_check()
+        item = check.item_scope("## Context\nsrc/legacy.py calls the parser.\n",
+                                ["src/legacy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("cannot be judged", item["detail"])
+
     def test_the_scope_item_fails_and_names_the_file(self):
         check = close_check()
-        item = check.item_scope("The change is in lane_driver.py.",
+        item = check.item_scope("In: lane_driver.py.",
                                 ["coordinator/overnight/lane_driver.py",
                                  "coordinator/mods/cockpit/ui.js"])
         self.assertEqual(item["status"], check.FAIL)
@@ -311,7 +333,7 @@ class ScopeTest(unittest.TestCase):
         declares is judged against the ticket and fails.
         """
         check = close_check()
-        ticket = "The change is in lane_driver.py."
+        ticket = "In: lane_driver.py."
         pull_request = "**Scope.** `coordinator/overnight/lane_driver.py`, `coordinator/unrelated.py`."
         items = check.checklist(ticket, pull_request,
                                 ["coordinator/overnight/lane_driver.py", "coordinator/unrelated.py"],
@@ -334,12 +356,12 @@ class ScopeTest(unittest.TestCase):
         check = close_check()
         proof = ("| Check | Command | Result |\n| --- | --- | --- |\n"
                  "| lane selection | `x` | passed |")
-        own = check.checklist("The change is in close_check.py.", "",
+        own = check.checklist("In: close_check.py.", "",
                               ["coordinator/bin/close_check.py",
                                "evidence/MO-1077/check-proof.md"], "found", proof,
                               "evidence/MO-1077/check-proof.md", "absent")
         self.assertEqual([item["item"] for item in check.blocking(own)], [])
-        other = check.checklist("The change is in close_check.py.", "",
+        other = check.checklist("In: close_check.py.", "",
                                 ["coordinator/bin/close_check.py",
                                  "evidence/MO-521/check-proof.md"], "found", proof,
                                 "evidence/MO-1077/check-proof.md", "absent")
@@ -620,7 +642,7 @@ class ReportLookupTest(unittest.TestCase):
 class ChecklistTest(unittest.TestCase):
     def test_the_checklist_reads_four_items_in_order(self):
         check = close_check()
-        items = check.checklist("The change is in close_check.py.", "Cost: 1 minute",
+        items = check.checklist("In: close_check.py.", "Cost: 1 minute",
                                 ["coordinator/bin/close_check.py"], "found",
                                 "| Check | Command | Result |\n| --- | --- | --- |\n"
                                 "| lane selection | `x` | passed |",
@@ -641,7 +663,7 @@ class ChecklistTest(unittest.TestCase):
 
     def test_a_cost_note_before_the_report_does_not_stop_the_close(self):
         check = close_check()
-        items = check.checklist("The change is in close_check.py.", "",
+        items = check.checklist("In: close_check.py.", "",
                                 ["coordinator/bin/close_check.py"], "found",
                                 "| Check | Command | Result |\n| --- | --- | --- |\n"
                                 "| lane selection | `x` | passed |",

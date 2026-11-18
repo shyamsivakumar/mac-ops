@@ -73,6 +73,9 @@ PROHIBITION = re.compile(r"(?i)\b(?:must not|do not|never|without)\s+"
 SENTENCE = re.compile(r";|\.\s")
 # A Markdown heading opens a section, and a section states its own intent.
 HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]*(.*)$")
+# A heading that declares the scope of the change: the section under it is
+# the ticket's declaration of what it changes.
+SCOPE_HEADING = re.compile(r"(?i)^[*_ ]*scope\b")
 # A heading that names only exclusions excludes what its section names.
 EXCLUSION_HEADING = re.compile(
     r"(?i)^[*_ ]*(out|out of scope|not in scope|excludes?|non-goals?|except(?: for)?)[*_ :]*$")
@@ -114,7 +117,12 @@ def scope_texts(body):
         heading = HEADING.match(line)
         if heading:
             named = (heading.group(1) or "").strip()
-            kind = "exclusion" if EXCLUSION_HEADING.match(named) else "plain"
+            if EXCLUSION_HEADING.match(named):
+                kind = "exclusion"
+            elif SCOPE_HEADING.match(named):
+                kind = "declared"
+            else:
+                kind = "plain"
         for sentence in SENTENCE.split(line):
             position = 0
             for match in SEGMENT.finditer(sentence):
@@ -123,13 +131,13 @@ def scope_texts(body):
                         else "declared")
                 position = match.end()
             kind = record(sentence[position:], kind)
-    # A ticket that declares its scope is judged by that declaration: the
-    # rest of the ticket is background, and a name in the background does
-    # not widen the scope of the change the ticket asked for. A ticket
-    # that declares no scope has no background to tell from, so everything
-    # it says is permission.
-    permission = declared if declared else plain
-    return "\n".join(permission), "\n".join(exclusion)
+    # A ticket is judged by its declaration: the words after an "in"
+    # marker, and the section under a heading that declares the scope.
+    # The rest of the ticket is background, and a name in the background
+    # does not widen the scope of the change the ticket asked for. A
+    # ticket that declares no scope declares none that can be judged, so
+    # the scope fails closed rather than fall back to the whole ticket.
+    return "\n".join(declared), "\n".join(exclusion)
 
 
 def scope_tokens(body):
