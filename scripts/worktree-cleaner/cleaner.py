@@ -1655,7 +1655,7 @@ def _trash_destination(path: Path) -> Path | None:
     return trash / f"worktree-cleaner-{path.name}-{int(time.time())}"
 
 
-def _remove_recovery_copy(path: Path, older_than: float) -> bool:
+def _remove_recovery_copy(path: Path, older_than: float, identity: tuple[int, int] | None = None) -> bool:
     """Give a recovery copy back, keeping every file and every name.
 
     The copy is decided as a whole before it is moved: it is kept when a file
@@ -1676,9 +1676,14 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
         return False
     try:
         # The identity is taken from the descriptor that was verified, while
-        # it is open, so the move can be bound to it.
+        # it is open, so the move can be bound to it. When the recovery
+        # recorded an identity, the directory has to be that one: a
+        # replacement that took the place is never moved.
         verified = os.fstat(descriptor)
-        identity = (verified.st_dev, verified.st_ino)
+        opened = (verified.st_dev, verified.st_ino)
+        if identity is not None and opened != identity:
+            return False
+        identity = opened
         if not _collect_recovery(descriptor, str(path), files, directories):
             return False
         for parent, name, entry in files:
@@ -1742,6 +1747,28 @@ def _recovery_manifest(state_root: Path) -> Path:
     return state_root / "recovery.json"
 
 
+def _read_recovery_manifest(state_root: Path) -> list[dict[str, Any]] | None:
+    """The recovery records, or None when the manifest cannot be read.
+
+    Only a manifest that is not there is empty. A manifest that cannot be
+    read or parsed is left alone: writing over it would lose every record
+    it holds, and the copies it names would never be swept again.
+    """
+    try:
+        text = _recovery_manifest(state_root).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return None
+    try:
+        entries = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(entries, list):
+        return None
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
 def _record_recovery(state_root: Path, path: Path) -> bool:
     """Remember a recovery directory and the time it was taken.
 
@@ -1749,14 +1776,16 @@ def _record_recovery(state_root: Path, path: Path) -> bool:
     written inside the recovered worktree.
     """
     manifest = _recovery_manifest(state_root)
+    entries = _read_recovery_manifest(state_root)
+    if entries is None:
+        return False
+    kept = [entry for entry in entries if entry.get("path") != str(path)]
     try:
-        entries = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        entries = []
-    if not isinstance(entries, list):
-        entries = []
-    kept = [entry for entry in entries if isinstance(entry, dict) and entry.get("path") != str(path)]
-    kept.append({"path": str(path), "recovered_at": time.time()})
+        info = os.stat(path)
+        identity = {"device": info.st_dev, "inode": info.st_ino}
+    except OSError:
+        identity = {}
+    kept.append({"path": str(path), "recovered_at": time.time(), **identity})
     try:
         atomic_write(manifest, json.dumps(kept, indent=1, sort_keys=True) + "\n")
     except OSError:
@@ -1772,16 +1801,11 @@ def _sweep_recovery(state_root: Path, older_than: float) -> None:
     never removed by a sweep.
     """
     manifest = _recovery_manifest(state_root)
-    try:
-        entries = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        entries = []
-    if not isinstance(entries, list):
-        entries = []
+    entries = _read_recovery_manifest(state_root)
+    if entries is None:
+        return
     keep: list[dict[str, Any]] = []
     for entry in entries:
-        if not isinstance(entry, dict):
-            continue
         path = Path(str(entry.get("path")))
         # The retention starts when the copy was recovered, so a copy whose
         # contents already had old timestamps keeps its day.
@@ -1797,7 +1821,11 @@ def _sweep_recovery(state_root: Path, older_than: float) -> None:
         if newest is None or newest > older_than:
             keep.append(entry)
             continue
-        if _remove_recovery_copy(path, older_than):
+        recorded = entry.get("device"), entry.get("inode")
+        identity = None
+        if isinstance(recorded[0], int) and isinstance(recorded[1], int):
+            identity = (recorded[0], recorded[1])
+        if _remove_recovery_copy(path, older_than, identity):
             continue
         keep.append(entry)
     try:
@@ -2427,13 +2455,13 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         "error": None if tree_gone and registration_gone else "the checkout or the registration is still there",
                         "kept_entries": kept,
                     })
+                    os.close(directory)
                     if not (tree_gone and registration_gone):
                         # The removal is reported as what it was.
                         append_removal(state_root, candidate, "removal_incomplete")
                         candidate["eligible"] = False
                         candidate["reasons"] = ["worktree_not_fully_removed"]
                         continue
-                    os.close(directory)
                 finally:
                     if lock.exists():
                         try:
