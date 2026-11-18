@@ -171,6 +171,18 @@ def with_model(args):
     return resolved, None
 
 
+def queued_launch_args(tool, args):
+    """A launch queued before taskType was required carries none, so the list that names its model classifies it.
+
+    A model no list names stays unclassified and is refused at dispatch."""
+    if tool != "t3_thread_launch" or "taskType" in args or not args.get("modelSelection"):
+        return args
+    for list_name, task_type in (("review", "review"), ("build", "worker"), ("fix", "fix")):
+        if model_list.find(args["modelSelection"], (list_name,)):
+            return {**args, "taskType": task_type}
+    return args
+
+
 def is_gate_model(selection):
     return model_list.find(selection, ("review",)) is not None
 
@@ -577,7 +589,7 @@ def drain():
             log(f"at cap {n + len(queue['reserved'])}/{cap()}, {len(ready)} waiting")
             return
         item = ready[0]
-        steps = item.get("pre", []) + [{"tool": item["tool"], "args": item["args"]}]
+        steps = item.get("pre", []) + [{"tool": item["tool"], "args": queued_launch_args(item["tool"], item["args"])}]
         rules = None
         if any(step["tool"] == "t3_thread_launch" and wants_rules(step["args"]) for step in steps):
             try:

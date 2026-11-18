@@ -257,10 +257,15 @@ def archive_model_lists(home: Path) -> list[Path]:
             atomic_write(target, copy, 0o644)
             moved.append(target)
     for path in old_list_files(home):
+        archive.mkdir(parents=True, exist_ok=True)
         target = archive / path.name
         if target.exists():
-            raise RuntimeError(f"{target} already exists, so {path} was not archived")
-        archive.mkdir(parents=True, exist_ok=True)
+            stem = f"{path.name}.{digest(path.read_bytes())[:16]}"
+            target = archive / stem
+            count = 1
+            while target.exists():
+                count += 1
+                target = archive / f"{stem}.{count}"
         path.rename(target)
         moved.append(target)
     if moved:
