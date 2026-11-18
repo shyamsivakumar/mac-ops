@@ -70,3 +70,25 @@ cases plus a verdict run that is never retried, a run that records no model,
 one move down per head, one log line per block, a run that answered before it
 failed (no block), and a dry run that blocks nothing. On the previous head
 the module fails 6 tests and errors on 8.
+
+## Round-one fixes on #536
+
+Two runtime defects in the gate fallback were fixed at 4c0b3e2, and the same
+replay module covers both.
+
+A head that a blocked Astra sent to Opus, and whose run died before recording
+a model, is now attributed to the reviewer it was launched on. The old run
+blocked Astra and could queue the same head on Opus again; the new run blocks
+Opus, and with nothing left below Opus the head is given up and nothing is
+queued. `coordq gatekeep` also writes the launch reviewer into `gatedHeads`
+when it queues a gate.
+
+A provider error is now a refusal only when it names the provider's own error
+code or an explicit HTTP status. `worker 14031 exited` holds the digits of
+403 and no longer blocks a reviewer.
+
+```
+$ python3 -m unittest tests.test_gate_reviewer_fallback
+Ran 24 tests in 2.988s
+OK
+```
