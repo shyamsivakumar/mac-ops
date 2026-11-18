@@ -1369,9 +1369,13 @@ def send_integrity():
              ("running", "waiting", "queued", "starting", "preparing", "completed", "interrupted", "failed")]
     cases += [(thread, True) for thread in
               (dict(status="running", providerInstanceId="router", model="task/standard"),)]
+    # The archived/sendable/canSend fixtures carry the same permitted GLM
+    # selection as the positive cases, so each one still tests its own
+    # lifecycle guard: the builder guard alone would send them.
     cases += [(thread, False) for thread in ({}, dict(status="deleted"),
-              dict(status="running", archived=True), dict(status="running", sendable=False),
-              dict(status="running", canSend=False),
+              dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", archived=True),
+              dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", sendable=False),
+              dict(status="running", providerInstanceId="glm", model="zai/glm-5.3", canSend=False),
               # A Sol builder thread is never continued, whatever its state:
               # the fix round relaunches on GLM instead (Shyam 2026-11-17).
               dict(status="running", providerInstanceId="codex", model="gpt-6.1-sol"),
