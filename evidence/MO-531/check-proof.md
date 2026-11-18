@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `1b83e1ad31e7acba8c48a446d0b445f5696cf00e`
+Checked commit: `c48c28ccda7f9c717037b118ded610259fa5bb3c`
 Working tree clean when the checks ran: yes
 
 | Check | Command | Result | Detail |
@@ -13,15 +13,13 @@ Working tree clean when the checks ran: yes
 | python syntax: coordinator/overnight/lane_driver.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/lane_driver.py` | passed |  |
 | python syntax: coordinator/overnight/selftest.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' coordinator/overnight/selftest.py` | passed |  |
 | python syntax: tests/test_builder_fallback.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_builder_fallback.py` | passed |  |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-8sfvxalp -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-8sfvxalp/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-hhz3_fds -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-hhz3_fds/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_builder_fallback | `python3 -m unittest tests.test_builder_fallback` | passed |  |
 
 A result is `passed`, `failed` or `not run`. A failed check stopped the run,
 so every check after it is `not run`.
 
-Device, handset and live-service testing: waived by Shyam on 2026-11-14; not run.
+Device, handset and live-service testing: not run; waived by Shyam on 2026-11-14.
 
-Reset boundary probe: passed using a local Python assertion against the event-time/reset-time example and an event-only timestamp.
-
-Diff review (deslop and no-comments): no added comments, dependencies, helpers or unrelated cleanup.
+In-session review: the dispatch failure supplies the existing request ID guard; fractional seconds preserve the following UTC offset. No new comments or cleanup findings in the two-line diff. Reset timestamp boundary probe: passed.
