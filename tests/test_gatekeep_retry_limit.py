@@ -424,6 +424,47 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertEqual(len(self.gate_items()), 1)
         self.assertFalse(coordq.model_list.is_blocked(self.gate_items()[0]["args"]["modelSelection"]))
 
+    def test_a_legacy_head_that_already_moved_is_given_up(self):
+        first, second = [coordq.model_list.identity(e["selection"])
+                         for e in coordq.model_list.entries("review")[:2]]
+        legacy = {self.key: {"id": 4, "retries": 1, "at": 0, "givenUp": False}}
+        payload = {"next": 5, "items": [], "gatedHeads": legacy,
+                   "gateReviewers": {self.key: [second]}}
+        with open(os.path.join(QUEUE_DIR, "queue.json"), "w") as f:
+            json.dump(payload, f)
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(
+            {"thread": {"status": "failed", "providerInstanceId": second.split(":")[0],
+                        "model": "x"}, "items": [], "recentRuns": []}))
+        out, _ = self.run_gatekeep()
+        self.assertIn("gave up " + self.key, out)
+        self.assertEqual(self.gate_items(), [])
+        self.assertTrue(self.read_queue()["gatedHeads"][self.key]["givenUp"])
+
+    def test_an_interrupted_write_does_not_leave_a_blocked_reviewer_queued(self):
+        chosen = coordq.fallback_reviewer
+        saved = coordq.save
+
+        def choose_then_block(queue, key, current, models=()):
+            selection = chosen(queue, key, current, models)
+            self.block(selection)
+            return selection
+
+        def save_then_interrupt(queue):
+            saved(queue)
+            if queue["items"]:
+                raise KeyboardInterrupt
+
+        coordq.fallback_reviewer = choose_then_block
+        coordq.save = save_then_interrupt
+        self.addCleanup(setattr, coordq, "fallback_reviewer", chosen)
+        self.addCleanup(setattr, coordq, "save", saved)
+        self.write_queue(heads=self.head())
+        try:
+            self.run_gatekeep()
+        except KeyboardInterrupt:
+            pass
+        self.assertEqual(self.gate_items(), [])
+
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
         self.run_gatekeep()
