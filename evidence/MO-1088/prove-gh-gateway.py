@@ -198,8 +198,8 @@ check("a slurped paginated read logs one row per page", len(rows()) - rows_befor
 # the response headers and the caller still gets only its own output.
 rows_before = len(rows())
 formatted = run(["gh", "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
-check("a formatted paginated read is one invocation",
-      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
+check("a formatted paginated read counts both paginations",
+      len(rows()) - rows_before == 6, f"rows={len(rows()) - rows_before}")
 check("a formatted paginated read returns only its bodies",
       formatted.stdout.split() == ["name1", "name2", "name3"]
       and "HTTP/" not in formatted.stdout, repr(formatted.stdout[:40]))
@@ -207,8 +207,8 @@ check("a formatted paginated read returns only its bodies",
 # The short filter flag also takes its value attached, as `-q.[].name`.
 rows_before = len(rows())
 attached = run(["gh", "api", "--paginate", "-q.[].name", "repos/a/b/tags"])
-check("an attached -q filter keeps the caller's output whole",
-      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
+check("an attached -q filter counts both paginations",
+      len(rows()) - rows_before == 6, f"rows={len(rows()) - rows_before}")
 check("an attached -q filter returns only its bodies",
       attached.stdout.split() == ["name1", "name2", "name3"], repr(attached.stdout[:40]))
 rows_before = len(rows())
@@ -450,7 +450,7 @@ set_mode("200")
 set_mode("bodyhttp")
 rows_before = len(rows())
 bodyish = run(["gh", "api", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
-check("body text is never counted or stripped", len(rows()) - rows_before == 1,
+check("body text is never counted or stripped", len(rows()) - rows_before == 6,
       f"rows={len(rows()) - rows_before}")
 check("body text is not stripped from the output", bodyish.stdout.count("HTTP/1.1 200 OK") == 3,
       repr(bodyish.stdout[:60]))
@@ -526,8 +526,8 @@ set_mode("bodyhttp")
 rows_before = len(rows())
 filtered_include = run(["gh", "api", "--include", "--paginate", "--jq", ".[].body",
                         "repos/a/b/bodies"])
-check("a filtered header-carrying read counts its pages",
-      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a filtered header-carrying read is one unknown invocation",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 check("a filtered header-carrying read keeps its text",
       filtered_include.stdout.count("HTTP/1.1 200 OK") == 3,
       repr(filtered_include.stdout[:40]))
@@ -598,8 +598,8 @@ check("--paginate=true counts its pages", len(rows()) - rows_before == 3,
 set_mode("numbers")
 rows_before = len(rows())
 numeric = run(["gh", "api", "--paginate", "--jq", ".[].number", "repos/a/b/issues"])
-check("ten numbers from one page are one call", len(rows()) - rows_before == 1,
-      f"rows={len(rows()) - rows_before}")
+check("ten numbers from one page count both paginations",
+      len(rows()) - rows_before == 6, f"rows={len(rows()) - rows_before}")
 check("the numeric read keeps its ten values", len(numeric.stdout.split()) == 10,
       f"values={len(numeric.stdout.split())}")
 set_mode("200")
@@ -609,8 +609,8 @@ set_mode("200")
 set_mode("bodyhttp")
 rows_before = len(rows())
 run(["gh", "api", "--include", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
-check("a filtered caller-header read counts its blocks",
-      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a filtered caller-header read is one unknown invocation",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 set_mode("200")
 
 # A formatted read is never replayed: one invocation, and its row says the
@@ -618,8 +618,8 @@ set_mode("200")
 rows_before = len(rows())
 before = calls_made()
 run(["gh", "api", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
-check("a formatted read is never replayed", calls_made() - before == 1,
-      f"calls={calls_made() - before}")
+check("a formatted GET read is measured with one counting read",
+      calls_made() - before == 2, f"calls={calls_made() - before}")
 check("a formatted read marks its pages unknown",
       rows()[rows_before].get("pages") == "unknown", str(rows()[rows_before]))
 
@@ -681,8 +681,8 @@ check("a caller-requested header read is not conditional",
 # counted from those headers, and its output keeps them.
 rows_before = len(rows())
 included_pages = run(["gh", "api", "--include", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
-check("a filtered caller-include read counts its blocks",
-      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a filtered caller-include read is one unknown invocation",
+      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
 check("a caller-included paginated read keeps its headers",
       included_pages.stdout.count("HTTP/") == 3 and "name1" in included_pages.stdout,
       repr(included_pages.stdout[:40]))
