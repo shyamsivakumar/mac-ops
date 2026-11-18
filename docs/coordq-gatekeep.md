@@ -63,5 +63,24 @@ Dry-run still reads GitHub and builder runs. API or malformed-data errors fail
 visibly. This command never merges; the reviewer brief permits merge only after
 CHECK and VERDICT pass for the exact head, using --match-head-commit.
 
+## The gate moves down the reviewer chain
+
+A gate run that ends without a `VERDICT:` line is retried once on the next
+reviewer of the same head: the next entry of the `review` list in
+`models.json` that is not blocked and that the head has not been tried on. A
+run that ends `VERDICT: PASS` or `VERDICT: FAIL` is a verdict and is never
+retried elsewhere. The head record names the reviewer the gate was launched
+on (`reviewer`), so a gate that died before it recorded one still moves down
+the chain instead of giving the head up.
+
+The choice of the reviewer and the queue item that carries it happen under
+`models.blocked_lock()`, the lock the provider block store holds while it
+writes `providers-blocked.json`. A block recorded while that lock is held
+cannot land between the choice and the append, so a blocked reviewer is never
+queued. The block lock is taken before the queue lock, everywhere. A reviewer
+that is blocked when the item is about to be written is not queued at all: the
+head waits (`waiting <repo>#<pr>: <reviewer> is blocked`) and tries again on
+the next run.
+
 A loaded LaunchAgent runs after login. Reboot survival requires a real reboot
 and has not been demonstrated by plist validation or local checks.

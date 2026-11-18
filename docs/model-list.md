@@ -23,7 +23,10 @@ A provider that fails with no credits, a usage limit or an auth error is
 recorded in `providers-blocked.json` in the queue folder. Every caller skips a
 blocked entry until the hourly probe of that provider answers. `models.py` only
 reads that file; the provider health store writes it. When every entry of a list
-is blocked, the caller waits and says so.
+is blocked, the caller waits and says so. A caller that reads the blocked set
+and then acts on it holds `models.blocked_lock()`, and the store's writer holds
+the same lock while it writes, so a block recorded in between cannot slip past
+the decision the caller already made.
 
 ## Callers
 

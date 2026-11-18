@@ -179,9 +179,12 @@ class NonAstraGateTest(RetryLimitBase):
         self.assertNotIn("regating", out)
         self.assertEqual(self.gate_items(), [])
         # The head record is a dict now: the dead Opus gate is not requeued
-        # and the head is recorded as given up.
+        # and the head is recorded as given up. The record names the
+        # reviewer the gate was launched on, so a gate that recorded none
+        # still moves down the chain.
         self.assertEqual(self.read_queue()["gatedHeads"][self.key],
-                         {"id": 4, "retries": 0, "at": None, "givenUp": True})
+                         {"id": 4, "retries": 0, "at": None, "givenUp": True,
+                          "reviewer": None})
 
 
 class BackoffTest(RetryLimitBase):
