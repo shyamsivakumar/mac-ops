@@ -690,9 +690,11 @@ def parse_options(argv):
                 ordered.append((short, True))
                 index += 1
                 continue
-            # The attached form: `-RHOST/OWNER/REPO`, `-Sfoo`.
-            options[short] = word[2:]
-            ordered.append((short, word[2:]))
+            # The attached form: `-RHOST/OWNER/REPO`, `-R=HOST/OWNER/REPO`,
+            # `-Sfoo`. The optional `=` is part of the syntax, not the value.
+            attached = word[2:].lstrip("=")
+            options[short] = attached
+            ordered.append((short, attached))
             index += 1
             continue
         if word.startswith("-"):

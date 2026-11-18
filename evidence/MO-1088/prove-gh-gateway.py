@@ -921,6 +921,7 @@ print("SELBEFORE2", gh_gateway.argv_host(
 print("COMMITVAL", gh_gateway.argv_host(
     ["gh", "run", "list", "-R", "actual.example/o/r", "--commit",
      "-Rother.example/o/r"]))
+print("REPOEQSHORT", gh_gateway.argv_host(["gh", "pr", "list", "-R=ent.example/o/r"]))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("a host in -R is the effective host",
       selector == ["R", "ent.example", "PLAIN", "''", "HOSTNAME", "h.example",
@@ -933,7 +934,8 @@ check("a host in -R is the effective host",
                   "SEARCHHOST", "actual.example", "RUNBRANCH", "actual.example",
                   "LASTREPO", "second.example", "LASTSHORT", "first.example",
                   "WORKFLOWALL", "ent.example", "SELBEFORE", "actual.example",
-                  "SELBEFORE2", "actual.example", "COMMITVAL", "actual.example"],
+                  "SELBEFORE2", "actual.example", "COMMITVAL", "actual.example",
+                  "REPOEQSHORT", "ent.example"],
       str(selector))
 
 # A malformed record makes the measurement incomplete, not quiet.
