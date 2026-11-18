@@ -99,8 +99,9 @@ export default class Coordinator extends View {
     this.editing = new Set(this.pop ? this.typing().keys() : []);
     // The cause each open reply is bound to: the one the panel showed
     // when the reply started, not the one it shows when the reply is
-    // sent.
-    this.replyCauses = new Map();
+    // sent. It is kept in the shared state, so a reply the popup
+    // restores keeps the cause it belongs to.
+    this.replyCauses = new Map(shared("co.replyCauses") ?? []);
     this.sent = "";
     this.box = { width: 800, height: 240 };
     this.contentH = 0;
@@ -314,6 +315,10 @@ export default class Coordinator extends View {
     setShared("co.typing", [...typing]);
   }
 
+  setReplyCauses(causes) {
+    setShared("co.replyCauses", [...causes]);
+  }
+
   keepTyping(q, text) {
     this.typingTimers.get(q)?.cancel();
     const typing = this.typing();
@@ -519,6 +524,7 @@ export default class Coordinator extends View {
     // alarm changes while he types, the answer is dropped instead of
     // being sent for the alarm that is there now.
     this.replyCauses.set(q, this.causeOf(q));
+    this.setReplyCauses(this.replyCauses);
     const draft = this.drafts().get(q);
     state.set_value(this.typing().get(q) ?? (draft?.kind === "reply" ? draft.text : ""));
     this.editing.add(q);
@@ -529,7 +535,19 @@ export default class Coordinator extends View {
   commit(q, cx) {
     const text = this.editor(q).value().trim();
     const drafts = this.drafts();
-    if (text) drafts.set(q, { kind: "reply", text, cause: this.replyCauses.get(q) ?? this.causeOf(q) });
+    const bound = this.replyCauses.get(q);
+    if (text && bound === undefined) {
+      // A restored reply whose cause is not known: the alarm it belongs
+      // to may not be the one on the board now, so it is dropped rather
+      // than sent for an alarm nobody answered.
+      notify({ title: "The reply was dropped", body: "The reply was restored without the alarm it belongs to. Write it again.", level: "warning" });
+      const typing = this.typing();
+      typing.delete(q);
+      this.setTyping(typing);
+      drafts.delete(q);
+    } else if (text) {
+      drafts.set(q, { kind: "reply", text, cause: bound });
+    }
     else if (drafts.get(q)?.kind === "reply") drafts.delete(q);
     this.setDrafts(drafts);
     this.keepTyping(q, "");
