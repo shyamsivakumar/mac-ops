@@ -353,20 +353,26 @@ export default class Coordinator extends View {
       // The answer carries the cause it was bound to when it was made,
       // not the cause the board shows now: an alarm that was replaced in
       // between is not acknowledged in the answer's place.
-      return [{ n: n + 1, id: a.id, q: a.text, shown: a.cause ?? "", cause: draft.cause ?? a.cause ?? "", kind: draft.kind, text: draft.text }];
+      // The cause is the one the answer was bound to when it was made,
+      // and never the one the board shows now: an answer that was not
+      // bound carries no cause, so it acknowledges nothing.
+      return [{ n: n + 1, id: a.id, q: a.text, shown: a.cause ?? "", cause: draft.cause ?? "", kind: draft.kind, text: draft.text }];
     });
   }
 
   // An answer belongs to the alarm it was given for. When the alarm is
   // replaced between the answer and the send, the answer is dropped and
   // Shyam is told: sending it would answer the alarm that is there now,
-  // and he never answered that one.
+  // and he never answered that one. An answer that was never bound to a
+  // cause is dropped too, for the same reason: it cannot be shown to
+  // belong to the alarm that is there now.
   dropStaleDrafts() {
     const drafts = this.drafts();
     const stale = [];
     for (const [id, draft] of drafts) {
       const shown = this.asks().find((a) => a.id === id)?.cause ?? "";
-      if (draft.cause && shown && draft.cause !== shown) stale.push(id);
+      if (!shown) continue;
+      if (!draft.cause || draft.cause !== shown) stale.push(id);
     }
     if (!stale.length) return;
     for (const id of stale) drafts.delete(id);
@@ -520,13 +526,32 @@ export default class Coordinator extends View {
 
   reply(q, cx) {
     const state = this.editor(q);
-    // The reply is bound to the cause the panel shows now. When the
-    // alarm changes while he types, the answer is dropped instead of
-    // being sent for the alarm that is there now.
-    this.replyCauses.set(q, this.causeOf(q));
-    this.setReplyCauses(this.replyCauses);
     const draft = this.drafts().get(q);
-    state.set_value(this.typing().get(q) ?? (draft?.kind === "reply" ? draft.text : ""));
+    const shown = this.causeOf(q);
+    const typed = this.typing().get(q);
+    const saved = this.replyCauses.get(q);
+    // The reply is bound to the cause it was started for. Text that was
+    // saved for another cause keeps that cause, so the answer is dropped
+    // instead of being sent for the alarm that is there now. Text saved
+    // without a cause is not restored at all: it cannot be bound to the
+    // alarm on the board now.
+    let text = typed ?? (draft?.kind === "reply" ? draft.text : "");
+    let bound = shown;
+    if (draft?.kind === "reply" && draft.cause) {
+      bound = draft.cause;
+    } else if (typed !== undefined) {
+      if (saved === undefined) {
+        text = "";
+        const typing = this.typing();
+        typing.delete(q);
+        this.setTyping(typing);
+      } else {
+        bound = saved;
+      }
+    }
+    this.replyCauses.set(q, bound);
+    this.setReplyCauses(this.replyCauses);
+    state.set_value(text);
     this.editing.add(q);
     cx.notify();
     cx.timer.after(60, () => state.focus());
