@@ -15,10 +15,10 @@ export function endsWithAsk(text) {
   return last.endsWith("?") || WAITING.test(last);
 }
 
-// The column a group of threads belongs to. Decisions and asked turns need Shyam; dead runs do not.
+// The column a group of threads belongs to. Decisions and asked turns need Shyam; dead runs and asks on a merged PR or an interrupted turn do not.
 function columnOf(group) {
   if (group.kind === "ask" || group.kind === "wait") return NEEDS;
-  if (group.threads.some((thread) => thread.ask)) return NEEDS;
+  if (group.info.status !== "merged" && group.threads.some((thread) => thread.ask && (thread.kind === "done" || thread.kind === "idle"))) return NEEDS;
   if (group.threads.some((thread) => thread.kind === "run")) return "run";
   if (group.kind === "fail" || group.kind === "stop") return DEAD;
   return "done";
