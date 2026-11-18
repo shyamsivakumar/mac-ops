@@ -11,55 +11,69 @@ import json
 import subprocess
 
 PROOF_NAME = "check-proof.md"
+DEFAULT_PROOF = f"evidence/{PROOF_NAME}"
+
+FOUND = "found"
+MISSING = "missing"
+UNREADABLE = "unreadable"
 
 
 def path_for(key, issue):
-    """The proof file path of one ticket, or None when there is no ticket.
+    """The proof file path of one ticket.
 
     The path carries the ticket key and number, so two pull requests that
-    are open at the same time never write the same file.
+    are open at the same time never write the same file. A pull request
+    with no ticket has no ticket path, so it uses the builder's default
+    path, the one the check writes when it is given no other.
     """
     if not key or issue is None:
-        return None
+        return DEFAULT_PROOF
     return f"evidence/{key}-{issue}/{PROOF_NAME}"
 
 
 def fetch(repo, path, head):
-    """Return the text of the proof file at head, or None when there is none.
+    """Read the proof file at head.
 
-    A pull request that carries no proof file is not an error: the brief
-    says so and the reviewer decides what a missing record means.
+    The state says what the read found: the file (`found`), no such file
+    (`missing`), or a read that failed (`unreadable`). A read that failed
+    is not a confirmed absence, so the two are never the same answer.
     """
     if not path:
-        return None
+        return MISSING, None
     try:
         run = subprocess.run(["gh", "api", f"repos/{repo}/contents/{path}?ref={head}"],
                               capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except subprocess.TimeoutExpired:
+        return UNREADABLE, "the read timed out"
+    except OSError as exc:
+        return UNREADABLE, str(exc)
     if run.returncode:
-        return None
+        if "404" in run.stderr or "Not Found" in run.stderr:
+            return MISSING, None
+        return UNREADABLE, run.stderr.strip().splitlines()[0] if run.stderr.strip() else "GitHub returned an error"
     try:
         blob = json.loads(run.stdout)
     except ValueError:
-        return None
+        return UNREADABLE, "GitHub returned no JSON"
     content = blob.get("content")
     if not content:
-        return None
+        return MISSING, None
     try:
-        return base64.b64decode(content).decode("utf-8", "replace")
+        return FOUND, base64.b64decode(content).decode("utf-8", "replace")
     except (ValueError, UnicodeDecodeError):
-        return None
+        return UNREADABLE, "GitHub returned a file this reader cannot decode"
 
 
-def section(text, path):
+def section(state, text, path):
     """The brief lines that carry the proof file to the reviewer."""
-    if not text:
-        where = f" at `{path}`" if path else ""
-        return (f"Proof file: this pull request carries none{where}. Say so in one line; "
-                "a missing proof file alone does not block.")
-    return (f"Proof file `{path}` at this head:\n\n```\n{text.strip()}\n```\n\n"
-            "Read it before the diff. Every check it lists must be `passed`; a `failed` or "
-            "`not run` check is a finding. It names the commit it checked: confirm that "
-            "commit is this head or an ancestor of it, and that the diff between them only "
-            "adds the proof file.")
+    if state == FOUND:
+        return (f"Proof file `{path}` at this head:\n\n```\n{(text or '').strip()}\n```\n\n"
+                "Read it before the diff. Every check it lists must be `passed`; a `failed` or "
+                "`not run` check is a finding. It names the commit it checked: confirm that "
+                "commit is this head or an ancestor of it, and that the diff between them only "
+                "adds the proof file.")
+    if state == UNREADABLE:
+        return (f"Proof file `{path}` could not be read ({text}). That is a failed read, not a "
+                "confirmed absence: say so in one line, and treat the checks as unproven.")
+    return (f"Proof file: this pull request carries none at `{path}`. Say so in one line; "
+            "a missing proof file alone does not block.")

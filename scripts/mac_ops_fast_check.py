@@ -26,8 +26,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SUFFIXLESS_PYTHON = (
     "coordinator/overnight/overnight",
     "coordinator/bin/coord-watch",
-    "coordinator/bin/coordq",
-    "coordinator/bin/ticket",
     "coordinator/pi/bin/coord-tick",
 )
 
@@ -225,21 +223,21 @@ def main():
         proof.check(f"shell syntax: {name}", shlex.join(command),
                     lambda command=command: run(command, timeout=120))
 
-    def tlc():
-        scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
-        model_dir = ROOT / "formal" / "heavy-queue"
-        for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
-            shutil.copyfile(model_dir / name, scratch / name)
-        java = os.environ.get("MAC_OPS_JAVA_BIN", "/opt/homebrew/opt/openjdk@17/bin/java" if Path("/opt/homebrew/opt/openjdk@17/bin/java").is_file() else "java")
-        jar = os.environ.get("MAC_OPS_TLA_JAR", str(Path.home() / "Code/llmwiki/runtime/tla/tla2tools.jar"))
-        command = [java, "-Xmx128m", f"-Djava.io.tmpdir={scratch}", "-cp", jar,
+    scratch = Path(tempfile.mkdtemp(prefix="heavy-queue-tlc-", dir=os.environ.get("TMPDIR")))
+    model_dir = ROOT / "formal" / "heavy-queue"
+    java = os.environ.get("MAC_OPS_JAVA_BIN", "/opt/homebrew/opt/openjdk@17/bin/java" if Path("/opt/homebrew/opt/openjdk@17/bin/java").is_file() else "java")
+    jar = os.environ.get("MAC_OPS_TLA_JAR", str(Path.home() / "Code/llmwiki/runtime/tla/tla2tools.jar"))
+    tlc_command = [java, "-Xmx128m", f"-Djava.io.tmpdir={scratch}", "-cp", jar,
                    "tlc2.TLC", "-workers", "1", "-noGenerateSpecTE",
                    "-metadir", str(scratch / "states"), "-config", "HeavyQueue.cfg",
                    "HeavyQueue.tla"]
-        run(command, cwd=scratch, timeout=120)
 
-    proof.check("TLC heavy queue model",
-                "java tlc2.TLC -workers 1 -config HeavyQueue.cfg HeavyQueue.tla", tlc)
+    def tlc():
+        for name in ("HeavyQueue.tla", "HeavyQueue.cfg"):
+            shutil.copyfile(model_dir / name, scratch / name)
+        run(tlc_command, cwd=scratch, timeout=120)
+
+    proof.check("TLC heavy queue model", shlex.join(tlc_command), tlc)
     heavy = ["python3", "heavy.py", "--help"]
     proof.check("heavy help", shlex.join(heavy), lambda: run(heavy, timeout=120))
     for name in tests:
