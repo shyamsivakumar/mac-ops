@@ -665,11 +665,16 @@ def prepare(argv):
     return list(argv), False
 
 
-def settle(argv, stdout, headers_counted):
-    """Return (body, count) for one read that has already run."""
+def settle(argv, stdout, headers_counted, failed=False):
+    """Return (body, count) for one read that has already run.
+
+    A paginated read that failed part way still made the request that
+    failed, so that request is counted too: the pages it printed are the
+    ones that succeeded."""
     stdout = stdout or ""
     if headers_counted:
-        return strip_headers(stdout), max(1, status_lines(stdout))
+        return (strip_headers(stdout),
+                max(1, status_lines(stdout)) + _failed_request(argv, failed))
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
@@ -678,10 +683,11 @@ def settle(argv, stdout, headers_counted):
             # The bodies are the caller's text, so neither a status line in
             # them nor a number on each line is a page. One invocation, one
             # row, page count unknown.
-            return stdout, 1
+            return stdout, 1 + _failed_request(argv, failed)
         if has_include:
             # Unfiltered pages are JSON, so a header block is a real one.
-            return stdout, max(1, status_lines(stdout))
+            return (stdout,
+                    max(1, status_lines(stdout)) + _failed_request(argv, failed))
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
     # A formatted read is measured as the one invocation it is, and the row
@@ -690,8 +696,13 @@ def settle(argv, stdout, headers_counted):
         # The formatted output is not a page list: one page of ten issues
         # with `--jq '.[].number'` prints ten numbers, and the JSON reader
         # would call those ten pages. One invocation, one row.
-        return stdout, 1
-    return stdout, requests(argv, stdout)
+        return stdout, 1 + _failed_request(argv, failed)
+    return stdout, requests(argv, stdout) + _failed_request(argv, failed)
+
+
+def _failed_request(argv, failed):
+    """One extra request when a paginated core read stopped on an error."""
+    return 1 if failed and paginated(argv) and resource(argv) == CORE else 0
 
 
 def pages_unknown(argv):
@@ -828,7 +839,8 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None)
     # A caller's launcher need not be a real CompletedProcess, so every part
     # is read with a default.
     stdout = getattr(result, "stdout", "") or ""
-    body, count = settle(argv, stdout, headers_counted)
+    body, count = settle(argv, stdout, headers_counted,
+                         failed=getattr(result, "returncode", 0) != 0)
     record(argv, count, caller_name)
     if result.returncode == 0:
         store(argv, body)

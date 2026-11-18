@@ -45,6 +45,12 @@ elif ("--include" in args or "-i" in args) and "--paginate" in args and mode != 
         print("x-ratelimit-resource: core")
         print()
         print(name)
+elif mode == "partial" and "--paginate" in args:
+    # Two pages, then the third request fails: three requests were made.
+    for page in (["1"], ["2"]):
+        print(json.dumps(page))
+    sys.stderr.write("gh: HTTP 502\\n")
+    sys.exit(1)
 elif mode == "numbers" and "--paginate" in args and any(
         arg in ("-q", "--jq", "-t", "--template") or arg.startswith(("-q", "-t"))
         for arg in args):
@@ -479,6 +485,14 @@ check("importing the lane driver does not rename the process",
 check("the lane's own calls are named lane_driver",
       [row["caller"] for row in rows_after[-2:]] == ["overnight", "lane_driver"],
       f"callers={[row['caller'] for row in rows_after[-2:]]}")
+
+# A read that fails part way still made the request that failed.
+set_mode("partial")
+rows_before = len(rows())
+run(["gh", "api", "--paginate", "repos/a/b/issues?state=open"])
+check("a failed pagination counts its failed request",
+      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+set_mode("200")
 
 # A filter value named `graphql` does not make a REST read GraphQL.
 rows_before = len(rows())
