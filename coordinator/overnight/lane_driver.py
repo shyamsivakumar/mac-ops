@@ -600,8 +600,12 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        if reroute in {"not the chosen builder", "builder blocked"} and thread.get("worktreePath") and not root_workspace(thread):
+        own_worktree = thread.get("worktreePath") and not root_workspace(thread)
+        if own_worktree and (reroute in {"not the chosen builder", "builder blocked"}
+                             or (pr is None and os.path.isdir(thread["worktreePath"]))):
             # The work stays in its own worktree; only the builder moves.
+            # A thread that cannot take a send and has no pull request to
+            # name a branch also starts again in the worktree it has.
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
             if pr is None:
@@ -963,6 +967,10 @@ def unstick(repo, ledger, excl=frozenset()):
             if out.endswith(BLOCKED_SKIP):
                 continue
             hold = out.endswith(HELD_SKIP)
+            if out.startswith("skip ") and not hold:
+                # Nothing was queued and no thread is live, so the ticket
+                # is not being worked and records no cooldown.
+                continue
             ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out, hold]
             if hold:
                 # The thread is live, so the ticket is being worked. It is
