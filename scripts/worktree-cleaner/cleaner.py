@@ -410,9 +410,30 @@ def _restore_entry(repo: Path, name: str, entry: tuple[str, str, bytes]) -> bool
     """Recreate a path from its committed bytes without replacing anything.
 
     The create is exclusive, so a file that appeared in the meantime is left
-    alone and the worktree is kept.
+    alone and the worktree is kept. A symlink is restored as a link, never as
+    a file that holds the link target, and the parent directories of the path
+    are created again when they are gone.
     """
-    return _exclusive_write(repo / name, entry[2], int(entry[0], 8) & 0o777)
+    relative = Path(name)
+    if relative.is_absolute() or ".." in relative.parts:
+        return False
+    if entry[0] == "120000":
+        target = entry[2].decode("utf-8", "surrogateescape")
+        try:
+            os.symlink(target, repo / relative)
+        except OSError:
+            return False
+        return True
+    parent = (repo / relative).parent
+    try:
+        parent.relative_to(repo)
+    except ValueError:
+        return False
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return _exclusive_write(repo / relative, entry[2], int(entry[0], 8) & 0o777)
 
 
 def _trash_path(trash: Path, prefix: str) -> Path:

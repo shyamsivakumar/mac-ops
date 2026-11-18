@@ -452,6 +452,48 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue(kept, "the moved file must be kept")
         self.assertTrue(any(item.read_bytes().endswith(self.block.encode("utf-8")) for item in kept), kept)
 
+    def test_a_deleted_bootstrap_file_with_a_missing_parent_is_restored(self):
+        # The whole directory is gone, so the parent of the file has to come
+        # back before the file can be written.
+        repo = Path(self.tmp.name) / "nested-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory" / "nested").mkdir(parents=True)
+        (repo / ".specstory" / "nested" / "a.md").write_text("history\n", encoding="utf-8")
+        git(repo, "add", ".specstory/nested/a.md")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "history"], check=True, capture_output=True)
+        (repo / ".specstory" / "nested" / "a.md").unlink()
+        (repo / ".specstory" / "nested").rmdir()
+        (repo / ".specstory").rmdir()
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        cleared = clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
+        self.assertEqual(sorted(cleared or []), [".specstory/nested/a.md"])
+        self.assertTrue((repo / ".specstory" / "nested" / "a.md").exists())
+        self.assertEqual(cleaner.status_for(repo), [])
+
+    def test_a_tracked_symlink_is_restored_as_a_link(self):
+        repo = Path(self.tmp.name) / "link-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        (repo / ".specstory").mkdir()
+        os.symlink("../elsewhere.md", repo / ".specstory" / "link.md")
+        git(repo, "add", ".specstory/link.md")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "link"], check=True, capture_output=True)
+        (repo / ".specstory" / "link.md").unlink()
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
+        cleared = clear_bootstrap(repo, records, self.trash, digests, cleaner.index_digest(repo))
+        self.assertEqual(sorted(cleared or []), [".specstory/link.md"])
+        link = repo / ".specstory" / "link.md"
+        self.assertTrue(link.is_symlink(), "the link must be restored as a link")
+        self.assertEqual(os.readlink(link), "../elsewhere.md")
+        self.assertEqual(cleaner.status_for(repo), [])
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)
