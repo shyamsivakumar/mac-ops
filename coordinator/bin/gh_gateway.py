@@ -345,15 +345,20 @@ def has_flag(argv, name, short=None):
 
     `--paginate` and `--paginate=true` are the same flag, and a caller may
     use either; `=false` is not set."""
+    def enabled(value):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+
     for word in [str(token) for token in (argv or [])[1:]]:
         if word == name:
             return True
-        if word.startswith(name + "="):
-            value = word.split("=", 1)[1].strip().lower()
-            if value in ("1", "true", "yes", "on"):
-                return True
-        if short and word == short:
+        if word.startswith(name + "=") and enabled(word.split("=", 1)[1]):
             return True
+        if short:
+            if word == short:
+                return True
+            # A short alias takes an explicit value too: `-i=true`, `-w=true`.
+            if word.startswith(short + "=") and enabled(word.split("=", 1)[1]):
+                return True
     return False
 
 
