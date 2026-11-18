@@ -440,7 +440,7 @@ class HeldContinue(unittest.TestCase):
         self.lane.DRY = False
         self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
 
-    def unstick(self, threads):
+    def unstick(self, threads, passes=1):
         """Replay the unstick path over the given tickets and their threads."""
         lane = self.lane
         issues = [{"number": number, "labels": []} for number in sorted(threads)]
@@ -471,12 +471,14 @@ class HeldContinue(unittest.TestCase):
             raise AssertionError(f"unexpected T3 call {tool}")
 
         ledger = {}
+        result = ""
         with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
              patch.object(lane, "SNAPSHOT", snapshot), \
              patch.object(lane, "run", run), patch.object(lane, "t3", t3), \
              patch.object(lane, "root_workspace", return_value=False), \
              patch("builtins.open", files), redirect_stdout(io.StringIO()):
-            result = lane.unstick(REPO, ledger)
+            for _ in range(passes):
+                result = lane.unstick(REPO, ledger)
         return result, queued, ledger
 
     def live_legacy(self, name):
@@ -509,6 +511,15 @@ class HeldContinue(unittest.TestCase):
         # worked.
         self.assertEqual(queued, [])
         self.assertEqual(result, "nothing ready")
+
+    def test_two_passes_do_not_unstick_a_held_ticket(self):
+        # The hold of the first pass has to survive the cooldown: the
+        # second pass must not put the ticket in the batch while its
+        # thread is still running.
+        result, queued, ledger = self.unstick({11: self.live_legacy("thread-11")}, passes=2)
+        self.assertEqual(queued, [])
+        self.assertEqual(result, "nothing ready")
+        self.assertIn("cont:thread-11", ledger)
 
 
 if __name__ == "__main__":
