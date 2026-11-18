@@ -644,6 +644,7 @@ revision 3 changes them.
 | `run/deadline` | The attended first night only | UNIX epoch the rehearsal ends at. The shift has no deadline (revision 3). |
 | `run/STOP` | Shyam (or `overnight.sh stop`) | Stop wins. The shift ends at the next cycle. |
 | `run/stall-state.json` | A cycle | How long every item the shift measured has been idle, and which items are parked as a stall. It holds no list of work: the board is the list. |
+| `run/mute-state.json` | A cycle | Which alarm keys are quiet and until when. It is the mute for the alarms the shift raises (Refs #496), and it lives here and not in the board file, because the coordinator rewrites the board file. The write merges, so a tick cannot take an acknowledgement that landed while it ran with it. |
 | `receipts/<item>.md` | A cycle (`overnight receipt`) | State, PR link, checks run and result, Opus gate verdict, files changed, time used, why it stopped. |
 | `inbox/parking-lot.md` | A cycle (`overnight park`) | Decisions the shift could not make. Each with a default and a recommendation. |
 | `inbox/snag-log.md` | A cycle (`overnight park`) | Problems found (flaky test, conflict, dialog) and what the shift did. |
@@ -1345,3 +1346,160 @@ is a limit, and the item stays a single item over repeated passes.
 `evidence/MO-1056/proof.py` runs three passes: the live launchd state with a
 stale log, a stopped job, and real launchctl output that reports a job
 killed by a signal, so the parser is exercised on the text launchd prints.
+
+### An acknowledged alarm stays quiet for four hours (Refs #496)
+
+The tick's alarms reached Shyam five times on one day for causes that were
+already known and being fixed. Marking one item Done on the decisions board
+does not stop the alarm: the next tick raises it again, the board holds the
+item again, and the phone relay sends it again. Shyam's decision (2026-11-17)
+is that an alarm that was acknowledged or routed stays quiet for four hours,
+unless its cause changes.
+
+The rule lives in one place (`coordinator/overnight/alarms.py`), beside the
+two places that raise these alarms: the watchdog (`factory-watchdog`, in
+`lane_driver.py`) and the stall rule (`factory-overnight-stall`, in
+`stall.py`). There is no second alerting path and no new alarm.
+
+| Thing | What it is |
+| --- | --- |
+| The key of an alarm | The alarm's id and its cause, as one string: `factory-watchdog\|gatekeep failing (last exit code 1)`. |
+| The cause | What is wrong, without the parts that change on every tick. The minutes of a quiet log and the minutes of a stuck run are not part of the cause; the exit code and the signal are. The stall's cause names the stalled repos. The idle tick count is not part of a cause: the same stall reported on the fourth tick is the same stall as the one reported on the third. |
+| The mute state | `run/mute-state.json`, in the shift's own folder, next to the stall state. It is not in the board file: the coordinator rewrites the board file, and a board file that is rewritten must not take the mute with it. |
+| The mute | Four hours (`MUTE_SECONDS`) from the acknowledgement. |
+
+One thing mutes a key: an explicit acknowledgement. It is a record with the
+time it was given and the time the mute ends, and it is written when the
+alarm was answered on the decisions board or when the coordinator recorded
+it as routed. The coordinator panel writes it when Shyam answers, through
+the `alarms ack <alarm-id> <cause>` command, and the command is there for
+the coordinator and for a person. `alarms status` prints the alarm keys and
+until when each one is quiet, and `alarms --help` prints the usage.
+
+The acknowledgement names the cause the panel showed, so only that cause is
+quiet: another cause of the same alarm was not answered and is not silenced.
+The command is the installed one (`~/.local/bin/alarms.py`, installed with
+the rest of the shift's commands), and it is a file with a shebang, so the
+panel runs it as a command.
+
+A state file that is not there is an empty state: the shift measures the
+alarms again from that tick on. A state file that cannot be read, or that
+holds damaged text, is not an empty state. Reading it as empty would let
+the next alarm overwrite it with its own key, and the acknowledgements it
+still holds would be lost, so the answered alarms would come back before
+their four hours are over. So the read failure is raised, and the alarm is
+published as unchecked without writing over the state that could not be
+read.
+
+The healthy branch cleans the board whether the mute state was written or
+not: a state that could not be read or locked must not leave a stale alarm
+on the board, so the board is cleaned under the board lock either way.
+
+The state is written with a merge: a tick reads the state, the panel records
+an acknowledgement and writes the file, and the tick writes its older
+snapshot. The newer acknowledgement of a key wins, so the tick cannot take
+it with it. The read, the merge and the replace happen under a lock file
+beside the state, so the two writers cannot land in each other, and each
+writer replaces the file from a temporary file of its own. A lock that cannot
+be taken is not a lock: the write fails rather than going on unlocked.
+
+The decision and the publication happen under that lock as well. A tick
+takes the lock, reads the state, decides, writes the state, reads the board,
+changes it and writes it back, all before it lets go: an answer that lands in
+between cannot be missed, and the alarm on the board is exactly what the
+decision said. The panel's answer waits for the lock, so it is either in the
+state the tick read, or it comes after the tick published and applies from
+the next tick. The board is read inside the lock too, so the watchdog and
+the stall writer cannot read it stale and lose each other's item.
+
+A quiet tick changes nothing, so it writes nothing: a write that fails on a
+quiet tick cannot turn a muted alarm into a published one. A board that
+cannot be written is said out loud, because the alarm is then nowhere.
+
+The board has its own lock, in a file beside the board, and it is held
+across the read, the change and the replace. It is not the mute lock: a
+mute storage that cannot be locked must not leave the board unprotected,
+or the watchdog and the stall writer read the same board and one alarm
+disappears. Each publisher also replaces the board from a temporary file
+of its own. A board lock that cannot be taken does not stop the
+publication: the write falls back to a compare-and-swap, which re-reads
+the board and replaces it only when nobody else wrote in between, and the
+board is read back so a write another publisher replaced is not counted as
+delivered. So an unacknowledged alarm is still delivered when the lock file
+cannot be opened, and two publishers still cannot erase one another's
+alarm. A publication that cannot be made safe after a few tries says so.
+
+An alarm on the board always has a key. The key is written before the alarm
+is published, so the answer Shyam gives it has something to acknowledge. A
+key that cannot be written is a fault the shift says out loud, and the
+alarm is published anyway: a storage failure must not hide a real failure
+from Shyam.
+
+The panel's answer is bound to the cause it showed when he chose it: the
+choice and the free-text reply alike take the cause when the answer
+starts, not when it is sent. An answer that was never bound to a cause is
+dropped rather than sent for the alarm that is there now, and so is an
+answer whose alarm was replaced in between. A reply the popup restores
+keeps the cause it belongs to, and text saved without a cause is not
+restored at all: it cannot be bound to the alarm on the board now.
+
+The rules that bind an answer live in `coordinator/mods/coordinator/answers.js`,
+a module with no imports, so the panel uses it and a probe can run it.
+`tests/test_alarm_panel.py` runs that module for real: a legacy draft
+reopened against a replaced alarm sends nothing and acknowledges nothing,
+a bound draft for another cause is dropped, and a bound draft for the alarm
+on the board is sent and acknowledged. When the alarm is replaced between the answer
+and the send, the answer is dropped and Shyam is told, because sending it
+would answer the alarm that is there now, and he never answered that one.
+
+The mute state lives under the root the run chose. A shift run and a
+fixture run with `--root` each write their own state under their own root,
+so a fixture never writes a synthetic alarm key into the live state and
+never reads a live acknowledgement.
+
+The command exits 0 when the acknowledgement was written, 1 when there is
+no raised key for that cause, 2 when the usage is wrong, and 3 when the
+state could not be locked or written. The panel warns on every exit but 0,
+because an acknowledgement that was not written means the alarm can raise
+again on the next tick, and an alarm on the board always has a key, so a
+missing key is a fault and not a quiet success.
+
+The record is the whole rule. A board item that went missing is not an
+acknowledgement: the board has more than one writer and one of them can lose
+the item for a tick, so an alarm that nobody answered is never silenced. It
+is raised again on the next tick.
+
+The shift asks again on every tick of a stall that continues. The rule
+stops asking once the alert was delivered, but the shift does not: the
+writer knows whether the alarm is due, it is quiet while the mute runs,
+and it comes back when the four hours are over and the board still has not
+moved.
+
+A muted alarm writes no board item and raises no alert for that key, and the
+shift logs one line per tick so the log says what it did not raise. A
+different cause is a different key and alarms at once: the tick job that
+fails with a new exit code, or the board that stalls on other repos, is a new
+alarm and is not silenced. An alarm that is not true any more drops its
+"raised" mark, so the same cause can alarm again the next time it is true,
+but an acknowledgement that is still running keeps the key quiet: one healthy
+tick does not take the mute with it. After the four hours are over the alarm
+comes back, if it is still true.
+
+The other board items are untouched: the merge alert (`factory-zero-merge`),
+the hourly fixture selftest (`overnight-selftest`) and every item a person
+put on the board keep their own rule and are never muted by this one.
+
+Run `python3 evidence/MO-496/proof.py` for the proof. It replays both
+alarms on a copy of the board file with a fixture clock. The stall is
+replayed on the real path: the proof loads the overnight runner and drives
+`stall_records`, so the shift's own decision to ask again on a stall that
+continues is part of the proof and not skipped. The first tick raises the
+alarm, the alarm's item goes missing and nobody answered, so the alarm is
+raised again, the answer records the acknowledgement, the next tick is
+quiet and logs one line, a changed cause alarms at once, the same cause
+alarms again after four hours, and the mute survives a tick where the job
+was healthy. The
+`alarm-mute` eval in `overnight selftest` covers the same ground with the
+fake clock, and the changed expectations in the `watchdog` eval are the
+alarm's new `cause` field and the mute state the pass writes beside the
+board.
