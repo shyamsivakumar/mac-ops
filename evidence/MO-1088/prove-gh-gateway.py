@@ -308,6 +308,22 @@ run(["gh", "api", "-H", f"Authorization: token {secret}", "repos/a/b/labels?per_
 logged = (scratch / "usage.jsonl").read_text()
 check("the usage log holds no credential", secret not in logged and "Authorization" not in logged)
 
+# The report reads the rotated log too, so a rotation during the measured
+# hour does not look like a quiet hour.
+report_log = scratch / "report.jsonl"
+now = time.time()
+(report_log.with_suffix(".jsonl.1")).write_text(json.dumps(
+    {"ts": now - 60, "caller": "rotated", "resource": "core", "verb": "list"}) + "\n")
+report_log.write_text(
+    json.dumps({"ts": now - 30, "caller": "active", "resource": "core", "verb": "list"}) + "\n" +
+    json.dumps({"ts": now - 20, "caller": "active", "resource": "core", "verb": "list"}) + "\n")
+report = subprocess.run(
+    [sys.executable, str(ROOT / "scripts" / "gh-usage-report.py"),
+     "--log", str(report_log), "--hours", "1"], capture_output=True, text=True, env=env)
+check("the report counts the rotated log too",
+      "rotated" in report.stdout and "core total" in report.stdout and " 3 " in report.stdout,
+      report.stdout.strip().splitlines()[-3:] if report.stdout else report.stderr.strip()[-80:])
+
 # A caller that asks for the headers gets them back untouched, in both
 # spellings, and is never handled conditionally.
 set_mode("200")
@@ -328,6 +344,14 @@ check("a caller-included paginated read logs one row per page",
 check("a caller-included paginated read keeps its headers",
       included_pages.stdout.count("HTTP/") == 3 and "name1" in included_pages.stdout,
       repr(included_pages.stdout[:40]))
+
+# The short filter flag also takes its value attached, as `-q'.[].name'`.
+rows_before = len(rows())
+attached_filter = run(["gh", "api", "--paginate", "-q.[].name", "repos/a/b/tags"])
+check("an attached -q filter logs one row per page", len(rows()) - rows_before == 3,
+      f"rows={len(rows()) - rows_before}")
+check("an attached -q filter returns only its bodies",
+      attached_filter.stdout.split() == ["name1", "name2", "name3"], repr(attached_filter.stdout[:40]))
 
 # The same holds with no output filter: the bodies are JSON, but the
 # response starts with a status line, so the headers carry the count.

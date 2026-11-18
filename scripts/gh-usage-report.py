@@ -10,7 +10,7 @@ prints the count per caller per hour, so the measurement in
     python3 scripts/gh-usage-report.py --hours 24 --log /path/to/gh-usage.jsonl
 
 A cached answer and a 304 are not GitHub calls, so they are not in the log
-and not in the count. Each row names the quota it spends: `core` for
+and not in the count. Each row names the caller, the verb and the quota: `core` for
 `gh api`, `search` for `gh search`, `graphql` for the commands GitHub
 answers over GraphQL. Only the `core` rows count against the 5000 an hour
 the ticket is about.
@@ -51,7 +51,12 @@ def main():
                         help="how far back to report, in hours")
     args = parser.parse_args()
     since = time.time() - args.hours * 3600
-    rows = [row for row in read(args.log) if row["ts"] >= since]
+    # The gateway rotates the log when it grows, so the hour being measured
+    # can span the active file and the one it was rotated into. Both are
+    # read, and both get the same cutoff; dropping the rotation would make
+    # a rotation during the hour look like a quiet hour.
+    sources = [args.log, args.log + ".1"]
+    rows = [row for source in sources for row in read(source) if row["ts"] >= since]
     if not rows:
         print(f"no GitHub calls recorded in the last {args.hours:g}h at {args.log}")
         return 0

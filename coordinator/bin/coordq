@@ -1699,8 +1699,9 @@ def cmd_fix(a):
             receipts = json.load(f)
     except (OSError, ValueError) as e:
         die(f"refused: the dispatch receipts could not be read: {e}")
-    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
-                         timeout=40, limit=FLOOR)
+    # An explicit request is not optional polling: the floor is not applied,
+    # so a below-floor quota still lets the operator's read through.
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}"], timeout=40)
     if run.returncode:
         die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
     pr = json.loads(run.stdout)
@@ -1848,8 +1849,9 @@ def cmd_gate(a):
     settings = (config.get("repos") or {}).get(repo)
     if not settings:
         die(f"refused: {repo} is not on the board")
-    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}"],
-                         timeout=40, limit=FLOOR)
+    # An explicit request is not optional polling: the floor is not applied,
+    # so a below-floor quota still lets the operator's read through.
+    run = gh_gateway.run(["gh", "api", f"repos/{repo}/pulls/{number}"], timeout=40)
     if run.returncode:
         die(f"refused: {repo}#{number} could not be read: {run.stderr.strip()[:200]}")
     pr = json.loads(run.stdout)
@@ -1867,8 +1869,7 @@ def cmd_gate(a):
         # kept, because the reviewer that could not run has not changed.
         if key in heads and not state["givenUp"]:
             die(f"refused: a gate for this head is already recorded as {gate_label(state)}")
-    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"],
-                               timeout=40, limit=FLOOR)
+    login_run = gh_gateway.run(["gh", "api", "user", "--jq", ".login"], timeout=40)
     if login_run.returncode:
         die("refused: the authenticated GitHub user is unknown")
     login = login_run.stdout.strip()
