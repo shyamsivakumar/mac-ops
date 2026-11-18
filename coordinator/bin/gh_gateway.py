@@ -509,7 +509,9 @@ def context(argv=None):
 
 def _key(argv):
     import hashlib
-    host, account, checkout, repo_override, token_id = context()
+    # The key follows the command's own host, so a `--hostname` read is
+    # keyed by that host's account and cannot answer another account's read.
+    host, account, checkout, repo_override, token_id = context(argv)
     parts = [host, account, checkout, repo_override, token_id] + [str(word) for word in argv]
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
