@@ -457,13 +457,52 @@ run(fresh_read)
 check("a fresh read refreshes the cache for the next reader", calls_made() - before == 0,
       f"calls={calls_made() - before}")
 
+# Importing the lane driver must not rename the process: overnight's later
+# calls stay overnight's, and the lane's own calls say lane_driver.
+code = f"""
+import sys
+sys.path.insert(0, {str(ROOT / 'coordinator' / 'overnight')!r})
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+import lane_driver
+before = gh_gateway.caller()
+gh_gateway.record(["gh", "api", "repos/a/b/issues?state=open"])
+gh_gateway.run(["gh", "api", "repos/a/b/branches?per_page=100"], timeout=20,
+               caller_name="lane_driver")
+print("CALLER", before)
+"""
+lane = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                     env={**env, "COORDINATOR_CALLER": "overnight"})
+rows_after = [json.loads(line) for line in (scratch / "usage.jsonl").read_text().splitlines()]
+check("importing the lane driver does not rename the process",
+      "CALLER overnight" in lane.stdout, lane.stdout.strip()[:60] or lane.stderr.strip()[-120:])
+check("the lane's own calls are named lane_driver",
+      [row["caller"] for row in rows_after[-2:]] == ["overnight", "lane_driver"],
+      f"callers={[row['caller'] for row in rows_after[-2:]]}")
+
+# `--hostname` takes a value, so the endpoint after it is still the
+# endpoint: graphql is graphql, search is search, a list is a list.
+routes = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+for argv in (["gh", "api", "--hostname", "github.com", "graphql"],
+             ["gh", "api", "--hostname", "github.com", "search/issues?q=x"],
+             ["gh", "api", "--hostname", "github.com", "repos/a/b/issues?state=open"]):
+    print(gh_gateway.endpoint(argv), gh_gateway.resource(argv), gh_gateway.cacheable(argv))
+"""], capture_output=True, text=True, env={**env, "COORDINATOR_GH_ACCOUNT": "proof"}).stdout.splitlines()
+check("--hostname does not hide the endpoint",
+      routes == ["graphql graphql False", "search/issues?q=x search True",
+                 "repos/a/b/issues?state=open core True"], str(routes))
+
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
 host_read = ["gh", "api", "--hostname", "enterprise.example",
              "repos/a/b/issues?state=open"]
+no_account = {"COORDINATOR_GH_ACCOUNT": ""}
 before = calls_made()
-run(host_read)
-run(host_read)
+run(host_read, extra_env=no_account)
+run(host_read, extra_env=no_account)
 check("an unknown --hostname host is not cached", calls_made() - before == 2,
       f"calls={calls_made() - before}")
 check("the --hostname host is in the key",

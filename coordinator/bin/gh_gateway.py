@@ -105,7 +105,7 @@ GRAPHQL_GROUPS = ("pr", "issue", "project", "label", "org")
 # method can be read without mistaking a value for the endpoint.
 VALUE_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "--raw-field", "--input", "-q", "--jq", "-t", "--template",
-               "--cache")
+               "--cache", "--hostname")
 BODY_FLAGS = ("-f", "-F", "--field", "--raw-field", "--input")
 # The flags that format the output. With one of these, a page is not a JSON
 # value any more, so the page count has to come from the response headers.
@@ -409,7 +409,7 @@ def _status(headers):
     return int(codes[-1]) if codes else None
 
 
-def _conditional_run(argv, timeout):
+def _conditional_run(argv, timeout, caller_name=None):
     """Run one api GET with If-None-Match; only a 304 answers from the file."""
     state = _read_etag(argv)
     extra = ["--include"]
@@ -424,7 +424,7 @@ def _conditional_run(argv, timeout):
         # core call once the entry expires.
         store(argv, state["stdout"])
         return subprocess.CompletedProcess(argv, 0, state["stdout"], "")
-    record(argv, 1)
+    record(argv, 1, caller_name)
     # A 2xx is not a success by itself: `gh` can fail locally after a good
     # response, as a `--jq` evaluation error does. Only a command that
     # exited zero may write either cache, or the next identical read would
@@ -679,7 +679,7 @@ def pages_unknown(argv):
                 and resource(argv) == CORE and filtered(argv))
 
 
-def record(argv, count=1):
+def record(argv, count=1, caller_name=None):
     """Write one usage-log line per GitHub core request the command made.
 
     A 304 is not a core call and is never passed here, so the log holds
@@ -691,7 +691,7 @@ def record(argv, count=1):
     # No argument is written: `gh api -H "Authorization: ..."` carries a
     # credential in one. The caller, the quota and the verb are enough for
     # the report and safe to keep.
-    row = {"ts": round(time.time(), 3), "caller": caller(),
+    row = {"ts": round(time.time(), 3), "caller": caller_name or caller(),
            "resource": resource(argv), "verb": verb(argv)}
     if pages_unknown(argv):
         row["pages"] = "unknown"
@@ -781,7 +781,7 @@ def below_floor(limit=None):
     return bool(remaining) and min(remaining.values()) < (floor() if limit is None else limit)
 
 
-def run(argv, timeout=60, stdin=None, limit=None, fresh=False):
+def run(argv, timeout=60, stdin=None, limit=None, fresh=False, caller_name=None):
     """Run one GitHub command, from the cache when it is a repeated read.
 
     The result is a `CompletedProcess`, so a caller keeps its own error
@@ -796,7 +796,7 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False):
         if hit is not None:
             return subprocess.CompletedProcess(argv, 0, hit, "")
     if stdin is None and conditional(argv):
-        return _conditional_run(argv, timeout)
+        return _conditional_run(argv, timeout, caller_name)
     command, headers_counted = prepare(argv) if stdin is None else (list(argv), False)
     result = _launch()(command, input=stdin, capture_output=True, text=True,
                        timeout=timeout)
@@ -804,7 +804,7 @@ def run(argv, timeout=60, stdin=None, limit=None, fresh=False):
     # is read with a default.
     stdout = getattr(result, "stdout", "") or ""
     body, count = settle(argv, stdout, headers_counted)
-    record(argv, count)
+    record(argv, count, caller_name)
     if result.returncode == 0:
         store(argv, body)
     return subprocess.CompletedProcess(argv, result.returncode, body,
