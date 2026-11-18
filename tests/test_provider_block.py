@@ -10,7 +10,10 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timezone
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
+from unittest.mock import patch
 
 BIN = Path(__file__).resolve().parents[1] / "coordinator" / "bin"
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,16 @@ if str(ROOT) not in sys.path:
 import install_coordinator
 import models
 import provider_block
+
+
+def load_coordq():
+    """The queue script, loaded the way the other tests load it."""
+    path = Path(__file__).resolve().parents[1] / "coordinator" / "bin" / "coordq"
+    loader = SourceFileLoader("coordq_provider_block", str(path))
+    spec = spec_from_loader(loader.name, loader)
+    module = module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def moment(text):
@@ -179,6 +192,70 @@ class ProviderBlockTests(unittest.TestCase):
         generated = install_coordinator.SHARED_BLOCKS
         self.assertIn("until", generated)
         self.assertIn("Date.now()", generated)
+
+    def test_the_failure_handler_records_the_block_of_a_failed_run(self):
+        """A run that failed with a provider error is a block, and the block
+        starts when the run failed."""
+        value = {"thread": {"threadId": "t1", "status": "failed", "latestRunId": "r1",
+                            "providerInstanceId": "glm", "model": "zai/glm-5.3",
+                            "completedAt": "2026-11-18T10:35:00+00:00"},
+                 "recentRuns": [{"runId": "r1", "status": "failed",
+                                 "startedAt": "2026-11-18T10:00:00+00:00",
+                                 "completedAt": "2026-11-18T10:35:00+00:00",
+                                 "error": {"code": "429",
+                                           "message": "429 rate limit; resets in 30 minutes"}}]}
+        record = provider_block.block_run(SELECTION, value, now=moment("2026-11-18T10:35:00"))
+        self.assertEqual(record["since"], "2026-11-18T10:35:00+00:00")
+        self.assertEqual(record["until"], "2026-11-18T11:05:00+00:00")
+        self.assertTrue(provider_block.is_blocked(SELECTION, moment("2026-11-18T10:40:00")))
+
+    def test_a_failure_that_is_not_the_provider_writing_nothing(self):
+        value = {"thread": {"status": "failed", "latestRunId": "r1"},
+                 "recentRuns": [{"runId": "r1", "status": "failed",
+                                 "completedAt": "2026-11-18T10:35:00+00:00",
+                                 "error": {"message": "worker 14031 exited"}}]}
+        self.assertIsNone(provider_block.block_run(SELECTION, value))
+
+    def test_an_older_failure_does_not_shorten_a_newer_block(self):
+        """A failure read late may not free a provider a newer failure
+        blocked for longer."""
+        newer = moment("2026-11-18T12:00:00")
+        provider_block.record_block(SELECTION, "429; resets at 14:00 UTC", newer, now=newer)
+        older = moment("2026-11-18T10:35:00")
+        record = provider_block.record_block(SELECTION, "resets in 30 minutes", older,
+                                             now=moment("2026-11-18T11:00:00"))
+        self.assertEqual(record["until"], "2026-11-18T14:00:00+00:00")
+        self.assertTrue(provider_block.is_blocked(SELECTION, moment("2026-11-18T13:59:59")))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T14:00:01")))
+
+    def test_a_reset_of_zero_frees_the_provider_at_once(self):
+        """'retry after 0s' names a reset, and a reset of zero is now."""
+        failed = moment("2026-11-18T10:35:00")
+        self.assertEqual(provider_block.reset_at("rate limited, retry after 0s", failed), failed)
+        record = provider_block.record_block(SELECTION, "rate limited, retry after 0s",
+                                              failed, now=failed)
+        self.assertIsNone(record)
+        self.assertEqual(provider_block.blocked_identities(), set())
+
+    def test_the_queue_writes_the_block_when_a_launch_fails(self):
+        """The production path: a launch that fails with a provider error
+        blocks that provider, so the next launch does not use it."""
+        coordq = load_coordq()
+        coordq.DIR = self.scratch.name
+        coordq.live = lambda: 0
+        coordq.cap = lambda: 6
+        coordq.save({"next": 2, "items": [
+            {"id": 1, "tool": "t3_thread_launch", "priority": 0, "title": "queued",
+             "args": {"clientRequestId": "c1", "title": "queued", "projectId": "p",
+                      "modelSelection": dict(SELECTION)}}]})
+        with patch.object(coordq, "active_thread_ids", return_value=set()), \
+                patch.object(coordq, "call",
+                             return_value=(1, "429 rate limit; resets in 30 minutes")):
+            coordq.drain()
+        self.assertTrue(provider_block.is_blocked(SELECTION))
+        record = provider_block.read()[IDENTITY]
+        self.assertEqual(record["reason"], "429 rate limit; resets in 30 minutes")
+        self.assertTrue(record["until"].endswith("+00:00"))
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ MESSAGE_TTL = float(os.environ.get("COORDQ_MESSAGE_TTL", "1800"))
 # whatever its reply said, so the slot it holds goes back to the queue.
 RESERVATION_TIMEOUT = float(os.environ.get("COORDQ_RESERVATION_TIMEOUT", "180"))
 import models as model_list
+import provider_block
 
 BUILD_TASK_TYPES = ("standard", "large", "ui", "research", "rca", "chore", "worker", "risky", "design")
 TASK_TYPES = BUILD_TASK_TYPES + ("fix", "review", "panel")
@@ -709,6 +710,11 @@ def drain():
                 set_action_key_state(queue, item["actionKey"], "queued")
             item["attempts"] = item.get("attempts", 0) + 1
             item["last_error"] = out[:200]
+            selection = (item.get("args") or {}).get("modelSelection")
+            if selection:
+                blocked = provider_block.block_run(selection, out)
+                if blocked:
+                    log(f"blocked provider {provider_block.identity(selection)} until {blocked['until']}")
             if request_id and request_id.startswith("gate:"):
                 key = ":".join(request_id.split(":")[:3])
                 model = failed_gate_reviewer(queue, key, item["args"]["modelSelection"], out)
@@ -1667,6 +1673,11 @@ def cmd_gatekeep(a):
                         continue
                     current = {"instanceId": thread.get("providerInstanceId"),
                                "model": thread.get("model")}
+                    if not a.dry_run:
+                        blocked = provider_block.block_run(current, data)
+                        if blocked:
+                            log(f"blocked provider {provider_block.identity(current)}"
+                                f" until {blocked['until']}")
                     model = failed_gate_reviewer(queue, key, current, data, event.get("builderModels", []))
                     if model is None:
                         if not a.dry_run:
