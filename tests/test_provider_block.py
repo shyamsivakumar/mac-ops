@@ -100,6 +100,16 @@ class ProviderBlockTests(unittest.TestCase):
                                               failed, now=failed)
         self.assertEqual(record["until"], "2026-11-18T11:00:00+00:00")
 
+    def test_a_compound_reset_holds_the_provider_until_the_whole_duration(self):
+        """A failure at 10:00 with 'resets in 1 hour 30 minutes' is eligible
+        at 11:30, not at 11:00."""
+        failed = moment("2026-11-18T10:00:00")
+        provider_block.record_block(SELECTION, "429; resets in 1 hour 30 minutes",
+                                    failed, now=failed)
+        self.assertTrue(provider_block.is_blocked(SELECTION, moment("2026-11-18T11:00:00")))
+        self.assertTrue(provider_block.is_blocked(SELECTION, moment("2026-11-18T11:29:59")))
+        self.assertFalse(provider_block.is_blocked(SELECTION, moment("2026-11-18T11:30:01")))
+
     def test_a_compound_relative_reset_is_read_whole(self):
         failed = moment("2026-11-18T10:00:00")
         for message in ("429; resets in 1 hour 30 minutes", "429; retry after 1h 30m",
