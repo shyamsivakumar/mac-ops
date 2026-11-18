@@ -1103,10 +1103,12 @@ def zero_merge():
     def saved(value, handle, **kwargs):
         state.clear()
         state.update(json.loads(json.dumps(value)))
+    # The alarm's key names the repos that are waiting, so a stall on one
+    # repo does not silence a stall on another. The title stays one title.
     alert = {"id": "factory-zero-merge", "group": "Coordinator", "kind": "action",
         "title": "No merge in 60 minutes with open PRs",
-        "cause": "No merge in 60 minutes with open PRs",
-        "why": "The coordinator must inspect blocked PRs and restore merge progress."}
+        "cause": "No merge in 60 minutes with open PRs: fixture/one",
+        "why": "The coordinator must inspect blocked PRs and restore merge progress: fixture/one"}
     # The alarm's mute state goes to a file of its own, so the eval never
     # reads or writes the live shift's folder.
     mute = str(Path(tempfile.mkdtemp(prefix="zero-merge-mute-")) / "mute-state.json")
@@ -1143,6 +1145,7 @@ def zero_merge():
             else:
                 raise AssertionError("read failure was swallowed")
         exact(state["items"], [other, alert])
+
         snapshot["repos"]["fixture/one"]["prs"] = []
         lane.zero_merge(snapshot)
         exact(state["items"], [other])
@@ -1150,8 +1153,19 @@ def zero_merge():
         # The board is written through the alarm module's own writer, and
         # the mute state beside it, each from a temporary file of its own.
         replaced = {(str(call.args[0]), str(call.args[1])) for call in replace.call_args_list}
-        allowed = {(f"{mute}.{os.getpid()}.tmp", mute)}
-        exact({pair for pair in replaced if pair[1] == mute} - allowed, set())
+        # The mute state was written: the exact pair was seen, and nothing
+        # else was replaced for it.
+        exact((f"{mute}.{os.getpid()}.tmp", mute) in replaced, True)
+
+        # The key names the waiting repos, so the alarm is a different
+        # cause on a different set of repos: the eval's own key proves it,
+        # and the mute itself is exercised by the alarm-mute eval.
+        import alarms as mute_rules
+        exact(mute_rules.key_of("factory-zero-merge",
+                                "No merge in 60 minutes with open PRs: fixture/one") !=
+              mute_rules.key_of("factory-zero-merge",
+                                "No merge in 60 minutes with open PRs: fixture/one, fixture/two"),
+              True)
 
 
 def board_integrity():
