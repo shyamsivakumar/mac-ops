@@ -57,6 +57,26 @@ retry count and is recorded as undecided again, so a second explicit gate for
 the same head is refused while that one is live, and if it dies without a
 verdict the head is given up again in one line rather than reopening the
 automatic retries.
+
+A retry moves the head to the next reviewer in `REVIEWER_CHAIN` that it has
+not tried and that is not blocked, and never back to one it came from. A run
+that records no reviewer at all, because it died before a model ran, counts as
+a run on the first reviewer. A run that ended `VERDICT: PASS` or
+`VERDICT: FAIL` is a verdict and is never retried elsewhere. When nothing is
+left to move to, the head is given up as above and waits.
+
+A gate run that fails with a blocking provider error -- no credits, a usage or
+spend limit, a rate limit (429), or an auth failure (401/403) -- blocks that
+reviewer for every head in `queue/reviewers-blocked.json`, for one hour or
+until the reset time the error names, and writes one line
+`reviewer <provider>:<model> blocked until <time>` to `queue/dispatch.log`. A
+new gate then starts on the next unblocked reviewer, the reviewer a head moves
+to skips a blocked one, and a head with nothing left to move to waits. An
+expired block is released at the start of a `coordq gatekeep` run, which writes
+`reviewer <provider>:<model> unblocked` once. When every reviewer is blocked,
+the head waits instead of running on a reviewer the queue recorded as unable:
+the run prints `defer <repo>#<pr>: every gate reviewer is blocked` and queues
+nothing. A dry run neither blocks nor unblocks a reviewer.
 Dry-run still reads GitHub and builder runs. API or malformed-data errors fail
 visibly. This command never merges; the reviewer brief permits merge only after
 CHECK and VERDICT pass for the exact head, using --match-head-commit.

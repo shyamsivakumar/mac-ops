@@ -27,7 +27,8 @@ LAUNCH_RECORD = "launch:"
 WORKER_MODEL = {"instanceId": "minimax", "model": "minimax/MiniMax-M3.1-Flash"}
 SOL_MODEL = {"instanceId": "codex", "model": "gpt-6.1-sol"}
 DEEPSEEK_MODEL = {"instanceId": "pi", "model": "deepseek/deepseek-flash"}
-from gate_reviewers import REVIEWER_CHAIN
+from gate_reviewers import (REVIEWER_CHAIN, block_reviewer, identity, is_blocked,
+                            release_expired, starting_reviewer)
 
 ASTRA_MODEL = REVIEWER_CHAIN[0]
 OPUS_MODEL = REVIEWER_CHAIN[-1]
@@ -1093,7 +1094,18 @@ def builder_models(thread, runs):
 
 
 def reviewer_model(models):
-    return ASTRA_MODEL
+    """The reviewer a new gate starts on: the first chain member not blocked."""
+    return starting_reviewer() or ASTRA_MODEL
+
+
+def ran_reviewer(thread):
+    """The reviewer a gate thread ran on.
+
+    A gate that died before a model ran records none, and the chain head is
+    the reviewer it was queued on."""
+    current = {"instanceId": thread.get("providerInstanceId"),
+               "model": thread.get("model")}
+    return current if current in REVIEWER_CHAIN else ASTRA_MODEL
 
 
 def quota_failure(value):
@@ -1126,18 +1138,28 @@ def quota_failure(value):
 
 
 def fallback_reviewer(queue, key, current, models=()):
+    """The next reviewer for a head that already ran on this one, past a blocked one."""
     if current not in REVIEWER_CHAIN:
         return None
     tried = queue.setdefault("gateReviewers", {}).setdefault(key, [])
     for selection in REVIEWER_CHAIN[REVIEWER_CHAIN.index(current) + 1:]:
-        identity = f"{selection['instanceId']}:{selection['model']}"
-        if identity not in tried:
-            tried.append(identity)
-            return selection
+        name = identity(selection)
+        if name in tried or is_blocked(selection):
+            continue
+        tried.append(name)
+        return selection
     return None
 
 
-def failed_gate_reviewer(queue, key, current, failure):
+def failed_gate_reviewer(queue, key, current, failure, dry_run=False):
+    """The next reviewer of a gate that ended without a verdict.
+
+    A blocking provider error blocks this reviewer for every head first; a
+    diagnostic blocks nothing."""
+    until = block_reviewer(current, failure) if not dry_run else None
+    if until is not None:
+        log(f"reviewer {identity(current)} blocked until "
+            + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(until)))
     selection = fallback_reviewer(queue, key, current)
     if selection is not None:
         return selection
@@ -1273,6 +1295,12 @@ def cmd_gatekeep(a):
         seen = set()
         stuck = []
         attempted = set()
+        if not a.dry_run:
+            # A block that has run out is released here, so the line that
+            # names the freed reviewer is written once per block.
+            with Lock(True):
+                for name in release_expired():
+                    log(f"reviewer {name} unblocked")
         for event in gate_candidates(config):
             if event["kind"] == "skip":
                 pr = event["pr"]
@@ -1324,9 +1352,8 @@ def cmd_gatekeep(a):
                         continue
                     if state["retries"] and time.time() - float(state["at"] or 0) < GATE_RETRY_BACKOFF:
                         continue
-                    current = {"instanceId": thread.get("providerInstanceId"),
-                               "model": thread.get("model")}
-                    model = failed_gate_reviewer(queue, key, current, data)
+                    current = ran_reviewer(thread)
+                    model = failed_gate_reviewer(queue, key, current, data, a.dry_run)
                     if model is None:
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
@@ -1344,6 +1371,11 @@ def cmd_gatekeep(a):
                             json.dump(receipts, f)
                         os.replace(receipt_path + ".tmp", receipt_path)
                 attempted.add(key)
+                if starting_reviewer() is None:
+                    # Every reviewer is blocked, so the gate waits instead of
+                    # running on one the queue just recorded as unable.
+                    print(f"defer {event['pr']}: every gate reviewer is blocked", flush=True)
+                    continue
                 print(("would queue " if a.dry_run else "queued ") + key
                       + " reviewer " + args["modelSelection"]["instanceId"] + " " + args["modelSelection"]["model"],
                       flush=True)
@@ -1481,7 +1513,7 @@ def cmd_fix(a):
 
 
 def backstop_model(thread, runs):
-    return ASTRA_MODEL
+    return starting_reviewer() or ASTRA_MODEL
 
 
 def check_names_head(body, head, publisher, checks):

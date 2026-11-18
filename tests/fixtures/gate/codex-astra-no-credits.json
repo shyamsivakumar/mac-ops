@@ -1,0 +1,30 @@
+{
+ "thread": {
+  "threadId": "gate-rec-2026-11-17",
+  "status": "failed",
+  "providerInstanceId": "codex",
+  "model": "gpt-6.2-astra",
+  "latestRunId": "run-rec-1",
+  "error": {
+   "code": "usage_limit",
+   "message": "You have no credits left on this plan; it resets in 30 minutes."
+  }
+ },
+ "items": [
+  {
+   "type": "user_message",
+   "text": "MO-532 review and merge · #532 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+ ],
+ "recentRuns": [
+  {
+   "runId": "run-rec-1",
+   "status": "failed",
+   "executedModel": "gpt-6.2-astra",
+   "error": {
+    "code": "usage_limit",
+    "message": "You have no credits left on this plan; it resets in 30 minutes."
+   }
+  }
+ ]
+}
