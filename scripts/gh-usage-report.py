@@ -82,18 +82,21 @@ def main():
         for row in rows)
     per_caller = collections.Counter(
         (row.get("caller") or "unknown", row.get("resource") or "core") for row in rows)
-    print(f"{'hour':20} {'caller':16} {'quota':8} calls")
+    unknown = sum(1 for row in rows if row.get("pages") == "unknown")
+    calls_header = "calls (>=)" if unknown else "calls"
+    print(f"{'hour':20} {'caller':16} {'quota':8} {calls_header}")
     for (stamp, caller, quota), count in sorted(per_hour.items()):
         print(f"{stamp:20} {caller:16} {quota:8} {count}")
     print()
-    print(f"{'caller':16} {'quota':8} {'calls':>6} {'per hour':>9}")
+    print(f"{'caller':16} {'quota':8} {calls_header:>9} {'per hour':>9}")
     for (caller, quota), count in sorted(per_caller.items()):
         print(f"{caller:16} {quota:8} {count:6} {count / args.hours:9.0f}")
     core = sum(count for (_caller, quota), count in per_caller.items() if quota == "core")
     unknown = sum(1 for row in rows if row.get("pages") == "unknown")
     label = "core total (lower bound)" if unknown else "core total"
     print(f"{label:16} {'core':8} {core:6} {core / args.hours:9.0f}")
-    print(f"{'all requests':16} {'':8} {len(rows):6} {len(rows) / args.hours:9.0f}")
+    all_label = "all requests (lower bound)" if unknown else "all requests"
+    print(f"{all_label:16} {'':8} {len(rows):6} {len(rows) / args.hours:9.0f}")
     if unknown:
         # A formatted paginated read is one measured invocation whose page
         # count cannot be seen. It is named here so a low core total is

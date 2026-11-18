@@ -480,6 +480,13 @@ check("the lane's own calls are named lane_driver",
       [row["caller"] for row in rows_after[-2:]] == ["overnight", "lane_driver"],
       f"callers={[row['caller'] for row in rows_after[-2:]]}")
 
+# A filter value named `graphql` does not make a REST read GraphQL.
+rows_before = len(rows())
+run(["gh", "api", "repos/a/b/issues?state=open", "--jq", "graphql"])
+check("a --jq value does not change the quota",
+      all(row["resource"] == "core" for row in rows()[rows_before:]),
+      f"resources={[row['resource'] for row in rows()[rows_before:]]}")
+
 # `--hostname` takes a value, so the endpoint after it is still the
 # endpoint: graphql is graphql, search is search, a list is a list.
 routes = subprocess.run([sys.executable, "-c", f"""

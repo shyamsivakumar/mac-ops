@@ -258,7 +258,9 @@ def resource(argv):
         # core read of a repository named search.
         if path.split("/", 1)[0] == SEARCH:
             return SEARCH
-        if path == "graphql" or "graphql" in words:
+        # Only the parsed endpoint decides. `--jq graphql` is a filter
+        # value on a REST read, not a GraphQL request.
+        if path == GRAPHQL:
             return GRAPHQL
         return CORE
     if words[0] in REST_GROUPS:
