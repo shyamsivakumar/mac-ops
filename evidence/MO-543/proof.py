@@ -115,8 +115,36 @@ def lane_replay():
         lane.prompt_pull = saved
 
 
+def queue_briefs():
+    """`coordq gatekeep` builds its brief through the same flag.
+
+    The end-to-end gatekeep path (its own candidate scan to the queued
+    brief) is `tests/test_prompt_paths.py::CoordqGateTest`, which the
+    repository check runs: this is the detection and the brief it feeds.
+    """
+    coordq = load(BIN / "coordq", "proof_coordq")
+    settings = {"key": "MO", "projectId": "fixture"}
+    model = {"instanceId": "codex", "model": "gpt-6.2-astra"}
+    repo = "shyamsivakumar/mac-ops"
+    command = "python3 evidence/MO-543/proof.py"
+    briefs = {}
+    for name, paths in (("prompt", PROMPT_PATHS), ("code", CODE_PATHS)):
+        files = [{"filename": path} for path in paths]
+        with patch.object(coordq, "gh_json", return_value=files):
+            flag = coordq.gate_prompt_change(repo, 544)
+        briefs[name] = coordq.gate_args(settings, repo, 543, 544, HEAD, False, model,
+                                        prompt=flag)["message"]
+    grant("queue gatekeep brief: prompt PR gets the hold",
+          "never auto-merges" in briefs["prompt"] and "gh pr merge" not in briefs["prompt"],
+          command)
+    grant("queue gatekeep brief: code-only PR keeps the merge order",
+          "gh pr merge 544 -R shyamsivakumar/mac-ops --squash" in briefs["code"]
+          and "never auto-merges" not in briefs["code"], command)
+
+
 def main():
     gate_briefs()
+    queue_briefs()
     lane_replay()
     failures = [row for row in RESULTS if not row[1]]
     for gate, ok, command in RESULTS:

@@ -1161,7 +1161,7 @@ def gate_prompt_change(repo, number):
         [entry.get("filename") or "" for entry in files if isinstance(entry, dict)])
 
 
-def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None):
+def gate_args(settings, repo, issue, number, head, publisher, model, proof=None, proof_path=None, proof_state=None, prompt=False):
     """The launch arguments of the gate for one pull request.
 
     One brief for every gate: the queue's own gatekeeper and the tick's
@@ -1171,7 +1171,7 @@ def gate_args(settings, repo, issue, number, head, publisher, model, proof=None,
     from gate_policy import build_gate_brief
     message = build_gate_brief(settings, repo, issue, number, head, publisher,
                                proof=proof, proof_path=proof_path, proof_state=proof_state,
-                               prompt=gate_prompt_change(repo, number))
+                               prompt=prompt)
     return {"projectId": settings["projectId"], "title": f"{settings['key']}-{issue if issue is not None else 'PR'} review #{number} {head[:8]}",
             "modelSelection": model, "runtimeMode": "full-access", "workspaceStrategy": {"type": "root"},
             "clientRequestId": key, "message": message}
@@ -1262,7 +1262,8 @@ def gate_candidates(config):
                 yield {"kind": "candidate", "pr": f"{repo}#{number}", "head": head, "key": key,
                        "builderModels": models,
                        "args": gate_args(settings, repo, issue, number, head, publisher, model,
-                                         proof=proof, proof_path=proof_path, proof_state=proof_state)}
+                                         proof=proof, proof_path=proof_path, proof_state=proof_state,
+                                         prompt=gate_prompt_change(repo, number))}
                 break
             else:
                 found = gate_request(repo, pr, settings, config, receipts, login)
@@ -1524,6 +1525,7 @@ def gate_request(repo, pr, settings, config, receipts, login):
     from then on. The gate model follows the builder's own rule."""
     head, number = pr["head"]["sha"], pr["number"]
     body = pr.get("body") or ""
+    prompt = gate_prompt_change(repo, number)
     for issue in dict.fromkeys(re.findall(r"\bRefs #(\d+)\b", body)):
         thread_id = builder_thread_for_issue(repo, issue)
         if not thread_id:
@@ -1538,7 +1540,8 @@ def gate_request(repo, pr, settings, config, receipts, login):
         key = f"gate:{repo}#{number}:{head}"
         proof_state, proof, proof_path = gate_proof(settings, repo, issue, head)
         return key, gate_args(settings, repo, issue, number, head, publisher, model,
-                               proof=proof, proof_path=proof_path, proof_state=proof_state), builder_models(thread, runs)
+                               proof=proof, proof_path=proof_path, proof_state=proof_state,
+                               prompt=prompt), builder_models(thread, runs)
     statuses = gh_json(f"repos/{repo}/commits/{head}/statuses?per_page=100")
     checks = [x for x in statuses if x["context"] == "srw/agent-check"]
     publisher = settings.get("macPublisher", repo == "shyamsivakumar/strategy-replay-workbench") or bool(checks)
@@ -1547,7 +1550,8 @@ def gate_request(repo, pr, settings, config, receipts, login):
     key = f"gate:{repo}#{number}:{head}"
     proof_state, proof, proof_path = gate_proof(settings, repo, None, head)
     return key, gate_args(settings, repo, None, number, head, publisher, backstop_model({}, []),
-                           proof=proof, proof_path=proof_path, proof_state=proof_state), []
+                           proof=proof, proof_path=proof_path, proof_state=proof_state,
+                           prompt=prompt), []
 
 
 def parse_ref(ref):

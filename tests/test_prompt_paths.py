@@ -122,6 +122,90 @@ class TicketGateTest(unittest.TestCase):
         self.assertFalse(self.prompt_pull(None))
 
 
+class CoordqGateTest(unittest.TestCase):
+    """The queue's own gatekeep builds the same held brief."""
+
+    REPO = "shyamsivakumar/fixture"
+    HEAD = "a" * 40
+
+    def setUp(self):
+        from tests.test_gatekeep_backstop_reviewer import load_coordq
+        self.coordq = load_coordq()
+
+    def test_the_queue_reads_the_same_list(self):
+        with patch.object(self.coordq, "gh_json",
+                          return_value=[{"filename": "coordinator/config/AGENT-RULES.md"}]):
+            self.assertTrue(self.coordq.gate_prompt_change("shyamsivakumar/mac-ops", 544))
+        with patch.object(self.coordq, "gh_json",
+                          return_value=[{"filename": "coordinator/bin/ticket"}]):
+            self.assertFalse(self.coordq.gate_prompt_change("shyamsivakumar/mac-ops", 544))
+
+    def test_a_failed_read_is_not_a_hold(self):
+        with patch.object(self.coordq, "gh_json", side_effect=RuntimeError("boom")):
+            self.assertFalse(self.coordq.gate_prompt_change("shyamsivakumar/mac-ops", 544))
+
+    def test_the_queued_brief_says_do_not_merge(self):
+        settings = {"key": "MO", "projectId": "fixture"}
+        model = {"instanceId": "codex", "model": "gpt-6.2-astra"}
+        args = self.coordq.gate_args(settings, "shyamsivakumar/mac-ops", 543, 544,
+                                     "a" * 40, False, model, prompt=True)
+        self.assertIn("never auto-merges", args["message"])
+        self.assertNotIn("gh pr merge", args["message"])
+        code = self.coordq.gate_args(settings, "shyamsivakumar/mac-ops", 543, 544,
+                                     "a" * 40, False, model)
+        self.assertIn("gh pr merge 544 -R shyamsivakumar/mac-ops", code["message"])
+
+    def gatekeep(self, changed):
+        """The gate the queue's own gatekeeper would queue, for one file list."""
+        import types
+        from contextlib import redirect_stderr
+        import io
+        import json
+        coordq = self.coordq
+        head = self.HEAD
+        repo = self.REPO
+        pull = {"draft": False, "number": 7, "head": {"sha": head},
+                "body": f"Refs #9\nBuilder check: PASS {head}\n"}
+        receipt = {"kind": "receipt", "attempt": 1, "requestId": "req-1"}
+        comment = {"user": {"login": "me"},
+                   "body": "attempt 1\n<!-- coordinator-ticket " + json.dumps(receipt) + " -->"}
+
+        def fake_gh(endpoint):
+            if "/files" in endpoint:
+                return [{"filename": path} for path in changed]
+            if endpoint.startswith(f"repos/{repo}/pulls"):
+                return [dict(pull)]
+            if endpoint.endswith("/comments?per_page=100"):
+                return [comment]
+            if endpoint.startswith(f"repos/{repo}/commits/"):
+                return []
+            raise AssertionError(f"unexpected endpoint {endpoint}")
+
+        quiet = types.SimpleNamespace(returncode=0, stdout="me\n", stderr="")
+        with patch.object(coordq, "subprocess", types.SimpleNamespace(run=lambda *a, **k: quiet)), \
+                patch.object(coordq, "gh_json", fake_gh), \
+                patch.object(coordq, "load_receipts", return_value={"req-1": "thread-1"}), \
+                patch.object(coordq, "read_builder_thread",
+                             return_value=({"providerInstanceId": "codex", "model": "gpt-6.2-astra"}, [])), \
+                patch.object(coordq, "builder_thread_for_issue", return_value="thread-1"), \
+                patch("builtins.open", side_effect=AssertionError("live filesystem forbidden")), \
+                redirect_stderr(io.StringIO()):
+            events = list(coordq.gate_candidates({"repos": {repo: {"key": "T", "projectId": "P"}}}))
+        messages = [event["args"]["message"] for event in events if event["kind"] == "candidate"]
+        self.assertEqual(len(messages), 1)
+        return messages[0]
+
+    def test_the_gatekeep_queues_a_held_gate(self):
+        message = self.gatekeep(["coordinator/config/AGENT-RULES.md"])
+        self.assertIn("never auto-merges", message)
+        self.assertNotIn("gh pr merge", message)
+
+    def test_the_gatekeep_queues_a_mergeable_gate_for_code(self):
+        message = self.gatekeep(["coordinator/bin/ticket"])
+        self.assertIn("gh pr merge 7 -R shyamsivakumar/fixture --squash", message)
+        self.assertNotIn("never auto-merges", message)
+
+
 class LanePassTest(unittest.TestCase):
     """A passing prompt pull request writes one item and merges nothing."""
 
