@@ -1610,20 +1610,39 @@ def _collect_recovery(descriptor: int, prefix: str, files: list[tuple[int, str, 
 _TRASH: Path | None = None
 
 
-def _trash_destination(name: str) -> Path | None:
-    """The place a copy that may go is moved to.
+def _volume_trash(path: Path) -> Path | None:
+    """The system trash of the volume a path is on.
 
-    The system trash is used when it is there, so emptying the trash in
-    Finder takes the copy with it. A trash that does not exist is not
-    invented: the copy stays in the recovery storage instead.
+    The trash of the home volume is the one in the home directory; another
+    volume keeps its trash under the mount point. A trash that is not there
+    is not invented, so a copy never lands in a folder the system does not
+    manage.
     """
-    trash = _TRASH or (Path.home() / "Trash")
+    if _TRASH is not None:
+        return _TRASH if _TRASH.is_dir() else None
+    home = Path.home()
     try:
-        if not trash.is_dir():
-            return None
+        if path == home or home in path.parents:
+            trash = home / ".Trash"
+        else:
+            mount = path
+            while mount.parent != mount and not (mount / ".Trashes").is_dir():
+                mount = mount.parent
+            trash = mount / ".Trashes" / str(os.getuid())
     except OSError:
         return None
-    return trash / f"worktree-cleaner-{name}-{int(time.time())}"
+    try:
+        return trash if trash.is_dir() else None
+    except OSError:
+        return None
+
+
+def _trash_destination(path: Path) -> Path | None:
+    """The place a copy that may go is moved to."""
+    trash = _volume_trash(path)
+    if trash is None:
+        return None
+    return trash / f"worktree-cleaner-{path.name}-{int(time.time())}"
 
 
 def _move_to_system_trash(path: Path) -> bool:
@@ -1656,6 +1675,10 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
     except OSError:
         return False
     try:
+        # The identity is taken from the descriptor that was verified, while
+        # it is open, so the move can be bound to it.
+        verified = os.fstat(descriptor)
+        identity = (verified.st_dev, verified.st_ino)
         if not _collect_recovery(descriptor, str(path), files, directories):
             return False
         for parent, name, entry in files:
@@ -1674,11 +1697,7 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
             except OSError:
                 pass
         os.close(descriptor)
-    try:
-        identity = os.stat(path)
-    except OSError:
-        return False
-    target = _trash_destination(path.name)
+    target = _trash_destination(path)
     if target is not None:
         try:
             # One move, every name kept: nothing is unlinked, so a file an
@@ -1690,7 +1709,7 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
             moved = os.stat(target)
         except OSError:
             return False
-        if (moved.st_dev, moved.st_ino) != (identity.st_dev, identity.st_ino):
+        if (moved.st_dev, moved.st_ino) != identity:
             # The directory that was moved is not the one that was checked, so
             # it goes back where it was.
             try:
