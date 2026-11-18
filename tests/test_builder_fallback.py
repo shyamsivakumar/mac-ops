@@ -345,10 +345,16 @@ class LaneDriverTests(StoreCase):
 
     def test_only_a_provider_failure_message_supplies_the_diagnostic(self):
         module = self.module()
+        # The assistant reply sits last, so a reader that took the newest text
+        # would return "I'm updating authentication tests" and let the
+        # authentication marker block the builder again.
         items = [
-            {"runId": "run-a", "type": "assistant_message", "text": "I'm updating authentication tests"},
-            {"runId": "run-a", "type": "provider_error", "text": "401 invalid api key"}]
+            {"runId": "run-a", "type": "provider_error", "text": "401 invalid api key"},
+            {"runId": "run-a", "type": "assistant_message", "text": "I'm updating authentication tests"}]
         with patch.object(module, "t3", lambda tool, args: {"items": items}):
+            # The unfiltered reader is the path block_reason took before the fix:
+            # it hands over the authentication reply.
+            self.assertEqual(module.last_reply("t1"), "I'm updating authentication tests")
             self.assertEqual(module.last_reply("t1", diagnostics_only=True), "401 invalid api key")
 
 
