@@ -124,7 +124,7 @@ class FallbackBase(unittest.TestCase):
             return []
         raise AssertionError(f"unexpected endpoint {endpoint}")
 
-    def run_gatekeep(self, payload):
+    def run_gatekeep(self, payload, dry_run=False):
         with open(os.path.join(QUEUE_DIR, "queue.json"), "w") as f:
             json.dump({"next": 2, "items": [],
                        "gatedHeads": {self.key: {"id": 1, "retries": 0, "reviewer": CHAIN_HEAD,
@@ -132,7 +132,7 @@ class FallbackBase(unittest.TestCase):
         coordq.call = lambda tool, args, rules=None: (0, json.dumps(payload))
         out = io.StringIO()
         with redirect_stdout(out):
-            coordq.cmd_gatekeep(argparse.Namespace(config=self.config, dry_run=False))
+            coordq.cmd_gatekeep(argparse.Namespace(config=self.config, dry_run=dry_run))
         return out.getvalue()
 
     def read_queue(self):
@@ -190,6 +190,13 @@ class RecordedFailureTests(FallbackBase):
         items = [i for i in self.read_queue()["items"] if i["tool"] == "t3_thread_launch"]
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["args"]["modelSelection"], FALLBACK_REVIEWER)
+
+    def test_a_dry_run_blocks_no_reviewer(self):
+        # A dry run computes the same fallback and writes nothing: the
+        # provider error of the dead gate never blocks the reviewer for
+        # every head from a diagnostic.
+        self.run_gatekeep(recorded_chain_head_failure(), dry_run=True)
+        self.assertEqual(gate_reviewers.blocked_identities(), set())
 
     def test_no_gate_is_queued_when_every_reviewer_is_blocked(self):
         gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits")
@@ -403,11 +410,24 @@ class NewGateStartTests(unittest.TestCase):
     def test_a_health_probe_names_its_reviewer_and_is_allowed(self):
         gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits")
         gate_reviewers.block_reviewer(FALLBACK_REVIEWER, "no credits")
+        gate_reviewers.note_probe(CHAIN_HEAD, "probe:api:1")
         args, refusal = coordq.with_model({"taskType": "review", "message": "probe",
                                            "clientRequestId": "probe:api:1",
                                            "modelSelection": CHAIN_HEAD})
         self.assertIsNone(refusal)
         self.assertEqual(args["modelSelection"], CHAIN_HEAD)
+
+    def test_a_probe_prefix_alone_does_not_claim_the_exemption(self):
+        # An ordinary review cannot pass the availability check by naming
+        # itself probe:...: only the request id the coordinator recorded
+        # for that reviewer's current probe is a health probe.
+        gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits")
+        gate_reviewers.note_probe(CHAIN_HEAD, "probe:api:1")
+        args, refusal = coordq.with_model({"taskType": "review", "message": "review the diff",
+                                           "clientRequestId": "probe:api:2",
+                                           "modelSelection": CHAIN_HEAD})
+        self.assertIsNone(args)
+        self.assertIn("blocked for every head", refusal)
 
     def test_an_ordinary_gate_may_not_name_a_blocked_reviewer(self):
         gate_reviewers.block_reviewer(CHAIN_HEAD, "no credits")

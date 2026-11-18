@@ -226,8 +226,18 @@ def is_health_probe(args):
     """Whether a launch is a reviewer health probe.
 
     The probe names the blocked reviewer it is checking, so it is the one
-    launch that may run on a blocked provider. Its request id says so."""
-    return str(args.get("clientRequestId") or "").startswith("probe:")
+    launch that may run on a blocked provider. A caller-supplied prefix
+    is not evidence: the request id must be the one the coordinator
+    recorded for that reviewer's current probe, so an ordinary launch
+    cannot claim the exemption by naming itself probe:..."""
+    request_id = str(args.get("clientRequestId") or "")
+    if not request_id.startswith("probe:"):
+        return False
+    selection = args.get("modelSelection")
+    if not isinstance(selection, dict):
+        return False
+    record = load_blocked().get(identity(selection))
+    return bool(record) and record.get("probeRequestId") == request_id
 
 
 def is_allowed_builder(selection):
@@ -1224,19 +1234,22 @@ def fallback_reviewer(queue, key, current, models=()):
     return selection
 
 
-def failed_gate_reviewer(queue, key, current, failure):
+def failed_gate_reviewer(queue, key, current, failure, dry_run=False):
     """The reviewer that takes over a gate that ended without a verdict.
 
     A gate that ends without a verdict for any reason (failed, errored,
     interrupted, timed out, no executed model, any provider error) moves
     down the chain. A blocking provider reason blocks that reviewer for
     every head, so every new gate starts on the next one until it
-    recovers."""
+    recovers — on a real run; a dry run keeps the fallback selection and
+    writes nothing."""
     reason = provider_block_reason(failure)
     if reason:
         blocked = failed_reviewer(failure) or current
         line = None
-        if chain_index(blocked) >= 0:
+        if chain_index(blocked) >= 0 and not dry_run:
+            # A dry run computes the same fallback but writes nothing: a
+            # diagnostic must not block a reviewer for every head.
             line = block_reviewer(blocked, reason, reset_at=reset_time(failure_text(failure)))
         if line:
             log(line)
@@ -1525,7 +1538,7 @@ def cmd_gatekeep(a):
                         continue
                     current = state.get("reviewer") or {"instanceId": thread.get("providerInstanceId"),
                                                        "model": thread.get("model")}
-                    model = failed_gate_reviewer(queue, key, current, data)
+                    model = failed_gate_reviewer(queue, key, current, data, dry_run=a.dry_run)
                     if model is None:
                         if not a.dry_run:
                             heads[key] = {**state, "givenUp": True}
