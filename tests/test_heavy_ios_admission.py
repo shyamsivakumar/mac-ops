@@ -327,8 +327,13 @@ class GovernorRecoveryTests(unittest.TestCase):
 
     def test_an_unreadable_sample_holds_the_capacity_it_has(self):
         state, detail = self.decide(0, sample(16, 5, captured=600.0))
-        self.assertEqual(detail["target"], 0)
-        self.assertEqual(state["heavy_slots"], 0)
+        self.assertEqual(detail["target"], 2)
+        self.assertEqual(state["heavy_slots"], 2)
+
+    def test_a_large_host_keeps_the_old_cap_on_an_unreadable_sample(self):
+        state, detail = self.decide(4, sample(48, 30, captured=600.0))
+        self.assertEqual(detail["target"], 2)
+        self.assertEqual(state["heavy_slots"], 2)
 
     def test_the_next_good_sample_restores_the_slots(self):
         state, detail = self.decide(0, sample(16, 5))
@@ -609,7 +614,7 @@ class SimulatorCreditRefreshTests(unittest.TestCase):
         self.assertEqual(probed, [self.BUILD, self.BUILD])
         self.assertEqual(allowances, [100 * 1024, 300 * 1024])
 
-    def test_a_wrapped_executable_claims_no_credit(self):
+    def test_a_wrapper_that_runs_xcodebuild_claims_its_credit(self):
         runner, _state = self.host()
         credit = heavy.simulator_memory_credit_bytes(
             [
@@ -620,9 +625,9 @@ class SimulatorCreditRefreshTests(unittest.TestCase):
             ],
             command_runner=runner,
         )
-        self.assertEqual(credit, 0)
+        self.assertEqual(credit, 100 * 1024)
 
-    def test_a_wrapped_command_reaches_reservation_without_credit(self):
+    def test_a_wrapped_command_reaches_reservation_with_its_credit(self):
         runner, _state = self.host()
         registry = Mock()
         allowances = []
@@ -655,7 +660,20 @@ class SimulatorCreditRefreshTests(unittest.TestCase):
                     registry=registry,
                     deps=self.deps(),
                 )
-        self.assertEqual(allowances, [0, 0])
+        self.assertEqual(allowances, [100 * 1024, 300 * 1024])
+
+    def test_a_program_that_only_mentions_xcodebuild_claims_no_credit(self):
+        self.assertEqual(
+            heavy.simulator_destination_device(
+                [
+                    "/bin/echo",
+                    "xcodebuild",
+                    "-destination",
+                    "platform=iOS Simulator,name=CI-iPhone",
+                ]
+            ),
+            (None, None, None),
+        )
 
 
 class WrappedBuildCommandTests(unittest.TestCase):
