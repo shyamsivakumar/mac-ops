@@ -952,12 +952,15 @@ def watchdog():
         return
 
     def publish_healthy():
-        """Take the watchdog's item off the board, under the lock.
+        """Take the watchdog's item off the board, under the board lock.
 
-        The board is read and written while the state lock is held, so
+        The board is read and written while the board lock is held, so
         another writer cannot replace it between the read and the write.
-        A board that cannot be written is said out loud: the item stays
-        on the board and the next tick tries again."""
+        The board lock is its own file: it does not depend on the mute
+        storage, so the board is cleaned even when the mute state cannot
+        be locked or read. A board that cannot be written is said out
+        loud: the item stays on the board and the next tick tries
+        again."""
         try:
             with alarms.board_locked(p) as unlocked:
                 if unlocked:
@@ -980,8 +983,9 @@ def watchdog():
 
     # The alarm is not true any more, so the same cause can alarm again
     # the next time it is true. An acknowledgement that is still running
-    # keeps the key quiet. The board is read and written under the lock,
-    # so another writer cannot read it stale.
+    # keeps the key quiet. The board is cleaned under the board lock,
+    # even when the mute state cannot be locked or read, so a broken
+    # mute storage does not leave a stale alarm on the board.
     if not alarms.forget_and_save("factory-watchdog", publish_healthy):
         print("WATCHDOG could not write the mute state; the alarm is not muted")
 
