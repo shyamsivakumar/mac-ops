@@ -967,9 +967,10 @@ def unstick(repo, ledger, excl=frozenset()):
             if out.endswith(BLOCKED_SKIP):
                 continue
             hold = out.endswith(HELD_SKIP)
-            if out.startswith("skip ") and not hold:
+            if not queued and not hold:
                 # Nothing was queued and no thread is live, so the ticket
-                # is not being worked and records no cooldown.
+                # is not being worked and records no cooldown: it stays
+                # eligible, so the next pass tries it again.
                 continue
             ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out, hold]
             if hold:

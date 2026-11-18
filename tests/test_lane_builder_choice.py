@@ -549,6 +549,26 @@ class HeldContinue(unittest.TestCase):
         """A thread on the chosen builder that takes no send."""
         return {**self.idle_builder(name), "canSend": False}
 
+    def archived_builder(self, name):
+        """An archived thread on the chosen builder, with its worktree."""
+        return {**self.idle_builder(name), "archived": True}
+
+    def test_an_archived_thread_hands_the_ticket_to_its_worktree(self):
+        # The thread is archived, so it takes no send, but its worktree is
+        # still there: the work starts again there on the chosen builder.
+        # The ticket is being worked, so it records the cooldown and the
+        # next pass does not give it to a second builder.
+        real = os.path.isdir
+        with patch.object(self.lane.os.path, "isdir",
+                          lambda path: path == "/fixture/worktree" or real(path)):
+            result, queued, ledger = self.unstick({11: self.archived_builder("thread-11")}, passes=2)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["workspaceStrategy"],
+                         {"type": "existing_worktree", "worktreePath": "/fixture/worktree"})
+        self.assertEqual(queued[0]["modelSelection"], MINIMAX)
+        self.assertIn("cont:thread-11", ledger)
+        self.assertEqual(result, "nothing ready")
+
     def test_a_handoff_that_queued_nothing_records_no_cooldown(self):
         # The thread takes no send, its worktree is gone and the ticket has
         # no pull request, so the send is skipped. Nothing is being worked,
