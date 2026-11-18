@@ -27,6 +27,7 @@ the test that fails without the fix.
 | 19 | the status was read as text, so a file name that is not valid UTF-8 raised out of the scan | the status is read as bytes and every path is decoded with `os.fsdecode`, in the status reader and in the worktree list | `...::ClearBootstrapChangesTest::test_a_file_name_that_is_not_utf8_does_not_abort_the_scan` |
 | 20 | deleting a tracked `.specstory/` directory left the parent path missing, so the exclusive create failed with `ENOENT` and the worktree stayed on disk | the parent directories of a restored path are created again inside the worktree before the file is written | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_a_deleted_bootstrap_file_with_a_missing_parent_is_restored` |
 | 21 | a tracked symlink under `.specstory/` was restored with `os.open`, which created a regular file that holds the link target with mode `000` | a symlink is restored with an exclusive `os.symlink`, so the link stays a link | `...::ClearBootstrapChangesTest::test_a_tracked_symlink_is_restored_as_a_link` |
+| 22 | the parent directories were created after the symlink branch, so restoring a symlink whose directory was gone failed with `ENOENT` and the worktree stayed on disk | the parent directories of a restored path are created before either restoration branch | `tests/test_worktree_cleaner_bootstrap.py::ClearBootstrapChangesTest::test_a_deleted_symlink_with_a_missing_parent_is_restored` |
 
 ## How the fixes are proved
 
