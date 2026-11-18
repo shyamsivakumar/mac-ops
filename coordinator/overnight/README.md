@@ -1403,6 +1403,13 @@ A quiet tick changes nothing, so it writes nothing: a write that fails on a
 quiet tick cannot turn a muted alarm into a published one. A board that
 cannot be written is said out loud, because the alarm is then nowhere.
 
+The board has its own lock, in a file beside the board, and it is held
+across the read, the change and the replace. It is not the mute lock: a
+mute storage that cannot be locked must not leave the board unprotected,
+or the watchdog and the stall writer read the same board and one alarm
+disappears. Each publisher also replaces the board from a temporary file
+of its own.
+
 An alarm on the board always has a key. The key is written before the alarm
 is published, so the answer Shyam gives it has something to acknowledge. A
 key that cannot be written is a fault the shift says out loud, and the
