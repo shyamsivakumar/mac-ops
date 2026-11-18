@@ -268,6 +268,12 @@ class GateBriefTest(unittest.TestCase):
         self.assertLess(text.index("merge nothing unless it is still `main`"),
                         text.index("gh pr merge"))
 
+    def test_the_merge_order_undoes_a_merge_on_a_moved_base(self):
+        """The pin is a read, so the merge that follows it is verified."""
+        text = self.brief(prompt=False)
+        self.assertIn("revert that merge with", text)
+        self.assertIn("read the base again after the merge", text)
+
     def test_the_verdict_lines_are_the_same_either_way(self):
         for prompt in (True, False):
             with self.subTest(prompt=prompt):
@@ -828,6 +834,46 @@ class BoardReconcileTest(unittest.TestCase):
     def test_an_unreadable_board_is_not_an_error(self):
         with patch.object(self.lane.alarms, "read_board", return_value=(b"", None)):
             self.assertEqual(self.lane.reconcile_prompt_items(self.snapshot), 0)
+
+
+class MergeBaseGuardTest(unittest.TestCase):
+    """A merge that lands on a moved base is undone in the same step."""
+
+    def setUp(self):
+        import lane_driver
+        self.lane = lane_driver
+
+    def merge(self, base_after):
+        calls = []
+
+        def command(cmd, timeout=150):
+            calls.append(cmd)
+            if cmd[:2] == ["gh", "pr"] and "view" in cmd and "baseRefName" in cmd:
+                return '{"baseRefName": "%s"}' % base_after
+            if cmd[:2] == ["gh", "api"]:
+                return '{"merged": false}'
+            return ""
+
+        with patch.object(self.lane, "run", command):
+            merged, note = self.lane.merge_on_reviewed_base(
+                "shyamsivakumar/mac-ops", 544, "a" * 40, "main")
+        return merged, note, calls
+
+    def test_a_merge_on_the_reviewed_base_stands(self):
+        merged, note, calls = self.merge("main")
+        self.assertTrue(merged)
+        self.assertNotIn("revert", " ".join(" ".join(call) for call in calls))
+        self.assertEqual(note, "#544: merged " + "a" * 40)
+
+    def test_a_merge_on_a_moved_base_is_reverted(self):
+        """The base can move between the pinned read and the merge call."""
+        merged, note, calls = self.merge("release/next")
+        self.assertFalse(merged)
+        self.assertIn("reverted", note)
+        self.assertIn("release/next", note)
+        revert = [call for call in calls if "revert" in " ".join(call)]
+        self.assertEqual(len(revert), 1)
+        self.assertIn("repos/shyamsivakumar/mac-ops/pulls/544/revert", " ".join(revert[0]))
 
 
 if __name__ == "__main__":

@@ -35,7 +35,10 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
     # head, so the same head can introduce prompt text it did not introduce
     # against the base this brief read. The merge order pins the base too.
     base_pin = (f"read the base with `gh pr view {number} -R {repo} --json baseRefName --jq .baseRefName`, "
-                f"merge nothing unless it is still `{base}`, and a base that moved is not this review's base")
+                f"merge nothing unless it is still `{base}`, and a base that moved is not this review's base; "
+                f"`--match-head-commit` pins the head only, so read the base again after the merge and, when it "
+                f"is no longer `{base}`, revert that merge with "
+                f"`gh api --method PUT repos/{repo}/pulls/{number}/revert -f body=<reason>` and report it")
     merge = (PROMPT_NO_MERGE if prompt else
              "Ascend repo: do not merge; stop at the verdict." if ascend else
              f"If and only if CHECK and VERDICT are PASS on {head}, {base_pin}, then run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
