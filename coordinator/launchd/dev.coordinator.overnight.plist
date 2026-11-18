@@ -27,6 +27,8 @@
     <integer>300</integer>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>COORDINATOR_GH_CACHE</key>
+        <string>on</string>
         <key>PATH</key>
         <string>@HOME@/.local/bin:@HOME@/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>HOME</key>
