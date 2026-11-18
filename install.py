@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 
-FILES = ("heavy.py", "heavy.sh", "heavy_hosts.json", "board_governor.py", "board_resources.py", "board_restart.py",
+FILES = ("heavy.py", "heavy.sh", "board_governor.py", "board_resources.py", "board_restart.py",
          "board_governor.json", "load_backstop.py", "agent_heavy_wait_pause.py")
 LABELS = ("com.shyam.load-backstop", "com.shyam.board-governor")
 OBSOLETE = ("com.shyam.multica-sweep", "com.shyam.multica-failover")

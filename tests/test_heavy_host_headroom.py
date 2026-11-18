@@ -1,5 +1,6 @@
 """Per-host memory headroom tests cover the host floor and governor recovery."""
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,7 +31,7 @@ class HostHeadroomTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
 
     def config(self, value):
-        path = Path(self.directory.name) / heavy.HOST_CONFIG_NAME
+        path = Path(self.directory.name) / heavy.CONFIG_NAME
         path.write_text(value if isinstance(value, str) else json.dumps(value))
         return path
 
@@ -39,25 +40,57 @@ class HostHeadroomTests(unittest.TestCase):
             return heavy.host_headroom_bytes(path)
 
     def test_a_named_host_gets_its_own_floor(self):
-        path = self.config({"hosts": {M1: {"min_headroom_bytes": M1_HEADROOM}}})
+        path = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
         self.assertEqual(self.floor_for(path, "Shyams-MacBook-Pro.local"), M1_HEADROOM)
 
     def test_an_unlisted_host_keeps_the_default_floor(self):
-        path = self.config({"hosts": {M1: {"min_headroom_bytes": M1_HEADROOM}}})
+        path = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
         self.assertEqual(self.floor_for(path, "Shyams-M4.local"), DEFAULT)
 
     def test_a_missing_malformed_or_out_of_range_file_keeps_the_default_floor(self):
         absent = Path(self.directory.name) / "absent.json"
         self.assertEqual(heavy.host_headroom_bytes(absent), DEFAULT)
         self.assertEqual(self.floor_for(self.config("{not json"), M1), DEFAULT)
-        path = self.config({"hosts": {M1: {"min_headroom_bytes": 0}}})
+        path = self.config({heavy.HOST_HEADROOM_KEY: {M1: 0}})
+        self.assertEqual(self.floor_for(path, M1), DEFAULT)
+        path = self.config({heavy.HOST_HEADROOM_KEY: {M1: 65 * heavy.GIB}})
         self.assertEqual(self.floor_for(path, M1), DEFAULT)
 
+    def test_a_symlinked_file_keeps_the_default_floor(self):
+        target = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
+        link = Path(self.directory.name) / "link.json"
+        link.symlink_to(target)
+        self.assertEqual(self.floor_for(link, M1), DEFAULT)
+
+    def test_a_shared_writable_file_keeps_the_default_floor(self):
+        path = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
+        os.chmod(path, 0o666)
+        self.assertEqual(self.floor_for(path, M1), DEFAULT)
+
+    def test_a_deeply_nested_file_keeps_the_default_floor(self):
+        nested = "[" * 2000 + "]" * 2000
+        self.assertLess(len(nested), 4096)
+        with self.assertRaises(RecursionError):
+            json.loads(nested)
+        path = self.config(nested)
+        self.assertEqual(self.floor_for(path, M1), DEFAULT)
+
+    def test_a_parse_recursion_error_keeps_the_default_floor(self):
+        path = self.config({heavy.HOST_HEADROOM_KEY: {M1: M1_HEADROOM}})
+        with patch.object(heavy.json, "loads", side_effect=RecursionError):
+            self.assertEqual(self.floor_for(path, M1), DEFAULT)
+
     def test_the_shipped_config_lowers_only_the_macbook_pro(self):
-        value = json.loads((Path(heavy.__file__).parent / heavy.HOST_CONFIG_NAME).read_text())
-        self.assertEqual(value["hosts"][M1]["min_headroom_bytes"], M1_HEADROOM)
-        self.assertNotIn("shyams-m4", value["hosts"])
+        value = json.loads((Path(heavy.__file__).parent / heavy.CONFIG_NAME).read_text())
+        hosts = value[heavy.HOST_HEADROOM_KEY]
+        self.assertEqual(hosts[M1], M1_HEADROOM)
+        self.assertNotIn("shyams-m4", hosts)
         self.assertEqual(heavy.MIN_HEADROOM_BYTES, DEFAULT)
+
+    def test_the_governor_config_accepts_the_host_map(self):
+        path = Path(board_governor.__file__).parent / board_governor.DEFAULTS.name
+        cfg = board_governor.config(path)
+        self.assertEqual(cfg[board_governor.HOST_HEADROOM_KEY][M1], M1_HEADROOM)
 
 
 class HeadroomFloorTests(unittest.TestCase):
