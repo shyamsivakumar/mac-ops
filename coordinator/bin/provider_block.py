@@ -76,6 +76,20 @@ STATUS = re.compile(
     r"\b(?:http|status(?:\s+code)?)\s*[:=]?\s*(?:401|402|403|429)\b"
     r"|\b(?:401|402|403|429)\s+(?:unauthorized|forbidden|too many requests|payment required)\b",
     re.IGNORECASE)
+# A provider that answers with the status code on its own, as a launch
+# error does: "429; resets at 14:00 UTC". The code stands alone at the
+# front of the message and is followed by punctuation or by nothing, so a
+# number inside a message, and a count that begins with one, are still no
+# evidence.
+LEADING_STATUS = re.compile(
+    r"^\s*(?:http\s+|status(?:\s+code)?\s*[:=]?\s*)?(401|402|403|429)(?![0-9A-Za-z])"
+    r"(?:\s*$|\s*[^\sA-Za-z])", re.IGNORECASE)
+# A local error that reads like a provider refusal. A full disk says
+# nothing about the provider, and `disk quota exceeded` holds the words of
+# a quota refusal without being one.
+LOCAL_ERROR = re.compile(
+    r"disk quota|no space left|enospc|disk full|out of disk|"
+    r"filesystem.{0,24}full|local storage", re.IGNORECASE)
 
 
 def identity(selection):
@@ -230,11 +244,17 @@ def provider_refusal(code, message):
     A refusal names the provider's own error code, or an HTTP status in the
     message, or one of the provider's billing and limit phrases. A
     substring is no evidence: `worker 14031 exited` holds the digits of 403
-    and a local `disk quota exceeded` holds the word quota, and neither
-    says anything about the provider."""
+    and a local `disk quota exceeded` holds the words of a quota refusal,
+    and neither says anything about the provider. A code that stands alone
+    at the front of the message is evidence, because that is how a launch
+    error names the status it was refused with."""
     if code.strip().lower() in BLOCK_CODES:
         return True
+    if LOCAL_ERROR.search(message):
+        return False
     if STATUS.search(message):
+        return True
+    if LEADING_STATUS.match(message):
         return True
     lowered = message.lower()
     return any(marker in lowered for marker in BLOCK_MARKERS)
