@@ -447,5 +447,53 @@ class LanePassTest(unittest.TestCase):
         self.assertEqual(calls, [(self.lane.DECISIONS_PATH, "prompt-merge-MO-544", "raise", self.item)])
 
 
+class BoardReconcileTest(unittest.TestCase):
+    """A merge ask for a pull request that left the open list is taken down."""
+
+    def setUp(self):
+        import lane_driver
+        self.lane = lane_driver
+        self.saved_cfg = lane_driver.CFG
+        lane_driver.CFG = {"shyamsivakumar/mac-ops": {"key": "MO", "projectId": "fixture"}}
+        self.addCleanup(lambda: setattr(lane_driver, "CFG", self.saved_cfg))
+        self.board = {"items": [{"id": "prompt-merge-MO-544"},
+                                {"id": "prompt-merge-MO-545"},
+                                {"id": "unrelated"}]}
+        self.snapshot = {"repos": {"shyamsivakumar/mac-ops": {"prs": [{"number": 545}]}}}
+
+    def reconcile(self, removed_writes=("wrote",)):
+        taken = []
+
+        def withdraw(item_id):
+            taken.append(item_id)
+            return removed_writes[0]
+
+        with patch.object(self.lane.alarms, "read_board", return_value=(b"", self.board)), \
+                patch.object(self.lane, "withdraw_decision", withdraw):
+            removed = self.lane.reconcile_prompt_items(self.snapshot)
+        return removed, taken
+
+    def test_a_merged_prompt_request_is_taken_down(self):
+        """The PR is gone from the snapshot, which is the only signal there is."""
+        removed, taken = self.reconcile()
+        self.assertEqual(taken, ["prompt-merge-MO-544"])
+        self.assertEqual(removed, 1)
+
+    def test_an_open_prompt_request_stays(self):
+        self.assertNotIn("prompt-merge-MO-545", self.reconcile()[1])
+
+    def test_someone_elses_item_is_left_alone(self):
+        self.assertNotIn("unrelated", self.reconcile()[1])
+
+    def test_a_dry_run_takes_nothing_down(self):
+        with patch.object(self.lane, "DRY", True):
+            removed, taken = self.reconcile()
+        self.assertEqual((removed, taken), (0, []))
+
+    def test_an_unreadable_board_is_not_an_error(self):
+        with patch.object(self.lane.alarms, "read_board", return_value=(b"", None)):
+            self.assertEqual(self.lane.reconcile_prompt_items(self.snapshot), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -807,7 +807,9 @@ now checked instead of remembered. One list lives in
   request. On a prompt change it merges nothing and writes one item to
   `~/Code/coordinator/decisions.json` (`kind: action`, id
   `prompt-merge-<key>-<pr>`) asking Shyam to merge it. The item is keyed by
-  id, so a second pass replaces it instead of adding a second one.
+  id, so a second pass replaces it instead of adding a second one, and a
+  pass takes it down once the pull request leaves the open list, whether
+  Shyam merged it or closed it.
 
 A file list GitHub cannot give is not code: the read is retried, and a list
 still unknown defers the gate or the merge instead of guessing. A brief

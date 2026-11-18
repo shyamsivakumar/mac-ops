@@ -2,6 +2,7 @@ from contextlib import contextmanager
 import shlex
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -623,6 +624,40 @@ def prompt_merge_item(repo, number, head):
 def withdraw_decision(item_id):
     """Take one item off Shyam's board, once the pull request is settled."""
     return alarms.board_update(DECISIONS_PATH, item_id, "remove", None)
+
+
+def reconcile_prompt_items(snapshot):
+    """Take merge asks off the board for pull requests that left the open list.
+
+    A prompt pull request Shyam merged or closed between two passes is not in
+    the snapshot any more, so no per-pull-request action ever reaches its
+    item: the board would keep asking for work that is done. The items are
+    read once here and the stale ones are removed by the key and number their
+    id carries. Return how many were removed.
+    """
+    try:
+        _bytes, board = alarms.read_board(Path(DECISIONS_PATH))
+    except OSError:
+        return 0
+    if not isinstance(board, dict):
+        return 0
+    repos_by_key = {CFG[repo]["key"]: repo for repo in CFG if repo in LANE_REPOS}
+    open_prs = {(repo, pull["number"]) for repo, data in snapshot["repos"].items()
+                for pull in data["prs"]}
+    removed = 0
+    for item in board.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        match = re.fullmatch(r"prompt-merge-([A-Za-z0-9]+)-(\d+)", str(item.get("id") or ""))
+        if not match or match.group(1) not in repos_by_key:
+            continue
+        if (repos_by_key[match.group(1)], int(match.group(2))) in open_prs:
+            continue
+        if DRY:
+            continue
+        if withdraw_decision(item["id"]) == "wrote":
+            removed += 1
+    return removed
 
 
 def prompt_pass(repo, number, head, prompt):
@@ -1627,6 +1662,9 @@ def main():
         run_pass(ledger)
         if not DRY:
             zero_merge(SNAPSHOT)
+            stale = reconcile_prompt_items(SNAPSHOT)
+            if stale:
+                print(f"BOARD removed {stale} settled merge ask(s)")
     except ApiBudgetExhausted as exc:
         print(f"API BUDGET {exc}")
         if ledger.get("_item_failures", 0):
