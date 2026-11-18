@@ -1462,7 +1462,8 @@ def probe_blocked_builders(ledger):
                 continue
             if status == "completed" or status in {"failed", "interrupted", "cancelled", "rolled_back"}:
                 reason = provider_health.block_reason(reply) or "the probe did not answer"
-                provider_health.note_probe_failure(member, reply, request_id=request_id)
+                if not DRY:
+                    provider_health.note_probe_failure(member, reply, request_id=request_id)
                 print(f"builder probe {ident}: still blocked ({reason})")
                 continue
             if not provider_health.probe_due(member):
