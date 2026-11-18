@@ -72,6 +72,19 @@ def prompt_change(paths):
     return any(is_prompt_path(path) for path in paths)
 
 
+def list_is_complete(entries, changed_files):
+    """False when the changed-file list may leave a file out.
+
+    GitHub's pull-request files endpoint returns at most 3,000 files, so a
+    list shorter than the pull request's own changed-file count may have
+    dropped the one prompt file. A count that is not known cannot be
+    compared, and only a known count can show the list is short.
+    """
+    if not isinstance(changed_files, int):
+        return True
+    return len(entries or ()) >= changed_files
+
+
 def prompt_scan(paths):
     """HOLD, CLEAR or UNKNOWN for one changed-path list.
 

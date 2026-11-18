@@ -77,6 +77,14 @@ class PromptPathTest(unittest.TestCase):
         self.assertEqual(prompt_paths.entry_paths(None), [])
         self.assertEqual(prompt_paths.entry_paths("not an entry"), [])
 
+    def test_a_short_list_is_not_complete(self):
+        """GitHub stops the files endpoint at 3,000, so a short list hides files."""
+        entries = [{"filename": "coordinator/bin/ticket"}]
+        self.assertFalse(prompt_paths.list_is_complete(entries, 3001))
+        self.assertTrue(prompt_paths.list_is_complete(entries, 1))
+        self.assertTrue(prompt_paths.list_is_complete(entries, None))
+        self.assertTrue(prompt_paths.list_is_complete(entries, []))
+
     def test_a_skills_directory_at_the_top_counts(self):
         self.assertTrue(prompt_paths.is_prompt_path("skills/SKILL.md"))
         self.assertTrue(prompt_paths.is_prompt_path("prompts/x.md"))
@@ -186,6 +194,17 @@ class CoordqGateTest(unittest.TestCase):
             self.assertEqual(self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544),
                              prompt_paths.UNKNOWN)
         self.assertEqual(read.call_count, 2)
+
+    def test_a_truncated_list_is_unknown_never_clear(self):
+        """A 3,001-file PR may have dropped its one prompt file from the list."""
+        files = [{"filename": "coordinator/bin/ticket"}]
+        with patch.object(self.coordq, "gh_json", return_value=files):
+            self.assertEqual(
+                self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 3001),
+                prompt_paths.UNKNOWN)
+            self.assertEqual(
+                self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, 1),
+                prompt_paths.CLEAR)
 
     def test_the_queued_brief_says_do_not_merge(self):
         settings = {"key": "MO", "projectId": "fixture"}
@@ -330,6 +349,24 @@ class LanePassTest(unittest.TestCase):
         self.assertIn("could not be read", held)
         self.assertIn("next run retries", held)
         self.assertEqual(written, [])
+
+    def test_a_truncated_list_defers_the_pass(self):
+        """A short list may have hidden the prompt file, so it is no list."""
+        written = []
+        with patch.object(self.lane, "run",
+                          return_value='[{"filename": "coordinator/bin/ticket"}]'), \
+                patch.object(self.lane, "publish_decision", lambda item: written.append(item)):
+            state = self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 3001)
+            held = self.lane.prompt_pass("shyamsivakumar/mac-ops", 544, "a" * 40, state)
+        self.assertEqual(state, prompt_paths.UNKNOWN)
+        self.assertIn("could not be read", held)
+        self.assertEqual(written, [])
+
+    def test_a_complete_list_of_code_is_clear(self):
+        with patch.object(self.lane, "run",
+                          return_value='[{"filename": "coordinator/bin/ticket"}]'):
+            self.assertEqual(self.lane.prompt_pull("shyamsivakumar/mac-ops", 544, 1),
+                             prompt_paths.CLEAR)
 
     def test_a_dry_run_writes_no_board_item(self):
         """The board write is live state, so a dry run must not reach it."""

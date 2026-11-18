@@ -85,7 +85,7 @@ def board_snapshot(ledger, force=False):
     if not force and isinstance(cached, dict) and 0 <= current_pass - cached.get("refreshed_pass", -BOARD_REFRESH_PASSES) < BOARD_REFRESH_PASSES:
         return cached
     snapshot = {"tickets": read_json(["ticket", "list", "--json", "--fresh"]).get("issues", []), "repos": {}}
-    fields = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup"
+    fields = "number,state,headRefOid,headRefName,baseRefName,body,mergeable,isDraft,statusCheckRollup,changedFiles"
     for repo in LANE_REPOS:
         snapshot["repos"][repo] = {
             "prs": read_json(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "200", "--json", fields]),
@@ -544,12 +544,14 @@ def check_step(repo, proof_path):
     return "run the repo's full local check"
 
 
-def pr_paths(repo, number):
+def pr_paths(repo, number, changed_files=None):
     """The paths a pull request changed, or None when GitHub cannot say.
 
     Both names of a renamed file count. Moving `prompts/reviewer.md` to
     `archive/reviewer.md` removed prompt text, so a read that looked at the
-    new name alone would let that pull request merge.
+    new name alone would let that pull request merge. A list shorter than
+    the pull request's own changed-file count may have left the one prompt
+    file out (the files endpoint stops at 3,000), so it is no list at all.
     """
     output = run(["gh", "api", "--paginate", f"repos/{repo}/pulls/{number}/files?per_page=100"])
     try:
@@ -558,18 +560,20 @@ def pr_paths(repo, number):
         return None
     if not isinstance(entries, list):
         return None
+    if not prompt_paths.list_is_complete(entries, changed_files):
+        return None
     return prompt_paths.entries_paths(entries)
 
 
-def prompt_pull(repo, number, attempts=2):
+def prompt_pull(repo, number, changed_files=None, attempts=2):
     """HOLD, CLEAR or UNKNOWN for the paths a pull request changed.
 
-    An unreadable list is retried, then UNKNOWN: the lane defers a passing
-    pull request it cannot read instead of merging it blind.
+    An unreadable or short list is retried, then UNKNOWN: the lane defers a
+    passing pull request it cannot read instead of merging it blind.
     """
     for _ in range(max(1, attempts)):
         try:
-            paths = pr_paths(repo, number)
+            paths = pr_paths(repo, number, changed_files)
         except (RuntimeError, ValueError):
             # A `gh` read that failed is retried, never guessed at.
             continue
@@ -667,7 +671,7 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
-        held = prompt_pass(repo, number, head, prompt_pull(repo, number))
+        held = prompt_pass(repo, number, head, prompt_pull(repo, number, pr.get("changedFiles")))
         if held:
             return held
         if repo == "digitized/Concerning":
