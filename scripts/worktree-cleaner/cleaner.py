@@ -533,6 +533,61 @@ def _read_at(parent: int, name: str) -> bytes | None:
         os.close(descriptor)
 
 
+def _snapshot_directory(fd: int) -> dict[str, tuple[int, int, int, int]]:
+    """The identity and the stamp of every entry of an open directory."""
+    snapshot: dict[str, tuple[int, int, int, int]] = {}
+    try:
+        entries = os.listdir(fd)
+    except OSError:
+        return snapshot
+    for entry in entries:
+        try:
+            info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
+        except OSError:
+            continue
+        snapshot[entry] = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    return snapshot
+
+
+def _remove_tree(fd: int, snapshot: dict[str, tuple[int, int, int, int]]) -> int:
+    """Remove the entries of a directory that have not changed since the
+    snapshot, through the descriptor of the directory.
+
+    An entry that was written after the snapshot is kept, so a save that
+    landed after the worktree was moved aside is never lost. The number of
+    entries that were kept is returned.
+    """
+    kept = 0
+    for entry, stamp in snapshot.items():
+        try:
+            info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
+        except OSError:
+            continue
+        if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != stamp:
+            kept += 1
+            continue
+        if stat.S_ISDIR(info.st_mode):
+            try:
+                child = os.open(entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except OSError:
+                kept += 1
+                continue
+            try:
+                kept += _remove_tree(child, _snapshot_directory(child))
+            finally:
+                os.close(child)
+            try:
+                os.rmdir(entry, dir_fd=fd)
+            except OSError:
+                kept += 1
+            continue
+        try:
+            os.unlink(entry, dir_fd=fd)
+        except OSError:
+            kept += 1
+    return kept
+
+
 def _aside_path(path: Path) -> Path | None:
     """A unique path next to a worktree, on the same filesystem."""
     parent = path.parent
@@ -1720,8 +1775,11 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     continue
                 try:
                     registered = (registration / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+                    registration_info = os.stat(registration)
+                    registration_identity = (registration_info.st_dev, registration_info.st_ino)
                 except OSError:
                     registered = ""
+                    registration_identity = (0, 0)
                 if registered.startswith("ref: "):
                     try:
                         registered = git(repo_root, "rev-parse", registered[len("ref: "):]).strip()
@@ -1801,8 +1859,56 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_not_moved_aside"]
                     prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": False, "error": str(exc)})
                     continue
+                # The tree that was moved aside has to be the one that was
+                # verified. If it is not, it is put back where it was and the
+                # removal is refused.
+                try:
+                    aside = os.open(moved_tree, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                except OSError:
+                    aside = None
+                if aside is None:
+                    append_removal(state_root, candidate, "removal_failed")
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_not_moved_aside"]
+                    continue
+                try:
+                    info = os.fstat(aside)
+                    aside_identity = f"{info.st_dev}:{info.st_ino}"
+                except OSError:
+                    aside_identity = ""
+                if expected_identity and aside_identity != expected_identity:
+                    os.close(aside)
+                    try:
+                        os.rename(moved_tree, candidate["path"])
+                    except OSError:
+                        pass
+                    append_removal(state_root, candidate, "removal_blocked")
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_replaced_before_remove"]
+                    continue
+                try:
+                    kept = _remove_tree(aside, _snapshot_directory(aside))
+                finally:
+                    os.close(aside)
+                try:
+                    os.rmdir(moved_tree)
+                except OSError:
+                    kept += 1
                 candidate["moved_aside_to"] = str(moved_tree)
-                prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": True, "error": None, "moved_aside_to": str(moved_tree)})
+                candidate["kept_entries"] = kept
+                if kept == 0:
+                    # The tree is gone, so its registration is pruned. It is
+                    # the registration the worktree owned, and its identity
+                    # was checked before the removal.
+                    try:
+                        info = os.stat(registration)
+                        if (info.st_dev, info.st_ino) == registration_identity:
+                            shutil.rmtree(registration)
+                        else:
+                            candidate["registration_pruned"] = False
+                    except OSError:
+                        candidate["registration_pruned"] = False
+                prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": True, "error": None, "moved_aside_to": str(moved_tree), "kept_entries": kept})
                 left = Path(candidate["path"])
                 if left.exists() and root_identity(left) == expected_identity:
                     append_removal(state_root, candidate, "removal_failed")
