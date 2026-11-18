@@ -917,6 +917,21 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue(other.exists(), "the file of another client must stay")
         self.assertEqual(other.read_text(encoding="utf-8"), "staged work of another client\n")
 
+    def test_a_refused_publish_leaves_no_temporary_file(self):
+        # The publication writes a private file first, so a refused publish
+        # leaves neither the editor's file nor a temporary file behind.
+        repo = Path(self.tmp.name) / "publish-repo"
+        repo.mkdir()
+        git(repo, "init", "-b", "main")
+        git(repo, "config", "user.name", "Fixture")
+        git(repo, "config", "user.email", "fixture@example.test")
+        commit(repo, "a.txt", "a\n")
+        target = repo / "AGENTS.md"
+        target.write_text("saved by an editor\n", encoding="utf-8")
+        self.assertFalse(cleaner._exclusive_write(repo, Path("AGENTS.md"), b"recovered\n", 0o644))
+        self.assertEqual(target.read_text(encoding="utf-8"), "saved by an editor\n")
+        self.assertEqual([item.name for item in repo.iterdir() if item.name.startswith(".cleaner-")], [])
+
     def test_a_real_change_is_never_cleared(self):
         (self.repo / "notes.txt").write_text("real work\n", encoding="utf-8")
         records = cleaner.status_for(self.repo)

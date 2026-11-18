@@ -455,26 +455,39 @@ def _set_index_to_head(repo: Path, name: str, entry: tuple[str, str, bytes] | No
 
 
 def _exclusive_write(repo: Path, relative: Path, data: bytes, mode: int) -> bool:
-    """Write bytes to a path only while nothing is there yet.
+    """Publish bytes at a path, without overwriting anything.
 
-    The create is exclusive and relative to a directory descriptor that was
-    opened without following links, so a save that landed in between keeps
-    its own file, the caller still holds the copy it was going to restore,
-    and a link in the path cannot redirect the write out of the worktree.
+    The bytes are written to a private file first and the finished file is
+    published with a link, which is atomic and refuses a path that already
+    exists. A save that lands at the path keeps its own file, and a save
+    that lands after the publication sees a complete file.
     """
     parent = _open_parent_fd(repo, relative.parent)
     if parent is None:
         return False
+    temporary: Path | None = None
     try:
         try:
-            descriptor = os.open(relative.name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode, dir_fd=parent)
+            descriptor, name = tempfile.mkstemp(dir=repo / relative.parent, prefix=".cleaner-", suffix=".tmp")
         except OSError:
             return False
+        temporary = Path(name)
         with os.fdopen(descriptor, "wb") as handle:
+            os.fchmod(handle.fileno(), mode)
             handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, relative.name, dst_dir_fd=parent)
         return True
+    except OSError:
+        return False
     finally:
         os.close(parent)
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
 
 def _read_at(parent: int, name: str) -> bytes | None:
@@ -623,7 +636,7 @@ def _restore_link(repo: Path, relative: Path, target: bytes) -> bool:
         os.close(parent)
 
 
-def _restore_moved(relative: Path, moved: Path, source: int, trash: Path) -> bool:
+def _restore_moved(repo: Path, relative: Path, moved: Path, source: int, trash: Path) -> bool:
     """Put a moved file back at its own path, but only when that path is free.
 
     The create is exclusive, so a path that became occupied keeps the file
@@ -646,17 +659,7 @@ def _restore_moved(relative: Path, moved: Path, source: int, trash: Path) -> boo
             # moved file stays in the recovery storage.
             return False
     else:
-        try:
-            descriptor = os.open(relative.name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode, dir_fd=source)
-        except OSError:
-            return False
-        try:
-            # The mode is set on the descriptor, so a name that was replaced
-            # in between cannot make the call follow a link.
-            os.fchmod(descriptor, mode)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(data)
-        except OSError:
+        if not _exclusive_write(repo, relative, data, mode):
             return False
     # The moved original stays in the recovery storage: an editor that still
     # has it open can finish saving into it, and that save has to survive.
@@ -723,7 +726,7 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
             # being cleared. It goes back to its own path when that path is
             # free, so the change stays in the worktree instead of the file
             # disappearing from it.
-            _restore_moved(relative, moved, source, trash)
+            _restore_moved(repo, relative, moved, source, trash)
             return False
         after = _file_bytes(moved)
         if after != expected:
