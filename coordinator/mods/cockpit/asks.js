@@ -5,6 +5,7 @@ const TRAILING = /[\s>*_`"'”’)\]]+$/;
 const WAITING = /\bWAITING:/;
 
 export const NEEDS = "needs";
+export const STUCK = "stuck";
 export const DEAD = "dead";
 
 // The last thing a turn said is a question, or a WAITING: line, when it ends that way.
@@ -80,10 +81,11 @@ export function needReasons(group, reviewFailed, now) {
   return reasons;
 }
 
-// The lane of a group, from live facts only: its reasons to need Shyam, thread state, then the open PR's CI and review.
+// The lane of a group, from live facts only: a question for Shyam, other reasons the coordinator can fix, thread state, then the open PR's CI and review.
 // `reviewCleared` is called only for an open PR whose CI is not failing or pending.
 export function laneOf(group, reasons, reviewCleared) {
-  if (reasons.length) return NEEDS;
+  if (reasons.includes("question")) return NEEDS;
+  if (reasons.length) return STUCK;
   const column = columnOf(group);
   if (column !== "done" || group.info.status !== "open") return column;
   const ci = group.info.gh?.ci ?? "loading";
