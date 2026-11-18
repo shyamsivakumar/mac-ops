@@ -1704,11 +1704,11 @@ def _remove_recovery_copy(path: Path, older_than: float) -> bool:
         except OSError:
             return False
         try:
-            moved = os.stat(target)
+            moved = os.lstat(target)
         except OSError:
             return False
-        if (moved.st_dev, moved.st_ino) != identity:
-            # The directory that was moved is not the one that was checked, so
+        if not stat.S_ISDIR(moved.st_mode) or (moved.st_dev, moved.st_ino) != identity:
+            # The entry that was moved is not the directory that was checked, so
             # it goes back where it was.
             try:
                 os.rename(target, path)
