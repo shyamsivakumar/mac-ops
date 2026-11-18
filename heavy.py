@@ -64,6 +64,7 @@ TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 QUEUE_FILE_PATTERN = re.compile(r"^queue-([0-9a-f]{32})\.json$")
 SIMULATOR_DESTINATION_MARKER = "platform=iOS Simulator"
 SIMULATOR_RUNTIME_MARKER = "SimulatorRuntime"
+ENV_OPTIONS_WITH_OPERAND = ("-u", "-C", "-S", "--unset", "--chdir", "--split-string")
 SIMULATOR_MEMORY_CREDIT_FRACTION = 0.125
 
 
@@ -441,6 +442,9 @@ def effective_executable(argv: Sequence[str]) -> Optional[str]:
     index = 1
     while index < len(argv):
         argument = str(argv[index])
+        if argument in ENV_OPTIONS_WITH_OPERAND:
+            index += 2
+            continue
         if argument.startswith("-") or "=" in argument:
             index += 1
             continue

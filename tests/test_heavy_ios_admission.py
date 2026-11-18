@@ -795,12 +795,78 @@ class BuildIdentityTests(unittest.TestCase):
             "xcodebuild",
         )
         self.assertEqual(
+            heavy.effective_executable(["/usr/bin/env", "-u", "CI", "xcodebuild"]),
+            "xcodebuild",
+        )
+        self.assertEqual(
+            heavy.effective_executable(["/usr/bin/env", "-u", "CI", "CI=1", "xcodebuild"]),
+            "xcodebuild",
+        )
+        self.assertEqual(
             heavy.effective_executable(["/bin/echo", "xcodebuild"]),
             "echo",
         )
 
     def test_the_supervisor_classifies_a_wrapped_build(self):
         """The supervisor, not the test, decides what a wrapped command is."""
+        registry = Mock()
+        registry.uid = 501
+        registry.directory = Path('/nonexistent-heavy-test')
+        registry.lock.side_effect = contextlib.nullcontext
+        active = [
+            {
+                'job_id': 'first', 'task_key': 'one', 'task_id': 'one',
+                'role': 'ordinary', 'command_basename': 'xcodebuild',
+                'state': 'running', 'created_ns': 1,
+                'supervisor': {'boot_id': 'boot'}, 'workload': {'pid': 100},
+            }
+        ]
+        registry.records.side_effect = lambda: list(active)
+        registry.remove_queue.side_effect = lambda qid: None
+        clock = {'now': 700}
+
+        def tick():
+            clock['now'] += 600
+            return clock['now']
+
+        deps = heavy.SupervisorDeps(
+            monotonic_ns=lambda: 700_000_000_000, clock=tick,
+            wall_clock=lambda: 700, boot_reader=lambda: 'boot',
+            process_table_reader=lambda: {}, legacy_slots=lambda table: 0,
+            sample=lambda: sample(16, 5), sleep=lambda seconds: None)
+        with patch.object(heavy, '_legacy_draining', return_value=False), \
+                patch.object(heavy, '_prune_finished_locked'), \
+                patch.object(
+                    heavy,
+                    '_prune_queue_records_locked',
+                    return_value=[
+                        {
+                            'queue_id': 'q', 'task_key': 'two',
+                            'role': 'ordinary', 'created_ns': 1,
+                            'process': {'pid': os.getpid()},
+                        }
+                    ],
+                ), \
+                patch.object(heavy, '_supervisor_identity', return_value={'pid': os.getpid()}), \
+                patch.object(heavy, '_identity_matches', return_value=True), \
+                patch.object(heavy, '_read_capacity_config', return_value={'heavy_slots': 2}), \
+                patch.object(heavy, '_log_event', return_value=None), \
+                patch.object(heavy, '_enqueue_job', return_value='q'), \
+                patch.object(heavy, '_task_identity', return_value=('two', 'two')), \
+                patch.object(
+                    heavy, 'simulator_memory_credit_bytes', return_value=2 * heavy.GIB):
+            with self.assertRaises(heavy.HeavyError) as caught:
+                heavy.run_supervisor(
+                    [
+                        "/usr/bin/env", "-u", "CI", "xcodebuild",
+                        "-destination", "platform=iOS Simulator,name=CI-iPhone",
+                    ],
+                    registry=registry,
+                    deps=deps,
+                )
+        self.assertIn('xcodebuild-busy', str(caught.exception))
+
+    def test_the_supervisor_classifies_an_env_assignment(self):
         registry = Mock()
         registry.uid = 501
         registry.directory = Path('/nonexistent-heavy-test')
