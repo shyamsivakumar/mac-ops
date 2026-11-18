@@ -519,6 +519,20 @@ for argv in (["gh", "repo", "list"], ["gh", "repo", "view"],
 check("gh repo is classified by subcommand",
       _repo_routes == ["graphql", "graphql", "core", "other"], str(_repo_routes))
 
+# A filtered read that carries the caller's headers counts its blocks: the
+# caller asked for them, so the pages are visible even though the bodies are
+# formatted, and the text is returned unchanged.
+set_mode("bodyhttp")
+rows_before = len(rows())
+filtered_include = run(["gh", "api", "--include", "--paginate", "--jq", ".[].body",
+                        "repos/a/b/bodies"])
+check("a filtered header-carrying read counts its pages",
+      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a filtered header-carrying read keeps its text",
+      filtered_include.stdout.count("HTTP/1.1 200 OK") == 3,
+      repr(filtered_include.stdout[:40]))
+set_mode("200")
+
 # A filter value named `graphql` does not make a REST read GraphQL.
 rows_before = len(rows())
 run(["gh", "api", "repos/a/b/issues?state=open", "--jq", "graphql"])
@@ -595,8 +609,8 @@ set_mode("200")
 set_mode("bodyhttp")
 rows_before = len(rows())
 run(["gh", "api", "--include", "--paginate", "--jq", ".[].body", "repos/a/b/bodies"])
-check("filtered caller-header text is not counted as pages",
-      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
+check("a filtered caller-header read counts its blocks",
+      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
 set_mode("200")
 
 # A formatted read is never replayed: one invocation, and its row says the
@@ -667,8 +681,8 @@ check("a caller-requested header read is not conditional",
 # counted from those headers, and its output keeps them.
 rows_before = len(rows())
 included_pages = run(["gh", "api", "--include", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
-check("a filtered caller-include read is one invocation",
-      len(rows()) - rows_before == 1, f"rows={len(rows()) - rows_before}")
+check("a filtered caller-include read counts its blocks",
+      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
 check("a caller-included paginated read keeps its headers",
       included_pages.stdout.count("HTTP/") == 3 and "name1" in included_pages.stdout,
       repr(included_pages.stdout[:40]))
