@@ -72,7 +72,7 @@ PROHIBITION = re.compile(r"(?i)\b(?:must not|do not|never|without)\s+"
                           r"(?:change|changes|changing|touch|touches|touching|edit|edits|editing|include|includes)\b")
 SENTENCE = re.compile(r";|\.\s")
 # A Markdown heading opens a section, and a section states its own intent.
-HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]*(.*)$")
+HEADING = re.compile(r"^[ \t]{0,3}(#{1,6})[ \t]*(.*)$")
 # A heading that declares the scope of the change: the section under it is
 # the ticket's declaration of what it changes.
 SCOPE_HEADING = re.compile(r"(?i)^[*_ ]*scope\b")
@@ -113,16 +113,27 @@ def scope_texts(body):
             plain.append(text)
         return kind
 
+    level = 0
     for line in (body or "").splitlines():
         heading = HEADING.match(line)
         if heading:
-            named = (heading.group(1) or "").strip()
+            named = (heading.group(2) or "").strip()
+            depth = len(heading.group(1))
             if EXCLUSION_HEADING.match(named):
                 kind = "exclusion"
+                level = depth
             elif SCOPE_HEADING.match(named):
                 kind = "declared"
+                level = depth
+            elif depth > level and level:
+                # A heading under the current one belongs to the current
+                # section, so it keeps the section's intent: a file under
+                # "### Protected files" is still excluded by the
+                # "## Out of scope" section it sits in.
+                pass
             else:
                 kind = "plain"
+                level = depth
         for sentence in SENTENCE.split(line):
             position = 0
             for match in SEGMENT.finditer(sentence):

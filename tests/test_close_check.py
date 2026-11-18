@@ -266,6 +266,21 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("tests/test_alarm_panel.py", item["detail"])
         self.assertNotIn("pass", item["status"])
 
+    def test_a_nested_heading_keeps_the_enclosing_exclusion(self):
+        """A heading under a section belongs to that section.
+
+        "### Protected files" sits inside "## Out of scope", so the file
+        it names stays excluded even though the declared directory would
+        otherwise cover it.
+        """
+        check = close_check()
+        ticket = ("## Scope\nIn: coordinator/bin/\n## Out of scope\n### Protected files\n"
+                  "coordinator/bin/gate_policy.py\n")
+        item = check.item_scope(ticket, ["coordinator/bin/ticket",
+                                         "coordinator/bin/gate_policy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("coordinator/bin/gate_policy.py", item["detail"])
+
     def test_a_scope_heading_declares_the_scope(self):
         """The gate's counterexample: the scope is declared by a heading.
 
