@@ -79,9 +79,13 @@ turned out to be blocked (`waiting <repo>#<pr>`). The first reviewer of a head
 is chosen before the locks are taken, so it is checked again under them and
 chosen again on a free reviewer (`rechoosing <repo>#<pr>`).
 
-The lock order is the block store lock, then the queue lock. Gatekeep takes
-them in that order, so a writer of the store that runs outside the queue lock
-cannot land a block between the check and the write. This branch ships no
+The lock order is the block store lock, then the queue lock. Gatekeep, `start`
+and `dispatch` take them in that order, so a writer of the store that runs
+outside the queue lock cannot land a block between the check and the write.
+`dispatch` and `start` hold both locks through the launch: a queued gate whose
+reviewer is blocked when the dispatcher reaches it stays queued (`waiting: its
+gate reviewer is blocked`) and does not use up an attempt, and a block cannot
+land between that check and the `t3_thread_launch` call. This branch ships no
 writer of the store: the store (MO-1092) takes the same lock file.
 
 A loaded LaunchAgent runs after login. Reboot survival requires a real reboot
