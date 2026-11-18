@@ -81,18 +81,19 @@ EXCLUSION_HEADING = re.compile(
 def scope_texts(body):
     """The ticket's permission text and the ticket's exclusion text.
 
-    Everything the ticket says is permission until the ticket excludes
-    something. An "out" segment, a sentence that forbids a change, and
-    the words after them are exclusions, and an exclusion holds to the
-    end of its section: a Markdown list under an `Out of scope:` heading
-    stays excluded, because the list continues the exclusion the heading
-    began. A Markdown heading states its section's intent again, and an
-    "in" marker states it inside a line, so the words after either one
-    are permission.
+    An "out" segment, a sentence that forbids a change, and the words
+    after them are exclusions, and an exclusion holds to the end of its
+    section: a Markdown list under an `Out of scope:` heading stays
+    excluded, because the list continues the exclusion the heading began.
+    A Markdown heading states its section's intent again, and an "in"
+    marker states it inside a line, so the words after it are the
+    declaration. When the ticket declares its scope, that declaration is
+    the permission and the rest of the ticket is background.
     """
-    permission = []
+    declared = []
+    plain = []
     exclusion = []
-    kind = "permission"
+    kind = "plain"
 
     def record(text, kind):
         """File one piece of text, and answer the kind it leaves behind."""
@@ -101,21 +102,33 @@ def scope_texts(body):
         if PROHIBITION.search(text):
             exclusion.append(text)
             return kind
-        (permission if kind == "permission" else exclusion).append(text)
+        if kind == "exclusion":
+            exclusion.append(text)
+        elif kind == "declared":
+            declared.append(text)
+        else:
+            plain.append(text)
         return kind
 
     for line in (body or "").splitlines():
         heading = HEADING.match(line)
         if heading:
             named = (heading.group(1) or "").strip()
-            kind = "exclusion" if EXCLUSION_HEADING.match(named) else "permission"
+            kind = "exclusion" if EXCLUSION_HEADING.match(named) else "plain"
         for sentence in SENTENCE.split(line):
             position = 0
             for match in SEGMENT.finditer(sentence):
                 kind = record(sentence[position:match.start()], kind)
-                kind = "exclusion" if match.group(1).lower() in OUT_MARKERS else "permission"
+                kind = ("exclusion" if match.group(1).lower() in OUT_MARKERS
+                        else "declared")
                 position = match.end()
             kind = record(sentence[position:], kind)
+    # A ticket that declares its scope is judged by that declaration: the
+    # rest of the ticket is background, and a name in the background does
+    # not widen the scope of the change the ticket asked for. A ticket
+    # that declares no scope has no background to tell from, so everything
+    # it says is permission.
+    permission = declared if declared else plain
     return "\n".join(permission), "\n".join(exclusion)
 
 
@@ -249,17 +262,18 @@ def token_matches(path, token):
     return base == token
 
 
-def names_a_file(tokens):
-    """Does the ticket name a file, or a glob that can hold one?
+def names_a_scope(tokens):
+    """Does the ticket name something that bounds the scope?
 
-    A directory token and a reference outside the repository (another
-    repository's name, a home path) can only widen what is in scope, so a
-    ticket that names only those cannot say whether a diff left its
-    scope: the scope cannot be judged, and an unjudged scope authorizes
-    no close.
+    A file name, a path, or a glob. A path is a directory of the
+    repository, and it bounds every changed file under it, so a ticket
+    that declares a directory says where its change is and each changed
+    path is checked against that boundary.
     """
     for token in tokens:
         if any(char in token for char in "*?["):
+            return True
+        if "/" in token:
             return True
         if FILE_TOKEN.fullmatch(token.rsplit("/", 1)[-1]):
             return True
@@ -283,7 +297,7 @@ def item_scope(body, files, evidence=""):
         return {"item": "scope", "status": FAIL, "required": True,
                 "detail": "the ticket excludes it: " + ", ".join(sorted(blocked))}
     tokens = scope_tokens(body)
-    if not tokens or not names_a_file(tokens):
+    if not tokens or not names_a_scope(tokens):
         return {"item": "scope", "status": FAIL, "required": True,
                 "detail": ("the ticket names no file in this repository, so the scope cannot be "
                            "judged: the ticket has to name the files it changes")}
@@ -541,15 +555,16 @@ def run_check(repo, pr, issue=None, reader=None):
         body = ticket.get("body") or ""
         title = ticket.get("title") or title
     proof_path = proof_file.path_for(ticket_key(title), number)
-    if not changed_proof(files, proof_path):
+    if reader is None:
+        state, text = proof_file.fetch(repo, proof_path, merge)
+    else:
+        state, text = reader(proof_path, merge)
+    if state == proof_file.FOUND and not changed_proof(files, proof_path):
+        # The file is on the base branch: it is an earlier run's proof.
         state, text = proof_file.MISSING, None
         proof_detail = (f"the proof file at {proof_path} is not part of this change: the pull "
                         "request does not change it, so it is an earlier run's proof")
-    elif reader is None:
-        state, text = proof_file.fetch(repo, proof_path, merge)
-        proof_detail = ""
     else:
-        state, text = reader(proof_path, merge)
         proof_detail = ""
     if reader is None:
         report, report_detail = report_state(repo, merge)

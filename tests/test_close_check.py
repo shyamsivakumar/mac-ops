@@ -175,15 +175,42 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(item["status"], check.FAIL)
         self.assertIn("coordinator/bin/gate_policy.py", item["detail"])
 
-    def test_a_heading_ends_an_exclusion(self):
-        """The next section states its own intent: permission again."""
+    def test_a_heading_does_not_widen_a_declared_scope(self):
+        """A later section is background once the ticket declares its scope.
+
+        The ticket declares its scope, so the declaration is the
+        permission: a file named in a later section is a reference, not a
+        permission.
+        """
         check = close_check()
-        ticket = ("## Scope and non-goals\nIn: checklist at close. Out: `gate_policy.py`\n\n"
+        ticket = ("## Scope and non-goals\nIn: `close_check.py`. Out: `gate_policy.py`\n\n"
                   "## Files\n`close_check.py` and `lane_driver.py`.\n")
-        self.assertEqual(check.scope_tokens(ticket), {"close_check.py", "lane_driver.py"})
+        self.assertEqual(check.scope_tokens(ticket), {"close_check.py"})
         item = check.item_scope(ticket, ["coordinator/bin/close_check.py",
                                          "coordinator/overnight/lane_driver.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("coordinator/overnight/lane_driver.py", item["detail"])
+
+    def test_a_background_reference_is_not_a_permission(self):
+        """The gate's counterexample: the context names another file."""
+        check = close_check()
+        ticket = "In: src/parser.py\n\n## Context\nsrc/legacy.py calls the parser\n"
+        self.assertEqual(check.scope_tokens(ticket), {"src/parser.py"})
+        item = check.item_scope(ticket, ["src/parser.py", "src/legacy.py"])
+        self.assertEqual(item["status"], check.FAIL)
+        self.assertIn("src/legacy.py", item["detail"])
+
+    def test_a_declared_directory_bounds_the_scope(self):
+        """A declared directory of the repository says where the change is."""
+        check = close_check()
+        ticket = "In: coordinator/bin/\n"
+        self.assertEqual(check.scope_tokens(ticket), {"coordinator/bin"})
+        item = check.item_scope(ticket, ["coordinator/bin/ticket"])
         self.assertEqual(item["status"], check.PASS)
+        outside = check.item_scope(ticket, ["coordinator/bin/ticket",
+                                            "coordinator/overnight/lane_driver.py"])
+        self.assertEqual(outside["status"], check.FAIL)
+        self.assertIn("coordinator/overnight/lane_driver.py", outside["detail"])
 
     def test_a_prohibition_phrase_excludes_only_what_it_forbids(self):
         """A phrase that forbids no file excludes no file.
