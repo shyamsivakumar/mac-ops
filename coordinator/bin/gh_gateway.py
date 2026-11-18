@@ -596,6 +596,31 @@ def looks_like_repo(value):
     return 2 <= len(parts) <= 3 and all(part.strip() for part in parts)
 
 
+LONG_VALUE_FLAGS = tuple(flag for flag in VALUE_FLAGS if flag.startswith("--"))
+
+
+def words_without_long_values(argv):
+    """Return the command's words with every long flag's value removed.
+
+    Long flags keep their arity across `gh` subcommands, so pairing them is
+    safe; short flags do not, so they are left in place and never consume a
+    word. A search value such as `-Rother.example/o/r` is therefore removed
+    before any selector is looked for."""
+    words = [str(word) for word in (argv or [])[1:]]
+    kept, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+            continue
+        if word in LONG_VALUE_FLAGS:
+            skip = True
+            continue
+        if any(word.startswith(flag + "=") for flag in LONG_VALUE_FLAGS):
+            continue
+        kept.append(word)
+    return kept
+
+
 def argv_host(argv):
     """Return the host a command targets, or "" when it names none.
 
@@ -605,14 +630,16 @@ def argv_host(argv):
     short flag with the next word: `-a` and `-w` mean different things in
     different `gh` subcommands, so `gh run list -a -R ent.example/o/r` must
     keep its selector, and `-w -Release` is not a selector at all."""
-    words = [str(word) for word in (argv or [])[1:]]
+    raw = [str(word) for word in (argv or [])[1:]]
+    for index, word in enumerate(raw):
+        if word == "--hostname" and index + 1 < len(raw) and not raw[index + 1].startswith("-"):
+            return raw[index + 1]
+        if word.startswith("--hostname="):
+            return word.split("=", 1)[1]
+    words = words_without_long_values(argv)
     selector = os.environ.get("GH_REPO") or ""
     for index, word in enumerate(words):
         following = words[index + 1] if index + 1 < len(words) else ""
-        if word == "--hostname" and following and not following.startswith("-"):
-            return following
-        if word.startswith("--hostname="):
-            return word.split("=", 1)[1]
         if word in ("-R", "--repo") and looks_like_repo(following):
             selector = following
         elif word.startswith("--repo="):
