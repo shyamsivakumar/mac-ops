@@ -569,13 +569,9 @@ def _rename_exclusive(source: Path, destination: Path) -> bool:
         if renamex_np(os.fsencode(str(source)), os.fsencode(str(destination)), rename_exclusive) == 0:
             return True
         return False
-    if os.path.exists(destination):
-        return False
-    try:
-        os.rename(source, destination)
-    except OSError:
-        return False
-    return True
+    # Without an atomic rename that refuses an occupied destination the move
+    # is refused: a directory that was created in between would be replaced.
+    return False
 
 
 def _unlink_verified(fd: int, name: str, stamp: tuple[int, int, int, int]) -> int:
@@ -1997,7 +1993,7 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                                     # refuses an occupied path, so a save at
                                     # that path is never replaced and the
                                     # aside copy is kept whole.
-                                    if not _rename_exclusive(Path(aside), Path(candidate["path"])):
+                                    if not _rename_exclusive(Path(candidate["path"]).parent / aside, Path(candidate["path"])):
                                         candidate["checkout_conflict"] = True
                             os.close(parent)
                     # The registration is removed through its own descriptor, so a
