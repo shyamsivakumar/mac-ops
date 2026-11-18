@@ -59,6 +59,9 @@ def main() -> int:
         (repo / "x.specstory" / "notes").write_text("notes\n", encoding="utf-8")
         git(repo, "add", "x.specstory/notes")
         command(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "notes"])
+        # A committed bootstrap file, so a worktree can rename it.
+        (repo / ".specstory").mkdir()
+        commit(repo, ".specstory/old.md", "old\n")
         git(repo, "push", "-u", "origin", "main")
         git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
         shas: dict[str, str] = {}
@@ -87,11 +90,14 @@ def main() -> int:
             (path / ".agents").mkdir(parents=True)
             (path / ".agents" / "legacy-instructions.md").write_text("legacy\n", encoding="utf-8")
         (paths["real"] / "real-work.txt").write_text("real work\n", encoding="utf-8")
+        # A rename of one bootstrap file onto another is the bootstrap too, and
+        # it has already taken the source away, so the cleanup restores it.
+        git(paths["bootstrap"], "mv", ".specstory/old.md", ".specstory/new.md")
         # One rule added by hand is not the bootstrap block: real work.
         with (paths["partial"] / "AGENTS.md").open("a", encoding="utf-8") as handle:
             handle.write("- CI is agent checks only: no Woodpecker, no GitHub Actions.\n")
         # A rename of a real file into .specstory/ is real work.
-        (paths["renamed"] / ".specstory").mkdir(parents=True)
+        (paths["renamed"] / ".specstory").mkdir(exist_ok=True)
         git(paths["renamed"], "mv", "renamed.txt", ".specstory/renamed.txt")
         # A real file whose name starts like a bootstrap path is real work.
         (paths["shifted"] / "x.specstory" / "notes").write_text("edited\n", encoding="utf-8")
@@ -161,7 +167,7 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
         assert dry["eligible"] == 2, dry["categories"]
         assert by_name["bootstrap"]["eligible"] is True, by_name["bootstrap"]["reasons"]
         assert by_name["bootstrap"]["dirty"] is False, by_name["bootstrap"]
-        assert sorted(by_name["bootstrap"]["bootstrap_changes"]) == [".agents/legacy-instructions.md", ".specstory/history/session.md", "AGENTS.md"], by_name["bootstrap"]
+        assert sorted(by_name["bootstrap"]["bootstrap_changes"]) == [".agents/legacy-instructions.md", ".specstory/history/session.md", ".specstory/new.md", "AGENTS.md"], by_name["bootstrap"]
         assert by_name["real"]["eligible"] is False and "worktree_dirty" in by_name["real"]["reasons"], by_name["real"]
         assert by_name["partial"]["eligible"] is False and "worktree_dirty" in by_name["partial"]["reasons"], by_name["partial"]
         assert by_name["partial"]["bootstrap_changes"] == [], by_name["partial"]
