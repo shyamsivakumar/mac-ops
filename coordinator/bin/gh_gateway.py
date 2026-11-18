@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -294,6 +295,11 @@ def conditional(argv):
     words = [str(word) for word in argv[1:]]
     if not words or words[0] != "api":
         return False
+    # A caller that asked for the headers gets them: the conditional path
+    # splits the response and would hand back only the body. `-i` is the
+    # short form of `--include`.
+    if "--include" in words or "-i" in words:
+        return False
     return not any(word in ("--paginate", "--slurp", "-X", "--method") for word in words)
 
 
@@ -309,15 +315,36 @@ def _read_etag(argv):
         return None
 
 
-def _write_etag(argv, etag, stdout):
+def _atomic_write(path, text):
+    """Write one file with a temporary name of this writer's own.
+
+    Two callers may refresh the same key at once. A shared `.tmp` path lets
+    one rename the file while the other is still writing it, so the entry
+    can hold a partial write. Every writer takes its own temporary file and
+    the rename stays atomic."""
     try:
-        path = _etag_path(argv)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"etag": etag, "stdout": stdout}))
-        os.replace(tmp, path)
+        handle = tempfile.NamedTemporaryFile("w", dir=str(path.parent),
+                                             prefix=path.name + ".", suffix=".tmp",
+                                             delete=False)
+        try:
+            with handle:
+                handle.write(text)
+            os.replace(handle.name, path)
+            return True
+        except OSError:
+            try:
+                os.unlink(handle.name)
+            except OSError:
+                pass
+            return False
     except OSError:
-        return
+        return False
+
+
+def _write_etag(argv, etag, stdout):
+    _atomic_write(_etag_path(argv),
+                  json.dumps({"etag": etag, "stdout": stdout}))
 
 
 def _split_headers(text):
@@ -437,14 +464,8 @@ def store(argv, stdout):
     """Keep one read's output for the rest of its TTL."""
     if not cacheable(argv) or not isinstance(stdout, str):
         return
-    try:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        path = CACHE_DIR / _key(argv)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"expiry": time.time() + LIST_TTL, "stdout": stdout}))
-        os.replace(tmp, path)
-    except OSError:
-        return
+    _atomic_write(CACHE_DIR / _key(argv),
+                  json.dumps({"expiry": time.time() + LIST_TTL, "stdout": stdout}))
 
 
 def filtered(argv):
@@ -512,7 +533,8 @@ def prepare(argv):
     response headers as well, and the status lines give the page count
     before formatting. A caller that runs its own subprocess uses this and
     `settle`, so every caller counts pages the same way."""
-    needs = (_gh(argv) and "--paginate" in argv and "--include" not in argv
+    has_include = "--include" in argv or "-i" in argv
+    needs = (_gh(argv) and "--paginate" in argv and not has_include
              and resource(argv) == CORE and filtered(argv))
     return (list(argv) + ["--include"] if needs else list(argv)), needs
 
@@ -522,6 +544,12 @@ def settle(argv, stdout, headers_counted):
     stdout = stdout or ""
     if headers_counted:
         return strip_headers(stdout), max(1, status_lines(stdout))
+    has_include = "--include" in argv or "-i" in argv
+    if (has_include and "--paginate" in argv
+            and resource(argv) == CORE and filtered(argv)):
+        # The caller asked for the headers itself: count the pages from
+        # them and leave its output exactly as gh wrote it.
+        return stdout, max(1, status_lines(stdout))
     return stdout, requests(argv, stdout)
 
 

@@ -38,13 +38,13 @@ if "rate_limit" in args:
 elif "auth" in args:
     print("github.com")
     print("  Token: sekrit-auth-token")
-elif "--include" in args and "--paginate" in args:
+elif ("--include" in args or "-i" in args) and "--paginate" in args:
     for name in ("name1", "name2", "name3"):
         print("HTTP/2.0 200 OK")
         print("content-type: application/json")
         print()
         print(name)
-elif "--include" in args:
+elif "--include" in args or "-i" in args:
     if mode == "304":
         print("HTTP/2.0 304 Not Modified")
         print('etag: "v1"')
@@ -307,6 +307,49 @@ secret = "sekrit-token-value"
 run(["gh", "api", "-H", f"Authorization: token {secret}", "repos/a/b/labels?per_page=100"])
 logged = (scratch / "usage.jsonl").read_text()
 check("the usage log holds no credential", secret not in logged and "Authorization" not in logged)
+
+# A caller that asks for the headers gets them back untouched, in both
+# spellings, and is never handled conditionally.
+set_mode("200")
+for spelling in ("--include", "-i"):
+    included = run(["gh", "api", spelling, "repos/a/b/labels?per_page=100"])
+    check(f"caller headers come back with {spelling}", "HTTP/" in included.stdout,
+          repr(included.stdout[:40]))
+check("a caller-requested header read is not conditional",
+      not any("labels" in line and "If-None-Match" in line
+              for line in calls.read_text().splitlines()))
+
+# A paginated formatted read that already carries the caller's headers is
+# counted from those headers, and its output keeps them.
+rows_before = len(rows())
+included_pages = run(["gh", "api", "--include", "--paginate", "--jq", ".[].name", "repos/a/b/tags"])
+check("a caller-included paginated read logs one row per page",
+      len(rows()) - rows_before == 3, f"rows={len(rows()) - rows_before}")
+check("a caller-included paginated read keeps its headers",
+      included_pages.stdout.count("HTTP/") == 3 and "name1" in included_pages.stdout,
+      repr(included_pages.stdout[:40]))
+
+# Two writers refreshing one entry use their own temporary file, so the
+# entry is always whole.
+code = f"""
+import json, sys, threading
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+path = gh_gateway.CACHE_DIR / "race-entry.json"
+
+def write(number):
+    for _ in range(60):
+        gh_gateway._atomic_write(path, json.dumps({{"expiry": 0, "stdout": str(number)}}))
+
+threads = [threading.Thread(target=write, args=(n,)) for n in range(8)]
+[t.start() for t in threads]
+[t.join() for t in threads]
+entry = json.loads(path.read_text())
+print("WHOLE", isinstance(entry.get("stdout"), str))
+"""
+race = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+check("concurrent writers leave a whole entry", "WHOLE True" in race.stdout,
+      race.stdout.strip()[:40] or race.stderr.strip()[-80:])
 check("the usage log holds no arguments",
       all("command" not in row for row in rows()), "rows carry caller, quota and verb")
 
