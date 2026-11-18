@@ -228,25 +228,40 @@ def blocked_launch(item):
     return None
 
 
+def put_receipt(head, thread_id):
+    receipts_path = path("dispatch-receipts.json")
+    receipts = load_receipts()
+    receipts[head] = thread_id
+    with open(receipts_path + ".tmp", "w") as f:
+        json.dump(receipts, f)
+    os.replace(receipts_path + ".tmp", receipts_path)
+
+
 def refuse_blocked_gate(queue, item, reason):
     """Take a gate item whose reviewer is blocked out of the queue.
 
-    The head keeps its record and the reviewers it already tried: only the
-    refused reviewer never ran, so only its attempt is undone.
+    The refused reviewer never ran, so its attempt is undone. A fallback
+    item carries the head record and receipt it replaced, and both come
+    back, so the head is retried on an eligible reviewer. A first launch has
+    nothing to restore, so its head is released and gated again.
     """
     release_action_key(queue, item)
+    heads = queue.setdefault("gatedHeads", {})
     head = item.get("head") or next(
-        (key for key, value in (queue.get("gatedHeads") or {}).items()
-         if gate_state(value)["id"] == item.get("id")), "")
+        (key for key, value in heads.items() if gate_state(value)["id"] == item.get("id")), "")
     identity = model_list.identity((item.get("args") or {}).get("modelSelection") or {})
     tried = (queue.get("gateReviewers") or {}).get(head)
     if tried and identity in tried:
         tried.remove(identity)
         if not tried:
             del queue["gateReviewers"][head]
-    record = (queue.get("gatedHeads") or {}).get(head)
-    if isinstance(record, dict):
-        record["moved"] = False
+    restore = item.get("restore")
+    if head and restore:
+        heads[head] = restore["record"]
+        if restore.get("receipt"):
+            put_receipt(head, restore["receipt"])
+    else:
+        heads.pop(head, None)
     log(f"REFUSED #{item['id']}: {reason}")
 
 
@@ -1792,6 +1807,8 @@ def cmd_gatekeep(a):
                 item = {"id": queue["next"], "tool": "t3_thread_launch", "args": args,
                         "title": args["title"], "priority": 5000, "head": key,
                         "builderModels": event.get("builderModels", [])}
+                if retried:
+                    item["restore"] = {"record": state, "receipt": receipts.get(key)}
                 queue["next"] += 1
                 queue["items"].append(item)
                 heads[key] = {"id": item["id"], "retries": retries,

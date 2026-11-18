@@ -475,7 +475,8 @@ class ReviewerFallbackTest(RetryLimitBase):
         self.assertIsNone(coordq.blocked_launch({"args": {"modelSelection": first}}))
 
     def drain_with(self, items, heads, before_launch=None, on_launch=None):
-        self.write_queue(heads=heads, items=items)
+        if items is not None:
+            self.write_queue(heads=heads, items=items)
         with open(os.path.join(QUEUE_DIR, "config.json"), "w") as f:
             json.dump({"cap": 5}, f)
         launches = []
@@ -516,14 +517,15 @@ class ReviewerFallbackTest(RetryLimitBase):
 
     def test_a_gate_blocked_after_it_was_admitted_is_not_launched(self):
         second = coordq.model_list.entries("review")[1]["selection"]
-        launches = self.drain_with([self.gate_item(second)], {self.key: {"id": 4, "moved": True}},
+        item = {**self.gate_item(second),
+                "restore": {"record": {"id": 3, "retries": 0, "moved": False}, "receipt": None}}
+        launches = self.drain_with([item], {self.key: {"id": 4, "moved": True}},
                                    before_launch=lambda: self.block(second))
         queue = self.read_queue()
         self.assertEqual(launches, [])
         self.assertEqual(queue["items"], [])
-        # The head keeps its record, so it is not a new head and a reviewer
-        # that already ran is not run again.
-        self.assertIn(self.key, queue["gatedHeads"])
+        # The head gets back the record it had before the refused fallback.
+        self.assertEqual(queue["gatedHeads"][self.key]["id"], 3)
 
     def test_an_interrupted_write_with_a_late_block_is_refused_at_launch(self):
         chosen = coordq.save
@@ -558,12 +560,13 @@ class ReviewerFallbackTest(RetryLimitBase):
         second = coordq.model_list.entries("review")[1]["selection"]
         identity = coordq.model_list.identity(second)
         first = coordq.model_list.identity(coordq.model_list.entries("review")[0]["selection"])
-        item = {"id": 9, "args": {"modelSelection": second}, "head": self.key}
-        queue = {"items": [item], "gatedHeads": {self.key: {"id": 4, "moved": True}},
+        item = {"id": 9, "args": {"modelSelection": second}, "head": self.key,
+                "restore": {"record": {"id": 4, "moved": False}, "receipt": None}}
+        queue = {"items": [item], "gatedHeads": {self.key: {"id": 9, "moved": True}},
                  "gateReviewers": {self.key: [first, identity]}}
         coordq.refuse_blocked_gate(queue, item, "blocked")
-        # The head keeps its record and the reviewer that ran before it.
-        self.assertIn(self.key, queue["gatedHeads"])
+        # The head gets back its record and keeps the reviewer that ran before it.
+        self.assertEqual(queue["gatedHeads"][self.key]["id"], 4)
         self.assertEqual(queue["gateReviewers"][self.key], [first])
         self.assertFalse(queue["gatedHeads"][self.key]["moved"])
 
@@ -572,12 +575,53 @@ class ReviewerFallbackTest(RetryLimitBase):
         identity = coordq.model_list.identity(second)
         first = coordq.model_list.identity(coordq.model_list.entries("review")[0]["selection"])
         item = {"id": 9, "args": {"modelSelection": second,
-                                  "clientRequestId": self.key + ":" + second["model"] + ":retry"}}
+                                  "clientRequestId": self.key + ":" + second["model"] + ":retry"},
+                "restore": {"record": {"id": 4, "moved": False}, "receipt": None}}
         queue = {"items": [item], "gatedHeads": {self.key: {"id": 9, "moved": True}},
                  "gateReviewers": {self.key: [first, identity]}}
         coordq.refuse_blocked_gate(queue, item, "blocked")
         self.assertEqual(queue["gateReviewers"][self.key], [first])
         self.assertFalse(queue["gatedHeads"][self.key]["moved"])
+
+    def test_a_refused_fallback_is_retried_by_the_next_gatekeep(self):
+        coordq.load_receipts = self.saved["load_receipts"]
+        receipts_file = os.path.join(QUEUE_DIR, "dispatch-receipts.json")
+        with open(receipts_file, "w") as f:
+            json.dump({RECEIPT["requestId"]: "builder-1", self.key: "gate-1"}, f)
+        self.write_queue(heads=self.head())
+        self.run_gatekeep()
+        second = coordq.model_list.entries("review")[1]["selection"]
+        self.assertEqual(self.gate_items()[0]["args"]["modelSelection"], second)
+        with open(receipts_file) as f:
+            self.assertNotIn(self.key, json.load(f))
+        self.block(second)
+        launches = self.drain_with(None, None)
+        queue = self.read_queue()
+        self.assertEqual(launches, [])
+        self.assertEqual(queue["items"], [])
+        self.assertEqual(queue["gatedHeads"][self.key]["id"], 4)
+        with open(receipts_file) as f:
+            self.assertEqual(json.load(f)[self.key], "gate-1")
+        coordq.call = lambda tool, args, rules=None: (0, json.dumps(DEAD_GATE))
+        out, _ = self.run_gatekeep()
+        self.assertIn("regating o/r#7", out)
+        self.assertEqual(self.gate_items()[0]["args"]["modelSelection"],
+                         coordq.model_list.entries("review")[2]["selection"])
+
+    def test_a_refused_first_launch_is_gated_again_by_the_next_gatekeep(self):
+        self.write_queue()
+        self.run_gatekeep()
+        first = self.gate_items()[0]["args"]["modelSelection"]
+        self.block(first)
+        launches = self.drain_with(None, None)
+        queue = self.read_queue()
+        self.assertEqual(launches, [])
+        self.assertEqual(queue["items"], [])
+        self.assertNotIn(self.key, queue["gatedHeads"])
+        out, _ = self.run_gatekeep()
+        self.assertIn("queued " + self.key, out)
+        self.assertEqual(len(self.gate_items()), 1)
+        self.assertFalse(coordq.model_list.is_blocked(self.gate_items()[0]["args"]["modelSelection"]))
 
     def test_a_head_moves_down_the_chain_once(self):
         self.write_queue(heads=self.head())
