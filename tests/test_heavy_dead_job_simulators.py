@@ -271,7 +271,7 @@ class SimulatorShutdownTests(unittest.TestCase):
         record = {
             "job_id": "a" * 32,
             "task_id": "task",
-            "simulators": {"booted": [], "started_at": 1000.0},
+            "simulators": {"booted": [], "started_at": 1000.0, "named": [DEVICE_A, DEVICE_B]},
         }
         result = heavy.shutdown_simulators_booted_by_job(
             record,
@@ -307,7 +307,7 @@ class SimulatorShutdownTests(unittest.TestCase):
         record = {
             "job_id": "c" * 32,
             "task_id": "task",
-            "simulators": {"booted": [], "started_at": 1000.0},
+            "simulators": {"booted": [], "started_at": 1000.0, "named": [DEVICE_A]},
         }
         other = {
             "job_id": "d" * 32,

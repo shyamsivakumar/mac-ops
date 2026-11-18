@@ -72,7 +72,11 @@ def main():
     record = {
         "job_id": "0" * 31 + "2",
         "task_id": "proof-simulator-job",
-        "simulators": {"booted": sorted(before_devices), "started_at": started_at},
+        "simulators": {
+            "booted": sorted(before_devices),
+            "started_at": started_at,
+            "named": [udid],
+        },
     }
     stopped = heavy.shutdown_simulators_booted_by_job(record)
     print("devices shut down when the job ended:", stopped)

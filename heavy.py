@@ -2170,10 +2170,16 @@ def _is_simulator_job(command_basename: str, argv: Sequence[str]) -> bool:
     return any(os.path.basename(str(arg)) == "simctl" for arg in argv)
 
 
-def simulator_booted_devices(
+SIMULATOR_BOOTED_STATES = ("Booted", "Booting")
+SIMULATOR_UDID_PATTERN = re.compile(
+    r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+)
+
+
+def simulator_devices(
     *, command_runner: Callable[[Sequence[str], float], str] = _run_native
-) -> Dict[str, str]:
-    """Return every booted or booting simulator device and its runtime identifier."""
+) -> List[Dict[str, str]]:
+    """Return every simulator device with its name, runtime identifier, and state."""
     output = command_runner(
         ["/usr/bin/xcrun", "simctl", "list", "devices", "--json"], SIMCTL_TIMEOUT
     )
@@ -2184,7 +2190,7 @@ def simulator_booted_devices(
     devices = value.get("devices") if isinstance(value, dict) else None
     if not isinstance(devices, dict):
         raise HeavyError("simulator device list is malformed")
-    booted: Dict[str, str] = {}
+    found: List[Dict[str, str]] = []
     for runtime, rows in devices.items():
         if not isinstance(runtime, str) or not isinstance(rows, list):
             continue
@@ -2194,10 +2200,67 @@ def simulator_booted_devices(
             udid = row.get("udid")
             if not isinstance(udid, str) or not udid:
                 continue
-            if row.get("state") not in ("Booted", "Booting"):
-                continue
-            booted[udid] = runtime
-    return booted
+            found.append(
+                {
+                    "udid": udid,
+                    "name": str(row.get("name") or ""),
+                    "runtime": runtime,
+                    "state": str(row.get("state") or ""),
+                }
+            )
+    return found
+
+
+def simulator_booted_devices(
+    *, command_runner: Callable[[Sequence[str], float], str] = _run_native
+) -> Dict[str, str]:
+    """Return every booted or booting simulator device and its runtime identifier."""
+    return {
+        row["udid"]: row["runtime"]
+        for row in simulator_devices(command_runner=command_runner)
+        if row["state"] in SIMULATOR_BOOTED_STATES
+    }
+
+
+def _version_numbers(text: str) -> Tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", text))
+
+
+def _runtime_version(identifier: str) -> Tuple[int, ...]:
+    return _version_numbers(identifier.rsplit(".", 1)[-1])
+
+
+def devices_named_by_job(
+    argv: Sequence[str], devices: Sequence[Dict[str, str]]
+) -> List[str]:
+    """Return the simulator devices that the job's arguments name.
+
+    A job names a device when a device identifier appears in its arguments, or
+    when a ``-destination`` names a device by its name. A destination with a
+    name and no OS names the newest runtime that has a device of that name. A job
+    that names no device is never credited with booting one.
+    """
+    named = {match.upper() for arg in argv for match in SIMULATOR_UDID_PATTERN.findall(str(arg))}
+    for index, arg in enumerate(argv[:-1]):
+        if arg != "-destination":
+            continue
+        fields: Dict[str, str] = {}
+        for part in str(argv[index + 1]).split(","):
+            key, separator, value = part.partition("=")
+            if separator:
+                fields[key.strip().lower()] = value.strip()
+        platform = fields.get("platform", "")
+        if platform and "simulator" not in platform.lower():
+            continue
+        matches = [row for row in devices if fields.get("name") and row["name"] == fields["name"]]
+        requested = _version_numbers(fields.get("os", "")) if fields.get("os", "").lower() != "latest" else ()
+        if requested:
+            matches = [row for row in matches if _runtime_version(row["runtime"])[: len(requested)] == requested]
+        elif matches:
+            newest = max(_runtime_version(row["runtime"]) for row in matches)
+            matches = [row for row in matches if _runtime_version(row["runtime"]) == newest]
+        named.update(row["udid"].upper() for row in matches)
+    return sorted(named)
 
 
 def simulator_process_rows(
@@ -2396,9 +2459,12 @@ def stop_orphan_simulator_processes(
     touched. Every device is handled on its own: the booted devices and the
     process table are read again after the identities were collected and right
     before that device's processes are signalled, so a device that starts
-    booting in between is left alone. The same check runs again before the
-    escalation to SIGKILL. A signal goes only to a process whose uid and start
-    token match the ones read with its classification.
+    booting in between is left alone. Immediately before each signal, SIGTERM
+    and SIGKILL alike, the process identity and the device state are checked
+    again for that one process, so a pid that was reused or a device that started
+    booting while earlier processes were being signalled is never hit. A signal
+    goes only to a process whose uid and start token match the ones read with
+    its classification.
     """
 
     def snapshot():
@@ -2409,6 +2475,13 @@ def stop_orphan_simulator_processes(
             identity_reader=identity_reader,
             epoch_clock=epoch_clock,
         )
+
+    def revalidate(pid, udid, identity):
+        if identity_reader(pid) != identity:
+            return "reused"
+        if udid is not None and udid in set(booted_reader()):
+            return "booting"
+        return "orphan"
 
     targets = snapshot()
     if not targets:
@@ -2428,18 +2501,25 @@ def stop_orphan_simulator_processes(
         ]
         if not live:
             continue
-        if udid is not None and udid in set(booted_reader()):
-            continue
+        signalled: List[int] = []
         for pid in live:
+            verdict = revalidate(pid, udid, targets[pid][1])
+            if verdict == "booting":
+                break
+            if verdict == "reused":
+                continue
             try:
                 kill(pid, signal.SIGTERM)
             except OSError:
                 pass
-        stopped += len(live)
+            signalled.append(pid)
+        if not signalled:
+            continue
+        stopped += len(signalled)
         if udid is not None:
             devices.append(udid)
         deadline = clock() + 2.0
-        remaining = list(live)
+        remaining = list(signalled)
         while remaining and clock() < deadline:
             remaining = [
                 pid
@@ -2455,8 +2535,11 @@ def stop_orphan_simulator_processes(
             current = still_orphans.get(pid)
             if current is None or current[1] != targets[pid][1]:
                 continue
-            if udid is not None and udid in set(booted_reader()):
+            verdict = revalidate(pid, udid, targets[pid][1])
+            if verdict == "booting":
                 break
+            if verdict == "reused":
+                continue
             try:
                 kill(pid, signal.SIGKILL)
             except OSError:
@@ -2486,7 +2569,9 @@ def _device_used_by_other_job(
                 return True
             continue
         booted_before = simulators.get("booted")
-        if isinstance(booted_before, list) and udid in booted_before:
+        if not isinstance(booted_before, list):
+            return True
+        if udid in booted_before:
             return True
         started_at = simulators.get("started_at")
         if (
@@ -2512,9 +2597,11 @@ def shutdown_simulators_booted_by_job(
 ) -> List[str]:
     """Shut down the simulator devices that one job booted.
 
-    A device belongs to the job when it was not booted when the job started and
-    its launchd process started while the job ran. A device another running job
-    may use is left alone.
+    A device belongs to the job when the job's arguments name it, it was not
+    booted when the job started, and its launchd process started while the job
+    ran. A job whose booted-device baseline is unknown, or whose record carries
+    no named devices, shuts nothing down. A device another running job may use is
+    left alone.
     """
     simulators = record.get("simulators")
     if not isinstance(simulators, dict):
@@ -2523,13 +2610,15 @@ def shutdown_simulators_booted_by_job(
     started_at = simulators.get("started_at")
     if not isinstance(booted_before, list) or not isinstance(started_at, (int, float)):
         return []
-    if isinstance(started_at, bool):
+    named = simulators.get("named")
+    if isinstance(started_at, bool) or not isinstance(named, list):
         return []
+    named_devices = {str(value).upper() for value in named}
     booted = booted_reader()
     boot_epochs = epochs_reader(rows_reader())
     stopped: List[str] = []
     for udid in sorted(booted):
-        if udid in set(booted_before):
+        if udid in set(booted_before) or udid.upper() not in named_devices:
             continue
         epoch = boot_epochs.get(udid)
         if epoch is None or epoch < float(started_at):
@@ -2554,6 +2643,11 @@ def _attach_simulator_state(
 ) -> None:
     """Record the booted simulator devices on the job record before it starts.
 
+    The record also lists the devices the job's arguments name, which is the
+    evidence that the job may have booted a device. A device list that cannot be
+    read records the booted baseline as unknown (None), and an unknown baseline
+    protects every device while the job runs and shuts none down at its end.
+
     The read and the write happen under the simulator lock, the same lock that
     job-end cleanup holds while it decides and shuts a device down. A job either
     records a device before cleanup looks for competing jobs, or reads the device
@@ -2566,10 +2660,23 @@ def _attach_simulator_state(
     try:
         with registry.lock(name=SIMULATOR_LOCK_NAME, timeout=SIMULATOR_LOCK_TIMEOUT):
             try:
-                booted = simulator_booted_devices()
+                devices: Optional[List[Dict[str, str]]] = simulator_devices()
             except (HeavyError, OSError):
-                booted = {}
-            state = {"booted": sorted(booted), "started_at": time.time()}
+                devices = None
+            booted = (
+                None
+                if devices is None
+                else sorted(
+                    row["udid"]
+                    for row in devices
+                    if row["state"] in SIMULATOR_BOOTED_STATES
+                )
+            )
+            state = {
+                "booted": booted,
+                "started_at": time.time(),
+                "named": devices_named_by_job(argv, devices or []),
+            }
 
             def attach(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 current["simulators"] = state
