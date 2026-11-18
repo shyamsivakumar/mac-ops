@@ -431,6 +431,30 @@ def _exclusive_write(repo: Path, relative: Path, data: bytes, mode: int) -> bool
         os.close(parent)
 
 
+def _read_at(parent: int, name: str) -> bytes | None:
+    """The bytes of a file, or the target of a link, relative to a directory."""
+    try:
+        return os.readlink(name, dir_fd=parent).encode("utf-8", "surrogateescape")
+    except OSError:
+        pass
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+    except OSError:
+        return None
+    try:
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
 def _open_parent_fd(repo: Path, relative: Path) -> int | None:
     """Open the parent directory of a path inside the worktree, without links.
 
@@ -528,8 +552,12 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
     landed in between is put back into a free path only, and the worktree is
     kept.
     """
-    file_path = repo / name
-    expected = _file_bytes(file_path)
+    relative = Path(name)
+    source = _open_parent_fd(repo, relative.parent)
+    if source is None:
+        return False
+    file_path = repo / relative
+    expected = _read_at(source, relative.name)
     if expected is None:
         # A delete or a rename has already taken the file away, so there is no
         # edit to preserve and the committed bytes are restored, or nothing
@@ -543,9 +571,17 @@ def _clear_bootstrap_file(repo: Path, trash: Path, name: str, entry: tuple[str, 
         return False
     moved = _trash_path(trash, f"{name.replace('/', '_')}.moved")
     try:
-        os.replace(file_path, moved)
+        storage = os.open(trash, os.O_RDONLY | os.O_DIRECTORY)
     except OSError:
         return False
+    try:
+        # The move is relative to the descriptor, so a parent that turned into
+        # a link cannot send an unrelated file into the recovery storage.
+        os.replace(relative.name, moved.name, src_dir_fd=source, dst_dir_fd=storage)
+    except OSError:
+        return False
+    finally:
+        os.close(storage)
     after = _file_bytes(moved)
     if after != expected:
         # Someone wrote the file while it was being cleared. Only a free path
@@ -860,10 +896,10 @@ class GitHub:
         self.default_branches: dict[str, str | None] = {}
         self.contained: dict[tuple[str, str, str], bool] = {}
 
-    def contains(self, repo: str, base: str, head: str) -> bool:
+    def contains(self, repo: str, base: str, head: str, *, refresh: bool = False) -> bool:
         """True when GitHub says the head commit is contained in the base."""
         key = (repo, base, head)
-        if key in self.contained:
+        if key in self.contained and not refresh:
             return self.contained[key]
         try:
             result = run(["gh", "api", f"repos/{repo}/compare/{base}...{head}", "--jq", ".status"])
@@ -873,11 +909,11 @@ class GitHub:
         self.contained[key] = status in {"behind", "identical"}
         return self.contained[key]
 
-    def default_branch(self, repo: str | None) -> str | None:
+    def default_branch(self, repo: str | None, *, refresh: bool = False) -> str | None:
         """The one default branch of the repository, or None when unknown."""
         if not repo:
             return None
-        if repo in self.default_branches:
+        if repo in self.default_branches and not refresh:
             return self.default_branches[repo]
         try:
             result = run([
@@ -970,7 +1006,7 @@ def verify_pr(github: GitHub, repo: str | None, branch: str | None, head: str, *
     return True, None, f"https://github.com/{repo}/pull/{row.get('number')}"
 
 
-def published_on_default_branch(result: dict[str, Any], github: GitHub, repo_slug: str | None) -> bool:
+def published_on_default_branch(result: dict[str, Any], github: GitHub, repo_slug: str | None, *, refresh: bool = False) -> bool:
     """True when every commit of the worktree is already on the default branch.
 
     The ancestry is decided by GitHub, against the current tip of the default
@@ -986,10 +1022,10 @@ def published_on_default_branch(result: dict[str, Any], github: GitHub, repo_slu
         return False
     if not repo_slug:
         return False
-    default = github.default_branch(repo_slug)
+    default = github.default_branch(repo_slug, refresh=refresh)
     if not default:
         return False
-    return github.contains(repo_slug, default, head)
+    return github.contains(repo_slug, default, head, refresh=refresh)
 
 
 def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: GitHub, t3_state: T3State, *, refresh: bool = False, refresh_cwds: bool = True) -> dict[str, Any]:
@@ -1052,14 +1088,14 @@ def evaluate(repo_root: Path, record: dict[str, Any], code_root: Path, github: G
         except SafetyError:
             idle = None
         result["detached_idle_seconds"] = idle
-        if not published_on_default_branch(result, github, repo_slug):
+        if not published_on_default_branch(result, github, repo_slug, refresh=refresh):
             if idle is None or idle < 24 * 60 * 60:
                 reasons.append("detached_not_proven_24h_old")
     elif not result["main_checkout"]:
         ok, why, pr_url = verify_pr(github, repo_slug, record.get("branch"), str(record.get("head") or ""), refresh=refresh)
         result["pull_request"] = pr_url
         if not ok and why:
-            if why == "github_pr_not_closed_for_head" and published_on_default_branch(result, github, repo_slug):
+            if why == "github_pr_not_closed_for_head" and published_on_default_branch(result, github, repo_slug, refresh=refresh):
                 result["published_on_default_branch"] = True
             else:
                 reasons.append(why)
