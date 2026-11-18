@@ -18,9 +18,10 @@ if _BIN_DIR not in sys.path:
     sys.path.insert(0, _BIN_DIR)
 import gh_gateway
 
-# The lane driver loads inside the overnight command, so it names itself in
-# the usage log instead of inheriting the command line's name.
-gh_gateway.set_caller("lane_driver")
+# The lane driver loads inside the overnight command, so it names itself on
+# its own calls. A process-wide name would charge every later overnight call
+# to the lane driver and spoil the per-caller ranking.
+LANE_CALLER = "lane_driver"
 
 COORDQ = "/Users/shyamsivakumar/.local/bin/coordq"
 LEDGER = "/Users/shyamsivakumar/Code/coordinator/loop/lanes-ledger.json"
@@ -71,7 +72,7 @@ def require_api_budget():
 
 def read_json(cmd):
     require_api_budget()
-    result = gh_gateway.run(cmd, timeout=300)
+    result = gh_gateway.run(cmd, timeout=300, caller_name=LANE_CALLER)
     if result.returncode:
         raise RuntimeError(f"snapshot read failed: {cmd[:3]} (exit {result.returncode})")
     return json.loads(result.stdout)
@@ -111,7 +112,7 @@ ORDER = {
 def run(cmd, timeout=150):
     if cmd[0] == "gh" or (cmd[0] == "ticket" and cmd[1] in ("start", "gate", "list")):
         require_api_budget()
-    p = gh_gateway.run(cmd, timeout=timeout)
+    p = gh_gateway.run(cmd, timeout=timeout, caller_name=LANE_CALLER)
     output = (p.stdout + p.stderr).strip()
     refusal = ("--dry-run" in cmd and cmd[:2] == ["ticket", "start"]
                and p.returncode == 2 and output.startswith("refused: ")
@@ -1180,7 +1181,7 @@ def dead_reference(repo, number):
     settled or flagged on a state the driver could not see."""
     require_api_budget()
     result = gh_gateway.run(["gh", "api", f"repos/{repo}/issues/{number}"],
-                            timeout=120)
+                            timeout=120, caller_name=LANE_CALLER)
     if result.returncode:
         output = result.stdout + result.stderr
         if "HTTP 404" in output or "Not Found" in output:
@@ -1208,7 +1209,8 @@ def dead_ticket_prs(repo, number):
     require_api_budget()
     result = gh_gateway.run(["gh", "pr", "list", "-R", repo, "--state", "all",
                              "--limit", str(DEAD_PR_PAGE), "--search", f"#{number} in:body",
-                             "--json", "number,state,mergedAt,body"], timeout=120)
+                             "--json", "number,state,mergedAt,body"], timeout=120,
+                            caller_name=LANE_CALLER)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(
@@ -1227,7 +1229,8 @@ def dead_ticket_numbers(repo, token):
     require_api_budget()
     result = gh_gateway.run(["gh", "issue", "list", "-R", repo, "--state", "all",
                              "--limit", "10", "--search", f"{token} in:title",
-                             "--json", "number,title"], timeout=120)
+                             "--json", "number,title"], timeout=120,
+                            caller_name=LANE_CALLER)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(f"{repo} {token}: {first[0] if first else result.returncode}")
