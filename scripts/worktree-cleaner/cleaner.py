@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 
 import subprocess
 import sys
@@ -221,6 +222,40 @@ def _permitted_agents_text(text: str, head: str, block: str) -> bool:
     return False
 
 
+def _kind_and_executable(meta: str) -> tuple[str, bool]:
+    kind = "symlink" if meta == "120000" else "submodule" if meta == "160000" else "blob"
+    return kind, meta == "100755"
+
+
+def _committed_signature(repo: Path) -> tuple[str, bool] | None:
+    """The type and executable bit of AGENTS.md at HEAD."""
+    output = git(repo, "ls-tree", "HEAD", "--", AGENTS_FILE).strip()
+    if not output:
+        return None
+    return _kind_and_executable(output.split()[0])
+
+
+def _staged_signature(repo: Path) -> tuple[str, bool] | None:
+    """The type and executable bit of AGENTS.md in the index."""
+    output = git(repo, "ls-files", "-s", "--", AGENTS_FILE).strip()
+    if not output:
+        return None
+    return _kind_and_executable(output.split()[0])
+
+
+def _working_signature(path: Path) -> tuple[str, bool] | None:
+    """The type and executable bit of AGENTS.md in the working copy."""
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        return "symlink", False
+    if stat.S_ISREG(info.st_mode):
+        return "blob", bool(info.st_mode & 0o111)
+    return "other", False
+
+
 def agents_only_rules(path: Path, *, untracked: bool) -> bool:
     """True when AGENTS.md holds the committed file plus exactly the rules block.
 
@@ -236,6 +271,15 @@ def agents_only_rules(path: Path, *, untracked: bool) -> bool:
     try:
         current = (path / AGENTS_FILE).read_text(encoding="utf-8", errors="replace")
     except OSError:
+        return False
+    working = _working_signature(path / AGENTS_FILE)
+    committed = _committed_signature(path)
+    staged = _staged_signature(path)
+    if working is None:
+        return False
+    if committed is not None and (staged is None or staged != committed or working != committed):
+        return False
+    if committed is None and staged is not None and staged != working:
         return False
     head: str | None = None
     try:
@@ -304,12 +348,15 @@ def on_default_branch(repo_root: Path, head: str, refs: list[str]) -> bool:
 
 
 def default_branch_refs(repo_root: Path, github: GitHub, repo_slug: str | None) -> list[str]:
-    """The remote tracking ref of the one default branch of the repository."""
+    """The remote tracking ref of the verified default branch of the repository.
+
+    The default branch must be verified by GitHub. A stale `origin/HEAD` is
+    not trusted: after a default branch change it still points at the old
+    branch, and a commit unique to that branch must not qualify a worktree
+    for removal.
+    """
     name = github.default_branch(repo_slug) if repo_slug else None
     if not name:
-        result = run(["git", "-C", str(repo_root), "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
-        name = result.stdout.strip().removeprefix("refs/remotes/origin/") if result.returncode == 0 else ""
-    if not name or "/" in name:
         return []
     return [f"refs/remotes/origin/{name}"]
 
@@ -519,7 +566,7 @@ class GitHub:
             return self.default_branches[repo]
         try:
             result = run([
-                "gh", "repo", "view", "--repo", repo, "--json", "defaultBranchRef",
+                "gh", "repo", "view", repo, "--json", "defaultBranchRef",
                 "--jq", ".defaultBranchRef.name",
             ])
         except SafetyError:

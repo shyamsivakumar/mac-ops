@@ -10,6 +10,7 @@ Each test here is one of the cases the gate reported:
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -109,14 +110,22 @@ class AgentsBootstrapTest(unittest.TestCase):
         self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
 
     def test_staged_genuine_edit_is_real_work(self):
-        # A genuine edit is staged, and the working copy holds only the
-        # committed file plus the rules block. The staged edit is real work.
         with (self.repo / "AGENTS.md").open("a", encoding="utf-8") as handle:
             handle.write("genuine edit\n")
         git(self.repo, "add", "AGENTS.md")
         head = git(self.repo, "show", "HEAD:AGENTS.md")
         with (self.repo / "AGENTS.md").open("w", encoding="utf-8") as handle:
             handle.write(head + self.block)
+        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+
+    def test_mode_change_is_real_work(self):
+        self.append(self.block)
+        os.chmod(self.repo / "AGENTS.md", 0o755)
+        self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
+
+    def test_staged_mode_change_is_real_work(self):
+        self.append(self.block)
+        git(self.repo, "update-index", "--chmod=+x", "AGENTS.md")
         self.assertFalse(cleaner.agents_only_rules(self.repo, untracked=False))
 
 
@@ -148,13 +157,23 @@ class DefaultBranchTest(unittest.TestCase):
 
     def test_only_the_default_branch_qualifies(self):
         github = cleaner.GitHub()
-        github.default_branch = lambda repo: None
+        github.default_branch = lambda repo: "main"
         refs = cleaner.default_branch_refs(self.repo, github, "fixture/repo")
         self.assertEqual(refs, ["refs/remotes/origin/main"])
         self.assertFalse(cleaner.on_default_branch(self.repo, self.master_head, refs))
         self.assertTrue(cleaner.on_default_branch(self.repo, self.master_head, ["refs/remotes/origin/master"]))
         main_head = git(self.repo, "rev-parse", "main")
         self.assertTrue(cleaner.on_default_branch(self.repo, main_head, refs))
+
+    def test_stale_origin_head_grants_nothing(self):
+        # The default branch moved from master to main, but origin/HEAD still
+        # points at master. A stale ref must not qualify a worktree.
+        git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+        github = cleaner.GitHub()
+        github.default_branch = lambda repo: None
+        self.assertEqual(cleaner.default_branch_refs(self.repo, github, "fixture/repo"), [])
+        row = {"head": self.master_head, "unpushed": 0, "remote_commit_present": True}
+        self.assertFalse(cleaner.published_on_default_branch(row, self.repo, []))
 
 
 if __name__ == "__main__":
