@@ -787,11 +787,12 @@ import sys
 sys.path.insert(0, {str(BIN)!r})
 import gh_gateway
 for argv in (["gh", "pr", "list", "--web"], ["gh", "pr", "list", "--web=true"],
-             ["gh", "pr", "list", "--web=1"], ["gh", "pr", "list", "-w"]):
+             ["gh", "pr", "list", "--web=1"], ["gh", "pr", "list", "-w"],
+             ["gh", "pr", "list", "-w=true"]):
     print("WEB", gh_gateway.cacheable(argv))
 """], capture_output=True, text=True, env=env).stdout.split()
 check("--web is never cached in any spelling",
-      web == ["WEB", "False"] * 4, str(web))
+      web == ["WEB", "False"] * 5, str(web))
 
 # An optional read reserves quota for the host it targets, not the default.
 host_quota = subprocess.run([sys.executable, "-c", f"""
@@ -820,6 +821,18 @@ print("DEFAULT", gh_gateway.api_remaining()["core"])
 check("the quota probe targets the requested host", host_quota[:2] == ["PROBE", "100"], str(host_quota))
 check("the probe passes the host to gh", host_quota[2:4] == ["ARGV", "True"], str(host_quota))
 check("the default host is probed separately", host_quota[4:6] == ["DEFAULT", "3000"], str(host_quota))
+
+# `-i=true` is the same as `--include`: the caller's headers must survive.
+short_bool = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+argv = ["gh", "api", "-i=true", "repos/a/b/issues?state=open"]
+print("INCLUDE", gh_gateway.include_requested(argv))
+print("CONDITIONAL", gh_gateway.conditional(argv))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("-i=true is the include flag",
+      short_bool == ["INCLUDE", "True", "CONDITIONAL", "False"], str(short_bool))
 
 # A `--hostname` read is keyed by that host: an unknown host has no account,
 # so it is never cached and cannot answer another account's read.
