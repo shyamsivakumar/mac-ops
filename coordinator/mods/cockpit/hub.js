@@ -9,6 +9,7 @@ const KIND = { waiting: "wait", failed: "fail", interrupted: "stop", completed: 
 const IDLE_PAGES = 4;
 const DEFAULT_CAP = 6;
 const URGENCY = { ask: 0, wait: 1, fail: 2, stop: 3, run: 4, done: 5, idle: 6 };
+const SHYAM = /\bshyam\b/i;
 const TASK_ID = /[A-Z]{2,5}-\d+/;
 const REVIEW_TITLE = /^[A-Z]{2,5}-\d+ (?:gate )?review\b/i;
 const PAGES = 3;
@@ -149,6 +150,7 @@ function card(thread, names) {
     status: thread.status,
     ask: Boolean(thread.ask),
     choices: thread.choices ?? null,
+    toShyam: Boolean(thread.toShyam),
     context: thread.pendingUnknown ? "pending request unknown" : kind === "fail" && thread.lastError ? plainError(thread.lastError) : kind === "done" && thread.askText ? thread.askText : CONTEXT[kind] ?? "",
     error: kind === "fail" ? thread.lastError ?? CONTEXT.fail : undefined,
     prs: (thread.pullRequests ?? []).map((p) => ({ repo: p.repository, number: p.number, url: p.url, state: p.state ?? "unknown" })),
@@ -286,11 +288,11 @@ async function tailOf(thread, items) {
     const error = reversed.find((item) => item.type === "error");
     const text = message ? await endOf(thread, message) : "";
     const choices = parseChoices(text);
-    const value = { stamp: thread.updatedAt, ask: Boolean(message) && endsWithAsk(text), choices, text: choices?.question ?? lastLine(text), error: error?.text ?? error?.title ?? null };
+    const value = { stamp: thread.updatedAt, ask: Boolean(message) && endsWithAsk(text), toShyam: SHYAM.test(text), choices, text: choices?.question ?? lastLine(text), error: error?.text ?? error?.title ?? null };
     failures.set(thread.threadId, value);
     return value;
   } catch {
-    return { unread: true, ask: false, choices: null, text: null, error: null };
+    return { unread: true, ask: false, toShyam: false, choices: null, text: null, error: null };
   }
 }
 
@@ -317,11 +319,13 @@ export async function load() {
         thread.ask = tail.ask;
         thread.askText = tail.text;
         thread.choices = tail.choices;
+        thread.toShyam = tail.toShyam;
       } else if (thread.status === "interrupted") {
         const tail = await tailOf(thread, ASK_TAIL);
         thread.ask = tail.ask;
         thread.askText = tail.text;
         thread.choices = tail.choices;
+        thread.toShyam = tail.toShyam;
       }
     }));
   }
@@ -331,6 +335,7 @@ export async function load() {
       thread.ask = tail.ask;
       thread.askText = tail.text;
       thread.choices = tail.choices;
+      thread.toShyam = tail.toShyam;
     }));
   }
   const cards = [...live, ...finished].filter((t) => !t.snoozed && !(t.settled && t.status !== "running")).map((t) => card(t, names));
