@@ -158,6 +158,26 @@ class AgentsBootstrapTest(unittest.TestCase):
         self.assertFalse(agents_bootstrap(self.repo))
 
 
+    def test_untracked_symlink_agents_file_is_real_work(self):
+        # An untracked AGENTS.md that is a symlink to a rules file must not
+        # be read through the link and accepted as the bootstrap.
+        target = self.repo / "rules-copy.md"
+        target.write_bytes(self.block.encode("utf-8"))
+        link = self.repo / "AGENTS.md"
+        if link.exists():
+            link.unlink()
+        link.symlink_to(target)
+        self.assertFalse(agents_bootstrap(self.repo))
+
+    def test_untracked_executable_agents_file_is_real_work(self):
+        link = self.repo / "AGENTS.md"
+        if link.exists():
+            link.unlink()
+        link.write_bytes(self.block.encode("utf-8"))
+        os.chmod(link, 0o755)
+        self.assertFalse(agents_bootstrap(self.repo))
+
+
 class DefaultBranchTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="mo514-default-")
@@ -184,23 +204,21 @@ class DefaultBranchTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_only_the_default_branch_qualifies(self):
+    def test_ancestry_is_decided_by_github(self):
         github = cleaner.GitHub()
         github.default_branch = lambda repo: "main"
-        refs = cleaner.default_branch_refs(self.repo, github, "fixture/repo")
-        self.assertEqual(refs, ["refs/remotes/origin/main"])
-        self.assertFalse(cleaner.on_default_branch(self.repo, self.master_head, refs))
-        self.assertTrue(cleaner.on_default_branch(self.repo, self.master_head, ["refs/remotes/origin/master"]))
-        main_head = git(self.repo, "rev-parse", "main")
-        self.assertTrue(cleaner.on_default_branch(self.repo, main_head, refs))
+        github.contains = lambda repo, base, head: head == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        row = {"head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "unpushed": 0, "remote_commit_present": True}
+        self.assertTrue(cleaner.published_on_default_branch(row, github, "fixture/repo"))
+        stale = {"head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "unpushed": 0, "remote_commit_present": True}
+        self.assertFalse(cleaner.published_on_default_branch(stale, github, "fixture/repo"))
 
-    def test_stale_origin_head_grants_nothing(self):
-        git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+    def test_unverified_default_branch_grants_nothing(self):
         github = cleaner.GitHub()
         github.default_branch = lambda repo: None
-        self.assertEqual(cleaner.default_branch_refs(self.repo, github, "fixture/repo"), [])
+        github.contains = lambda repo, base, head: True
         row = {"head": self.master_head, "unpushed": 0, "remote_commit_present": True}
-        self.assertFalse(cleaner.published_on_default_branch(row, self.repo, []))
+        self.assertFalse(cleaner.published_on_default_branch(row, github, "fixture/repo"))
 
     def test_valid_branch_names_are_accepted(self):
         if not hasattr(cleaner, "valid_branch_name"):
@@ -208,6 +226,7 @@ class DefaultBranchTest(unittest.TestCase):
         self.assertTrue(cleaner.valid_branch_name("main"))
         self.assertTrue(cleaner.valid_branch_name("release/main"))
         self.assertTrue(cleaner.valid_branch_name("release-1.2"))
+        self.assertTrue(cleaner.valid_branch_name("release/\u00e9t\u00e9"))
         self.assertFalse(cleaner.valid_branch_name(""))
         self.assertFalse(cleaner.valid_branch_name("bad name"))
         self.assertFalse(cleaner.valid_branch_name("bad..name"))
@@ -216,7 +235,7 @@ class DefaultBranchTest(unittest.TestCase):
         self.assertFalse(cleaner.valid_branch_name("name.lock"))
         github = cleaner.GitHub()
         github.default_branch = lambda repo: "release/main"
-        self.assertEqual(cleaner.default_branch_refs(self.repo, github, "fixture/repo"), ["refs/remotes/origin/release/main"])
+        self.assertEqual(github.default_branch("fixture/repo"), "release/main")
 
 
 if __name__ == "__main__":

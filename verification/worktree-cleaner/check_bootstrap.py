@@ -115,6 +115,7 @@ def main() -> int:
         fixture.write_text(json.dumps({
             "present": [shas[name] for name in ("bootstrap", "real", "onmain", "partial", "renamed", "shifted", "marker", "masteronly")] + [ascend_sha],
             "prs": {name: [{"number": 7, "state": "MERGED", "headRefName": name, "headRefOid": shas[name]}] for name in ("bootstrap", "partial", "renamed", "shifted", "marker")},
+            "contained": {"main": [shas[name] for name in ("bootstrap", "real", "onmain", "partial", "renamed", "shifted", "marker")]},
         }))
         bin_dir = base / "bin"
         bin_dir.mkdir()
@@ -130,10 +131,15 @@ if args[:2] == ['repo', 'view']:
     else:
         print('fixture/fixture-repo')
 elif args[0] == 'api':
-    sha = args[1].rsplit('/', 1)[-1]
-    if sha not in d['present']:
-        sys.exit(1)
-    print(sha)
+    path = args[1]
+    if '/compare/' in path:
+        base, _, head = path.split('/compare/', 1)[1].partition('...')
+        print('behind' if head in d.get('contained', {}).get(base, []) else 'ahead')
+    else:
+        sha = path.rsplit('/', 1)[-1]
+        if sha not in d['present']:
+            sys.exit(1)
+        print(sha)
 elif args[:2] == ['pr', 'list']:
     print(json.dumps(d['prs'].get(args[args.index('--head') + 1], [])))
 else:
