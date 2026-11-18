@@ -57,6 +57,13 @@ The work goes back to its builder and the ticket stays open.
   the change introduced that string or not, so a shared string proves nothing.
   Evidence is not a source, so a pull request cannot supply the file that
   authorizes its own test change.
+- The ticket's own evidence travels with the change: a file under the ticket's own
+  evidence directory is in scope, and another ticket's evidence is not. A pull
+  request scoped to one file cannot rewrite another ticket's proof file and still
+  pass the scope item.
+- A proof row that carries no result blocks the close. An incomplete row is never
+  dropped: a row that names a check and a command but omits its result fails the
+  item, so a passing check that was never written cannot read as passed.
 
 The cost note item is skipped in both: MO-1068 (#504) is report only and its report
 (evidence/MO-1068/cost-report.md) does not exist yet.
