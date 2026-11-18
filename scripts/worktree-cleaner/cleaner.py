@@ -533,6 +533,44 @@ def _read_at(parent: int, name: str) -> bytes | None:
         os.close(descriptor)
 
 
+def _clear_directory(fd: int) -> bool:
+    """Delete everything inside an open directory, through its descriptor.
+
+    Nothing is resolved by name, so a path that was swapped in the meantime
+    is not touched: the deletion acts on the directory that was opened and
+    verified.
+    """
+    try:
+        entries = os.listdir(fd)
+    except OSError:
+        return False
+    for entry in entries:
+        try:
+            info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
+        except OSError:
+            return False
+        if stat.S_ISDIR(info.st_mode):
+            try:
+                child = os.open(entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except OSError:
+                return False
+            try:
+                if not _clear_directory(child):
+                    return False
+            finally:
+                os.close(child)
+            try:
+                os.rmdir(entry, dir_fd=fd)
+            except OSError:
+                return False
+            continue
+        try:
+            os.unlink(entry, dir_fd=fd)
+        except OSError:
+            return False
+    return True
+
+
 def _worktree_registration(path: Path) -> Path | None:
     """The administration directory of the registration a worktree owns.
 
@@ -1733,22 +1771,52 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                         candidate["reasons"] = ["worktree_head_changed_before_remove"]
                         append_removal(state_root, candidate, "removal_blocked")
                         continue
+                    # The contents are deleted through the descriptor of the
+                    # directory that was verified, and the registration that
+                    # the worktree owns goes with it. No path is handed to git
+                    # for the removal, so a worktree that took the place in
+                    # the meantime is not touched.
                     try:
-                        result = run(["git", "-C", str(repo_root), "worktree", "remove", candidate["path"]], timeout=300)
-                    except SafetyError:
-                        result = None
+                        directory = os.open(Path(candidate["path"]), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    except OSError:
+                        directory = None
+                    if directory is None:
+                        append_removal(state_root, candidate, "removal_failed")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_directory_unavailable"]
+                        continue
+                    try:
+                        emptied = _clear_directory(directory)
+                    finally:
+                        os.close(directory)
+                    if not emptied:
+                        append_removal(state_root, candidate, "removal_failed")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_contents_not_removed"]
+                        continue
+                    try:
+                        os.rmdir(candidate["path"])
+                    except OSError:
+                        pass
+                    try:
+                        shutil.rmtree(registration)
+                    except OSError as exc:
+                        append_removal(state_root, candidate, "removal_failed")
+                        candidate["eligible"] = False
+                        candidate["reasons"] = ["worktree_registration_not_removed"]
+                        prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": False, "error": str(exc)})
+                        continue
+                    result = None
                 finally:
                     if lock.exists():
                         try:
                             lock.unlink()
                         except OSError:
                             pass
-                if result is None:
-                    append_removal(state_root, candidate, "removal_outcome_unknown")
-                    candidate["eligible"] = False
-                    candidate["reasons"] = ["worktree_remove_outcome_unknown"]
-                    continue
-                if result.returncode != 0 or Path(candidate["path"]).exists():
+                left = Path(candidate["path"])
+                if left.exists() and root_identity(left) == expected_identity:
+                    # The verified directory is still there, so the removal
+                    # did not happen.
                     append_removal(state_root, candidate, "removal_failed")
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_remove_failed"]
