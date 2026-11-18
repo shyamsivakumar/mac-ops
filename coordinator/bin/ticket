@@ -1502,6 +1502,9 @@ def cmd_deliver(a):
         pulls = [pull for pull in referencing_pulls(repo, n) if pull["state"] == "open"]
         if not pulls:
             raise Refuse("no open pull request references this issue")
+        parking = parked_label([label["name"] for label in issue["labels"]])
+        if parking:
+            raise Refuse(f"parked ({parking}); only Shyam clears it")
     except Refuse as e:
         die(f"refused: {e}", 2)
     except GhError as e:

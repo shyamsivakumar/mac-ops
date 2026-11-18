@@ -332,17 +332,18 @@ def deliver_stage(repo, issue):
     The builder opens its own pull request, so this pass is the delivery
     step and nothing else moves the ticket then. `ticket deliver` writes
     nothing when the ticket already carries exactly the delivered stage,
-    so it is called only when the stage label is missing or doubled. A
-    failure is printed and left for the next pass: one ticket's label does
-    not fail the whole lane pass.
+    so it is called only when the stage label is missing or doubled.
+    Returns (delivered, note). A refusal or failure is not delivery: the
+    caller prints the note and leaves the pull request for the next pass,
+    so a ticket parked after the board snapshot never reaches the gate.
     """
     if DRY:
-        return f"DRY deliver #{issue}"
+        return True, f"DRY deliver #{issue}"
     try:
-        return run(["ticket", "deliver", f"{repo}#{issue}"], timeout=200)
+        return True, run(["ticket", "deliver", f"{repo}#{issue}"], timeout=200)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        return (f"deliver #{issue} failed (exit {getattr(exc, 'returncode', 'timeout')}): "
-                f"{(getattr(exc, 'stderr', '') or '').strip()}")
+        return False, (f"deliver #{issue} failed (exit {getattr(exc, 'returncode', 'timeout')}): "
+                       f"{(getattr(exc, 'stderr', '') or '').strip()}")
 
 
 def builder_thread(repo, body):
@@ -611,9 +612,11 @@ def act_on_pr(repo, number, ledger):
         if parked_by_hand(issue_record["labels"]):
             return None
         if not on_delivered_stage(issue_record["labels"]):
-            note = deliver_stage(repo, issue)
+            delivered, note = deliver_stage(repo, issue)
             if note:
                 print(f"{CFG[repo]['key']:5} #{number} {note}")
+            if not delivered:
+                return f"skip #{number}: delivery of #{issue} did not complete"
     agent_ok = any("agent-check" in (c.get("context") or c.get("name") or "") and (c.get("state") or c.get("conclusion")) == "SUCCESS"
                    for c in pr.get("statusCheckRollup") or [])
     check_ok = f"Builder check: PASS {head}" in body or agent_ok
