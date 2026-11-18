@@ -352,9 +352,10 @@ def gate_pipeline():
         def command(cmd, timeout=150):
             if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "state,mergedAt"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
-            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName"]:
-                # The retarget guard: the base the review was taken against.
-                return json.dumps({"baseRefName": "main"})
+            if cmd == ["gh", "pr", "view", "20", "-R", target, "--json", "baseRefName,headRefOid"]:
+                # The pre-merge guard: the base and head the review was taken
+                # against, read in one call immediately before the merge.
+                return json.dumps({"baseRefName": "main", "headRefOid": head})
             if cmd[:2] == ["gh", "api"]:
                 # The changed paths of the pull request: the case decides
                 # whether they carry one prompt path or only code. The lane

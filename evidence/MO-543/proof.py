@@ -377,8 +377,9 @@ def moved_base_refuses_merge():
 
     def run_cmd(cmd, timeout=150):
         calls.append(cmd)
-        if cmd[:2] == ["gh", "pr"] and "view" in cmd and "baseRefName" in cmd:
-            return '{"baseRefName": "release/next"}'
+        if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
+                "baseRefName" in str(part) for part in cmd):
+            return '{"baseRefName": "release/next", "headRefOid": "%s"}' % HEAD
         return ""
 
     with patch.object(lane, "run", run_cmd):

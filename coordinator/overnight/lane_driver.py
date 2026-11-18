@@ -765,10 +765,11 @@ def merge_on_reviewed_base(repo, number, head, base):
     line the pass prints.
     """
     current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
-                              "--json", "baseRefName"])) or {}
-    if current.get("baseRefName") != base:
-        return False, (f"skip #{number}: gate PASS, but the base moved from {base} to "
-                       f"{current.get('baseRefName')}; nothing merged, the next pass reviews the new base")
+                              "--json", "baseRefName,headRefOid"])) or {}
+    if current.get("baseRefName") != base or current.get("headRefOid") != head:
+        return False, (f"skip #{number}: gate PASS, but the pull request moved (base {base} -> "
+                       f"{current.get('baseRefName')}, head {head[:8]} -> "
+                       f"{str(current.get('headRefOid'))[:8]}); nothing merged, the next pass reviews it")
     run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
     return True, f"#{number}: merged {head}"
 def message_title(repo, number, action, head):
@@ -853,17 +854,13 @@ def act_on_pr(repo, number, ledger):
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
         base = pr.get("baseRefName") or "main"
-        # A retarget moves the pull request onto another base without moving
-        # its head, and the same head can then introduce prompt text it did
-        # not introduce against the base this pass classified. The base is
-        # read again here, and a moved base merges nothing.
-        current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
-                                  "--json", "baseRefName"]))
-        if (current or {}).get("baseRefName") != base:
-            return (f"skip #{number}: gate PASS, the base moved from {base} to "
-                    f"{(current or {}).get('baseRefName')}, merge deferred")
         if DRY:
             return f"DRY merge #{number} {head}"
+        # A retarget moves the pull request onto another base without moving
+        # its head, and the same head can then introduce prompt text it did
+        # not introduce against the base this pass classified. The base and
+        # head are read again inside the merge step, as close to the merge as
+        # the merge can be guarded: a pull request that moved merges nothing.
         merged, note = merge_on_reviewed_base(repo, number, head, base)
         if not merged:
             return note

@@ -849,8 +849,9 @@ class MergeBaseGuardTest(unittest.TestCase):
 
         def command(cmd, timeout=150):
             calls.append(cmd)
-            if cmd[:2] == ["gh", "pr"] and "view" in cmd and "baseRefName" in cmd:
-                return '{"baseRefName": "%s"}' % base_after
+            if cmd[:2] == ["gh", "pr"] and "view" in cmd and any(
+                    "baseRefName" in str(part) for part in cmd):
+                return '{"baseRefName": "%s", "headRefOid": "%s"}' % (base_after, "a" * 40)
             return ""
 
         with patch.object(self.lane, "run", command):
