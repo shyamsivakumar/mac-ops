@@ -815,8 +815,7 @@ def act_on_pr(repo, number, ledger):
         # The pull request has used the three reviews the rule gives it.
         # It is re-cut into smaller pull requests, or Shyam takes it
         # over, and it is not reviewed a 4th time as it is.
-        return (f"skip #{number}: {GATE_ROUND_CAP} review rounds without PASS, "
-                "no 4th review, the decisions item is on the board")
+        return gate_round_decision(repo, number, head, ledger)
     tag = "regate" if verdict == "none" else "gate"
     reviewers = json.loads(run(["ticket", "gate", f"{repo}#{number}", "--print-model"]))
     if not reviewers:
