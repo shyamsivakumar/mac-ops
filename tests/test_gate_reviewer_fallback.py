@@ -345,6 +345,13 @@ class BlockedReviewerTest(ReplayBase):
         self.assertIsNotNone(gate_reviewers.blocking_until(
             {"error": {"code": "rate_limit_exceeded", "message": "slow down"}}))
 
+    def test_a_local_error_that_borrows_a_provider_word_is_no_refusal(self):
+        for text in ("write failed: disk quota exceeded",
+                     "fatal: Authentication failed for 'https://github.com/o/r'",
+                     "error: 403 files could not be read"):
+            with self.subTest(text=text):
+                self.assertIsNone(gate_reviewers.blocking_until({"error": {"message": text}}))
+
     def test_the_provider_reasons_that_block(self):
         for text in ("You have no credits left", "usage limit reached",
                      "HTTP 429 Too Many Requests", "401 Unauthorized", "403 Forbidden"):

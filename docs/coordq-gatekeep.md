@@ -76,9 +76,13 @@ spend limit, a rate limit (429), or an auth failure (401/403) -- blocks that
 reviewer for every head in `queue/reviewers-blocked.json`, for one hour or
 until the reset time the error names, and writes one line
 `reviewer <provider>:<model> blocked until <time>` to `queue/dispatch.log`. The
-error has to be the provider's: its own error code, matched whole, or an HTTP
-status the message names as one. Bare digits are no evidence, so an error such
-as `worker 14031 exited` holds the digits of 403 and blocks nobody. A
+error has to be the provider's: its own error code, matched whole, an HTTP
+status the message names as one, or one of the provider's own billing and limit
+phrases. Bare digits are no evidence, so an error such
+as `worker 14031 exited` holds the digits of 403 and blocks nobody, and a bare
+provider word is no evidence either, so a local `disk quota exceeded` or a
+`fatal: Authentication failed` from a git push inside the reviewer blocks
+nobody. A
 new gate then starts on the next unblocked reviewer, the reviewer a head moves
 to skips a blocked one, and a head with nothing left to move to waits. An
 expired block is released at the start of a `coordq gatekeep` run, which writes

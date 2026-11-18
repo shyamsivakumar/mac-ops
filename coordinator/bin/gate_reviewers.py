@@ -20,12 +20,17 @@ BLOCK_SECONDS = 3600.0
 DEFAULT_DIR = os.path.expanduser("~/Code/coordinator/queue")
 
 # A run that fails for one of these reasons says nothing about the diff, so
-# the reviewer is blocked instead of the head moving on alone.
+# the reviewer is blocked instead of the head moving on alone. Every marker is
+# a phrase only a provider's own refusal uses. A bare `quota` is not one: a
+# local `disk quota exceeded` says nothing about the provider and would block a
+# healthy reviewer for every head. A bare auth word is not one either, since a
+# `fatal: Authentication failed` from a git push inside the reviewer is not the
+# provider refusing; the provider names those as an error code or an HTTP
+# status, which BLOCK_CODES and STATUS match.
 BLOCK_MARKERS = (
     "no credits", "credit balance", "out of credits", "insufficient_quota",
-    "insufficient quota", "quota", "usage limit", "spend limit", "rate limit",
-    "too many requests", "unauthorized", "forbidden", "authentication",
-    "invalid api key",
+    "insufficient quota", "exceeded your current quota", "usage limit",
+    "spend limit", "rate limit", "too many requests", "invalid api key",
 )
 # The provider's own error codes. The code field is compared whole, so a code
 # is evidence and a number inside a message is not.
@@ -162,8 +167,10 @@ def provider_refusal(code, message):
     """Whether a failed run's error is the provider refusing to run.
 
     A refusal names the provider's own error code, or an HTTP status in the
-    message. A substring is no evidence: `worker 14031 exited` holds the
-    digits of 403 and says nothing about the provider."""
+    message, or one of the provider's billing and limit phrases. A substring is
+    no evidence: `worker 14031 exited` holds the digits of 403, and a local
+    `disk quota exceeded` holds the word quota, and neither says anything about
+    the provider."""
     if code.strip().lower() in BLOCK_CODES:
         return True
     if STATUS.search(message):
