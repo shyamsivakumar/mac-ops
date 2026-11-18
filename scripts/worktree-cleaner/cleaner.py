@@ -533,42 +533,14 @@ def _read_at(parent: int, name: str) -> bytes | None:
         os.close(descriptor)
 
 
-def _clear_directory(fd: int) -> bool:
-    """Delete everything inside an open directory, through its descriptor.
-
-    Nothing is resolved by name, so a path that was swapped in the meantime
-    is not touched: the deletion acts on the directory that was opened and
-    verified.
-    """
-    try:
-        entries = os.listdir(fd)
-    except OSError:
-        return False
-    for entry in entries:
-        try:
-            info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
-        except OSError:
-            return False
-        if stat.S_ISDIR(info.st_mode):
-            try:
-                child = os.open(entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-            except OSError:
-                return False
-            try:
-                if not _clear_directory(child):
-                    return False
-            finally:
-                os.close(child)
-            try:
-                os.rmdir(entry, dir_fd=fd)
-            except OSError:
-                return False
-            continue
-        try:
-            os.unlink(entry, dir_fd=fd)
-        except OSError:
-            return False
-    return True
+def _aside_path(path: Path) -> Path | None:
+    """A unique path next to a worktree, on the same filesystem."""
+    parent = path.parent
+    for attempt in range(64):
+        candidate = parent / f".worktree-cleaner-aside-{os.getpid()}-{attempt}"
+        if not candidate.exists():
+            return candidate
+    return None
 
 
 def _worktree_registration(path: Path) -> Path | None:
@@ -1766,83 +1738,73 @@ def scan(code_root: Path, state_root: Path, apply: bool, report: bool = True, pr
                     candidate["reasons"] = ["worktree_head_locked"]
                     append_removal(state_root, candidate, "removal_blocked")
                     continue
+                if not _head_matches(Path(candidate["path"]), str(candidate["head"])):
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_head_changed_before_remove"]
+                    append_removal(state_root, candidate, "removal_blocked")
+                    continue
+                # The directory that is opened has to be the one the scan saw.
                 try:
-                    if not _head_matches(Path(candidate["path"]), str(candidate["head"])):
-                        candidate["eligible"] = False
-                        candidate["reasons"] = ["worktree_head_changed_before_remove"]
-                        append_removal(state_root, candidate, "removal_blocked")
-                        continue
-                    # The contents are deleted through the descriptor of the
-                    # directory that was verified, and the registration that
-                    # the worktree owns goes with it. No path is handed to git
-                    # for the removal, so a worktree that took the place in
-                    # the meantime is not touched.
-                    try:
-                        directory = os.open(Path(candidate["path"]), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-                    except OSError:
-                        directory = None
-                    if directory is None:
-                        append_removal(state_root, candidate, "removal_failed")
-                        candidate["eligible"] = False
-                        candidate["reasons"] = ["worktree_directory_unavailable"]
-                        continue
-                    try:
-                        opened = os.fstat(directory)
-                    except OSError:
-                        opened = None
-                    if opened is None or (expected_identity and f"{opened.st_dev}:{opened.st_ino}" != expected_identity):
-                        # The directory that was opened is not the one the
-                        # scan saw, so nothing in it may be deleted.
-                        os.close(directory)
-                        append_removal(state_root, candidate, "removal_blocked")
-                        candidate["eligible"] = False
-                        candidate["reasons"] = ["worktree_replaced_before_remove"]
-                        continue
-                    try:
-                        pending = status_for(Path(candidate["path"]))
-                    except SafetyError:
-                        pending = []
-                    if pending:
-                        # The same refusal git makes for a dirty worktree: a
-                        # file that was saved after the last status check is
-                        # real work and is never deleted.
-                        os.close(directory)
-                        append_removal(state_root, candidate, "removal_blocked")
-                        candidate["eligible"] = False
-                        candidate["reasons"] = ["worktree_changed_before_remove"]
-                        continue
-                    try:
-                        emptied = _clear_directory(directory)
-                    finally:
-                        os.close(directory)
-                    if not emptied:
-                        append_removal(state_root, candidate, "removal_failed")
-                        candidate["eligible"] = False
-                        candidate["reasons"] = ["worktree_contents_not_removed"]
-                        continue
-                    try:
-                        os.rmdir(candidate["path"])
-                    except OSError:
-                        pass
-                    try:
-                        shutil.rmtree(registration)
-                    except OSError as exc:
-                        append_removal(state_root, candidate, "removal_failed")
-                        candidate["eligible"] = False
-                        candidate["reasons"] = ["worktree_registration_not_removed"]
-                        prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": False, "error": str(exc)})
-                        continue
-                    result = None
+                    directory = os.open(Path(candidate["path"]), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                except OSError:
+                    directory = None
+                if directory is None:
+                    append_removal(state_root, candidate, "removal_failed")
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_directory_unavailable"]
+                    continue
+                try:
+                    opened = os.fstat(directory)
+                    identity = f"{opened.st_dev}:{opened.st_ino}"
+                except OSError:
+                    identity = ""
                 finally:
-                    if lock.exists():
-                        try:
-                            lock.unlink()
-                        except OSError:
-                            pass
+                    os.close(directory)
+                if expected_identity and identity != expected_identity:
+                    append_removal(state_root, candidate, "removal_blocked")
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_replaced_before_remove"]
+                    continue
+                # The worktree is moved aside rather than deleted. The rename
+                # is atomic, so a file that was saved after the last status
+                # check goes with it and is never lost, and nothing in a
+                # worktree that took the place in the meantime is touched.
+                try:
+                    pending = status_for(Path(candidate["path"]))
+                except SafetyError:
+                    pending = None
+                if pending is None:
+                    # A failed inspection blocks the removal.
+                    append_removal(state_root, candidate, "removal_blocked")
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_status_unknown"]
+                    continue
+                if pending:
+                    # The same refusal git makes for a dirty worktree: a file
+                    # that was saved after the last status check is real work
+                    # and is never removed.
+                    append_removal(state_root, candidate, "removal_blocked")
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_changed_before_remove"]
+                    continue
+                moved_tree = _aside_path(Path(candidate["path"]))
+                if moved_tree is None:
+                    append_removal(state_root, candidate, "removal_failed")
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_not_moved_aside"]
+                    continue
+                try:
+                    os.rename(candidate["path"], moved_tree)
+                except OSError as exc:
+                    append_removal(state_root, candidate, "removal_failed")
+                    candidate["eligible"] = False
+                    candidate["reasons"] = ["worktree_not_moved_aside"]
+                    prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": False, "error": str(exc)})
+                    continue
+                candidate["moved_aside_to"] = str(moved_tree)
+                prune_results.append({"repo": str(repo_root), "worktree": candidate["path"], "ok": True, "error": None, "moved_aside_to": str(moved_tree)})
                 left = Path(candidate["path"])
                 if left.exists() and root_identity(left) == expected_identity:
-                    # The verified directory is still there, so the removal
-                    # did not happen.
                     append_removal(state_root, candidate, "removal_failed")
                     candidate["eligible"] = False
                     candidate["reasons"] = ["worktree_remove_failed"]
