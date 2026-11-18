@@ -394,6 +394,10 @@ def _conditional_run(argv, timeout):
     headers, body = _split_headers(result.stdout or "")
     status = _status(headers)
     if status == 304 and state:
+        # The ETag says the body is still good, so the TTL cache is renewed
+        # too; without this every identical read of an unchanged list pays a
+        # core call once the entry expires.
+        store(argv, state["stdout"])
         return subprocess.CompletedProcess(argv, 0, state["stdout"], "")
     record(argv, 1)
     # A 2xx is not a success by itself: `gh` can fail locally after a good
@@ -512,8 +516,17 @@ def filtered(argv):
 # line and a blank line. The header line is what tells a block apart from a
 # body that happens to start with text such as `HTTP/1.1 200 OK`, which is
 # user data and must be neither counted nor removed.
-HEADER_BLOCK = re.compile(
-    r"(?m)^HTTP/[\d.]+\s+\d{3}[^\n]*\n(?:[^:\n]+:[^\n]*\n)+\n")
+_HEADER_CANDIDATE = re.compile(
+    r"(?m)^HTTP/[\d.]+\s+\d{3}[^\n]*\n(?:[^:\n]+:[^\n]*\n)*\n")
+# A real gh response block carries a GitHub or rate-limit header. That is
+# what tells it apart from a body that prints a header-shaped block itself,
+# which is user data and must be neither counted nor removed.
+_GITHUB_HEADER = re.compile(r"(?im)^(?:x-github-|x-ratelimit-)")
+
+
+def _header_blocks(text):
+    return [match for match in _HEADER_CANDIDATE.finditer(text or "")
+            if _GITHUB_HEADER.search(match.group(0))]
 
 
 def status_lines(text):
@@ -522,7 +535,7 @@ def status_lines(text):
     One block is one request, whatever the output formatting did to the
     body, so this is the page count before formatting. A header block only
     counts when it carries a header line, so body text is not a page."""
-    return len(HEADER_BLOCK.findall(text or ""))
+    return len(_header_blocks(text))
 
 
 def strip_headers(text):
@@ -530,7 +543,13 @@ def strip_headers(text):
 
     Only a block with a header line is removed, so a body that begins with
     `HTTP/1.1 200 OK` and a blank line survives in the caller's output."""
-    return HEADER_BLOCK.sub("", text or "")
+    text = text or ""
+    kept, position = [], 0
+    for block in _header_blocks(text):
+        kept.append(text[position:block.start()])
+        position = block.end()
+    kept.append(text[position:])
+    return "".join(kept)
 
 
 def requests(argv, stdout):
