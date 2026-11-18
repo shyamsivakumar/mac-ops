@@ -914,6 +914,7 @@ def unstick(repo, ledger, excl=frozenset()):
         return "nothing ready"
     receipts = json.load(open(RECEIPTS))
     failures_before = ledger.get("_item_failures", 0)
+    held = set()
     for n in orphans:
         with item_boundary(repo, n, ledger):
             prefix = f"ticket:{repo}#{n}:a"
@@ -938,8 +939,14 @@ def unstick(repo, ledger, excl=frozenset()):
             queued = {}
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
                        queued, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, issue=n)
-            if queued:
-                ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
+            ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
+            if not queued:
+                # The work was held: the thread is live on another model, so
+                # the ticket is being worked. It is not unstuck, and the
+                # scan goes on to the next ticket: one held ticket must not
+                # starve the others.
+                held.add(n)
+                continue
             return f"continue #{n}: {out}"
     if ledger.get("_item_failures", 0) > failures_before:
         return "continue failed"
@@ -949,7 +956,7 @@ def unstick(repo, ledger, excl=frozenset()):
         if isinstance(v, list) and (now - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
             return True
         return False
-    orphans = [n for n in orphans if not marked(f"unstick:{repo}#{n}")]
+    orphans = [n for n in orphans if not marked(f"unstick:{repo}#{n}") and n not in held]
     if not orphans:
         return "nothing ready"
     # Every ticket runs on the builder it resolves to, so a batch holds

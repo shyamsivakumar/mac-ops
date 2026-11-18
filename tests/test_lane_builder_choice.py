@@ -415,5 +415,101 @@ class UnstickBuilders(unittest.TestCase):
         self.assertIn("#12", launches[0]["message"])
 
 
+class HeldContinue(unittest.TestCase):
+    """A held send does not starve the other tickets.
+
+    A thread that is live on another model holds the work. The ticket is
+    being worked, so it is not unstuck and the scan goes on to the next
+    ticket, and the held ticket gets a cooldown so the next pass does not
+    select it again.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.previous = os.environ.get("COORDQ_DIR")
+        os.environ["COORDQ_DIR"] = self.scratch.name
+
+        def restore():
+            if self.previous is None:
+                os.environ.pop("COORDQ_DIR", None)
+            else:
+                os.environ["COORDQ_DIR"] = self.previous
+        self.addCleanup(restore)
+        self.lane = load_lane()
+        self.lane.DRY = False
+        self.lane.CFG = {REPO: {"projectId": "fixture", "key": "MO"}}
+
+    def unstick(self, threads):
+        """Replay the unstick path over the given tickets and their threads."""
+        lane = self.lane
+        issues = [{"number": number, "labels": []} for number in sorted(threads)]
+        snapshot = {"tickets": [], "repos": {REPO: {"prs": [], "issues": issues}}}
+        receipts = {f"ticket:{REPO}#{number}:a1": thread["threadId"]
+                    for number, thread in threads.items()}
+        queued = []
+
+        def files(path, *args, **kwargs):
+            if str(path).endswith("providers-blocked.json"):
+                return mock_open(read_data='{"blocked": {}}')()
+            if str(path).endswith("models.json"):
+                return mock_open(read_data=MODELS.read_text())()
+            if path == lane.RECEIPTS:
+                return mock_open(read_data=json.dumps(receipts))()
+            return mock_open(read_data="continue the ticket {issue}")()
+
+        def run(cmd, timeout=150):
+            queued.append(json.loads(cmd[2]))
+            return "fixture-receipt"
+
+        def t3(tool, args):
+            if tool == "t3_thread_read":
+                for thread in threads.values():
+                    if thread["threadId"] == args["threadId"]:
+                        return {"thread": thread}
+                raise AssertionError(f"unexpected thread {args['threadId']}")
+            raise AssertionError(f"unexpected T3 call {tool}")
+
+        ledger = {}
+        with patch.dict(os.environ, {"COORDINATOR_MODELS": str(MODELS)}), \
+             patch.object(lane, "SNAPSHOT", snapshot), \
+             patch.object(lane, "run", run), patch.object(lane, "t3", t3), \
+             patch.object(lane, "root_workspace", return_value=False), \
+             patch("builtins.open", files), redirect_stdout(io.StringIO()):
+            result = lane.unstick(REPO, ledger)
+        return result, queued, ledger
+
+    def live_legacy(self, name):
+        """A thread that is running on a model the lane does not build with."""
+        return {"threadId": name, "status": "running", "providerInstanceId": "codex",
+                "model": "gpt-6.1-sol", "worktreePath": "/fixture/worktree", "pullRequests": []}
+
+    def idle_builder(self, name):
+        """A thread that is idle on the builder the lane picked."""
+        return {"threadId": name, "status": "completed",
+                "providerInstanceId": MINIMAX["instanceId"], "model": MINIMAX["model"],
+                "worktreePath": "/fixture/worktree", "pullRequests": []}
+
+    def test_a_held_send_lets_the_next_ticket_take_the_pass(self):
+        result, queued, ledger = self.unstick({11: self.live_legacy("thread-11"),
+                                                12: self.live_legacy("thread-12"),
+                                                13: self.idle_builder("thread-13")})
+        # The idle ticket on the chosen builder takes the pass.
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["threadId"], "thread-13")
+        self.assertTrue(result.startswith("continue #13:"), result)
+        # Both held tickets get a cooldown, so the next pass does not
+        # select them again.
+        self.assertIn("cont:thread-11", ledger)
+        self.assertIn("cont:thread-12", ledger)
+
+    def test_a_held_ticket_is_not_unstuck(self):
+        result, queued, ledger = self.unstick({11: self.live_legacy("thread-11")})
+        # Nothing was queued and nothing was unstuck: the ticket is being
+        # worked.
+        self.assertEqual(queued, [])
+        self.assertEqual(result, "nothing ready")
+
+
 if __name__ == "__main__":
     unittest.main()
