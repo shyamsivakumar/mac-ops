@@ -58,6 +58,7 @@ env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}",
        "COORDINATOR_GH_CACHE": "on",
        "COORDINATOR_GH_CACHE_DIR": str(cache),
        "COORDINATOR_GH_USAGE_LOG": str(scratch / "usage.jsonl"),
+       "COORDINATOR_GH_ACCOUNT": "proof",
        "COORDINATOR_CALLER": "proof"}
 
 ok = True
@@ -69,7 +70,7 @@ def check(name, condition, detail=""):
     print(f"{'PASS' if condition else 'FAIL'} {name}" + (f" ({detail})" if detail else ""))
 
 
-def run(argv, floor=None):
+def run(argv, floor=None, cwd=None):
     """Run one read in its own process, so the in-process quota cache is fresh."""
     code = f"""
 import sys
@@ -78,7 +79,8 @@ import gh_gateway
 result = gh_gateway.run({argv!r}, timeout=20, limit={floor!r})
 sys.stdout.write(result.stdout)
 """
-    return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    return subprocess.run([sys.executable, "-c", code], capture_output=True,
+                          text=True, env=env, cwd=cwd)
 
 
 def calls_made():
@@ -216,6 +218,36 @@ check("a write is not conditional",
               for line in calls.read_text().splitlines()))
 
 check("the usage log names the caller per call", all(row["caller"] == "proof" for row in rows()))
+
+# A header can carry a credential, so no argument may be written down.
+secret = "sekrit-token-value"
+run(["gh", "api", "-H", f"Authorization: token {secret}", "repos/a/b/labels?per_page=100"])
+logged = (scratch / "usage.jsonl").read_text()
+check("the usage log holds no credential", secret not in logged and "Authorization" not in logged)
+check("the usage log holds no arguments",
+      all("command" not in row for row in rows()), "rows carry caller, quota and verb")
+
+# `--method=POST` must not be read as GET: a write is never cached.
+before = calls_made()
+run(["gh", "api", "--method=POST", "repos/a/b/dispatches?ref=main"])
+run(["gh", "api", "--method=POST", "repos/a/b/dispatches?ref=main"])
+check("a --method=POST write is never cached", calls_made() - before == 2,
+      f"calls={calls_made() - before}")
+
+# The same command in two checkouts is two reads: the cache key names the
+# repository, the host and the account.
+one = Path(tempfile.mkdtemp(prefix="repo-one-"))
+two = Path(tempfile.mkdtemp(prefix="repo-two-"))
+listed = ["gh", "issue", "list", "-R", "a/b", "--state", "open", "--json", "number"]
+before = calls_made()
+run(listed, cwd=str(one))
+run(listed, cwd=str(one))
+check("the same repo and command is cached once", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
+before = calls_made()
+run(listed, cwd=str(two))
+check("a different checkout is a different read", calls_made() - before == 1,
+      f"calls={calls_made() - before}")
 
 result = run(fresh, floor=5000)
 check("a read below the floor is refused",
