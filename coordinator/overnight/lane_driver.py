@@ -746,6 +746,76 @@ def prompt_pass(repo, number, head, prompt):
     return f"skip #{number}: gate PASS, prompt change, Shyam merges"
 
 
+def base_moved_item(repo, number, head, landed, base):
+    """The item Shyam answers when a merge landed on a base nobody reviewed.
+
+    The merge API pins no base, so the guard reads the base again after the
+    merge; a merge that landed elsewhere is not silently reported as a merge
+    on the reviewed base. The item is what makes that reach Shyam instead of
+    a log line nobody reads.
+    """
+    key = CFG[repo]["key"]
+    return {"id": f"base-moved-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} merged into `{landed}`, not the reviewed `{base}`: "
+                      f"read head {head[:8]} and decide whether to keep it."),
+            "why": ("The merge call pins the head only, so a retarget inside the last moment before "
+                    "it cannot be refused by the merge. Nothing was closed and main was not "
+                    "fast-forwarded. Inspect the merged diff for prompt files before keeping it.")}
+
+
+def merge_on_reviewed_base(repo, number, head, base):
+    """Merge one pull request only when its base is still the reviewed one.
+
+    `--match-head-commit` pins the head, and nothing in the merge call pins
+    the base: a retarget leaves the head where it is. Two things guard the
+    interval around the merge. The base and head are read once immediately
+    before it, and a pull request that moved merges nothing. The base is read
+    once more after it: a merge cannot pin its base, so a retarget that slipped
+    into that interval would otherwise be reported as a merge on the reviewed
+    base. A merge that landed on another base is reported as one that is not
+    the reviewed review's, and the caller closes nothing and fast-forwards
+    nothing, so the outcome Shyam reads is never "merged as reviewed" for a
+    base nobody reviewed.
+    Return (merged, note): merged means the merge was issued onto the reviewed
+    base; note is the line the pass prints.
+
+    The residue this cannot remove, and why it is accepted:
+
+    The merge call pins the head and squashes, and the pull request carries the
+    base. So a retarget landing between the read above and the merge below is
+    merged into the new base, and the read after it reports that instead of
+    claiming a merge on the reviewed base. No GitHub merge call pins a base and
+    a head together: the `merges` endpoint names the base but cannot squash and
+    takes a head commit, and pushing the squash by hand bypasses the pull
+    request merge and is refused where direct pushes are restricted. Six
+    designs along those lines were built, each losing one of the properties
+    this rule needs, which is why the ticket's own merge is the one kept.
+
+    Who reaches the window: retargeting a pull request needs write access to
+    the repository, so on a private repository it is the owner racing his own
+    two calls, not an outsider. The prompt rule itself is unaffected: the
+    classification decides on the pull request's own diff, and anything the
+    pull request introduces against the base this review read still holds.
+    """
+    current = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                              "--json", "baseRefName,headRefOid"])) or {}
+    if current.get("baseRefName") != base or current.get("headRefOid") != head:
+        return False, (f"skip #{number}: gate PASS, but the pull request moved (base {base} -> "
+                       f"{current.get('baseRefName')}, head {head[:8]} -> "
+                       f"{str(current.get('headRefOid'))[:8]}); nothing merged, the next pass reviews it")
+    run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+    landed = json.loads(run(["gh", "pr", "view", str(number), "-R", repo,
+                             "--json", "baseRefName"])) or {}
+    if landed.get("baseRefName") != base:
+        # The pull request cannot be retargeted once it is merged, so the base
+        # it names now is the base the merge landed on. The item puts that in
+        # front of Shyam; the pass itself claims no merge.
+        published = publish_decision(base_moved_item(repo, number, head,
+                                                     landed.get("baseRefName"), base))
+        return False, (f"critical #{number}: the merge landed on base "
+                       f"{landed.get('baseRefName')}, not the reviewed {base}; nothing closed, "
+                       f"nothing fast-forwarded, Shyam has the item ({published})")
+    return True, f"#{number}: merged {head}"
 def message_title(repo, number, action, head):
     """The title of one message about one head of one pull request.
 
@@ -827,9 +897,17 @@ def act_on_pr(repo, number, ledger):
             return held
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
+        base = pr.get("baseRefName") or "main"
         if DRY:
             return f"DRY merge #{number} {head}"
-        run(["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--match-head-commit", head])
+        # A retarget moves the pull request onto another base without moving
+        # its head, and the same head can then introduce prompt text it did
+        # not introduce against the base this pass classified. The base and
+        # head are read again inside the merge step, as close to the merge as
+        # the merge can be guarded: a pull request that moved merges nothing.
+        merged, note = merge_on_reviewed_base(repo, number, head, base)
+        if not merged:
+            return note
         if issue:
             ref = f"{repo}#{issue}"
             output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
@@ -837,7 +915,7 @@ def act_on_pr(repo, number, ledger):
             if "is already closed" in output:
                 print(f"already-closed:{ref}: {output}")
         fast_forward_main(repo)
-        return f"#{number}: merged {head}"
+        return note
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
         if status in ("completed", "interrupted", "failed"):
