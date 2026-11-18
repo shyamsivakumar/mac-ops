@@ -704,10 +704,8 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         self.assertTrue(os.access(self.repo / "AGENTS.md", os.X_OK), "the mode change has to survive")
         self.assertNotEqual(cleaner.status_for(self.repo), [])
 
-    def test_a_mode_change_on_a_rename_destination_keeps_the_worktree(self):
-        # The destination of a staged rename becomes executable after the
-        # scan. The bytes still match, so the mode has to be compared too.
-        repo = Path(self.tmp.name) / "rename-mode-repo"
+    def _renamed_repo(self, name: str) -> Path:
+        repo = Path(self.tmp.name) / name
         repo.mkdir()
         git(repo, "init", "-b", "main")
         git(repo, "config", "user.name", "Fixture")
@@ -717,13 +715,33 @@ class ClearBootstrapChangesTest(unittest.TestCase):
         git(repo, "add", ".specstory/a.md")
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=a@b.c", "commit", "-m", "history"], check=True, capture_output=True)
         git(repo, "mv", ".specstory/a.md", ".specstory/b.md")
+        return repo
+
+    def test_a_rename_destination_is_cleared(self):
+        # The same rename as below, without a mode change, has to succeed, so
+        # the test that follows cannot pass for the wrong reason.
+        repo = self._renamed_repo("rename-plain-repo")
         records = cleaner.status_for(repo)
-        digests = {name: cleaner.file_digest(repo / name) for code, name, original in records if original is None}
-        signatures = {name: cleaner._working_signature(repo / name) for code, name, original in records if original is None}
+        digests = {name: cleaner.file_digest(repo / name) for code, name, _original in records}
+        signatures = {name: cleaner._working_signature(repo / name) for code, name, _original in records}
+        cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests, cleaner.index_digest(repo), signatures)
+        self.assertEqual(sorted(cleared or []), [".specstory/b.md"])
+        self.assertEqual(cleaner.status_for(repo), [])
+
+    def test_a_mode_change_on_a_rename_destination_keeps_the_worktree(self):
+        # The destination of a staged rename becomes executable after the
+        # scan. The bytes still match, so the mode has to be compared too,
+        # and the file has to stay in the worktree with its new mode.
+        repo = self._renamed_repo("rename-mode-repo")
+        records = cleaner.status_for(repo)
+        digests = {name: cleaner.file_digest(repo / name) for code, name, _original in records}
+        signatures = {name: cleaner._working_signature(repo / name) for code, name, _original in records}
         os.chmod(repo / ".specstory" / "b.md", 0o755)
         cleared = cleaner.clear_bootstrap_changes(repo, records, self.trash, digests, cleaner.index_digest(repo), signatures)
         self.assertIsNone(cleared)
-        self.assertTrue(os.access(repo / ".specstory" / "b.md", os.X_OK), "the mode change has to survive")
+        destination = repo / ".specstory" / "b.md"
+        self.assertTrue(destination.exists(), "the file must stay in the worktree")
+        self.assertTrue(os.access(destination, os.X_OK), "the mode change has to survive")
 
     def test_a_deletion_after_the_scan_keeps_the_worktree(self):
         # The file is deleted after the scan, so the deletion is kept and the
