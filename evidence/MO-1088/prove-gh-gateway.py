@@ -531,6 +531,22 @@ print(gh_gateway._hosts_account("github.com"))
 check("the host-level account wins over a nested users entry",
       account == "active-name", account)
 
+# An unfiltered paginated read without --slurp cannot prove its page
+# boundaries, so its count is a lower bound; a slurped read can.
+plain = subprocess.run([sys.executable, "-c", f"""
+import sys
+sys.path.insert(0, {str(BIN)!r})
+import gh_gateway
+plain = ["gh", "api", "--paginate", "repos/a/b/issues?state=open"]
+slurped = ["gh", "api", "--paginate", "--slurp", "repos/a/b/issues?state=open"]
+headers = ["gh", "api", "--paginate", "--include", "repos/a/b/issues?state=open"]
+print("PLAIN", gh_gateway.pages_unknown(plain))
+print("SLURPED", gh_gateway.pages_unknown(slurped))
+print("HEADERS", gh_gateway.pages_unknown(headers))
+"""], capture_output=True, text=True, env=env).stdout.split()
+check("an unbounded array read is a lower bound",
+      plain == ["PLAIN", "True", "SLURPED", "False", "HEADERS", "False"], str(plain))
+
 # `gh issue` and `gh pr` are mixed groups: reads are GraphQL, writes may be
 # REST, so a write is reported as `other` rather than guessed.
 mixed = subprocess.run([sys.executable, "-c", f"""
