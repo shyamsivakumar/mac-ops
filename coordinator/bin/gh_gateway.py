@@ -122,7 +122,9 @@ KNOWN_FLAGS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field",
                "-p", "--preview")
 # The flags that format the output. With one of these, a page is not a JSON
 # value any more, so the page count has to come from the response headers.
-OUTPUT_FILTER_FLAGS = ("-q", "--jq", "-t", "--template")
+# `--silent` prints no body at all, so a paginated read with it cannot be
+# counted from its output either.
+OUTPUT_FILTER_FLAGS = ("-q", "--jq", "-t", "--template", "--silent", "--verbose")
 
 
 def tokens(argv):
@@ -732,7 +734,7 @@ def settle(argv, stdout, headers_counted, failed=False):
     if headers_counted:
         pages = status_lines(stdout)
         return (strip_headers(stdout),
-                max(1, pages) + _failed_request(argv, failed, pages, True))
+                max(1, pages) + _failed_request(argv, failed, pages, True, stdout))
     # Unreachable today: the gateway never adds the header flag. Kept so a
     # caller that adds it itself is handled by the branch below.
     if paginated(argv) and resource(argv) == CORE:
@@ -748,7 +750,7 @@ def settle(argv, stdout, headers_counted, failed=False):
         if has_include:
             # Unfiltered pages are JSON, so a header block is a real one.
             pages = status_lines(stdout)
-            return stdout, max(1, pages) + _failed_request(argv, failed, pages, True)
+            return stdout, max(1, pages) + _failed_request(argv, failed, pages, True, stdout)
 
     # Nothing here ever re-runs the command. A replay could send a write
     # twice, and a second pagination would spend quota to learn a count.
@@ -763,7 +765,13 @@ def settle(argv, stdout, headers_counted, failed=False):
     return stdout, max(1, pages + _failed_request(argv, failed, pages))
 
 
-def _failed_request(argv, failed, pages, header_blocks=False):
+def _last_status(text):
+    """Return the last HTTP status in a header-carrying output, or None."""
+    codes = re.findall(r"(?m)^HTTP/[\d.]+\s+(\d{3})", text or "")
+    return int(codes[-1]) if codes else None
+
+
+def _failed_request(argv, failed, pages, header_blocks=False, stdout=""):
     """One extra request when a paginated core read stopped on an error.
 
     `pages` is the number of pages already counted from the output. Only
@@ -773,8 +781,10 @@ def _failed_request(argv, failed, pages, header_blocks=False):
         return 0
     if header_blocks:
         # A failed response that printed its own header block is already in
-        # the block count; adding one more would count it twice.
-        return 0
+        # the block count. When no error block was printed, the attempt is
+        # still missing, so it is added here.
+        status = _last_status(stdout)
+        return 0 if status is not None and status >= 400 else 1
     return 1 if pages else 0
 
 

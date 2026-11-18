@@ -1230,7 +1230,7 @@ def dead_ticket_numbers(repo, token):
     result = gh_gateway.run(["gh", "issue", "list", "-R", repo, "--state", "all",
                              "--limit", "10", "--search", f"{token} in:title",
                              "--json", "number,title"], timeout=120,
-                            caller_name=LANE_CALLER)
+                            fresh=True, caller_name=LANE_CALLER)
     if result.returncode:
         first = (result.stdout + result.stderr).strip().splitlines()
         raise RuntimeError(f"{repo} {token}: {first[0] if first else result.returncode}")
