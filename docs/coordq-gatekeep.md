@@ -79,24 +79,10 @@ turned out to be blocked (`waiting <repo>#<pr>`). The first reviewer of a head
 is chosen before the locks are taken, so it is checked again under them and
 chosen again on a free reviewer (`rechoosing <repo>#<pr>`).
 
-A queued gate whose reviewer was blocked after it was queued is not launched.
-The dispatcher checks the reviewer again under the block store lock just
-before it reserves the launch, refuses the item (`REFUSED #<id>`), and
-puts the head back as it was before the item. A fallback item carries the head
-record and receipt it replaced, and both are restored, so the next run retries
-the head on an eligible reviewer. A first launch has nothing to restore, so its
-head is released and gated again. The
-dispatcher already holds the queue lock, so it takes the block store lock
-without waiting and leaves the item queued for the next run when a writer
-holds it. Queued builders are never refused for a blocked model.
-
 The lock order is the block store lock, then the queue lock. Gatekeep takes
-them in that order, and the dispatcher only try-locks the block store lock
-while it holds the queue lock. This branch ships no writer of the store, so
-nothing here waits on the block store lock under the queue lock. A writer of
-the store that is called from the dispatcher or from gatekeep must run
-outside the queue lock, or it deadlocks against a gatekeep run that holds the
-block store lock and waits for the queue lock.
+them in that order, so a writer of the store that runs outside the queue lock
+cannot land a block between the check and the write. This branch ships no
+writer of the store: the store (MO-1092) takes the same lock file.
 
 A loaded LaunchAgent runs after login. Reboot survival requires a real reboot
 and has not been demonstrated by plist validation or local checks.
