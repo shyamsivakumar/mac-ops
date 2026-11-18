@@ -1,7 +1,7 @@
 # Check proof
 
 Command: `python3 scripts/mac_ops_fast_check.py`
-Checked commit: `5f7ea7ef8dbb68427ce2018a01c27de4ec992990`
+Checked commit: `c27dd84c9d130ed72d76a028d68485d291234737`
 Working tree clean when the checks ran: yes
 
 | Check | Command | Result | Detail |
@@ -13,7 +13,7 @@ Working tree clean when the checks ran: yes
 | python syntax: tests/test_worktree_cleaner_bootstrap.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' tests/test_worktree_cleaner_bootstrap.py` | passed |  |
 | python syntax: verification/worktree-cleaner/check_bootstrap.py | `python3 -c 'import ast,sys;[ast.parse(open(f,'"'"'rb'"'"').read(),f) for f in sys.argv[1:]]' verification/worktree-cleaner/check_bootstrap.py` | passed |  |
 | worktree cleaner bootstrap fixture | `python3 verification/worktree-cleaner/check_bootstrap.py` | passed |  |
-| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-2h9c6jya -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-2h9c6jya/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
+| TLC heavy queue model | `/opt/homebrew/opt/openjdk@17/bin/java -Xmx128m -Djava.io.tmpdir=/var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-01s21o_t -cp /Users/shyamsivakumar/Code/llmwiki/runtime/tla/tla2tools.jar tlc2.TLC -workers 1 -noGenerateSpecTE -metadir /var/folders/d3/kwh8z2bj1rlgy6ld9fcpnpk00000gn/T/heavy-queue-tlc-01s21o_t/states -config HeavyQueue.cfg HeavyQueue.tla` | passed |  |
 | heavy help | `python3 heavy.py --help` | passed |  |
 | tests: tests.test_worktree_cleaner_bootstrap | `python3 -m unittest tests.test_worktree_cleaner_bootstrap` | passed |  |
 
