@@ -98,7 +98,12 @@ their counts; the check fails only on a finding the baseline does not have. Run
 `python3 scripts/mac_ops_fast_check.py --write-ruff-baseline` to write the
 baseline again after the known findings are fixed. When Ruff or `uvx` is not on
 the machine, the proof file records `not run` and the run is incomplete, so it
-is not a pass. This repository does not currently configure a type checker.
+is not a pass.
+
+The check runs mypy the same way, through `uvx mypy@1.18.2 --strict`, over the
+modules listed in `MYPY_TARGETS` (today `board_resources.py`). Both versions live in
+`TOOL_VERSIONS` in `scripts/mac_ops_fast_check.py`; change a version there and
+nowhere else. A missing `uvx` or mypy is `not run`, never `passed`.
 
 The check writes a proof file, `evidence/check-proof.md` by default and
 `evidence/<KEY>-<issue>/check-proof.md` with `--proof`. The file lists every
@@ -347,15 +352,6 @@ under `~/.local/state/mac-ops/session-traces/`, with a daily eval table in
 when `POSTHOG_API_KEY` is set (ask the coordinator before creating a key). See
 [docs/session-traces.md](docs/session-traces.md); daily command:
 `./scripts/session-traces/daily.sh`.
-
-## Agent cost per pull request (MO-504)
-
-A report-only measurement of what each pull request cost, priced from the usage
-records pi writes for every API turn, and what a refactor changed: the cost per
-pull request of a repository in the days before a refactor merged and the days
-after. It reads the session logs and writes a report; it changes no code and
-blocks no merge. Command: `python3 mo124 cost --day 2026-11-17`. See
-[docs/session-traces.md](docs/session-traces.md).
 
 ## Worktree cleaner (MO-125)
 

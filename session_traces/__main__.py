@@ -10,9 +10,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .collect import collect_and_store
-from .cost_report import DEFAULT_PI_ROOT, build_report, write_report
+from .cost_report import DEFAULT_PI_ROOT, build_report, render
 from .eval_day import write_day_report
-from .store import day_key, posthog_api_key, state_root
+from .store import day_key, posthog_api_key
 
 LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
@@ -80,40 +80,10 @@ def main(argv: list[str] | None = None) -> int:
     daily.add_argument("--no-export", action="store_true")
     daily.add_argument("--baseline-day", default=None)
 
-    cost = sub.add_parser(
-        "cost", help="Agent cost per pull request for a local day"
-    )
+    cost = sub.add_parser("cost", help="Agent cost per pull request for a local day")
     cost.add_argument("--day", help="Local calendar day YYYY-MM-DD (default: today)")
-    cost.add_argument(
-        "--pi-root",
-        type=Path,
-        default=DEFAULT_PI_ROOT,
-        help="The pi home that holds the session logs (default: ~/.pi)",
-    )
-    cost.add_argument(
-        "--before-days",
-        type=int,
-        default=7,
-        help="Days before a refactor merge to measure (default: 7)",
-    )
-    cost.add_argument(
-        "--after-days",
-        type=int,
-        default=3,
-        help="Days after a refactor merge to measure (default: 3)",
-    )
-    cost.add_argument(
-        "--repo",
-        action="append",
-        default=None,
-        help="Only this owner/name (repeatable)",
-    )
-    cost.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Where the report is written (default: <state>/cost-reports)",
-    )
+    cost.add_argument("--pi-root", type=Path, default=DEFAULT_PI_ROOT)
+    cost.add_argument("--out", type=Path, default=None, help="Write the markdown report here")
 
     sub.add_parser("status", help="Show store paths and PostHog key presence")
 
@@ -144,30 +114,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "cost":
-        day = args.day or day_key()
-        report = build_report(
-            day,
-            pi_root=args.pi_root,
-            before_days=args.before_days,
-            after_days=args.after_days,
-            repos=args.repo,
-        )
-        out_dir = args.out or (state_root(args.state_root) / "cost-reports")
-        paths = write_report(report, out_dir)
-        summary = {
-            "day": day,
-            "json": paths["json"],
-            "md": paths["md"],
-            "sessions": report["session_count"],
-            "total_cost_usd": report["total_cost_usd"],
-            "pr_count": report["pr_count"],
-            "cost_per_pr_usd": report["cost_per_pr_usd"],
-            "reconciled": report["reconciled"],
-        }
-        print(json.dumps(summary, indent=2))
-        md = Path(paths["md"])
-        if md.is_file():
-            sys.stdout.write(md.read_text(encoding="utf-8"))
+        markdown = render(build_report(args.day or day_key(), args.pi_root))
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(markdown, encoding="utf-8")
+        sys.stdout.write(markdown)
         return 0
 
     if args.cmd == "eval":
