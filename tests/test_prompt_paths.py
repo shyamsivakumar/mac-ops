@@ -344,6 +344,7 @@ class CoordqGateTest(unittest.TestCase):
     def setUp(self):
         from tests.test_gatekeep_backstop_reviewer import load_coordq
         self.coordq = load_coordq()
+        self.coordq._base_pins.clear()
 
     def test_the_queue_reads_the_same_list(self):
         with patch.object(self.coordq, "gh_json",
@@ -385,7 +386,9 @@ class CoordqGateTest(unittest.TestCase):
         def gh(endpoint):
             if endpoint.endswith("/files?per_page=100"):
                 return [{"filename": "coordinator/bin/coordq"}]
-            if "/compare/" in endpoint:
+            if endpoint.endswith("/git/ref/heads/main"):
+                return [{"object": {"sha": "mainsha"}}]
+            if endpoint.endswith("/compare/mainsha...head"):
                 return [{"merge_base_commit": {"sha": "base"}}]
             if endpoint.endswith("/git/trees/base?recursive=1"):
                 return [{"tree": [{"type": "blob", "path": "a.py", "sha": "1"}]}]
@@ -399,6 +402,49 @@ class CoordqGateTest(unittest.TestCase):
             self.assertEqual(
                 self.coordq.gate_prompt_state("shyamsivakumar/mac-ops", 544, base="main", head="head"),
                 prompt_paths.CLEAR)
+
+    def test_the_base_branch_is_pinned_once_and_an_unreadable_pin_is_unknown(self):
+        reads = []
+
+        def gh(endpoint):
+            reads.append(endpoint)
+            return [{"object": {"sha": "m" * 40}}]
+
+        with patch.object(self.coordq, "gh_json", gh):
+            first = self.coordq.pinned_base("o/r", "main")
+            self.assertEqual(self.coordq.pinned_base("o/r", "main"), first)
+        self.assertEqual(reads, ["repos/o/r/git/ref/heads/main"])
+        self.coordq._base_pins.clear()
+        with patch.object(self.coordq, "gh_json", return_value=[]):
+            self.assertEqual(self.coordq.gate_prompt_state("o/r", 1, base="main", head="h"),
+                             prompt_paths.UNKNOWN)
+
+    def test_the_open_pulls_read_is_never_served_from_the_cache(self):
+        seen = {}
+
+        def run(argv, **kwargs):
+            seen[argv[-1]] = kwargs.get("fresh")
+            return subprocess.CompletedProcess(argv, 0, "[[]]", "")
+
+        with patch.object(self.coordq.gh_gateway, "run", run):
+            self.coordq.gh_json("repos/o/r/pulls?state=open&per_page=100")
+            self.coordq.gh_json("repos/o/r/issues/9/comments?per_page=100")
+        self.assertIs(seen["repos/o/r/pulls?state=open&per_page=100"], True)
+        self.assertIs(seen["repos/o/r/issues/9/comments?per_page=100"], False)
+
+    def test_only_reads_of_full_shas_are_kept_for_long(self):
+        import gh_gateway
+        sha, other = "a" * 40, "b" * 40
+        kept = [f"repos/o/r/git/trees/{sha}", f"repos/o/r/git/trees/{sha}?recursive=1",
+                f"repos/o/r/compare/{sha}...{other}", f"repos/o/r/contents/evidence/x.md?ref={sha}"]
+        moving = ["repos/o/r/git/trees/main", "repos/o/r/compare/main..." + other,
+                  "repos/o/r/contents/x.md?ref=main", f"repos/o/r/commits/{sha}/statuses?per_page=100",
+                  "repos/o/r/git/ref/heads/main"]
+        for route in kept:
+            self.assertTrue(gh_gateway.immutable(["gh", "api", route]), route)
+        for route in moving:
+            self.assertFalse(gh_gateway.immutable(["gh", "api", route]), route)
+        self.assertFalse(gh_gateway.immutable(["gh", "api", "-X", "POST", kept[0]]))
 
     def test_a_code_pull_request_without_a_list_count_is_clear(self):
         """The count read is a one-row list, and its count is used."""
@@ -468,6 +514,8 @@ class CoordqGateTest(unittest.TestCase):
         def gh(endpoint):
             if "/files" in endpoint:
                 raise AssertionError("a file list read by number describes a live head")
+            if endpoint.endswith("/git/ref/heads/main"):
+                return [{"object": {"sha": "mainsha"}}]
             if "/compare/" in endpoint:
                 return [{"merge_base_commit": {"sha": "base"}}]
             if endpoint.endswith("/git/trees/base?recursive=1"):

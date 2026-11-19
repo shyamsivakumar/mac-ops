@@ -66,6 +66,16 @@ COLLECTION_ROUTES = (
     r"search/(?:issues|repositories|users|commits|code|topics)",
     r"(?:orgs|users)/[^/]+/(?:repos|members|teams|events|followers)",
 )
+# A read that names only full commit SHAs returns the same bytes forever, so
+# it is kept for IMMUTABLE_TTL instead of LIST_TTL. A route that names a
+# branch or a tag is never here: `compare/main...<sha>` moves with `main`.
+IMMUTABLE_TTL = 30 * 24 * 3600
+SHA = r"[0-9a-f]{40}"
+IMMUTABLE_ROUTES = (
+    (rf"repos/[^/]+/[^/]+/git/trees/{SHA}", ("", "recursive=1")),
+    (rf"repos/[^/]+/[^/]+/compare/{SHA}\.\.\.{SHA}", ("",)),
+    (r"repos/[^/]+/[^/]+/contents/[^?]+", (f"ref={SHA}",)),
+)
 READ_COMMANDS = (
     ("pr", "list"),
     ("issue", "list"),
@@ -404,6 +414,8 @@ def cacheable(argv):
     # `gh api -X POST repos/o/r/dispatches?ref=main`, must never be served
     # from the cache: the cached success would answer a request that was
     # never sent.
+    if immutable(argv):
+        return True
     path = endpoint(argv)
     if method(argv) != "GET" or "?" not in path:
         return False
@@ -413,6 +425,16 @@ def cacheable(argv):
     # `repos/o/r/git/ref/heads/main?per_page=1` is never answered from the
     # cache after the branch or the pull moves.
     return any(re.fullmatch(route, clean) for route in COLLECTION_ROUTES)
+
+
+def immutable(argv):
+    """True when this api GET names only full commit SHAs, so it never changes."""
+    path = endpoint(argv)
+    if not path or method(argv) != "GET":
+        return False
+    route, _, query = path.lstrip("/").partition("?")
+    return any(re.fullmatch(pattern, route.rstrip("/")) and any(re.fullmatch(q, query) for q in queries)
+               for pattern, queries in IMMUTABLE_ROUTES)
 
 
 def conditional(argv):
@@ -648,7 +670,8 @@ def store(argv, stdout):
     if not cacheable(argv) or not isinstance(stdout, str):
         return
     _atomic_write(CACHE_DIR / _key(argv),
-                  json.dumps({"expiry": time.time() + LIST_TTL, "stdout": stdout}))
+                  json.dumps({"expiry": time.time() + (IMMUTABLE_TTL if immutable(argv) else LIST_TTL),
+                            "stdout": stdout}))
 
 
 def filtered(argv):
