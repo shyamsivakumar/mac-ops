@@ -1,4 +1,7 @@
-import contextlib, io, sys, unittest  # noqa: E401
+import contextlib
+import io
+import sys
+import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -34,7 +37,8 @@ class Bot1RollbackDryRunTests(unittest.TestCase):
                 deployment(1, "REMOVED", "c5d2eabf" + "0" * 32),
                 deployment(4, "SUCCESS", CURRENT),
                 deployment(2, "REMOVED", CURRENT),
-                deployment(3, "REMOVED", PREVIOUS),
+                deployment(3, "SLEEPING", PREVIOUS),
+                deployment(5, "QUEUED", "f" * 40),
             ]
         )
         self.assertEqual(code, 0)
@@ -43,11 +47,13 @@ class Bot1RollbackDryRunTests(unittest.TestCase):
 
     def test_unusable_history_exits_non_zero_with_one_line(self):
         success = deployment(4, "SUCCESS", CURRENT)
+        older = deployment(1, "REMOVED", PREVIOUS)
         for history in (
             [success, deployment(1, "REMOVED", CURRENT)],
-            [success, deployment(3, "REMOVED", None, meta={}), deployment(1, "REMOVED", PREVIOUS)],
-            [success, deployment(3, None, CURRENT), deployment(1, "REMOVED", PREVIOUS)],
-            [success, deployment(3, "BOGUS", CURRENT), deployment(1, "REMOVED", PREVIOUS)],
+            [success, deployment(3, "REMOVED", None, meta={}), older],
+            [success, deployment(3, "SLEEPING", None, meta={}), older],
+            [success, deployment(3, None, CURRENT), older],
+            [success, deployment(3, "BOGUS", CURRENT), older],
             [success, deployment(1, "REMOVED", PREVIOUS, meta="unavailable")],
             [success, None],
         ):
