@@ -7,13 +7,14 @@ it has one. A thread on a model that may take the send is sent to as
 before.
 """
 
+import datetime
 import importlib.util
 import json
 import sys
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 LANE_DIR = ROOT / "coordinator" / "overnight"
@@ -44,7 +45,7 @@ class SendModelTests(unittest.TestCase):
         self.lists = self.lane.model_list.read_json(self.lane.model_list.SEED_PATH)
         self.commands = []
 
-    def send(self, thread, blocked=frozenset(), root=False):
+    def send(self, thread, blocked=frozenset(), root=False, list_name=None, with_pr=True):
         """Send to one thread and return the queue command the lane made."""
         lane = self.lane
 
@@ -63,7 +64,9 @@ class SendModelTests(unittest.TestCase):
              patch.object(lane, "read_json", return_value=pr), \
              patch.object(lane, "root_workspace", return_value=root), \
              patch.object(lane, "run", run), patch.object(lane, "t3", t3):
-            lane.send("thread-1", "brief", "fix", {}, KEY, repo=REPO, pr_number=385)
+            lane.send("thread-1", "brief", "fix", {}, KEY, repo=REPO,
+                      pr_number=385 if with_pr else None,
+                      list_name=list_name or "fix")
         self.assertEqual(len(self.commands), 1)
         return self.commands[0]
 
@@ -98,6 +101,8 @@ class SendModelTests(unittest.TestCase):
         command = self.send(thread, {self.identity(SOL)})
         self.assertNotIn("--tool", command)
         self.assertEqual(self.payload(command)["modelSelection"], self.lists["fix"][0]["selection"])
+        self.assertEqual(self.payload(command)["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
 
     def test_an_allowed_model_is_sent_to_as_before(self):
         """A thread on a model of the fix list takes the message itself."""
@@ -120,6 +125,61 @@ class SendModelTests(unittest.TestCase):
         self.assertNotIn("--tool", command)
         self.assertEqual(self.payload(command)["workspaceStrategy"],
                          {"type": "worktree", "baseRef": "origin/builder/fixture", "startFromOrigin": True})
+
+    def test_a_ticket_without_a_pull_request_still_gets_a_replacement(self):
+        """A thread in the shared checkout gets a replacement, not a skip."""
+        thread = {**SOL, "status": "completed", "sendable": True}
+        command = self.send(thread, root=True, with_pr=False)
+        payload = self.payload(command)
+        self.assertEqual(payload["workspaceStrategy"],
+                         {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True})
+        self.assertEqual(payload["modelSelection"], self.lists["fix"][0]["selection"])
+
+    def test_a_ticket_build_is_replaced_on_the_build_list(self):
+        """A build-list send starts the replacement on the build list."""
+        thread = {**SOL, "status": "completed", "sendable": True, "worktreePath": WORKTREE}
+        command = self.send(thread, list_name="build")
+        payload = self.payload(command)
+        self.assertEqual(payload["modelSelection"], self.lists["build"][0]["selection"])
+        self.assertEqual(payload["taskType"], "worker")
+
+    def test_a_fix_round_is_replaced_on_the_fix_list(self):
+        """A fix-list send starts the replacement on the fix list."""
+        thread = {**SOL, "status": "completed", "sendable": True, "worktreePath": WORKTREE}
+        command = self.send(thread, list_name="fix")
+        payload = self.payload(command)
+        self.assertEqual(payload["modelSelection"], self.lists["fix"][0]["selection"])
+        self.assertEqual(payload["taskType"], "fix")
+
+    def test_a_skipped_continuation_does_not_hold_the_ticket(self):
+        """A continuation that queued nothing leaves the ticket eligible."""
+        lane = self.lane
+        reads, commands = [], []
+
+        def t3(tool, args):
+            reads.append(args)
+            return {"thread": {"status": "deleted"}}
+
+        def run(cmd, timeout=150):
+            commands.append(cmd)
+            return "receipt"
+
+        def files(path, *args, **kwargs):
+            data = json.dumps({f"ticket:{REPO}#385:a1": "old"}) if path == lane.RECEIPTS else "brief"
+            return mock_open(read_data=data)()
+
+        snapshot = {"repos": {REPO: {"issues": [{"number": 385, "labels": []}], "prs": []}}}
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        ledger = {"cont:old": [now, f"skip continue:{REPO}#385:old: no verified PR branch for relaunch"]}
+        with patch.object(lane, "SNAPSHOT", snapshot), \
+             patch.object(lane, "CFG", {REPO: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "DRY", False), patch("builtins.open", files), \
+             patch.object(lane.model_list, "entries", side_effect=lambda name: self.lists[name]), \
+             patch.object(lane.model_list, "blocked_identities", return_value=set()), \
+             patch.object(lane, "t3", t3), patch.object(lane, "run", run):
+            lane.unstick(REPO, ledger)
+        self.assertTrue(reads)
+        self.assertEqual(len(commands), 1)
 
 
 if __name__ == "__main__":

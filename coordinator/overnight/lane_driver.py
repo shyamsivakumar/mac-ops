@@ -470,13 +470,22 @@ def branch_on_origin(repo, branch):
     return bool(listing.strip())
 
 
-def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False):
+def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_number=None, worktree_only=False, list_name="fix"):
     """Send work to a thread, or start a fresh one when it cannot take it.
 
     With `worktree_only` the work belongs in a worktree of its own: a
     thread that works in a shared checkout of a repository never takes
     it, and the work starts a fresh worktree instead. That is the
     fix-check path's rule; the other paths keep their own routing.
+
+    `list_name` is the list the replacement thread runs on when the
+    thread cannot take the send: the fix list for a fix round, the build
+    list for a ticket build.
+
+    The replacement starts in the thread's own worktree when the thread
+    is idle and works in one, and in a worktree of its own otherwise: a
+    live thread still holds its checkout, and the shared checkout of a
+    repository is never a destination.
     """
     repo = repo or next((r for r in CFG if r in lkey), None)
     pr = None
@@ -498,12 +507,13 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
                 and not thread.get("archived") and thread.get("sendable") is not False
                 and thread.get("canSend") is not False)
     reroute = "unreachable"
+    live = thread.get("status") in {"running", "waiting", "queued", "starting", "preparing"}
     if not may_send:
         # The thread runs a model that is blocked, or a model no list
         # names (a legacy Sol thread). It takes no send, and the message
         # is not held for it either: the work starts again on the first
-        # unblocked fix model, in the thread's own worktree when it has
-        # one, so no message is dropped without a thread to carry it.
+        # unblocked entry of the list the send names, so no message is
+        # dropped without a thread to carry it.
         sendable = False
         reroute = "model may not take a send"
     if sendable and worktree_only and root_workspace(thread):
@@ -520,22 +530,34 @@ def send(thread_id, message, title, ledger, lkey, repo=None, priority=800, pr_nu
         repo = repo or next((r for r in CFG if r in lkey), None)
         if not repo:
             raise ValueError(f"No repository for {lkey}")
-        # The work starts on the first unblocked fix model.
-        fixer = model_list.first_available("fix")
-        if fixer is None:
-            return f"skip {lkey}: every fix model is blocked"
-        if reroute == "model may not take a send" and not root_workspace(thread):
+        # The work starts on the first unblocked entry of the list the
+        # send names: the fix list for a fix round, the build list for a
+        # ticket build.
+        entry = model_list.first_available(list_name)
+        if entry is None:
+            return f"skip {lkey}: every {list_name} model is blocked"
+        if reroute == "model may not take a send" and not live and not root_workspace(thread):
+            # The thread is idle and works in a worktree of its own, so
+            # the replacement starts there and the work keeps its place.
             workspace = {"type": "existing_worktree", "worktreePath": thread["worktreePath"]}
         else:
-            if pr is None:
-                return f"skip {lkey}: no verified PR branch for relaunch"
-            if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
-                return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
-            workspace = {"type": "worktree", "baseRef": "origin/" + pr["headRefName"], "startFromOrigin": True}
+            # A live thread still holds its checkout, so a replacement
+            # must not share it, and the shared checkout of a repository
+            # is never a destination. The replacement starts in a
+            # worktree of its own: on the pull request's branch, or on
+            # main when the work has no pull request yet.
+            if pr is not None:
+                if worktree_only and not branch_on_origin(repo, pr["headRefName"]):
+                    return f"skip {lkey}: branch {pr['headRefName']} is not on origin, no safe worktree"
+                branch = pr["headRefName"]
+            else:
+                branch = "main"
+            workspace = {"type": "worktree", "baseRef": "origin/" + branch, "startFromOrigin": True}
         # The client request names the work this launch starts, so the queue
         # refuses a second launch for the same work while this one runs.
         args = {"projectId": CFG[repo]["projectId"], "title": title,
-                "taskType": "fix", "modelSelection": fixer["selection"], "runtimeMode": "full-access",
+                "taskType": "worker" if list_name == "build" else "fix",
+                "modelSelection": entry["selection"], "runtimeMode": "full-access",
                 "workspaceStrategy": workspace, "message": message,
                 "clientRequestId": lkey}
         options = ["--priority", str(priority)]
@@ -776,7 +798,7 @@ def act_on_pr(repo, number, ledger):
         msg = (f"Coordinator: PR #{number} cannot be gated because {why}. Update the branch from origin/main if needed, "
                f"{check_step(repo, proof_path)}, push, set "
                "`Builder check: PASS <full new head sha>` on its own line in the PR body, and report the head. 20 minutes at most; every command under `timeout 300`.")
-        return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True)
+        return f"#{number} fix-check: " + send(builder, msg, message_title(repo, number, "check", head), ledger, f"check:{repo}#{number}:{head}", pr_number=number, worktree_only=True, list_name="build")
     verdict, gate, reply = gate_verdict(repo, number, head)
     if verdict == "running":
         return f"#{number}: gate running"
@@ -974,7 +996,12 @@ def unstick(repo, ledger, excl=frozenset()):
                 continue
             v = ledger.get(f"cont:{best[1]}")
             if isinstance(v, list) and (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").datetime.fromisoformat(v[0])).total_seconds() < 1800:
-                continue
+                # A continuation that carried the work holds the ticket
+                # for a while. A continuation that queued nothing - the
+                # send skipped - does not: the ticket stays eligible, so
+                # the next pass tries it again.
+                if len(v) < 2 or not str(v[1]).startswith("skip"):
+                    continue
             if not t3("t3_thread_read", {"threadId": best[1], "limit": 1}).get("thread"):
                 if DRY:
                     return f"DRY start #{n}"
@@ -986,7 +1013,7 @@ def unstick(repo, ledger, excl=frozenset()):
                 return f"DRY continue #{n}"
             msg = open("/Users/shyamsivakumar/Code/coordinator/loop/continue-brief.md").read().replace("{issue}", str(n))
             out = send(best[1], msg, f"{CFG[repo]['key']}#{n} continue",
-                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900)
+                       {}, f"continue:{repo}#{n}:{best[1]}", repo=repo, priority=900, list_name="build")
             ledger[f"cont:{best[1]}"] = [__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(), out]
             return f"continue #{n}: {out}"
     if ledger.get("_item_failures", 0) > failures_before:
