@@ -267,7 +267,7 @@ class Installer:
         write_json(self.settings(), settings)
         return "cleaned"
 
-    def merge_t3_gate(self, spec: dict) -> dict | None:
+    def merge_t3_gate(self, spec: dict, enabled: bool | None) -> dict | None:
         conf = spec["t3_gate_instance"]
         settings = load_json(self.t3_settings(spec))
         instances = dict(settings.get("providerInstances") or {})
@@ -285,7 +285,7 @@ class Installer:
             **base,
             "driver": base.get("driver", conf["driver"]),
             "displayName": base.get("displayName", conf["displayName"]),
-            "enabled": base.get("enabled", True),
+            "enabled": base.get("enabled", True) if enabled is None else enabled,
             "environment": others + [role],
         }
         settings["providerInstances"] = instances
@@ -320,10 +320,13 @@ class Installer:
         stamp = str(time.time_ns())
         snapshot = self.snapshot(spec, self.backups / stamp / "snapshot")
         self.prior = self.backups / stamp / "prior"
+        gate_id = spec["t3_gate_instance"]["instanceId"]
+        instances = load_json(self.t3_settings(spec)).get("providerInstances") or {}
+        enabled = instances.get(gate_id, {}).get("enabled") if saved else None
         try:
             if saved:
                 self.uninstall(spec)
-            return self.apply(spec)
+            return self.apply(spec, enabled)
         except BaseException:
             self.restore(snapshot)
             raise
@@ -332,7 +335,7 @@ class Installer:
         saved = self.copy_aside(path, self.prior)
         prior_files[str(path)] = str(saved) if saved else None
 
-    def apply(self, spec: dict) -> dict:
+    def apply(self, spec: dict, enabled: bool | None) -> dict:
         prior_files: dict = {}
         added, registered = self.merge_claude(spec)
         actions = [
@@ -346,7 +349,7 @@ class Installer:
         source = ROOT_REPO / spec["claude_code"]["hook"]["source"]
         shutil.copyfile(source, hook)
         os.chmod(hook, os.stat(source).st_mode | stat.S_IXUSR)
-        t3_prior = self.merge_t3_gate(spec)
+        t3_prior = self.merge_t3_gate(spec, enabled)
         guard = render_guard(spec, self.root)
         for target in self.guard_targets(spec):
             self.claim(target, prior_files)

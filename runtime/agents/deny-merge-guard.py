@@ -79,6 +79,7 @@ WRAPPERS = {
 }
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 COMMAND_NAMES = WRAPPERS | SHELLS | {"git", "gh", "eval"}
+KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}"}
 SEPARATORS = ";&|\n()`"
 MAX_NESTING = 4
 
@@ -211,10 +212,10 @@ def parse(text, i=0, nested=False):
 
 
 def real_command(words):
-    """The words after env assignments and wrapper commands such as `heavy` or `timeout`."""
+    """The words after env assignments, shell keywords and wrappers such as `heavy` or `timeout`."""
     i = 0
     while i < len(words):
-        if ASSIGNMENT_RE.match(words[i]):
+        if ASSIGNMENT_RE.match(words[i]) or words[i] in KEYWORDS:
             i += 1
             continue
         if os.path.basename(words[i]) not in WRAPPERS:
