@@ -160,7 +160,7 @@ def start_routing():
          patch.object(lane, "board_snapshot", return_value=snapshot), \
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
-         patch.object(lane, "recover_dead_runs"), \
+         patch.object(lane, "recover_dead_runs"), patch.object(lane, "settle_merged_prs"), \
          patch.object(lane, "t3", return_value={"threads": [{"title": "bot"}]}), \
          patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False):
@@ -190,7 +190,7 @@ def start_routing():
          patch.object(lane, "board_snapshot", return_value=orphan_snapshot), \
          patch.object(lane, "LANE_REPOS", [repos[1]]), patch.object(lane, "ORDER", {}), \
          patch.object(lane, "CFG", {repos[1]: {"projectId": "fixture", "key": "SRW"}}), \
-         patch.object(lane, "recover_dead_runs"), \
+         patch.object(lane, "recover_dead_runs"), patch.object(lane, "settle_merged_prs"), \
          patch.object(lane, "run", run), patch.object(lane, "DRY", False), \
          patch("builtins.open", __import__("unittest.mock", fromlist=["mock_open"]).mock_open(
              read_data=json.dumps({f"ticket:{repos[1]}#9:a1": "dead"}))):
@@ -534,6 +534,55 @@ def gate_pipeline():
         raise AssertionError("; ".join(failures))
     completion_boundary()
     main_update_boundary()
+
+
+def merged_restart():
+    import lane_driver as lane
+    repo = "shyamsivakumar/mac-ops"
+    head = "a" * 40
+    merged = [dict(number=20, headRefOid=head, body="Refs #10")]
+    for name, receipts, reply, expected in [
+        ("recorded-pass", {f"gate:{repo}#20:{head}": "gate"}, "VERDICT: PASS", ["provides", "ff"]),
+        ("no-recorded-pass", {}, "", ["decisions"]),
+    ]:
+        actions = []
+
+        def command(cmd, timeout=150, actions=actions):
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return json.dumps(merged)
+            if cmd[:2] == ["ticket", "close"]:
+                actions.append("provides")
+                return "closed"
+            if cmd[0] == "git" and "worktree" in cmd:
+                return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
+            if cmd[0] == "git" and "symbolic-ref" in cmd:
+                return "refs/heads/main"
+            if cmd[0] == "git" and "--ff-only" in cmd:
+                actions.append("ff")
+                return "updated"
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def threads(tool, args, reply=reply):
+            return {"thread": {"status": "completed"}, "items": [{"type": "assistant_message", "text": reply}]}
+
+        def decision(item, actions=actions):
+            exact(item["id"], "lane-merged-unreviewed-FIX-20")
+            actions.append("decisions")
+            return "wrote"
+
+        ledger = {}
+        with tempfile.TemporaryDirectory() as scratch, \
+             patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
+             patch.object(lane, "CFG", {repo: dict(key="FIX", projectId="fixture")}), \
+             patch.object(lane, "SNAPSHOT", {"repos": {repo: {"issues": [dict(number=10, labels=[])]}}}), \
+             patch.object(lane, "DRY", False), \
+             patch.object(lane, "publish_decision", decision), \
+             patch.object(lane, "run", command), patch.object(lane, "t3", threads):
+            Path(scratch, "receipts.json").write_text(json.dumps(receipts))
+            lane.settle_merged_prs(repo, ledger)
+            exact(actions, expected)
+            lane.settle_merged_prs(repo, ledger)
+            exact(actions, expected)
 
 
 def main_update_boundary():
@@ -2303,7 +2352,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
         lane.STALL_STATE = {}
         lane.STALL_EVENTS.clear()
         for _ in range(4):
@@ -2332,7 +2381,7 @@ def stall():
              patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
              patch.object(lane, "busy", return_value=live), patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "stall_receipts", return_value={}), \
-             patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+             patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
             lane.STALL_STATE = {}
             lane.STALL_EVENTS.clear()
             for _ in range(4):
@@ -2353,7 +2402,7 @@ def stall():
          patch.object(lane, "busy", side_effect=timeout), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
          patch.object(lane, "start_next") as start, \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
         lane.STALL_STATE = {}
         failed = {}
         with contextlib.redirect_stdout(io.StringIO()), contextlib.suppress(RuntimeError):
@@ -2396,7 +2445,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "run", run), \
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "run", run), \
          patch.object(lane, "DRY", False):
         for _ in range(3):
             lane.run_pass({})
@@ -2423,7 +2472,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
         for _ in range(4):
             lane.run_pass({})
     exact(lane.STALL_STATE["items"][f"{repo}#9"]["stalled"], False)
@@ -2439,7 +2488,7 @@ def stall():
          patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
          patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
          patch.object(lane, "stall_receipts", return_value={}), \
-         patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+         patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
         lane.run_pass({})
     exact(lane.STALL_STATE.get("items", {}), {})
 
@@ -2457,7 +2506,7 @@ def stall():
              patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
              patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
              patch.object(lane, "stall_receipts", return_value={}), \
-             patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+             patch.object(lane, "act_on_pr", act), patch.object(lane, "settle_merged_prs"), patch.object(lane, "DRY", False):
             for _ in range(3):
                 lane.run_pass({})
         found = list(lane.STALL_EVENTS)
@@ -3157,7 +3206,7 @@ def alarm_mute():
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():

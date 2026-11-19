@@ -1081,6 +1081,11 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
     merged, note = merge_on_reviewed_base(repo, number, head, base)
     if not merged:
         return note
+    after_merge(repo, number, head, issue, gate)
+    return note
+
+
+def after_merge(repo, number, head, issue, gate):
     if issue:
         ref = f"{repo}#{issue}"
         output = run(["ticket", "close", ref, "--pr", str(number), "--head", head,
@@ -1088,7 +1093,36 @@ def merge_passed_pr(repo, number, head, pr, issue, gate, ledger):
         if "is already closed" in output:
             print(f"already-closed:{ref}: {output}")
     fast_forward_main(repo)
-    return note
+
+
+def merged_without_gate_item(repo, number, head):
+    key = CFG[repo]["key"]
+    return {"id": f"lane-merged-unreviewed-{key}-{number}", "group": "Coordinator", "kind": "action",
+            "title": (f"{key}-{number} is merged at head {head[:8]} with no recorded gate PASS, "
+                      "so its ticket stays open: check the merge and close the ticket yourself."),
+            "why": "The lane closes a ticket only after a merge whose head the recorded gate attempt passed."}
+
+
+def settle_merged_prs(repo, ledger):
+    merged = json.loads(run(["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", "10",
+                             "--json", "number,headRefOid,body"]) or "[]")
+    for pr in merged:
+        number, head = pr["number"], pr["headRefOid"]
+        lkey = f"after-merge:{repo}#{number}:{head}"
+        found = re.search(r"\bRefs #(\d+)", pr.get("body") or "")
+        if lkey in ledger or not found or issue_record(SNAPSHOT, repo, found.group(1)) is None:
+            continue
+        if DRY:
+            print(f"DRY after-merge #{number}")
+            continue
+        verdict, gate, _ = gate_verdict(repo, number, head)
+        if verdict == "PASS":
+            after_merge(repo, number, head, found.group(1), gate)
+            ledger[lkey] = "closed"
+            print(f"{CFG[repo]['key']:5} #{number}: merged earlier, ticket closed and main fast-forwarded")
+        else:
+            publish_decision(merged_without_gate_item(repo, number, head))
+            ledger[lkey] = "item raised"
 
 
 def act_on_pr(repo, number, ledger):
@@ -2039,6 +2073,8 @@ def run_pass(ledger):
             prs = list(ORDER.get(repo, []))
             others = SNAPSHOT["repos"][repo]["prs"]
             prs += sorted(p["number"] for p in others if p["number"] not in prs and not p["isDraft"])
+            with item_boundary(repo, "after-merge", ledger):
+                settle_merged_prs(repo, ledger)
             b = busy_by_repo[repo]
             if b:
                 print(f"{CFG[repo]['key']:5} busy ({b}); PR actions still run")
