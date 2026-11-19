@@ -1464,6 +1464,7 @@ def _claim_termination(
     claimant_pid: int,
     expected_workload: Optional[Dict[str, Any]] = None,
     takeover: bool = False,
+    observed_termination: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     with registry.lock():
 
@@ -1483,6 +1484,15 @@ def _claim_termination(
                 return None
             existing = record.get("termination")
             if existing and not takeover:
+                return None
+            if (
+                existing
+                and observed_termination is not None
+                and any(
+                    existing.get(key) != observed_termination.get(key)
+                    for key in ("claimant_pid", "requested_ns", "takeover_ns")
+                )
+            ):
                 return None
             if existing:
                 existing["claimant_pid"] = claimant_pid
@@ -2750,6 +2760,7 @@ def _terminate_for_limit(
         claimant_pid=os.getpid(),
         expected_workload=workload,
         takeover=takeover,
+        observed_termination=record.get("termination") if takeover else None,
     )
     if claimed is None:
         return False
