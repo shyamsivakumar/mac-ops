@@ -1708,7 +1708,8 @@ def gate_round_cap():
         exact(f"rounds-decision:{repo}#20" in ledger, False)
         exact(len(json.loads(board.read_text())["items"]), 3)
 
-        none_line = f"finding\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL"
+        check_pass = f"CHECK: PASS {heads[2]}"
+        none_line = f"finding\n{check_pass}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL"
         merged, briefs = [], []
 
         def merge(repo_, number_, head_, base_):
@@ -1741,9 +1742,23 @@ def gate_round_cap():
         # The line must sit right before the final VERDICT line.
         at_cap(33, f"{lane.OPEN_FINDINGS_NONE}\nfinding\nVERDICT: FAIL")
         exact(merged, [(30, heads[2])])
-        at_cap(37, f"finding\n{lane.OPEN_FINDINGS_NONE}  \n\nVERDICT: FAIL")
+        at_cap(37, f"finding\n{check_pass}\n{lane.OPEN_FINDINGS_NONE}  \n\nVERDICT: FAIL")
         exact(merged[-1], (37, heads[2]))
         merged.pop()
+        # A failed or missing check, a wrong head, a leading space, or a
+        # trailing token after the verdict never authorize the merge.
+        bad = {
+            38: f"CHECK: FAIL {heads[2]}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL",
+            39: f"{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL",
+            40: f"CHECK: PASS {heads[1]}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL",
+            41: f"{check_pass}\n {lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL",
+            42: f"{check_pass}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: unknown VERDICT: FAIL",
+            43: f"{check_pass}\nCHECK: FAIL {heads[2]}\n{lane.OPEN_FINDINGS_NONE}\nVERDICT: FAIL",
+        }
+        for number, report in bad.items():
+            at_cap(number, report)
+            exact(round_item(number), True)
+        exact(merged, [(30, heads[2])])
         # (d) round 1 FAIL with the none line is a normal fix round.
         sent.clear()
         with patch.object(lane, "merge_on_reviewed_base", merge):
