@@ -1280,8 +1280,7 @@ def cmd_status(a):
     stuck = [f"{pr} {value['head']} {value['reason']}"
              for pr, value in sorted(load_counts().items())
              if value.get("count", 0) >= STUCK_COUNT]
-    stuck += [f"{pr} {value['head']} {ROUNDS_REASON}"
-              for pr, value in sorted((before.get(ROUNDS_STUCK) or {}).items())]
+    stuck += rounds_lines(before)
     threads = live()
     # A start can enqueue between a read and a write, and saving an older
     # snapshot would drop the item it just queued. So the queue is read,
@@ -1719,11 +1718,25 @@ def load_counts():
     return counts if isinstance(counts, dict) else {}
 
 
+def rounds_lines(queue):
+    """The stuck-list lines of the pull requests the lane stopped at the round cap."""
+    return [f"{pr} {value['head']} {ROUNDS_REASON}"
+            for pr, value in sorted((queue.get(ROUNDS_STUCK) or {}).items())]
+
+
+def write_stuck_file(lines):
+    tmp = path(STUCK_FILE + ".tmp")
+    with open(tmp, "w") as f:
+        f.write("".join(line + "\n" for line in lines))
+    os.replace(tmp, path(STUCK_FILE))
+
+
 def write_counts(counts, seen, stuck, dry_run):
     """Keep the skip counts and write the report of the stuck pull requests.
 
     The file is written from scratch every run, so a pull request that is
-    gated or gone leaves it.
+    gated or gone leaves it. The pull requests the lane stopped at the
+    round cap stay in it until the lane clears them.
     """
     for pr, head, reason in stuck:
         print(f"stuck {pr} {head} {reason}", file=sys.stderr)
@@ -1740,11 +1753,7 @@ def write_counts(counts, seen, stuck, dry_run):
                                   for key, value in (queue.get("gateReviewers") or {}).items()
                                   if key in (queue.get("gatedHeads") or {})}
         save(queue)
-    lines = [f"{pr} {head} {reason}" for pr, head, reason in sorted(stuck)]
-    tmp = path(STUCK_FILE + ".tmp")
-    with open(tmp, "w") as f:
-        f.write("".join(line + "\n" for line in lines))
-    os.replace(tmp, path(STUCK_FILE))
+        write_stuck_file([f"{pr} {head} {reason}" for pr, head, reason in sorted(stuck)] + rounds_lines(queue))
 
 
 def cmd_stuck(a):
@@ -1761,6 +1770,12 @@ def cmd_stuck(a):
         else:
             entries[a.ref] = {"head": a.head}
         save(queue)
+        try:
+            with open(path(STUCK_FILE)) as f:
+                skipped = [line.rstrip("\n") for line in f if not line.rstrip("\n").endswith(f" {ROUNDS_REASON}")]
+        except FileNotFoundError:
+            skipped = []
+        write_stuck_file(skipped + rounds_lines(queue))
     print(f"{'cleared' if a.clear else 'stuck'} {a.ref}")
 
 

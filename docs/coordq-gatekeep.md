@@ -33,7 +33,8 @@ coordinator tick sees a gate that cannot run.
 The lane driver also puts a pull request on the list `coordq status` reports,
 with reason `rounds`, when the 3-round cap stops it
 (`coordq stuck <repo#pr> --head <sha>`). The entry lives in queue.json's
-`roundsStuck` map, so gatekeep's skip counts never touch it. It adds no
+`roundsStuck` map, so gatekeep's skip counts never touch it, and the entry is
+also a line in `queue/gatekeep-stuck.txt` that every gatekeep run keeps. It adds no
 decisions item, so the stop never asks Shyam. The lane clears the entry
 (`coordq stuck <repo#pr> --clear`) when the pull request passes.
 

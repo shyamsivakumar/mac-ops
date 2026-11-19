@@ -659,13 +659,25 @@ def gate_rounds_used(repo, number, ledger):
 
 
 def clear_gate_round_stuck(repo, number, ledger):
-    """Take a pull request off the stuck list when it passes."""
+    """Take a pull request off the stuck list when it passes.
+
+    A pull request capped before the stuck list existed has an item on
+    the decisions board. It is taken off the board too. Returns False
+    when that item is still on the board; its ledger key stays, so the
+    next pass retries the removal.
+    """
+    legacy = f"rounds-decision:{repo}#{number}"
+    if legacy in ledger:
+        item_id = f"lane-gate-rounds-{repo.replace('/', '-')}-{number}"
+        if not DRY and alarms.board_update(DECISIONS_PATH, item_id, "remove") != "wrote":
+            return False
+        del ledger[legacy]
     lkey = f"rounds-stuck:{repo}#{number}"
-    if lkey not in ledger:
-        return
-    if not DRY:
-        run([COORDQ, "stuck", f"{repo}#{number}", "--clear"])
-    del ledger[lkey]
+    if lkey in ledger:
+        if not DRY:
+            run([COORDQ, "stuck", f"{repo}#{number}", "--clear"])
+        del ledger[lkey]
+    return True
 
 
 def check_step(repo, proof_path):
@@ -750,7 +762,8 @@ def act_on_pr(repo, number, ledger):
     if verdict == "running":
         return f"#{number}: gate running"
     if verdict == "PASS":
-        clear_gate_round_stuck(repo, number, ledger)
+        if not clear_gate_round_stuck(repo, number, ledger):
+            return f"#{number}: gate PASS, the decisions item could not be taken off the board, no merge until it is"
         if repo == "digitized/Concerning":
             return f"skip #{number}: gate PASS, manual merge"
         if DRY:
