@@ -683,6 +683,10 @@ def parse_options(argv):
         booleans = set()
     values = SHORT_VALUE.get(key, set())
     options, positionals, ordered = {}, [], []
+    # True when a selector-shaped token may have been consumed as the value
+    # of a flag whose arity this code does not know. It is decided while
+    # consuming, never by a second scan of the raw words.
+    ambiguous = False
     index = 0
     while index < len(words):
         word = words[index]
@@ -739,43 +743,16 @@ def parse_options(argv):
             index += 1
             continue
         if word.startswith("-"):
+            if word not in booleans and word not in values and word not in VALUE_FLAGS:
+                if following.startswith("-R"):
+                    ambiguous = True
             options[word] = True
             ordered.append((word, True))
             index += 1
             continue
         positionals.append(word)
         index += 1
-    return options, positionals, ordered
-
-
-def ambiguous_selector(argv):
-    """True when a `-R` token follows a short flag this code does not know.
-
-    That token may be the flag's value rather than a selector, and guessing
-    either way risks the wrong host's quota, so the caller is told the host
-    is unknown."""
-    words = [str(word) for word in (argv or [])[1:]]
-    group, verb = command_of(argv)
-    key = (group, verb)
-    booleans = SHORT_BOOLEAN.get(key)
-    if booleans is None:
-        booleans = {"-a", "-d", "-w"} if verb == "list" else set()
-    for index, word in enumerate(words):
-        if not word.startswith("-R"):
-            continue
-        if index == 0:
-            continue
-        previous = words[index - 1]
-        if not previous.startswith("-") or previous.startswith("--"):
-            continue
-        if previous in booleans or previous in SHORT_VALUE.get(key, set()):
-            continue
-        # An attached value such as `-L1` is a complete option, not a flag
-        # waiting for the next word, so it cannot have consumed the selector.
-        if len(previous) > 2 and previous[:2] in VALUE_FLAGS:
-            continue
-        return True
-    return False
+    return options, positionals, ordered, ambiguous
 
 
 def argv_host(argv):
@@ -790,7 +767,7 @@ def argv_host(argv):
     that flag's value, so the host is reported as unknown (None) rather than
     guessed. Unknown means: no response cache, and no optional-read floor
     decided against a host that may be the wrong one."""
-    _options, _positionals, ordered = parse_options(argv)
+    _options, _positionals, ordered, ambiguous = parse_options(argv)
     # `gh` uses the last selector given, whichever alias it is, so the host
     # is taken from the last one in argument order.
     host = ""
@@ -805,9 +782,9 @@ def argv_host(argv):
             # A two-part selector names no host, and it still overrides
             # `GH_REPO`, so the answer is "" rather than the environment's.
             host = parts[0] if len(parts) == 3 and parts[0] else ""
-    if ambiguous_selector(argv):
-        # A `-R` token sits after a short flag this code doesn't know: it may
-        # be that flag's value, so no host can be claimed.
+    if ambiguous:
+        # A `-R` token follows a short flag whose arity is unknown, so it may
+        # be that flag's value. No host can be claimed.
         return None
     if explicit:
         return host

@@ -965,6 +965,8 @@ print("ISSUECOMMENT", gh_gateway.argv_host(
     ["gh", "issue", "comment", "42", "-e", "-R", "ent.example/team/repo"]))
 print("LIMITATTACHED", gh_gateway.argv_host(
     ["gh", "pr", "list", "-L1", "-R", "ent.example/team/repo"]))
+print("LABELVALUE", gh_gateway.argv_host(
+    ["gh", "pr", "list", "-R", "ent.example/team/repo", "-l", "-Release"]))
 print("REVIEWBODY", gh_gateway.argv_host(
     ["gh", "pr", "review", "42", "-R", "actual.example/o/r", "--body",
      "-Rother.example/o/r"]))
@@ -984,14 +986,14 @@ check("a host in -R is the effective host",
                   "REPOEQSHORT", "ent.example", "CLUSTERNEXT", "ent.example",
                   "VERBAFTER", "actual.example", "CLUSTER", "ent.example",
                   "MERGESQUASH", "ent.example", "MERGEMETHOD", "ent.example",
-                  "MERGEREBASE", "ent.example", "MERGEBODY", "None",
+                  "MERGEREBASE", "ent.example", "MERGEBODY", "ent.example",
                   "REVIEWAPPROVE", "ent.example", "REVIEWCOMMENT", "ent.example",
                   "REVIEWCOMMENTLONG", "ent.example", "CLOSECOMMENT", "''",
                   "REVIEWCHANGES", "ent.example",
                   "CREATEFILL", "ent.example", "CREATEDRAFT", "ent.example",
                   "CREATEWEB", "ent.example", "CREATEEDITOR", "ent.example",
                   "ISSUEEDITOR", "ent.example", "CHECKOUTFORCE", "ent.example",
-                  "COMMENTEDITOR", "ent.example", "ISSUECOMMENT", "ent.example", "LIMITATTACHED", "ent.example",
+                  "COMMENTEDITOR", "ent.example", "ISSUECOMMENT", "ent.example", "LIMITATTACHED", "ent.example", "LABELVALUE", "ent.example",
                   "REVIEWBODY", "actual.example"],
       str(selector))
 
