@@ -1591,6 +1591,16 @@ def gate_round_cap():
         exact(sorted(item["id"] for item in json.loads(board.read_text())["items"]),
               [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (20, 21, 22)])
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
+        # A pull request with three historical fix rounds whose current
+        # head is the third one, a FAIL verdict and an interrupted builder
+        # reaches the cap before the same-head retry. The lane raises the
+        # item and sends no "Continue fixing".
+        same_head = {f"fix:{repo}#23:{head}": "sent" for head in heads[:3]}
+        result = act(23, heads[2], same_head)
+        exact(result, f"#23: no fix round after {lane.GATE_ROUND_CAP} failed reviews, one decisions item is on the board")
+        exact(sorted(item["id"] for item in json.loads(board.read_text())["items"])[-1],
+              "lane-gate-rounds-shyamsivakumar-mac-ops-23")
+        exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
 
 
 def decisions_board_guard():

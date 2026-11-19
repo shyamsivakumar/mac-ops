@@ -618,7 +618,7 @@ def failed_reviews(repo, number, ledger):
 def record_failed_review(repo, number, head, ledger):
     """Count the failed gate review in hand, and return the count."""
     count, last = failed_reviews(repo, number, ledger)
-    if last == head:
+    if last == head or f"fix:{repo}#{number}:{head}" in ledger:
         return count
     count += 1
     ledger[f"rounds:{repo}#{number}"] = {"count": count, "head": head}
@@ -788,6 +788,15 @@ def act_on_pr(repo, number, ledger):
                 print(f"already-closed:{ref}: {output}")
         fast_forward_main(repo)
         return f"#{number}: merged {head}"
+    if verdict == "FAIL":
+        # The failed review in hand is one after the reviews the pull
+        # request already had. The convergence rule gives it three
+        # reviews: the first review and the two fix rounds it can answer.
+        # The cap is asked before the same-head retry, so a pull request
+        # at the cap is never sent "Continue fixing".
+        reviews = record_failed_review(repo, number, head, ledger)
+        if reviews >= GATE_ROUND_CAP:
+            return gate_round_decision(repo, number, head, ledger)
     if verdict == "FAIL" and f"fix:{repo}#{number}:{head}" in ledger and builder:
         status = (t3("t3_thread_read", {"threadId": builder, "limit": 1}).get("thread") or {}).get("status")
         if status in ("completed", "interrupted", "failed"):
@@ -798,12 +807,6 @@ def act_on_pr(repo, number, ledger):
         # still working them. A second copy is the padding the queue had.
         return f"skip #{number}: gate findings for this head are already with the builder ({status})"
     if verdict == "FAIL":
-        # The failed review in hand is one after the reviews the pull
-        # request already had. The convergence rule gives it three
-        # reviews: the first review and the two fix rounds it can answer.
-        reviews = record_failed_review(repo, number, head, ledger)
-        if reviews >= GATE_ROUND_CAP:
-            return gate_round_decision(repo, number, head, ledger)
         if not builder:
             return f"skip #{number}: FAIL, no builder thread"
         msg = (f"The gate on PR #{number} at {head} returned VERDICT: FAIL. Fix every critical and major finding below, "
