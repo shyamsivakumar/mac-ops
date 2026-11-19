@@ -2,7 +2,7 @@
 
 `models.json` is the only place a model is listed. The ticket tool, coordq,
 the lane driver and the pi route generator read it through this module.
-Lists: `build` (every build type), `fix` (fix and finish rounds), `review`
+Lists: `build` (every build type; an entry's optional `leads` names the task types it goes first for), `fix` (fix and finish rounds), `review`
 (the gate) and `panel` (only when Shyam asks for one).
 
 A provider that fails for a blocking reason is recorded in
@@ -63,6 +63,9 @@ def validate(data):
                 raise ModelsError(
                     f"models.json {name} entry needs id, vendor and a selection with instanceId and model: {entry!r}"
                 )
+            leads = entry.get("leads", [])
+            if not (isinstance(leads, list) and all(nonempty_string(t) for t in leads)):
+                raise ModelsError(f"models.json {name} entry leads must be a list of task types: {entry!r}")
             if entry["id"] in seen:
                 raise ModelsError(f"models.json {name} lists {entry['id']} twice")
             seen.add(entry["id"])
@@ -203,17 +206,21 @@ def is_blocked(selection, blocked=None):
     return identity(selection) in blocked
 
 
-def in_order(list_name, preferred=None):
-    """The entries of a list, the preferred id first, then the list in order."""
-    listed = entries(list_name)
-    first = [e for e in listed if e["id"] == preferred]
-    return first + [e for e in listed if e["id"] != preferred]
+def in_order(list_name, preferred=None, task_type=None):
+    """The entries of a list: the preferred id first, then the entries whose
+    `leads` names the task type, then the rest, each group in list order."""
+    def rank(entry):
+        if entry["id"] == preferred:
+            return 0
+        return 1 if task_type in entry.get("leads", ()) else 2
+
+    return sorted(entries(list_name), key=rank)
 
 
-def first_available(list_name, preferred=None, blocked=None):
+def first_available(list_name, preferred=None, blocked=None, task_type=None):
     """The first entry that is not blocked, or None when every entry is."""
     blocked = blocked_identities() if blocked is None else blocked
-    for entry in in_order(list_name, preferred):
+    for entry in in_order(list_name, preferred, task_type):
         if identity(entry["selection"]) not in blocked:
             return entry
     return None
@@ -262,13 +269,14 @@ def reviewers(builder_models=(), preferred=None, blocked=None):
     ]
 
 
-def pi_routes():
-    """The build list as pi route specs, `provider/model`, in order.
+def pi_routes(task_type=None):
+    """The build list as pi route specs, `provider/model`, in the order the
+    task type uses.
 
     Only an entry whose model carries a pi provider prefix can run in pi."""
     return [
         e["selection"]["model"]
-        for e in entries("build")
+        for e in in_order("build", task_type=task_type)
         if "/" in e["selection"]["model"]
     ]
 

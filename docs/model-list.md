@@ -9,16 +9,22 @@ Nothing else keeps a copy of a model id.
 
 | List | Used for | Order rule |
 | --- | --- | --- |
-| `build` | Every build type: standard, risky, design, large, ui, research, rca and chore. | The first entry that is not blocked. A `builder:<id>` label puts that entry first. |
+| `build` | Every build type: standard, risky, design, large, ui, research, rca and chore. | The first entry that is not blocked, led by the entries whose `leads` names the task type. A `builder:<id>` label puts that entry first. |
 | `fix` | Fix and finish rounds. | The first entry that is not blocked. |
 | `review` | The gate. | The first entry that is not blocked and whose vendor differs from the builder's executed vendor. A `reviewer:<id>` label puts that entry first. |
 | `panel` | A panel, only when Shyam asks for one. | Nothing starts a panel on its own. |
 
 The workhorses are the two Morph models, DeepSeek V4.1 Flash (vendor deepseek)
 and Kimi K3.1 (vendor moonshot). Both run through the `pi` provider instance.
-Build runs DeepSeek first because the plan allows far more parallel runs on it,
-then Kimi, then Terra as the fallback. Fix runs Kimi, DeepSeek, then Terra. Reviews are Astra, then Opus. Fable runs
-only when Shyam asks for it.
+The build list order is DeepSeek, Kimi, Terra. A build entry may carry a
+`leads` list of task types it goes first for. Kimi leads rca, risky, design and
+hard (long reasoning sessions), so those types run Kimi, DeepSeek, Terra. Every
+other type runs DeepSeek first, because the plan allows far more parallel runs on
+it (high-volume work). Terra is always the last fallback. Fix runs DeepSeek,
+Kimi, then Terra. Reviews are Astra, then Opus. Fable runs only when Shyam asks
+for it. `coordq` and `ticket start` pass the task type to `models.py`, and the
+installer builds each `ROUTES` row from the same order, so one file holds the
+preference.
 
 A builder that ran on Kimi or DeepSeek is reviewed by Astra. A builder that ran
 on Terra (OpenAI) is reviewed by an Anthropic entry (Opus).

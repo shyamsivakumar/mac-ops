@@ -211,15 +211,15 @@ def shim_item(checkout: Path, home: Path, path: str) -> tuple[Path, bytes, int] 
     return target, source.encode(), 0o755
 
 
-def task_router_text(text: str, routes: list[str], identities: dict[str, str]) -> str:
+def task_router_text(text: str, routes: dict[str, list[str]], identities: dict[str, str]) -> str:
     """Return the task-router.ts text with its ROUTES table rebuilt from routes.
 
-    Every route tries each model of routes in order, at the route's thinking
+    Each route tries the models routes lists for it in order, at the route's thinking
     level. identities names each route's entry in the shared provider store, and
     the router skips an entry that store has blocked each time it picks one. The
     header paragraphs that told a reader to edit the table by hand are replaced."""
     lines = "".join(
-        f"\t{route}: [{', '.join(json.dumps(f'{model}:{level}') for model in routes)}],\n"
+        f"\t{route}: [{', '.join(json.dumps(f'{model}:{level}') for model in routes[route])}],\n"
         for route, level in ROUTE_LEVELS.items()
     )
     shared = "".join(f"\t{json.dumps(spec)}: {json.dumps(identity)},\n" for spec, identity in identities.items())
@@ -293,9 +293,9 @@ def archive_model_lists(home: Path) -> list[Path]:
     return moved
 
 
-def checkout_pi_models(checkout: Path) -> tuple[list[str], dict[str, str]]:
+def checkout_pi_models(checkout: Path) -> tuple[dict[str, list[str]], dict[str, str]]:
     with mock.patch.dict(os.environ, {"COORDINATOR_MODELS": str(checkout / "coordinator/models.json")}):
-        return models.pi_routes(), models.pi_identities()
+        return {route: models.pi_routes(route) for route in ROUTE_LEVELS}, models.pi_identities()
 
 
 def coordinator_dir(home: Path, override: str | None = None) -> Path:
