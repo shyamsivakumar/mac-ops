@@ -608,6 +608,111 @@ def merged_restart():
                   [item_id] if board == "decisions" else [])
 
 
+def merge_pass():
+    import lane_driver as lane
+    head = "a" * 40
+    full = f"PROVIDES: PASS {head}\nCHECK: PASS {head}\nVERDICT: PASS"
+
+    def replay(repo, reply=full, brief="lane-merges", passes=1, merge_fails=False, checkout=True,
+               earlier=None, finished=True, ledger=None, live_base="main"):
+        key = f"gate:{repo}#20:{head}"
+        receipts = {key: "gate", "base:gate": "main", "brief:gate": brief} if brief else {}
+        replies = {"gate": reply}
+        for thread, text in (earlier or {}).items():
+            receipts.update({f"{key}:old": thread, f"base:{thread}": "main"})
+            replies[thread] = text
+        actions, gh_calls = [], []
+
+        def command(cmd, timeout=150):
+            if cmd[0] == "gh":
+                gh_calls.append(cmd)
+            if cmd[:3] == ["gh", "pr", "view"]:
+                fields = cmd[-1]
+                return json.dumps({"baseRefName,headRefOid": {"baseRefName": "main", "headRefOid": head},
+                                   "state": {"state": "OPEN" if merge_fails else "MERGED"},
+                                   "baseRefName": {"baseRefName": "main"}}[fields])
+            if cmd[:3] == ["gh", "pr", "merge"]:
+                exact(cmd[cmd.index("--match-head-commit") + 1], head)
+                actions.append("merge")
+                if merge_fails:
+                    raise subprocess.CalledProcessError(1, cmd)
+                return "merged"
+            if cmd[:2] == ["ticket", "close"]:
+                actions.append("close")
+                return "closed"
+            if cmd[0] == "git" and "worktree" in cmd:
+                return "worktree /fixture/main\0HEAD fixture\0branch refs/heads/main\0\0"
+            if cmd[0] == "git" and "symbolic-ref" in cmd:
+                return "refs/heads/main"
+            if cmd[0] == "git" and "--ff-only" in cmd:
+                actions.append("ff")
+                return "updated"
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def read(cmd):
+            gh_calls.append(cmd)
+            return dict(number=20, state="OPEN", headRefName="builder/x", baseRefName=live_base, headRefOid=head,
+                        body="Refs #10", changedFiles=1)
+
+        def threads(tool, args):
+            return {"thread": {"status": "completed" if finished else "running"},
+                    "items": [{"type": "assistant_message", "text": replies[args["threadId"]]}]}
+
+        ledger = {} if ledger is None else ledger
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board, \
+             patch.dict(os.environ, {"COORDINATOR_OWNER_BOARD": str(Path(scratch) / "owner.json")}), \
+             patch.object(lane, "RECEIPTS", str(Path(scratch) / "receipts.json")), \
+             patch.object(lane, "CFG", {repo: dict(key="NING" if "Concerning" in repo else "TNR", projectId="fixture",
+                                                   **({"merge": "manual"} if "Concerning" in repo else {}))}), \
+             patch.object(lane, "PATHS", {repo: "fixture"} if checkout else {}), \
+             patch.object(lane.os.path, "isdir", return_value=True), \
+             patch.object(lane, "prompt_pull", return_value=lane.prompt_paths.CLEAR), \
+             patch.object(lane, "DRY", False), patch.object(lane, "read_json", read), \
+             patch.object(lane, "run", command), patch.object(lane, "t3", threads), \
+             contextlib.redirect_stdout(output):
+            Path(scratch, "receipts.json").write_text(json.dumps(receipts))
+            for _ in range(passes):
+                try:
+                    lane.merge_pass(repo, ledger)
+                except subprocess.CalledProcessError:
+                    pass
+            owner = Path(scratch, "owner.json")
+            items = [i["id"] for path in (board, owner) if path.exists() for i in json.loads(path.read_text())["items"]]
+        return actions, len(gh_calls), items, output.getvalue(), ledger
+
+    repo = "shyamsivakumar/tunerise"
+    ledger = {}
+    actions, calls, items, _, ledger = replay(repo, ledger=ledger)
+    exact(actions, ["merge", "close", "ff"])
+    exact(items, [])
+    actions, calls, _, _, _ = replay(repo, ledger=ledger)
+    exact((actions, calls), ([], 0))
+    exact(replay(repo, live_base="other")[0], [])
+    exact(replay(repo, brief="reviewer-merges")[:3], ([], 0, []))
+    seen = []
+    for allowed, expected in (({"shyamsivakumar/mac-ops"}, []), (None, ["shyamsivakumar/tunerise"])):
+        with patch.object(lane, "MERGE_REPOS", ["shyamsivakumar/tunerise"]), \
+             patch.object(lane, "merge_pass", lambda target, ledger: seen.append(target)):
+            lane.restrict_merge_repos(allowed)
+            lane.merge_passes({})
+        exact(seen, expected)
+        seen.clear()
+    exact(replay(repo, brief=None)[:3], ([], 0, []))
+    exact(replay(repo, finished=False)[:3], ([], 0, []))
+    exact(replay(repo, reply="interrupted")[:3], ([], 0, []))
+    actions, calls, items, _, _ = replay("digitized/Concerning")
+    exact((actions, items), ([], ["manual-merge-NING-20"]))
+    actions, calls, items, _, _ = replay(repo, earlier={"old": "dead\nVERDICT: FAIL"})
+    exact((actions, calls, items), ([], 0, ["lane-gate-split-TNR-20"]))
+    actions, _, _, shown, _ = replay(repo, checkout=False)
+    exact(actions, ["merge", "close"])
+    exact("no local checkout for " + repo in shown, True)
+    for passes, expected in ((lane.MERGE_WAIT_PASSES - 1, []), (lane.MERGE_WAIT_PASSES, ["merge-pass-stuck-TNR-20"])):
+        actions, _, items, _, _ = replay(repo, merge_fails=True, passes=passes)
+        exact((actions, items), (["merge"] * passes, expected))
+
+
 def main_update_boundary():
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
@@ -1645,7 +1750,8 @@ def consolidation_guard():
     exact("fast-forward" in lane_brief and "git merge --ff-only" in lane_brief, False)
     exact("PROVIDES: PASS " + "a" * 40 in lane_brief, True)
     other_brief = ticket.gate_brief("shyamsivakumar/tunerise", {"key": "FIX"}, 1, 2, "a" * 40, "main", False, False)
-    exact("gh pr merge 2 -R shyamsivakumar/tunerise --squash --match-head-commit " + "a" * 40 in other_brief, True)
+    exact("gh pr merge" in other_brief, False)
+    exact("PROVIDES: PASS " + "a" * 40 in other_brief, True)
     for brief in (builder, gate):
         exact(re.findall(r"(?i)(?:gh\s+issue\s+create|(?:create|file|open)\s+(?:a\s+|new\s+)?(?:issues?|tickets?))", brief), [])
     calls = []
@@ -3221,7 +3327,7 @@ def alarm_mute():
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 
 
-EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
+EVALS = {"send-integrity": send_integrity, "root-workspace": root_workspace, "consolidation-guard": consolidation_guard, "script-results": script_results,"start-routing": start_routing, "dead-run-recovery": dead_run_recovery, "gate-pipeline": gate_pipeline, "merged-restart": merged_restart, "merge-pass": merge_pass, "gate-round-cap": gate_round_cap, "decisions-board-guard": decisions_board_guard, "no-parking": no_parking, "turncap": turncap, "watchdog": watchdog, "zero-merge": zero_merge, "board-integrity": board_integrity, "api-budget": api_budget, "ff-drift": ff_drift, "cycle-health": cycle_health, "stall": stall, "alarm-mute": alarm_mute}
 
 
 def main():
@@ -3240,6 +3346,15 @@ def main():
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     evaluate()
+                    if name == "merge-pass":
+                        import lane_driver
+                        with patch.object(lane_driver, "merge_pass"):
+                            try:
+                                evaluate()
+                            except AssertionError:
+                                pass
+                            else:
+                                raise AssertionError("negative control accepted a pass that merges nothing")
                     if name == "send-integrity":
                         import lane_driver
                         with patch.object(lane_driver, "send", return_value="started"):
