@@ -2215,6 +2215,34 @@ def stall():
         lane.run_pass({})
     exact(lane.STALL_STATE.get("items", {}), {})
 
+    held = {"number": 9, "title": "held", "labels": [{"name": "stage:hold"}]}
+    idle = {"number": 10, "title": "idle", "labels": [{"name": "stage:todo"}]}
+    idle_pull = dict(stale, number=10, body="Refs #10")
+
+    def three_ticks(prs, issues):
+        board = {"tickets": [], "repos": {repo: {"prs": prs, "issues": issues}}}
+        lane.STALL_STATE = {}
+        lane.STALL_EVENTS.clear()
+        with patch.object(lane, "watchdog"), patch.object(lane, "drift_ff"), \
+             patch.object(lane, "board_snapshot", return_value=board), \
+             patch.object(lane, "LANE_REPOS", [repo]), patch.object(lane, "ORDER", {}), \
+             patch.object(lane, "CFG", {repo: {"projectId": "fixture", "key": "MO"}}), \
+             patch.object(lane, "busy", return_value=""), patch.object(lane, "t3", return_value={}), \
+             patch.object(lane, "stall_receipts", return_value={}), \
+             patch.object(lane, "act_on_pr", act), patch.object(lane, "DRY", False):
+            for _ in range(3):
+                lane.run_pass({})
+        found = list(lane.STALL_EVENTS)
+        lane.STALL_EVENTS.clear()
+        return found
+
+    exact(three_ticks([stale], [held]), [])
+    exact(lane.STALL_STATE.get("items", {}), {})
+    exact(lane.board_keys({"tickets": [dict(repo=repo, number=9, stage="todo")],
+                           "repos": {repo: {"prs": [], "issues": [held]}}}), set())
+    found = three_ticks([stale, idle_pull], [held, idle])
+    exact([event["item"] for event in found if event["kind"] == "item"], [f"{repo}#10"])
+
     # A stalled item is reported, not parked: the shift keeps working it.
     lane.STALL_STATE = {"items": {f"{repo}#9": {"marker": "a" * 40, "idle": 3,
                                                 "stalled": True}}}
