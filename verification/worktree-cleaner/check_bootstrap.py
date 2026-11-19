@@ -249,6 +249,16 @@ print(json.dumps({'threads': [], 'total': 0, 'nextCursor': None}))
 
         applied = json.loads(command(args + ["--apply"], env=env))
         assert applied["removed"] == 3, applied["categories"]
+        # Every removed worktree leaves a holding copy behind, and it is
+        # recorded for the sweep. The copy is never deleted here, so a save
+        # that lands after the removal is still in it when the editor
+        # closes the file.
+        manifest = json.loads((base / "state" / "recovery.json").read_text(encoding="utf-8"))
+        assert len(manifest) == 3, manifest
+        for entry in manifest:
+            assert entry.get("path") and entry.get("recovered_at"), entry
+            assert isinstance(entry.get("device"), int) and isinstance(entry.get("inode"), int), entry
+            assert Path(entry["path"]).is_dir(), entry
         assert paths["locked"].exists(), "a worktree its owner locked has to stay"
         assert paths["hidden"].exists(), "a worktree whose edit the index hides has to stay"
         assert "locked" in git(repo, "worktree", "list", "--porcelain"), "the registration of a locked worktree has to stay"

@@ -1963,11 +1963,14 @@ def _remove_verified_worktree(
     if registration.exists():
         _record_recovery(state_root, holding)
         return False, "worktree_not_fully_removed", []
-    if _tree_matches(holding, snapshot):
-        shutil.rmtree(holding)
-        return True, "", []
+    # The holding copy is always kept and recorded for the sweep. It is
+    # never deleted here: a save that lands after this check is written
+    # into the copy, and deleting it now would lose that save when the
+    # editor closes the file. The sweep decides later, when the copy has
+    # been held for the retention time, whether it holds a change.
+    changed = _changed_names(holding, snapshot)
     _record_recovery(state_root, holding)
-    return True, "", _changed_names(holding, snapshot)
+    return True, "", changed
 
 
 def _claim_index_lock(worktree: Path) -> Path | None:
