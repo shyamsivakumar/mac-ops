@@ -3044,6 +3044,16 @@ def alarm_mute():
         exact(alarms.route_update(decisions, "SRW-1", "remove"), "wrote")
         exact(alarms.route_update(decisions, "factory-overnight-stall", "remove"), "wrote")
         exact(json.loads(owner.read_text())["items"], [])
+        decisions.write_text(json.dumps({"items": [{"id": "factory-zero-merge"}, {"id": "factory-watchdog"}]}))
+        owner.unlink()
+        exact(alarms.route_update(decisions, "factory-zero-merge", "remove"), "wrote")
+        exact([i["id"] for i in json.loads(decisions.read_text())["items"]], ["factory-watchdog"])
+        exact(owner.exists(), False)
+        decisions.write_text(json.dumps({"items": [dict(stale, id="factory-zero-merge")]}))
+        before = decisions.read_bytes()
+        with patch.object(alarms, "take_lock", return_value=None):
+            exact(alarms.clear_stale(decisions, "factory-zero-merge"), "failed")
+        exact(decisions.read_bytes(), before)
         exact(alarms.board_for(decisions, "prompt-merge-SRW-4"), decisions)
         exact(alarms.board_for(decisions, "lane-gate-rounds-shyamsivakumar-mac-ops-9"), owner)
 

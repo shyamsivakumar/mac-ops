@@ -276,7 +276,7 @@ def route_update(decisions, alarm_id, action, item=None):
     target = board_for(decisions, alarm_id)
     if target == Path(decisions):
         return board_update(decisions, alarm_id, action, item)
-    if board_update(target, alarm_id, action, item, create=action == "raise") != "wrote":
+    if board_update(target, alarm_id, action, item, create=True) != "wrote":
         return "failed"
     return clear_stale(decisions, alarm_id)
 
@@ -286,9 +286,12 @@ def clear_stale(decisions, alarm_id, attempts=5):
 
     The board is replaced only when its bytes still match the read, under
     the board lock, because the watchdog writes the same file without the
-    lock. A board that keeps changing returns "failed" for the next tick."""
+    lock. A lock that cannot be taken, or a board that keeps changing,
+    returns "failed" for the next tick."""
     path = Path(decisions)
     handle = take_lock(str(path) + ".lock")
+    if handle is None:
+        return "failed"
     try:
         for _ in range(attempts):
             _, board = read_board(path)
@@ -300,8 +303,7 @@ def clear_stale(decisions, alarm_id, attempts=5):
                 return result
         return "failed"
     finally:
-        if handle is not None:
-            drop_lock(handle)
+        drop_lock(handle)
 
 
 def migrate_stale(decisions, alarm_id):
@@ -351,6 +353,8 @@ def write_alarm(path, alarm_id, action, item, create=False):
     """Read, change and replace the board under the caller's lock."""
     _, board = read_board(path)
     if board is None and create and not path.exists():
+        if action != "raise":
+            return True
         board = {"items": []}
     if board is None:
         return False
