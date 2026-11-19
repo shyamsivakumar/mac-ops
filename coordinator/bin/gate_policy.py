@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -10,12 +11,20 @@ if _BIN_DIR not in sys.path:
 from answer_format import ANSWER_FORMAT
 from gate_bar import GATE_BAR
 
+LANE_REPOS = ["shyamsivakumar/mac-ops", "shyamsivakumar/strategy-replay-workbench", "shyamsivakumar/fantasy-football-toolkit",
+              "shyamsivakumar/catalouge"]
+
 # The sentence a prompt pull request ends on: it never merges itself.
 PROMPT_NO_MERGE = (
     "This pull request changes prompt, skill or playbook files, and a change like that never "
     "auto-merges (Shyam): do not merge. Stop at the verdict and report it; Shyam merges a passing one himself."
 )
 PROMPT_CLOSE_NOTHING = " Do not close the issue either: the merge that would close it is Shyam's."
+
+
+def brief_base(message, head):
+    found = re.search(rf"git diff origin/(\S+?)\.\.\.{re.escape(head)}", message)
+    return found.group(1) if found else None
 
 
 def manual_merge(settings):
@@ -34,12 +43,18 @@ def build_gate_brief(settings, repo, issue, number, head, publisher, base="main"
     merge = (PROMPT_NO_MERGE if prompt else
              "Ascend repo: do not merge; stop at the verdict." if ascend else
              f"If and only if CHECK and VERDICT are PASS on {head}, run `gh pr merge {number} -R {repo} --squash --match-head-commit {head}`; report the merge commit or refusal.")
-    fast_forward = ("" if ascend or not fast_forward_main else
+    lane = repo in LANE_REPOS and not ascend and not prompt
+    if lane:
+        merge = ("Do not merge, close the issue or fast-forward main: the lane does all three on your verdict. "
+                 f"Verify every Provides claim from the ticket on head {head}. Only if all hold, include the exact line "
+                 f"`PROVIDES: PASS {head}` before the final CHECK and VERDICT lines.")
+    fast_forward = ("" if ascend or lane or not fast_forward_main else
                     " Only when that merge produced a merge commit, fast-forward this repository's local main to origin/main and never force: "
                     "find the worktree that has main checked out in `git worktree list` and run `git fetch origin` then "
                     "`git merge --ff-only origin/main` there; when no worktree has main checked out, run `git fetch origin main:main`. "
                     "Report `git rev-parse main origin/main` (one hash twice) or the exact refusal. Fast-forward no other repository.")
-    close = (PROMPT_CLOSE_NOTHING if prompt else
+    close = ("" if lane else
+             PROMPT_CLOSE_NOTHING if prompt else
              " Ascend repo: do not close the issue." if ascend else
              f" Only when that merge produced a merge commit, verify every Provides claim from the ticket on that merge commit and report the commit SHA, evidence and result for each claim. If any Provides claim is false, missing or unverified, close nothing and report the refusal. "
              f"Before the close, run the close checklist: `python3 coordinator/bin/close_check.py --repo {repo} --pr {number}"
