@@ -76,9 +76,9 @@ def exact(actual, expected):
 def scratch_board(scratch):
     """Point the lane's decisions board at a scratch file.
 
-    The lane raises one item on the decisions board when a pull request
-    uses its review rounds. A test must never write the board Shyam
-    reads, so the board path is a scratch file for the whole eval.
+    The lane raises watchdog items on the decisions board. A test must
+    never write the board Shyam reads, so the board path is a scratch
+    file for the whole eval.
     """
     import lane_driver as lane
     board = Path(scratch) / "decisions.json"
@@ -1506,24 +1506,35 @@ def consolidation_guard():
 
 
 def gate_round_cap():
-    """The convergence rule in the lane: three failed reviews, then one item.
+    """The convergence rule in the lane: three failed reviews, then one stuck entry.
 
     The convergence rule (Shyam, 2026-11-18): after 3 review rounds
     without PASS the pull request is re-cut or brought to Shyam, and it is
     not reviewed a 4th time as it is. The first review of a pull request
     is round 1, so the lane sends two fix rounds (the answers to rounds 1
-    and 2) and the third failed review raises one decisions item instead
-    of a third fix round.
+    and 2) and the third failed review puts the pull request on the
+    coordinator's stuck list instead of a third fix round. It adds no item
+    to the decisions board, so it never asks Shyam.
     """
     import lane_driver as lane
     repo = "shyamsivakumar/mac-ops"
     heads = ["a" * 40, "b" * 40, "c" * 40, "d" * 40]
     sent = []
     with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board:
+        stuck_list = {}
+
+        def stuck():
+            return stuck_list
 
         def command(cmd, timeout=150):
             if cmd[:3] == ["gh", "pr", "view"]:
                 return json.dumps({"state": "OPEN", "mergedAt": None})
+            if cmd[:2] == [lane.COORDQ, "stuck"]:
+                if "--clear" in cmd:
+                    stuck_list.pop(cmd[2], None)
+                else:
+                    stuck_list[cmd[2]] = {"head": cmd[4], "count": lane.GATE_ROUND_CAP, "reason": "rounds"}
+                return ""
             raise AssertionError(f"unexpected command: {cmd}")
 
         def threads(tool, args):
@@ -1556,13 +1567,11 @@ def gate_round_cap():
             act(20, head, ledger)
         # Two fix rounds: the answers to the first and the second review.
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
-        # The third failed review and the fourth raise one decisions item
-        # between them, and the board holds that one item.
-        items = json.loads(board.read_text())["items"]
-        exact(len(items), 1)
-        exact(items[0]["kind"], "ask")
-        exact(items[0]["title"].startswith("Shyam,"), True)
-        exact(len(items[0]["options"]), 2)
+        # The third failed review and the fourth put the pull request on
+        # the stuck list once between them, and the decisions board holds
+        # no item.
+        exact(stuck(), {f"{repo}#20": {"head": heads[2], "count": lane.GATE_ROUND_CAP, "reason": "rounds"}})
+        exact(json.loads(board.read_text())["items"], [])
         # The fix rounds of the pull request are its failed reviews before
         # the one in hand.
         exact(lane.failed_reviews(repo, 20, ledger), (4, heads[3]))
@@ -1570,80 +1579,62 @@ def gate_round_cap():
         # reviewer for a model or for a brief, so no such command runs,
         # and no fix round is sent.
         result = act(20, "e" * 40, ledger, verdict=("absent", None, ""))
-        exact(result, "#20: no fix round, the decisions item is on the board")
+        exact(result, "#20: no fix round, it is on the stuck list")
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
-        exact(len(json.loads(board.read_text())["items"]), 1)
+        exact(len(stuck()), 1)
         # A pull request that two earlier lane sessions already sent two
         # fix rounds to has had two reviews. The third failed review
-        # raises the decisions item, and no third fix round is sent.
+        # puts the pull request on the stuck list, and no third fix round is sent.
         earlier = {f"fix:{repo}#21:{heads[0]}": "sent", f"fix:{repo}#21:{heads[1]}": "sent"}
         result = act(21, heads[2], earlier)
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
         exact(lane.failed_reviews(repo, 21, earlier), (3, heads[2]))
-        exact(result.endswith("one decisions item is on the board"), True)
+        exact(result.endswith("it is on the stuck list"), True)
         # A pull request with three historical fix rounds, a new head and
-        # no item on the board reaches the cap before any verdict. The lane
-        # publishes the item then, and it does not report an item that was
-        # never written.
+        # no stuck entry reaches the cap before any verdict. The lane writes
+        # the entry then, and it does not report an entry that was never
+        # written.
         history = {f"fix:{repo}#22:{head}": "sent" for head in heads[:3]}
         result = act(22, "f" * 40, history, verdict=("absent", None, ""))
-        exact(result, f"#22: no fix round after {lane.GATE_ROUND_CAP} failed reviews, one decisions item is on the board")
-        exact(sorted(item["id"] for item in json.loads(board.read_text())["items"]),
-              [f"lane-gate-rounds-shyamsivakumar-mac-ops-{number}" for number in (20, 21, 22)])
+        exact(result, f"#22: no fix round after {lane.GATE_ROUND_CAP} failed reviews, it is on the stuck list")
+        exact(sorted(stuck()), [f"{repo}#{number}" for number in (20, 21, 22)])
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
         # A pull request with three historical fix rounds whose current
         # head is the third one, a FAIL verdict and an interrupted builder
-        # reaches the cap before the same-head retry. The lane raises the
-        # item and sends no "Continue fixing".
+        # reaches the cap before the same-head retry. The lane writes the
+        # stuck entry and sends no "Continue fixing".
         same_head = {f"fix:{repo}#23:{head}": "sent" for head in heads[:3]}
         result = act(23, heads[2], same_head)
-        exact(result, f"#23: no fix round after {lane.GATE_ROUND_CAP} failed reviews, one decisions item is on the board")
-        exact(sorted(item["id"] for item in json.loads(board.read_text())["items"])[-1],
-              "lane-gate-rounds-shyamsivakumar-mac-ops-23")
+        exact(result, f"#23: no fix round after {lane.GATE_ROUND_CAP} failed reviews, it is on the stuck list")
+        exact(sorted(stuck()), [f"{repo}#{number}" for number in (20, 21, 22, 23)])
+        exact(json.loads(board.read_text())["items"], [])
         exact(sent, [f"fix:{repo}#20:{heads[0]}", f"fix:{repo}#20:{heads[1]}"])
-        # A capped pull request that later passes while the board removal
-        # fails is not merged: the command stub raises on any merge call.
-        # The ledger key stays, so the next pass retries the removal.
-        passing = ("PASS", {"threadId": "gate"}, "VERDICT: PASS")
-        with patch.object(lane.alarms, "board_update", return_value="failed"):
-            result = act(20, heads[3], ledger, verdict=passing)
-        exact("no merge until it is" in result, True)
-        exact(f"rounds-decision:{repo}#20" in ledger, True)
-        exact(len(json.loads(board.read_text())["items"]), 4)
-        exact(lane.clear_gate_round_decision(repo, 20, ledger), True)
-        exact(f"rounds-decision:{repo}#20" in ledger, False)
-        exact(len(json.loads(board.read_text())["items"]), 3)
+        # A capped pull request that passes leaves the stuck list; the
+        # other entries stay.
+        with patch.object(lane, "run", command), patch.object(lane, "DRY", False):
+            lane.clear_gate_round_stuck(repo, 20, ledger)
+        exact(f"rounds-stuck:{repo}#20" in ledger, False)
+        exact(sorted(stuck()), [f"{repo}#{number}" for number in (21, 22, 23)])
 
 
 def decisions_board_guard():
-    """A test run never writes the board Shyam reads.
+    """A pull request at the round cap adds no item to the decisions board.
 
-    The lane raises one item on the decisions board when a pull request
-    uses its review rounds. The board path comes from the environment, so
-    a test points it at a scratch file. This eval runs the path that
-    raises the item and checks that every write names the scratch file as
-    its destination. The board Shyam reads is not compared before and
-    after, because the coordinator may publish to it while this runs.
+    The stop goes to the stuck list, so the board Shyam reads gets no
+    item. This eval runs the path with the board pointed at a scratch
+    file, then checks that the file holds no item and that a second pass
+    adds no second stuck entry.
     """
     import lane_driver as lane
-    targets = []
-    real_update = lane.alarms.board_update
-
-    def record(target, *args, **kwargs):
-        targets.append(str(target))
-        return real_update(target, *args, **kwargs)
-
-    with tempfile.TemporaryDirectory() as scratch:
-        board = Path(scratch) / "decisions.json"
-        board.write_text(json.dumps({"items": []}))
-        with patch.object(lane, "DECISIONS_PATH", str(board)), \
-                patch.object(lane.alarms, "board_update", record):
-            lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
-            lane.gate_round_decision("fixture/repo", 20, "a" * 40, {})
-        items = json.loads(board.read_text())["items"]
-        exact(targets, [str(board)] * 2)
-        exact(len(items), 1)
-        exact(items[0]["id"], "lane-gate-rounds-fixture-repo-20")
+    calls = []
+    with tempfile.TemporaryDirectory() as scratch, scratch_board(scratch) as board:
+        with patch.object(lane, "run", lambda cmd, timeout=150: calls.append(cmd) or ""), \
+                patch.object(lane, "DRY", False):
+            ledger = {}
+            lane.gate_round_stuck("fixture/repo", 20, "a" * 40, ledger)
+            lane.gate_round_stuck("fixture/repo", 20, "a" * 40, ledger)
+        exact(json.loads(board.read_text())["items"], [])
+    exact(calls, [[lane.COORDQ, "stuck", "fixture/repo#20", "--head", "a" * 40]])
 
 
 def send_integrity():
